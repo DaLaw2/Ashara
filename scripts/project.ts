@@ -37,6 +37,7 @@ function parseUnblockArgs(args: readonly string[]): UnblockArgs {
     const flag = rest[i];
     const value = rest[i + 1];
     if ((flag !== "--reason" && flag !== "--by") || value === undefined || value.trim() === "") {
+      // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
       throw new ProjectCliUsageError(`Unexpected or empty argument: ${flag ?? ""}.`);
     }
     if (flags.has(flag)) throw new ProjectCliUsageError(`${flag} given twice.`);

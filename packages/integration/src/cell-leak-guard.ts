@@ -4,6 +4,7 @@ import { constants as osConstants } from "node:os";
 import { promisify } from "node:util";
 import type { TestProject } from "vitest/node";
 import { z } from "zod";
+import { parseJson } from "@ashara/shared";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -108,18 +109,18 @@ async function labelledContainers(timeoutMs?: number): Promise<TestContainer[]> 
 }
 
 function parsePs(stdout: string): TestContainer[] {
-  let json: unknown;
+  let entries: z.infer<typeof psSchema>;
   try {
-    json = JSON.parse(stdout);
+    entries = parseJson(psSchema, stdout, "podman ps stdout");
   } catch (err) {
-    throw new TestCellGuardFailed("parse podman ps", `invalid JSON: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    throw new TestCellGuardFailed("parse podman ps", err instanceof Error ? err.message : String(err), { cause: err });
   }
-  const parsed = psSchema.safeParse(json);
-  if (!parsed.success) throw new TestCellGuardFailed("parse podman ps", parsed.error.message);
-  return parsed.data.map((entry) => ({
+  return entries.map((entry) => ({
     id: entry.Id,
     name: entry.Names?.[0] ?? entry.Id,
+    // eslint-disable-next-line no-restricted-syntax -- policy default: display text of a container listing; the guard judges by label only
     state: entry.State ?? "unknown",
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a container podman lists with no labels carries no instance label, so it is no cell of this run
     labels: entry.Labels ?? {},
   }));
 }
@@ -148,6 +149,7 @@ function processAlive(pid: number): boolean {
 /** Test cells of runs whose vitest process is gone: their own end never ran. */
 async function reapDeadRuns(): Promise<void> {
   const dead = (await labelledContainers()).filter((c) => {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a container without the instance label names no run, so it is not reaped
     const pid = RUN_INSTANCE.exec(c.labels[LABEL_INSTANCE] ?? "")?.[1];
     return pid !== undefined && !processAlive(Number(pid));
   });
@@ -178,6 +180,7 @@ function removeOwnCellsNow(cellRun: string): string {
   let own: TestContainer[];
   try {
     const stdout = execFileSync("podman", [...PS_LABELLED], { encoding: "utf8", timeout: PODMAN_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a container without the instance label is no cell this run labelled
     own = parsePs(stdout).filter((c) => (c.labels[LABEL_INSTANCE] ?? "").startsWith(prefix));
   } catch (err) {
     return `listing its cells failed, so a later run's reaper removes them: ${message(err)}`;
@@ -235,6 +238,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
       process.exitCode = 1;
       const deadline = Date.now() + teardownTimeoutMs * TEARDOWN_SHARE;
       const prefix = testInstancePrefix(cellRun);
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a container without the instance label is no cell this run labelled; the listing is filtered on that label
       const leaked = (await labelledContainers(remainingMs(deadline))).filter((c) => (c.labels[LABEL_INSTANCE] ?? "").startsWith(prefix));
       if (leaked.length === 0) {
         process.exitCode = verdictBefore;

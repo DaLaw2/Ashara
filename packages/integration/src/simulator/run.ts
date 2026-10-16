@@ -170,6 +170,7 @@ class BackendsOutlivedInstance extends Error {
     readonly applicationName: string,
     readonly sessions: readonly OutlivingSession[],
   ) {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
     const each = sessions.map((s) => `pid ${s.pid} ${s.state ?? "(no state)"} since ${s.backendStart ?? "?"}, last query ${JSON.stringify(s.query ?? "")}`);
     super(`${sessions.length} database session(s) of ${applicationName} were still open ${BACKEND_EXIT_POLLS * BACKEND_EXIT_POLL_MS} ms after pg_terminate_backend: ${each.join("; ")}`);
     this.name = "BackendsOutlivedInstance";
@@ -395,6 +396,7 @@ function ofProject(index: number, violation: Violation): Violation {
 
 /** Where a project's end stands: a halt that ends and begins again is not one end. */
 function standing(snapshot: Snapshot): string {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: standing text; a project with no category and one with a category are still distinct standings
   return `${snapshot.project.status}(${snapshot.project.blockedCategory ?? ""})#${snapshot.episodes.length}`;
 }
 
@@ -465,6 +467,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           if (sent !== null) bites += 1;
           return sent;
         };
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a run with no plant bypasses no seam
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver);
   const admissions = new AdmissionLedger();
@@ -682,7 +685,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
 
     /** A process that died or was SIGTERMed is restarted before anything else is asked of it. */
     const recover = async (current: Live): Promise<void> => {
-      if (current.handle.fatal !== null) trace.push(`fatal exit: ${current.handle.fatal.split(":")[0] ?? ""}`);
+      if (current.handle.fatal !== null) trace.push(`fatal exit: ${current.handle.fatal.split(":")[0]}`);
       if (current.handle.dead) await restart(current, current.handle.fatal === null ? "a crash" : "a fatal exit");
       else if (current.handle.sigtermed) await restart(current, "a SIGTERM");
     };
@@ -796,7 +799,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           dispatches += result.tasksProcessed;
           processed += result.tasksProcessed;
           for (const task of result.results) statuses.push(task.status);
-          trace.push(`cycle ${cycles}: ${result.tasksProcessed} task(s) [${result.results.map((t) => t.status).join(",")}]${result.stop === null ? "" : ` stop: ${result.stop.reason.split(":")[0] ?? ""}`}`);
+          trace.push(`cycle ${cycles}: ${result.tasksProcessed} task(s) [${result.results.map((t) => t.status).join(",")}]${result.stop === null ? "" : ` stop: ${result.stop.reason.split(":")[0]}`}`);
           if (result.stop !== null && !current.handle.dead) outcome = { kind: "halted", cause: "spend_cap", detail: result.stop.reason };
         } catch (err) {
           trace.push(`cycle ${cycles}: error ${err instanceof SimulatedCrash ? "SimulatedCrash" : err instanceof Error ? err.name : "unknown"}`);
@@ -918,7 +921,10 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       const stuck = open
         .flatMap((each) => each.items)
         .filter((item) => item.level === "Task" && item.status !== "Completed" && item.status !== "Abandoned")
-        .map((item) => `"${item.title}" ${item.status}${sourceOf(item.blockedReason) === null ? "" : ` (${sourceOf(item.blockedReason) ?? ""})`}`);
+        .map((item) => {
+          const source = sourceOf(item.blockedReason);
+          return `"${item.title}" ${item.status}${source === null ? "" : ` (${source})`}`;
+        });
       const statement = noProgress
         ? `the project made no progress for ${NO_PROGRESS_CYCLES} fault-free cycles and is neither accepted, halted nor stopped: ${stuck.join(", ")}`
         : `the project did not end within ${options.maxCycles} cycles: ${stuck.join(", ")}`;

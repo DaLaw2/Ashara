@@ -35,6 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { z } from "zod";
+import { JsonParseFailed, parseJson } from "@ashara/shared";
 
 const DEPENDENCY_NAME_RE = /(?:Deps|Port|Config)$/;
 
@@ -108,9 +109,12 @@ function workspaceResolver(packagesDir: string): (specifier: string) => string |
     if (exportsMap === undefined) {
       const manifestPath = path.join(packagesDir, pkg, "package.json");
       if (!fs.existsSync(manifestPath)) throw new OptionalDepsScanError(specifier, `${manifestPath} does not exist`);
-      const parsed = PackageJsonSchema.safeParse(JSON.parse(fs.readFileSync(manifestPath, "utf-8")));
-      if (!parsed.success) throw new OptionalDepsScanError(manifestPath, `exports is not a map of subpath to file: ${parsed.error.message}`);
-      exportsMap = parsed.data.exports;
+      try {
+        exportsMap = parseJson(PackageJsonSchema, fs.readFileSync(manifestPath, "utf-8"), manifestPath).exports;
+      } catch (err) {
+        if (!(err instanceof JsonParseFailed)) throw err;
+        throw new OptionalDepsScanError(manifestPath, `exports is not a map of subpath to file: ${err.message}`);
+      }
       exportsByPackage.set(pkg, exportsMap);
     }
     const target = exportsMap[subpath === undefined ? "." : `.${subpath}`];
@@ -219,6 +223,7 @@ function optionalMembersOf(sourceFile: ts.SourceFile, root: string): OptionalMem
       members = node.type.members;
       declaration = node.name.text;
     }
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a node that declares no *Deps type has no member to check
     for (const member of members ?? []) {
       if (!(ts.isPropertySignature(member) || ts.isMethodSignature(member)) || member.questionToken === undefined) continue;
       const name = memberName(member.name);
@@ -239,6 +244,7 @@ function constituents(type: ts.Type): ts.Type[] {
 /** Every member declaration the module's object literals and member assignments fill. */
 function suppliedDeclarations(sourceFile: ts.SourceFile, checker: ts.TypeChecker, into: Set<ts.Declaration>): void {
   const record = (symbol: ts.Symbol | undefined): void => {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a symbol with no declaration records none
     for (const declaration of symbol?.declarations ?? []) into.add(declaration);
   };
   const visit = (node: ts.Node): void => {

@@ -167,7 +167,9 @@ export async function decidedByLatestChecks(db: DbHandle, projectId: string): Pr
     const decides = StoredDecidesSchema.safeParse(row.decides);
     if (!decides.success) throw new StoredDecisionUnreadable(row.checkTaskId, row.name, `records decides that do not parse: ${z.prettifyError(decides.error)}`);
     if (decides.data === null) continue;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: an absent task_spec holds no source, so every id the row decides throws StoredDecisionUnreadable below
     const sources = parseStoredTaskSpec(row.taskSpec)?.sources ?? [];
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a task not yet seen has no decided item yet; the accumulator's start
     const items = decided.get(row.taskId) ?? [];
     for (const id of decides.data) {
       const source = sources.find((each) => each.id === id);

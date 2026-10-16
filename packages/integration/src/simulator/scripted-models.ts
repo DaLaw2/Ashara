@@ -160,7 +160,9 @@ const jsonSchemaShape = z.object({
 function schemaKeys(schema: unknown): string[] {
   const parsed = jsonSchemaShape.safeParse(schema);
   if (!parsed.success) return [];
+  // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a JSON schema without variants has none; no oracle reads it
   const variants = [...(parsed.data.anyOf ?? []), ...(parsed.data.oneOf ?? [])];
+  // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a JSON schema without properties has none; no oracle reads it
   return [...Object.keys(parsed.data.properties ?? {}), ...variants.flatMap((v) => Object.keys(v.properties ?? {}))];
 }
 
@@ -476,6 +478,7 @@ export class StandIns {
     const result = await this.context.observer.execute(sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${checkTaskId}`);
     const [row] = z.array(z.object({ sources: z.array(citedItemSchema).nullable() })).parse(result.rows);
     if (row === undefined) throw new StandInUnanswerable("suite-review", `check task ${checkTaskId} is not on record`);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a check task with no sources cites none; no oracle reads it
     return row.sources ?? [];
   }
 
@@ -519,6 +522,7 @@ export class StandIns {
 
   private async agentTurn(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
     const task = await this.taskInProgress();
+    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a call with no tools offers none; no oracle reads it
     const toolNames = new Set((options.tools ?? []).map((tool) => tool.name));
     // A requeue after a fault that was not the task's work refunds its dispatch, but its next
     // attempt is a new request to the model, so it draws a new script.
@@ -574,6 +578,7 @@ export class StandIns {
       steps = this.environmentWork();
     } else if (tools.has("define_check")) {
       work = "checks";
+      // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a task spec with no sources cites none; no oracle reads it
       steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined, spec.success ? (spec.data.sources ?? []).map((item) => item.id) : []);
     } else if (origin === "product-scaffold") {
       work = "scaffold";
@@ -751,6 +756,7 @@ export class StandIns {
     const underDelivers = behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery, "implementation");
     if (underDelivers) behaviours = behaviours.slice(0, -1);
     const later: SimTask[] = universe.tasks.slice(index + 1);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a later task with no behaviours adds none; no oracle reads it
     if (later.length > 0 && tape.chance("agent.over-delivery", rates.overDelivery, "implementation")) behaviours.push(...(later[0]?.behaviours ?? []));
     for (const b of behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b}\n` }]);
     const earlier = universe.tasks.slice(0, index).flatMap((t) => t.behaviours);
@@ -808,6 +814,7 @@ function specsOf(files: ReadonlyArray<{ readonly path: string; readonly content:
     if (!file.path.endsWith(".json")) continue;
     let raw: unknown;
     try {
+      // eslint-disable-next-line no-restricted-syntax -- a stand-in model may import no product package (boundary-rules.toml stand-ins), so it cannot reach parseJson; CheckSpecSchema validates the value below
       raw = JSON.parse(file.content);
     } catch (err) {
       console.warn(`[simulator] check file ${file.path} is not JSON, skipped: ${err instanceof Error ? err.message : String(err)}`);

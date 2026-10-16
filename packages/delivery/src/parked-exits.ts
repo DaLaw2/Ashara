@@ -52,6 +52,7 @@ async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promi
   } catch (err) {
     if (!(err instanceof WorkItemRowCorrupt)) throw err;
     console.warn(`[parked-exits] project ${projectId}: ${describeErrorChain(err)}; its Blocked tasks are not re-checked`);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: the pass released no task, which is what it returns; the warn above names why
     return 0;
   }
   let released = 0;
@@ -87,6 +88,7 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
     await deps.workItemRepo.recordMergeCommit(item.id, mergeCommit, mergeKind);
   } catch (err) {
     console.warn(`[parked-exits] task ${item.id}: the record of merge ${mergeCommit} still cannot be written; it stays Blocked:`, err);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the warn above names why
     return false;
   }
   await releaseMergedTask(deps.projects, deps.workdirBase, item, mergeKind);
@@ -96,6 +98,7 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
     console.warn(`[parked-exits] task ${item.id}: merge ${mergeCommit} recorded, but not completed: it changed concurrently (${err.from} -> ${err.to})`);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not completed; the warn above names why
     return false;
   }
   console.log(`[parked-exits] task ${item.id}: merge ${mergeCommit} recorded; Completed`);
@@ -115,6 +118,7 @@ async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boole
     merge = await mergeOnMainOf(deps.projects, deps.workdirBase, item);
   } catch (err) {
     console.warn(`[parked-exits] task ${item.id}: main still cannot be read for its merge; it stays Blocked:`, err);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the warn above names why
     return false;
   }
   if (merge !== null) return completeRecordedMerge(deps, item, merge, "merged");
@@ -148,6 +152,7 @@ async function giveUp(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
     console.warn(`[parked-exits] task ${item.id}: not given up, it changed concurrently (${err.from} -> ${err.to})`);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not given up this pass; the warn above names why
     return false;
   }
   console.warn(`[parked-exits] task ${item.id}: its ${cause.source} block has no exit that clears by itself; given up, its plan is repaired`);
@@ -163,6 +168,7 @@ async function release(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
     console.warn(`[parked-exits] task ${item.id}: not released, it changed concurrently (${err.from} -> ${err.to})`);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not released; the warn above names why
     return false;
   }
   console.log(`[parked-exits] task ${item.id}: its ${source} block cleared; back to Pending`);

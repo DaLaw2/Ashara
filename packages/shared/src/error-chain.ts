@@ -89,6 +89,7 @@ function isError(value: unknown): value is Error {
   try {
     return value instanceof Error;
   } catch {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a value whose instanceof check throws (a revoked Proxy) is serialized as a non-Error
     return false;
   }
 }
@@ -97,6 +98,7 @@ function isArray(value: unknown): value is readonly unknown[] {
   try {
     return Array.isArray(value);
   } catch {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a value whose Array.isArray check throws (a revoked Proxy) is serialized as a non-array
     return false;
   }
 }
@@ -331,6 +333,7 @@ function withCutStrings(s: SerializedError): SerializedError {
 /** Every layer's child errors dropped and counted instead. */
 function withoutChildErrors(s: SerializedError): SerializedError {
   const { errors, errorsNotKept, cause, ...rest } = s;
+  // eslint-disable-next-line no-restricted-syntax -- policy default: serializeError omits errors and errorsNotKept when a layer has none
   const notKept = (errors?.length ?? 0) + (errorsNotKept ?? 0);
   return {
     ...rest,
@@ -440,7 +443,9 @@ function describeSerialized(s: SerializedError): string {
   const parts: string[] = [];
   for (const layer of serializedLayers(s)) {
     let text = layer.name === "NonError" ? `non-Error thrown: ${layer.message}` : `${layer.name}: ${layer.message}`;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: serializeError omits errors when a layer has none
     const children = layer.errors ?? [];
+    // eslint-disable-next-line no-restricted-syntax -- policy default: serializeError omits errorsNotKept when a layer kept every child
     const notKept = layer.errorsNotKept ?? 0;
     if (children.length > 0 || notKept > 0) {
       const listed = children.map(describeSerialized);

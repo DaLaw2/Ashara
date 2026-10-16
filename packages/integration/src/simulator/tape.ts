@@ -112,12 +112,15 @@ export class Tape {
   }
 
   private draw(site: string, scope: string | undefined, choose: (u: number) => number, n: number): number {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a site not yet drawn has drawn 0 times, the counter's start
     const occurrence = (this.counts.get(site) ?? 0) + 1;
     this.counts.set(site, occurrence);
     const key = `${site}#${occurrence}`;
     let value: number;
     if (this.seed !== null) value = choose(seededUniform(this.seed, key));
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a replay file records only the non-zero draws (taken below), so an absent key is the zero draw
     else if (this.fixed !== null) value = this.fixed.get(key) ?? 0;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a site no direction steers takes the zero draw, the undisturbed path
     else value = this.directedDraw(site, scope) ?? 0;
     if (value < 0 || value >= n) throw new DrawOutOfRange(key, value, n);
     if (value !== 0) this.taken.push({ key, value });

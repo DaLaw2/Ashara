@@ -8,7 +8,9 @@ export class TaskSelector {
   ): WorkItem[] {
     const sorted = [...available].sort((a, b) => {
       if (unlockWeights) {
+        // eslint-disable-next-line no-restricted-syntax -- policy default: an item absent from the weights unlocks no task; it orders the batch only
         const wa = unlockWeights.get(a.id) ?? 0;
+        // eslint-disable-next-line no-restricted-syntax -- policy default: an item absent from the weights unlocks no task; it orders the batch only
         const wb = unlockWeights.get(b.id) ?? 0;
         if (wa !== wb) return wb - wa;
       }

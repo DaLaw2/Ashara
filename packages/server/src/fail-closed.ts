@@ -21,6 +21,7 @@ function isStartupRefused(err: unknown): err is ServerStartupRefused {
   try {
     return err instanceof ServerStartupRefused;
   } catch {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a value whose prototype check throws is no refused start; the caller handles it as any other failure
     return false;
   }
 }

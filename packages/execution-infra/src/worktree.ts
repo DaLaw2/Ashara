@@ -412,6 +412,7 @@ export async function buildFileTree(
   const list: ListChildren = (await treeHasDirectory(rootDir, ".git"))
     ? await gitListing(rootDir)
     : async (relDir) =>
+        // eslint-disable-next-line no-restricted-syntax -- policy default: a directory that does not exist lists no entry in the agent's file-tree context; no verdict reads it
         ((await listTreeDir(rootDir, relDir)) ?? []).map((e) => ({ name: e.name, isDirectory: e.kind === "directory" }));
   const paths: string[] = [];
 

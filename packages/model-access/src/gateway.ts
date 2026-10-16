@@ -10,7 +10,7 @@ import {
 } from "ai";
 import type { GenerateObjectResult, LanguageModel } from "ai";
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
+import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
 import {
@@ -503,6 +503,7 @@ export class LLMGateway {
         outputTokens: extraction.reported.outputTokens,
         reasoningTokens: extraction.reasoningTokens,
         // generateObject keeps no raw text on success; this is the parsed object re-serialized.
+        // eslint-disable-next-line no-restricted-syntax -- policy default: diagnostic text of an over-budget success; JSON.stringify returns undefined only for an undefined object
         text: JSON.stringify(result.object) ?? "",
       });
     }
@@ -615,19 +616,13 @@ type ParsedStructuredText<T> =
 
 function parseStructuredText<T>(text: string, schema: StructuredRequest<T>["schema"]): ParsedStructuredText<T> {
   const jsonText = extractJson(text);
-  let json: unknown;
   try {
-    json = JSON.parse(jsonText);
-  } catch {
-    return { ok: false, errorKind: "InvalidJson", errors: [`Invalid JSON: ${jsonText.slice(0, 100)}`] };
+    return { ok: true, data: parseJson(schema, jsonText, "structured output text") };
+  } catch (err) {
+    if (!(err instanceof JsonParseFailed)) throw err;
+    if (err.stage === "syntax") return { ok: false, errorKind: "InvalidJson", errors: [`Invalid JSON: ${jsonText.slice(0, 100)}`] };
+    return { ok: false, errorKind: "SchemaMismatch", errors: [...err.issues] };
   }
-  const validation = schema.safeParse(json);
-  if (validation.success) return { ok: true, data: validation.data };
-  return {
-    ok: false,
-    errorKind: "SchemaMismatch",
-    errors: validation.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
-  };
 }
 
 /**
@@ -649,6 +644,7 @@ function structuredFailureOf(
   resolved: CallTarget,
   budget: OutputBudget,
 ): SchemaValidationError {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: diagnostic text of a response already classed as a failure
   const text = error.text ?? "";
   if (error.finishReason === "length") {
     return new StructuredOutputTruncated(
@@ -766,9 +762,13 @@ export function extractUsage(
   };
   // Zero-filled for tallies only; `reported` keeps every null, and only it prices a call.
   const usage: TokenUsage = {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: tallies for the attempt record only; `reported` keeps every null and alone prices a call (measureCost)
     inputTokens: reported.inputTokens ?? 0,
+    // eslint-disable-next-line no-restricted-syntax -- policy default: tallies for the attempt record only; `reported` keeps every null and alone prices a call (measureCost)
     outputTokens: reported.outputTokens ?? 0,
+    // eslint-disable-next-line no-restricted-syntax -- policy default: tallies for the attempt record only; `reported` keeps every null and alone prices a call (measureCost)
     cacheReadTokens: reported.cacheReadTokens ?? 0,
+    // eslint-disable-next-line no-restricted-syntax -- policy default: tallies for the attempt record only; `reported` keeps every null and alone prices a call (measureCost)
     cacheWriteTokens: reported.cacheWriteTokens ?? 0,
   };
   return { usage, reported, reasoningTokens: reportedReasoning(sdkUsage?.raw) };

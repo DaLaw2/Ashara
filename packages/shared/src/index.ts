@@ -21,5 +21,7 @@ export { memoryStepContainment } from "./contained-step.js";
 export type { DomainEvent } from "./types.js";
 export { createDomainEvent } from "./types.js";
 
+export { JsonParseFailed, parseJson } from "./json.js";
+
 export type { ElidedText } from "./elided-text.js";
 export { cutText, headBudget, joinElided, keepEnds, renderElided, shownText, uncutText, wholeText } from "./elided-text.js";

@@ -190,5 +190,6 @@ function buildDependencyContext(items: WorkItem[]): DependencyContext {
 }
 
 function equivalenceKey(parentId: string | undefined, title: string): string {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a parentless item's key has an empty parent part; a key, not a verdict
   return `${parentId ?? ""}::${title.trim().toLowerCase()}`;
 }

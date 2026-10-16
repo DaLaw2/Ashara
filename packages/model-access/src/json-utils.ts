@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { JsonParseFailed, parseJson } from "@ashara/shared";
+
 /**
  * The JSON text of an LLM response that may wrap it in a markdown fence or in
  * explanatory prose. It only removes what surrounds the value and never adds
@@ -27,10 +30,10 @@ export function extractJson(text: string): string {
 
 function parses(candidate: string): boolean {
     try {
-        JSON.parse(candidate);
+        parseJson(z.unknown(), candidate, "model response text");
         return true;
     } catch (e: unknown) {
-        if (e instanceof SyntaxError) return false;
+        if (e instanceof JsonParseFailed && e.stage === "syntax") return false;
         throw e;
     }
 }

@@ -51,6 +51,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
             item: rowToWorkItem(item),
             mergeCommit: item.mergeCommit,
             environmentStatement: item.environmentStatement,
+            // eslint-disable-next-line no-restricted-syntax -- policy default: a task with no stored checks decides no item (decidedByLatestChecks), the reading that counts none of its items as covered
             decided: decided.get(item.id) ?? [],
           })),
           };

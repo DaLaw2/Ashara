@@ -168,6 +168,7 @@ async function executeTask(
     dispatchCount: task.dispatchCount,
     attempt,
     workKind: task.workKind,
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a task stored without criteria (epics, HTTP-created tasks; parseStoredSuccessCriteria) gets no acceptance section in its brief; no verdict reads it
     successCriteria: task.successCriteria ?? [],
   };
 

@@ -142,6 +142,7 @@ function tieLines(task: RunEvidence["tasks"][number]): { readonly lines: string[
     );
   }
   const bySite = new Map<string, number>();
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a call site not yet counted has count 0, the accumulator's start
   for (const c of task.calls) if (!c.agentTurn) bySite.set(c.callSite, (bySite.get(c.callSite) ?? 0) + 1);
   for (const [site, n] of [...bySite.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     lines.push(`  ${n} call(s) by ${site}: not an attempt's turn (an attempt calls only as agent-runner), so none is tied to an attempt`);

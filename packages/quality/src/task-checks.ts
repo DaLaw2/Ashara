@@ -196,6 +196,7 @@ export type CitedItemIds = readonly [string, ...string[]];
  * decides decides nothing. Empty only when every cited item has a check whose stored verdict is on it.
  */
 function undecidedItems(cited: readonly string[], checks: ReadonlyArray<{ readonly decides: readonly string[] | null }>): string[] {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a check with no record of what it decides decides nothing (ADR-083), so its cited items stay undecided
   const decided = new Set(checks.flatMap((check) => check.decides ?? []));
   return cited.filter((id) => !decided.has(id));
 }
@@ -433,9 +434,9 @@ async function collectCheckFiles(
   const changed: Array<{ readonly status: string; readonly path: string }> = [];
   const discarded: string[] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
-    const path = fields[i + 1] ?? "";
+    const path = fields[i + 1];
     if (!written.has(path)) continue;
-    if (path.startsWith(area)) changed.push({ status: fields[i] ?? "", path });
+    if (path.startsWith(area)) changed.push({ status: fields[i], path });
     else discarded.push(path);
   }
   if (discarded.length > 0) {

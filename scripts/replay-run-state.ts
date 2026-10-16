@@ -185,6 +185,7 @@ async function main(): Promise<void> {
       );
       for (const project of projects) {
         console.log(`project ${project.id} "${project.name}"`);
+        // eslint-disable-next-line no-restricted-syntax -- policy default: a project with nothing kept prints an empty list
         print("kept", kept.get(project.id) ?? []);
         const today = await judgeStoredText(db, project.id, await recomposeBriefs(db, project.id));
         const composed = today.filter((each) => composedAgain(each.key, project.id, recomposed));

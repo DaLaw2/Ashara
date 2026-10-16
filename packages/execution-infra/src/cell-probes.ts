@@ -202,6 +202,7 @@ export async function probeOutboundHost(cell: Cell, host: string): Promise<Probe
   if (result.exitCode !== 0) return unobserved(probe, result);
   const lines = result.stdout.split("\n");
   const line = (prefix: string): string | null => lines.find((entry) => entry.startsWith(prefix)) ?? null;
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent interfaces line yields no interface, which the outcome below reads as unverifiable, never held
   const interfaces = (line("interfaces:")?.slice("interfaces:".length).trim() ?? "").split(" ").filter((name) => name !== "");
   const routes = line("routes: ");
   const routeCount = routes === null ? null : (ROUTES_LINE.exec(routes)?.[1] ?? null);

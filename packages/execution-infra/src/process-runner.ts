@@ -188,6 +188,7 @@ export const spawnProcess: ProcessRunner = (request) =>
       if (timer) clearTimeout(timer);
       if (settled) return;
       settled = true;
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a spawn error without an errno code; the code is shown in messages only, no caller branches on it
       reject(new ProcessSpawnFailed(request.file, err.code ?? "unknown", err.message, { cause: err }));
     });
 

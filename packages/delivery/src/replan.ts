@@ -424,8 +424,8 @@ function revisionChanges(changes: readonly [ChangeRequest, ...ChangeRequest[]]):
 }
 
 function firstLine(text: string): string {
-  const [line] = text.split("\n");
-  return line ?? "";
+  // split returns at least one element, the whole text when it holds no newline.
+  return text.split("\n")[0];
 }
 
 function cut(text: string, max: number): string {

@@ -148,7 +148,7 @@ names.model-access = ["LanguageModelFactory"]
 names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "observeAcceptanceSweeps"]
 names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
-names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "describeErrorChain", "observeContendedWaits"]
+names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "describeErrorChain", "observeContendedWaits", "parseJson"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT"]
 # ADR-080 d10: a stand-in model answers the product's model calls, so one that imports the rule judging
 # its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the

@@ -709,6 +709,7 @@ export class DispatchService {
       }
       // ADR-083: its checks are kept only when they decide every item it cites, so a check task that
       // records none has nothing its checks could be judged complete against.
+      // eslint-disable-next-line no-restricted-syntax -- policy default: an absent sources list cites no item, which the unplannable refusal below rejects as an empty one
       const [firstCited, ...restCited] = (task.taskSpec?.sources ?? []).map((source) => source.id);
       if (firstCited === undefined) {
         return {
@@ -1378,7 +1379,7 @@ export class DispatchService {
  */
 function briefSpecOf(task: TaskDescriptor): { readonly kind: "spec"; readonly spec: TaskSpec } | Unplannable {
   const stored = task.taskSpec;
-  const { goal, endState, scope, deliverables } = stored ?? {};
+  const [goal, endState, scope, deliverables] = [stored?.goal, stored?.endState, stored?.scope, stored?.deliverables];
   if (goal === undefined || endState === undefined || scope === undefined || deliverables === undefined) {
     const missing = Object.entries({ goal, endState, scope, deliverables })
       .filter(([, value]) => value === undefined)

@@ -269,7 +269,9 @@ export class DependencyGraph {
       const dependents = this.reverseEdges.get(node);
       if (!dependents) continue;
       for (const dep of dependents) {
+        // eslint-disable-next-line no-restricted-syntax -- policy default: a dependent not yet weighed unlocks nothing yet; 0 is the accumulator's start, not a reading
         const downstream = (weights.get(dep) ?? 0) + 1;
+        // eslint-disable-next-line no-restricted-syntax -- policy default: a node not yet weighed has weight 0, the accumulator's start
         if (downstream > (weights.get(node) ?? 0)) {
           weights.set(node, downstream);
         }
@@ -288,6 +290,7 @@ export class DependencyGraph {
     }
     for (const [, targets] of this.edges) {
       for (const target of targets) {
+        // eslint-disable-next-line no-restricted-syntax -- policy default: every node starts at in-degree 0 above; 0 is the accumulator's start
         inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
       }
     }

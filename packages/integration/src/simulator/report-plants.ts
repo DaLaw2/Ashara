@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { JsonParseFailed, parseJson } from "@ashara/shared";
 import type { QueryPlant } from "./faults.js";
 
 /**
@@ -140,22 +141,17 @@ export const deliveredReportMisquotesInterface = rewriteReport(
       : body.replace("its public interface file is missing.", "its public interface file is empty."),
 );
 
-/** A parameter as JSON, or undefined when it is no JSON text. */
-function jsonOf(param: string): unknown {
-  try {
-    return JSON.parse(param);
-  } catch {
-    return undefined;
-  }
-}
-
 const decidesParam = z.array(z.string().min(1)).min(1);
 
-/** A parameter that is a stored check's `decides` (a JSON array of ids), or null. */
+/** A parameter that is a stored check's `decides` (a JSON array of ids), or null: every other parameter of the insert is not one. */
 function decidesOf(param: unknown): string[] | null {
   if (typeof param !== "string") return null;
-  const parsed = decidesParam.safeParse(jsonOf(param));
-  return parsed.success ? parsed.data : null;
+  try {
+    return parseJson(decidesParam, param, "task_checks insert parameter");
+  } catch (err) {
+    if (err instanceof JsonParseFailed) return null;
+    throw err;
+  }
 }
 
 /**
@@ -168,6 +164,7 @@ export const checkSetSkipsItem: QueryPlant = (args) => {
   const text = textOf(args);
   const params = args[1];
   if (text === null || !text.startsWith(`insert into "task_checks"`) || !Array.isArray(params)) return null;
+  // eslint-disable-next-line no-restricted-syntax -- policy default: plant test plumbing, a parameter that is no decides array adds no id; no oracle reads it
   const decided = [...new Set(params.flatMap((param: unknown) => decidesOf(param) ?? []))];
   const [first] = decided;
   const skipped = decided.at(-1);

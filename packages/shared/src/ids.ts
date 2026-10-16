@@ -1,14 +1,16 @@
 import { z } from "zod";
 
-export type ProjectId = string & { readonly __brand: "ProjectId" };
-export type WorkItemId = string & { readonly __brand: "WorkItemId" };
-
 type IdBrand = "ProjectId" | "WorkItemId";
 
 // Both are uuid columns (projects.id, work_items.id) or
 // crypto.randomUUID(). z.guid() is the 8-4-4-4-12 hex shape without RFC 9562
-// version bits: Postgres stores any such value in a uuid column.
-const UuidSchema = z.guid();
+// version bits: Postgres stores any such value in a uuid column. The brand is
+// Zod's, so the only value that carries it is one the schema accepted.
+const ProjectIdSchema = z.guid().brand<"ProjectId">();
+const WorkItemIdSchema = z.guid().brand<"WorkItemId">();
+
+export type ProjectId = z.infer<typeof ProjectIdSchema>;
+export type WorkItemId = z.infer<typeof WorkItemIdSchema>;
 
 /**
  * A value that was to become a branded id and is not one. `field` names where
@@ -26,8 +28,8 @@ export class InvalidId extends Error {
   }
 }
 
-function parseUuid(brand: IdBrand, raw: unknown, field: string): string {
-  const parsed = UuidSchema.safeParse(raw);
+function parseUuid<S extends z.ZodType>(brand: IdBrand, schema: S, raw: unknown, field: string): z.output<S> {
+  const parsed = schema.safeParse(raw);
   if (!parsed.success) throw new InvalidId(brand, field, raw);
   return parsed.data;
 }
@@ -37,12 +39,12 @@ function parseUuid(brand: IdBrand, raw: unknown, field: string): string {
  * (migration 014), the key of a project's visions and work items.
  */
 export function parseProjectId(raw: unknown, field: string): ProjectId {
-  return parseUuid("ProjectId", raw, field) as ProjectId;
+  return parseUuid("ProjectId", ProjectIdSchema, raw, field);
 }
 
 /** The one way an external value becomes a `WorkItemId` — a work_items.id or a stored reference to one. */
 export function parseWorkItemId(raw: unknown, field: string): WorkItemId {
-  return parseUuid("WorkItemId", raw, field) as WorkItemId;
+  return parseUuid("WorkItemId", WorkItemIdSchema, raw, field);
 }
 
 export function createWorkItemId(): WorkItemId {

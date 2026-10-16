@@ -107,6 +107,7 @@ export class SuiteReviewFindingRepository {
         .groupBy(suiteReviewFindings.checkTaskId);
       const times = new Map(rows.map((row) => [row.checkTaskId, row.times]));
       // Every row just inserted is counted: a named check task below one means the count read another table state.
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a check task with no counted row reads 0, which throws SuiteReviewFindingsUnrecordable below
       const uncounted = named.filter((checkTaskId) => (times.get(checkTaskId) ?? 0) < 1);
       if (uncounted.length > 0) {
         throw new SuiteReviewFindingsUnrecordable(findings.reviewTaskId, `check task(s) ${uncounted.join(", ")} counted no review right after one was recorded`);

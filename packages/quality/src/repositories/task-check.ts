@@ -315,6 +315,7 @@ export class TaskCheckRepository {
       const locked = await tx.execute(sql`SELECT id FROM work_items WHERE id = ${write.taskId} FOR UPDATE`);
       if (locked.rows.length !== 1) throw new CheckedTaskMissing(write.taskId);
       const [latest] = await tx.select({ revision: max(taskChecks.revision) }).from(taskChecks).where(eq(taskChecks.taskId, write.taskId));
+      // eslint-disable-next-line no-restricted-syntax -- policy default: max() over no stored revision is null, so this write is the task's first revision
       const revision = (latest?.revision ?? 0) + 1;
       await tx.insert(taskChecks).values(
         write.checks.map((check) => ({

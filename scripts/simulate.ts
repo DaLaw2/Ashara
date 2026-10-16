@@ -52,7 +52,7 @@ import {
   runSeed,
 } from "@ashara/integration";
 import type { Decision, Floor, Profile, RunMode, RunOptions, RunResult, SeedReport } from "@ashara/integration";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, parseJson } from "@ashara/shared";
 
 const USAGE = "Usage: npx tsx scripts/simulate.ts [--seeds N] [--start S] [--jobs J] [--profile P] [--projects 1|2] [--cap USD] [--minimize] [--trace] [--replay FILE]";
 
@@ -149,6 +149,7 @@ function parseArgs(argv: readonly string[]): Args {
     }
     const value = argv[i + 1];
     i += 1;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
     if (value === undefined) throw new SimulateUsageError(`${flag ?? ""} needs a value.`);
     if (flag === "--seeds") seeds = integerArg(flag, value, 1, MAX_SEEDS);
     else if (flag === "--start") start = integerArg(flag, value, 0, Number.MAX_SAFE_INTEGER);
@@ -157,6 +158,7 @@ function parseArgs(argv: readonly string[]): Args {
     else if (flag === "--replay") replay = value;
     else if (flag === "--projects") projects = integerArg(flag, value, 1, 2) === 2 ? 2 : 1;
     else if (flag === "--cap") capUsd = integerArg(flag, value, 1, 1000);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
     else throw new SimulateUsageError(`Unknown argument ${flag ?? ""}.`);
   }
   return { seeds, start, jobs, profile, minimize: shouldMinimize, trace, replay, projects, capUsd, worker };
@@ -406,7 +408,7 @@ async function main(): Promise<void> {
   }
 
   if (args.replay !== null) {
-    const file = ReplayFileSchema.parse(JSON.parse(await readFile(args.replay, "utf8")));
+    const file = parseJson(ReplayFileSchema, await readFile(args.replay, "utf8"), `replay file ${args.replay}`);
     // The file's own mode, recorded when it was written; a file without one is a one-project run.
     const replayed: RunMode = { projects: file.projects ?? 1, ...(file.capUsd === undefined ? {} : { capUsd: file.capUsd }) };
     const result = await runSeed({ ...base, ...replayed, seed: file.seed, profile: file.profile, tape: { kind: "replay", decisions: file.decisions } });

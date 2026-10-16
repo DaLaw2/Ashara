@@ -143,6 +143,7 @@ function tokenSpans(text: string, token: string): [number, number][] {
   const spans: [number, number][] = [];
   for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
     const before = at === 0 ? "" : haystack[at - 1];
+    // eslint-disable-next-line no-restricted-syntax -- policy default: past the end of the text is a word boundary
     const after = haystack[at + needle.length] ?? "";
     if (!WORD_CHAR_RE.test(before) && !WORD_CHAR_RE.test(after)) spans.push([at, at + needle.length]);
   }

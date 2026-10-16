@@ -351,6 +351,7 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: Versions, add: Add)
     if (kindWords !== KIND_WORDS[recorded.kind] || (notCitable === undefined) !== citable || text !== recorded.statement) {
       add(
         `brief-assumption:${title}:${id}`,
+        // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
         `the brief of "${title}" states assumption ${id} as "${kindWords}${notCitable ?? ""}: ${text.slice(0, 120)}"; vision v${brief.visionVersion} records "${KIND_WORDS[recorded.kind]}: ${recorded.statement.slice(0, 120)}"`,
       );
     }
@@ -365,7 +366,7 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: Versions, add: Add)
  */
 function checkBriefTask(title: string, context: string, rawSpec: unknown, add: Add): void {
   const spec = parseStoredTaskSpec(rawSpec);
-  const { goal, endState, scope, deliverables } = spec ?? {};
+  const [goal, endState, scope, deliverables] = [spec?.goal, spec?.endState, spec?.scope, spec?.deliverables];
   if (goal === undefined || endState === undefined || scope === undefined || deliverables === undefined) {
     add(`brief-spec-unrecorded:${title}`, `a brief of "${title}" was recorded, but its task_spec does not record a goal, end state, scope and deliverables for it to state`);
     return;
@@ -473,7 +474,9 @@ function checkAssumptionsReport(records: TextFactRecords, add: Add, versions: Ve
   if (report === undefined) return;
   const parts = report.body.split("\n\n");
   const listed = report.body.split("\n").filter((line) => /^- \S+: /.test(line));
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no assumption, so each one expected under it is reported below
   const behaviour = parts.find((part) => part.startsWith("What the product will do:")) ?? "";
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no assumption, so each one expected under it is reported below
   const design = parts.find((part) => part.startsWith("How we will build it")) ?? "";
   for (const assumption of reported) {
     const under = assumption.kind === "client-visible" ? behaviour : assumption.kind === "internal-design" ? design : null;
@@ -506,6 +509,7 @@ function checkFirstPlan(records: TextFactRecords, add: Add): void {
     } catch (err) {
       if (!(err instanceof BlockedReasonCorrupt)) throw err;
       corrupt += 1;
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a task whose reason does not parse is counted as corrupt and reported as first-plan-unreadable below
       return false;
     }
   });
@@ -571,8 +575,10 @@ const UNCOVERED_HEAD = "These items of what you asked for are decided by no stor
 function checkDeliveredStandings(records: TextFactRecords, add: Add, versions: Versions): void {
   if (records.delivered.length === 0) return;
   // A corrupt task_spec throws TaskSpecCorrupt: the run fails, never passes unjudged.
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an unrecorded review spec leaves no reviewed assumption whose standing to recompute; client-reports coverageOnRecord judges it as unrecorded
   const reviewed = (parseStoredTaskSpec(records.reviewSpec)?.sources ?? []).filter((source) => source.type === "assumption");
   for (const report of records.delivered) {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item whose standing to judge; client-reports coverageProblems judges the section itself
     const listed = (report.body.split("\n\n").find((part) => part.startsWith(UNCOVERED_HEAD)) ?? "").split("\n").filter((line) => line.startsWith("- "));
     if (reviewed.length === 0 || listed.length === 0) continue;
     const vision = report.visionAtAcceptance === null ? undefined : versions.get(report.visionAtAcceptance);

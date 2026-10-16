@@ -356,6 +356,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
           return async () => {
             const fate = await context.scheduler.enter(context.instance, "db", "connect", ["db-unreachable"]);
             if (fate.fault === "db-unreachable") {
+              // eslint-disable-next-line no-restricted-syntax -- the simulated fault is node-postgres's own throw: a plain Error with a code, which the product's fault classifier must meet as it is
               throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432 (simulated)"), { code: "ECONNREFUSED" });
             }
             const client = await target.connect();
@@ -438,6 +439,7 @@ export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
     const label = args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? "git";
     const fate = await context.scheduler.enter(context.instance, "git", label, ["git-failed"]);
     if (fate.fault === "git-failed") {
+      // eslint-disable-next-line no-restricted-syntax -- the simulated fault is execFile's own throw: a plain Error with code and stderr, which the product must meet as it is
       throw Object.assign(new Error(`Command failed: git ${label}\nfatal: Unable to create 'index.lock': File exists. (simulated)`), {
         code: 128,
         stderr: "fatal: Unable to create 'index.lock': File exists. (simulated)\n",
@@ -471,7 +473,9 @@ const PODMAN_FAULT_OF: Readonly<Partial<Record<string, FaultKind>>> = {
 /** The container runtime of one instance (S3): each subcommand's own fault answers like podman would. */
 export function faultingPodman(context: SeamContext, inner: ProcessRunner): ProcessRunner {
   return async (request) => {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, a request with no subcommand keys no specific fault; no oracle reads it
     const subcommand = request.args[0] ?? "";
+    // eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, the label keys the fault draw only; no oracle reads it
     const label = subcommand === "image" ? `image ${request.args[1] ?? ""}` : subcommand;
     const specific = PODMAN_FAULT_OF[subcommand];
     const fate = await context.scheduler.enter(context.instance, "podman", label, specific === undefined ? [] : [specific]);
@@ -498,6 +502,7 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
  * provider's failure. A bare Error here would reach the gateway as an Ashara fault instead.
  */
 function connectionReset(provider: string, modelId: string): APICallError {
+  // eslint-disable-next-line no-restricted-syntax -- the simulated cause is node's own socket error: a plain Error with a code, wrapped as the provider SDK wraps it
   const cause = Object.assign(new Error("socket hang up (simulated)"), { code: "ECONNRESET" });
   return new APICallError({
     message: `Cannot connect to API: ${cause.message}`,

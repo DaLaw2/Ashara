@@ -51,6 +51,7 @@ function parseArgs(args: readonly string[]): { readonly image: string | null; re
     const flag = args[i];
     const value = args[i + 1];
     if ((flag !== "--image" && flag !== "--host") || value === undefined || value.trim() === "") {
+      // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
       throw new ProbesUsageError(`Unexpected or empty argument: ${flag ?? ""}.`);
     }
     if (flags.has(flag)) throw new ProbesUsageError(`${flag} given twice.`);

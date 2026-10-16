@@ -252,6 +252,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       if (rule.standIns.length === 0) {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, "lists a package's symbols, but the section has no stand-ins");
       }
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no names list narrows to nothing, so each stand-in name throws below
       const wider = rule.names.get(named) ?? [];
       for (const name of standInNames) {
         if (!wider.includes(name)) {
@@ -259,6 +260,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         }
       }
     }
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a section without importers restricts no importer (boundary-rules.toml header)
     for (const importer of rule.importers ?? []) {
       if (!rules.has(importer)) {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
@@ -509,8 +511,11 @@ function checkStandIns(scope: StandInScope): Map<string, Set<string>> {
       reason: `${where}: ${reason}`,
     });
     for (const ref of extractNamedImports(content).imports) {
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no names list is left to the named-only check, which reports it (docblock above)
       const wider = rule.names.get(ref.pkg) ?? [];
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no stand-in names allows the stand-in none, so each listed name is reported below
       const narrow = rule.standInNames.get(ref.pkg) ?? [];
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a namespace or default import names no symbol and is left to the named-only check, which reports it
       for (const name of ref.names ?? []) {
         if (!wider.includes(name)) continue;
         if (!narrow.includes(name)) {

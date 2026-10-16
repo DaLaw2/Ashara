@@ -114,7 +114,8 @@ export async function recomposeBriefs(db: Db, projectId: string): Promise<Recomp
   const briefs: RecomposedBrief[] = [];
   for (const session of sessions) {
     const intent = await loadProjectIntent(visionWhenRecorded(db, session.id), parseWorkItemId(session.taskId, "dev_sessions.task_id"));
-    const { goal, endState, scope, deliverables } = parseStoredTaskSpec(session.taskSpec) ?? {};
+    const spec = parseStoredTaskSpec(session.taskSpec);
+    const [goal, endState, scope, deliverables] = [spec?.goal, spec?.endState, spec?.scope, spec?.deliverables];
     const context =
       goal === undefined || endState === undefined || scope === undefined || deliverables === undefined
         ? ""
@@ -123,6 +124,7 @@ export async function recomposeBriefs(db: Db, projectId: string): Promise<Recomp
       title: session.title,
       visionAtCreation: session.visionAtCreation,
       taskSpec: session.taskSpec,
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a session whose task_spec records no goal; the judge re-reads taskSpec (text-facts checkBriefTask) and reports brief-spec-unrecorded
       brief: { goal: goal ?? "", context, visionVersion: intent.visionVersion, assumptions: intent.assumptions },
     });
   }

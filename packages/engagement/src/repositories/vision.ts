@@ -35,6 +35,7 @@ export class VisionRepository {
    * number fail on UNIQUE (project_id, version) rather than sharing it.
    */
   async create(projectId: ProjectId, doc: NewVision): Promise<VisionRow> {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a caller that omits these lists writes a vision that has none; the write states what it was given
     const fields = { scopeBoundaries: doc.scopeBoundaries ?? [], inferences: doc.inferences ?? [], openQuestions: doc.openQuestions ?? [] };
     assertVisionWritable(projectId, fields);
     const [row] = await this.db

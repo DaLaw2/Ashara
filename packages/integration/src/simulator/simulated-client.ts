@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, parseJson } from "@ashara/shared";
 
 /**
  * The simulated client, as a browser on the web client (ADR-076) is one: it logs in with its name
@@ -57,6 +57,7 @@ class ClientReplyUnreadable extends Error {
 function cookiePair(response: Response): string | null {
   const header = response.headers.get("set-cookie");
   if (header === null) return null;
+  // eslint-disable-next-line no-restricted-syntax -- policy default: client test plumbing, a header with no pair is refused below as no cookie
   const pair = header.split(";")[0]?.trim() ?? "";
   return pair.includes("=") ? pair : null;
 }
@@ -112,6 +113,7 @@ export class SimulatedClient {
       const login = await this.login(app);
       if (!login.ok) return login;
     }
+    // eslint-disable-next-line no-restricted-syntax -- policy default: client test plumbing, the login above sets the cookie; an empty one is answered 401 by the route
     const headers: Record<string, string> = { Cookie: this.cookie ?? "" };
     if (method === "POST") Object.assign(headers, { "Content-Type": "application/json" }, CLIENT_HEADER);
     const response = await app.request(`${ORIGIN}${path}`, body === null ? { method, headers } : { method, headers, body: JSON.stringify(body) }, LOOPBACK);
@@ -119,7 +121,7 @@ export class SimulatedClient {
     if (response.status === 401) this.cookie = null;
     if (response.status !== expected) return { ok: false, status: response.status, detail: `${method} ${path}: ${text}` };
     try {
-      return { ok: true, value: read(text === "" ? null : JSON.parse(text)) };
+      return { ok: true, value: read(text === "" ? null : parseJson(z.unknown(), text, `${method} ${path} response body`)) };
     } catch (err) {
       throw new ClientReplyUnreadable(`${method} ${path}`, response.status, describeErrorChain(err), { cause: err });
     }

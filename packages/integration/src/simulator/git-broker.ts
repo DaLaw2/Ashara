@@ -120,6 +120,7 @@ export class GitBroker {
         }
         const out = bytes ? asBuffer(reply.stdout) : asText(reply.stdout);
         const err = bytes ? asBuffer(reply.stderr) : asText(reply.stderr);
+        // eslint-disable-next-line no-restricted-syntax -- rebuilds execFile's own throw across the broker's process boundary: a plain Error with execFile's fields, which the product must meet as it is
         reject(Object.assign(new Error(reply.failure.message), { code: reply.failure.code, killed: reply.failure.killed, signal: reply.failure.signal, cmd: reply.failure.cmd, stdout: out, stderr: err }));
       };
       this.pending.set(id, { settle, fail: reject });

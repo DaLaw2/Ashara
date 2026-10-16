@@ -75,6 +75,7 @@ export function worstCaseCostUsd(model: ModelConfig, requestBytes: number, maxOu
     ...model.priceWindows.map((window) => window.rates),
     ...model.priceTiers.map((tier) => tier.rates),
   ];
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a null cache-write rate bills no cache write (TokenRates), so the worst-case input rate is the input rate itself
   const inputRate = Math.max(...rates.map((r) => Math.max(r.inputCostPer1M, r.cacheWriteCostPer1M ?? 0)));
   const outputRate = Math.max(...rates.map((r) => r.outputCostPer1M));
   const inputTokens = Math.ceil(requestBytes / BYTES_PER_TOKEN_FLOOR) + REQUEST_FRAMING_TOKENS;

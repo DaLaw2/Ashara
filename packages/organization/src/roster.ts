@@ -90,6 +90,7 @@ function grouped(roles: readonly Role[], key: (role: Role) => string): [string, 
   const groups = new Map<string, Role[]>();
   for (const role of roles) {
     const k = key(role);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a key not yet seen has no member yet; the accumulator's start
     groups.set(k, [...(groups.get(k) ?? []), role]);
   }
   return [...groups].filter(([, members]) => members.length > 1);

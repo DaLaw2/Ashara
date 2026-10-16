@@ -1367,6 +1367,7 @@ export class TaskVerification {
           attempt: d.task.attempt,
           command,
           ...(report.kind === "ran"
+            // eslint-disable-next-line no-restricted-syntax -- policy default: event-sink telemetry only, no verdict reads it; a ran report carries its one run
             ? { exitCode: report.runs[0]?.exitCode ?? null, timedOut: report.runs[0]?.timedOut ?? false }
             : { notRun: report.kind }),
         });

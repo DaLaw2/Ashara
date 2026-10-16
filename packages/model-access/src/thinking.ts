@@ -41,6 +41,7 @@ export function loadThinkingPolicyFromToml(configPath: string): ThinkingPolicy {
       parsed.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`),
     );
   }
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a policy file that overrides no site leaves every site on its default
   return { default: parsed.data.default, sites: parsed.data.sites ?? {} };
 }
 

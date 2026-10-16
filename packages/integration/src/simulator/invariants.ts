@@ -496,12 +496,14 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
   const recorded = new Map<string, ItemRow[]>();
   for (const item of snapshot.items) {
     if (item.mergeCommit === null) continue;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a commit not yet seen has no record yet; the accumulator's start
     recorded.set(item.mergeCommit, [...(recorded.get(item.mergeCommit) ?? []), item]);
   }
   const onMain = new Set(snapshot.main.map((entry) => entry.commit));
   for (const entry of snapshot.main) {
     const named = /^merge: task (\S+)$/.exec(entry.subject)?.[1];
     if (named === undefined) continue;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a merge on main with no record is held to exactly one record below and reported
     const records = (recorded.get(entry.commit) ?? []).filter((item) => item.id === named && item.status === "Completed");
     if (records.length !== 1) {
       const item = byId.get(named);
@@ -528,9 +530,11 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
  */
 export function progressFacts(snapshot: Snapshot): string[] {
   const { project } = snapshot;
+  // eslint-disable-next-line no-restricted-syntax -- policy default: fact text; a project with no category and one with a category are still distinct facts
   const facts = [`project:${project.status}(${project.blockedCategory ?? ""})`];
   for (const item of snapshot.items) {
     const source = sourceOf(item.blockedReason);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: fact text; a task with no reason source and one with a source are still distinct facts
     facts.push(`status:${item.id}:${item.status}(${source ?? ""})`);
     if (item.mergeCommit !== null) facts.push(`merge:${item.id}:${item.mergeCommit}`);
     facts.push(`attempts:${item.id}:${item.dispatchCount}`, `infrastructure:${item.id}:${item.infrastructureFaults}`);
@@ -553,6 +557,7 @@ export function checkTotality(step: number, stalled: Snapshot, cycles: number): 
     if (item.level !== "Task" || item.status === "Completed" || item.status === "Abandoned") continue;
     const source = sourceOf(item.blockedReason);
     const state = source === null ? item.status : `${item.status}(${source})`;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a state not yet seen has no title yet; the accumulator's start
     states.set(state, [...(states.get(state) ?? []), `"${item.title}"`]);
   }
   return [...states].map(([state, titles]) => ({

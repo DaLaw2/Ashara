@@ -193,6 +193,7 @@ export async function containEach<T, O>(
     }
     if (containment.escapes(result.error)) throw result.error;
     const error = describeErrorChain(result.error);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: no standing on the ledger is a subject with no fault in a row, so this fault is its first
     const retryAfterSeconds = faultBackoffSeconds((prior?.faults ?? 0) + 1);
     const faults = await containment.record({ step, subjectId: subject.id, projectId: subject.projectId, error, retryAfterSeconds });
     const where = `[${step}] ${subject.id} (project ${subject.projectId}): fault ${faults} in a row`;
@@ -250,12 +251,15 @@ export function memoryStepContainment(escapes: (error: unknown) => boolean): Ste
     record: async (fault) => {
       const prior = recorded.get(key(fault.step, fault.subjectId));
       recorded.set(key(fault.step, fault.subjectId), {
+        // eslint-disable-next-line no-restricted-syntax -- policy default: no prior entry is a subject with no fault in a row, so this fault is its first
         faults: (prior?.faults ?? 0) + 1,
         error: fault.error,
         retryAt: Date.now() + fault.retryAfterSeconds * 1000,
+        // eslint-disable-next-line no-restricted-syntax -- policy default: a subject with no prior fault has not been parked
         parked: prior?.parked ?? false,
         projectId: fault.projectId,
       });
+      // eslint-disable-next-line no-restricted-syntax -- policy default: no prior entry is a subject with no fault in a row, so this fault is its first
       return (prior?.faults ?? 0) + 1;
     },
     clear: async (step, subjectId) => {

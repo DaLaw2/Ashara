@@ -126,6 +126,7 @@ export function parseVerifyBlocks(content: string, filePath: string): VerifyBloc
     }
 
     const blockLine = i + 1;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a fence with no annotation
     const rawAnnotation = (fenceMatch[1] ?? "").trim();
     if (rawAnnotation !== "") {
       throw new BlockParseError(filePath, blockLine, `unknown annotation "${rawAnnotation}"`);

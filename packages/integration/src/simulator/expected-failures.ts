@@ -50,6 +50,7 @@ interface ExpectedFailureDiff {
 }
 
 export function diffExpected(run: Pick<RunResult, "seed" | "profile" | "violations">, mode: RunMode): ExpectedFailureDiff {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a seed with no entry expects no failure, so every violation it has is unexpected
   const listed = new Set(entryOf(run, mode)?.keys ?? []);
   const failed = new Set(run.violations.map((violation) => violation.key));
   return {

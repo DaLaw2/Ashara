@@ -92,6 +92,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       return c.json({ error: "invalid status patch body", issues: bodyParsed.error.issues }, 400);
     }
     const newStatus = bodyParsed.data.status;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: an operator's Failed patch may omit its detail; the stored reason still records source api
     const reason = bodyParsed.data.reason ?? {};
 
     const row = await workItemRepo.findById(id);
@@ -205,7 +206,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       sessionId: row.id,
       taskId: row.taskId,
       phase: row.phase,
-      brief: row.brief ?? {},
+      brief: row.brief,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }));

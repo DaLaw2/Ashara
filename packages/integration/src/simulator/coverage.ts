@@ -361,6 +361,7 @@ export function countBehaviours(counts: Map<string, number>, coverage: Coverage)
     for (const member of members) {
       if (!coverage[set].has(member)) continue;
       const key = `${set} ${member}`;
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a behaviour not yet counted has count 0, the accumulator's start
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }

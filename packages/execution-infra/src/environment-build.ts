@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { describeErrorChain, joinElided, keepEnds, renderElided } from "@ashara/shared";
+import { JsonParseFailed, describeErrorChain, joinElided, keepEnds, parseJson, renderElided } from "@ashara/shared";
 import type { ElidedText, ProjectId } from "@ashara/shared";
 import { buildLimitArgs } from "./cell-limits.js";
 import { materializeSnapshot, snapshotEnvironment, type EnvironmentBuildContext } from "./environment.js";
@@ -106,21 +106,7 @@ async function existingImageId(substrate: PodmanSubstrate, imageRef: string, pro
     throw new PodmanCommandFailed("image exists", existsArgs, exists.exitCode, exists.stderr.trim() || "(no stderr)");
   }
   const inspectArgs = ["image", "inspect", "--format", "json", imageRef];
-  const inspect = await substrate.run(inspectArgs);
-  if (inspect.exitCode !== 0) {
-    throw new PodmanCommandFailed("image inspect", inspectArgs, inspect.exitCode, inspect.stderr.trim() || "(no stderr)");
-  }
-  let json: unknown;
-  try {
-    json = JSON.parse(inspect.stdout);
-  } catch (err) {
-    throw new PodmanCommandFailed("image inspect", inspectArgs, inspect.exitCode, `invalid JSON: ${describeErrorChain(err)}`);
-  }
-  const parsed = inspectSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new PodmanCommandFailed("image inspect", inspectArgs, inspect.exitCode, `unexpected shape: ${parsed.error.message}`);
-  }
-  const [image] = parsed.data;
+  const [image] = await podmanJson(substrate, "image inspect", inspectArgs, inspectSchema);
   // A tag is mutable: only an image that carries this project's and version's labels is ours.
   if (image === undefined || image.Labels?.[LABEL_PROJECT] !== projectId || image.Labels[LABEL_ENV_VERSION] !== version) return null;
   return `sha256:${image.Id}`;
@@ -148,13 +134,14 @@ export interface EnvironmentImagePrune {
   readonly kept: readonly KeptImage[];
 }
 
-async function podmanJson(substrate: PodmanSubstrate, operation: string, args: readonly string[]): Promise<unknown> {
+async function podmanJson<S extends z.ZodType>(substrate: PodmanSubstrate, operation: string, args: readonly string[], schema: S): Promise<z.output<S>> {
   const result = await substrate.run(args);
   if (result.exitCode !== 0) throw new PodmanCommandFailed(operation, args, result.exitCode, result.stderr.trim() || "(no stderr)");
   try {
-    return JSON.parse(result.stdout);
+    return parseJson(schema, result.stdout, `podman ${operation} stdout`);
   } catch (err) {
-    throw new PodmanCommandFailed(operation, args, result.exitCode, `invalid JSON: ${describeErrorChain(err)}`);
+    if (!(err instanceof JsonParseFailed)) throw err;
+    throw new PodmanCommandFailed(operation, args, result.exitCode, describeErrorChain(err));
   }
 }
 
@@ -175,9 +162,8 @@ export async function pruneEnvironmentImages(
   if (!tag.success) throw new InvalidCellRequest("pruneEnvironmentImages", tag.error.issues.map((issue) => issue.message));
 
   const listArgs = ["images", "--filter", `label=${LABEL_MANAGED}=1`, "--filter", `label=${LABEL_PROJECT}=${projectId}`, "--format", "json"];
-  const images = imageListSchema.safeParse(await podmanJson(substrate, "images", listArgs));
-  if (!images.success) throw new PodmanCommandFailed("images", listArgs, 0, `unexpected shape: ${images.error.message}`);
-  const foreign = images.data.filter((image) => image.Labels?.[LABEL_MANAGED] !== "1" || image.Labels[LABEL_PROJECT] !== projectId);
+  const images = await podmanJson(substrate, "images", listArgs, imageListSchema);
+  const foreign = images.filter((image) => image.Labels?.[LABEL_MANAGED] !== "1" || image.Labels[LABEL_PROJECT] !== projectId);
   if (foreign.length > 0) {
     throw new PodmanCommandFailed(
       "images", listArgs, 0,
@@ -186,15 +172,14 @@ export async function pruneEnvironmentImages(
   }
 
   const psArgs = ["ps", "-a", "--format", "json"];
-  const containers = containerListSchema.safeParse(await podmanJson(substrate, "ps", psArgs));
-  if (!containers.success) throw new PodmanCommandFailed("ps", psArgs, 0, `unexpected shape: ${containers.error.message}`);
-  const inUse = new Set(containers.data.map((container) => container.ImageID.replace(/^sha256:/, "")));
+  const containers = await podmanJson(substrate, "ps", psArgs, containerListSchema);
+  const inUse = new Set(containers.map((container) => container.ImageID.replace(/^sha256:/, "")));
 
   const removed: Array<{ readonly imageId: string; readonly version: string }> = [];
   const kept: KeptImage[] = [];
   // podman lists an image once per name: each is judged once.
   const seen = new Set<string>();
-  for (const image of images.data) {
+  for (const image of images) {
     if (seen.has(image.Id)) continue;
     seen.add(image.Id);
     const version = image.Labels?.[LABEL_ENV_VERSION] ?? null;
@@ -284,6 +269,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
     const log = joinElided([elidedOutput(result.stdout, result.stdoutCut), elidedOutput(result.stderr, result.stderrCut)]);
     if (result.killedByHost) return await fail(null, true, log, `podman build ran past ${deps.timeoutMs} ms and was killed`);
     if (result.exitCode !== 0) {
+      // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
       return await fail(result.exitCode, false, log, `podman build exited ${result.exitCode ?? `by signal ${result.signal ?? "unknown"}`}`);
     }
 

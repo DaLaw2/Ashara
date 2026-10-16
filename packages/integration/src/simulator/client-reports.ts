@@ -206,6 +206,7 @@ const STATED_KINDS: ReadonlyArray<StatedKind> = [
 ];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a typed Unknown, which the halt check reports as halt-kind-unknown
   return JUDGEMENT_OF.get(kind) ?? "unknown";
 }
 
@@ -477,11 +478,12 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     if (stops.length !== 1) add("stop-reports", `the project is stopped with ${stops.length} stop report(s)`);
     const [stop] = stops;
     if (stop !== undefined) {
-      const merges = items.filter((item) => item.level === "Task" && item.mergeCommit !== null);
+      const merges = items.flatMap((item) => (item.level === "Task" && item.mergeCommit !== null ? [{ title: item.title, mergeCommit: item.mergeCommit }] : []));
+      // eslint-disable-next-line no-restricted-syntax -- policy default: an absent paragraph names no merge, so each merged task below is reported as stop-merges
       const lines = namedLines(paragraph(stop.body, "What is on main") ?? "");
       for (const item of merges) {
-        if (!lines.some((line) => line.startsWith(`- "${item.title}"`) && line.includes(item.mergeCommit ?? ""))) {
-          add("stop-merges", `the stop report does not name "${item.title}" merged as ${item.mergeCommit ?? ""}`);
+        if (!lines.some((line) => line.startsWith(`- "${item.title}"`) && line.includes(item.mergeCommit))) {
+          add("stop-merges", `the stop report does not name "${item.title}" merged as ${item.mergeCommit}`);
         }
       }
       if (lines.length !== merges.length) add("stop-merges", `the stop report names ${lines.length} merge(s); the records hold ${merges.length}`);
@@ -503,7 +505,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
       if (sweep.reportFailures < attempts - 1) {
         add("delivered-notice-unfounded", `the acceptance notice says the report could not be written in ${attempts} attempts; the sweep records ${sweep.reportFailures} failed attempt(s)`);
       }
-    } else if (report !== undefined) {
+    } else if (report !== undefined && sweep !== undefined) {
       const goals = items.filter((item) => item.level === "Task" && item.status === "Completed" && item.origin === "decomposition");
       const closes = namedLines(paragraph(report.body, "What was delivered:"));
       for (const goal of goals) {
@@ -517,7 +519,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
       if (closes.length !== goals.length) add("delivered-close", `the delivered report names ${closes.length} goal(s); the records hold ${goals.length} completed goal task(s)`);
 
       const unchecked = items.filter((item) => item.status === "Completed" && item.workKind === "implementation" && !checkedTaskIds.has(item.id));
-      const swept = new Set(sweep?.uncheckedTasks ?? []);
+      const swept = new Set(sweep.uncheckedTasks);
       if (unchecked.length !== swept.size || unchecked.some((item) => !swept.has(item.id))) {
         add("delivered-unchecked", `the accepted sweep records ${swept.size} task(s) as not checked; the task and check records hold ${unchecked.length}`);
       }
@@ -659,6 +661,7 @@ const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds 
 /** Where the delivered report's coverage section departs from the records. */
 function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
   if (coverage.kind === "unreadable") return [`the coverage records cannot be read, yet a delivered report was posted: ${coverage.detail}`];
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item, so each uncovered item is reported missing below and an empty expectation is met
   const listed = (paragraph(body, UNCOVERED_HEAD) ?? "").split("\n").filter((line) => line.startsWith("- "));
   const expectSentence = (sentence: string, what: string): string[] =>
     [

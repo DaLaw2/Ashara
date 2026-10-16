@@ -5,6 +5,12 @@
  *
  * A column is one `key: builder("sql_name")` entry plus its `.chain()` continuation lines; it is a
  * price column when its key or SQL name mentions cost or price, and any `.default(` on it is reported.
+ *
+ * Blind spots: a price column named without "cost" or "price" (`rate`, `usd`, `amount`); a column
+ * whose builder call spans lines, or whose chain continues past a comment or blank line; a default
+ * given another way (`.$defaultFn(`, `.$onUpdate(`, `sql` in a builder helper); a DEFAULT written in
+ * a migration's SQL, which this scan of the Drizzle schema never reads; SQL COALESCE or a `??`
+ * fallback in the code that reads a rate; and schema outside packages/db/src/schema.
  */
 
 interface PriceColumnDefault {

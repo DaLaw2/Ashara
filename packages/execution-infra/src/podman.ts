@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, sep } from "node:path";
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
+import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { cellLimitsSchema, readCellLimits, runLimitArgs, type CellResourceLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
@@ -331,12 +331,13 @@ function issuesOf(error: z.ZodError): string[] {
   return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
 }
 
-
-function parseJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
+/** `text` as `schema`'s value, or the JsonParseFailed it raised turned into the caller's error by `failure`. */
+function podmanOutput<S extends z.ZodType>(schema: S, text: string, source: string, failure: (detail: string) => Error): z.output<S> {
   try {
-    return { ok: true, value: JSON.parse(text) };
+    return parseJson(schema, text, source);
   } catch (err) {
-    return { ok: false, error: describeErrorChain(err) };
+    if (!(err instanceof JsonParseFailed)) throw err;
+    throw failure(describeErrorChain(err));
   }
 }
 
@@ -448,6 +449,7 @@ class PodmanCell implements Cell {
       return { ...streams(result), exitCode: null, timedOut: true, statusLost: false };
     }
     if (result.exitCode === null) {
+      // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
       throw new CellExecFailed(this.id, argv, null, result.stderr, `podman exec ended by signal ${result.signal ?? "unknown"}`);
     }
     const exitCode = result.exitCode;
@@ -681,16 +683,12 @@ export class PodmanSubstrate {
     if (result.exitCode !== 0) {
       throw new SubstrateUnavailable(
         this.podmanPath,
+        // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
         `\`info\` exited ${result.exitCode ?? `by signal ${result.signal ?? "unknown"}`}: ${result.stderr.trim() || "(no stderr)"}`,
       );
     }
-    const json = parseJson(result.stdout);
-    if (!json.ok) throw new SubstrateUnavailable(this.podmanPath, `\`info\` printed invalid JSON: ${json.error}`);
-    const parsed = podmanInfoSchema.safeParse(json.value);
-    if (!parsed.success) {
-      throw new SubstrateUnavailable(this.podmanPath, `\`info\` output is not the expected shape: ${issuesOf(parsed.error).join("; ")}`);
-    }
-    return { version: parsed.data.version.Version, rootless: parsed.data.host.security.rootless };
+    const info = podmanOutput(podmanInfoSchema, result.stdout, "podman info stdout", (detail) => new SubstrateUnavailable(this.podmanPath, detail));
+    return { version: info.version.Version, rootless: info.host.security.rootless };
   }
 
   async createCell(spec: CellSpec): Promise<Cell> {
@@ -916,15 +914,10 @@ export class PodmanSubstrate {
     if (result.exitCode !== 0) {
       throw new PodmanCommandFailed("ps", args, result.exitCode, result.stderr.trim() || "(no stderr)");
     }
-    const json = parseJson(result.stdout);
-    if (!json.ok) throw new PodmanCommandFailed("ps", args, result.exitCode, `invalid JSON: ${json.error}`);
-    const entries = z.array(psEntrySchema).safeParse(json.value);
-    if (!entries.success) {
-      throw new PodmanCommandFailed("ps", args, result.exitCode, `unexpected shape: ${issuesOf(entries.error).join("; ")}`);
-    }
+    const entries = podmanOutput(z.array(psEntrySchema), result.stdout, "podman ps stdout", (detail) => new PodmanCommandFailed("ps", args, result.exitCode, detail));
     // The label filter is the selector; re-checking it here means a change in podman's filter
     // semantics refuses to delete rather than deleting someone else's container.
-    const foreign = entries.data.filter(
+    const foreign = entries.filter(
       (entry) => entry.Labels?.[LABEL_MANAGED] !== "1" || entry.Labels[LABEL_INSTANCE] !== instance,
     );
     if (foreign.length > 0) {
@@ -935,7 +928,7 @@ export class PodmanSubstrate {
         `the label filter returned ${foreign.length} container(s) without both labels (${foreign.map((e) => e.Id).join(", ")}); refusing to remove anything`,
       );
     }
-    const orphans = entries.data.map((entry) => entry.Id).filter((id) => !this.cells.has(id));
+    const orphans = entries.map((entry) => entry.Id).filter((id) => !this.cells.has(id));
     const containers = await this.removeAll(orphans);
     // Only once their containers are gone: a state dir is removed only when nothing mounts it.
     const state = await this.sweepState(instance);
