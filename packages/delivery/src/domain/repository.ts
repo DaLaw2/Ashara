@@ -63,6 +63,14 @@ export interface WorkItemRepository {
    */
   recordInfrastructureFault(id: WorkItemId): Promise<number>;
   /**
+   * Counts one more startup in a row that found the item InProgress, left by a process that died
+   * (migration 070), in a single UPDATE, and returns the count after it: the durable bound of its
+   * re-dispatches after a crash. Throws when the item does not exist.
+   */
+  recordCrashOrphan(id: WorkItemId): Promise<number>;
+  /** A dispatch of the item ended in the process that started it: its count of startups in a row found InProgress goes back to 0. */
+  clearCrashOrphans(id: WorkItemId): Promise<void>;
+  /**
    * Records the merge commit Z0's merge step made on the target's main for the task (migration
    * 041): the one record of what was merged, which reports to the client read. Throws when the
    * item does not exist; the caller writes it before completing the task, so a failed write

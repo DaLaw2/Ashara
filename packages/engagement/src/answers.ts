@@ -290,6 +290,9 @@ export class ClientAnswers implements LiaisonAnswers {
       const recorded = await this.deps.store.recordAnswer(write);
       if (recorded.kind === "already-consumed") return { kind: recorded.kind, ...base };
       if (recorded.kind === "recorded") return recordedOutcome(context, reading.reading, write);
+      // Past MAX_ANSWER_WRITES the answer is read again next cycle, uncounted (loop L19): the work
+      // ledger bounds it, since every reading draws from the project's budget, which halts the
+      // project as work_budget when spent.
       if (written >= MAX_ANSWER_WRITES) {
         console.warn(
           `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): its project's record moved under ` +

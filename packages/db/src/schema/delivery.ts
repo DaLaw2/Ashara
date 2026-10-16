@@ -45,6 +45,9 @@ export const workItems = pgTable("work_items", {
   // Migration 048: infrastructure faults observed on the item's dispatches, none charged as an
   // attempt; the bound of its uncharged requeues.
   infrastructureFaults: integer("infrastructure_faults").notNull().default(0),
+  // Migration 070: the startups in a row that found the item InProgress, left by a process that
+  // died; the bound of its re-dispatches after a crash (startup reconciler).
+  crashOrphans: integer("crash_orphans").notNull().default(0),
   // Migration 041: the merge commit Z0's merge step made on the target's main for this task;
   // the only record of what was merged. NULL when nothing of the task was merged.
   mergeCommit: text("merge_commit"),

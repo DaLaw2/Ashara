@@ -379,6 +379,8 @@ function givenUpEvidence(reason: GivenUpReason): string {
       return `Ashara's own machinery could not settle it after a restart (${reason.step}): ${reason.reason}`;
     case "work_budget_spent":
       return `It drew every model request its work budget holds (${reason.drawnRequests} of ${reason.budgetRequests}): ${reason.reason}`;
+    case "crash_loop":
+      return `Ashara's process died while it was in progress at ${reason.boots} startups in a row, so it is not dispatched again: ${reason.reason}`;
     case "task_failed":
     case "orchestrator_error":
     case "merge_unrecorded":
@@ -642,7 +644,8 @@ export class Replanner implements Replanning {
     // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
     const vision = planningVisionOf(project.vision);
     const tasks = project.items.filter(isTask);
-    // The store lists a project only with no task in progress; one seen here started since.
+    // The store lists a project only with no task in progress; one seen here started since. Nothing
+    // is drawn before this return: the revision waits on a dispatch, which ends by its own bounds.
     if (tasks.some(({ item }) => item.status === "InProgress")) return { kind: "moved", projectId };
     const completed = tasks.filter(({ item }) => item.status === "Completed");
     const open = tasks.filter(({ item }) => item.status === "Pending" || item.status === "Blocked" || item.status === "Failed");
@@ -665,6 +668,8 @@ export class Replanner implements Replanning {
       if (failure === "ashara") throw err;
       return this.fail(project, err, failure);
     }
+    // Revised again next cycle, uncounted (loop L17): the work ledger bounds it, since every
+    // decomposition draws from the project's budget, which halts the project as work_budget when spent.
     if (result === "moved") return { kind: "moved", projectId };
     const why =
       cause.kind === "client-change"

@@ -317,6 +317,25 @@ export class WorkItemRowRepository {
     return row.infrastructureFaults;
   }
 
+  /** Counts one more startup in a row that found the item InProgress (migration 070); returns the count after it. */
+  async recordCrashOrphan(id: string): Promise<number> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ crashOrphans: sql`${workItems.crashOrphans} + 1` })
+      .where(eq(workItems.id, id))
+      .returning({ crashOrphans: workItems.crashOrphans });
+    if (!row) throw new WorkItemNotFound(id);
+    return row.crashOrphans;
+  }
+
+  /** A dispatch of the item ended in the process that started it: its startups in a row found InProgress are 0 again. */
+  async clearCrashOrphans(id: string): Promise<void> {
+    await this.db
+      .update(workItems)
+      .set({ crashOrphans: 0 })
+      .where(and(eq(workItems.id, id), sql`${workItems.crashOrphans} > 0`));
+  }
+
   async addDependency(fromId: string, toId: string) {
     await this.db
       .insert(dependencies)

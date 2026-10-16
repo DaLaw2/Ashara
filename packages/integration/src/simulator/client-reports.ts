@@ -320,6 +320,8 @@ function categoryWords(reason: StoredBlockedReason): string {
       return "the review of the plan's checks found problems that could not be settled";
     case "work_budget_spent":
       return "it used every model request the budget of one task allows";
+    case "crash_loop":
+      return "Ashara's own process stopped while working on it, each time it was tried";
     case "owner_unresolved":
       return "no member of the team is assigned to do it";
     case "dependency_unsatisfiable":

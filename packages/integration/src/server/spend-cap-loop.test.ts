@@ -91,6 +91,8 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
       save: notExercised("save"),
       incrementDispatchCount: notExercised("incrementDispatchCount"),
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       saveRefunded: notExercised("saveRefunded"),
       recordMergeCommit: notExercised("recordMergeCommit"),
       addDependency: notExercised("addDependency"),

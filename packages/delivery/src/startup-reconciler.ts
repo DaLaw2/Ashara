@@ -12,7 +12,7 @@ import { projectBlockCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { FailureRouter, RawFailureContext } from "./failure-router.js";
 import type { ParkedFailureDeps } from "./lifecycle/failure-recovery.js";
-import { blockWorkItem, PlanningService, requeueWorkItem, takeEvents } from "./domain/index.js";
+import { blockWorkItem, giveUpWorkItem, PlanningService, requeueWorkItem, takeEvents } from "./domain/index.js";
 import { recoverParkedFailedItem } from "./lifecycle/failure-recovery.js";
 import { ORPHANED_SESSION_RESOLVER } from "./acl/workplace-acl.js";
 import { mergeOnMainOf, OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
@@ -45,6 +45,8 @@ interface StartupReconcilerDeps {
 
 interface ReconcileSummary {
   readonly orphansRequeued: number;
+  /** Orphans found InProgress at CRASH_LOOP_BOUND startups in a row: given up (crash_loop), never re-dispatched. */
+  readonly orphansGivenUp: number;
   /** Orphans whose merge was found on main: recorded and Completed, never re-dispatched. */
   readonly orphansCompleted: number;
   /** Orphans not settled within the bound: Blocked under a typed cause, never left InProgress. */
@@ -88,6 +90,7 @@ async function* itemsByProject(
 
 export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): Promise<ReconcileSummary> {
   let orphansRequeued = 0;
+  let orphansGivenUp = 0;
   let orphansCompleted = 0;
   let orphansBlocked = 0;
   let failedReplanned = 0;
@@ -101,6 +104,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     for (const orphan of orphans) {
       const settled = await settleOrphan(deps, orphan);
       if (settled === "requeued") orphansRequeued += 1;
+      else if (settled === "given-up") orphansGivenUp += 1;
       else if (settled === "completed") orphansCompleted += 1;
       else if (settled === "blocked") orphansBlocked += 1;
     }
@@ -136,6 +140,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
 
   const summary: ReconcileSummary = {
     orphansRequeued,
+    orphansGivenUp,
     orphansCompleted,
     orphansBlocked,
     failedReplanned,
@@ -145,7 +150,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     projectsBlocked: blockedProjects.size,
   };
   console.log(
-    `[startup-reconciler] orphans requeued=${orphansRequeued} completed=${orphansCompleted} blocked=${orphansBlocked}; ` +
+    `[startup-reconciler] orphans requeued=${orphansRequeued} given-up=${orphansGivenUp} completed=${orphansCompleted} blocked=${orphansBlocked}; ` +
       `parked Failed routed=${failedRouted} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
       `held=${failedHeld} errored=${failedErrored}); ` +
       `projects blocked on a corrupt row=${blockedProjects.size}`,
@@ -156,7 +161,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
 /**
  * Crash-orphaned dispatches of one task given back before a further one is left counted: a task
  * whose dispatch keeps dying with the process may be what kills it, and a refund every time would
- * re-dispatch it forever without its retry bound moving.
+ * leave its retry bound unmoved. CRASH_LOOP_BOUND, below, ends the re-dispatches themselves.
  */
 const MAX_ORPHAN_REFUNDS = 1;
 
@@ -166,15 +171,26 @@ const MAX_ORPHAN_REFUNDS = 1;
  */
 const ORPHAN_BACKOFF_MS: readonly number[] = [100, 500];
 
-type Settled = "requeued" | "completed" | "blocked" | "moved";
+/**
+ * Policy default (Decided: ADR-084 decision 1, an existing bound stays as an early stop inside the
+ * work ledger): the startups in a row that may find one task InProgress before it is given up
+ * (crash_loop) instead of requeued. A task left InProgress by a dead process twice running, with no
+ * dispatch of it ending in between, is taken as the dispatch that kills the process. Loop L7
+ * (requeue at every restart) ends here first; the work ledger bounds it too, since a dead process's
+ * requests stay drawn and a task whose budget they spent is given up (work_budget_spent).
+ */
+const CRASH_LOOP_BOUND = 2;
+
+type Settled = "requeued" | "given-up" | "completed" | "blocked" | "moved";
 
 /**
  * Settles an InProgress item a previous process left (Discipline A, B). Main is read first: a
  * dead process may have committed the task's merge and died before its record, and a requeue
  * would redo merged work. A merge found is recorded, the worktree and branch the dead process left
  * released (releaseMergedTask), and the task Completed through the path a finished dispatch takes
- * (recordMergeCommit, then PlanningService.route); none found, the task is
- * requeued (requeueOrphan). Each attempt re-reads the item, so a partial write of the one before
+ * (recordMergeCommit, then PlanningService.route); none found, the startup is counted on the task
+ * (recordCrashOrphan, once per startup) and the task requeued (requeueOrphan), or given up as
+ * crash_loop once CRASH_LOOP_BOUND startups in a row have found it InProgress. Each attempt re-reads the item, so a partial write of the one before
  * is never built on. Past the bound the task is blocked, never left InProgress: with its merge
  * found but unrecorded, as merge_unrecorded, whose record the loop writes again each cycle;
  * otherwise as orphan_unreconciled under Ashara's own fault class, with the project blocked on it
@@ -183,6 +199,7 @@ type Settled = "requeued" | "completed" | "blocked" | "moved";
  */
 async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<Settled> {
   let merge: string | null | undefined;
+  let boots: number | undefined;
   let step = "read main for the task's merge";
   let last: unknown = null;
   for (let attempt = 1; attempt <= ORPHAN_BACKOFF_MS.length + 1; attempt++) {
@@ -196,6 +213,13 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       step = "read main for the task's merge";
       if (merge === undefined) merge = await mergeOnMainOf(deps.projects, deps.workdirBase, item);
       if (merge === null) {
+        step = "count the startup that found it InProgress";
+        if (boots === undefined) boots = await deps.workItemRepo.recordCrashOrphan(item.id);
+        if (boots >= CRASH_LOOP_BOUND) {
+          step = "give the task up as a crash loop";
+          await giveUpCrashLoop(deps, item, boots);
+          return "given-up";
+        }
         step = "requeue the task";
         await requeueOrphan(deps, item);
         return "requeued";
@@ -265,6 +289,18 @@ async function blockUnsettled(
   throw new OrphanUnreconciled(orphan.id, `block it (${reason.source}) after this: ${unsettled.message}; the block`, ORPHAN_BACKOFF_MS.length + 1, {
     cause: last,
   });
+}
+
+/** Gives up an orphan found InProgress at `boots` startups in a row: Abandoned as crash_loop, and its plan repaired. */
+async function giveUpCrashLoop(deps: StartupReconcilerDeps, orphan: WorkItem, boots: number): Promise<void> {
+  const reason =
+    `found InProgress, left by a process that died while it ran, at ${boots} startups in a row with no dispatch of it ` +
+    `ending in between (bound ${CRASH_LOOP_BOUND}): its dispatch may be what kills the process`;
+  const previousStatus = orphan.status;
+  giveUpWorkItem(orphan, { source: "crash_loop", boots, bound: CRASH_LOOP_BOUND, reason });
+  await deps.workItemRepo.save(orphan, previousStatus);
+  await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
+  console.warn(`[startup-reconciler] ${orphan.id} given up (crash_loop), never re-dispatched; its plan is repaired: ${reason}`);
 }
 
 /**

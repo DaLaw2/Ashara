@@ -201,6 +201,8 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+    recordCrashOrphan: async () => 1,
+    clearCrashOrphans: async () => {},
     saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit: async (id, commit) => {
       mergeRecords.push({ id, commit });
@@ -403,6 +405,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: async () => ++faults,
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         refunded++;
@@ -467,6 +471,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         return row.dispatchCount;
       },
       recordInfrastructureFault: async () => 1,
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         // The one transaction rolled back: neither the requeue nor the refund was written.
         if (refundFaults-- > 0) throw new Error("Failed query: update \"work_items\" set \"dispatch_count\" = \"work_items\".\"dispatch_count\" - 1");
@@ -830,6 +836,8 @@ describe("stored checks stale: the check task is reopened and the item waits on 
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
@@ -980,6 +988,8 @@ describe("a disputed check: the check task is reopened with the dispute and the 
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
@@ -1145,6 +1155,8 @@ describe("an environment change requested: an environment task is opened and the
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
@@ -1337,6 +1349,8 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         return row.dispatchCount;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
@@ -1477,6 +1491,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       saveRefunded: notExercised("saveRefunded"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
@@ -1703,6 +1719,8 @@ describe("a review of the plan's suites with problems: the named check tasks are
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+      recordCrashOrphan: async () => 1,
+      clearCrashOrphans: async () => {},
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);

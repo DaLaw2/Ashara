@@ -199,6 +199,21 @@ const workBudgetSpentSchema = z.object({
 });
 
 /**
+ * The task was InProgress at `boots` startups in a row, each time left by a process that died
+ * while it ran, and `boots` reached the bound of re-dispatches after a crash (`bound`, the startup
+ * reconciler's): its dispatch may be what kills the process, so the reconciler gives it up
+ * (Abandoned) instead of requeueing it, and its plan is repaired. A dispatch that ends in the
+ * process that started it sets the count back to 0. `reason` names the startups.
+ */
+const crashLoopSchema = z.object({
+  source: z.literal("crash_loop"),
+  boots: z.number().int().min(1),
+  bound: z.number().int().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * A Pending task depends, directly or transitively, on work that can never complete: an
  * Abandoned item, or a dependency cycle. The gate gives it up (Abandoned) instead of leaving it
  * Pending with nothing that would ever admit it, and its plan is repaired. `blockedBy` names the
@@ -306,6 +321,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   checkDisputedSchema,
   suiteReviewUnresolvedSchema,
   workBudgetSpentSchema,
+  crashLoopSchema,
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   orphanUnreconciledSchema,
@@ -341,6 +357,7 @@ export const BLOCKED_REASON_SOURCES = [
   "check_disputed",
   "suite_review_unresolved",
   "work_budget_spent",
+  "crash_loop",
   "dependency_unsatisfiable",
   "merge_unrecorded",
   "orphan_unreconciled",
@@ -384,6 +401,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "check_disputed":
     case "suite_review_unresolved":
     case "work_budget_spent":
+    case "crash_loop":
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "orphan_unreconciled":
@@ -437,6 +455,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "check_disputed":
     case "suite_review_unresolved":
     case "work_budget_spent":
+    case "crash_loop":
     case "dependency_unsatisfiable":
     case "api":
     case "task_failed":

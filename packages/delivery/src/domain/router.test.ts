@@ -26,6 +26,8 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: async () => 1,
+    recordCrashOrphan: async () => 1,
+    clearCrashOrphans: async () => {},
     saveRefunded: async () => 0,
     recordMergeCommit: async () => {},
     addDependency: async () => {},

@@ -194,6 +194,11 @@ export async function containEach<T, O>(
     if (prior !== undefined && !prior.due) continue;
     const result = await runSubject(item, run);
     if (result.ran) {
+      // A run that completes clears the faults "in a row" (loop L21), so a subject whose runs
+      // alternate fault and success never halts here. That is a deliberate wait, not a work loop:
+      // containEach sends no model request of its own and backs every fault off, a minute doubling
+      // to an hour; every model request a subject's run sends draws from the work ledger, which
+      // ends the subject's paid work when its project's budget is spent.
       if (prior !== undefined) await containment.clear(step, subject.id);
       outcomes.push(result.outcome);
       continue;

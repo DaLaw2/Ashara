@@ -277,7 +277,9 @@ async function executeTask(
   if (execResult.status === "interrupted") {
     // The shutdown stopped the attempt; it did not fail. No FailureRouter and no lesson: the
     // item goes back to Pending now with its dispatch refunded, so the startup reconciler
-    // finds nothing InProgress to requeue and nothing Failed to route.
+    // finds nothing InProgress to requeue and nothing Failed to route. No counter of its own bounds
+    // these requeues (loop L6): the work ledger does, since a refund returns no request drawn, and
+    // the task whose budget they spend is given up as work_budget_spent.
     await requeueAndRefund(deps, task.id, "a shutdown interrupted its attempt", "execution.routeAsInterrupted");
     return {
       result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
@@ -328,6 +330,9 @@ async function executeTask(
           : refusal.kind === "project_work"
             ? `project ${refusal.projectId}'s work budget`
             : `a configuration fault (${refusal.errorClass})`;
+    // These requeues have no counter of their own (loop L6): each refusal here halts the project
+    // (its spend cap, its work budget, its configuration) or stops the loop (the deployment's cap),
+    // so the task is dispatched again only after a person's grant or unblock.
     await requeueAndRefund(deps, task.id, `a refusal at ${cap}: ${refusal.reason}`, "execution.routeAsRefused");
     return {
       result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
@@ -718,6 +723,18 @@ async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   console.warn(`[${taskId}] back to Pending after ${why}, no dispatch counted`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.requeueUncounted");
+}
+
+/**
+ * Sets the task's startups in a row found InProgress back to 0. A failed write leaves the count as
+ * it was, the direction that gives a crash-looping task up sooner, never later; it is logged.
+ */
+async function clearCrashOrphansBestEffort(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]): Promise<void> {
+  try {
+    await deps.workItemRepo.clearCrashOrphans(taskId);
+  } catch (e) {
+    console.warn(`[${taskId}] its dispatch ended in this process, but its count of startups found InProgress could not be cleared:`, e);
+  }
 }
 
 /**
@@ -1287,6 +1304,9 @@ async function runCountedDispatch(
     await haltOnProjectRefusal(deps, task, e);
     await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
     return { taskId: task.id, status: "interrupted", detail: fault.reason };
+  } finally {
+    // The dispatch ended in the process that started it, however it ended: no crash loop runs on it.
+    await clearCrashOrphansBestEffort(routingDeps, task.id);
   }
   const { result, outcome, errorEnvelope: execEnvelope, verdict, routedHere } = executed;
 

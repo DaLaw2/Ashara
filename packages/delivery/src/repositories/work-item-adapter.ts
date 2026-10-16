@@ -122,6 +122,12 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
     async recordInfrastructureFault(id) {
       return db.recordInfrastructureFault(id);
     },
+    async recordCrashOrphan(id) {
+      return db.recordCrashOrphan(id);
+    },
+    async clearCrashOrphans(id) {
+      await db.clearCrashOrphans(id);
+    },
     async recordMergeCommit(id, commit, kind) {
       await db.recordMergeCommit(id, commit, kind);
     },

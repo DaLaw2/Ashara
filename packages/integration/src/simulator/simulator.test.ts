@@ -152,18 +152,33 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
-  // Task t-orphan-requeue-failure: a crash, a crash right after the task is set
-  // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read. The
-  // reconciler retries the requeue within its bound, so the orphan is never left InProgress.
+  /** A crash in the implementation's dispatch, which leaves its task InProgress for the next startup. */
+  const CRASH_IN_DISPATCH: Direction = { kind: "fault", seam: "git", label: "ls-tree", nth: 2, fault: "crash-before" };
+
+  // Task t-orphan-requeue-failure: a crash in a dispatch leaves its task InProgress (its orphan),
+  // then a 40001 on the startup reconciler's dev_sessions read of that orphan. The reconciler
+  // retries the requeue within its bound, so the orphan is never left InProgress.
   it("retries a failed requeue of an orphan, never leaving it InProgress while the process lives", async () => {
     const result = await directed([
-      { kind: "fault", seam: "git", label: "ls-tree", nth: 2, fault: "crash-before" },
-      { kind: "fault", seam: "db", label: /^update "work_items" set "status" = \$1, "blocked_reason" = \$2/, nth: 5, fault: "crash-after" },
-      { kind: "fault", seam: "db", label: /^select count\(\*\) from "dev_sessions"/, nth: 3, fault: "db-query-failed" },
+      CRASH_IN_DISPATCH,
+      { kind: "fault", seam: "db", label: /^select count\(\*\) from "dev_sessions"/, nth: 2, fault: "db-query-failed" },
     ]);
-    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:crash-after", "db:db-query-failed"]);
+    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:db-query-failed"]);
     expect(result.log.some((line) => line.includes("requeue the task failed on attempt 1 of 3; retrying"))).toBe(true);
     expect(keys(result)).toEqual([]);
+  }, 90_000);
+
+  // Loop L7's early stop (startup-reconciler.ts CRASH_LOOP_BOUND, ADR-084 decision 1): the task's
+  // dispatch dies, and its re-dispatch dies again right after the task is set InProgress. The second
+  // startup to find it InProgress gives it up as crash_loop instead of dispatching it a third time.
+  it("gives up a task found InProgress at two startups in a row as a crash loop, never re-dispatching it", async () => {
+    const result = await directed([
+      CRASH_IN_DISPATCH,
+      { kind: "fault", seam: "db", label: /^update "work_items" set "status" = \$1, "blocked_reason" = \$2/, nth: 5, fault: "crash-after" },
+    ]);
+    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:crash-after"]);
+    expect(result.log.some((line) => line.includes("given up (crash_loop), never re-dispatched"))).toBe(true);
+    expect(keys(result), statements(result)).toEqual([]);
   }, 90_000);
 
   // Task t-merge-record-crash-window: the process dies on the
