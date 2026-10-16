@@ -43,8 +43,11 @@ check-docs:
 typecheck-full:
     npm run --silent typecheck:full
 
+# Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.ts globalSetup)
+# answers by removing the run's cells before vitest exits; SIGKILL 30 s later only if the run is
+# still alive. A bare SIGKILL skips that removal and leaves the cells to the next run's reaper.
 test:
-    npx vitest run
+    timeout -k 30 1200 npx vitest run
 
 # The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, each
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default
