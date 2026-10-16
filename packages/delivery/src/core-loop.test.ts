@@ -384,7 +384,7 @@ describe("CoreLoop first plan", () => {
     expect(order).toEqual(["stop", "change", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
-  test("a cycle halted at the spend cap takes the client's stops, answers the client's changes and posts the block and delivered reports still due, and nothing else", async () => {
+  test("a cycle halted at the spend cap takes the client's stops, answers the client's changes and posts the block, delivered and plan reports still due, and nothing else", async () => {
     const order: string[] = [];
     const step = (name: string) =>
       vi.fn(async () => {
@@ -395,7 +395,7 @@ describe("CoreLoop first plan", () => {
 
     await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } }).runHaltedCycle();
 
-    expect(order).toEqual(["stop", "change", "block-report", "delivered-report"]);
+    expect(order).toEqual(["stop", "change", "block-report", "delivered-report", "report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
@@ -408,9 +408,9 @@ describe("CoreLoop first plan", () => {
       "settled-branches": "halted",
       "block-report": "halted",
       "delivered-report": "halted",
-      "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; a choice pending at the halt is recorded and reported on the next full cycle" },
+      "plan-report": "halted",
+      "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; only a project at work has a choice due, so a project halted at the cap has its choice recorded and reported once it resumes, in a full cycle after the process restarts" },
       "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
-      "plan-report": { excluded: "it reports plans, which only steps with model calls write; a report pending at the halt is posted on the next full cycle" },
       "parked-exits": { excluded: "it moves Blocked tasks toward dispatch, and a halted cycle dispatches nothing" },
       "acceptance": { excluded: "it sweeps main on cells, which is work, not a report" },
       "gate": { excluded: "it selects tasks to dispatch, and a halted cycle dispatches nothing" },

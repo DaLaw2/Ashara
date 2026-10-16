@@ -7,8 +7,8 @@ export interface CycleRunner {
   runCycle(): Promise<CycleResult>;
   /**
    * What still runs once a cycle has stopped the loop, each with no LLM call: the client's stops,
-   * each recorded and answered, so a stop sent while the loop is halted holds, and the block reports
-   * still due, so a halt whose report faulted in the stopping cycle is still told.
+   * each recorded and answered, so a stop sent while the loop is halted holds, and the block, delivered
+   * and plan reports still due, so a report written or faulted in the stopping cycle is still posted.
    */
   runHaltedCycle(): Promise<void>;
 }

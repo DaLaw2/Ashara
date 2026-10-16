@@ -10,9 +10,10 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService, ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import { BlockReports, ClientStops, ClientMessageRepository, DeliveredReports } from "@ashara/engagement";
-import type { BlockReportStore, ClientStopStore, DeliveredReportStore } from "@ashara/engagement";
+import { DispatchService, ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, FirstPlanner, adaptWorkItemRepo, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import type { FirstPlanStore } from "@ashara/delivery";
+import { BlockReports, ClientStops, ClientMessageRepository, DeliveredReports, PlanReports, VisionRepository } from "@ashara/engagement";
+import type { BlockReportStore, ClientStopStore, DeliveredReportStore, PlanReportStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -23,9 +24,12 @@ import type { ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { createPlanReportStore } from "@ashara/server/plan-report-store";
+import { createRosterStore } from "@ashara/server/roster-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
+import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.
@@ -158,6 +162,8 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN ${projectIds}`);
   await db.execute(sql`DELETE FROM client_messages WHERE direction = 'outbound' AND project_id IN ${projectIds}`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN ${projectIds}`);
+  await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN ${projectIds}`);
+  await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN ${projectIds}`);
   await db.execute(sql`DELETE FROM projects WHERE name = ${NAME}`);
   await db.execute(sql`DELETE FROM clients WHERE name LIKE ${`${NAME}%`}`);
   await db.$client.end();
@@ -411,6 +417,100 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
 
     expect(posted).toHaveLength(1);
     expect(posted[0]).toContain("Store keys");
+  });
+});
+
+const PLAN_TASKS = {
+  tasks: [
+    {
+      ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [],
+      endState: "Classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
+      capability: "Strong", capabilityReason: "graded for the test",
+    },
+  ],
+};
+
+// A first plan written in the cycle whose cap check stops the loop: the cycle halts before its plan
+// report step, and no full cycle runs again in this process, so the halted cycles report the plan.
+describe("the deployment cap stops the cycle a first plan was written in", () => {
+  test("the project still gets exactly one first-plan report, on a halted cycle", async () => {
+    const projects = new ProjectHaltRepository(db);
+    const messages = new ClientMessageRepository(db);
+    const client = await new ClientRepository(db).create(`${NAME}-plan-at-cap`);
+    const projectId = (await projects.create(NAME, client.id)).id;
+    await new VisionRepository(db).create(projectId, {
+      visionText: "A class list for my pottery studio.",
+      summary: "A class list for a pottery studio.",
+      scopeBoundaries: ["In: class listing"],
+      inferences: [],
+    });
+    const roles = [
+      { id: randomUUID(), name: "Liaison", responsibility: "Talks to the client.", capabilities: ["client-comms"] as const },
+      { id: randomUUID(), name: "Platform", responsibility: "Defines how the product is built and tested.", capabilities: ["write-environment"] as const },
+      { id: randomUUID(), name: "Implementer", responsibility: "Builds the product.", capabilities: ["write-source"] as const },
+      { id: randomUUID(), name: "Check author", responsibility: "Writes the checks.", capabilities: ["author-checks"] as const },
+    ] as const;
+    expect(await createRosterStore(db).recordRoster({ projectId, visionVersion: 1, revision: 1, roles: [...roles] })).toBe("recorded");
+    stub.model = new MockLanguageModelV4({
+      doGenerate: async (call) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(citingItemsToCheck(PLAN_TASKS, JSON.stringify(call.prompt))) }],
+        usage: {
+          inputTokens: { total: 500, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 200, text: 200, reasoning: undefined },
+        },
+        finishReason: { unified: "stop" as const, raw: "stop" },
+        warnings: [],
+      }),
+    });
+    const calls = new LlmCallRepository(db);
+    const gateway = gatewayOn(new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } }), calls);
+    const planStore = createFirstPlanStore(db);
+    const narrowedPlans: FirstPlanStore = { ...planStore, projectsAwaitingPlan: async () => (await planStore.projectsAwaitingPlan()).filter((p) => p.projectId === projectId) };
+    const planner = new FirstPlanner({ containment: memoryStepContainment(() => false), llm: gateway, store: narrowedPlans });
+    const reportStore = createPlanReportStore(db);
+    // Only this suite's project: the listings over the shared database would reach other suites'.
+    const narrowedReports: PlanReportStore = {
+      ...reportStore,
+      dueReports: async () => (await reportStore.dueReports()).filter((r) => r.projectId === projectId),
+      dueRevisionReports: async () => (await reportStore.dueRevisionReports()).filter((r) => r.projectId === projectId),
+    };
+    let planned = false;
+    const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
+    const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
+    const loop = new CoreLoop(
+      loopDeps({
+        projectRepo: {
+          ...base.projectRepo,
+          blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
+        },
+        firstPlanning: {
+          runPending: async () => {
+            const outcomes = await planner.runPending();
+            planned = true;
+            return outcomes;
+          },
+        },
+        planReports: new PlanReports(narrowedReports, memoryStepContainment(() => false)),
+        // The plan's model call is what reaches the cap: the check after the first-plan step stops the loop.
+        spendCap: {
+          deploymentStop: async () => (planned ? { reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } } : null),
+          refusalOf: () => null,
+        },
+      }),
+    );
+    const planReports = async () => (await messages.listByProject(projectId)).filter((m) => m.direction === "outbound" && m.body.includes("Ashara has made the first plan"));
+
+    const cycle = await loop.runCycle();
+    expect(cycle.stop?.reason).toBe(capReason);
+    expect((await projects.get(projectId))?.status).toBe("blocked");
+    expect(await planReports()).toHaveLength(0);
+
+    await loop.runHaltedCycle();
+    await loop.runHaltedCycle();
+
+    const posted = await planReports();
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.body).toContain("split into 1 task for what you asked for");
   });
 });
 

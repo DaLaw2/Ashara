@@ -2,11 +2,12 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
-import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange, projectAtWork, projectHalted } from "@ashara/db";
+import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange, projectHalted } from "@ashara/db";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 import type { DroppedPlanDependency } from "./first-plan.js";
+import { projectReportsPlans } from "./project-halt.js";
 import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 
 // The Liaison's reports on planning outcomes (migration 020). A report is due
@@ -94,8 +95,9 @@ const unreported = (subject: PlanReportSubject) =>
  * blocked_reason names it). A revision written before the first plan was
  * reported (answers read in the cycle that wrote the plan) is returned
  * with it, so the client gets one report of the plan that stands, not one of a
- * plan already replaced followed by its revision. Only an active project's first
- * plan is due, and none while the project awaits a revision: the client is
+ * plan already replaced followed by its revision. Only the first plan of a
+ * project at work, or halted at the deployment's spend cap (projectReportsPlans),
+ * is due, and none while the project awaits a revision: the client is
  * not told of a plan already known to be changing. Planning that
  * stopped is due only while the project is blocked: a project the client has
  * stopped (migration 028), or has a stop awaiting the Liaison, gets the stop
@@ -111,7 +113,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
     .from(projects)
     .where(
       and(
-        projectAtWork(),
+        projectReportsPlans(),
         isNotNull(projects.firstPlannedAt),
         sql`NOT ${pendingChange(projects.id)}`,
         unreported("first-plan"),

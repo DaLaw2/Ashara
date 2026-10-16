@@ -192,13 +192,8 @@ export class CoreLoop {
     const replans = await this.stepThenCap("replan", () => deps.replanning.runPending());
     if (replans.kind === "stop") return this.haltAtCap(replans.stop);
     for (const outcome of replans.outcomes) logReplan(outcome);
-    const planReports = await this.step("plan-report", () => deps.planReports.runPending());
-    if (planReports.kind === "stop") return this.haltAtCap(planReports.stop);
-    for (const report of planReports.kind === "ran" ? planReports.value : []) {
-      if (report.kind !== "project-blocked" && report.kind !== "step-faulted") {
-        console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
-      }
-    }
+    const planReports = await this.postPlanReports();
+    if (planReports !== null) return this.haltAtCap(planReports);
 
     // Every Blocked task takes its exit (Completed, Pending or given up) before the gate reads them.
     const released = await this.step("parked-exits", () =>
@@ -256,18 +251,20 @@ export class CoreLoop {
   /**
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
    * stops and changes, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds,
-   * the release of what attempts held, and the block and delivered reports still due. A project stopped here stays
-   * stopped when the halt is lifted: the owner's unblock admits only a blocked project.
+   * the release of what attempts held, and the block, delivered and plan reports still due. A project stopped here
+   * stays stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
     // The loop is already stopped at the cap: a stop any of these returns is that same stop.
     await this.takeClientStops();
     await this.answerClientChanges();
     await this.releaseHeld();
-    // A report whose post faulted is contained to its project and retried after a backoff; no full
-    // cycle runs again in this process, so the retry is here. Neither report makes an LLM call.
+    // A report whose post faulted is contained to its project and retried after a backoff, and a plan
+    // written in the cycle that reached the cap is reported after its block report; no full cycle runs
+    // again in this process, so both are here. No report makes an LLM call.
     await this.postBlockReports();
     await this.postDeliveredReports();
+    await this.postPlanReports();
   }
 
   /**
@@ -322,6 +319,21 @@ export class CoreLoop {
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
       if (report.kind !== "failed") console.log(`[liaison-delivered-report] project ${report.projectId}: delivered report ${report.kind}`);
+    }
+    return null;
+  }
+
+  /**
+   * The planning outcomes not yet reported, each posted once; a project whose record is bad is
+   * blocked by the Liaison. The deployment cap's stop when a refusal named it, else null.
+   */
+  private async postPlanReports(): Promise<LoopStop | null> {
+    const reports = await this.step("plan-report", () => this.deps.planReports.runPending());
+    if (reports.kind === "stop") return reports.stop;
+    for (const report of reports.kind === "ran" ? reports.value : []) {
+      if (report.kind !== "project-blocked" && report.kind !== "step-faulted") {
+        console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+      }
     }
     return null;
   }

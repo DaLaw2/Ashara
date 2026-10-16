@@ -1,7 +1,8 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { ProjectRepository, noOpenStop, projectAtWork, projectBlocks, projects } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 
 // Delivery's one guard over the project halt (O3 c, ADR-080 d3; migration 059). A project is halted
@@ -11,6 +12,17 @@ import type { ProjectBlockCause } from "../project-halt.js";
 // resumption (the substrate probe, or the operator's unblock once the cause is cleared) ends it.
 // Engagement's lifecycle column is never written here; the client's stop ends a halt it finds
 // through the projects_stop_ends_halt trigger.
+
+/**
+ * The project's planning outcomes are reported to the client: it is at work, or its halt is the
+ * deployment's spend cap. That halt stops the process's full cycles for good, so a plan written
+ * in the cycle that reached the cap, or one whose report's post faulted there, is reported by the
+ * halted cycles; the plan stands, and the client's block report says why no work follows it. Any
+ * other halt holds the report until the project resumes.
+ */
+export const projectReportsPlans = (): SQL =>
+  sql`(${projectAtWork()} OR (${projects.lifecycle} = 'active' AND EXISTS (SELECT 1 FROM project_blocks cb
+    WHERE cb.project_id = ${projects.id} AND cb.ended_at IS NULL AND cb.error_class = ${SPEND_CAP_ERROR_CLASS.deployment})))`;
 
 /** A project id named for a write that matches no project row. */
 class ProjectNotFound extends Error {

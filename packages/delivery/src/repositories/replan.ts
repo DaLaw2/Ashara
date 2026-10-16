@@ -7,6 +7,7 @@ import type { VisionItem } from "../decomposition-types.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
+import { projectReportsPlans } from "./project-halt.js";
 import { WorkItemRowRepository } from "./work-item.js";
 
 // Delivery's revisions of a plan under way (migration 042). A project awaits a revision while
@@ -426,9 +427,9 @@ interface DuePlanRevisionRow {
 
 /**
  * Plan revisions the client has not been told about, oldest first. Only an active project's: a
- * report saying what the team will now do is not posted while the project is halted or stopped,
- * nor while a stop awaits the Liaison; a halted project's revision is reported once it
- * resumes. A revision written before the project's first plan was reported is not listed here:
+ * report saying what the team will now do is not posted while the project is stopped, nor while a
+ * stop awaits the Liaison, nor while it is halted for any cause but the deployment's spend cap
+ * (projectReportsPlans); such a halted project's revision is reported once it resumes. A revision written before the project's first plan was reported is not listed here:
  * that report describes it (listDuePlanReports), so the client never reads a revision of a plan it
  * was not told about. A revision whose row does not read is its UnreadSubject (readEach).
  */
@@ -446,7 +447,7 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<Du
     .where(
       and(
         isNull(planRevisions.reportId),
-        projectAtWork(),
+        projectReportsPlans(),
         noOpenStop(projects.id),
         sql`EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = ${projects.id} AND m.reports_on = 'first-plan')`,
       ),
