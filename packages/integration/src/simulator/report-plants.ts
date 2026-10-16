@@ -134,8 +134,9 @@ export const deliveredReportOmitsUnverified = rewriteReport(
 export const deliveredReportMisquotesInterface = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
   (body) =>
-    body.includes("Run: sim <behaviour>")
-      ? body.replace("Run: sim <behaviour>", "Run: tally <behaviour>")
+    // The run command both the scaffold's and the delivered interface file state.
+    body.includes(": sim <behaviour>")
+      ? body.replace(": sim <behaviour>", ": tally <behaviour>")
       : body.replace("its public interface file is missing.", "its public interface file is empty."),
 );
 

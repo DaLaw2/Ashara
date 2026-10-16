@@ -34,10 +34,15 @@ export function publicInterfaceText(form: InterfaceForm): string {
 /**
  * The file an implementer leaves once it has updated the scaffold's: the same form, so a delivered
  * report still quotes a long one cut, and the same text whichever task writes it, so two tasks of
- * one batch that both update it never conflict.
+ * one batch that both update it never conflict. It is written whole rather than edited from the
+ * scaffold's, whose usage text and notes it does not contain: acceptance refuses only a file
+ * byte-identical to the scaffold's, so an honest stand-in that kept the placeholder and added one
+ * line would pass on exactly that loophole. Like the scaffold's, it carries blank lines and a fence.
  */
 export function deliveredInterfaceText(form: InterfaceForm): string {
-  return `The product does every behaviour below.\n\n${publicInterfaceText(form)}`;
+  const usage = "To use the delivered product, run: sim <behaviour>\n\nA delivered behaviour, run, prints its own name:\n```console\n$ sim b1\nb1\n```\n";
+  if (form === "short") return usage;
+  return `${usage}${Array.from({ length: 400 }, (_, i) => `- delivered behaviour reference ${i + 1}\n`).join("")}End of the delivered interface.\n`;
 }
 
 /** Whether `text` is a scripted scaffold's public interface file byte for byte: the placeholder's, not the delivered product's. */

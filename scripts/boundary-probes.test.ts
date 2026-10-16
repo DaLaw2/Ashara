@@ -4,8 +4,9 @@
  * The map below is the expected side: for every package it states the packages it may import, the
  * packages that admit only some importers, and the files a restricted edge is confined to. The test
  * copies packages/, the rules and the checker into a scratch tree, plants one violating import per
- * forbidden package pair, per restrict rule and for the named-only rule, one manifest-name literal
- * in production source for the [stack-literals] denylist, plus one permitted import
+ * forbidden package pair, per restrict rule, for the named-only rule and for the stand-in rule
+ * (directly and through a helper), one manifest-name literal in production source for the
+ * [stack-literals] denylist, plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -96,6 +97,37 @@ const STACK_LITERAL_PROBE = {
     'packages/delivery/src/__boundary_probe__/stack-literal.ts:1  delivery -> "Cargo.toml"  (stack literal in production source: "Cargo.toml"; take it from the contract, or exempt it in [stack-literals] with a reason)',
 };
 
+// A stand-in model importing a product rule (a name names.delivery lists, so only the stand-in list
+// refuses it), directly, through a simulator helper that re-exports one, and by a relative path into
+// the package that owns it.
+const STAND_IN = "packages/integration/src/simulator/scripted-models.ts";
+const STAND_IN_HELPER = "packages/integration/src/simulator/__boundary_probe_helper__.ts";
+const STAND_IN_PROBES = [
+  {
+    name: "a stand-in model imports no product rule",
+    file: STAND_IN,
+    content: 'import { parseStoredTaskSpec } from "@ashara/delivery";\nimport { probedRule } from "./__boundary_probe_helper__.js";\n',
+    violation: `${STAND_IN}:1  integration -> "@ashara/delivery"  (stand-in model file: "parseStoredTaskSpec" is not in stand-in-names.delivery)`,
+    prepend: true,
+  },
+  {
+    name: "a named-only file reaches no other package by a relative path",
+    file: "packages/integration/src/simulator/__boundary_probe_escape__.ts",
+    content: 'import { parseStoredTaskSpec } from "../../../delivery/src/index.js";\n',
+    violation:
+      'packages/integration/src/simulator/__boundary_probe_escape__.ts:1  integration -> "../../../delivery/src/index.js"  ' +
+      "(named-only file: the relative import leaves the package; import another package by its @ashara/ name)",
+  },
+  {
+    name: "a stand-in model is handed no product rule by a helper",
+    file: STAND_IN_HELPER,
+    content: 'export { parseStoredBlockedReason as probedRule } from "@ashara/delivery";\n',
+    violation:
+      `${STAND_IN_HELPER}:1  integration -> "@ashara/delivery"  ` +
+      "(reached by a value import from stand-in src/simulator/scripted-models.ts: \"parseStoredBlockedReason\" is not in stand-in-names.delivery)",
+  },
+];
+
 const REPO = path.resolve(import.meta.dirname, "..");
 const PROBE_DIR = "src/__boundary_probe__";
 
@@ -112,6 +144,8 @@ interface PlannedProbe {
   readonly content: string;
   /** The checker's report line for it; null for a permitted import, which must report nothing. */
   readonly violation: string | null;
+  /** Planted at the head of an existing file, which the clean run passed, so it is reported at :1. */
+  readonly prepend?: boolean;
 }
 
 function reportLine(file: string, fromPkg: string, toPkg: string, reason: string): string {
@@ -163,6 +197,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   }
   probes.push({ name: "integration simulator imports only listed names", ...NAMED_ONLY_PROBE });
   probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
+  probes.push(...STAND_IN_PROBES);
   return probes;
 }
 
@@ -195,8 +230,9 @@ function plant(root: string, probe: PlannedProbe): void {
     return;
   }
   // A restrict rule that lists files by name is probed inside one of them; the file passed the
-  // clean run, so a permitted probe there must leave it reporting nothing.
-  if (probe.violation !== null) {
+  // clean run, so a permitted probe there must leave it reporting nothing, and a violating one
+  // planted at its head is reported at :1.
+  if (probe.violation !== null && probe.prepend !== true) {
     throw new ProbeTreeError("plant", `${probe.file} exists; a violating probe must be a file of its own, reported at :1`);
   }
   fs.writeFileSync(target, `${probe.content}${fs.readFileSync(target, "utf-8")}`);

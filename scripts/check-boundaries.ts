@@ -16,12 +16,19 @@
  *                                   package only the symbols its `names.<pkg>` lists
  *   names.<pkg>      = [...]        those symbols; a package with no `names.<pkg>` gives the
  *                                   named-only files nothing
+ *   stand-ins        = [glob, ...]  named-only files that stand in for a model the product calls
+ *   stand-in-names.<pkg> = [...]    the narrower list those files, and every file they reach by a
+ *                                   value import, may import from <pkg>; each name must also be in
+ *                                   `names.<pkg>`, and a package with none gives them nothing
  *
  * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
  * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
  * relative import may not leave the named-only files, and a listed name no named-only file imports
  * is itself a violation, so the list never grows past what is used (ADR-081: a simulator oracle
- * never imports the production predicate it judges).
+ * never imports the production predicate it judges). A stand-in is held to `stand-in-names` through
+ * its relative value imports too, followed file to file, so a helper cannot hand it a product rule;
+ * an `import type` edge carries no runtime code and is not followed. A stand-in glob that matches no
+ * file, or matches a file outside the named-only files, is a violation.
  *
  * It also fails on a default on a price or cost column of a packages/db/src/schema/ module
  * (scripts/price-defaults.ts), on an optional member of a *Deps, *Port or *Config interface that
@@ -70,6 +77,16 @@ class BoundaryRulesCoverageError extends Error {
   }
 }
 
+class StandInScanError extends Error {
+  constructor(
+    readonly file: string,
+    readonly reason: string,
+  ) {
+    super(`stand-in scan: ${file}: ${reason}`);
+    this.name = "StandInScanError";
+  }
+}
+
 interface PackageRule {
   readonly allow: readonly string[];
   /** importedPkg -> file globs (relative to the package root) permitted to import it. */
@@ -80,6 +97,10 @@ interface PackageRule {
   readonly namedOnly: readonly string[];
   /** importedPkg -> the only symbols the named-only files may import from it. */
   readonly names: ReadonlyMap<string, readonly string[]>;
+  /** Named-only file globs that stand in for a model; empty when the section states none. */
+  readonly standIns: readonly string[];
+  /** importedPkg -> the only symbols the stand-ins, and what they reach, may import from it. */
+  readonly standInNames: ReadonlyMap<string, readonly string[]>;
 }
 
 type BoundaryRules = ReadonlyMap<string, PackageRule>;
@@ -93,7 +114,15 @@ function parseList(inner: string): string[] {
 function parseRules(toml: string, rulesPath: string): BoundaryRules {
   const rules = new Map<
     string,
-    { allow: string[]; restrict: Map<string, string[]>; importers: string[] | null; namedOnly: string[]; names: Map<string, string[]> }
+    {
+      allow: string[];
+      restrict: Map<string, string[]>;
+      importers: string[] | null;
+      namedOnly: string[];
+      names: Map<string, string[]>;
+      standIns: string[];
+      standInNames: Map<string, string[]>;
+    }
   >();
   let currentSection: string | null = null;
   // The [stack-literals] section is not a package's rules; parseStackLiteralRules reads it.
@@ -112,7 +141,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map() });
       }
       continue;
     }
@@ -172,6 +201,25 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
+    const standInsMatch = /^stand-ins\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (standInsMatch) {
+      rule.standIns = parseList(standInsMatch[1]);
+      if (rule.standIns.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "stand-ins list is empty");
+      }
+      continue;
+    }
+
+    const standInNamesMatch = /^stand-in-names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (standInNamesMatch) {
+      const names = parseList(standInNamesMatch[2]);
+      if (names.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "stand-in-names list is empty (omit it to give the stand-ins nothing)");
+      }
+      rule.standInNames.set(standInNamesMatch[1], names);
+      continue;
+    }
+
     // Fail closed: a typo in a rule key must not silently disable the gate.
     throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
   }
@@ -197,12 +245,34 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, `lists symbols of "${named}", which is not in its allow list`);
       }
     }
+    if (rule.standIns.length > 0 && rule.namedOnly.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-ins`, "names stand-in files, but the section has no named-only files");
+    }
+    for (const [named, standInNames] of rule.standInNames) {
+      if (rule.standIns.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, "lists a package's symbols, but the section has no stand-ins");
+      }
+      const wider = rule.names.get(named) ?? [];
+      for (const name of standInNames) {
+        if (!wider.includes(name)) {
+          throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, `lists "${name}", which names.${named} does not: the stand-in list only narrows`);
+        }
+      }
+    }
     for (const importer of rule.importers ?? []) {
       if (!rules.has(importer)) {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
       }
     }
-    result.set(pkg, { allow: rule.allow, restrict: rule.restrict, importers: rule.importers, namedOnly: rule.namedOnly, names: rule.names });
+    result.set(pkg, {
+      allow: rule.allow,
+      restrict: rule.restrict,
+      importers: rule.importers,
+      namedOnly: rule.namedOnly,
+      names: rule.names,
+      standIns: rule.standIns,
+      standInNames: rule.standInNames,
+    });
   }
 
   return result;
@@ -368,6 +438,108 @@ function extractNamedImports(content: string): { imports: NamedImport[]; unaccou
   return { imports, unaccounted };
 }
 
+// A relative `import type` or `export type` statement: erased at runtime, so it hands no rule over.
+// An inline `{ type X }` modifier is not matched, so such an import is followed (fail closed).
+const TYPE_ONLY_RELATIVE_RE = /\b(?:import|export)\s+type\s+(?:\{[^}]*\}|\*\s+as\s+[\w$]+|[\w$]+)\s*from\s*(["']\.{1,2}\/[^"']*["'])/g;
+const RELATIVE_LITERAL_RE = /\b(?:from|import)\s*\(?\s*(["'](\.{1,2}\/[^"']*)["'])/g;
+
+/** Every relative specifier in the file that is not the tail of a type-only statement. */
+function valueRelativeImports(content: string): { line: number; specifier: string }[] {
+  const typeOnly = new Set<number>();
+  for (const match of content.matchAll(TYPE_ONLY_RELATIVE_RE)) typeOnly.add(match.index + match[0].length - match[1].length);
+  const found: { line: number; specifier: string }[] = [];
+  for (const match of content.matchAll(RELATIVE_LITERAL_RE)) {
+    const offset = match.index + match[0].length - match[1].length;
+    if (!typeOnly.has(offset)) found.push({ line: lineAt(content, offset), specifier: match[2] });
+  }
+  return found;
+}
+
+/** The scanned file a relative specifier names, under TypeScript's `.js`-for-`.ts` convention; null when none is. */
+function resolveRelative(fromFile: string, specifier: string, scanned: ReadonlySet<string>): string | null {
+  const base = path.resolve(path.dirname(fromFile), specifier);
+  const candidates = [base, base.replace(/\.js$/, ".ts"), `${base}.ts`, path.join(base, "index.ts")];
+  return candidates.find((candidate) => scanned.has(candidate)) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Stand-in models
+// ---------------------------------------------------------------------------
+
+interface StandInScope {
+  readonly rule: PackageRule;
+  readonly pkgName: string;
+  readonly pkgRoot: string;
+  readonly root: string;
+  /** Every scanned file of the package, by absolute path. */
+  readonly contents: ReadonlyMap<string, string>;
+  /** The package's files that match both `named-only` and `stand-ins`. */
+  readonly standInFiles: readonly string[];
+  readonly relativeTo: (filePath: string) => string;
+  readonly violations: Violation[];
+}
+
+/**
+ * Holds every stand-in, and every named-only file it reaches by relative value imports, to
+ * `stand-in-names`. A name outside `names` is left to the named-only check, which already reports
+ * it. Returns the stand-in names imported, by package.
+ */
+function checkStandIns(scope: StandInScope): Map<string, Set<string>> {
+  const { rule, pkgName, pkgRoot, root, contents, relativeTo, violations } = scope;
+  const used = new Map<string, Set<string>>();
+  const reachedFrom = new Map<string, string>();
+  const queue: string[] = [];
+  for (const standIn of scope.standInFiles) {
+    reachedFrom.set(standIn, standIn);
+    queue.push(standIn);
+  }
+  const scanned = new Set(contents.keys());
+  for (let filePath = queue.shift(); filePath !== undefined; filePath = queue.shift()) {
+    const content = contents.get(filePath);
+    const standIn = reachedFrom.get(filePath);
+    if (content === undefined || standIn === undefined) {
+      throw new StandInScanError(path.relative(root, filePath), "a queued file was never scanned");
+    }
+    const where = standIn === filePath ? "stand-in model file" : `reached by a value import from stand-in ${relativeTo(standIn)}`;
+    const at = (line: number, specifier: string, reason: string): Violation => ({
+      file: path.relative(root, filePath),
+      line,
+      fromPkg: pkgName,
+      specifier,
+      reason: `${where}: ${reason}`,
+    });
+    for (const ref of extractNamedImports(content).imports) {
+      const wider = rule.names.get(ref.pkg) ?? [];
+      const narrow = rule.standInNames.get(ref.pkg) ?? [];
+      for (const name of ref.names ?? []) {
+        if (!wider.includes(name)) continue;
+        if (!narrow.includes(name)) {
+          violations.push(at(ref.line, ref.specifier, `"${name}" is not in stand-in-names.${ref.pkg}`));
+          continue;
+        }
+        const names = used.get(ref.pkg) ?? new Set<string>();
+        names.add(name);
+        used.set(ref.pkg, names);
+      }
+    }
+    for (const relative of valueRelativeImports(content)) {
+      const target = path.relative(pkgRoot, path.resolve(path.dirname(filePath), relative.specifier)).split(path.sep).join("/");
+      // A path out of the package or out of the named-only files is reported by the named-only check.
+      if (target.startsWith("../") || path.isAbsolute(target)) continue;
+      if (![target, target.replace(/\.js$/, ".ts")].some((candidate) => matchesAnyGlob(candidate, rule.namedOnly))) continue;
+      const resolved = resolveRelative(filePath, relative.specifier, scanned);
+      if (resolved === null) {
+        violations.push(at(relative.line, relative.specifier, "the value import names no scanned .ts file, so what it hands the stand-in cannot be checked"));
+        continue;
+      }
+      if (reachedFrom.has(resolved)) continue;
+      reachedFrom.set(resolved, standIn);
+      queue.push(resolved);
+    }
+  }
+  return used;
+}
+
 // ---------------------------------------------------------------------------
 // Stack literals (not an import rule; run here so `just check` keeps its four steps)
 // ---------------------------------------------------------------------------
@@ -491,12 +663,25 @@ function main(): void {
     ];
 
     const namesUsed = new Map<string, Set<string>>();
+    const contents = new Map<string, string>();
+    const standInFiles: string[] = [];
+    const relativeTo = (filePath: string): string => path.relative(pkgRoot, filePath).split(path.sep).join("/");
 
     for (const filePath of files) {
       filesChecked++;
       const content = fs.readFileSync(filePath, "utf-8");
+      contents.set(filePath, content);
       const imports = extractAsharaImports(content, filePath, packagesDir, pkgName);
-      const pkgRelative = path.relative(pkgRoot, filePath).split(path.sep).join("/");
+      const pkgRelative = relativeTo(filePath);
+      if (matchesAnyGlob(pkgRelative, rule.standIns) && !matchesAnyGlob(pkgRelative, rule.namedOnly)) {
+        violations.push({
+          file: path.relative(root, filePath),
+          line: 0,
+          fromPkg: pkgName,
+          specifier: "stand-ins",
+          reason: `a stand-in file must also be a named-only file (${rule.namedOnly.join(", ")})`,
+        });
+      }
 
       if (rule.namedOnly.length > 0 && matchesAnyGlob(pkgRelative, rule.namedOnly)) {
         const at = (line: number, specifier: string, reason: string): Violation => ({
@@ -526,9 +711,14 @@ function main(): void {
             namesUsed.set(ref.pkg, used);
           }
         }
+        if (matchesAnyGlob(pkgRelative, rule.standIns)) standInFiles.push(filePath);
         scanLines(content, RELATIVE_IMPORT_RE, (line, match) => {
           const target = path.relative(pkgRoot, path.resolve(path.dirname(filePath), match[1])).split(path.sep).join("/");
-          if (target.startsWith("../") || path.isAbsolute(target)) return;
+          // Another package's file reached by path would carry no names to check.
+          if (target.startsWith("../") || path.isAbsolute(target)) {
+            violations.push(at(line, match[1], "the relative import leaves the package; import another package by its @ashara/ name"));
+            return;
+          }
           const candidates = [target, target.replace(/\.js$/, ".ts")];
           if (!candidates.some((candidate) => matchesAnyGlob(candidate, rule.namedOnly))) {
             violations.push(at(line, match[1], `the relative import leaves the named-only files (${rule.namedOnly.join(", ")})`));
@@ -564,6 +754,32 @@ function main(): void {
         const soleImporters = rule.restrict.get(ref.pkg);
         if (soleImporters !== undefined && !matchesAnyGlob(pkgRelative, soleImporters)) {
           violations.push(violation(`only ${soleImporters.join(", ")} may import package "${ref.pkg}"`));
+        }
+      }
+    }
+
+    const standInNamesUsed = checkStandIns({ rule, pkgName, pkgRoot, root, contents, standInFiles, relativeTo, violations });
+    for (const glob of rule.standIns) {
+      if (!standInFiles.some((filePath) => matchesAnyGlob(relativeTo(filePath), [glob]))) {
+        violations.push({
+          file: rulesRelative,
+          line: 0,
+          fromPkg: pkgName,
+          specifier: "stand-ins",
+          reason: `"${glob}" matches no named-only file; a stand-in rule that holds nothing passes everything`,
+        });
+      }
+    }
+    for (const [importedPkg, listed] of rule.standInNames) {
+      for (const name of listed) {
+        if (standInNamesUsed.get(importedPkg)?.has(name) !== true) {
+          violations.push({
+            file: rulesRelative,
+            line: 0,
+            fromPkg: pkgName,
+            specifier: `stand-in-names.${importedPkg}`,
+            reason: `"${name}" is listed but no stand-in imports it; remove it`,
+          });
         }
       }
     }

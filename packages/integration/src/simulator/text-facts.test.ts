@@ -202,4 +202,13 @@ describe("checkTextFacts, the delivered report's quote of the public interface",
     const delivered = deliveredInterfaceText("short");
     expect(judged(delivered, `${lead}\n${fence}\n${delivered}${fence}`)).toEqual([]);
   });
+
+  it("models a delivered interface file written whole, never the scaffold's with a line added", () => {
+    // Acceptance refuses only a byte-identical file: a stand-in passing it by an edit would feed that loophole.
+    for (const form of ["short", "oversized"] as const) {
+      const kept = new Set(deliveredInterfaceText(form).split("\n"));
+      const placeholder = publicInterfaceText(form).split("\n").filter((line) => line.trim() !== "" && !line.startsWith("```"));
+      expect(placeholder.filter((line) => kept.has(line))).toEqual([]);
+    }
+  });
 });

@@ -150,6 +150,15 @@ names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "cre
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "describeErrorChain", "observeContendedWaits"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT"]
+# ADR-080 d10: a stand-in model answers the product's model calls, so one that imports the rule judging
+# its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the
+# oracle judging that rule stops being independent. A stand-in, and every simulator file it reaches by
+# a relative value import, may import from another package only the transport and type names below,
+# never a product rule; each must also be in names.<pkg>. Blind spots: a stand-in that games the rule
+# by hand (writes the minimal text the rule accepts) imports nothing and passes; an `import type` edge
+# is not followed; tests written from observed behaviour are not checked at all.
+stand-ins = ["src/simulator/scripted-models.ts"]
+stand-in-names.model-access = ["LanguageModelFactory"]
 
 # --- Stack literals (no package's section) ----------------------------------------------------
 
