@@ -27,6 +27,7 @@ export {
   suiteReviewJudgements,
   taskChecks,
   visionDocuments,
+  workBurnWarnings,
   workItems,
 } from "./schema/index.js";
 

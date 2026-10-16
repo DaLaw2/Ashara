@@ -253,6 +253,7 @@ const SIM_ENV = [
   // Unset for the run: the work budgets are production's policy defaults (ADR-084 decision 1).
   "ASHARA_TASK_WORK_BUDGET_REQUESTS",
   "ASHARA_PROJECT_WORK_BUDGET_REQUESTS",
+  "ASHARA_WORK_RESERVE_PERCENT",
   // Unset for the run: the batch size is production's default (server config.ts), a batch of two.
   "MAX_BATCH_SIZE",
   "ASHARA_CELL_MEMORY",
@@ -268,6 +269,7 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
   delete process.env["ASHARA_TASK_WORK_BUDGET_REQUESTS"];
   delete process.env["ASHARA_PROJECT_WORK_BUDGET_REQUESTS"];
+  delete process.env["ASHARA_WORK_RESERVE_PERCENT"];
   delete process.env["MAX_BATCH_SIZE"];
   // Required configuration (ADR-074 d82 W9); the fake runtime accepts and ignores the caps they become.
   process.env["ASHARA_CELL_MEMORY"] = "4g";

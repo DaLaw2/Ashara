@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, jsonb, integer, unique, index, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, jsonb, integer, unique, index, primaryKey, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
 import { projects } from "./project.js";
@@ -65,4 +65,34 @@ export const clientMessages = pgTable(
   (t) => ({
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),
   }),
+);
+
+// ---------------------------------------------------------------------------
+// work_burn_warnings (migration 068, ADR-084 addendum 1 decision 7, Engagement context)
+// ---------------------------------------------------------------------------
+// One row per zone of the work ledger's fever chart a project entered in one plan revision, with
+// the figures it was decided on and the Liaison's one report of it; the red zone's also carries
+// what the operator is told. The primary key makes each zone once per project and revision.
+
+export const workBurnWarnings = pgTable(
+  "work_burn_warnings",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    planRevision: integer("plan_revision").notNull(),
+    zone: text().notNull(),
+    drawnRequests: integer("drawn_requests").notNull(),
+    budgetRequests: integer("budget_requests").notNull(),
+    reserveRequests: integer("reserve_requests").notNull(),
+    upstreamRequests: integer("upstream_requests").notNull(),
+    plannedTasks: integer("planned_tasks").notNull(),
+    completedTasks: integer("completed_tasks").notNull(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => clientMessages.id),
+    operatorReport: text("operator_report"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.planRevision, t.zone] })],
 );

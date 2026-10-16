@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkReports, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
-const noRecords: ReportRecords = { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], passedSweeps: [] };
+const noRecords: ReportRecords = { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], passedSweeps: [] };
 
 function haltWith(kind: string, errorClass: string | null, reason: string | null, body: string): ReportRecords {
   return {
@@ -56,7 +56,7 @@ describe("checkReports, a halt's cause", () => {
   });
 
   it("holds a work_budget halt's report to the budget, the requests drawn and the call sites its ledger recorded", () => {
-    const work = { scope: "project", budgetRequests: 600, grantedRequests: 0, spentRequests: 599, inFlightRequests: 1, bySite: [{ callSite: "agent", requests: 600 }] };
+    const work = { scope: "project", budgetRequests: 600, grantedRequests: 0, reserveRequests: 0, reserveProtected: false, spentRequests: 599, inFlightRequests: 1, bySite: [{ callSite: "agent", requests: 600 }] };
     const words = "the budget of model requests set for this project was used up, so the next step of the work was not sent";
     const figures =
       'When it stopped the work, 599 model requests had been sent and 1 more were under way, against a budget of 600 model requests. ' +
@@ -69,6 +69,24 @@ describe("checkReports, a halt's cause", () => {
     // Another call site's count is not the ledger on record.
     expect(keysOf(withWork(`${words}. ${figures.replace('"agent" 600', '"agent" 599')}`, work), "blocked")).toEqual(["halt-cause:work_budget"]);
     expect(keysOf(withWork(`${words}. ${figures}`, { scope: "project" }), "blocked")).toEqual(["halt-spend-corrupt:work_budget"]);
+  });
+
+  it("holds a work_budget halt that kept the verification reserve to saying so", () => {
+    const work = { scope: "project", budgetRequests: 8, grantedRequests: 0, reserveRequests: 2, reserveProtected: true, spentRequests: 6, inFlightRequests: 0, bySite: [{ callSite: "agent-runner", requests: 6 }] };
+    const kept =
+      "the budget of model requests set for this project was used up except for the share set aside for checking and accepting the " +
+      "finished work, which is kept for that, so the next step of the work, which was not that checking, was not sent";
+    const figures =
+      "When it stopped the work, 6 model requests had been sent and 0 more were under way, against a budget of 8 model requests. " +
+      '2 model requests of the budget are set aside for checking and accepting the finished work. The requests drawn, by the step of the work that drew them: "agent-runner" 6.';
+    const withWork = (sentence: string): ReportRecords => {
+      const records = haltWith("work_budget", "WorkBudgetSpent", "spent", stated(sentence, "e1"));
+      return { ...records, episodes: records.episodes.map((episode) => ({ ...episode, work })) };
+    };
+    expect(keysOf(withWork(`${kept}. ${figures.slice(0, -1)}`), "blocked")).toEqual([]);
+    expect(keysOf(withWork(`the budget of model requests set for this project was used up, so the next step of the work was not sent. ${figures.slice(0, -1)}`), "blocked")).toEqual([
+      "halt-cause:work_budget",
+    ]);
   });
 
   it("holds a halt with no cause recorded to saying so, and one with a cause to not saying so", () => {
@@ -270,5 +288,55 @@ describe("uncheckedAtPassedSweeps", () => {
     // A check stored with no record of what it decides decides nothing on record.
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, decides: null }] })).toEqual(["coverage-unreadable"]);
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, decides: ["A1"] }] })).toEqual(["coverage-unreadable"]);
+  });
+});
+
+describe("checkReports, a burn warning", () => {
+  // ADR-084 addendum 1 decision 7: a warning states the figures it recorded, its zone held on them,
+  // and each zone is told once per plan revision.
+  const yellow = {
+    planRevision: 1,
+    zone: "yellow",
+    drawnRequests: 230,
+    budgetRequests: 600,
+    reserveRequests: 150,
+    upstreamRequests: 450,
+    plannedTasks: 4,
+    completedTasks: 1,
+    reportId: "w1",
+    operatorReport: null,
+    ledgerRequests: 240,
+  };
+  const body =
+    "This project has used more of its budget of model requests than its finished work accounts for.\n\n" +
+    "So far 230 model requests have been sent, of the 450 model requests this project's work may use before it pauses. A further 150 model " +
+    "requests of its budget are set aside for checking and accepting the finished work, and only that checking may use them. 1 of the 4 " +
+    "building tasks of the current plan are finished.";
+  const warned = (warnings: ReportRecords["burnWarnings"], text = body): ReportRecords => ({
+    ...noRecords,
+    reports: warnings.map((warning) => ({ id: warning.reportId, body: text, reportsOn: null, inReplyTo: null })),
+    burnWarnings: warnings,
+  });
+
+  it("holds a warning to the figures and zone it recorded, and to its one report", () => {
+    expect(keysOf(warned([yellow]), "active")).toEqual([]);
+    expect(keysOf(warned([yellow], body.replace("230 model", "200 model")), "active")).toEqual(["burn-warning"]);
+    expect(keysOf(warned([{ ...yellow, completedTasks: 2 }]), "active")).toEqual(["burn-warning-zone", "burn-warning"]);
+    expect(keysOf(warned([{ ...yellow, ledgerRequests: 229 }]), "active")).toEqual(["burn-warning-figures"]);
+    // A warning's report is on its record, so it is not an unrecorded report.
+    expect(keysOf({ ...warned([yellow]), burnWarnings: [] }, "active")).toEqual(["unrecorded-report"]);
+  });
+
+  it("holds each zone to once per plan revision, never yellow after red, and red to the operator's report", () => {
+    const operatorReport = "work_burn red: project p (plan revision 1) has drawn 400 of the 450 model requests its upstream work may draw (budget 600)";
+    const red = { ...yellow, zone: "red", drawnRequests: 400, reportId: "w2", operatorReport, ledgerRequests: 400 };
+    const redBody = body.replace("230 model", "400 model");
+    const reports = [
+      { id: "w2", body: redBody, reportsOn: null, inReplyTo: null },
+      { id: "w3", body: redBody, reportsOn: null, inReplyTo: null },
+    ];
+    const records: ReportRecords = { ...noRecords, reports, burnWarnings: [red, { ...red, zone: "yellow", reportId: "w3", operatorReport: null }] };
+    expect(keysOf(records, "active")).toEqual(["burn-warning-repeated"]);
+    expect(keysOf({ ...noRecords, reports: reports.slice(0, 1), burnWarnings: [{ ...red, operatorReport: null }] }, "active")).toEqual(["burn-warning-operator"]);
   });
 });

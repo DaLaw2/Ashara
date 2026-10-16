@@ -779,6 +779,9 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/block-report.ts#disputeBoundReport`, judges: [i4("halt-kind-retired")] },
   { source: `${ENGAGEMENT}/block-report.ts#suiteReviewBoundReport`, judges: [i4("halt-kind-retired")] },
   { source: `${ENGAGEMENT}/client-stop.ts#stopReport`, judges: [i4("stop-merges")] },
+  // The work ledger's early warning: its figures against its own record and the ledger, its zone, once per revision.
+  { source: `${ENGAGEMENT}/burn-warning.ts#burnWarningReport`, judges: [i4("burn-warning"), i4("burn-warning-zone"), i4("burn-warning-repeated")] },
+  { source: `${ENGAGEMENT}/burn-warning.ts#operatorBurnReport`, judges: [i4("burn-warning-operator")] },
 ];
 
 const I9_CHECKS: readonly TextCheck[] = [...new Set(TEXT_COVERED.flatMap((entry) => entry.judges.flatMap((judge) => (judge.by === "I9" ? [judge.check] : []))))];
@@ -865,4 +868,5 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
     clientWords: false,
   },
   { source: `${ENGAGEMENT}/repositories/stack-choice.ts#recordStackChoice`, posts: [`${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`], clientWords: false },
+  { source: `${ENGAGEMENT}/repositories/burn-warning.ts#postBurnWarning`, posts: [`${ENGAGEMENT}/burn-warning.ts#burnWarningReport`], clientWords: false },
 ];

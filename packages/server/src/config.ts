@@ -100,11 +100,15 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const perProjectUsd =
     rawProjectLimit === undefined ? deploymentUsd : parseBudgetLimit("ASHARA_PROJECT_BUDGET_LIMIT_USD", rawProjectLimit);
 
-  // Policy defaults: unset, ADR-084 decision 1's budgets (DEFAULT_WORK_BUDGETS). A set but unusable
+  // Policy defaults: unset, ADR-084 decision 1's budgets and addendum 1 decision 6's verification
+  // reserve (DEFAULT_WORK_BUDGETS). A set but unusable
   // one is refused, never replaced.
   const rawTaskWork = nonEmptyEnv("ASHARA_TASK_WORK_BUDGET_REQUESTS");
   const rawProjectWork = nonEmptyEnv("ASHARA_PROJECT_WORK_BUDGET_REQUESTS");
+  const rawReserve = nonEmptyEnv("ASHARA_WORK_RESERVE_PERCENT");
   const workBudgets: WorkBudgets = {
+    verificationReservePercent:
+      rawReserve === undefined ? DEFAULT_WORK_BUDGETS.verificationReservePercent : parseIntegerSetting("ASHARA_WORK_RESERVE_PERCENT", rawReserve, 0, 99),
     perTaskRequests:
       rawTaskWork === undefined
         ? DEFAULT_WORK_BUDGETS.perTaskRequests

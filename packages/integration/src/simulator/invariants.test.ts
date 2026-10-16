@@ -87,7 +87,7 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
     unrecordedCalls: 0,
     events: [],
     main: [],
-    reports: { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], passedSweeps: [] },
+    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], passedSweeps: [] },
     textFacts: {
       visions: [], briefs: [], questions: [], answerReplies: [], tenderReports: [], delivered: [], sweepReplies: [],
       interfaceOnMain: { kind: "not-held" }, reviewSpec: null, firstPlan: { report: null, items: [], revisions: [] },

@@ -5,8 +5,10 @@ export type { LlmCallRecorder, LlmProviderCall } from "./guarded-model-access.js
 export { LlmCallLedger } from "./llm-call-ledger.js";
 export { SPEND_CAP_ERROR_CLASS, SpendCap, WORK_BUDGET_ERROR_CLASS } from "./spend-cap.js";
 export type { SpendAtCap } from "./spend-cap.js";
-export { DEFAULT_WORK_BUDGETS } from "./work-ledger.js";
+export { DEFAULT_WORK_BUDGETS, projectWorkBudget } from "./work-ledger.js";
 export type { WorkBudgets } from "./work-ledger.js";
+export { burnZoneOf } from "./work-burn.js";
+export type { BurnZone } from "./work-burn.js";
 export type { WorkAtBudget } from "./errors.js";
 /** @testseam the integration work-ledger.test.ts asserts the refusal's scope and figures; WorkLedger.draw throws it */
 export { WorkBudgetSpent } from "./errors.js";

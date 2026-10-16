@@ -87,6 +87,8 @@ describe("project block reports", () => {
       scope: "project" as const,
       budgetRequests: 650,
       grantedRequests: 50,
+      reserveRequests: 0,
+      reserveProtected: false,
       spentRequests: 649,
       inFlightRequests: 1,
       bySite: [{ callSite: "agent", requests: 600 }, { callSite: "suite-review", requests: 50 }],
@@ -102,6 +104,32 @@ describe("project block reports", () => {
     );
     expect(posted[0].body).toContain("More model requests have to be granted to this project before more work is done.");
     expect(posted[0].body).not.toContain("WorkBudgetSpent");
+  });
+
+  // ADR-084 addendum 1 decision 6: a halt that kept the verification reserve says so, and names what spent the rest.
+  test("a work_budget halt that protected the verification reserve says the reserve is kept, and names the call sites that drew the rest", async () => {
+    const work = {
+      scope: "project" as const,
+      budgetRequests: 600,
+      grantedRequests: 0,
+      reserveRequests: 150,
+      reserveProtected: true,
+      spentRequests: 450,
+      inFlightRequests: 0,
+      bySite: [{ callSite: "agent-runner", requests: 400 }, { callSite: "suite-review", requests: 50 }],
+    };
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "work_budget", cause: { errorClass: "WorkBudgetSpent", reason: "r", spend: null, work } },
+    ]);
+    await reports.runPending();
+    expect(posted[0].body).toContain(
+      "Ashara recorded the cause as this: the budget of model requests set for this project was used up except for the share set aside " +
+        "for checking and accepting the finished work, which is kept for that, so the next step of the work, which was not that checking, was not sent.",
+    );
+    expect(posted[0].body).toContain(
+      "against a budget of 600 model requests. 150 model requests of the budget are set aside for checking and accepting the finished work. " +
+        'The requests drawn, by the step of the work that drew them: "agent-runner" 400, "suite-review" 50.',
+    );
   });
 
   test("a halt with no cause recorded says so, and claims none", async () => {

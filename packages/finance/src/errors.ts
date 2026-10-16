@@ -229,14 +229,24 @@ type WorkBudgetScope =
 
 /**
  * The work ledger as it stood when it refused a request (ADR-084 decision 1), in model requests:
- * the budget in force (its policy default plus the owner's grants), the requests drawn against it,
- * recorded and in flight, and which call sites drew them, most first.
+ * the budget in force (its policy default plus the owner's grants), the verification reserve in it,
+ * the requests drawn against it, recorded and in flight, and which call sites drew them, most first.
  */
 export interface WorkAtBudget {
   readonly scope: "task" | "project";
   readonly budgetRequests: number;
   /** Requests the owner granted; always 0 at task scope, whose budget no grant raises. */
   readonly grantedRequests: number;
+  /**
+   * The requests of the budget only verification and acceptance may draw (ADR-084 addendum 1
+   * decision 6); always 0 at task scope, since the reserve is the project's.
+   */
+  readonly reserveRequests: number;
+  /**
+   * True when the refused request was upstream work and only the reserve was left, so the reserve
+   * was kept for verification; false when the whole budget was drawn, and at task scope.
+   */
+  readonly reserveProtected: boolean;
   readonly spentRequests: number;
   readonly inFlightRequests: number;
   readonly bySite: ReadonlyArray<{ readonly callSite: string; readonly requests: number }>;
@@ -270,8 +280,11 @@ export class WorkBudgetSpent extends PreCallRefusal {
         ? `The task is given up and its plan repaired; no grant raises a task's budget.`
         : `Grant the project more requests (npx tsx scripts/project.ts grant ${scope.projectId} --requests <n> --reason <why>), ` +
           `then return it to work (npx tsx scripts/project.ts unblock ${scope.projectId} --reason <why>).`;
+    const left = work.reserveProtected
+      ? `only its verification reserve of ${work.reserveRequests} is left, which upstream work may not draw`
+      : "none is left";
     super(
-      `work_budget: the work budget of ${subject} is ${budget}, and none is left: ${work.spentRequests} sent ` +
+      `work_budget: the work budget of ${subject} is ${budget}, and ${left}: ${work.spentRequests} sent ` +
         `(llm_calls) + ${work.inFlightRequests} in flight. Requests drawn by call site: ${describeSites(work.bySite)}. ` +
         `The request (call site "${context.callSite}") was not sent. ${howToFix}`,
     );
@@ -283,19 +296,22 @@ export class WorkBudgetSpent extends PreCallRefusal {
   }
 }
 
-/** The configured work budgets are not positive integers. */
+/** The configured work budgets are not positive integers, or the verification reserve is not a whole percent under 100. */
 export class WorkBudgetsInvalid extends Error {
   readonly perTaskRequests: number;
   readonly perProjectRequests: number;
+  readonly verificationReservePercent: number;
 
-  constructor(budgets: { readonly perTaskRequests: number; readonly perProjectRequests: number }) {
+  constructor(budgets: { readonly perTaskRequests: number; readonly perProjectRequests: number; readonly verificationReservePercent: number }) {
     super(
-      `work budgets are invalid: perTask=${budgets.perTaskRequests}, perProject=${budgets.perProjectRequests} model requests; ` +
-        `both must be positive integers (ASHARA_TASK_WORK_BUDGET_REQUESTS, ASHARA_PROJECT_WORK_BUDGET_REQUESTS)`,
+      `work budgets are invalid: perTask=${budgets.perTaskRequests}, perProject=${budgets.perProjectRequests} model requests, ` +
+        `verification reserve ${budgets.verificationReservePercent}%; both budgets must be positive integers and the reserve a whole ` +
+        `percent from 0 to 99 (ASHARA_TASK_WORK_BUDGET_REQUESTS, ASHARA_PROJECT_WORK_BUDGET_REQUESTS, ASHARA_WORK_RESERVE_PERCENT)`,
     );
     this.name = "WorkBudgetsInvalid";
     this.perTaskRequests = budgets.perTaskRequests;
     this.perProjectRequests = budgets.perProjectRequests;
+    this.verificationReservePercent = budgets.verificationReservePercent;
   }
 }
 

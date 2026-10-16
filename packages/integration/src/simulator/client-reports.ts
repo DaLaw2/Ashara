@@ -28,11 +28,13 @@ const spendRecord = z.strictObject({
   inFlightUsd: z.number(),
   nextCallUsd: z.number().nullable(),
 });
-/** The work ledger a work_budget halt recorded, as project_blocks.work holds it (migration 067). */
+/** The work ledger a work_budget halt recorded, as project_blocks.work holds it (migrations 067, 068). */
 const workRecord = z.strictObject({
   scope: z.enum(["task", "project"]),
   budgetRequests: z.number(),
   grantedRequests: z.number(),
+  reserveRequests: z.number(),
+  reserveProtected: z.boolean(),
   spentRequests: z.number(),
   inFlightRequests: z.number(),
   bySite: z.array(z.strictObject({ callSite: z.string(), requests: z.number() })),
@@ -50,6 +52,21 @@ const episodeRecord = z.object({
   resumedReportId: z.string().nullable(),
   ended: z.boolean(),
 });
+/** One zone of the work ledger's early warning a project entered (work_burn_warnings, migration 068), with its report's text. */
+const burnWarningRow = z.object({
+  planRevision: z.number(),
+  zone: z.string(),
+  drawnRequests: z.number(),
+  budgetRequests: z.number(),
+  reserveRequests: z.number(),
+  upstreamRequests: z.number(),
+  plannedTasks: z.number(),
+  completedTasks: z.number(),
+  reportId: z.string(),
+  operatorReport: z.string().nullable(),
+  /** Every model request the project has drawn by the end of the run: the ledger never gives one back. */
+  ledgerRequests: z.number(),
+});
 const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), title: z.string(), attempts: z.number(), blockedReason: z.unknown() });
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
@@ -65,6 +82,8 @@ export interface ReportRecords {
   /** Every outbound report of the project, in posting order. */
   readonly reports: ReadonlyArray<z.infer<typeof reportRow>>;
   readonly episodes: ReadonlyArray<z.infer<typeof episodeRecord>>;
+  /** Every early-warning zone the project entered, in recording order. */
+  readonly burnWarnings: ReadonlyArray<z.infer<typeof burnWarningRow>>;
   /** The given-up tasks each open plan_repair episode was blocked on (block-report.ts blockingAbandonments). */
   readonly repairs: ReadonlyArray<z.infer<typeof repairRow>>;
   readonly sweeps: ReadonlyArray<z.infer<typeof sweepRow>>;
@@ -95,6 +114,14 @@ export async function readReportRecords(db: Database, projectId: string): Promis
       sql`SELECT id, kind, error_class AS "errorClass", reason, spend, work, report_id AS "reportId", resumed_report_id AS "resumedReportId",
                  ended_at IS NOT NULL AS ended
           FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`,
+    ),
+    burnWarnings: await rows(
+      burnWarningRow,
+      sql`SELECT plan_revision AS "planRevision", zone, drawn_requests AS "drawnRequests", budget_requests AS "budgetRequests",
+                 reserve_requests AS "reserveRequests", upstream_requests AS "upstreamRequests", planned_tasks AS "plannedTasks",
+                 completed_tasks AS "completedTasks", report_id AS "reportId", operator_report AS "operatorReport",
+                 (SELECT count(*)::int FROM llm_calls c WHERE c.project_id = w.project_id) AS "ledgerRequests"
+          FROM work_burn_warnings w WHERE project_id = ${projectId} ORDER BY created_at, plan_revision, zone`,
     ),
     repairs: await rows(
       repairRow,
@@ -338,11 +365,70 @@ function requestCount(count: number): string {
 function expectedWorkWords(work: z.infer<typeof workRecord> | null): string {
   if (work === null) return "How many model requests had been drawn against that budget, and by which steps of the work, is not on record.";
   const granted = work.grantedRequests > 0 ? `, ${requestCount(work.grantedRequests)} of it granted by the operator` : "";
+  const reserve = work.reserveRequests > 0 ? ` ${requestCount(work.reserveRequests)} of the budget are set aside for checking and accepting the finished work.` : "";
   const sites = work.bySite.length === 0 ? "none is on record" : work.bySite.map((site) => `"${site.callSite}" ${site.requests}`).join(", ");
   return (
     `When it stopped the work, ${requestCount(work.spentRequests)} had been sent and ${work.inFlightRequests} more were under way, ` +
-    `against a budget of ${requestCount(work.budgetRequests)}${granted}. The requests drawn, by the step of the work that drew them: ${sites}.`
+    `against a budget of ${requestCount(work.budgetRequests)}${granted}.${reserve} The requests drawn, by the step of the work that drew them: ${sites}.`
   );
+}
+
+/**
+ * The sentences a burn warning's report must carry, from its recorded figures, written here: what was
+ * sent of what the project's work may use, the reserve when there is one, and what of the plan is done.
+ */
+function expectedBurnFigures(warning: z.infer<typeof burnWarningRow>): string {
+  const reserve =
+    warning.reserveRequests > 0
+      ? ` A further ${requestCount(warning.reserveRequests)} of its budget are set aside for checking and accepting the finished work, and only that checking may use them.`
+      : "";
+  const done =
+    warning.plannedTasks === 0
+      ? "No building task of the current plan is planned yet, so none of it is finished."
+      : `${warning.completedTasks} of the ${warning.plannedTasks} building tasks of the current plan are finished.`;
+  return `So far ${requestCount(warning.drawnRequests)} have been sent, of the ${requestCount(warning.upstreamRequests)} this project's work may use before it pauses.${reserve} ${done}`;
+}
+
+/**
+ * Whether a warning's recorded figures put it in its zone (ADR-084 addendum 1 decision 7, the policy
+ * defaults restated here): yellow at 50 percent of what upstream work may draw with at most 25
+ * percent of the planned tasks done, red at 80 percent with the plan not finished, none planned
+ * counting as none done.
+ */
+function zoneHolds(warning: z.infer<typeof burnWarningRow>): boolean {
+  const drawn = warning.drawnRequests * 100;
+  if (warning.zone === "red") return drawn >= 80 * warning.upstreamRequests && (warning.plannedTasks === 0 || warning.completedTasks < warning.plannedTasks);
+  if (warning.zone === "yellow") return drawn >= 50 * warning.upstreamRequests && warning.completedTasks * 100 <= 25 * warning.plannedTasks;
+  return false;
+}
+
+/**
+ * Each burn warning against its own record: its zone held on the figures it recorded, its figures
+ * add up and never claim more requests than the ledger holds, its report states them, a red one told
+ * the operator the same figures, and no zone was told twice in a revision nor yellow after red.
+ */
+function checkBurnWarnings(records: ReportRecords, byId: ReadonlyMap<string, z.infer<typeof reportRow>>, add: (key: string, statement: string) => void): void {
+  const told = new Set<string>();
+  for (const warning of records.burnWarnings) {
+    const at = `${warning.zone} warning of plan revision ${warning.planRevision}`;
+    if (told.has(`${warning.planRevision}:${warning.zone}`) || (warning.zone === "yellow" && told.has(`${warning.planRevision}:red`))) {
+      add("burn-warning-repeated", `the ${at} was told after the same or a higher zone of that revision`);
+    }
+    told.add(`${warning.planRevision}:${warning.zone}`);
+    if (!zoneHolds(warning)) add("burn-warning-zone", `the ${at} records ${warning.drawnRequests} of ${warning.upstreamRequests} requests drawn and ${warning.completedTasks} of ${warning.plannedTasks} tasks done, outside its zone`);
+    if (warning.upstreamRequests !== warning.budgetRequests - warning.reserveRequests || warning.drawnRequests > warning.ledgerRequests) {
+      add("burn-warning-figures", `the ${at} records ${warning.drawnRequests} drawn of a budget ${warning.budgetRequests} less reserve ${warning.reserveRequests} = ${warning.upstreamRequests}; the ledger holds ${warning.ledgerRequests}`);
+    }
+    const report = byId.get(warning.reportId);
+    const figures = expectedBurnFigures(warning);
+    if (report === undefined || !report.body.includes(figures)) {
+      add("burn-warning", `the ${at}'s report does not state "${figures.slice(0, 200)}"; it reads "${report?.body.slice(0, 200) ?? "no report"}"`);
+    }
+    const operatorFigures = `has drawn ${warning.drawnRequests} of the ${warning.upstreamRequests} model requests its upstream work may draw`;
+    if ((warning.zone === "red") !== (warning.operatorReport?.includes(operatorFigures) === true)) {
+      add("burn-warning-operator", `the ${at} ${warning.zone === "red" ? "did not tell" : "told"} the operator "${operatorFigures}"`);
+    }
+  }
 }
 
 function usd(amount: number): string {
@@ -371,6 +457,7 @@ function statedCause(
 ): string | null {
   if (episode.reason === null && episode.errorClass === null) return "No cause was recorded for this pause.";
   let amounts = "";
+  let words = expectedKindWords(kind, episode.errorClass);
   if (kind === "budget_cap") {
     const spend = z.union([z.null(), spendRecord]).safeParse(episode.spend ?? null);
     if (!spend.success) return null;
@@ -380,9 +467,15 @@ function statedCause(
     const work = z.union([z.null(), workRecord]).safeParse(episode.work ?? null);
     if (!work.success) return null;
     amounts = `${expectedWorkWords(work.data)} `;
+    // A refusal that kept the verification reserve says the reserve is kept (ADR-084 addendum 1 decision 6).
+    if (work.data?.reserveProtected === true) {
+      words =
+        "the budget of model requests set for this project was used up except for the share set aside for checking and accepting the " +
+        "finished work, which is kept for that, so the next step of the work, which was not that checking, was not sent";
+    }
   }
   return (
-    `Ashara recorded the cause as this: ${expectedKindWords(kind, episode.errorClass)}. ` +
+    `Ashara recorded the cause as this: ${words}. ` +
     amounts +
     `Ashara keeps the technical detail in its own record of this pause, record ${episode.id}.`
   );
@@ -459,11 +552,14 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     ...records.episodes.flatMap((episode) => [episode.reportId, episode.resumedReportId]),
     ...records.sweeps.map((sweep) => sweep.reportId),
     ...records.revisionReports,
+    ...records.burnWarnings.map((warning) => warning.reportId),
   ].filter((id): id is string => id !== null);
   for (const report of records.reports) {
     if (recorded.includes(report.id) || report.reportsOn !== null || report.inReplyTo !== null) continue;
     add("unrecorded-report", `a report was sent that no record was posted on (a second report of something already reported): "${report.body.slice(0, 80)}..."`);
   }
+
+  checkBurnWarnings(records, byId, add);
 
   // A halt's report states the cause recorded on its episode.
   for (const episode of records.episodes) {

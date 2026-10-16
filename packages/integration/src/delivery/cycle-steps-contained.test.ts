@@ -34,6 +34,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.replanning.runPending": runPending("packages/delivery/src/replan.ts"),
   "deps.planReports.runPending": runPending("packages/engagement/src/plan-report.ts"),
   "deps.blockReports.runPending": runPending("packages/engagement/src/block-report.ts"),
+  "deps.burnWarnings.runPending": runPending("packages/engagement/src/burn-warning.ts"),
   "deps.deliveredReports.runPending": runPending(
     "packages/engagement/src/delivered-report.ts",
     {
@@ -121,6 +122,7 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/delivery/src/stores/first-plan-store.ts#projectsAwaitingPlan": { kind: "read-each" },
   "packages/delivery/src/stores/replan-store.ts#projectsAwaitingReplan": { kind: "read-each" },
   "packages/engagement/src/repositories/block-report.ts#listDueBlockReports": { kind: "read-each" },
+  "packages/engagement/src/repositories/burn-warning.ts#listProjectBurns": { kind: "read-each" },
   "packages/engagement/src/repositories/client-answer.ts#listOpenAnswers": { kind: "rows-only", why: ROWS_ONLY_QUERIES, body: "async function openAnswerRows(" },
   "packages/engagement/src/repositories/client-change.ts#listUnconsumedChanges": { kind: "rows-only", why: "message and project ids only" },
   "packages/engagement/src/repositories/client-message.ts#listByProject": { kind: "not-a-step-listing", why: "one project's messages, for the client channel" },

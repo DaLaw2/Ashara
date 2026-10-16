@@ -168,10 +168,11 @@ function requests(count: number): string {
 function workFigures(work: WorkAtBudget | null): string {
   if (work === null) return "How many model requests had been drawn against that budget, and by which steps of the work, is not on record.";
   const granted = work.grantedRequests > 0 ? `, ${requests(work.grantedRequests)} of it granted by the operator` : "";
+  const reserve = work.reserveRequests > 0 ? ` ${requests(work.reserveRequests)} of the budget are set aside for checking and accepting the finished work.` : "";
   const sites = work.bySite.length === 0 ? "none is on record" : work.bySite.map((site) => `"${site.callSite}" ${site.requests}`).join(", ");
   return (
     `When it stopped the work, ${requests(work.spentRequests)} had been sent and ${work.inFlightRequests} more were under way, ` +
-    `against a budget of ${requests(work.budgetRequests)}${granted}. The requests drawn, by the step of the work that drew them: ${sites}.`
+    `against a budget of ${requests(work.budgetRequests)}${granted}.${reserve} The requests drawn, by the step of the work that drew them: ${sites}.`
   );
 }
 
@@ -236,7 +237,10 @@ function recordedKind(halt: ToldHalt): string {
     case "provider_failed":
       return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
     case "work_budget":
-      return "the budget of model requests set for this project was used up, so the next step of the work was not sent";
+      return halt.work?.reserveProtected === true
+        ? "the budget of model requests set for this project was used up except for the share set aside for checking and accepting the " +
+            "finished work, which is kept for that, so the next step of the work, which was not that checking, was not sent"
+        : "the budget of model requests set for this project was used up, so the next step of the work was not sent";
   }
 }
 

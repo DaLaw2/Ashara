@@ -13,6 +13,7 @@ import type { SettledTargets } from "./settled-branches.js";
 import type {
   LiaisonAnswers,
   LiaisonBlockReports,
+  LiaisonBurnWarnings,
   LiaisonClientChanges,
   LiaisonClientStops,
   LiaisonDeliveredReports,
@@ -207,6 +208,12 @@ export interface CoreLoopDeps {
    * cap too (no LLM call), and once more when the deployment cap stops the loop.
    */
   readonly blockReports: LiaisonBlockReports;
+  /**
+   * The Liaison's early warning on each project's work ledger (ADR-084 addendum 1 decision 7): one
+   * report per zone and plan revision, the red zone's to the operator too; run every cycle after the
+   * block reports, before the spend-cap check (no LLM call).
+   */
+  readonly burnWarnings: LiaisonBurnWarnings;
   /** The substrate probe an infrastructure halt waits on; run each cycle while a project is so halted. */
   readonly infrastructureProbe: InfrastructureProbe;
   /**

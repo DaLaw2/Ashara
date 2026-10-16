@@ -216,6 +216,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     checkDisputes: { record: notExercised("checkDisputes") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
     blockReports: { runPending: async () => [] },
+    burnWarnings: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     heldCells: { release: async () => {} },
     environmentOwner: notExercised("environmentOwner"),
@@ -278,7 +279,7 @@ describe("a task that draws its whole work budget", () => {
   test("is given up with source work_budget_spent and its plan repaired, never requeued, and its project stays at work", async () => {
     const at = await fixture("task-budget");
     const mock = endlessAgent();
-    const loop = serverProcess(at, { perTaskRequests: 2, perProjectRequests: 100 });
+    const loop = serverProcess(at, { perTaskRequests: 2, perProjectRequests: 100, verificationReservePercent: 0 });
 
     const cycle = await loop.runCycle();
 
@@ -305,7 +306,7 @@ describe("a project that draws its whole work budget", () => {
       const at = await fixture("project-budget");
       const mock = endlessAgent();
       // The task's own budget is ample: only the project's binds.
-      const budgets = { perTaskRequests: 50, perProjectRequests: 2 };
+      const budgets = { perTaskRequests: 50, perProjectRequests: 2, verificationReservePercent: 0 };
       const loop = serverProcess(at, budgets);
       const projects = new ProjectHaltRepository(db);
 
@@ -320,7 +321,7 @@ describe("a project that draws its whole work budget", () => {
       expect(await itemOf(at.itemId)).toMatchObject({ status: "Pending", dispatchCount: 0 });
       const episode = await db.execute(sql`SELECT work FROM project_blocks WHERE project_id = ${at.projectId} AND ended_at IS NULL`);
       expect(episode.rows).toEqual([
-        { work: { scope: "project", budgetRequests: 2, grantedRequests: 0, spentRequests: 2, inFlightRequests: 0, bySite: [{ callSite: "agent-runner", requests: 2 }] } },
+        { work: { scope: "project", budgetRequests: 2, grantedRequests: 0, reserveRequests: 0, reserveProtected: false, spentRequests: 2, inFlightRequests: 0, bySite: [{ callSite: "agent-runner", requests: 2 }] } },
       ]);
 
       // The client and the operator are told the budget, what was drawn and by which call site.

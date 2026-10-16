@@ -22,6 +22,8 @@ export {
 } from "./errors.js";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "./errors.js";
+/** @testseam Finance's work-ledger.test.ts holds the call-site purposes to every registered site; buildGateway is its production reader */
+export { KNOWN_LLM_SITES } from "./types.js";
 export type {
   KnownLLMSite,
   ModelConfig,

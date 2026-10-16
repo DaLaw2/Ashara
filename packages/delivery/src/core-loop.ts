@@ -121,6 +121,14 @@ export class CoreLoop {
     // budget cap halted is told so.
     const blockReports = await this.postBlockReports();
     if (blockReports !== null) return this.haltAtCap(blockReports);
+    // A project whose model requests run ahead of its finished work is warned once per zone and plan
+    // revision, from the ledger's rows (no LLM call), so the warning reaches the client and the
+    // operator before the budget halts the project.
+    const warnings = await this.step("burn-warning", () => deps.burnWarnings.runPending());
+    if (warnings.kind === "stop") return this.haltAtCap(warnings.stop);
+    for (const warning of warnings.kind === "ran" ? warnings.value : []) {
+      if (warning.kind !== "step-faulted") console.log(`[liaison-burn-warning] project ${warning.projectId}: ${warning.zone} warning ${warning.kind}`);
+    }
     // An acceptance recorded before a restart, or before the cap stopped the loop, is told here.
     const delivered = await this.postDeliveredReports();
     if (delivered !== null) return this.haltAtCap(delivered);

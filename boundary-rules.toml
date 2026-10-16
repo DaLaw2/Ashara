@@ -179,6 +179,7 @@ tokens.toolchain = ["npm", "npx", "yarn", "pnpm", "bun", "node_modules", "tsc", 
 exempt.delivery-unblock-hint = { file = "packages/delivery/src/acceptance.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
 exempt.shared-unblock-hint = { file = "packages/shared/src/contained-step.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
 exempt.finance-unblock-hint = { file = "packages/finance/src/errors.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
+exempt.engagement-grant-hint = { file = "packages/engagement/src/burn-warning.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
 exempt.model-access-key-hint = { file = "packages/model-access/src/build-gateway.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret.ts" }
 exempt.security-key-length-hint = { file = "packages/security/src/errors.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret-key-init.ts" }
 exempt.security-key-init-hint = { file = "packages/security/src/master-key.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret-key-init.ts" }

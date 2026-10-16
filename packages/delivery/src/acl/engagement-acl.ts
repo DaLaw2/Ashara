@@ -15,7 +15,8 @@ import type { VisionItem } from "../decomposition-types.js";
  * client's answers into the vision, to report
  * recorded planning outcomes to the client, and to record the stack a merged
  * Sprint 0 task chose as an assumption in the vision and report it, and to
- * report each project halt and resumption and each delivered project, and reads back what happened.
+ * report each project halt and resumption and each delivered project, to warn the client when a
+ * project's model requests run ahead of its finished work, and reads back what happened.
  * Delivery reads the client's vision only as Engagement's published VisionVersion (ADR-075 decision
  * 6, S7, S8), and turns it into its own planning input and into the neutral items an Assignment
  * carries, so no other context reads Engagement's vocabulary (O9).
@@ -26,6 +27,7 @@ export type {
   IntakeOutcome,
   LiaisonAnswers,
   LiaisonBlockReports,
+  LiaisonBurnWarnings,
   LiaisonClientChanges,
   LiaisonClientStops,
   LiaisonDeliveredReports,

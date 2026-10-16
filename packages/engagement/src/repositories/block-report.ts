@@ -74,7 +74,7 @@ async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: 
 /**
  * The cause recorded on a block episode (migration 040): the error's class, its described chain, on
  * a budget_cap halt the amounts its cap was judged on (migration 060), and on a work_budget halt the
- * work ledger as it stood (migration 067).
+ * work ledger as it stood (migration 067), its verification reserve with it (migration 068).
  */
 interface RecordedCauseRow {
   readonly errorClass: string | null;
@@ -89,6 +89,8 @@ const WorkAtBudgetSchema = z.strictObject({
   scope: z.enum(["task", "project"]),
   budgetRequests: z.number().int().positive(),
   grantedRequests: z.number().int().nonnegative(),
+  reserveRequests: z.number().int().nonnegative(),
+  reserveProtected: z.boolean(),
   spentRequests: z.number().int().nonnegative(),
   inFlightRequests: z.number().int().nonnegative(),
   bySite: z.array(z.strictObject({ callSite: z.string().min(1), requests: z.number().int().positive() })),

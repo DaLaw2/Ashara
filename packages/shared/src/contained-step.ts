@@ -21,6 +21,7 @@ export type CycleStep =
   | "plan-report"
   | "plan-revision-report"
   | "block-report"
+  | "burn-warning"
   | "stack-choice"
   | "client-stop"
   | "client-change"

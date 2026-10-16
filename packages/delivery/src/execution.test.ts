@@ -138,6 +138,7 @@ function coreLoopDeps(
     checkDisputes: { record: notExercised("checkDisputes") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
     blockReports: { runPending: notExercised("blockReports") },
+    burnWarnings: { runPending: notExercised("burnWarnings") },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     heldCells: { release: async () => {} },
     environmentOwner: notExercised("environmentOwner"),

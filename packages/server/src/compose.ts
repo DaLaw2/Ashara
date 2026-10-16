@@ -25,6 +25,7 @@ import {
 import type { AgentStaffing, CoreLoopDeps, CycleRunner, TaskLanes, WorkItemRepository } from "@ashara/delivery";
 import {
   BlockReports,
+  BurnWarnings,
   ClientAnswers,
   ClientChanges,
   ClientStops,
@@ -34,6 +35,8 @@ import {
   VisionRepository,
   ClientMessageRepository,
   createProjectWithTender,
+  listProjectBurns,
+  postBurnWarning,
 } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import {
@@ -443,6 +446,11 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     stackChoices: new StackChoiceReports(createStackChoiceStore(db), containment),
     checkDisputes: new CheckDisputeRepository(db),
     blockReports,
+    burnWarnings: new BurnWarnings(
+      { projectBurns: () => listProjectBurns(db), postWarning: (warning) => postBurnWarning(db, warning) },
+      config.workBudgets,
+      containment,
+    ),
     suiteReviewFindings: new SuiteReviewFindingRepository(db),
     infrastructureProbe: substrateProbe(cellSubstrate),
     heldCells: { release: () => releaseHeldCells(cellSubstrate) },

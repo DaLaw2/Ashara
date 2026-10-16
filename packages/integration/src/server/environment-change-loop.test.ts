@@ -217,6 +217,7 @@ async function harness(name: string): Promise<Harness> {
     checkDisputes: { record: notExercised("checkDisputes") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
     blockReports: { runPending: async () => [] },
+    burnWarnings: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     heldCells: { release: async () => {} },
     environmentOwner: async () => ({ kind: "role", roleId: platformRoleId }),
