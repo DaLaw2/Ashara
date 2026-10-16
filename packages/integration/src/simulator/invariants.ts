@@ -12,6 +12,7 @@ import { checkReports, readReportRecords } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
+import { MISREAD_REJECTION_MARKER } from "./product.js";
 import { projectState } from "./project-state.js";
 import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
@@ -79,6 +80,7 @@ const checkRow = z.object({
   files: z.array(z.object({ path: z.string() })),
 });
 const eventRow = z.object({ seq: z.number(), eventType: z.string(), workItemId: z.string().nullable() });
+const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
 
 interface MainCommit {
   readonly commit: string;
@@ -90,6 +92,8 @@ export interface Snapshot {
   readonly items: readonly ItemRow[];
   readonly episodes: ReadonlyArray<z.infer<typeof episodeRow>>;
   readonly checks: ReadonlyArray<z.infer<typeof checkRow>>;
+  /** Every problem a suite review's recorded findings route to a check task, as recorded. */
+  readonly reviewFindings: ReadonlyArray<z.infer<typeof findingRow>>;
   readonly spendUsd: number;
   readonly unrecordedCalls: number;
   readonly events: ReadonlyArray<z.infer<typeof eventRow>>;
@@ -151,6 +155,14 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
         FROM task_checks WHERE project_id = ${projectId} ORDER BY task_id, revision, name`)
     ).rows,
   );
+  const reviewFindings = z.array(findingRow).parse(
+    (
+      await db.execute(sql`
+        SELECT f.check_task_id AS "checkTaskId", p.problem->>'problem' AS problem
+        FROM suite_review_findings f, jsonb_array_elements(f.problems) AS p(problem)
+        WHERE f.project_id = ${projectId} ORDER BY f.created_at, f.id`)
+    ).rows,
+  );
   const [spend] = z.array(z.object({ spend: z.coerce.number(), unrecorded: z.coerce.number() })).parse(
     (
       await db.execute(sql`
@@ -176,6 +188,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     items,
     episodes,
     checks,
+    reviewFindings,
     spendUsd: spend.spend,
     unrecordedCalls: spend.unrecorded,
     events,
@@ -343,6 +356,28 @@ const Z0_CELL_ROLES: ReadonlyMap<string, (workKind: string | null) => boolean> =
 ]);
 
 /**
+ * I3's review clause: a suite review's rejection of a correct check whose missing clause its cited
+ * item states (the stand-ins' misread, scripted-models.ts) is never recorded, so never routed to the
+ * check's author.
+ *
+ * @testseam the clause is judged alone; checkSnapshot is its production caller
+ */
+export function misreadRejections(
+  findings: Snapshot["reviewFindings"],
+  items: ReadonlyArray<Pick<ItemRow, "id" | "title">>,
+): Array<{ readonly key: string; readonly statement: string }> {
+  return findings
+    .filter((finding) => finding.problem.includes(MISREAD_REJECTION_MARKER))
+    .map((finding) => {
+      const title = items.find((item) => item.id === finding.checkTaskId)?.title ?? finding.checkTaskId;
+      return {
+        key: `misread-rejection:${title}`,
+        statement: `a suite review's rejection of "${title}", whose missing clause its cited item states, was recorded and routed: ${finding.problem}`,
+      };
+    });
+}
+
+/**
  * I3's cell clause, over every cell a task's id labels in the run, live or removed: the cell its
  * owner's agent works in carries the owner role's id, and Z0's own cells a Z0 role its work kind
  * admits. Any other role is a cell that ran as someone the task is not staffed with.
@@ -410,6 +445,7 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
     }
   }
   for (const found of cellRoleViolations(snapshot.items, context.cells)) add("I3", found.key, found.statement);
+  for (const found of misreadRejections(snapshot.reviewFindings, snapshot.items)) add("I3", found.key, found.statement);
 
   // I4: an accepted project has its delivered report, once the run ends; that a halt episode
   // has its report is I2's. What each report states is judged against the records it is rendered

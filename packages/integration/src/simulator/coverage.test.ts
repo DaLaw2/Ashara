@@ -8,6 +8,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     items: [],
     episodes: [],
     checks: [],
+    reviewFindings: [],
     spendUsd: 0,
     unrecordedCalls: 0,
     events,

@@ -11,6 +11,7 @@ import {
   CheckSpecSchema,
   LAYOUT_FILE,
   MANIFEST_FILE,
+  MISREAD_REJECTION_MARKER,
   PUBLIC_INTERFACE_PATH,
   RECIPE_DEFECT_SYMPTOM,
   RECIPE_DEFECT_TOKEN,
@@ -174,6 +175,8 @@ const checkRowSchema = z.object({
   name: z.string(),
   files: z.array(z.object({ path: z.string(), content: z.string() })),
 });
+
+const citedItemSchema = z.object({ id: z.string(), text: z.string() });
 
 type ToolStep = readonly [toolName: string, input: unknown];
 
@@ -350,15 +353,47 @@ export class StandIns {
       for (const spec of specsOf(row.files)) {
         if (spec.kind !== "wrong" && spec.kind !== "contradictory" && spec.kind !== "out_of_vision") continue;
         if (!this.context.tape.chance("model.suite-review.catch", this.context.rates.reviewCatch)) continue;
+        const evidence = `It requires [${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`;
+        if (spec.kind !== "out_of_vision") {
+          problems.push({ checkTasks: [row.checkTaskId], kind: "contradiction", problem: `Check ${row.name} cannot pass on correct work.`, evidence });
+          continue;
+        }
+        const cited = await this.citedBy(row.checkTaskId);
         problems.push({
           checkTasks: [row.checkTaskId],
-          kind: spec.kind === "out_of_vision" ? "outside-vision" : "contradiction",
-          problem: `Check ${row.name} ${spec.kind === "out_of_vision" ? "asks for behaviour no vision item names" : "cannot pass on correct work"}.`,
-          evidence: `It requires [${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`,
+          kind: "outside-vision",
+          judgedItems: cited.map((item) => item.id),
+          missingClause: `does ${spec.requires.join(" and ")}`,
+          problem: `Check ${row.name} asks for behaviour no vision item names.`,
+          evidence,
+        });
+      }
+    }
+    // A misread (r8exit D1): a correct check rejected as outside the vision, quoting as missing the very text its cited item states.
+    const correct = rows.find((row) => specsOf(row.files).some((spec) => spec.kind === "correct"));
+    if (correct !== undefined && this.context.tape.chance("model.suite-review.misread", this.context.rates.reviewMisread)) {
+      const [item] = await this.citedBy(correct.checkTaskId);
+      if (item !== undefined) {
+        this.context.onModelCall({ site: "suite-review", action: "misread" });
+        problems.push({
+          checkTasks: [correct.checkTaskId],
+          kind: "outside-vision",
+          judgedItems: [item.id],
+          missingClause: item.text,
+          problem: `Check ${correct.name} asks for behaviour no cited item names (${MISREAD_REJECTION_MARKER}).`,
+          evidence: `${item.id} is read as not asking for it.`,
         });
       }
     }
     return { problems };
+  }
+
+  /** The vision items a check task cites, as its task_spec stores them. */
+  private async citedBy(checkTaskId: string): Promise<Array<z.infer<typeof citedItemSchema>>> {
+    const result = await this.context.observer.execute(sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${checkTaskId}`);
+    const [row] = z.array(z.object({ sources: z.array(citedItemSchema).nullable() })).parse(result.rows);
+    if (row === undefined) throw new StandInUnanswerable("suite-review", `check task ${checkTaskId} is not on record`);
+    return row.sources ?? [];
   }
 
   private answer(): unknown {

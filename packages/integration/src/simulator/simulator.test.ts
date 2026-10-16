@@ -429,6 +429,15 @@ describe("lifecycle simulator, directed", () => {
     );
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
+
+  // r8exit D1: the review rejects a correct check as outside the vision, quoting as missing the
+  // very text its cited item states; Z0 finds the clause in that text, discards the rejection and
+  // asks again, so nothing reopens the check (I3's review clause).
+  it("discards a suite review's rejection whose missing clause the cited item states", async () => {
+    const result = await adversarial([draw("model.suite-review.misread", 1)]);
+    expectReached(result, ["suite-review misread"], [], []);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
 });
 
 describe("minimize", () => {

@@ -18,7 +18,10 @@ import type { TaskChecks } from "./task-checks.js";
 // checks it reads. Each check is judged against the vision items its own task cites, with their
 // status, and against the product's public interface as it stood on the commit the checks were
 // written against (d89 B): a reviewer that reads neither rejects checks their brief required.
-// What it finds is routed by the orchestrator (planning's exitSuiteReview).
+// What it finds is routed by the orchestrator (planning's exitSuiteReview). A model can misread an
+// item it was shown whole, so an outside-vision rejection is acted on only after Z0 finds the
+// clause it says is missing absent from the exact text of every item the check's task cites; one
+// the text contradicts is never routed, and the review is asked again within the ladder's bound.
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */
 interface CheckTaskUnderReview {
@@ -117,24 +120,49 @@ class SuitesUnreadable extends Error {
   }
 }
 
+const NonEmpty = z.string().trim().min(1);
+
+/**
+ * A rejection is acted on only with what makes its claim checkable: an outside-vision finding names
+ * the one check task it judged, the cited items it judged the check against and, quoted, the clause
+ * it says none of them states; a finding without them is not a verdict.
+ */
 const ReviewResponseSchema = z.strictObject({
   problems: z.array(
-    z.strictObject({
-      checkTasks: z.array(z.string().trim().min(1)).min(1),
-      kind: z.enum(["contradiction", "outside-vision"]),
-      problem: z.string().trim().min(1),
-      evidence: z.string().trim().min(1),
-    }),
+    z.discriminatedUnion("kind", [
+      z.strictObject({
+        kind: z.literal("contradiction"),
+        checkTasks: z.array(NonEmpty).min(1),
+        problem: NonEmpty,
+        evidence: NonEmpty,
+      }),
+      z.strictObject({
+        kind: z.literal("outside-vision"),
+        checkTasks: z.array(NonEmpty).length(1),
+        judgedItems: z.array(NonEmpty).min(1),
+        missingClause: NonEmpty,
+        problem: NonEmpty,
+        evidence: NonEmpty,
+      }),
+    ]),
   ),
 });
 
 type ReviewResponse = z.infer<typeof ReviewResponseSchema>;
 
+/** One vision item a check task cites, as the review shows it and checks a rejection against: its exact text. */
+interface CitedItem {
+  /** Its id in the vision, or `item <n>` on a row that records no ids. */
+  readonly id: string;
+  readonly text: string;
+  readonly line: string;
+}
+
 /** One suite as the review reads it: its task's cited items, each with its id and status when the row records them. */
 interface ReviewedSuite {
   readonly checkTaskId: string;
   readonly taskTitle: string;
-  readonly cited: readonly string[];
+  readonly cited: readonly CitedItem[];
   readonly checks: TaskChecks;
 }
 
@@ -153,12 +181,22 @@ function itemLines(sources: readonly VisionSource[] | null | undefined, texts: r
     : sources.map(visionSourceCitation);
 }
 
+/**
+ * A check task's cited items with the exact text each was cited with: the text a rejection is
+ * checked against. A row that records no ids names its items by their place.
+ */
+function citedItems(sources: readonly VisionSource[] | null | undefined, texts: readonly string[]): CitedItem[] {
+  return sources === null || sources === undefined || sources.length === 0
+    ? texts.map((text, i) => ({ id: `item ${i + 1}`, text, line: `item ${i + 1}: ${text} (its id, status and kind are not recorded)` }))
+    : sources.map((source) => ({ id: source.id, text: source.text, line: visionSourceCitation(source) }));
+}
+
 function suiteSection(suite: ReviewedSuite): string {
   const files = suite.checks.files.map((file) => `--- file ${file.path}\n${fileText(file.content)}`);
   return [
     `## Check task ${suite.checkTaskId}`,
     `It wrote the checks of the task ${JSON.stringify(suite.taskTitle)}, which cites these vision items:`,
-    ...suite.cited.map((item) => `- ${item}`),
+    ...suite.cited.map((item) => `- ${item.line}`),
     `Checks (revision ${suite.checks.revision}${suite.checks.baselineCommit === null ? "" : `, written against commit ${suite.checks.baselineCommit}`}):`,
     ...suite.checks.checks.map((check) => `- ${JSON.stringify(check.name)}: ${check.command}`),
     ...(files.length === 0 ? [`Files: none`] : [`Files:`, ...files]),
@@ -207,15 +245,19 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `- "outside-vision": a check that requires behaviour none of the vision items its own task cites asks for. Judge`,
     `  each check only against its own task's cited items, whatever their status: an Inferred client-visible`,
     `  assumption the task cites is asked for. An input a cited item says the product must reject is asked for. Using a`,
-    `  form the public interface names (a command, an argument, a file, an exit status) is never outside. Name the check`,
-    `  task that wrote it.`,
+    `  form the public interface names (a command, an argument, a file, an exit status) is never outside. Name the one`,
+    `  check task that wrote it. Read each cited item's whole text, every clause of it, before you say it does not ask`,
+    `  for something: a finding whose clause a cited item states is discarded and you are asked again.`,
     `For each: "checkTasks" lists those check task ids exactly as written above; "problem" says which checks and what`,
-    `cannot hold, in one or two sentences; "evidence" quotes the commands or file lines that show it.`,
+    `cannot hold, in one or two sentences; "evidence" quotes the commands or file lines that show it. An "outside-vision"`,
+    `finding also gives "judgedItems", the ids of the cited items you judged the check against, exactly as written above,`,
+    `and "missingClause", the behaviour the check requires, in a few words, that you say none of them states.`,
     `Do not report style, missing coverage, or checks you would have written differently. When there is no problem,`,
     `return {"problems": []}.`,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
-    `Use exactly this format: {"problems": [{"checkTasks": ["<check task id>"], "kind": "contradiction", "problem": "...", "evidence": "..."}]}`,
+    `Use exactly this format: {"problems": [{"kind": "contradiction", "checkTasks": ["<check task id>", "<check task id>"], "problem": "...", "evidence": "..."}, ` +
+      `{"kind": "outside-vision", "checkTasks": ["<check task id>"], "judgedItems": ["<cited item id>"], "missingClause": "...", "problem": "...", "evidence": "..."}]}`,
   ].join("\n");
 }
 
@@ -223,18 +265,63 @@ function reviewReask(ctx: { readonly errors: readonly string[] }): string {
   return (
     `\n\nYour previous response was REJECTED for these reasons:\n` +
     ctx.errors.map((e) => `- ${e}`).join("\n") +
-    `\nRe-send corrected JSON only. In "checkTasks" use ONLY the check task ids written above. No markdown, no prose.`
+    `\nRe-send corrected JSON only. In "checkTasks" use ONLY the check task ids written above, in "judgedItems" ONLY ` +
+    `the ids of the items that check task cites. No markdown, no prose.`
   );
 }
 
-/** Every check task a problem names must be one whose suite was read. */
-function validateNames(response: ReviewResponse, reviewed: ReadonlySet<string>): StructuredValidation {
-  const errors = response.problems.flatMap((problem, i) =>
-    problem.checkTasks
-      .filter((id) => !reviewed.has(id))
-      .map((id) => `problem ${i + 1} names check task ${JSON.stringify(id)}, which is none of [${[...reviewed].join(", ")}]`),
-  );
+/** Text as a clause is matched against an item: lower case, every run of anything but letters and digits one space. */
+function normalized(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * What makes a verdict unfit to act on: a check task it did not read, and an outside-vision finding
+ * whose own claim the cited text contradicts, judged by Z0 and never by another model call: an item
+ * it says it judged that the check task does not cite, a clause that is no words at all, or a clause
+ * one of the check task's cited items states.
+ */
+function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, ReviewedSuite>): string[] {
+  return response.problems.flatMap((problem, i) => {
+    const unread = problem.checkTasks
+      .filter((id) => !suites.has(id))
+      .map((id) => `problem ${i + 1} names check task ${JSON.stringify(id)}, which is none of [${[...suites.keys()].join(", ")}]`);
+    if (problem.kind !== "outside-vision" || unread.length > 0) return unread;
+    const [checkTaskId = ""] = problem.checkTasks;
+    const cited = suites.get(checkTaskId)?.cited ?? [];
+    const citedIds = cited.map((item) => item.id);
+    const uncited = problem.judgedItems
+      .filter((id) => !citedIds.includes(id))
+      .map((id) => `problem ${i + 1} judged item ${JSON.stringify(id)}, which check task ${checkTaskId} does not cite (it cites [${citedIds.join(", ")}])`);
+    const clause = normalized(problem.missingClause);
+    if (clause === "") return [...uncited, `problem ${i + 1} gives a missingClause with no words: ${JSON.stringify(problem.missingClause)}`];
+    const stating = cited.filter((item) => ` ${normalized(item.text)} `.includes(` ${clause} `));
+    return [
+      ...uncited,
+      ...stating.map(
+        (item) =>
+          `problem ${i + 1} says no item check task ${checkTaskId} cites asks for ${JSON.stringify(problem.missingClause)}, but ${item.id} ` +
+          `states it: ${JSON.stringify(item.text)}. Judge that check against the whole text of every item it cites again.`,
+      ),
+    ];
+  });
+}
+
+function verdictValidation(response: ReviewResponse, suites: ReadonlyMap<string, ReviewedSuite>): StructuredValidation {
+  const errors = verdictErrors(response, suites);
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
+}
+
+/** The problem as Delivery routes it: an outside-vision finding carries what it was judged against and the clause verified absent. */
+function routedProblem(problem: ReviewResponse["problems"][number]): SuiteReviewProblem {
+  const checkTaskIds = [...new Set(problem.checkTasks)];
+  if (problem.kind === "contradiction") return { checkTaskIds, kind: problem.kind, problem: problem.problem, evidence: problem.evidence };
+  return {
+    checkTaskIds,
+    kind: problem.kind,
+    problem: `${problem.problem} (judged against ${problem.judgedItems.join(", ")}; none of the items its task cites states ${JSON.stringify(problem.missingClause)})`,
+    evidence: problem.evidence,
+  };
 }
 
 interface SuiteReviewerDeps {
@@ -254,7 +341,7 @@ export class SuiteReviewer implements SuiteReviewing {
     }
     const { suites, setAside } = await this.readSuites(task.id);
     const interfaces = await this.readInterfaces(task.id, targetProjectPath, suites);
-    const reviewed = new Set(suites.map((suite) => suite.checkTaskId));
+    const bySuite = new Map(suites.map((suite) => [suite.checkTaskId, suite]));
     const provider = withStructuredLadder(
       this.deps.llm.forCall({ projectId: task.projectId, taskId: task.id, callSite: "suite-review" }),
       { site: "suite-review", attempts: 2, onAttempt: this.deps.onAttempt, reask: reviewReask },
@@ -263,25 +350,15 @@ export class SuiteReviewer implements SuiteReviewing {
       capability: "Strong",
       prompt: reviewPrompt(itemLines(task.taskSpec?.sources, vision), interfaces, suites),
       schema: ReviewResponseSchema,
-      validate: (value) => validateNames(value, reviewed),
+      validate: (value) => verdictValidation(value, bySuite),
       maxTokens: 4096,
     });
-    const reviewedIds = [...reviewed];
-    // The ladder validated the names; a model that ignored validate is caught here, never trusted.
-    const unnamed = validateNames(response.data, reviewed);
-    if (!unnamed.ok) throw new SuitesUnreadable(task.id, `the review named check tasks it did not read: ${unnamed.errors.join("; ")}`);
+    const reviewedIds = [...bySuite.keys()];
+    // The ladder validated the verdict; a model that ignored validate is caught here, never acted on.
+    const unfit = verdictErrors(response.data, bySuite);
+    if (unfit.length > 0) throw new SuitesUnreadable(task.id, `the review's verdict is unfit to act on: ${unfit.join("; ")}`);
     if (response.data.problems.length === 0) return { kind: "clean", reviewed: reviewedIds, setAside };
-    return {
-      kind: "problems",
-      reviewed: reviewedIds,
-      setAside,
-      problems: response.data.problems.map((problem) => ({
-        checkTaskIds: [...new Set(problem.checkTasks)],
-        kind: problem.kind,
-        problem: problem.problem,
-        evidence: problem.evidence,
-      })),
-    };
+    return { kind: "problems", reviewed: reviewedIds, setAside, problems: response.data.problems.map(routedProblem) };
   }
 
   /**
@@ -314,7 +391,7 @@ export class SuiteReviewer implements SuiteReviewing {
       suites.push({
         checkTaskId: checkTask.id,
         taskTitle: checkTask.checkedTitle,
-        cited: itemLines(checkTask.sources, checkTask.visionItems),
+        cited: citedItems(checkTask.sources, checkTask.visionItems),
         checks,
       });
     }

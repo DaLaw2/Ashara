@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cellRoleViolations } from "./invariants.js";
+import { cellRoleViolations, misreadRejections } from "./invariants.js";
+import { MISREAD_REJECTION_MARKER } from "./product.js";
 
 const OWNER = "0ed5677b-4330-4dec-be2e-586c7d953682";
 const OTHER = "3ee4bc78-d595-4ff8-991f-4b0aed2c67c3";
@@ -22,5 +23,16 @@ describe("I3's cell clause", () => {
       "cell-role:Deliver b1:environment-check",
       "cell-role:Define the environment:none",
     ]);
+  });
+});
+
+describe("I3's review clause", () => {
+  it("names a misread rejection that was recorded, and nothing else a review found", () => {
+    const findings = [
+      { checkTaskId: "impl", problem: "Check c1 cannot pass on correct work." },
+      { checkTaskId: "impl", problem: `Check c2 asks for behaviour no cited item names (${MISREAD_REJECTION_MARKER}).` },
+    ];
+    expect(misreadRejections(findings, items).map((violation) => violation.key)).toEqual(["misread-rejection:Deliver b1"]);
+    expect(misreadRejections(findings.slice(0, 1), items)).toEqual([]);
   });
 });

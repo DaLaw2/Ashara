@@ -123,3 +123,5 @@ export const RECIPE_DEFECT_TOKEN = "cache-dir-owner=root";
 /** What a build or test under that defect prints. */
 export const RECIPE_DEFECT_SYMPTOM = "the cache dir is owned by root";
 export const TOOLCHAIN_TOKEN = "toolchain";
+/** What a suite review's misread rejection of a correct check says, so the oracle finds it if it is ever acted on. */
+export const MISREAD_REJECTION_MARKER = "misread-rejection";
