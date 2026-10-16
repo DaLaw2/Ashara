@@ -116,7 +116,9 @@ export class SpendCap {
   admit(call: PendingLlmCall): Promise<void> {
     const ahead = this.deps.admissionTurn?.(this.admissions) ?? this.admissions;
     const admission = ahead.then(() => this.admitNow(call));
-    this.admissions = admission.catch(() => undefined);
+    // The next admission waits for this one to settle, whatever its outcome; its refusal reaches
+    // the caller through `admission`.
+    this.admissions = Promise.allSettled([admission]);
     return admission;
   }
 

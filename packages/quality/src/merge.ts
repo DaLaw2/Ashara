@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
-import { mergeInProgress, runHostGit, targetRepo, treeHasEntry } from "@ashara/execution-infra";
+import { clearWorktreeSlot, mergeInProgress, runHostGit, targetRepo, treeHasEntry } from "@ashara/execution-infra";
 import type { HostRepo } from "@ashara/execution-infra";
 
 /** execFile's rejection carries the child's stderr as a string; anything else carries none. */
@@ -28,18 +28,49 @@ export function taskBranchName(taskId: string): string {
 }
 
 /**
- * Deletes the task's branch, so its next attempt starts a fresh one from main (createWorkdir)
- * instead of resuming it. Taken when the ownership gate finds the branch changed the environment
- * recipe (an environment task is requested for it, ADR-074 addendum 2 d66 b, d72 B1): that branch
- * holds edits made and checked on an environment that changes before the task runs again. Nothing
- * of it was merged. No branch
- * is nothing to do; a branch git refuses to delete (a worktree still holds it) throws.
+ * Deletes the task's branch whatever it holds (`-D`): a discarded branch holds commits main never
+ * took. Taken when the ownership gate finds the branch changed the environment recipe (an
+ * environment task is requested for it, ADR-074 addendum 2 d66 b, d72 B1), so the next attempt
+ * starts a fresh branch from main (createWorkdir), and when the task is settled
+ * (deleteSettledTaskBranch). No branch is nothing to do; a branch git refuses to delete (a worktree
+ * still holds it) throws.
  */
 export async function discardTaskBranch(targetPath: string, taskId: string): Promise<"deleted" | "absent"> {
   const branch = taskBranchName(taskId);
   if (!(await branchExists(targetPath, branch))) return "absent";
   await runHostGit(targetRepo(targetPath), ["branch", "-D", branch]);
   return "deleted";
+}
+
+/**
+ * Deletes the branch of a settled task, its worktree already removed: merged into main, or
+ * completed as already delivered there with its own work discarded. No attempt resumes it. The
+ * task's verdict is reached, so a branch that cannot be deleted is a leftover in the target,
+ * logged at warn with git's cause, never a verdict.
+ */
+export async function deleteSettledTaskBranch(targetPath: string, taskId: string, settled: string): Promise<void> {
+  try {
+    await discardTaskBranch(targetPath, taskId);
+  } catch (e) {
+    console.warn(`[${taskId}] the branch ${taskBranchName(taskId)} of a task ${settled} could not be deleted and is left in ${targetPath}; the settled-branch release deletes it once the task is Completed: ${describeErrorChain(e)}`);
+  }
+}
+
+/**
+ * Releases what a task whose work is recorded on main (`settled`: merged there, or already
+ * delivered there) still holds in the target when no dispatch released it (its dispatch faulted, its
+ * process died, or its record was written late): the worktree slot under `workdirBase` (git refuses
+ * to delete a branch a worktree holds), then the branch. Its work is on main, so a failure leaves a
+ * leftover, logged at warn with its cause, never a verdict.
+ */
+export async function releaseMergedTaskCheckout(workdirBase: string, targetPath: string, taskId: string, settled: string): Promise<void> {
+  try {
+    await clearWorktreeSlot(workdirBase, targetPath, taskBranchName(taskId));
+  } catch (e) {
+    console.warn(`[${taskId}] the worktree slot of a task ${settled} could not be cleared, so its branch ${taskBranchName(taskId)} is left in ${targetPath}; the settled-branch release clears both once the task is Completed: ${describeErrorChain(e)}`);
+    return;
+  }
+  await deleteSettledTaskBranch(targetPath, taskId, settled);
 }
 
 /**
@@ -98,7 +129,7 @@ export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutR
   return { status: "clean" };
 }
 
-/** `--no-commit` stages the merge without moving main; gates run before commitMerge/abortMerge decides its fate. */
+/** `--no-commit` stages the merge without moving main; gates run before commitMerge or finalize's reset to HEAD decides its fate. */
 export async function tentativeMerge(targetPath: string, branch: string): Promise<MergeResult> {
   try {
     await runHostGit(targetRepo(targetPath), ["merge", "--no-commit", "--no-ff", branch]);
@@ -106,15 +137,17 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
   } catch (e) {
     const errMsg = describeErrorChain(e);
     const stderr = stderrOf(e);
-    console.warn(`[tentativeMerge] merge failed for ${branch}: ${errMsg.slice(0, 200)} | stderr: ${stderr.slice(0, 300)}`);
     const message = `${errMsg.slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}`;
     let files: string[];
     try {
       files = await getConflictingFiles(targetPath);
     } catch (diffError) {
+      console.warn(`[tentativeMerge] merge of ${branch} failed and its conflicting files could not be listed: ${message} | ${describeErrorChain(diffError)}`);
       return { status: "error", message: `${message}; and the conflicting files could not be listed: ${describeErrorChain(diffError).slice(0, 300)}`, cause: diffError };
     }
+    // A conflict is the task's outcome, not a failure of git: finalize logs it with its verdict.
     if (files.length > 0) return { status: "conflict", files };
+    console.warn(`[tentativeMerge] merge of ${branch} failed without a conflict: ${message}`);
     return { status: "error", message, cause: e };
   }
 }
@@ -141,8 +174,8 @@ class MergeCommitUnreadable extends Error {
  */
 export async function commitMerge(targetPath: string, taskId: string): Promise<string> {
   await runHostGit(targetRepo(targetPath), ["commit", "-m", mergeSubject(taskId)]);
-  // Branch deletion deferred to cleanupWorkdir — worktree must be removed first
-  // (git refuses to delete a branch that has an active worktree).
+  // The branch is deleted after the worktree is removed (deleteSettledTaskBranch): git refuses to
+  // delete a branch a worktree holds.
   const { stdout } = await runHostGit(targetRepo(targetPath), ["rev-parse", "HEAD"]);
   const commit = CommitIdSchema.safeParse(stdout.trim());
   if (!commit.success) throw new MergeCommitUnreadable(taskId, targetPath, stdout);
@@ -213,20 +246,6 @@ export async function taskMergeOnMain(targetPath: string, taskId: string): Promi
     return parsed.data;
   }
   return null;
-}
-
-export async function abortMerge(targetPath: string): Promise<void> {
-  try {
-    await runHostGit(targetRepo(targetPath), ["checkout", "--", "."]);
-  } catch (e) {
-    console.warn(`[abortMerge] git checkout -- . failed: ${describeErrorChain(e)}`);
-  }
-  try {
-    await runHostGit(targetRepo(targetPath), ["clean", "-fd"]);
-  } catch (e) {
-    console.warn(`[abortMerge] git clean -fd failed: ${describeErrorChain(e)}`);
-  }
-  await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
 }
 
 /** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
@@ -362,10 +381,11 @@ async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"mer
   try {
     await runHostGit(repo, ["merge", "--no-ff", "--no-edit", "-m", `Merge main into task/${taskId} for its next attempt`, "--end-of-options", "refs/heads/main"]);
   } catch (e) {
+    // A merge git refused before it began stages nothing, and `merge --abort` on it fails: abort only one in progress.
     try {
-      await runHostGit(repo, ["merge", "--abort"]);
+      if (await mergeInProgress(repo)) await runHostGit(repo, ["merge", "--abort"]);
     } catch (abortError) {
-      console.warn(`[mergeMainIntoBranch] git merge --abort failed for task ${taskId}: ${describeErrorChain(abortError)}`);
+      console.warn(`[mergeMainIntoBranch] the failed merge of main into task ${taskId}'s branch could not be aborted: ${describeErrorChain(abortError)}`);
     }
     throw new ConflictRetryUnprepared(taskId, "merge", describeErrorChain(e), { cause: e });
   }

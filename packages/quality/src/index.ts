@@ -9,7 +9,6 @@ export {
   agentWorkOf,
   asharaBlocked,
   cellImageOf,
-  cleanupWorkdirBeforeReturn,
   describeAgentWork,
   environmentBlocked,
   failedBeforeAgent,
@@ -40,14 +39,17 @@ export {
   ConflictRetryUnprepared,
   branchExists,
   conflictWithMain,
+  deleteSettledTaskBranch,
   formatConflictForBrief,
   mainMergedForRetry,
+  releaseMergedTaskCheckout,
   stagedConflictMarkers,
   taskBranchName,
   taskMergeOnMain,
 } from "./merge.js";
 export type { MainConflict } from "./merge.js";
 export { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
+export { releaseSettledBranches } from "./settled-branches.js";
 export { CONFLICT_MARKERS_LEFT, WORK_FAILED, failureVerdictSchema } from "./task-verdict.js";
 export type { FailureVerdict } from "./task-verdict.js";
 export { SuiteReviewer, gitPublicInterface } from "./suite-review.js";

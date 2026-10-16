@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
@@ -92,7 +96,7 @@ function buildDeps(
     listByProject: notExercised("listByProject"),
     findByProjectAndStatus: notExercised("findByProjectAndStatus"),
     projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-    listIdsByStatus: notExercised("listIdsByStatus"),
+    listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     refundDispatchCount: notExercised("refundDispatchCount"),
@@ -120,6 +124,7 @@ function buildDeps(
       listInfrastructureHalted: async () => [],
       resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
       blockAllActive: async () => [],
+      listWithWorkspace: async () => [],
     },
     dispatchService: { execute: notExercised("execute") },
     spendCap,
@@ -224,6 +229,39 @@ describe("CoreLoop batch dispatch parallelism", () => {
     expect(cycleTallies).toEqual([
       { event: "cycle_complete", tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 },
     ]);
+  });
+});
+
+describe("CoreLoop settled branches", () => {
+  test("a cycle releases every Abandoned task's branch before it dispatches, whichever path abandoned it", async () => {
+    const base = mkdtempSync(join(tmpdir(), "ashara-loop-settled-"));
+    const target = join(base, "projects", "p");
+    mkdirSync(target, { recursive: true });
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: target, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      git("commit", "-q", "--allow-empty", "-m", "init");
+      const abandoned = createWorkItemId();
+      git("branch", `task/${abandoned}`);
+      const branchAtDispatch: string[] = [];
+      mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
+        branchAtDispatch.push(git("branch", "--list", `task/${abandoned}`));
+        return { taskId: task.id, status: "completed" as const, detail: "ok" };
+      });
+      const deps = buildDeps();
+
+      await new CoreLoop({
+        ...deps,
+        config: { ...deps.config, workdirBase: base },
+        workItemRepo: { ...deps.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [abandoned] : []) },
+        projectRepo: { ...deps.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] },
+      }).runCycle();
+
+      expect(branchAtDispatch).toEqual(["", ""]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

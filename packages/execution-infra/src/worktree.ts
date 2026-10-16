@@ -120,16 +120,52 @@ export async function createWorkdirForRetry(
   return { workDir, taskBranch, repo };
 }
 
-async function removeWorktree(targetProjectPath: string, workDir: string, deleteBranch?: string): Promise<void> {
+/**
+ * Removes the worktree at `workDir` and its registration. A directory already gone (an earlier
+ * cleanup, the startup sweep) leaves at most a registration, which `worktree prune` drops: nothing
+ * failed, so nothing is logged. A `worktree remove` that fails is a real failure: the directory is
+ * removed and the registration pruned instead, and the failure is logged at warn with its cause and
+ * what the fallback left. Never throws: it runs on the way out of paths that carry their own error.
+ */
+async function removeWorktree(targetProjectPath: string, workDir: string): Promise<void> {
   const repo = targetRepo(targetProjectPath);
+  if (await directoryGone(workDir)) {
+    try {
+      await runHostGit(repo, ["worktree", "prune"]);
+    } catch (e) {
+      console.warn(`[worktree] ${workDir} is gone, but its registration could not be pruned: ${describeErrorChain(e)}`);
+    }
+    return;
+  }
   try {
     await runHostGit(repo, ["worktree", "remove", workDir, "--force"]);
-  } catch {
-    await rm(workDir, { recursive: true, force: true }).catch(() => {});
-    await runHostGit(repo, ["worktree", "prune"]).catch(() => {});
+    return;
+  } catch (removeError) {
+    const left: string[] = [];
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch (e) {
+      left.push(`the directory could not be removed either: ${describeErrorChain(e)}`);
+    }
+    try {
+      await runHostGit(repo, ["worktree", "prune"]);
+    } catch (e) {
+      left.push(`its registration could not be pruned: ${describeErrorChain(e)}`);
+    }
+    console.warn(
+      `[worktree] git worktree remove ${workDir} failed: ${describeErrorChain(removeError)}; ` +
+        (left.length === 0 ? "the directory was removed and its registration pruned instead" : left.join("; ")),
+    );
   }
-  if (deleteBranch) {
-    await runHostGit(repo, ["branch", "-d", deleteBranch]).catch(() => {});
+}
+
+/** Only ENOENT says the directory is gone; any other answer is not "gone", so its removal is still tried. */
+async function directoryGone(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return false;
+  } catch (err) {
+    return errnoOf(err) === "ENOENT";
   }
 }
 
@@ -160,12 +196,18 @@ export async function mergeInProgress(repo: HostRepo): Promise<boolean> {
   }
 }
 
+/**
+ * Whether HEAD names a commit. `rev-parse -q --verify` exits 1 with no output when it does not (a
+ * fresh repository); any other failure is no answer and throws, never read as "no commits", which
+ * would stage and commit whatever the checkout holds onto a main that has history.
+ */
 async function hasGitCommits(dir: string): Promise<boolean> {
   try {
-    await runHostGit(targetRepo(dir), ["rev-parse", "HEAD"]);
+    await runHostGit(targetRepo(dir), ["rev-parse", "-q", "--verify", "HEAD^{commit}"]);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return false;
+    throw e;
   }
 }
 
@@ -303,7 +345,7 @@ export async function commitPartialWork(
 ): Promise<PartialCommitOutcome> {
   try {
     if (await mergeInProgress(repo)) {
-      console.warn(`[commitPartialWork] ${repo.workTree} holds an unfinished merge of main; nothing is committed, the next attempt merges main again`);
+      console.warn(`[commitPartialWork] ${repo.workTree} holds an unfinished merge of main; nothing is committed, and an attempt that resumes the branch prepares the merge again from git`);
       return { committed: false, reason: "merge-in-progress" };
     }
     const files = await getChangedFiles(repo);
@@ -320,12 +362,15 @@ export async function commitPartialWork(
   }
 }
 
-export async function cleanupWorkdir(workDir: string, targetProjectPath?: string, taskBranch?: string): Promise<void> {
-  if (targetProjectPath) {
-    await removeWorktree(targetProjectPath, workDir, taskBranch);
-  } else {
-    await rm(workDir, { recursive: true, force: true }).catch(() => {});
-  }
+/**
+ * Removes the worktree and keeps its branch: a branch is deleted only by whoever settles its task
+ * (merge.ts deleteSettledTaskBranch), discards its attempt (discardTaskBranch, dropCheckBranch), or
+ * finds its task settled (settled-branches.ts releaseSettledBranches).
+ * Never throws: a failure is logged at warn with its cause (removeWorktree), so a caller on its way
+ * out of a path carrying its own error needs no catch of its own.
+ */
+export async function cleanupWorkdir(workDir: string, targetProjectPath: string): Promise<void> {
+  await removeWorktree(targetProjectPath, workDir);
 }
 
 interface TreeChild {

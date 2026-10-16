@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -43,7 +43,7 @@ async function unusedBlock(): Promise<never> {
 function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): { deps: StartupReconcilerDeps } {
   const deps: StartupReconcilerDeps = {
     workItemRepo: emptyWorkItemRepo(),
-    projects: { block: unusedBlock, get: async () => ({ workspacePath: null }) },
+    projects: { block: unusedBlock, get: async () => ({ workspacePath: null }), listWithWorkspace: async () => [] },
     eventStore: { publish: async () => undefined },
     // Provably never invoked: projectIdsWithStatus("Failed") returns [], so no item is
     // routed. FailureRouter has private members, so a structural double cannot
@@ -154,6 +154,19 @@ function targetWithMain(subjects: readonly string[]): { readonly path: string; r
   return { path, head: git("rev-parse", "HEAD") };
 }
 
+/**
+ * What a dead process's dispatch leaves: the task's branch, holding a commit main never took,
+ * checked out in its worktree slot under the workdir base. The returned read gives both back.
+ */
+function heldCheckout(target: string, taskId: string): () => { readonly branch: string; readonly worktree: boolean } {
+  const workDir = join(tmpdir(), `task-${taskId}`);
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+  git(target, "worktree", "add", "-q", workDir, "-b", `task/${taskId}`, "main");
+  git(workDir, "commit", "-q", "--allow-empty", "-m", "the agent's work");
+  return () => ({ branch: git(target, "branch", "--list", "--format=%(refname:short)", `task/${taskId}`), worktree: existsSync(workDir) });
+}
+
 // A merge committed on main and a crash before the task's Completed update must not requeue the
 // merged work, and a requeue that fails once must not leave the orphan InProgress.
 describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, within a bound, never left InProgress", () => {
@@ -213,15 +226,18 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
           return "blocked";
         },
         get: async () => ({ workspacePath }),
+        listWithWorkspace: async () => [],
       },
       devSessionStore: { dispatchEvidence: async () => ({ latestPhase: null, orphanedBefore: 0 }) },
     });
     return { deps, row: () => row, records, projectBlocks };
   }
 
-  test("its merge is on main: the merge is recorded and the task Completed, never requeued", async () => {
+  test("its merge is on main: the merge is recorded and the task Completed, never requeued; the dead process's worktree and branch are gone", async () => {
     const id = createWorkItemId();
     const main = target([`merge: task ${createWorkItemId()}`, `merge: task ${id}`, "later work"]);
+    const left = heldCheckout(main.path, id);
+    dirs.push(join(tmpdir(), `task-${id}`));
     const world = orphanWorld(id, main.path);
 
     const summary = await reconcileWorkItemsOnStartup(world.deps);
@@ -230,6 +246,21 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     const merged = execFileSync("git", ["rev-parse", "HEAD~1"], { cwd: main.path, encoding: "utf8" }).trim();
     expect(world.records).toEqual([{ commit: merged, kind: "merged" }]);
     expect(world.row().status).toBe("Completed");
+    expect(left()).toEqual({ branch: "", worktree: false });
+  });
+
+  test("its merge recorded but its completion never written: Blocked merge_unrecorded, its worktree and branch already released", async () => {
+    const id = createWorkItemId();
+    const main = target([`merge: task ${id}`]);
+    const left = heldCheckout(main.path, id);
+    dirs.push(join(tmpdir(), `task-${id}`));
+    const world = orphanWorld(id, main.path, (status) => status === "Completed");
+
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ orphansBlocked: 1 });
+    expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "merge_unrecorded", mergeCommit: main.head } });
+    expect(left()).toEqual({ branch: "", worktree: false });
   });
 
   test("main holds no merge of it: requeued", async () => {
@@ -308,6 +339,8 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
   test("its merge found but its record never written: Blocked merge_unrecorded, which the loop writes again", async () => {
     const id = createWorkItemId();
     const main = target([`merge: task ${id}`]);
+    const left = heldCheckout(main.path, id);
+    dirs.push(join(tmpdir(), `task-${id}`));
     const world = orphanWorld(id, main.path);
     const failing: StartupReconcilerDeps = {
       ...world.deps,
@@ -324,6 +357,8 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     expect(summary).toMatchObject({ orphansBlocked: 1 });
     expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "merge_unrecorded", mergeCommit: main.head, mergeKind: "merged" } });
     expect(world.projectBlocks).toEqual([]);
+    // Released only once the record holds (parked-exits writes it, then releases).
+    expect(left()).toMatchObject({ branch: `task/${id}`, worktree: true });
   });
 
   test("no write reaches the store at all: the start is refused, the orphan is never left behind silently", async () => {
@@ -380,6 +415,7 @@ describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its 
           return "blocked";
         },
         get: async () => ({ workspacePath: null }),
+        listWithWorkspace: async () => [],
       },
     });
     return { deps, row: () => row, projectBlocks };
@@ -421,5 +457,31 @@ describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its 
     expect(summary).toMatchObject({ failedReplanned: 0, failedAbandoned: 0, failedHeld: 1, failedErrored: 0 });
     expect(world.row().status).toBe("Failed");
     expect(world.projectBlocks).toEqual([expect.objectContaining({ category: "fault", errorClass: "StoredFailureVerdictCorrupt" })]);
+  });
+});
+
+describe("reconcileWorkItemsOnStartup — the branches of settled tasks", () => {
+  test("an Abandoned task's branch and worktree are released at startup, whichever path abandoned it", async () => {
+    const taskId = createWorkItemId();
+    const target = targetWithMain([]);
+    const held = heldCheckout(target.path, taskId);
+    try {
+      const { deps } = buildDeps({
+        workItemRepo: { ...emptyWorkItemRepo(), listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [taskId] : []) },
+        projects: {
+          block: unusedBlock,
+          get: async () => ({ workspacePath: target.path }),
+          listWithWorkspace: async () => [{ id: parseProjectId("00000000-0000-4000-8000-0000000000bc", "test"), workspacePath: target.path }],
+        },
+      });
+      expect(held()).toEqual({ branch: `task/${taskId}`, worktree: true });
+
+      await reconcileWorkItemsOnStartup(deps);
+
+      expect(held()).toEqual({ branch: "", worktree: false });
+    } finally {
+      rmSync(target.path, { recursive: true, force: true });
+      rmSync(join(tmpdir(), `task-${taskId}`), { recursive: true, force: true });
+    }
   });
 });

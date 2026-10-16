@@ -1435,14 +1435,16 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(branchKept).toBe(true);
     });
 
-    test("a branch clear of both: the gate passes and the work merges", async () => {
-      const { result, events, probe, mainBefore, mainAfter } = await dispatch({ agentAlsoWrites: { "src/greet.sh": "cat greet.txt\n" }, checkFiles: [CHECK_FILE] });
+    test("a branch clear of both: the gate passes and the work merges; its worktree and branch are gone", async () => {
+      const { result, events, probe, mainBefore, mainAfter, branchKept, workdirBase, taskId } = await dispatch({ agentAlsoWrites: { "src/greet.sh": "cat greet.txt\n" }, checkFiles: [CHECK_FILE] });
 
       expect(result.status, result.detail).toBe("completed");
       expect(events.filter((e) => e.event === "ownership_gate")).toEqual([expect.objectContaining({ verdict: "clean" })]);
       expect(events.some((e) => e.event === "environment_rebuilt")).toBe(false);
       expect(probe.recorded).toEqual([]);
       expect(mainAfter).not.toBe(mainBefore);
+      expect(branchKept).toBe(false);
+      expect(existsSync(join(workdirBase, `task-${taskId}`))).toBe(false);
     });
 
     // ADR-074 addendum 2 d72 B2: the scaffold is decided by the product's build and test, never by stored checks.

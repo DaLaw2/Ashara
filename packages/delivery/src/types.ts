@@ -9,6 +9,7 @@ import type { FailedApproachRepository } from "./acl/knowledge-acl.js";
 import type { TaskVerification } from "./acl/quality-acl.js";
 import type { DispatchService } from "./dispatch/dispatch-service.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
+import type { SettledTargets } from "./settled-branches.js";
 import type {
   LiaisonAnswers,
   LiaisonBlockReports,
@@ -135,9 +136,10 @@ export interface CoreLoopDeps {
    * Holds each project's target workspace path (migration 024) and its status:
    * the gate admits only active projects' tasks and blocks a project with a bad
    * row (migration 025); the infrastructure halts and the deployment cap's halt
-   * (migration 048). ProjectHaltRepository satisfies it.
+   * (migration 048); every target, whose settled tasks' branches each cycle releases.
+   * ProjectHaltRepository satisfies it.
    */
-  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts;
+  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts & SettledTargets;
   readonly dispatchService: Pick<DispatchService, "execute">;
   /** Z0's acceptance sweep of a project on main HEAD (Quality; no model is called). */
   readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;

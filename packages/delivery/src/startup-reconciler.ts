@@ -15,10 +15,12 @@ import type { ParkedFailureDeps } from "./lifecycle/failure-recovery.js";
 import { blockWorkItem, PlanningService, requeueWorkItem, takeEvents } from "./domain/index.js";
 import { recoverParkedFailedItem } from "./lifecycle/failure-recovery.js";
 import { ORPHANED_SESSION_RESOLVER } from "./acl/workplace-acl.js";
-import { mergeOnMainOf, OrphanUnreconciled } from "./orphan-merge.js";
+import { mergeOnMainOf, OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
+import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
+import type { SettledTargets } from "./settled-branches.js";
 
-// Delivery's reconcile at startup: its work items only. Each other context reconciles its own
+// Delivery's reconcile at startup: its work items, and the branches of those settled. Each other context reconciles its own
 // resources in its own call (Workplace its sessions, Execution Infrastructure its cells and task
 // worktrees), ordered by the composition root (S9).
 
@@ -26,9 +28,10 @@ interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
   /**
    * Blocks a project one of whose rows does not parse (migration 025), or whose crash orphan could
-   * not be settled; `get` names the target whose main an orphan's merge is read from.
+   * not be settled; `get` names the target whose main an orphan's merge is read from, and
+   * `listWithWorkspace` every target whose settled tasks' branches are released.
    */
-  readonly projects: Pick<ProjectHaltRepository, "block"> & TargetPathSource;
+  readonly projects: Pick<ProjectHaltRepository, "block"> & TargetPathSource & SettledTargets;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failureRouter: FailureRouter;
   /**
@@ -128,6 +131,9 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     }
   }
 
+  // Last, so a task this pass settled (an orphan Completed, a parked Failed item abandoned) is covered.
+  await releaseBranchesOfSettledTasks({ workItemRepo: deps.workItemRepo, projects: deps.projects, workdirBase: deps.workdirBase });
+
   const summary: ReconcileSummary = {
     orphansRequeued,
     orphansCompleted,
@@ -165,8 +171,9 @@ type Settled = "requeued" | "completed" | "blocked" | "moved";
 /**
  * Settles an InProgress item a previous process left (Discipline A, B). Main is read first: a
  * dead process may have committed the task's merge and died before its record, and a requeue
- * would redo merged work. A merge found is recorded and the task Completed through the path a
- * finished dispatch takes (recordMergeCommit, then PlanningService.route); none found, the task is
+ * would redo merged work. A merge found is recorded, the worktree and branch the dead process left
+ * released (releaseMergedTask), and the task Completed through the path a finished dispatch takes
+ * (recordMergeCommit, then PlanningService.route); none found, the task is
  * requeued (requeueOrphan). Each attempt re-reads the item, so a partial write of the one before
  * is never built on. Past the bound the task is blocked, never left InProgress: with its merge
  * found but unrecorded, as merge_unrecorded, whose record the loop writes again each cycle;
@@ -195,6 +202,7 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       }
       step = `record the merge ${merge}`;
       await deps.workItemRepo.recordMergeCommit(item.id, merge, "merged");
+      await releaseMergedTask(deps.projects, deps.workdirBase, item, "merged");
       step = `complete the task merged as ${merge}`;
       const events = await PlanningService.route(deps.workItemRepo, item.id, "passed");
       await publishBestEffort(deps.eventStore, events, item.id);

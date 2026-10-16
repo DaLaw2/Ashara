@@ -17,7 +17,7 @@ async function makeDir(prefix: string): Promise<string> {
 }
 
 afterAll(async () => {
-  for (const d of tempDirs) await rm(d, { recursive: true, force: true }).catch(() => {});
+  for (const d of tempDirs) await rm(d, { recursive: true, force: true });
 });
 
 describe("assertValidTargetProjectPath", () => {

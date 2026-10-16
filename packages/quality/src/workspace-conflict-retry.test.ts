@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupWorkdir, commitAllChanges, commitPartialWork, createWorkdir, createWorkdirForRetry, ensureTargetGitInit } from "@ashara/execution-infra";
 import type { WorkdirInfo } from "@ashara/execution-infra";
 import { ConflictRetryUnprepared, conflictWithMain, mainMergedForRetry, stagedConflictMarkers, taskBranchName, tentativeMerge } from "./merge.js";
@@ -27,7 +27,7 @@ function retryWorkdir(workdirBase: string, target: string, taskId: string, confl
 }
 
 afterAll(async () => {
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true });
 });
 
 /** A target whose main holds task `first`'s change to shared.txt, and task `second`'s branch, cut from the same main, its own. */
@@ -104,6 +104,29 @@ describe("a retry of a branch that conflicts with main", () => {
     await cleanupWorkdir(again.workDir, target);
   });
 
+  test("a merge of main git refuses before it begins is unprepared, and no abort of a merge that never started is tried", async () => {
+    const { target, workdirBase } = await sameBaseConflict();
+    const { workDir, repo } = await createWorkdir(workdirBase, target, taskBranchName("third"));
+    await writeFile(join(workDir, "third.txt"), "third\n");
+    await commitAllChanges(repo, "work of third");
+    await cleanupWorkdir(workDir, target);
+    await git(target, "merge", "-q", "--no-ff", "-m", "merge second", "-X", "theirs", taskBranchName("second"));
+
+    const held = await createWorkdirForRetry(workdirBase, target, taskBranchName("third"), async () => undefined);
+    // git's index lock refuses the merge before it stages anything: no MERGE_HEAD, nothing to abort.
+    const lock = join(await git(held.workDir, "rev-parse", "--absolute-git-dir"), "index.lock");
+    await writeFile(lock, "");
+    const warn = vi.spyOn(console, "warn");
+    try {
+      await expect(mainMergedForRetry("third", null)(held.repo)).rejects.toBeInstanceOf(ConflictRetryUnprepared);
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      await rm(lock);
+    }
+    await cleanupWorkdir(held.workDir, target);
+  });
+
   test("a conflict git does not reproduce in the worktree is unprepared, and the worktree is removed", async () => {
     const { target, workdirBase } = await sameBaseConflict();
     const conflict = await conflictWithMain(target, "second");
@@ -124,6 +147,15 @@ describe("a worktree slot left by a crash or a faulted cleanup", () => {
     const { target, workdirBase } = await sameBaseConflict();
     const left = await retryWorkdir(workdirBase, target, "first", null);
     await rm(left.workDir, { recursive: true, force: true });
+    // Removing a worktree whose directory is already gone is no failure: its registration is pruned, nothing logged.
+    const warn = vi.spyOn(console, "warn");
+    try {
+      await cleanupWorkdir(left.workDir, target);
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await git(target, "worktree", "list", "--porcelain")).not.toContain("task-first");
 
     const again = await retryWorkdir(workdirBase, target, "first", null);
     expect(again.workDir).toBe(left.workDir);

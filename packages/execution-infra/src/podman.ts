@@ -413,10 +413,7 @@ class PodmanCell implements Cell {
     // session, which would include a concurrent exec's. The lane only orders; each caller gets its
     // own exec's outcome from `run`.
     const run = this.lane.then(() => this.execAlone(argv, options));
-    this.lane = run.then(
-      () => undefined,
-      () => undefined,
-    );
+    this.lane = Promise.allSettled([run]).then(() => undefined);
     return run;
   }
 

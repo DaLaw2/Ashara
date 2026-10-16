@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Cell, CellSpec, CurrentEnvironment, PartialCommitOutcome, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
-import { WorktreeCommitFailed, cleanupWorkdir } from "@ashara/execution-infra";
+import { WorktreeCommitFailed } from "@ashara/execution-infra";
 import type { PreCallRefusal } from "@ashara/finance";
 import type { ErrorLayer, ProjectId, WorkItemId } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/workplace";
@@ -40,14 +40,6 @@ export interface VerifiedDispatch {
   readonly sessionId: string;
   /** What the task cell, the red-run and gate cells and the post-merge verifier cell are started from. */
   readonly environment: DispatchEnvironment;
-}
-
-export async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targetProjectPath: string, why: string): Promise<void> {
-  try {
-    await cleanupWorkdir(workDir, targetProjectPath);
-  } catch (cleanupError) {
-    console.warn(`[${taskId}] workdir cleanup failed (${workDir}) after ${why}:`, cleanupError);
-  }
 }
 
 /**

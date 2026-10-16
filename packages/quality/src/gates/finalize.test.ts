@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test, vi } from "vitest";
-import { CheckoutHolderOverran, ensureTargetGitInit, withTargetCheckout } from "@ashara/execution-infra";
+import { CheckoutHolderOverran, ensureTargetGitInit, mergeInProgress, targetRepo, withTargetCheckout } from "@ashara/execution-infra";
 import { createWorkItemId, observeContendedWaits } from "@ashara/shared";
 import type { DispatchRef } from "../dispatch-result.js";
 import { recoverOrphanedMerge, resetCheckoutToHead, taskBranchName, tentativeMerge } from "../merge.js";
@@ -35,10 +35,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 async function hasMergeHead(target: string): Promise<boolean> {
-  return git(target, "rev-parse", "-q", "--verify", "MERGE_HEAD").then(
-    () => true,
-    () => false,
-  );
+  return mergeInProgress(targetRepo(target));
 }
 
 function task(): DispatchRef {
@@ -68,7 +65,7 @@ function deps(postMergeVerify: FinalizeDeps["postMergeVerify"]): FinalizeDeps {
 }
 
 afterAll(async () => {
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true });
 });
 
 describe("finalize serialises per target checkout", () => {
@@ -214,7 +211,7 @@ describe("a tentative merge that cannot be undone", () => {
     const target = await targetWithBranches([a, b]);
     const lock = join(target, ".git", "index.lock");
 
-    // The check fails, and git's index lock then refuses both the abort and the reset to HEAD.
+    // The check fails, and git's index lock then refuses the reset to HEAD.
     const first = await finalizeSuccess(
       deps(async () => {
         await writeFile(lock, "");
@@ -229,7 +226,7 @@ describe("a tentative merge that cannot be undone", () => {
     expect(first.fault.class).toBe("ashara");
     if (first.fault.class !== "ashara") return;
     expect(first.fault.error).toBeInstanceOf(VerificationInfrastructureFault);
-    expect(first.fault.error.message).toMatch(/could not be aborted after postMergeTaskChecks.*no merge runs on this checkout until it is restored/s);
+    expect(first.fault.error.message).toMatch(/could not be undone after postMergeTaskChecks: git reset --hard HEAD failed.*index\.lock.*no merge runs on this checkout until it is restored/s);
     expect(first.errorLayer.operation).toBe("postMergeCheckRun");
 
     let verified = false;
@@ -267,7 +264,16 @@ describe("a conflicted merge", () => {
       verified = true;
       return { passed: true, details: "ok" };
     };
-    const stale = await finalizeSuccess(deps(verify), b, target, 1);
+    // Undoing a conflicted merge is the normal path: nothing fails, so nothing is logged at warn.
+    const warn = vi.spyOn(console, "warn");
+    let stale: Awaited<ReturnType<typeof finalizeSuccess>>;
+    try {
+      stale = await finalizeSuccess(deps(verify), b, target, 1);
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await git(target, "status", "--porcelain")).toBe("");
     if (stale.success) throw new Error("expected a conflict");
     expect(stale).toMatchObject({ failedStep: "merge", fault: { class: "agent_work" } });
     expect(stale.errorLayer).toMatchObject({ operation: "tentativeMerge", context: { conflictFiles: ["shared.txt"] } });

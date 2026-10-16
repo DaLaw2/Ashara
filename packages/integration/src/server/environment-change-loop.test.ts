@@ -194,6 +194,7 @@ async function harness(name: string): Promise<Harness> {
       get: (id) => projects.get(id),
       recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
       listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
+      listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
       block: (id, cause) => projects.block(id, cause),
       listInfrastructureHalted: async () => [],
       resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),

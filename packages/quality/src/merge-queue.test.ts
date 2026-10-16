@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { ensureTargetGitInit } from "@ashara/execution-infra";
-import { commitMerge, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
+import { commitMerge, deleteSettledTaskBranch, releaseMergedTaskCheckout, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
 
 // ---------------------------------------------------------------------------
 // Post-merge verify runs the project's own build inside the MAIN
@@ -53,13 +53,12 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true });
 });
 
 describe("target scaffold", () => {
   test("writes no .gitignore — the project's ignores are the project's", async () => {
-    const exists = await access(join(target, ".gitignore")).then(() => true, () => false);
-    expect(exists).toBe(false);
+    await expect(access(join(target, ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("commits a root commit even though nothing is scaffolded", async () => {
@@ -161,5 +160,53 @@ describe("merge queue vs. build residue in the main checkout", () => {
     if (result.status === "error") {
       expect(result.message).toContain("git reset --hard HEAD failed");
     }
+  });
+});
+
+describe("a settled task's branch", () => {
+  test("is deleted when its work was merged, and when it was discarded with commits main never took", async () => {
+    await commitOnTaskBranch("task/merged", { "a.txt": "a\n" });
+    await commitOnTaskBranch("task/discarded", { "a.txt": "other\n" });
+    await tentativeMerge(target, "task/merged");
+    await commitMerge(target, "merged");
+
+    await deleteSettledTaskBranch(target, "merged", "merged into main");
+    // The conflicting branch of a task completed as already delivered: none of its commits is on main.
+    await deleteSettledTaskBranch(target, "discarded", "completed as already delivered");
+
+    expect(await git(target, "branch", "--list", "task/*")).toBe("");
+  });
+
+  test("a branch a worktree still holds is left, with git's cause at warn", async () => {
+    await commitOnTaskBranch("task/held", { "a.txt": "a\n" });
+    await git(target, "worktree", "add", join(await makeDir("ashara-merge-held-"), "wt"), "task/held");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await deleteSettledTaskBranch(target, "held", "completed as already delivered");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/the branch task\/held of a task completed as already delivered could not be deleted.*branch -D task\/held/s);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await git(target, "branch", "--list", "task/held")).not.toBe("");
+  });
+
+  test("of a task found merged on main after its dispatch died, is deleted with the worktree that dispatch left", async () => {
+    const workdirBase = dirname(target);
+    await commitOnTaskBranch("task/orphan", { "a.txt": "a\n" });
+    await tentativeMerge(target, "task/orphan");
+    await commitMerge(target, "orphan");
+    const slot = join(workdirBase, "task-orphan");
+    await git(target, "worktree", "add", slot, "task/orphan");
+    const warn = vi.spyOn(console, "warn");
+    try {
+      await releaseMergedTaskCheckout(workdirBase, target, "orphan", "merged on main");
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await git(target, "branch", "--list", "task/*")).toBe("");
+    expect(await git(target, "worktree", "list", "--porcelain")).not.toContain(slot);
+    await expect(access(slot)).rejects.toThrow();
   });
 });

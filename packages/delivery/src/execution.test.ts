@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
@@ -47,6 +47,21 @@ function targetWithMain(subjects: readonly string[]): { readonly path: string; r
   git("commit", "-q", "--allow-empty", "-m", "initial");
   for (const subject of subjects) git("commit", "-q", "--allow-empty", "-m", subject);
   return { path, head: git("rev-parse", "HEAD") };
+}
+
+/**
+ * What a faulted dispatch leaves when it never released its checkout: the task's branch, holding a
+ * commit main never took, checked out in its worktree slot under the workdir base. The returned
+ * read gives both back.
+ */
+function heldCheckout(target: string, taskId: string): () => { readonly branch: string; readonly worktree: boolean } {
+  const workDir = join(tmpdir(), `task-${taskId}`);
+  targets.push(workDir);
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+  git(target, "worktree", "add", "-q", workDir, "-b", `task/${taskId}`, "main");
+  git(workDir, "commit", "-q", "--allow-empty", "-m", "the agent's work");
+  return () => ({ branch: git(target, "branch", "--list", "--format=%(refname:short)", `task/${taskId}`), worktree: existsSync(workDir) });
 }
 
 /** Main holding no merge of any task: a faulted dispatch is routed as a fault. */
@@ -106,6 +121,7 @@ function coreLoopDeps(
       listInfrastructureHalted: notExercised("listInfrastructureHalted"),
       resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
       blockAllActive: notExercised("blockAllActive"),
+      listWithWorkspace: async () => [],
     },
     failureRouter: { route: notExercised("route") },
     spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
@@ -430,9 +446,10 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
   // A fault after the merge commit (`git rev-parse HEAD` failing) is Ashara's, and the merged task
   // must not be requeued for it.
-  test("a fault after its merge reached main: the merge recorded and the task Completed, never requeued", async () => {
+  test("a fault after its merge reached main: the merge recorded and the task Completed, never requeued; its worktree and branch are gone", async () => {
     const { deps, stored, statusesWritten, refunds } = buildEnvironmentBlockedDeps();
     const main = targetWithMain([`merge: task ${ITEM_ID}`]);
+    const left = heldCheckout(main.path, ITEM_ID);
     deps.projectRepo.get = async () => ({ workspacePath: main.path });
     const records: string[] = [];
     deps.workItemRepo.recordMergeCommit = async (_id, commit, kind) => void records.push(`${commit}:${kind ?? "null"}`);
@@ -443,6 +460,25 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(statusesWritten).toEqual(["InProgress", "Completed"]);
     expect(stored().status).toBe("Completed");
     expect(refunds()).toBe(0);
+    expect(left()).toEqual({ branch: "", worktree: false });
+  });
+
+  test("a fault after its merge reached main and its completion lost to a concurrent write: its worktree and branch are released all the same", async () => {
+    const { deps, stored } = buildEnvironmentBlockedDeps();
+    const main = targetWithMain([`merge: task ${ITEM_ID}`]);
+    const left = heldCheckout(main.path, ITEM_ID);
+    deps.projectRepo.get = async () => ({ workspacePath: main.path });
+    deps.workItemRepo.recordMergeCommit = async () => undefined;
+    const save = deps.workItemRepo.save.bind(deps.workItemRepo);
+    deps.workItemRepo.save = async (item, previous) => {
+      if (item.status === "Completed") throw new InvalidStatusTransition(item.id, "Abandoned", "Completed");
+      return save(item, previous);
+    };
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored().status).toBe("InProgress");
+    expect(left()).toEqual({ branch: "", worktree: false });
   });
 
   test("a fault before the target's repository exists: it holds no merge, so the fault is routed as one and the task requeued", async () => {
@@ -1250,6 +1286,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         listInfrastructureHalted: notExercised("listInfrastructureHalted"),
         resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
         blockAllActive: notExercised("blockAllActive"),
+        listWithWorkspace: async () => [],
       },
       spendCap: {
         deploymentStop: notExercised("deploymentStop"),

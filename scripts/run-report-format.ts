@@ -8,6 +8,7 @@ import type { readRunEvidence } from "@ashara/workplace";
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
 type CallTotals = RunEvidence["calls"][number];
 type Session = RunEvidence["tasks"][number]["sessions"][number];
+type TaskCall = RunEvidence["tasks"][number]["calls"][number];
 
 interface Totals {
   calls: number;
@@ -88,7 +89,7 @@ function sessionLine(index: number, s: Session): string {
     case "open":
       return `${head}: no attempt recorded; the session is not terminal (in flight, or a crash orphan not yet reconciled)`;
     case "reconciled":
-      return `${head}: no attempt recorded; closed by ${record.by} as a crash orphan, so any model calls it made are untracked`;
+      return `${head}: no attempt recorded; closed by ${record.by} as a crash orphan, so any agent call it made is tied to no attempt`;
     case "predates-attempt-columns":
       return `${head}: no attempt recorded; the session predates migration 046, which added the attempt columns`;
     case "completed-without-attempt":
@@ -105,23 +106,46 @@ function sessionLine(index: number, s: Session): string {
 }
 
 /**
- * Whether a session's model calls, if it made any, can never be tied to an attempt: it ended, or
- * was closed, with no attempt recorded, and its row does not show whether it called a model before
- * it did. That includes a session that completed without an attempt: its row records the end, not
- * the absence of a call. An open session is not: it is in flight, and its calls precede the attempt
- * record it has yet to write.
+ * Which attempt an agent call belongs to, read from when it was admitted: `tied` inside a session
+ * with a recorded attempt (from the session's creation to its terminal write), `open` at or after
+ * the start of a session not yet terminal, and `untied` otherwise: it matches no attempt, whatever
+ * the task's other sessions show. An `open` call is tied to no attempt the rows show; whether one
+ * will be is not in them: the session is in flight, or a crash orphan the startup reconciler has
+ * not closed, whose calls then stay tied to none.
  */
-function mayHoldUntiedCalls(s: Session): boolean {
-  switch (s.attempt.kind) {
-    case "reconciled":
-    case "predates-attempt-columns":
-    case "unrecorded":
-    case "completed-without-attempt":
-      return true;
-    case "recorded":
-    case "open":
-      return false;
+function tieOf(call: TaskCall, sessions: readonly Session[]): "tied" | "open" | "untied" {
+  const at = call.createdAt.getTime();
+  const within = (s: Session) => s.createdAt.getTime() <= at && at <= s.updatedAt.getTime();
+  if (sessions.some((s) => s.attempt.kind === "recorded" && within(s))) return "tied";
+  if (sessions.some((s) => s.attempt.kind === "open" && s.createdAt.getTime() <= at)) return "open";
+  return "untied";
+}
+
+/** The per-task lines on how its calls tie to its attempts, and whether any is UNTIED. */
+function tieLines(task: RunEvidence["tasks"][number]): { readonly lines: string[]; readonly untied: boolean } {
+  const lines: string[] = [];
+  const agentCalls = task.calls.filter((c) => c.agentTurn);
+  const ties = agentCalls.map((c) => ({ call: c, tie: tieOf(c, task.sessions) }));
+  const untied = ties.filter((t) => t.tie === "untied").map((t) => t.call.createdAt.toISOString());
+  const open = ties.filter((t) => t.tie === "open").length;
+  if (untied.length > 0) {
+    lines.push(
+      `  UNTIED: ${untied.length} of ${agentCalls.length} agent call(s) on this task fall in no session with a recorded attempt ` +
+        `(admitted ${untied.length === 1 ? `at ${untied[0]}` : `from ${untied[0]} to ${untied[untied.length - 1]}`}); those calls cannot be tied to an attempt`,
+    );
   }
+  if (open > 0) {
+    lines.push(
+      `  open: ${open} agent call(s) admitted in a session not yet terminal (in flight, or a crash orphan not yet reconciled); ` +
+        `no attempt is recorded for it, so none is tied to an attempt yet`,
+    );
+  }
+  const bySite = new Map<string, number>();
+  for (const c of task.calls) if (!c.agentTurn) bySite.set(c.callSite, (bySite.get(c.callSite) ?? 0) + 1);
+  for (const [site, n] of [...bySite.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    lines.push(`  ${n} call(s) by ${site}: not an attempt's turn (an attempt calls only as agent-runner), so none is tied to an attempt`);
+  }
+  return { lines, untied: untied.length > 0 };
 }
 
 function callLines(rows: readonly CallTotals[]): string[] {
@@ -154,23 +178,9 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
     });
     const taskCalls = calls.filter((row) => row.taskId === task.taskId);
     lines.push("  llm_calls:", ...callLines(taskCalls));
-    const untied = task.sessions.filter(mayHoldUntiedCalls).length;
-    const inFlight = task.sessions.filter((s) => s.attempt.kind === "open").length;
-    const callCount = taskCalls.reduce((sum, row) => sum + row.calls, 0);
-    if (untied > 0 && callCount > 0) {
-      untiedTasks += 1;
-      lines.push(
-        `  UNTIED: ${callCount} llm_calls row(s) on this task and ${untied} session(s) that ended without a recorded attempt; ` +
-          "those calls cannot be tied to an attempt",
-      );
-    } else if (task.sessions.length === 0 && callCount > 0) {
-      // A dispatch that runs no agent, such as a review of the plan's suites, opens no dev session.
-      untiedTasks += 1;
-      lines.push(`  UNTIED: ${callCount} llm_calls row(s) on this task and no dev session; those calls cannot be tied to an attempt`);
-    }
-    if (inFlight > 0 && callCount > 0) {
-      lines.push(`  in flight: ${inFlight} session(s) not yet terminal; their calls are tied once their attempt is recorded`);
-    }
+    const tie = tieLines(task);
+    if (tie.untied) untiedTasks += 1;
+    lines.push(...tie.lines);
   }
   const projectCalls = calls.filter((row) => row.taskId === null);
   if (projectCalls.length > 0) lines.push("", "project calls (no task):", ...callLines(projectCalls));

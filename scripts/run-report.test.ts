@@ -276,9 +276,20 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     expect(line(attemptSession)).toContain(
       `terminal finished:done, 3 turn(s), model deepseek/deepseek-scripted, base cell, prompt digest ${recorded?.kind === "recorded" ? recorded.attempt.promptDigest : "MISSING"}`,
     );
-    // The orphan sits on the task that has llm_calls rows: those calls cannot be tied to an attempt.
-    expect(report.text).toContain("UNTIED: 3 llm_calls row(s) on this task and 1 session(s) that ended without a recorded attempt");
-    expect(report.text).toContain("6 dev session(s), 1 with a recorded attempt, 5 without; 1 task(s) UNTIED");
+    // Every agent call was admitted inside the recorded attempt's session: the orphan opened later on the same task
+    // and the sessions without an attempt elsewhere leave them tied.
+    expect(evidence.tasks.find((t) => t.taskId === attemptTaskId)?.calls.map((c) => c.agentTurn)).toEqual([true, true, true]);
+    expect(report.text).not.toContain("UNTIED:");
+    expect(report.text).toContain("6 dev session(s), 1 with a recorded attempt, 5 without; 0 task(s) UNTIED");
+
+    // An agent call admitted before every session of its task matches no attempt.
+    await db.execute(sql`
+      INSERT INTO llm_calls (id, project_id, task_id, call_site, provider, model, estimated_cost_usd, state, created_at)
+      VALUES (${randomUUID()}, ${projectId}, ${idleTaskId}, 'agent-runner', 'deepseek', 'deepseek-scripted', 0.001, 'unmeasured_after_crash', '1999-01-01T00:00:00Z')`);
+    const untied = formatRunReport(await readRunEvidence(db, projectId)).text;
+    expect(untied).toContain("UNTIED: 1 of 1 agent call(s) on this task fall in no session with a recorded attempt (admitted at 1999-01-01T00:00:00.000Z)");
+    expect(untied).toContain("1 task(s) UNTIED");
+    await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId} AND created_at = '1999-01-01T00:00:00Z'`);
   });
 
   test("a call admitted and never recorded is told apart from a recorded call whose cost is unknown", async () => {

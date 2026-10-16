@@ -1,8 +1,9 @@
 import type { ProjectId } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { WorkItem } from "./domain/index.js";
+import type { MergeKind } from "./work-item-language/blocked-reason.js";
 import { assertValidTargetProjectPath } from "./acl/execution-infra-acl.js";
-import { taskMergeOnMain } from "./acl/quality-acl.js";
+import { releaseMergedTaskCheckout, taskMergeOnMain } from "./acl/quality-acl.js";
 
 /** The slice of the Project Record that reading a task's merge on main needs. */
 export interface TargetPathSource {
@@ -30,11 +31,47 @@ class TaskProjectMissing extends Error {
  * failure throws: a main that cannot be read is never "nothing merged".
  */
 export async function mergeOnMainOf(projects: TargetPathSource, workdirBase: string, item: WorkItem): Promise<string | null> {
+  const target = await targetOf(projects, workdirBase, item);
+  return target === null ? null : taskMergeOnMain(target, item.id);
+}
+
+/** The task's target, validated against `workdirBase`; null when its project records none. */
+async function targetOf(projects: TargetPathSource, workdirBase: string, item: WorkItem): Promise<string | null> {
   const project = await projects.get(item.projectId);
   if (project === null) throw new TaskProjectMissing(item.id, item.projectId);
   if (project.workspacePath === null) return null;
   await assertValidTargetProjectPath(project.workspacePath, workdirBase);
-  return taskMergeOnMain(project.workspacePath, item.id);
+  return project.workspacePath;
+}
+
+/** How a recorded commit settled the task, as its release logs it; a row from before migration 049 records no kind. */
+function settledOn(kind: MergeKind | null): string {
+  if (kind === "merged") return "merged on main";
+  if (kind === "already_delivered") return "already delivered on main";
+  return "recorded on main";
+}
+
+/**
+ * A task whose merge on main is recorded where no dispatch released its checkout: its dispatch
+ * faulted after the merge or its process died (mergeOnMainOf), or its record was written late
+ * (parked-exits). Its work is on main, so no attempt resumes its branch, whatever its completion
+ * meets next: the worktree and branch are released as soon as the record holds. A failure is a
+ * leftover in the target, logged at warn with its cause, never a verdict.
+ */
+export async function releaseMergedTask(projects: TargetPathSource, workdirBase: string, item: WorkItem, kind: MergeKind | null): Promise<void> {
+  const settled = settledOn(kind);
+  let target: string | null;
+  try {
+    target = await targetOf(projects, workdirBase, item);
+  } catch (e) {
+    console.warn(`[${item.id}] ${settled}, but its target could not be read, so its worktree and branch are left: ${describeErrorChain(e)}`);
+    return;
+  }
+  if (target === null) {
+    console.warn(`[${item.id}] ${settled}, but its project now records no target, so its worktree and branch are left`);
+    return;
+  }
+  await releaseMergedTaskCheckout(workdirBase, target, item.id, settled);
 }
 
 /**

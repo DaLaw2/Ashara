@@ -31,7 +31,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 afterAll(async () => {
-  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
+  for (const dir of tempDirs) await rm(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
       expect(outcome.filesCount).toBe(2);
     }
 
-    // Cleanup destroys the worktree but preserves the branch (no taskBranch arg)
+    // Cleanup destroys the worktree and keeps the branch
     await cleanupWorkdir(workDir, target);
 
     // Retry: new worktree from the same branch
@@ -82,7 +82,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     expect(log).toContain("partial work for retry");
     expect(log).toContain("agent-blocked");
 
-    await cleanupWorkdir(retry.workDir, target, branch);
+    await cleanupWorkdir(retry.workDir, target);
   });
 
   test("nothing to commit returns no-changes, not an error", async () => {
@@ -101,7 +101,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     );
     expect(outcome).toEqual({ committed: false, reason: "no-changes" });
 
-    await cleanupWorkdir(workDir, target, branch);
+    await cleanupWorkdir(workDir, target);
   });
 
   test("a partial commit on a prior dispatch does not break the finalize commit on a successful retry", async () => {
@@ -135,7 +135,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     const v2 = await readFile(join(w2, "v2.ts"), "utf-8");
     expect(v2).toContain("v = 2");
 
-    await cleanupWorkdir(w2, target, branch);
+    await cleanupWorkdir(w2, target);
   });
 
   test("a git failure is reported as git-error, not thrown", async () => {
@@ -177,6 +177,6 @@ describe("commitAllChanges fails closed", () => {
     expect(await git(workDir, "rev-parse", "HEAD")).toBe(before);
 
     await rm(join(repo.gitDir, "index.lock"));
-    await cleanupWorkdir(workDir, target, branch);
+    await cleanupWorkdir(workDir, target);
   });
 });

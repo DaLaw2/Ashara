@@ -283,7 +283,11 @@ export async function discardCheckWorkdir(workDir: string, targetProjectPath: st
   try {
     await dropCheckBranch(targetProjectPath, branch);
   } catch (err) {
-    console.warn(`[checks] the throwaway branch ${branch} could not be deleted; the next attempt deletes it:`, err);
+    console.warn(
+      `[checks] the throwaway branch ${branch} could not be deleted and is left in ${targetProjectPath}; the task's next ` +
+        `attempt deletes it before it starts, or the settled-branch release once the task is Completed or Abandoned:`,
+      err,
+    );
   }
 }
 

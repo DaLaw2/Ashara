@@ -7,7 +7,7 @@ import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import { WorkItemRowCorrupt } from "./work-item-language/work-item-row.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./domain/index.js";
-import { mergeOnMainOf } from "./orphan-merge.js";
+import { mergeOnMainOf, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 
 // The exits of Blocked work items (story s-loop-never-stop-m1, Discipline B; W6: no work item waits
@@ -69,8 +69,8 @@ export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number
 
 /**
  * A merged task whose merge record could not be written: the record is written again, and once
- * it holds the task is Completed (never Pending: its work is on main). A write that fails leaves
- * it Blocked for the next cycle.
+ * it holds the worktree and branch no dispatch released are released and the task is Completed
+ * (never Pending: its work is on main). A write that fails leaves it Blocked for the next cycle.
  */
 async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, mergeCommit: string, mergeKind: MergeKind | null): Promise<boolean> {
   try {
@@ -79,6 +79,7 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
     console.warn(`[parked-exits] task ${item.id}: the record of merge ${mergeCommit} still cannot be written; it stays Blocked:`, err);
     return false;
   }
+  await releaseMergedTask(deps.projects, deps.workdirBase, item, mergeKind);
   let events: DomainEvent[];
   try {
     events = await PlanningService.completeRecordedMerge(deps.workItemRepo, item);

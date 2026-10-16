@@ -167,14 +167,10 @@ export class Interleaver {
     const lane = this.laneOfBatch();
     if (lane === null || this.stalled) return waiting;
     let settled = false;
-    waiting.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    // Only whether it settled is read here; its outcome, a rejection included, reaches the caller through `waiting`.
+    void Promise.allSettled([waiting]).then(() => {
+      settled = true;
+    });
     // An uncontended wait settles within microtasks: then no other task is involved.
     await nextMacrotask();
     if (settled) return waiting;

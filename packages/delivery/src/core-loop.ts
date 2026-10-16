@@ -13,6 +13,7 @@ import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import { deploymentCapCause, projectCapCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
+import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 
 /** Failures are logged at warn by the Liaison itself, with their attempt count. */
 function logIntake(outcome: IntakeOutcome): void {
@@ -177,6 +178,9 @@ export class CoreLoop {
       projects: deps.projectRepo,
       workdirBase: deps.config.workdirBase,
     });
+    // Then every settled task's branches are released, whichever path settled it: the previous
+    // cycle awaited every attempt it dispatched, so none is in flight.
+    await releaseBranchesOfSettledTasks({ workItemRepo: deps.workItemRepo, projects: deps.projectRepo, workdirBase: deps.config.workdirBase });
 
     // A project with every task settled and a goal task done is swept on main (no LLM call): Accepted
     // and told so, or a defect whose repair the next cycle's replanning plans.

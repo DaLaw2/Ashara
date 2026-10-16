@@ -7,8 +7,10 @@
  * Per task: each dev session's attempt (terminal, turns, model, environment version, prompt
  * digest), or, when none is recorded, what the row says about why (still open, closed by the startup
  * reconciler, from before migration 046, or ended without an attempt outcome), never "no model
- * call"; a task with llm_calls rows and a session that ended without a recorded attempt, or with no
- * dev session at all, is flagged UNTIED (an open session is in flight, so it is not). Its
+ * call"; a task with an agent call admitted inside no session with a recorded attempt is flagged
+ * UNTIED (one at or after the start of a session not yet terminal is listed apart as open: in flight,
+ * or a crash orphan not yet reconciled, the rows do not say which; a call of any site but
+ * agent-runner, such as a review of the plan's suites, is no attempt's turn and is listed by its site). Its
  * llm_calls per provider with the measured coverage of their cost and the cache-hit share
  * (cache-read over input tokens, over the calls that reported both). Then the run's totals. Exits 1 when an llm_calls row is priced at
  * exactly $0, which the ledger must never write (an unknown cost is NULL).

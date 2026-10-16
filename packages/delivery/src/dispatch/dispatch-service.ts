@@ -36,8 +36,8 @@ import {
   cellImageOf,
   checkAreaOf,
   checkBranchName,
-  cleanupWorkdirBeforeReturn,
   conflictWithMain,
+  deleteSettledTaskBranch,
   describeAgentWork,
   discardCheckWorkdir,
   dropCheckBranch,
@@ -113,11 +113,18 @@ import { DispatchRecords } from "./dispatch-records.js";
 // staffs the attempt, runs it in Workplace and hands every verdict to Quality's TaskVerification.
 // What happens to the task afterwards is the core loop's (execution.ts), from the ExecutionResult.
 
-async function pathExists(path: string): Promise<boolean> {
-  return access(path).then(
-    () => true,
-    () => false,
-  );
+/**
+ * What the disk says of a worktree after its cleanup: null when it is gone (ENOENT), otherwise what
+ * is left. An answer other than ENOENT is never read as "gone": it is reported with its cause.
+ */
+async function worktreeLeft(workDir: string): Promise<string | null> {
+  try {
+    await access(workDir);
+    return "is still on disk after cleanup";
+  } catch (e) {
+    if (typeof e === "object" && e !== null && "code" in e && e.code === "ENOENT") return null;
+    return `could not be checked after cleanup: ${describeErrorChain(e)}`;
+  }
 }
 
 function attemptCellImage(environment: DispatchEnvironment): AttemptCellImage {
@@ -606,7 +613,7 @@ export class DispatchService {
         mount: { hostPath: workDir },
       });
     } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
+      await cleanupWorkdir(workDir, targetProjectPath);
       return thrownBlocked(task, sessionId, "createCell", e, { step: "create the task cell", cell: "task cell" }, NO_AGENT, eventSink);
     }
     eventSink?.emit({ event: "cell_created", taskId: task.id, attempt: task.attempt, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
@@ -642,7 +649,7 @@ export class DispatchService {
     } catch (e) {
       // A throw no stage caught: never the agent's work, so blocked under its class, no lesson.
       eventSink?.emit({ event: "error", location: "DispatchService:execute", taskId: task.id, attempt: task.attempt, error: describeErrorChain(e) });
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "a throw out of the dispatch");
+      await cleanupWorkdir(workDir, targetProjectPath);
       return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink);
     } finally {
       await this.verification.teardownCell({ taskId: task.id, attempt: task.attempt }, cell);
@@ -1014,10 +1021,12 @@ export class DispatchService {
       };
     }
 
-    await cleanupWorkdir(workDir, targetProjectPath, taskBranchName(task.id));
+    await cleanupWorkdir(workDir, targetProjectPath);
+    await deleteSettledTaskBranch(targetProjectPath, task.id, "merged into main");
     // Stated from the disk, not assumed: cleanupWorkdir's own fallbacks are best-effort.
-    if (await pathExists(workDir)) {
-      console.warn(`[${task.id}] task completed — but worktree ${workDir} is still on disk after cleanup`);
+    const left = await worktreeLeft(workDir);
+    if (left !== null) {
+      console.warn(`[${task.id}] task completed — but worktree ${workDir} ${left}`);
     } else {
       console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
     }
@@ -1055,7 +1064,7 @@ export class DispatchService {
     try {
       left = await stagedConflictMarkers(d.repo, conflict.files);
     } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the conflict markers could not be read");
+      await cleanupWorkdir(workDir, targetProjectPath);
       const fault = new VerificationInfrastructureFault(task.id, "conflict marker read of the task worktree", { cause: e });
       const chain = wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name });
       return asharaBlocked(task, sessionId, "conflictResolution", fault, { outcome, agentWork: "merge-discarded" }, this.deps.eventSink, chain);
@@ -1089,7 +1098,7 @@ export class DispatchService {
       await commitAllChanges(d.repo, `ashara: agent output for task ${task.id}`);
       return null;
     } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the agent's work could not be committed");
+      await cleanupWorkdir(workDir, targetProjectPath);
       if (!(e instanceof WorktreeCommitIncomplete)) {
         // Z0's git refused to record the work (WorktreeCommitFailed), or anything else failed: never the agent's.
         return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { outcome, agentWork: "kept" }, this.deps.eventSink);
@@ -1119,7 +1128,7 @@ export class DispatchService {
     try {
       return { kind: "paths", paths: await branchChangedPaths(targetProjectPath, task.id, taskBranchName(task.id)) };
     } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task branch could not be compared with main");
+      await cleanupWorkdir(workDir, targetProjectPath);
       const environmentFailure = environmentErrorOf(e);
       if (environmentFailure !== null) {
         return {

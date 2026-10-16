@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
 import { projectHalted, projects } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
+import { AGENT_CALL_SITE } from "./attempt.js";
 import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
 
 /** The project named for a run report does not exist. */
@@ -47,6 +48,7 @@ const SessionRowSchema = z.object({
   phase: z.string(),
   environmentVersion: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
   resolvedBy: z.string().nullable(),
   endOutcome: z.string().nullable(),
   endDetail: z.string().nullable(),
@@ -75,6 +77,8 @@ const CallTotalsRowSchema = z.object({
   cacheReadTokens: count,
 });
 
+const TaskCallRowSchema = z.object({ taskId: z.guid(), callSite: z.string().min(1), createdAt: z.coerce.date() });
+
 /**
  * What a session's row says about its attempt. Absent attempt columns never mean "no model call":
  * each NULL case names only what the row actually shows.
@@ -101,7 +105,20 @@ interface SessionEvidence {
   readonly phase: string;
   readonly environmentVersion: string | null;
   readonly createdAt: Date;
+  /** Its row's last write: for a terminal session the terminal write, after every call its attempt made. */
+  readonly updatedAt: Date;
   readonly attempt: AttemptRecord;
+}
+
+/**
+ * One llm_calls row of a task, when it was admitted and by which site. `agentTurn`: its site is
+ * AGENT_CALL_SITE, the only site an attempt calls as, so it belongs to one of the task's dev
+ * sessions; a call of any other site is no attempt's turn.
+ */
+interface TaskCall {
+  readonly callSite: string;
+  readonly createdAt: Date;
+  readonly agentTurn: boolean;
 }
 
 /**
@@ -119,6 +136,7 @@ interface TaskEvidence {
   readonly title: string;
   readonly status: string;
   readonly sessions: readonly SessionEvidence[];
+  readonly calls: readonly TaskCall[];
 }
 
 interface RunEvidence {
@@ -156,13 +174,15 @@ function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: D
     phase: row.phase,
     environmentVersion: row.environmentVersion,
     createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     attempt: attemptRecord(row, attemptColumnsSince),
   };
 }
 
 /**
  * The evidence of one project's run (roadmap M2 exit 7): every task that had a dev session or an
- * llm_calls row, with each session's attempt record, and the project's llm_calls totals per task
+ * llm_calls row, with each session's attempt record and each of its calls (when, by which site),
+ * and the project's llm_calls totals per task
  * and provider. Every row is validated on the way out of Postgres.
  */
 export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promise<RunEvidence> {
@@ -180,7 +200,7 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
 
   const sessionRows = await db.execute(sql`
     SELECT s.id AS "sessionId", s.task_id AS "taskId", s.phase, s.environment_version AS "environmentVersion",
-           s.created_at AS "createdAt", s.verification_result ->> 'resolvedBy' AS "resolvedBy",
+           s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.verification_result ->> 'resolvedBy' AS "resolvedBy",
            s.verification_result ->> 'outcome' AS "endOutcome",
            s.verification_result ->> 'detail' AS "endDetail",s.attempt_prompt_digest AS "attemptPromptDigest",
            s.attempt_terminal AS "attemptTerminal", s.attempt_turns AS "attemptTurns",
@@ -217,11 +237,21 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
     ORDER BY task_id NULLS FIRST, provider`);
   const calls = z.array(CallTotalsRowSchema).parse(callRows.rows);
 
+  const taskCallRows = await db.execute(sql`
+    SELECT task_id AS "taskId", call_site AS "callSite", created_at AS "createdAt"
+    FROM llm_calls
+    WHERE project_id = ${projectId} AND task_id IS NOT NULL
+    ORDER BY created_at, id`);
+  const taskCalls = z.array(TaskCallRowSchema).parse(taskCallRows.rows);
+
   return {
     project,
     tasks: tasks.map((task) => ({
       ...task,
       sessions: sessions.filter((s) => s.taskId === task.taskId).map((s) => toSession(s, attemptColumnsSince)),
+      calls: taskCalls
+        .filter((c) => c.taskId === task.taskId)
+        .map((c) => ({ callSite: c.callSite, createdAt: c.createdAt, agentTurn: c.callSite === AGENT_CALL_SITE })),
     })),
     calls,
   };

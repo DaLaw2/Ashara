@@ -6,7 +6,6 @@ import { environmentErrorOf } from "../fault-class.js";
 import type { EnvironmentError } from "../fault-class.js";
 import type { DispatchRef, ExecutionEventSink } from "../dispatch-result.js";
 import {
-  abortMerge,
   commitMerge,
   recoverOrphanedMerge,
   resetCheckoutToHead,
@@ -116,9 +115,9 @@ export interface FinalizeDeps {
 }
 
 /**
- * The tentative merge could not be undone, neither by `git merge --abort` nor by a reset to HEAD:
- * the target checkout holds residue no later merge may be built on. The next finalize on the
- * checkout restores it first and refuses to merge while it cannot (finalizeHeld).
+ * The tentative merge could not be undone: the reset to HEAD failed, or left a merge staged. The
+ * target checkout holds residue no later merge may be built on. The next finalize on the checkout
+ * restores it first and refuses to merge while it cannot (finalizeHeld).
  */
 class TargetCheckoutUnrestored extends Error {
   constructor(
@@ -126,15 +125,10 @@ class TargetCheckoutUnrestored extends Error {
     readonly targetPath: string,
     /** What the merge was being undone after. */
     readonly after: string,
-    /** Why the reset to HEAD did not restore it either. */
+    /** Why the checkout is not back at HEAD with nothing staged. */
     readonly restoreDetail: string,
-    options: { readonly cause: unknown },
   ) {
-    super(
-      `task ${taskId}: the tentative merge in ${targetPath} could not be aborted after ${after} ` +
-        `(${describeErrorChain(options.cause)}), and ${restoreDetail}; no merge runs on this checkout until it is restored`,
-      { cause: options.cause },
-    );
+    super(`task ${taskId}: the tentative merge in ${targetPath} could not be undone after ${after}: ${restoreDetail}; no merge runs on this checkout until it is restored`);
     this.name = "TargetCheckoutUnrestored";
   }
 }
@@ -163,25 +157,19 @@ async function unrestoredReason(targetProjectPath: string): Promise<string | nul
 }
 
 /**
- * Undoes the tentative merge. `git merge --abort` failing (a merge that never staged has nothing
- * for it to undo) falls back to a reset to HEAD; when neither restores the checkout the failure is
- * returned typed for the caller to block on, never swallowed: a merge verdict built on top of the
- * residue would be untrustworthy (Discipline A).
+ * Undoes the tentative merge. The checkout was at HEAD with nothing staged when the merge began
+ * (finalizeHeld restores it first), so the undo is the same restore: a reset to HEAD, which drops
+ * the staged merge, its unmerged paths and MERGE_HEAD, and whatever the post-merge check left in the
+ * tracked files, then a clean. When the checkout is still not at HEAD with nothing staged, the
+ * failure is logged at warn with its cause and returned typed for the caller to block on, never
+ * swallowed: a merge verdict built on top of the residue would be untrustworthy (Discipline A).
  */
 async function undoTentativeMerge(taskId: string, targetProjectPath: string, after: string): Promise<VerificationInfrastructureFault | null> {
-  try {
-    await abortMerge(targetProjectPath);
-    return null;
-  } catch (abortError) {
-    const reason = await unrestoredReason(targetProjectPath);
-    if (reason === null) {
-      console.warn(`[${taskId}] git merge --abort failed after ${after} (${describeErrorChain(abortError)}); the checkout was reset to HEAD instead`);
-      return null;
-    }
-    const unrestored = new TargetCheckoutUnrestored(taskId, targetProjectPath, after, `the reset to HEAD did not restore it: ${reason}`, { cause: abortError });
-    console.warn(`[${taskId}] ${unrestored.message}`);
-    return new VerificationInfrastructureFault(taskId, `restoring the target checkout after ${after}`, { cause: unrestored });
-  }
+  const reason = await unrestoredReason(targetProjectPath);
+  if (reason === null) return null;
+  const unrestored = new TargetCheckoutUnrestored(taskId, targetProjectPath, after, reason);
+  console.warn(`[${taskId}] ${unrestored.message}`);
+  return new VerificationInfrastructureFault(taskId, `restoring the target checkout after ${after}`, { cause: unrestored });
 }
 
 /** The merge's own failure, unless undoing it failed: then the checkout is the operator's first, whatever the gate said. */
@@ -218,7 +206,7 @@ async function abortAndFail(
 
   const unrestored = await undoTentativeMerge(taskId, targetProjectPath, errorLayerInfo.operation);
   if (unrestored !== null) return unrestoredFailure(unrestored, "verification", gateFailureContext, errorLayerInfo);
-  console.log(`[${taskId}] tentative merge aborted — main restored, task branch preserved for retry`);
+  console.log(`[${taskId}] tentative merge undone by a reset to HEAD — main restored, task branch preserved for retry`);
 
   const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, errorLayerInfo.gateContext);
 
@@ -311,7 +299,7 @@ async function finalizeHeld(
     if (unrestored !== null) {
       return unrestoredFailure(unrestored, "merge", mergeContext, { operation, gateOutput: "merge conflict", gateContext });
     }
-    console.log(`[${task.id}] tentative merge CONFLICT — aborted, branch preserved for retry`);
+    console.log(`[${task.id}] tentative merge CONFLICT in ${mergeResult.files.join(", ")} — undone by a reset to HEAD, branch preserved for retry`);
     return {
       success: false,
       failedStep: "merge",
@@ -334,7 +322,7 @@ async function finalizeHeld(
         gateContext,
       });
     }
-    console.warn(`[${task.id}] tentative merge FAILED without a conflict — aborted: ${fault.message}`);
+    console.warn(`[${task.id}] tentative merge FAILED without a conflict — undone by a reset to HEAD: ${fault.message}`);
     return {
       success: false,
       failedStep: "merge",

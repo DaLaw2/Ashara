@@ -1,0 +1,72 @@
+import type { ProjectId } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import type { WorkItemRepository } from "./domain/index.js";
+import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
+import { assertValidTargetProjectPath } from "./acl/execution-infra-acl.js";
+import { releaseSettledBranches } from "./acl/quality-acl.js";
+
+/**
+ * The statuses whose tasks hold a branch nothing reads: no attempt runs for them, and the next one,
+ * if any, starts fresh. Abandoned is terminal. A Completed task's work is on main (its branch merged,
+ * or discarded as already delivered there), and the one edge out of Completed reopens a check task,
+ * whose attempt drops its throwaway branch before it starts.
+ */
+const SETTLED_STATUSES: readonly WorkItemStatus[] = ["Completed", "Abandoned"];
+
+type Target = { readonly id: ProjectId; readonly workspacePath: string };
+
+/** The projects with a target workspace recorded, whatever their status; ProjectRepository satisfies it. */
+export interface SettledTargets {
+  listWithWorkspace(): Promise<readonly Target[]>;
+}
+
+interface SettledBranchDeps {
+  readonly workItemRepo: Pick<WorkItemRepository, "listIdsByStatus">;
+  readonly projects: SettledTargets;
+  /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
+  readonly workdirBase: string;
+}
+
+interface SettledBranchSummary {
+  readonly released: number;
+  readonly left: number;
+  /** Targets whose branches could not be listed, or whose stored path was refused. */
+  readonly targetsFailed: number;
+}
+
+/**
+ * Releases the branches (and worktree slots) of every settled task in every target, run at startup
+ * and each cycle while no attempt is in flight. Release follows the settled status itself, not the
+ * path that reached it: every path that gives a task up or completes it is covered, a new one
+ * included, and a release a settle path tried and failed is retried here. A leftover is logged at
+ * warn, never a verdict; a store that cannot be read releases nothing this pass, and the next retries.
+ */
+export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Promise<SettledBranchSummary> {
+  let settled: ReadonlySet<string>;
+  let targets: readonly Target[];
+  try {
+    settled = new Set(await deps.workItemRepo.listIdsByStatus(SETTLED_STATUSES));
+    targets = await deps.projects.listWithWorkspace();
+  } catch (err) {
+    console.warn(`[settled-branches] the settled tasks or the targets could not be read; no branch is released this pass: ${describeErrorChain(err)}`);
+    return { released: 0, left: 0, targetsFailed: 0 };
+  }
+  let released = 0;
+  let left = 0;
+  let targetsFailed = 0;
+  for (const target of targets) {
+    try {
+      await assertValidTargetProjectPath(target.workspacePath, deps.workdirBase);
+      const result = await releaseSettledBranches(deps.workdirBase, target.workspacePath, settled);
+      released += result.released;
+      left += result.left;
+    } catch (err) {
+      targetsFailed += 1;
+      console.warn(`[settled-branches] project ${target.id}: the branches of ${target.workspacePath} could not be listed; none is released this pass: ${describeErrorChain(err)}`);
+    }
+  }
+  if (released > 0 || left > 0 || targetsFailed > 0) {
+    console.log(`[settled-branches] released ${released} branch(es) of settled tasks; ${left} left, ${targetsFailed} target(s) not read`);
+  }
+  return { released, left, targetsFailed };
+}

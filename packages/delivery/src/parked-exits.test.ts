@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -75,6 +75,35 @@ function run(
   return { released, saves, published };
 }
 
+const repos: string[] = [];
+afterEach(() => {
+  for (const dir of repos.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function gitIn(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+}
+
+function repoWith(subject: string): { readonly path: string; readonly head: string } {
+  const path = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+  repos.push(path);
+  gitIn(path, "init", "-q", "-b", "main");
+  gitIn(path, "commit", "-q", "--allow-empty", "-m", subject);
+  return { path, head: gitIn(path, "rev-parse", "HEAD") };
+}
+
+/**
+ * What a dispatch that never released its checkout leaves: the task's branch, holding a commit main
+ * never took, checked out in its worktree slot under the workdir base. `left` reads both back.
+ */
+function heldCheckout(target: string, taskId: string): () => { readonly branch: string; readonly worktree: boolean } {
+  const workDir = join(tmpdir(), `task-${taskId}`);
+  repos.push(workDir);
+  gitIn(target, "worktree", "add", "-q", workDir, "-b", `task/${taskId}`, "main");
+  gitIn(workDir, "commit", "-q", "--allow-empty", "-m", "the agent's work");
+  return () => ({ branch: gitIn(target, "branch", "--list", "--format=%(refname:short)", `task/${taskId}`), worktree: existsSync(workDir) });
+}
+
 beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -110,6 +139,19 @@ describe("merge_unrecorded leaves Blocked to Completed once its merge record is 
     expect(records).toEqual([`${item.id}:${MERGE}`]);
     expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Completed", reason: undefined }]);
     expect(published.map((e) => e.eventType)).toEqual(["work_item.completed"]);
+  });
+
+  test("once the record holds, the worktree and branch no dispatch released are gone, a completion lost to a concurrent write included", async () => {
+    for (const saveRefused of [false, true]) {
+      const item = blocked(unrecorded);
+      const main = repoWith("initial");
+      const left = heldCheckout(main.path, item.id);
+
+      const { released } = run([item], saveRefused, async () => undefined, main.path);
+
+      expect(await released).toBe(saveRefused ? 0 : 1);
+      expect(left()).toEqual({ branch: "", worktree: false });
+    }
   });
 
   test("a record that still fails leaves it Blocked for the next cycle", async () => {
@@ -221,36 +263,23 @@ test("a give-up that loses a race to a concurrent write is not counted", async (
 
 describe("orphan_unreconciled reads main again before it leaves Blocked", () => {
   const unreconciled: StoredBlockedReason = { source: "orphan_unreconciled", faultClass: "ashara", step: "read main for the task's merge", reason: "git failed" };
-  const dirs: string[] = [];
 
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
-
-  function repoWith(subject: string): { readonly path: string; readonly head: string } {
-    const path = mkdtempSync(join(tmpdir(), "ashara-parked-"));
-    dirs.push(path);
-    const git = (...args: string[]): string =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: path, encoding: "utf8" }).trim();
-    git("init", "-q", "-b", "main");
-    git("commit", "-q", "--allow-empty", "-m", subject);
-    return { path, head: git("rev-parse", "HEAD") };
-  }
-
-  test("its merge is on main now: recorded and Completed, never Pending", async () => {
+  test("its merge is on main now: recorded and Completed, never Pending; the dead process's worktree and branch are gone", async () => {
     const item = blocked(unreconciled);
     const main = repoWith(`merge: task ${item.id}`);
+    const left = heldCheckout(main.path, item.id);
     const records: string[] = [];
     const { released, saves } = run([item], false, async (id, commit) => void records.push(`${id}:${commit}`), main.path);
 
     expect(await released).toBe(1);
     expect(records).toEqual([`${item.id}:${main.head}`]);
     expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Completed", reason: undefined }]);
+    expect(left()).toEqual({ branch: "", worktree: false });
   });
 
   test("main still cannot be read: it stays Blocked, never requeued blind", async () => {
     const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
-    dirs.push(unreadable);
+    repos.push(unreadable);
     mkdirSync(join(unreadable, ".git"));
     const { released, saves } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), unreadable);
 

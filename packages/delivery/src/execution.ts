@@ -17,7 +17,7 @@ import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import type { TaskDescriptor } from "./dispatch/dispatch-service.js";
 import { findEpicId, resolveTargetProjectPath } from "./task-helpers.js";
-import { mergeOnMainOf, OrphanUnreconciled } from "./orphan-merge.js";
+import { mergeOnMainOf, OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 
 /** The block a dispatch parks a task with: the loop takes its exit by itself (parked-exits.ts). */
@@ -561,10 +561,10 @@ async function routeAsInfrastructureFault(
  * Whether a dispatch that stopped on a fault had already merged its work: Z0 commits the merge on
  * main and only then reads its id and writes the record, so a fault after the commit leaves merged
  * work behind, and a requeue would redo it. Main is read first, within the merge record's
- * bound. A merge found is recorded and the task Completed (or parked merge_unrecorded when that
- * cannot be written); main that cannot be read parks the task orphan_unreconciled, whose exit reads
- * main again, with the project blocked on Ashara's own fault. False only when main holds no merge
- * of the task: then the fault is routed as one.
+ * bound. A merge found is recorded, its worktree and branch released, and the task Completed (or
+ * parked merge_unrecorded when the record cannot be written); main that cannot be read parks the
+ * task orphan_unreconciled, whose exit reads main again, with the project blocked on Ashara's own
+ * fault. False only when main holds no merge of the task: then the fault is routed as one.
  */
 async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promise<boolean> {
   let merge: string | null | undefined;
@@ -594,6 +594,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
     await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason: `merged on main as ${merge}, but the merge record could not be written: ${unrecorded}` });
     return true;
   }
+  await releaseMergedTask(deps.projects, deps.workdirBase, task, "merged");
   try {
     await routeAsSuccess(deps, task, MERGE_RECORD_BACKOFF_MS.length + 1);
   } catch (e) {

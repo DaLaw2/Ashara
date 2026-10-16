@@ -36,7 +36,6 @@ import {
   PostMergeEnvironmentMissing,
   asharaBlocked,
   cellImageOf,
-  cleanupWorkdirBeforeReturn,
   failedBeforeAgent,
   mainRunBlocked,
   sessionEnvironmentVersion,
@@ -71,7 +70,7 @@ import type { EnvironmentError } from "./fault-class.js";
 import { VerificationInfrastructureFault } from "./gates/finalize.js";
 import type { PostMergeVerdict } from "./gates/finalize.js";
 import { checkBranchOwnership } from "./gates/ownership.js";
-import { discardTaskBranch, taskBranchName } from "./merge.js";
+import { deleteSettledTaskBranch, discardTaskBranch, taskBranchName } from "./merge.js";
 import { interfaceDefectLine, interfaceStandingOnMain, PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { InterfaceStanding, ScaffoldMerge } from "./public-interface.js";
 import type { SuiteReviewing } from "./suite-review.js";
@@ -576,7 +575,8 @@ export class TaskVerification {
   private async alreadyDelivered(d: VerifiedDispatch, main: string, stored: TaskChecks, agent: AgentPart): Promise<ExecutionResult> {
     const { eventSink } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
-    await cleanupWorkdir(workDir, targetProjectPath, taskBranchName(task.id));
+    await cleanupWorkdir(workDir, targetProjectPath);
+    await deleteSettledTaskBranch(targetProjectPath, task.id, "completed as already delivered");
     console.log(`[${task.id}] already delivered: its checks, the environment's test and the regression suite pass on main ${main}; nothing merged`);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "already_delivered" });
     return {
@@ -775,7 +775,7 @@ export class TaskVerification {
       const checkFiles = await this.deps.checks.checkFilesOf(task.projectId);
       verdict = await checkBranchOwnership(targetProjectPath, task.id, taskBranchName(task.id), recipePaths(d.environment.definition), checkFiles);
     } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the ownership gate could not run");
+      await cleanupWorkdir(workDir, targetProjectPath);
       return blockOn(e, "ownership gate");
     }
     eventSink?.emit({ event: "ownership_gate", taskId: task.id, attempt: task.attempt, verdict: verdict.kind });
@@ -850,7 +850,7 @@ export class TaskVerification {
     try {
       run = await runSubstrateGate(this.environmentScope(d), attemptPolicy.perCommandTimeoutSeconds);
     } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the substrate gate could not run");
+      await cleanupWorkdir(workDir, targetProjectPath);
       const fault = environmentErrorOf(e) ?? new VerificationInfrastructureFault(task.id, "substrate gate run", { cause: e });
       return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { outcome, agentWork: "kept" }, eventSink) };
     }
@@ -868,7 +868,7 @@ export class TaskVerification {
       await this.deps.environment.statements.record(task.id, statement, run.tested.version);
     } catch (e) {
       // The gate passed; only Z0's store failed to keep its statement, as recordRebuiltStatement's write.
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the stack statement could not be recorded");
+      await cleanupWorkdir(workDir, targetProjectPath);
       const fault = new VerificationInfrastructureFault(task.id, `record the environment statement for version ${run.tested.version}`, { cause: e });
       return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { outcome, agentWork: "kept" }, eventSink) };
     }
