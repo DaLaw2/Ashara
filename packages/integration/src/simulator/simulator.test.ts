@@ -325,6 +325,18 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed([scaffold(1)], { mutation: "delivered-report-misquotes-interface" }))).toEqual(["I9:delivered-interface"]);
   }, 180_000);
 
+  // Every implementer leaves the scaffold's public interface file as it was: acceptance refuses main
+  // while it is the scaffold's, the repair plans its update, and the project is accepted only once
+  // main's file describes the product, so no delivered report quotes the placeholder.
+  it("refuses acceptance while main's public interface file is the scaffold's, and accepts it once updated", async () => {
+    const stale = await directed([implementation("agent.interface-left-stale", "every")]);
+    expect(stale.outcome.kind).toBe("accepted");
+    expect(keys(stale)).toEqual([]);
+    const sweeps = stale.trace.filter((line) => line.startsWith("acceptance sweep "));
+    expect(sweeps[0]).toBe("acceptance sweep ran:failed");
+    expect(sweeps.at(-1)).toBe("acceptance sweep ran:passed");
+  }, 180_000);
+
   // W6/W7: a halt's report quotes the cause recorded on its episode. Under a cell outage the project
   // halts on infrastructure and then undeliverable (plan_repair); at the low cap it halts at once.
   it("catches a halt report that states a fixed cause instead of the recorded one", async () => {

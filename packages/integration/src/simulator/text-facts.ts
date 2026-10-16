@@ -5,7 +5,7 @@ import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
 import type { Database } from "./database.js";
-import { PUBLIC_INTERFACE_PATH } from "./product.js";
+import { PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
 
 /**
  * I9, text against fact (ADR-081): every fact a composer
@@ -649,8 +649,10 @@ function quoteOf(quoted: string, file: string): "whole" | "cut" | null {
  * The delivered report's how-to-run section against main: the quoted block is the public
  * interface file as main holds it at the sweep's commit, whole or its start and end around one
  * marker counting exactly what was cut, and the report says it was cut exactly when it was; with no
- * such file on main, the report says the product has none, naming the file. Not judged where no
- * checkout is held.
+ * such file on main, the report says the product has none, naming the file. A delivered main whose
+ * file is still a scripted scaffold's was accepted on a placeholder's description: the report then
+ * quotes something false to the client however faithfully it quotes. Not judged where no checkout
+ * is held.
  */
 function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
   const onMain = records.interfaceOnMain;
@@ -668,6 +670,9 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
         add("delivered-interface", `main holds no ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report does not say "${noneLine(commit)}"`);
       }
       continue;
+    }
+    if (isScaffoldInterface(file.text)) {
+      add("delivered-placeholder-interface", `the project was delivered with ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)} still the scaffold's placeholder`);
     }
     if (block === null) {
       add("delivered-interface", `main holds ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report quotes no block of it after "${quotedLead(commit)}"`);

@@ -71,6 +71,8 @@ import { VerificationInfrastructureFault } from "./gates/finalize.js";
 import type { PostMergeVerdict } from "./gates/finalize.js";
 import { checkBranchOwnership } from "./gates/ownership.js";
 import { discardTaskBranch, taskBranchName } from "./merge.js";
+import { interfaceStandingOnMain, placeholderInterfaceLine, PUBLIC_INTERFACE_FILE } from "./public-interface.js";
+import type { InterfaceStanding, ScaffoldMerge } from "./public-interface.js";
 import type { SuiteReviewing } from "./suite-review.js";
 import {
   FoundationUnbuildable,
@@ -205,6 +207,8 @@ export type AcceptanceSweep =
       readonly checkedTasks: readonly string[];
       /** Completed implementation tasks with no stored check: nothing of theirs ran, so they are not checked. */
       readonly uncheckedTasks: readonly string[];
+      /** The public interface file on main against the product scaffold's: a scaffold's byte for byte is not accepted. */
+      readonly publicInterface: InterfaceStanding;
       readonly details: string;
     }
   | { readonly kind: "unrunnable"; readonly error: EnvironmentError }
@@ -576,12 +580,20 @@ export class TaskVerification {
    * no model called. Passed only when every suite ran every check and each passed, and every goal
    * task in `goalTaskIds` has checks stored: a goal never checked is not accepted on its word.
    * Completed tasks with no stored check are named apart (`uncheckedTasks`), never counted as
-   * passed. A main with no environment its cells can be built from fails the sweep, with the
+   * passed. A main whose public interface file is byte for byte the one a product scaffold in
+   * `scaffolds` wrote fails the sweep, its details opening with what to update: that file describes
+   * the scaffold's placeholder, and the delivered report quotes it to the client as how to run the
+   * product. A main with no environment its cells can be built from fails the sweep, with the
    * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or
    * an EnvironmentError); any other error is `faulted`, with the step it stopped at. The caller
    * bounds both (orchestrator acceptance.ts).
    */
-  async sweepForAcceptance(projectId: ProjectId, targetProjectPath: string, goalTaskIds: readonly string[]): Promise<AcceptanceSweep> {
+  async sweepForAcceptance(
+    projectId: ProjectId,
+    targetProjectPath: string,
+    goalTaskIds: readonly string[],
+    scaffolds: readonly ScaffoldMerge[],
+  ): Promise<AcceptanceSweep> {
     const label = `acceptance-${projectId}`;
     let step = "probe the substrate";
     let main: string | null = null;
@@ -590,7 +602,7 @@ export class TaskVerification {
       step = "read main";
       main = await mainCommit(targetProjectPath, label);
       return observed(
-        await this.runAcceptanceSweep(projectId, targetProjectPath, goalTaskIds, main, (next) => {
+        await this.runAcceptanceSweep(projectId, targetProjectPath, goalTaskIds, scaffolds, main, (next) => {
           step = next;
         }),
       );
@@ -606,6 +618,7 @@ export class TaskVerification {
     projectId: ProjectId,
     targetProjectPath: string,
     goalTaskIds: readonly string[],
+    scaffolds: readonly ScaffoldMerge[],
     main: string,
     at: (step: string) => void,
   ): Promise<AcceptanceSweep> {
@@ -627,10 +640,13 @@ export class TaskVerification {
         environmentVersion: null,
         checkedTasks: [],
         uncheckedTasks: [],
+        publicInterface: { kind: "not-compared" },
         details: `no environment its cells can be built from: ${resolution.reason}`,
       };
     }
     const environment: CurrentEnvironment<EnvironmentDefinition> = resolution.environment;
+    at(`compare ${PUBLIC_INTERFACE_FILE} on main with the product scaffold's`);
+    const publicInterface = await interfaceStandingOnMain(targetProjectPath, main, scaffolds);
     at("read the stored checks of the completed tasks");
     const completed = await this.deps.checks.completedOf(projectId, null);
     const checkedIds = new Set(completed.checked.map((prior) => prior.taskId));
@@ -658,8 +674,10 @@ export class TaskVerification {
       ...(neverChecked.length === 0 ? [] : [`Goal task(s) with no stored checks, so never checked: ${neverChecked.join(", ")}`]),
       ...(completed.unchecked.length === 0 ? [] : [`Not re-run, no check is stored for them: ${completed.unchecked.join(", ")}`]),
     ];
-    const passed = ran.passed && neverChecked.length === 0;
-    const details = [ran.details, ...gaps].join("\n");
+    const placeholder = publicInterface.kind === "scaffold-placeholder" ? [placeholderInterfaceLine(publicInterface)] : [];
+    const passed = ran.passed && neverChecked.length === 0 && placeholder.length === 0;
+    // The placeholder line comes first: a repair reads the start of these details when they are long.
+    const details = [...placeholder, ran.details, ...gaps].join("\n");
     const checkedTasks = completed.checked.map((prior) => prior.taskId);
     eventSink?.emit({
       event: "acceptance_sweep",
@@ -677,6 +695,7 @@ export class TaskVerification {
       environmentVersion: environment.version,
       checkedTasks,
       uncheckedTasks: completed.unchecked,
+      publicInterface,
       details,
     };
   }

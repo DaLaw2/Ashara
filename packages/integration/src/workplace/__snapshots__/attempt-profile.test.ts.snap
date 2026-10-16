@@ -935,6 +935,18 @@ Your finish summary states what you changed in 1-2 sentences.
 If a tool fails, read the error and try a different approach.
 Do not retry the identical failing action. Diagnose first.
 
+# Keeping the public interface true
+PUBLIC_INTERFACE.md at the repository root states the product's public interface: how it is started and configured, and each
+way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests
+the product through it, and the client is given it as how to run the delivered product.
+- Read it before you change the product.
+- When your change makes it no longer true of the product as your change leaves it (an entry it says the product
+  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the
+  product is started or configured), update PUBLIC_INTERFACE.md in the same change, so it states the product as it then is.
+- Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
+  wish for it.
+- A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
+
 # Project
 ## Owner's intent (verbatim)
 A greeting file
@@ -1012,6 +1024,18 @@ Your finish summary states what you changed in 1-2 sentences.
 # Errors
 If a tool fails, read the error and try a different approach.
 Do not retry the identical failing action. Diagnose first.
+
+# Keeping the public interface true
+PUBLIC_INTERFACE.md at the repository root states the product's public interface: how it is started and configured, and each
+way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests
+the product through it, and the client is given it as how to run the delivered product.
+- Read it before you change the product.
+- When your change makes it no longer true of the product as your change leaves it (an entry it says the product
+  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the
+  product is started or configured), update PUBLIC_INTERFACE.md in the same change, so it states the product as it then is.
+- Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
+  wish for it.
+- A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
 
 # Project
 ## Owner's intent (verbatim)
@@ -1108,6 +1132,18 @@ Your finish summary states what you changed in 1-2 sentences.
 # Errors
 If a tool fails, read the error and try a different approach.
 Do not retry the identical failing action. Diagnose first.
+
+# Keeping the public interface true
+PUBLIC_INTERFACE.md at the repository root states the product's public interface: how it is started and configured, and each
+way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests
+the product through it, and the client is given it as how to run the delivered product.
+- Read it before you change the product.
+- When your change makes it no longer true of the product as your change leaves it (an entry it says the product
+  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the
+  product is started or configured), update PUBLIC_INTERFACE.md in the same change, so it states the product as it then is.
+- Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
+  wish for it.
+- A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
 
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:
@@ -1210,6 +1246,18 @@ Your finish summary states what you changed in 1-2 sentences.
 # Errors
 If a tool fails, read the error and try a different approach.
 Do not retry the identical failing action. Diagnose first.
+
+# Keeping the public interface true
+PUBLIC_INTERFACE.md at the repository root states the product's public interface: how it is started and configured, and each
+way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests
+the product through it, and the client is given it as how to run the delivered product.
+- Read it before you change the product.
+- When your change makes it no longer true of the product as your change leaves it (an entry it says the product
+  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the
+  product is started or configured), update PUBLIC_INTERFACE.md in the same change, so it states the product as it then is.
+- Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
+  wish for it.
+- A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
 
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:
@@ -1331,6 +1379,18 @@ Your finish summary states what you changed in 1-2 sentences.
 If a tool fails, read the error and try a different approach.
 Do not retry the identical failing action. Diagnose first.
 
+# Keeping the public interface true
+PUBLIC_INTERFACE.md at the repository root states the product's public interface: how it is started and configured, and each
+way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests
+the product through it, and the client is given it as how to run the delivered product.
+- Read it before you change the product.
+- When your change makes it no longer true of the product as your change leaves it (an entry it says the product
+  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the
+  product is started or configured), update PUBLIC_INTERFACE.md in the same change, so it states the product as it then is.
+- Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
+  wish for it.
+- A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
+
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:
 - The environment recipe belongs to the platform role, who builds the project's image from it: environment/environment.toml.
@@ -1421,6 +1481,18 @@ Your finish summary states what you changed in 1-2 sentences.
 # Errors
 If a tool fails, read the error and try a different approach.
 Do not retry the identical failing action. Diagnose first.
+
+# Keeping the public interface true
+PUBLIC_INTERFACE.md at the repository root states the product's public interface: how it is started and configured, and each
+way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests
+the product through it, and the client is given it as how to run the delivered product.
+- Read it before you change the product.
+- When your change makes it no longer true of the product as your change leaves it (an entry it says the product
+  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the
+  product is started or configured), update PUBLIC_INTERFACE.md in the same change, so it states the product as it then is.
+- Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
+  wish for it.
+- A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
 
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:

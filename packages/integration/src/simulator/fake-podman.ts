@@ -9,10 +9,12 @@ import {
   CheckSpecSchema,
   HUNG,
   LAYOUT_FILE,
+  PUBLIC_INTERFACE_PATH,
   RECIPE_DEFECT_SYMPTOM,
   RECIPE_DEFECT_TOKEN,
   TOOLCHAIN_TOKEN,
   exited,
+  isScaffoldInterface,
   recipeTokens,
 } from "./product.js";
 import type { SimOutcome } from "./product.js";
@@ -417,6 +419,14 @@ export class FakePodman {
         return HUNG;
       case "vacuous":
         return exited(0, "ok\n");
+      case "interface": {
+        const path = join(root, ...PUBLIC_INTERFACE_PATH.split("/"));
+        if (!(await exists(path))) return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: ${PUBLIC_INTERFACE_PATH} is missing\n`);
+        if (isScaffoldInterface(await readFile(path, "utf8"))) {
+          return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: ${PUBLIC_INTERFACE_PATH} is still the scaffold's\n`);
+        }
+        return exited(0, `sim check ${specPath}: pass\n`);
+      }
       default:
         break;
     }

@@ -1,15 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { UNKINDED_WORK_CHARTER, charterOf } from "./charter.js";
 
+const CONVENTIONS = { publicInterfaceFile: "INTERFACE.txt" };
+
 function duties(kind: Parameters<typeof charterOf>[0]): string {
-  return charterOf(kind).duties ?? "";
+  return charterOf(kind, CONVENTIONS).duties ?? "";
 }
 
 describe("role charters", () => {
-  it("every role is a coding agent, and only the environment role and the check author carry duties beyond the task", () => {
-    for (const kind of ["environment", "implementation", "check"] as const) expect(charterOf(kind).identity).toBe("You are a coding agent.");
-    expect(charterOf("implementation").duties).toBeNull();
+  it("every role is a coding agent, and every kinded role carries duties beyond the task", () => {
+    for (const kind of ["environment", "implementation", "check"] as const) {
+      expect(charterOf(kind, CONVENTIONS).identity).toBe("You are a coding agent.");
+      expect(duties(kind)).not.toBe("");
+    }
     expect(UNKINDED_WORK_CHARTER).toEqual({ identity: "You are a coding agent.", duties: null });
+  });
+
+  it("holds the implementer to updating the public interface file it is given whenever its change makes it untrue", () => {
+    const text = duties("implementation");
+    expect(text).toContain("INTERFACE.txt at the repository root states the product's public interface");
+    expect(text).toContain("update INTERFACE.txt in the same change, so it states the product as it then is");
+    expect(text).toContain("A product is not accepted while INTERFACE.txt is still the one the product's scaffold wrote");
+    expect(text).not.toContain("PUBLIC_INTERFACE.md");
   });
 
   it("the environment role's charter states the recipe, the probe gate and that the product is not the environment's (d72)", () => {

@@ -8,6 +8,8 @@ import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 const MAIN = "f".repeat(40);
+const SCAFFOLD_MERGE = "a".repeat(40);
+const SCAFFOLDS = [{ taskId: "s1", mergeCommit: SCAFFOLD_MERGE }];
 
 type AcceptanceDeps = Parameters<typeof runAcceptanceSweeps>[0];
 
@@ -20,10 +22,11 @@ function notExercised(label: string): () => never {
 }
 
 /** A planning repository that keeps the defect's writes: its insert, then its saves. */
-function defectRepo(writes: Array<{ op: string; status: string; source?: string }>): WorkItemRepository {
+function defectRepo(writes: Array<{ op: string; status: string; source?: string }>, created: WorkItem[] = []): WorkItemRepository {
   return {
     create: async (item: WorkItem) => {
       writes.push({ op: "create", status: item.status });
+      created.push(item);
       return item;
     },
     save: async (item: WorkItem) => {
@@ -53,11 +56,13 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
 function harness(sweep: Sweep) {
   const accepted: string[] = [];
   const defects: Array<{ details: string; writes: Array<{ op: string; status: string; source?: string }> }> = [];
+  const created: WorkItem[] = [];
   const blocks: Array<{ projectId: ProjectId; cause: ProjectBlockCause }> = [];
   let faults = 0;
   let blocked = false;
   const acceptance: AcceptanceStore = {
-    readyForAcceptance: async () => (blocked ? [] : [{ projectId, workspacePath: "/tmp/ashara-acceptance-test", goalTaskIds: ["g1", "g2"] }]),
+    readyForAcceptance: async () =>
+      blocked ? [] : [{ projectId, workspacePath: "/tmp/ashara-acceptance-test", goalTaskIds: ["g1", "g2"], scaffoldMerges: SCAFFOLDS }],
     recordAccepted: async (record) => {
       accepted.push(record.mainCommit);
       return "accepted";
@@ -65,17 +70,19 @@ function harness(sweep: Sweep) {
     recordSweepFault: async () => ++faults,
     recordDefect: async (record, writeDefect) => {
       const writes: Array<{ op: string; status: string; source?: string }> = [];
-      await writeDefect(defectRepo(writes));
+      await writeDefect(defectRepo(writes, created));
       defects.push({ details: record.details, writes });
       return "recorded";
     },
   };
   const sweeps: Array<readonly string[]> = [];
+  const scaffoldsSwept: unknown[] = [];
   const deps: AcceptanceDeps = {
     acceptance,
     acceptanceSweeper: {
-      sweepForAcceptance: async (_id, _path, goals) => {
+      sweepForAcceptance: async (_id, _path, goals, scaffolds) => {
         sweeps.push(goals);
+        scaffoldsSwept.push(scaffolds);
         return sweep;
       },
     },
@@ -92,7 +99,7 @@ function harness(sweep: Sweep) {
   const resume = (): void => {
     if (blocks.at(-1)?.cause.category === "infrastructure") blocked = false;
   };
-  return { deps, accepted, defects, blocks, sweeps, resume, faults: () => faults };
+  return { deps, accepted, defects, created, blocks, sweeps, scaffoldsSwept, resume, faults: () => faults };
 }
 
 /** An EnvironmentError as the substrate throws it (structurally: execution-infra is not this package's to import). */
@@ -117,17 +124,19 @@ function sweepFault(): Extract<Sweep, { readonly kind: "faulted" }>["error"] {
 describe("the acceptance sweep", () => {
   test("a sweep that passes on main makes the project accepted, nothing else", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const { deps, accepted, defects, blocks, sweeps } = harness({
+    const { deps, accepted, defects, blocks, sweeps, scaffoldsSwept } = harness({
       kind: "ran",
       passed: true,
       mainCommit: MAIN,
       environmentVersion: "v1",
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
+      publicInterface: { kind: "described" },
       details: "all passed",
     });
     expect(await runAcceptanceSweeps(deps)).toBe(1);
     expect(sweeps).toEqual([["g1", "g2"]]);
+    expect(scaffoldsSwept).toEqual([SCAFFOLDS]);
     expect(accepted).toEqual([MAIN]);
     expect(defects).toEqual([]);
     expect(blocks).toEqual([]);
@@ -136,13 +145,14 @@ describe("the acceptance sweep", () => {
   test("a sweep that fails is a defect given up for a repair, never acceptance", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const details = `1 failure(s) on main:\n- task g2's checks: check "delete" exited 1`;
-    const { deps, accepted, defects, blocks } = harness({
+    const { deps, accepted, defects, created, blocks } = harness({
       kind: "ran",
       passed: false,
       mainCommit: MAIN,
       environmentVersion: "v1",
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
+      publicInterface: { kind: "described" },
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);
@@ -158,6 +168,29 @@ describe("the acceptance sweep", () => {
         ],
       },
     ]);
+    expect(created[0]?.taskSpec?.goal).toBe("Every goal task's checks and the environment's test pass together on main");
+  });
+
+  test("a main whose public interface file is the scaffold's is a defect asking for that file, given up for a repair", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const details = `PUBLIC_INTERFACE.md on main is byte-identical to the one the product scaffold wrote (task s1, merged as ${SCAFFOLD_MERGE})`;
+    const { deps, accepted, defects, created } = harness({
+      kind: "ran",
+      passed: false,
+      mainCommit: MAIN,
+      environmentVersion: "v1",
+      checkedTasks: ["g1", "g2"],
+      uncheckedTasks: [],
+      publicInterface: { kind: "scaffold-placeholder", file: "PUBLIC_INTERFACE.md", scaffoldTaskId: "s1", scaffoldCommit: SCAFFOLD_MERGE },
+      details,
+    });
+    expect(await runAcceptanceSweeps(deps)).toBe(0);
+    expect(accepted).toEqual([]);
+    expect(defects[0]?.writes.at(-1)).toEqual({ op: "save", status: "Abandoned", source: "acceptance_failed" });
+    const [defect] = created;
+    expect(defect?.title).toBe(`Acceptance on main ${MAIN.slice(0, 12)}: update PUBLIC_INTERFACE.md`);
+    expect(defect?.taskSpec?.goal).toContain("Update PUBLIC_INTERFACE.md so it states how the delivered product is started, configured and called");
+    expect(defect?.taskSpec?.deliverables).toEqual(["PUBLIC_INTERFACE.md, stating the delivered product's public interface"]);
   });
 
   test("a sweep the substrate could not run halts the project on infrastructure with the observed error", async () => {

@@ -17,6 +17,35 @@ interface FailedAcceptance {
   readonly projectId: ProjectId;
   readonly mainCommit: string | null;
   readonly details: string;
+  /** The public interface file main still holds as the product scaffold wrote it; null when that is not why. */
+  readonly placeholderInterface: PlaceholderInterface | null;
+}
+
+/** The public interface file main holds byte for byte as a product scaffold wrote it (Quality's sweep found it). */
+export interface PlaceholderInterface {
+  readonly file: string;
+  readonly scaffoldTaskId: string;
+  readonly scaffoldCommit: string;
+}
+
+/**
+ * What the defect asks for: the sweep passing, and, when main's public interface file is still the
+ * scaffold's placeholder, that file stating the delivered product, which no check of a goal task
+ * asks for and so no rerun of one delivers.
+ */
+function defectSpec(sweep: FailedAcceptance): { goal: string; endState: string; deliverables: string[] } {
+  const stale = sweep.placeholderInterface;
+  if (stale === null) {
+    return { goal: "Every goal task's checks and the environment's test pass together on main", endState: "The acceptance run on main passes", deliverables: [] };
+  }
+  return {
+    goal:
+      `Update ${stale.file} so it states how the delivered product is started, configured and called: main still ` +
+      `holds it byte for byte as the product scaffold wrote it (task ${stale.scaffoldTaskId}, merged as ` +
+      `${stale.scaffoldCommit}), describing a placeholder; and every goal task's checks and the environment's test pass together on main`,
+    endState: `${stale.file} on main differs from the product scaffold's and describes the delivered product, and the acceptance run on main passes`,
+    deliverables: [`${stale.file}, stating the delivered product's public interface`],
+  };
 }
 
 /**
@@ -25,19 +54,15 @@ interface FailedAcceptance {
  * repair trigger reads.
  */
 export function openAcceptanceDefect(sweep: FailedAcceptance): WorkItem {
+  const spec = defectSpec(sweep);
+  const stale = sweep.placeholderInterface;
   const defect = createPendingWorkItem(
     "Task",
-    `Acceptance on main ${sweep.mainCommit === null ? "(not read)" : sweep.mainCommit.slice(0, 12)}`,
+    `Acceptance on main ${sweep.mainCommit === null ? "(not read)" : sweep.mainCommit.slice(0, 12)}${stale === null ? "" : `: update ${stale.file}`}`,
     sweep.projectId,
     undefined,
     sweep.mainCommit === null ? "The acceptance run could not read main." : `The acceptance run on main ${sweep.mainCommit} did not pass.`,
-    {
-      goal: "Every goal task's checks and the environment's test pass together on main",
-      endState: "The acceptance run on main passes",
-      scope: sweep.details,
-      deliverables: [],
-      origin: "acceptance",
-    },
+    { ...spec, scope: sweep.details, origin: "acceptance" },
   );
   defect.events.push(
     createDomainEvent("work_item.created", "delivery", {
@@ -45,6 +70,7 @@ export function openAcceptanceDefect(sweep: FailedAcceptance): WorkItem {
       level: defect.level,
       origin: "acceptance",
       main_commit: sweep.mainCommit,
+      placeholder_interface: stale?.file ?? null,
     }),
   );
   return defect;

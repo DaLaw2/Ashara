@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { deliveredInterfaceText, publicInterfaceText } from "./product.js";
 import { checkTextFacts } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
 
@@ -183,5 +184,13 @@ describe("checkTextFacts, the delivered report's quote of the public interface",
 
   it("judges nothing where no checkout is held", () => {
     expect(keysOf({ delivered: [report("Nothing about the interface.")] })).toEqual([]);
+  });
+
+  it("names a delivery whose main still holds the scaffold's interface file, however faithfully it is quoted", () => {
+    const fence = "`".repeat(4);
+    const scaffold = publicInterfaceText("short");
+    expect(judged(scaffold, `${lead}\n${fence}\n${scaffold}${fence}`)).toEqual(["delivered-placeholder-interface"]);
+    const delivered = deliveredInterfaceText("short");
+    expect(judged(delivered, `${lead}\n${fence}\n${delivered}${fence}`)).toEqual([]);
   });
 });

@@ -186,6 +186,7 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
         environmentVersion: "v1",
         checkedTasks: ran.checked,
         uncheckedTasks: ran.unchecked,
+        publicInterface: { kind: "described" as const },
         details,
       }),
     },
@@ -234,7 +235,10 @@ describe("acceptance on main", () => {
   test("a passing sweep makes the project accepted, stops its dispatch, and posts one delivered report from the records", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
     const projects = new ProjectHaltRepository(db);
-    expect(await acceptanceStore().readyForAcceptance()).toEqual([{ projectId, workspacePath: `/tmp/${NAME_PREFIX}`, goalTaskIds: goals }]);
+    // The scaffold's merge is not on record here: the readiness row names it so, and Quality's sweep refuses to compare.
+    expect(await acceptanceStore().readyForAcceptance()).toEqual([
+      { projectId, workspacePath: `/tmp/${NAME_PREFIX}`, goalTaskIds: goals, scaffoldMerges: [{ taskId: scaffold, mergeCommit: null }] },
+    ]);
 
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
 

@@ -89,15 +89,43 @@ const CHECK_DUTIES = [
   `  finish with status "done": they are all red-run on the foundation again then.`,
 ].join("\n");
 
-const CHARTERS: Readonly<Record<WorkKind, RoleCharter>> = {
-  environment: { identity: CODING_AGENT, duties: ENVIRONMENT_DUTIES },
-  implementation: { identity: CODING_AGENT, duties: null },
-  check: { identity: CODING_AGENT, duties: CHECK_DUTIES },
-};
+/** The conventions of the workplace a charter names, which their owners supply: Organization fixes none of them. */
+interface CharterConventions {
+  /** The file at the repository root that states the product's public interface. */
+  readonly publicInterfaceFile: string;
+}
 
-/** The charter of the role that owns this kind of work. */
-export function charterOf(workKind: WorkKind): RoleCharter {
-  return CHARTERS[workKind];
+/**
+ * Implementation work changes the product, so it keeps the written public interface true: every
+ * check author tests through that file, and the client is told it as how to run what was delivered.
+ */
+function implementationDuties(conventions: CharterConventions): string {
+  const file = conventions.publicInterfaceFile;
+  return [
+    `# Keeping the public interface true`,
+    `${file} at the repository root states the product's public interface: how it is started and configured, and each`,
+    `way it is called, with what each gives back and the error each gives for input it refuses. Every check author tests`,
+    `the product through it, and the client is given it as how to run the delivered product.`,
+    `- Read it before you change the product.`,
+    `- When your change makes it no longer true of the product as your change leaves it (an entry it says the product`,
+    `  refuses or does not do yet that your work now does, an entry you add, change or remove, a change to how the`,
+    `  product is started or configured), update ${file} in the same change, so it states the product as it then is.`,
+    `- Change the interface itself only as your task asks: what you write in ${file} describes the product, never a`,
+    `  wish for it.`,
+    `- A product is not accepted while ${file} is still the one the product's scaffold wrote.`,
+  ].join("\n");
+}
+
+/** The charter of the role that owns this kind of work, naming the conventions it is held to. */
+export function charterOf(workKind: WorkKind, conventions: CharterConventions): RoleCharter {
+  switch (workKind) {
+    case "environment":
+      return { identity: CODING_AGENT, duties: ENVIRONMENT_DUTIES };
+    case "implementation":
+      return { identity: CODING_AGENT, duties: implementationDuties(conventions) };
+    case "check":
+      return { identity: CODING_AGENT, duties: CHECK_DUTIES };
+  }
 }
 
 /** A task with no recorded kind of work is worked by a coding agent whose role carries no further duties. */

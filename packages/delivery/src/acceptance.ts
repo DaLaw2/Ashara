@@ -6,6 +6,7 @@ import type { ProjectBlockCause } from "./project-halt.js";
 import type { TaskVerification } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
+import type { PlaceholderInterface } from "./domain/index.js";
 import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution.js";
 
 // Delivering -> Accepted (story s-independent-verify-m1 W7, design P11): each cycle, every project
@@ -26,6 +27,8 @@ interface ReadyProject {
   readonly projectId: ProjectId;
   readonly workspacePath: string | null;
   readonly goalTaskIds: readonly string[];
+  /** Its Completed product scaffolds and their recorded merges: the public interface file main must have moved on from. */
+  readonly scaffoldMerges: ReadonlyArray<{ readonly taskId: string; readonly mergeCommit: string | null }>;
 }
 
 /** What one sweep recorded, whatever its verdict. */
@@ -86,8 +89,8 @@ class AcceptanceFaultBudgetSpent extends Error {
 type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
 
 /** Records a failed sweep with its defect, given up at once, and publishes the defect's events. */
-async function recordDefect(deps: AcceptanceDeps, record: SweepRecord): Promise<void> {
-  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details });
+async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, placeholderInterface: PlaceholderInterface | null): Promise<void> {
+  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details, placeholderInterface });
   const outcome = await deps.acceptance.recordDefect(record, async (workItems) => {
     await PlanningService.createWorkItem(workItems, defect);
     giveUpAcceptanceDefect(defect, record);
@@ -136,7 +139,7 @@ async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep
     checkedTasks: [],
     uncheckedTasks: [],
     details: `The acceptance run could not be carried out (${why}): ${describeErrorChain(sweep.error)}`,
-  });
+  }, null);
 }
 
 /** Runs the sweep of every ready project; returns how many became accepted. */
@@ -149,7 +152,7 @@ export async function runAcceptanceSweeps(deps: AcceptanceDeps): Promise<number>
       console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
       continue;
     }
-    const sweep = await deps.acceptanceSweeper.sweepForAcceptance(ready.projectId, ready.workspacePath, ready.goalTaskIds);
+    const sweep = await deps.acceptanceSweeper.sweepForAcceptance(ready.projectId, ready.workspacePath, ready.goalTaskIds, ready.scaffoldMerges);
     if (sweep.kind !== "ran") {
       await routeSweepFault(deps, ready.projectId, sweep);
       continue;
@@ -168,7 +171,7 @@ export async function runAcceptanceSweeps(deps: AcceptanceDeps): Promise<number>
       console.log(`[acceptance] project ${ready.projectId}: sweep on main ${sweep.mainCommit} passed; ${outcome}`);
       continue;
     }
-    await recordDefect(deps, record);
+    await recordDefect(deps, record, sweep.publicInterface.kind === "scaffold-placeholder" ? sweep.publicInterface : null);
   }
   return accepted;
 }

@@ -1,7 +1,8 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects } from "@ashara/db";
+import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import type { ScaffoldMerge } from "../public-interface.js";
 
 // A delivered project is accepted on one sweep of main HEAD (migration 049; story
 // s-independent-verify-m1 W7, design P11). A project is ready for it once its first plan exists,
@@ -29,6 +30,25 @@ interface ReadyProjectRow {
   readonly workspacePath: string | null;
   /** The project's Completed goal tasks (decomposition), oldest completion first. */
   readonly goalTaskIds: readonly string[];
+  /** The project's Completed product scaffolds with their recorded merges, oldest completion first. */
+  readonly scaffoldMerges: readonly ScaffoldMerge[];
+}
+
+/** The project's Completed product scaffolds, each with the merge its completion recorded (migration 041). */
+async function completedScaffolds(db: DbHandle, projectId: string): Promise<ScaffoldMerge[]> {
+  const rows = await db
+    .select({ taskId: workItems.id, mergeCommit: workItems.mergeCommit })
+    .from(workItems)
+    .where(
+      and(
+        eq(workItems.projectId, projectId),
+        eq(workItems.level, "Task"),
+        eq(workItems.status, "Completed"),
+        sql`${workItems.taskSpec}->>'origin' = 'product-scaffold'`,
+      ),
+    )
+    .orderBy(asc(workItems.updatedAt), asc(workItems.id));
+  return rows.map((row) => ({ taskId: row.taskId, mergeCommit: row.mergeCommit }));
 }
 
 /** The projects ready for their acceptance sweep, oldest first. */
@@ -45,6 +65,7 @@ export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<Read
       projectId: parseProjectId(row.id, "projects.id"),
       workspacePath: row.workspacePath,
       goalTaskIds: goals.map((goal) => goal.id),
+      scaffoldMerges: await completedScaffolds(db, row.id),
     });
   }
   return ready;

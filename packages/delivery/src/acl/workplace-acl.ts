@@ -9,6 +9,7 @@
 import type { AssignmentCharter, ToolProfile } from "@ashara/workplace";
 import { UNKINDED_WORK_CHARTER, charterOf } from "./organization-acl.js";
 import type { WorkKind } from "./organization-acl.js";
+import { PUBLIC_INTERFACE_FILE } from "./quality-acl.js";
 
 export type { DevSessionRepository, ErrorEnvelope, Outcome } from "@ashara/workplace";
 export { ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, toRecordedOutcome } from "@ashara/workplace";
@@ -35,5 +36,5 @@ interface AttemptProfile {
  */
 export function attemptProfileOf(workKind: WorkKind | null): AttemptProfile {
   if (workKind === null) return { toolProfile: "run-checks", charter: UNKINDED_WORK_CHARTER };
-  return { toolProfile: TOOL_PROFILE[workKind], charter: charterOf(workKind) };
+  return { toolProfile: TOOL_PROFILE[workKind], charter: charterOf(workKind, { publicInterfaceFile: PUBLIC_INTERFACE_FILE }) };
 }

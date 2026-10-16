@@ -9,21 +9,26 @@ import { z } from "zod";
 import type { LanguageModelFactory } from "@ashara/model-access";
 import {
   CheckSpecSchema,
+  INTERFACE_TASK_REF,
+  INTERFACE_TASK_TITLE,
   LAYOUT_FILE,
   MANIFEST_FILE,
   MISREAD_REJECTION_MARKER,
+  PLACEHOLDER_INTERFACE_EVIDENCE,
   PUBLIC_INTERFACE_PATH,
   RECIPE_DEFECT_SYMPTOM,
   RECIPE_DEFECT_TOKEN,
   SHARED_INDEX_FILE,
   TOOLCHAIN_TOKEN,
   behaviourPath,
+  deliveredInterfaceText,
+  isInterfaceTaskTitle,
   publicInterfaceText,
   taskOfTitle,
   taskTitle,
 } from "./product.js";
 import type { Database } from "./database.js";
-import type { CheckSpec, SimTask, Universe } from "./product.js";
+import type { CheckSpec, InterfaceForm, SimTask, Universe } from "./product.js";
 import type { AdversaryRates } from "./profile.js";
 import type { Tape } from "./tape.js";
 
@@ -227,6 +232,12 @@ function assistantTurns(options: LanguageModelV4CallOptions): number {
  */
 export class StandIns {
   private readonly attempts = new Map<string, AttemptScript>();
+  /**
+   * The form of public interface file each project's latest scripted scaffold wrote (null: none),
+   * so an implementer updating it keeps its form. The latest is the one merged: a scaffold attempt
+   * that merged is followed by no other.
+   */
+  private readonly interfaceForms = new Map<string, InterfaceForm | null>();
   private toolCalls = 0;
 
   constructor(private readonly context: StandInContext) {}
@@ -253,7 +264,7 @@ export class StandIns {
     const keys = schemaKeys(format.schema);
     if (keys.includes("inScope")) return this.structured(options, "liaison-intake", () => this.intake());
     if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
-    if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan());
+    if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan(promptText(options)));
     if (keys.includes("problems")) return this.structured(options, "suite-review", () => this.review());
     if (keys.includes("verdict")) return this.structured(options, "liaison-answer", () => this.answer());
     if (keys.includes("environmentChange")) {
@@ -325,14 +336,38 @@ export class StandIns {
     return { roles };
   }
 
-  private plan(): unknown {
+  /**
+   * The universe's tasks; a repair whose evidence says acceptance refused main's public interface
+   * file as the scaffold's also plans a task to update it, which no universe task's checks ask for.
+   */
+  private plan(prompt: string): unknown {
     const { universe } = this.context;
+    const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE)
+      ? [
+          {
+            ref: INTERFACE_TASK_REF,
+            title: INTERFACE_TASK_TITLE,
+            description: `Updates ${PUBLIC_INTERFACE_PATH} to describe the delivered product.`,
+            dependsOn: [],
+            goal: `${PUBLIC_INTERFACE_PATH} describes the delivered product`,
+            endState: `${PUBLIC_INTERFACE_PATH} is no longer the scaffold's.`,
+            scope: `${PUBLIC_INTERFACE_PATH} only.`,
+            deliverables: [{ text: `${PUBLIC_INTERFACE_PATH} describes the product.`, sources: ["S1"] }],
+            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: ["S1"] }],
+            capability: "Medium",
+            capabilityReason: "One file.",
+          },
+        ]
+      : [];
+    // Answering that evidence, it plans only what is still to do: a done task planned again could
+    // never have a check fail on its foundation.
+    const planned = interfaceTask.length === 0 ? universe.tasks : universe.tasks.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
     return {
-      tasks: universe.tasks.map((task, i) => ({
+      tasks: [...planned.map((task, i) => ({
         ref: task.ref,
         title: taskTitle(task),
         description: `Delivers ${task.behaviours.join(", ")}.`,
-        dependsOn: i === 0 || universe.independent ? [] : [universe.tasks[i - 1]?.ref ?? task.ref],
+        dependsOn: i === 0 || universe.independent ? [] : [planned[i - 1]?.ref ?? task.ref],
         goal: `Deliver ${task.behaviours.join(", ")}`,
         endState: `${task.behaviours.join(", ")} can be used end to end.`,
         scope: `The ${task.behaviours.join(", ")} part of the product.`,
@@ -340,7 +375,7 @@ export class StandIns {
         acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
         capability: "Medium",
         capabilityReason: "One small behaviour.",
-      })),
+      })), ...interfaceTask],
     };
   }
 
@@ -491,7 +526,11 @@ export class StandIns {
       steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined);
     } else if (origin === "product-scaffold") {
       work = "scaffold";
-      steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], ...this.publicInterfaceWork(), finished("Set up the product layout.")];
+      steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], ...this.publicInterfaceWork(task.projectId), finished("Set up the product layout.")];
+    } else if (isInterfaceTaskTitle(task.title)) {
+      work = "implementation";
+      const form = this.interfaceForms.get(task.projectId) ?? "short";
+      steps = [["write_file", { path: PUBLIC_INTERFACE_PATH, content: deliveredInterfaceText(form) }], finished(`Updated ${PUBLIC_INTERFACE_PATH}.`)];
     } else {
       work = "implementation";
       steps = await this.implementationWork(task, tools, conflictFilesOf(prompt));
@@ -527,10 +566,23 @@ export class StandIns {
   }
 
   /** The scaffold's public interface file: written as briefed, left out, or longer than any report quotes whole. */
-  private publicInterfaceWork(): ToolStep[] {
-    const form = this.context.tape.pick("agent.scaffold.public-interface", 3, "scaffold");
-    if (form === 1) return [];
-    return [["write_file", { path: PUBLIC_INTERFACE_PATH, content: publicInterfaceText(form === 0 ? "short" : "oversized") }]];
+  private publicInterfaceWork(projectId: string): ToolStep[] {
+    const pick = this.context.tape.pick("agent.scaffold.public-interface", 3, "scaffold");
+    const form: InterfaceForm | null = pick === 1 ? null : pick === 0 ? "short" : "oversized";
+    this.interfaceForms.set(projectId, form);
+    if (form === null) return [];
+    return [["write_file", { path: PUBLIC_INTERFACE_PATH, content: publicInterfaceText(form) }]];
+  }
+
+  /**
+   * An implementation updates the scaffold's public interface file, as its charter asks, unless it
+   * leaves it stale (the profile's rate); with no file from the scaffold there is none to update.
+   */
+  private interfaceUpdate(projectId: string): ToolStep[] {
+    const form = this.interfaceForms.get(projectId) ?? null;
+    if (form === null) return [];
+    if (this.context.tape.chance("agent.interface-left-stale", this.context.rates.interfaceLeftStale, "implementation")) return [];
+    return [["write_file", { path: PUBLIC_INTERFACE_PATH, content: deliveredInterfaceText(form) }]];
   }
 
   private environmentWork(): ToolStep[] {
@@ -563,7 +615,17 @@ export class StandIns {
   private async checkWork(checksFor: string | undefined): Promise<ToolStep[]> {
     const { tape, rates, universe } = this.context;
     if (checksFor === undefined) throw new StandInUnanswerable("agent-runner", "a check task names no task it checks");
-    const checked = taskOfTitle(universe, await this.titleOf(checksFor));
+    const checkedTitle = await this.titleOf(checksFor);
+    if (isInterfaceTaskTitle(checkedTitle)) {
+      const path = `checks/${checksFor}/interface.json`;
+      const spec: CheckSpec = { kind: "interface", requires: [], forbids: [], harness: [] };
+      return [
+        ["write_file", { path, content: `${JSON.stringify(spec)}\n` }],
+        ["define_check", { name: "interface", command: `sim check ${path}` }],
+        finished("Defined 1 check(s)."),
+      ];
+    }
+    const checked = taskOfTitle(universe, checkedTitle);
     if (checked === null) throw new StandInUnanswerable("agent-runner", `check task for ${checksFor}: its title carries no simulator marker`);
     const checks: Array<{ readonly name: string; readonly spec: CheckSpec }> = checked.behaviours.map((b) => ({
       name: `has-${b}`,
@@ -630,6 +692,7 @@ export class StandIns {
     if (victim !== undefined && tape.chance("agent.regression", rates.regression, "implementation")) {
       steps.push(["run_command", { command: `sim rm ${behaviourPath(victim)}` }]);
     }
+    if (!conflicted.includes(PUBLIC_INTERFACE_PATH)) steps.push(...this.interfaceUpdate(task.projectId));
     if (tape.chance("agent.manifest", rates.overDelivery / 3, "implementation") && !conflicted.includes(MANIFEST_FILE)) {
       steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
     }

@@ -18,15 +18,42 @@ export const SHARED_INDEX_FILE = "product/INDEX";
  */
 export const PUBLIC_INTERFACE_PATH = "PUBLIC_INTERFACE.md";
 
+/** The two forms of public interface file a scripted scaffold may write (it may also write none). */
+export type InterfaceForm = "short" | "oversized";
+
 /**
  * The public interface file a scripted scaffold writes: a short one, none, or one longer than any
  * report quotes whole. The text carries blank lines and a fence, as a real one may.
  */
-export function publicInterfaceText(form: "short" | "oversized"): string {
+export function publicInterfaceText(form: InterfaceForm): string {
   const usage = "Run: sim <behaviour>\n\nEach behaviour prints its name:\n```\nsim b1\n```\n";
   if (form === "short") return usage;
   return `${usage}${Array.from({ length: 400 }, (_, i) => `- behaviour note ${i + 1}: unchanged by every task\n`).join("")}End of interface.\n`;
 }
+
+/**
+ * The file an implementer leaves once it has updated the scaffold's: the same form, so a delivered
+ * report still quotes a long one cut, and the same text whichever task writes it, so two tasks of
+ * one batch that both update it never conflict.
+ */
+export function deliveredInterfaceText(form: InterfaceForm): string {
+  return `The product does every behaviour below.\n\n${publicInterfaceText(form)}`;
+}
+
+/** Whether `text` is a scripted scaffold's public interface file byte for byte: the placeholder's, not the delivered product's. */
+export function isScaffoldInterface(text: string): boolean {
+  return text === publicInterfaceText("short") || text === publicInterfaceText("oversized");
+}
+
+/**
+ * What an honest planner reads in a repair's evidence when acceptance refused a main whose public
+ * interface file is still the scaffold's: Quality's sweep states it so (verification.ts), and the
+ * planner answers it with a task of its own, since no goal task's checks ask for that file.
+ */
+export const PLACEHOLDER_INTERFACE_EVIDENCE = `${PUBLIC_INTERFACE_PATH} on main is byte-identical to the one the product scaffold wrote`;
+
+/** The marker ref of the task a repair plans to update the public interface file (never a universe task's). */
+export const INTERFACE_TASK_REF = "iface";
 /** git's conflict marker lines, as `sim resolve` removes them: both sides' lines are kept. */
 export const CONFLICT_MARKER_LINE = /^(<{7}|={7}|>{7})( |$)/;
 
@@ -68,7 +95,7 @@ export function drawUniverse(tape: Tape): Universe {
   return { behaviours, outOfVision: "x1", tasks, independent: tape.chance("universe.independent-tasks", INDEPENDENT_PLAN_RATE) };
 }
 
-const TASK_MARKER = /\[sim (t\d+)\]/;
+const TASK_MARKER = /\[sim (t\d+|iface)\]/;
 
 /** The title the scripted planner gives a task; its marker survives into the check task's title. */
 export function taskTitle(task: SimTask): string {
@@ -80,7 +107,19 @@ export function taskOfTitle(universe: Universe, title: string): SimTask | null {
   return universe.tasks.find((task) => task.ref === ref) ?? null;
 }
 
-const CHECK_KINDS = ["correct", "wrong", "contradictory", "vacuous", "flaky", "out_of_vision", "unrunnable", "slow"] as const;
+/** The title a repair's planner gives the task that updates the public interface file. */
+export const INTERFACE_TASK_TITLE = `Update ${PUBLIC_INTERFACE_PATH} to describe the delivered product [sim ${INTERFACE_TASK_REF}]`;
+
+/** Whether `title` is that task's, or a check task's for it. */
+export function isInterfaceTaskTitle(title: string): boolean {
+  return TASK_MARKER.exec(title)?.[1] === INTERFACE_TASK_REF;
+}
+
+/**
+ * `interface`: passes iff the public interface file exists and is not a scripted scaffold's, the
+ * check of the task a repair plans to update it.
+ */
+const CHECK_KINDS = ["correct", "wrong", "contradictory", "vacuous", "flaky", "out_of_vision", "unrunnable", "slow", "interface"] as const;
 
 /**
  * A check as the scripted check author writes it, in a file of the check set. `sim check <file>`

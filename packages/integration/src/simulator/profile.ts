@@ -49,6 +49,8 @@ export interface AdversaryRates {
   readonly reviewMisread: number;
   /** Sprint 0 writes a recipe defect (a cache dir owned by root). */
   readonly recipeDefect: number;
+  /** An implementation leaves the public interface file as the scaffold wrote it. */
+  readonly interfaceLeftStale: number;
   /** The client answers a question by changing its assumption after the first merge. */
   readonly lateChange: number;
   /** The client stops the project at a random step. */
@@ -94,36 +96,36 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
   benign: {
     overDelivery: 0, underDelivery: 0, regression: 0, wrongCheck: 0, contradictoryCheck: 0, vacuousCheck: 0,
     allGuardSet: 0, outOfVisionCheck: 0, flakyCheck: 0, unrunnableCheck: 0, authorWritesProduct: 0, refusal: 0,
-    timeout: 0, invalidOutput: 0, disputeRight: 0, disputeWrong: 0, reviewCatch: 1, reviewMisread: 0,recipeDefect: 0, lateChange: 0,
+    timeout: 0, invalidOutput: 0, disputeRight: 0, disputeWrong: 0, reviewCatch: 1, reviewMisread: 0, recipeDefect: 0, interfaceLeftStale: 0, lateChange: 0,
     clientStop: 0, lowBudget: 0, ...COOPERATIVE_RESPONSES,
   },
   typical: {
     overDelivery: 0.3, underDelivery: 0.15, regression: 0.05, wrongCheck: 0.05, contradictoryCheck: 0.05, vacuousCheck: 0.05,
     allGuardSet: 0.02, outOfVisionCheck: 0.1, flakyCheck: 0.03, unrunnableCheck: 0.05, authorWritesProduct: 0.4, refusal: 0.02,
-    timeout: 0.05, invalidOutput: 0.1, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, reviewMisread: 0.05,recipeDefect: 0.05,
-    lateChange: 0.1, clientStop: 0.02, lowBudget: 0.05, ...COOPERATIVE_RESPONSES,
+    timeout: 0.05, invalidOutput: 0.1, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, reviewMisread: 0.05, recipeDefect: 0.05,
+    interfaceLeftStale: 0.3, lateChange: 0.1, clientStop: 0.02, lowBudget: 0.05, ...COOPERATIVE_RESPONSES,
   },
   hostile: {
     overDelivery: 0.6, underDelivery: 0.35, regression: 0.15, wrongCheck: 0.2, contradictoryCheck: 0.15, vacuousCheck: 0.15,
     allGuardSet: 0.1, outOfVisionCheck: 0.2, flakyCheck: 0.1, unrunnableCheck: 0.1, authorWritesProduct: 0.4, refusal: 0.05,
-    timeout: 0.1, invalidOutput: 0.2, disputeRight: 0.9, disputeWrong: 0.2, reviewCatch: 0.7, reviewMisread: 0.1,recipeDefect: 0.15,
-    lateChange: 0.2, clientStop: 0.05, lowBudget: 0.1,
+    timeout: 0.1, invalidOutput: 0.2, disputeRight: 0.9, disputeWrong: 0.2, reviewCatch: 0.7, reviewMisread: 0.1, recipeDefect: 0.15,
+    interfaceLeftStale: 0.5, lateChange: 0.2, clientStop: 0.05, lowBudget: 0.1,
     sharedFileEdit: 0.15, conflictMarkersLeft: 0.2, truncatedTurn: 0.02, emptyTurn: 0.02, reasoningExhausted: 0.02, turnCapMidEdit: 0.05,
     truncatedStructured: 0.02, emptyStructured: 0.02,
   },
   chaos: {
     overDelivery: 0.8, underDelivery: 0.5, regression: 0.3, wrongCheck: 0.3, contradictoryCheck: 0.3, vacuousCheck: 0.3,
     allGuardSet: 0.2, outOfVisionCheck: 0.3, flakyCheck: 0.2, unrunnableCheck: 0.2, authorWritesProduct: 0.6, refusal: 0.1,
-    timeout: 0.2, invalidOutput: 0.3, disputeRight: 0.9, disputeWrong: 0.4, reviewCatch: 0.5, reviewMisread: 0.2,recipeDefect: 0.3,
-    lateChange: 0.3, clientStop: 0.1, lowBudget: 0.2,
+    timeout: 0.2, invalidOutput: 0.3, disputeRight: 0.9, disputeWrong: 0.4, reviewCatch: 0.5, reviewMisread: 0.2, recipeDefect: 0.3,
+    interfaceLeftStale: 0.6, lateChange: 0.3, clientStop: 0.1, lowBudget: 0.2,
     sharedFileEdit: 0.3, conflictMarkersLeft: 0.3, truncatedTurn: 0.04, emptyTurn: 0.04, reasoningExhausted: 0.04, turnCapMidEdit: 0.1,
     truncatedStructured: 0.04, emptyStructured: 0.04,
   },
   adversarial: {
     overDelivery: 0.3, underDelivery: 0.15, regression: 0.05, wrongCheck: 0.1, contradictoryCheck: 0.1, vacuousCheck: 0.05,
     allGuardSet: 0.02, outOfVisionCheck: 0.1, flakyCheck: 0.03, unrunnableCheck: 0.05, authorWritesProduct: 0.4, refusal: 0.02,
-    timeout: 0.02, invalidOutput: 0.05, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, reviewMisread: 0.3,recipeDefect: 0.05,
-    lateChange: 0.1, clientStop: 0.02, lowBudget: 0,
+    timeout: 0.02, invalidOutput: 0.05, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, reviewMisread: 0.3, recipeDefect: 0.05,
+    interfaceLeftStale: 0.3, lateChange: 0.1, clientStop: 0.02, lowBudget: 0,
     // A stalled attempt spends its whole turn cap; each unpriced stand-in call counts at its worst-case estimate.
     sharedFileEdit: 0.7, conflictMarkersLeft: 0.3, truncatedTurn: 0.06, emptyTurn: 0.06, reasoningExhausted: 0.05, turnCapMidEdit: 0.08,
     truncatedStructured: 0.05, emptyStructured: 0.05,
