@@ -1,15 +1,14 @@
 /**
  * Executable-claims gate.
  *
- * Finds every ```verify block in the scan scope set by docs/README.md section 9 —
- * CLAUDE.md, .claude/commands/*.md, docs/*.md, docs/design/*.md,
- * docs/decisions/*.md and docs/rules/*.md — runs each command from the repo root, and compares
- * trimmed stdout against the recorded expected output. A mismatch, a non-zero exit, an unreadable
- * document, or an unparseable block is a failure. Zero documents found is a failure.
+ * Finds every ```verify block in the scan scope of docs/README.md section 9 (SCAN_SOURCES), runs
+ * each command from the repo root, and compares trimmed stdout against the recorded expected
+ * output. A mismatch, a non-zero exit, an unreadable document, or an unparseable block is a
+ * failure. Zero documents found is a failure.
  *
- * Also enforces docs/README.md section 7 on docs/investigations/: every entry there is
- * cited by name from a live record (else an archive candidate) and has its INDEX.md row.
- * Exit non-zero on any failure.
+ * Also enforces docs/README.md sections 4 and 7 on docs/investigations/ (checkRetention), and
+ * requires the README to still hold, verbatim, every sentence that defines what this gate checks
+ * (README_CLAUSES), so the README and the gate cannot drift apart. Exit non-zero on any failure.
  *
  * The repo root is the working directory.
  *
@@ -22,6 +21,7 @@
 
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
@@ -289,8 +289,71 @@ export function checkBlocks(blocks: readonly VerifyBlock[], cwd: string): CheckR
 }
 
 // ---------------------------------------------------------------------------
+// The README rules this gate implements
+// ---------------------------------------------------------------------------
+
+/**
+ * Every docs/README.md sentence that defines what this gate checks, verbatim (whitespace
+ * normalized). The gate fails when docs/README.md no longer holds one of them, so neither the
+ * README nor the code below can change the rule alone. Each source table below names the README
+ * token it implements; check-docs.test.ts requires the tables and these clauses to agree.
+ */
+const README_PATH = path.join("docs", "README.md");
+
+const SCAN_SCOPE_CLAUSE =
+  "It scans `CLAUDE.md`, `.claude/commands/*.md`, `docs/*.md`, `docs/design/*.md`, `docs/decisions/*.md` " +
+  "and `docs/rules/*.md`, checks §7 retention, and fails closed on no documents.";
+
+const LIVE_RECORD_CLAUSE =
+  "A **live record** is: `state.toml`, `backlog.toml`, `context.md`, `roadmap.md`, anything in `design/` " +
+  "or `rules/`, an ADR body, `CLAUDE.md`, `.claude/commands/`, `.claude/workflows/`, or the auto-memory " +
+  "(not `.claude/worktrees/`).";
+
+const CITATION_CLAUSE =
+  "Only a **direct** citation by its `investigations/` path from a live record keeps a file in place; one " +
+  "from an index, `state-archive.toml`, `archive/` or other evidence keeps nothing (ADR-073 d15).";
+
+const SUBDIRECTORY_CLAUSE =
+  "A subdirectory of `investigations/` has one `INDEX.md` row, pointing at its entry point (`index.md` or " +
+  "the file named), which ends with the same table for its other files.";
+
+/** @testseam check-docs.test.ts requires each clause's backticked tokens to match the tables below */
+export const README_CLAUSES = {
+  scanScope: SCAN_SCOPE_CLAUSE,
+  liveRecord: LIVE_RECORD_CLAUSE,
+  citation: CITATION_CLAUSE,
+  subdirectory: SUBDIRECTORY_CLAUSE,
+} as const;
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+// ---------------------------------------------------------------------------
 // Document discovery
 // ---------------------------------------------------------------------------
+
+interface ScanSource {
+  /** The token SCAN_SCOPE_CLAUSE names this source by */
+  readonly readmeName: string;
+  /** Repo-relative file, or directory whose top-level *.md files are scanned */
+  readonly rel: string;
+  readonly kind: "file" | "markdown-dir";
+}
+
+/**
+ * The verify-block scan scope of SCAN_SCOPE_CLAUSE. investigations/ and archive/ are dated
+ * observations that never hold verify blocks, so they are not in it.
+ * @testseam check-docs.test.ts requires these to be exactly the clause's tokens
+ */
+export const SCAN_SOURCES: readonly ScanSource[] = [
+  { readmeName: "`CLAUDE.md`", rel: "CLAUDE.md", kind: "file" },
+  { readmeName: "`.claude/commands/*.md`", rel: path.join(".claude", "commands"), kind: "markdown-dir" },
+  { readmeName: "`docs/*.md`", rel: "docs", kind: "markdown-dir" },
+  { readmeName: "`docs/design/*.md`", rel: path.join("docs", "design"), kind: "markdown-dir" },
+  { readmeName: "`docs/decisions/*.md`", rel: path.join("docs", "decisions"), kind: "markdown-dir" },
+  { readmeName: "`docs/rules/*.md`", rel: path.join("docs", "rules"), kind: "markdown-dir" },
+];
 
 function markdownFilesIn(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -306,71 +369,94 @@ function markdownFilesIn(dir: string): string[] {
 }
 
 /**
- * The verify-block scan scope of docs/README.md section 9, plus docs/rules/*.md, which
- * holds rules split out of CLAUDE.md together with their verify blocks.
- * investigations/ and archive/ are dated observations that never hold verify blocks,
- * so they are deliberately excluded.
+ * Every document in SCAN_SOURCES that exists under `root`.
  * @testseam check-docs.test.ts exercises the scan scope on a fixture tree
  */
 export function discoverDocuments(root: string): string[] {
   const docs: string[] = [];
-
-  const claudeMd = path.join(root, "CLAUDE.md");
-  if (fs.existsSync(claudeMd)) docs.push(claudeMd);
-
-  for (const dir of [
-    path.join(root, ".claude", "commands"),
-    path.join(root, "docs"),
-    path.join(root, "docs", "design"),
-    path.join(root, "docs", "decisions"),
-    path.join(root, "docs", "rules"),
-  ]) {
-    docs.push(...markdownFilesIn(dir));
+  for (const source of SCAN_SOURCES) {
+    const full = path.join(root, source.rel);
+    if (source.kind === "file") {
+      if (fs.existsSync(full)) docs.push(full);
+    } else {
+      docs.push(...markdownFilesIn(full));
+    }
   }
-
   return docs;
 }
 
 // ---------------------------------------------------------------------------
-// Retention (docs/README.md section 7)
+// Retention (docs/README.md sections 4 and 7)
 // ---------------------------------------------------------------------------
 
 interface RetentionFailure {
-  /** Repo-relative path of the offending entry or of the missing input */
+  /** Repo-relative path of the offending entry, row or record, or the absolute path of a missing auto-memory */
   readonly path: string;
-  readonly kind: "archive-candidate" | "unindexed" | "missing-input";
+  readonly kind:
+    | "archive-candidate"
+    | "unindexed"
+    | "stale-row"
+    | "no-entry-point"
+    | "missing-input"
+    | "readme-drift";
   readonly rule: string;
 }
 
 const INVESTIGATIONS_DIR = path.join("docs", "investigations");
 const INVESTIGATIONS_INDEX = path.join(INVESTIGATIONS_DIR, "INDEX.md");
+const DEFAULT_ENTRY_POINT = "index.md";
 
-/** Live records that must exist: without one, every citation it holds would read as missing. */
-const REQUIRED_LIVE_FILES = [
-  "CLAUDE.md",
-  path.join("docs", "state.toml"),
-  path.join("docs", "backlog.toml"),
-  path.join("docs", "context.md"),
-  path.join("docs", "roadmap.md"),
+/**
+ * Where LIVE_RECORD_CLAUSE's live records are read from. A `file` must exist: without it, every
+ * citation it holds would read as missing. A `tree` is read recursively when present. `adr` is
+ * every ADR body in docs/decisions/; `memory` is the auto-memory's *.md files, which must exist.
+ */
+type LiveRecordSource =
+  | { readonly readmeName: string; readonly kind: "file" | "tree"; readonly rel: string }
+  | { readonly readmeName: string; readonly kind: "adr" | "memory" };
+
+/** @testseam check-docs.test.ts requires these, with the exclusions, to be exactly the clause's tokens */
+export const LIVE_RECORD_SOURCES: readonly LiveRecordSource[] = [
+  { readmeName: "`state.toml`", kind: "file", rel: path.join("docs", "state.toml") },
+  { readmeName: "`backlog.toml`", kind: "file", rel: path.join("docs", "backlog.toml") },
+  { readmeName: "`context.md`", kind: "file", rel: path.join("docs", "context.md") },
+  { readmeName: "`roadmap.md`", kind: "file", rel: path.join("docs", "roadmap.md") },
+  { readmeName: "`design/`", kind: "tree", rel: path.join("docs", "design") },
+  { readmeName: "`rules/`", kind: "tree", rel: path.join("docs", "rules") },
+  { readmeName: "an ADR body", kind: "adr" },
+  { readmeName: "`CLAUDE.md`", kind: "file", rel: "CLAUDE.md" },
+  { readmeName: "`.claude/commands/`", kind: "tree", rel: path.join(".claude", "commands") },
+  { readmeName: "`.claude/workflows/`", kind: "tree", rel: path.join(".claude", "workflows") },
+  { readmeName: "the auto-memory", kind: "memory" },
 ];
 
-/** Live-record directories, every file in them read recursively. */
-const LIVE_TREES = [
-  path.join("docs", "design"),
-  path.join("docs", "rules"),
-  path.join(".claude", "commands"),
-  path.join(".claude", "workflows"),
-];
+/**
+ * Tokens LIVE_RECORD_CLAUSE names as not live. `.claude/worktrees/` lies outside every tree in
+ * LIVE_RECORD_SOURCES, so excluding it needs no code.
+ * @testseam check-docs.test.ts requires the clause's tokens to be the sources' plus these
+ */
+export const LIVE_RECORD_EXCLUSIONS: readonly string[] = ["`.claude/worktrees/`"];
 
-function filesUnder(dir: string): string[] {
-  let entries: fs.Dirent[];
+/**
+ * The auto-memory directory Claude Code keeps for a checkout: `<config>/projects/<root with every
+ * non-alphanumeric character replaced by "-">/memory`, where `<config>` is CLAUDE_CONFIG_DIR or ~/.claude.
+ */
+function autoMemoryDir(root: string): string {
+  const configDir = process.env["CLAUDE_CONFIG_DIR"] ?? path.join(os.homedir(), ".claude");
+  return path.join(configDir, "projects", root.replace(/[^A-Za-z0-9]/g, "-"), "memory");
+}
+
+function readEntries(dir: string): fs.Dirent[] {
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    return fs.readdirSync(dir, { withFileTypes: true });
   } catch (err: unknown) {
     throw new DocumentReadError(dir, err);
   }
+}
+
+function filesUnder(dir: string): string[] {
   const files: string[] = [];
-  for (const entry of entries) {
+  for (const entry of readEntries(dir)) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) files.push(...filesUnder(full));
     else if (entry.isFile()) files.push(full);
@@ -391,40 +477,129 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * A citation by name is the entry's name as a whole token. A path prefix such as
- * `docs/investigations/` is allowed and a subdirectory may be cited by a path into it;
- * an `archive/` prefix is not, since that names the archived copy, not the evidence here.
+ * CITATION_CLAUSE: a citation names the entry by its investigations path, `investigations/<name>`
+ * as a whole token, alone or at the end of a longer path such as `docs/investigations/<name>`. A
+ * subdirectory may be cited by a path into it. A bare name does not count, since a same-named file
+ * elsewhere would satisfy it; nor does an `archive/` path, which names the archived copy.
  */
-function citesByName(text: string, name: string): boolean {
+function citesByPath(text: string, name: string): boolean {
   const pattern = new RegExp(
-    `(?<![A-Za-z0-9_.-])(?<!archive/)${escapeRegExp(name)}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`,
+    `(?<!archive/)investigations/${escapeRegExp(name)}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`,
   );
   return pattern.test(text);
 }
 
-/** The first cell of every Markdown table row, without backticks, link syntax or a trailing slash. */
-function indexedNames(indexText: string): Set<string> {
-  const names = new Set<string>();
+const FILE_TABLE_HEADER = /^\|\s*File\s*\|\s*Date\s*\|/;
+const SEPARATOR_ROW = /^\|[\s:|-]*$/;
+
+interface IndexRow {
+  /** The first cell, without backticks, link syntax or a trailing slash */
+  readonly name: string;
+  readonly line: string;
+}
+
+/** Every row of the file table (the one headed `| File | Date |`). Separator rows are not rows. */
+function indexRows(indexText: string): IndexRow[] {
+  const rows: IndexRow[] = [];
+  let inTable = false;
   for (const line of indexText.split("\n")) {
+    if (FILE_TABLE_HEADER.test(line)) {
+      inTable = true;
+      continue;
+    }
+    if (!inTable) continue;
+    if (!line.startsWith("|")) {
+      inTable = false;
+      continue;
+    }
+    if (SEPARATOR_ROW.test(line)) continue;
     const row = /^\|([^|]*)\|/.exec(line);
     if (!row) continue;
     const link = /^\s*\[([^\]]*)\]\([^)]*\)\s*$/.exec(row[1]);
-    const cell = (link ? link[1] : row[1]).replace(/`/g, "").trim().replace(/\/$/, "");
-    if (cell !== "") names.add(cell);
+    const name = (link ? link[1] : row[1]).replace(/`/g, "").trim().replace(/\/$/, "");
+    if (name !== "") rows.push({ name, line });
   }
-  return names;
+  return rows;
+}
+
+/** SUBDIRECTORY_CLAUSE: the entry point is the file the row names as "entry point `<file>`", else index.md. */
+function entryPointName(row: IndexRow | undefined): string {
+  const named = row ? /entry point `([^`]+)`/.exec(row.line) : null;
+  return named ? named[1] : DEFAULT_ENTRY_POINT;
 }
 
 /**
- * docs/README.md section 7: every file or subdirectory directly under docs/investigations/
- * (INDEX.md aside) is cited by name from a live record, else it is an archive candidate;
- * and section 4: each has its own INDEX.md row (a subdirectory: one row). A missing
- * investigations directory, index or required live record is a failure, never an empty result.
+ * SUBDIRECTORY_CLAUSE: the entry point exists and holds the file table, every row of that table
+ * names a file that exists, and every other file in the subdirectory has a row.
+ */
+function checkSubdirectory(root: string, relDir: string, row: IndexRow | undefined): RetentionFailure[] {
+  const dir = path.join(root, relDir);
+  const entryName = entryPointName(row);
+  const entryPoint = path.join(dir, entryName);
+  const relEntryPoint = path.join(relDir, entryName);
+  const entryText = fs.existsSync(entryPoint) ? readText(entryPoint) : null;
+  if (entryText === null || !entryText.split("\n").some((line) => FILE_TABLE_HEADER.test(line))) {
+    return [
+      {
+        path: relEntryPoint,
+        kind: "no-entry-point",
+        rule:
+          "README section 4: the entry point (the file the INDEX.md row names, else index.md) " +
+          (entryText === null ? "does not exist" : "holds no `| File | Date |` table"),
+      },
+    ];
+  }
+
+  const present = readEntries(dir).map((entry) => entry.name);
+  const listed = new Set(indexRows(entryText).map((r) => r.name));
+  const failures: RetentionFailure[] = [];
+  for (const name of [...listed].sort()) {
+    if (present.includes(name)) continue;
+    failures.push({
+      path: path.join(relDir, name),
+      kind: "stale-row",
+      rule: `README section 4: ${relEntryPoint} has a row for a file that does not exist`,
+    });
+  }
+  for (const name of [...present].sort()) {
+    if (name === entryName || listed.has(name)) continue;
+    failures.push({
+      path: path.join(relDir, name),
+      kind: "unindexed",
+      rule: `README section 4: this file has no row in its entry point ${relEntryPoint}`,
+    });
+  }
+  return failures;
+}
+
+/** README sentences this gate implements that docs/README.md no longer holds verbatim. */
+function readmeDrift(readmeText: string): RetentionFailure[] {
+  const normalized = normalizeWhitespace(readmeText);
+  return Object.values(README_CLAUSES)
+    .filter((clause) => !normalized.includes(normalizeWhitespace(clause)))
+    .map((clause) => ({
+      path: README_PATH,
+      kind: "readme-drift",
+      rule:
+        `scripts/check-docs.ts implements this sentence and ${README_PATH} no longer holds it; ` +
+        `change the rule in both together: ${clause}`,
+    }));
+}
+
+/**
+ * docs/README.md sections 4 and 7. The README must still hold every clause in README_CLAUSES.
+ * Every file or subdirectory directly under docs/investigations/ (INDEX.md aside) is cited by its
+ * investigations path from a live record (LIVE_RECORD_SOURCES; the auto-memory is read from the
+ * *.md files of `memoryDir`), else it is an archive candidate. Each entry has its own INDEX.md
+ * row, every INDEX.md row names an entry that exists, and each subdirectory passes
+ * checkSubdirectory. A missing README, investigations directory, index, required live record or
+ * auto-memory is a failure, never an empty result; an unreadable one throws.
  * @testseam check-docs.test.ts exercises retention on a fixture tree
  */
-export function checkRetention(root: string): RetentionFailure[] {
+export function checkRetention(root: string, memoryDir: string): RetentionFailure[] {
   const missing: RetentionFailure[] = [];
-  for (const required of [INVESTIGATIONS_DIR, INVESTIGATIONS_INDEX, ...REQUIRED_LIVE_FILES]) {
+  const requiredFiles = LIVE_RECORD_SOURCES.flatMap((source) => (source.kind === "file" ? [source.rel] : []));
+  for (const required of [README_PATH, INVESTIGATIONS_DIR, INVESTIGATIONS_INDEX, ...requiredFiles]) {
     if (!fs.existsSync(path.join(root, required))) {
       missing.push({
         path: required,
@@ -433,51 +608,82 @@ export function checkRetention(root: string): RetentionFailure[] {
       });
     }
   }
+  if (!fs.existsSync(memoryDir)) {
+    missing.push({
+      path: memoryDir,
+      kind: "missing-input",
+      rule: "README section 7: the auto-memory is a live record and its directory is absent",
+    });
+  }
   if (missing.length > 0) return missing;
 
-  const liveFiles = REQUIRED_LIVE_FILES.map((rel) => path.join(root, rel));
-  liveFiles.push(
-    ...markdownFilesIn(path.join(root, "docs", "decisions")).filter((f) =>
-      path.basename(f).startsWith("ADR-"),
-    ),
-  );
-  for (const tree of LIVE_TREES) {
-    const dir = path.join(root, tree);
-    if (fs.existsSync(dir)) liveFiles.push(...filesUnder(dir));
+  const memoryFiles = readEntries(memoryDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => path.join(memoryDir, entry.name));
+  if (memoryFiles.length === 0) {
+    return [
+      {
+        path: memoryDir,
+        kind: "missing-input",
+        rule: "README section 7: the auto-memory is a live record and its directory holds no *.md file",
+      },
+    ];
   }
+
+  const liveFiles = LIVE_RECORD_SOURCES.flatMap((source): string[] => {
+    switch (source.kind) {
+      case "file":
+        return [path.join(root, source.rel)];
+      case "tree": {
+        const dir = path.join(root, source.rel);
+        return fs.existsSync(dir) ? filesUnder(dir) : [];
+      }
+      case "adr":
+        return markdownFilesIn(path.join(root, "docs", "decisions")).filter((f) =>
+          path.basename(f).startsWith("ADR-"),
+        );
+      case "memory":
+        return memoryFiles;
+    }
+  });
   const liveTexts = liveFiles.map(readText);
-  const indexed = indexedNames(readText(path.join(root, INVESTIGATIONS_INDEX)));
+  const rows = indexRows(readText(path.join(root, INVESTIGATIONS_INDEX)));
+  const entries = readEntries(path.join(root, INVESTIGATIONS_DIR));
 
-  const investigationsDir = path.join(root, INVESTIGATIONS_DIR);
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(investigationsDir, { withFileTypes: true });
-  } catch (err: unknown) {
-    throw new DocumentReadError(investigationsDir, err);
-  }
-
-  const failures: RetentionFailure[] = [];
+  const failures = readmeDrift(readText(path.join(root, README_PATH)));
   const indexName = path.basename(INVESTIGATIONS_INDEX);
   for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name === indexName) continue;
     const isDir = entry.isDirectory();
     const rel = path.join(INVESTIGATIONS_DIR, entry.name) + (isDir ? "/" : "");
     const unit = isDir ? "subdirectory" : "file";
+    const row = rows.find((r) => r.name === entry.name);
 
-    if (!liveTexts.some((text) => citesByName(text, entry.name))) {
+    if (!liveTexts.some((text) => citesByPath(text, entry.name))) {
       failures.push({
         path: rel,
         kind: "archive-candidate",
-        rule: `README section 7: no live record cites this ${unit} by name`,
+        rule: `README section 7: no live record cites this ${unit} by its investigations/ path`,
       });
     }
-    if (!indexed.has(entry.name)) {
+    if (row === undefined) {
       failures.push({
         path: rel,
         kind: "unindexed",
         rule: `README section 4: this ${unit} has no row of its own in ${INVESTIGATIONS_INDEX}`,
       });
     }
+    if (isDir) failures.push(...checkSubdirectory(root, path.join(INVESTIGATIONS_DIR, entry.name), row));
+  }
+
+  const present = new Set(entries.map((entry) => entry.name));
+  for (const { name } of rows) {
+    if (present.has(name)) continue;
+    failures.push({
+      path: path.join(INVESTIGATIONS_DIR, name),
+      kind: "stale-row",
+      rule: `README section 4: ${INVESTIGATIONS_INDEX} has a row for an entry that does not exist`,
+    });
   }
   return failures;
 }
@@ -514,7 +720,7 @@ function main(): void {
   let retentionFailures: RetentionFailure[];
   try {
     documents = discoverDocuments(root);
-    retentionFailures = checkRetention(root);
+    retentionFailures = checkRetention(root, autoMemoryDir(root));
   } catch (err: unknown) {
     console.error(`\nERROR: ${describeErrorChain(err)}\n`);
     process.exit(1);
