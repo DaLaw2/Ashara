@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import {
   ClientAnswers,
@@ -354,6 +355,53 @@ describe("acceptance on main", () => {
     const posted = await deliveredReports().runPending();
     expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, broken.projectId].sort());
     expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
+  });
+
+  test("only an unreachable database is retried uncounted: an error nothing names counts toward the notice sent in the report's place", async () => {
+    const { projectId, goals, scaffold } = await deliveredProject();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+    const unreachable = createDb(Object.assign(new URL(DATABASE_URL), { port: "1" }).toString());
+    try {
+      const listedThenFailing = (failing: Database): Database => {
+        let listed = false;
+        return new Proxy(db, {
+          get(target, prop) {
+            const source = listed ? failing : target;
+            if (prop === "select") listed = true;
+            const value: unknown = Reflect.get(source, prop);
+            return typeof value === "function" ? value.bind(source) : value;
+          },
+        });
+      };
+      const unnamed = new Proxy(db, {
+        get(target, prop) {
+          if (prop === "select" || prop === "execute") return () => { throw new TypeError("cannot read properties of undefined (reading 'rows')"); };
+          const value: unknown = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const ours = async (handle: Database) => (await createDeliveredReportStore(handle).dueReports()).find((due) => due.projectId === projectId);
+      const recordFailures = async () =>
+        z.array(z.object({ n: z.number() })).parse((await db.execute(sql`SELECT report_record_failures AS n FROM acceptance_sweeps WHERE project_id = ${projectId} AND passed`)).rows)[0]?.n;
+
+      expect(await ours(listedThenFailing(unreachable))).toMatchObject({ kind: "unread", cause: "connection" });
+      expect(await ours(listedThenFailing(unnamed))).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "TypeError" }) });
+
+      const reports = (handle: Database) => {
+        const store = createDeliveredReportStore(handle);
+        return new DeliveredReports(
+          { ...store, recordReportFailure: createDeliveredReportStore(db).recordReportFailure, dueReports: async () => (await store.dueReports()).filter((due) => due.projectId === projectId) },
+          { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) },
+        );
+      };
+      expect(await reports(listedThenFailing(unreachable)).runPending()).toEqual([expect.objectContaining({ kind: "failed", projectId })]);
+      expect(await recordFailures()).toBe(0);
+      await endBackoff(projectId);
+      expect(await reports(listedThenFailing(unnamed)).runPending()).toEqual([expect.objectContaining({ kind: "failed", projectId })]);
+      expect(await recordFailures()).toBe(1);
+    } finally {
+      await unreachable.$client.end();
+    }
   });
 
   // ADR-074 d95 a: a confirming answer read after the plan was made asks for no replan, so the

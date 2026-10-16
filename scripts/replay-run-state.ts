@@ -43,7 +43,7 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
-import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations, stepFaultLedger } from "@ashara/db";
+import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
 import { BlockReports, DeliveredReports } from "@ashara/engagement";
 import {
   composedAgain,
@@ -60,7 +60,7 @@ import type { StoredTextViolation } from "@ashara/integration";
 import { PUBLIC_INTERFACE_FILE } from "@ashara/quality";
 import { createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, uncontainedSteps } from "@ashara/shared";
 
 const USAGE = 'Usage: npx tsx scripts/replay-run-state.ts --dump FILE --psql "COMMAND" [--keep]';
 const RESTORE_TIMEOUT_MS = 5 * 60_000;
@@ -175,8 +175,9 @@ async function main(): Promise<void> {
         file: PUBLIC_INTERFACE_FILE,
         at: async () => ({ kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" }),
       }).runPending();
-      // A replay contains nothing: any report that fails throws, so the replay stops on it.
-      await new BlockReports(createBlockReportStore(db), { ...stepFaultLedger(db), escapes: () => true }).runPending();
+      // A replay contains nothing and skips nothing: any report that fails throws, so the replay stops on it, and a
+      // backoff kept in the restored step_faults does not hide a report.
+      await new BlockReports(createBlockReportStore(db), uncontainedSteps()).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(
         `today's composers: every recorded brief's facts, and ${recomposed.length} of ${setAside.records.length} kept delivered and halt ` +

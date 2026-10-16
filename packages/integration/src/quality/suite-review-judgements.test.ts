@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
 import type { ContextualLlm } from "@ashara/finance";
-import { SuiteReviewJudgementRepository, SuiteReviewer, reviewJudgementsOf } from "@ashara/quality";
+import { SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
@@ -80,9 +80,10 @@ describe("suite review judgements (migration 063)", () => {
     const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: ["Monthly totals", "Malformed rows are refused"] } }, "/unused");
 
     expect(outcome).toMatchObject({ kind: "problems", released: [{ checkTaskId: checkB, check: "stdout-empty" }] });
-    const recorded = await reviewJudgementsOf(db, reviewTask);
+    const recorded = (await suiteReviewJudgementsOf(db, projectId)).filter((judgement) => judgement.reviewTaskId === reviewTask);
     expect(recorded).toEqual([
       {
+        reviewTaskId: reviewTask,
         checkTaskId: checkA,
         checkName: "prints-count",
         outcome: "routed",
@@ -93,6 +94,7 @@ describe("suite review judgements (migration 063)", () => {
         secondReview: "other-model",
       },
       {
+        reviewTaskId: reviewTask,
         checkTaskId: checkB,
         checkName: "stdout-empty",
         outcome: "released",
@@ -113,7 +115,7 @@ describe("suite review judgements (migration 063)", () => {
     await db.execute(sql`
       INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, first_finding, second_findings, first_model, second_model, second_review)
       VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 're-sample')`);
-    await expect(reviewJudgementsOf(db, reviewTask)).rejects.toMatchObject({ name: "SuiteReviewJudgementCorrupt" });
+    await expect(suiteReviewJudgementsOf(db, projectId)).rejects.toMatchObject({ name: "SuiteReviewJudgementCorrupt" });
   });
 
   test("a re-sample must name the same model twice, and another model two different ones", async () => {

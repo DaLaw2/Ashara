@@ -107,8 +107,8 @@ function reports(handle: Handle): PlanReports {
   return new PlanReports(ours, memoryStepContainment(() => true));
 }
 
-function gate(handle: Handle) {
-  return PlanningService.gate(adaptWorkItemRepo(new WorkItemRowRepository(handle)), ourActiveProjects(handle), { publish: async () => {} });
+async function gate(handle: Handle) {
+  return (await PlanningService.gate(adaptWorkItemRepo(new WorkItemRowRepository(handle)), ourActiveProjects(handle), { publish: async () => {} }, memoryStepContainment(() => true))).available;
 }
 
 /** Rolls the probe transaction back once its assertions have run. */

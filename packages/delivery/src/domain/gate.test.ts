@@ -1,10 +1,11 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type { DomainEvent, ProjectId, WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import { GateKeeper } from "./gate.js";
+import type { EventPublisher } from "../lifecycle/ports.js";
 
 const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000002", "test");
 const OTHER_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000003", "test");
@@ -45,6 +46,11 @@ function activeProjects(...ids: ProjectId[]): ActiveProjects {
 
 const projects = activeProjects(PROJECT_ID);
 
+/** The tasks the gate admits, each project contained by a ledger in memory that lets nothing escape. */
+async function admitted(repo: WorkItemRepository, active: ActiveProjects, events: EventPublisher): Promise<WorkItem[]> {
+  return (await GateKeeper.filterAvailable(repo, active, events, memoryStepContainment(() => false))).available;
+}
+
 function publisher() {
   const published: DomainEvent[] = [];
   return { events: { publish: async (event: DomainEvent) => void published.push(event) }, published };
@@ -77,7 +83,7 @@ describe("GateKeeper.filterAvailable", () => {
     const { repo, store, saves } = repoOf([check, impl], [{ fromId: impl.id, toId: check.id }]);
     const { events, published } = publisher();
 
-    expect(await GateKeeper.filterAvailable(repo, projects, events)).toEqual([]);
+    expect(await admitted(repo, projects, events)).toEqual([]);
 
     expect(saves).toEqual([{ id: impl.id, prev: "Pending", status: "Abandoned" }]);
     const parked = store.get(impl.id);
@@ -101,7 +107,7 @@ describe("GateKeeper.filterAvailable", () => {
     );
     const { events } = publisher();
 
-    const eligible = await GateKeeper.filterAvailable(repo, projects, events);
+    const eligible = await admitted(repo, projects, events);
 
     expect(eligible.map((i) => i.id)).toEqual([other.id]);
     expect(saves).toEqual([{ id: own.id, prev: "Pending", status: "Abandoned" }]);
@@ -128,15 +134,15 @@ describe("GateKeeper.filterAvailable", () => {
     const { events } = publisher();
 
     // A check task still to run: only it is dispatched.
-    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id)).toEqual([checkB.id]);
+    expect((await admitted(repo, projects, events)).map((i) => i.id)).toEqual([checkB.id]);
 
     // Every check task done: only the review is dispatched, not one implementation.
     store.set(checkB.id, { ...checkB, status: "Completed" });
-    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id)).toEqual([review.id]);
+    expect((await admitted(repo, projects, events)).map((i) => i.id)).toEqual([review.id]);
 
     // The review completed: the implementations are released.
     store.set(review.id, { ...review, status: "Completed" });
-    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id).sort()).toEqual([own.id, other.id].sort());
+    expect((await admitted(repo, projects, events)).map((i) => i.id).sort()).toEqual([own.id, other.id].sort());
   });
 
   test("an Abandoned check task does not hold the review, which reads the other suites; its own task is given up", async () => {
@@ -155,7 +161,7 @@ describe("GateKeeper.filterAvailable", () => {
     );
     const { events } = publisher();
 
-    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id)).toEqual([review.id]);
+    expect((await admitted(repo, projects, events)).map((i) => i.id)).toEqual([review.id]);
   });
 
   test("a Pending task waiting on a check task still in flight waits, unsaved", async () => {
@@ -164,7 +170,7 @@ describe("GateKeeper.filterAvailable", () => {
     const { repo, saves } = repoOf([check, impl], [{ fromId: impl.id, toId: check.id }]);
     const { events, published } = publisher();
 
-    const eligible = await GateKeeper.filterAvailable(repo, projects, events);
+    const eligible = await admitted(repo, projects, events);
 
     expect(eligible.map((i) => i.id)).toEqual([check.id]);
     expect(saves).toEqual([]);
@@ -188,7 +194,7 @@ describe("GateKeeper.filterAvailable", () => {
     );
     const { events, published } = publisher();
 
-    const eligible = await GateKeeper.filterAvailable(repo, activeProjects(PROJECT_ID, OTHER_PROJECT_ID), events);
+    const eligible = await admitted(repo, activeProjects(PROJECT_ID, OTHER_PROJECT_ID), events);
 
     expect(eligible.map((i) => i.id)).toEqual([free.id]);
     for (const parked of [a, b, waiting]) {
@@ -208,7 +214,7 @@ describe("GateKeeper.filterAvailable", () => {
       { fromId: done.id, toId: next.id },
     ]);
 
-    const eligible = await GateKeeper.filterAvailable(repo, projects, publisher().events);
+    const eligible = await admitted(repo, projects, publisher().events);
 
     expect(eligible.map((i) => i.id)).toEqual([next.id]);
     expect(saves).toEqual([]);
@@ -219,12 +225,31 @@ describe("GateKeeper.filterAvailable", () => {
     const impl = task("Pending", "implement");
     const { repo, store } = repoOf([gone, impl], [{ fromId: impl.id, toId: gone.id }]);
 
-    await GateKeeper.filterAvailable(repo, projects, {
+    await admitted(repo, projects, {
       publish: async () => {
         throw new Error("event store down");
       },
     });
 
     expect(store.get(impl.id)?.status).toBe("Abandoned");
+  });
+
+  test("one project's unknown failure is contained to it: recorded and backed off, the other project's tasks still dispatch", async () => {
+    const own = task("Pending", "own");
+    const other = task("Pending", "other", OTHER_PROJECT_ID);
+    const { repo } = repoOf([own, other], []);
+    const failing: WorkItemRepository = {
+      ...repo,
+      listByProject: async (projectId) => {
+        if (projectId === PROJECT_ID) throw new TypeError("cannot read properties of undefined (reading 'status')");
+        return repo.listByProject(projectId);
+      },
+    };
+    const containment = memoryStepContainment(() => false);
+
+    const gated = await GateKeeper.filterAvailable(failing, activeProjects(PROJECT_ID, OTHER_PROJECT_ID), publisher().events, containment);
+
+    expect(gated.available.map((i) => i.id)).toEqual([other.id]);
+    expect(containment.recorded.get(`gate/${PROJECT_ID}`)).toMatchObject({ faults: 1, error: expect.stringContaining("TypeError") });
   });
 });

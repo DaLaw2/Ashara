@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository, stepFaultLedger } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -11,7 +11,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner, createFirstPlanStore } from "@ashara/delivery";
+import { FirstPlanner, createFirstPlanStore, stepContainment } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
 import type { StepContainment } from "@ashara/shared";
@@ -122,9 +122,9 @@ function ours<T extends { readonly projectId: string }>(list: () => Promise<read
   return async () => (await list()).filter((row) => ourProjects.has(row.projectId));
 }
 
-/** db's step-fault ledger, as the composition root supplies it; a spend-cap refusal escapes. */
+/** The cycle's containment, as the composition root supplies it; a spend-cap refusal escapes. */
 function containment(): StepContainment {
-  return { ...stepFaultLedger(db), escapes: (error) => error instanceof BudgetExceeded };
+  return stepContainment(db, (error) => error instanceof BudgetExceeded);
 }
 
 function answers(): ClientAnswers {

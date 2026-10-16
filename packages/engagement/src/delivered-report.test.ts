@@ -10,7 +10,7 @@ const MERGE_A = "a".repeat(40);
 
 type Listed = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
 type Due = Extract<Listed, { readonly kind: "due" }>;
-type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures">;
+type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures">;
 type Item = Extract<Due["vision"], { readonly kind: "recorded" }>["items"][number]["source"];
 
 function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): Item {
@@ -26,7 +26,7 @@ const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
 type InterfaceRead = Awaited<ReturnType<ConstructorParameters<typeof DeliveredReports>[1]["at"]>>;
 
 async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }): Promise<string> {
-  const due: Due = { ...fields, kind: "due", failures: 0, interfaceReadFailures: 0, targetProjectPath: WORKSPACE };
+  const due: Due = { ...fields, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
   const reads: string[] = [];
   const reports = new DeliveredReports(
@@ -322,6 +322,8 @@ describe("the delivered report", () => {
 describe("a delivered report that fails is its own project's", () => {
   const otherId = parseProjectId("00000000-0000-4000-8000-000000000022", "test");
   const BROKEN = "/work/broken";
+  /** A workspace whose interface file reads, and whose report then fails to render: a failure no step names. */
+  const UNRENDERABLE = "/work/unrenderable";
 
   function store(listed: readonly Listed[], post: "posts" | "fails" = "posts") {
     const posted: Array<{ sweepId: string; body: string }> = [];
@@ -341,6 +343,14 @@ describe("a delivered report that fails is its own project's", () => {
       file: INTERFACE_FILE,
       at: async (targetProjectPath) => {
         if (targetProjectPath === BROKEN) throw new Error("git ls-tree: fatal: not a git repository");
+        if (targetProjectPath === UNRENDERABLE) {
+          return {
+            kind: "present",
+            get text(): string {
+              throw new TypeError("cannot read properties of undefined (reading 'length')");
+            },
+          };
+        }
         return { kind: "absent" };
       },
     });
@@ -352,9 +362,30 @@ describe("a delivered report that fails is its own project's", () => {
     kind: "due",
     failures,
     interfaceReadFailures,
+    recordFailures: 0,
     sweepId,
     projectId: id,
     targetProjectPath,
+  });
+
+  test("a report that cannot be rendered from what was read is that project's: counted toward the notice, the other project's posted", async () => {
+    const { reports, posted, failures } = store([due("s-bad", otherId, UNRENDERABLE, 0), due("s-ok", projectId, WORKSPACE, 0)]);
+
+    expect((await reports.runPending()).map((o) => [o.kind, o.projectId])).toEqual([
+      ["failed", otherId],
+      ["posted", projectId],
+    ]);
+    expect(posted.map((p) => p.sweepId)).toEqual(["s-ok"]);
+    expect(failures).toEqual([{ sweepId: "s-bad", error: expect.stringContaining("TypeError"), interfaceRead: false, recordUnread: true, retryAfterSeconds: 60 }]);
+  });
+
+  test("a failure that cannot be recorded throws through: a report's failure is never dropped", async () => {
+    const unread: Listed = { kind: "unread", cause: "record", failures: 0, recordFailures: 0, sweepId: "s-unread", projectId: otherId, error: new Error("bad record") };
+    const reports = new DeliveredReports(
+      { dueReports: async () => [unread], postReport: async () => "posted", recordReportFailure: async () => Promise.reject(new Error("ledger down")) },
+      { file: INTERFACE_FILE, at: async () => ({ kind: "absent" }) },
+    );
+    await expect(reports.runPending()).rejects.toMatchObject({ name: "DeliveredReportFailureUnrecorded" });
   });
 
   test("two projects, one whose interface file git cannot read: the other is posted, the failure recorded with a backoff", async () => {
@@ -396,7 +427,7 @@ describe("a delivered report that fails is its own project's", () => {
   });
 
   test("a read of the records that failed (a lost connection) is retried and never counts toward the notice, however often", async () => {
-    const lost: Listed = { kind: "unread", cause: "read-failed", failures: 9, recordFailures: 0, sweepId: "s-lost", projectId: otherId, error: new Error("Connection terminated unexpectedly") };
+    const lost: Listed = { kind: "unread", cause: "connection", failures: 9, recordFailures: 0, sweepId: "s-lost", projectId: otherId, error: new Error("Connection terminated unexpectedly") };
     const { reports, posted, failures } = store([lost]);
 
     expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);

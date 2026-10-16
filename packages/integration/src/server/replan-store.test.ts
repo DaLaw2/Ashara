@@ -716,6 +716,7 @@ async function gateOurs(): Promise<void> {
     adaptWorkItemRepo(new WorkItemRowRepository(db)),
     { listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)), block: (id, cause) => projects.block(id, cause) },
     { publish: async () => {} },
+    memoryStepContainment(() => true),
   );
 }
 

@@ -67,16 +67,18 @@ function liaison(): ClientStops {
   return new ClientStops(ours, memoryStepContainment(() => true));
 }
 
-function gate() {
+async function gate() {
   const projects = new ProjectHaltRepository(db);
-  return PlanningService.gate(
+  const gated = await PlanningService.gate(
     adaptWorkItemRepo(new WorkItemRowRepository(db)),
     {
       listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)),
       block: projects.block.bind(projects),
     },
     new EventStoreRepository(db),
+    memoryStepContainment(() => true),
   );
+  return gated.available;
 }
 
 const ProjectRowSchema = z.array(

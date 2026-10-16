@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
@@ -54,6 +54,8 @@ interface DueDeliveredReportRow {
   readonly failures: number;
   /** Failed reads of the public interface file so far (migration 062). */
   readonly interfaceReadFailures: number;
+  /** Failed attempts whose records did not make a report so far (migration 063). */
+  readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
   readonly mainCommit: string;
@@ -71,12 +73,13 @@ interface DueDeliveredReportRow {
 
 /**
  * A due report whose records could not be read; the rest of the due reports are still listed.
- * `cause` is "record" when what was read does not hold together as a report (ReportRecordUnreadable),
- * "read-failed" for any other failure of the read.
+ * `cause` is "connection" when the database could not be reached (isDatabaseConnectionFault), and
+ * "record" for every other failure: what was read does not make a report, by a defect of the records
+ * or of Ashara's reading of them, which a retry meets again.
  */
 interface UnreadDeliveredReportRow {
   readonly kind: "unread";
-  readonly cause: "record" | "read-failed";
+  readonly cause: "record" | "connection";
   readonly failures: number;
   readonly recordFailures: number;
   readonly sweepId: string;
@@ -429,6 +432,7 @@ interface DueSweep {
   readonly workspacePath: string | null;
   readonly failures: number;
   readonly interfaceReadFailures: number;
+  readonly recordFailures: number;
 }
 
 async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredReportRow> {
@@ -441,6 +445,7 @@ async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredRep
     kind: "due",
     failures: row.failures,
     interfaceReadFailures: row.interfaceReadFailures,
+    recordFailures: row.recordFailures,
     sweepId: row.id,
     projectId: row.projectId,
     mainCommit: row.mainCommit,
@@ -492,9 +497,10 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDe
     try {
       due.push(await dueReportOf(db, { ...row, projectId }));
     } catch (error) {
-      // Only records that do not hold together count toward the notice sent in the report's place;
-      // a read that failed for any other reason (a lost connection) says nothing of them.
-      const cause = error instanceof ReportRecordUnreadable ? "record" : "read-failed";
+      // Only a database that could not be reached says nothing of the records, and is retried
+      // uncounted; every other failure counts toward the notice sent in the report's place, so one
+      // nothing names is never retried unseen for good.
+      const cause = isDatabaseConnectionFault(error) ? "connection" : "record";
       due.push({ kind: "unread", cause, failures: row.failures, recordFailures: row.recordFailures, sweepId: row.id, projectId, error });
     }
   }

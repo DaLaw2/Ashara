@@ -47,6 +47,8 @@ interface DueDeliveredReport {
   readonly failures: number;
   /** Failed reads of its public interface file so far (acceptance_sweeps.report_interface_read_failures). */
   readonly interfaceReadFailures: number;
+  /** Failed attempts whose records did not make a report (acceptance_sweeps.report_record_failures). */
+  readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
   /** The commit on main the acceptance sweep passed on. */
@@ -65,14 +67,13 @@ interface DueDeliveredReport {
 
 /**
  * A passed sweep whose report its records could not be read for; `error` says why. `cause` is
- * "record" when the records were read and do not hold together as a report (a row that does not
- * parse, a reference to nothing), which a retry meets again; "read-failed" when reading them failed
- * for any other reason (a lost connection, a query that did not complete), which says nothing of
- * the records.
+ * "connection" when the database could not be reached, which says nothing of the records; "record"
+ * for every other failure (a row that does not parse, a reference to nothing, Ashara's own reading
+ * of them failing), which a retry meets again.
  */
 interface UnreadDeliveredReport {
   readonly kind: "unread";
-  readonly cause: "record" | "read-failed";
+  readonly cause: "record" | "connection";
   readonly failures: number;
   /** Failed attempts whose records did not read as a report (acceptance_sweeps.report_record_failures). */
   readonly recordFailures: number;
@@ -123,13 +124,24 @@ export interface DeliveredReportFailureRecord {
   readonly error: string;
   /** The public interface file could not be read: counted apart, against MAX_INTERFACE_READ_FAILURES. */
   readonly interfaceRead: boolean;
-  /** The records were read and did not hold together as a report: counted apart, against MAX_UNREAD_ATTEMPTS. */
+  /** The records did not make a report, for any cause but an unreachable database: counted apart, against MAX_UNREAD_ATTEMPTS. */
   readonly recordUnread: boolean;
   /**
    * The wait before the next attempt, for an attempt that failed; null when this attempt posts the
    * report without what failed, so no attempt is counted and no retry is set.
    */
   readonly retryAfterSeconds: number | null;
+}
+
+/** A failure at a delivered report could not be recorded on its sweep: the cycle's step fails, as its listing would. */
+class DeliveredReportFailureUnrecorded extends Error {
+  constructor(
+    readonly sweepId: string,
+    cause: unknown,
+  ) {
+    super(`a failed delivered report could not be recorded on acceptance sweep ${sweepId}`, { cause });
+    this.name = "DeliveredReportFailureUnrecorded";
+  }
 }
 
 /** One project's delivered report failed this cycle; it is tried again after `retryAfterSeconds`. */
@@ -359,14 +371,37 @@ export class DeliveredReports implements LiaisonDeliveredReports {
    * its post) is that project's: recorded on its sweep, logged at warn and tried again after a
    * backoff, never thrown into the cycle. Past MAX_INTERFACE_READ_FAILURES reads the report is
    * posted without the quote; past MAX_UNREAD_ATTEMPTS attempts whose records did not read as a
-   * report the client is sent an acceptance notice instead of it. A read of the records that failed
-   * otherwise is retried and never counted toward that notice: a lost connection says nothing of
-   * the records. Only a failure to list the reports or to record a failure throws through.
+   * report the client is sent an acceptance notice instead of it. A read of the records the database's
+   * connection failed is retried and never counted toward that notice: a lost connection says nothing
+   * of the records. Only a failure to list the reports or to record a failure throws through.
    */
   async runPending(): Promise<readonly DeliveredReportOutcome[]> {
     const outcomes: DeliveredReportOutcome[] = [];
-    for (const due of await this.store.dueReports()) outcomes.push(await this.report(due));
+    for (const due of await this.store.dueReports()) outcomes.push(await this.contained(due));
     return outcomes;
+  }
+
+  /**
+   * One report, its every failure its own: one no step below handled (a report that cannot be
+   * rendered from what was read) is a report its records did not make, counted toward the notice
+   * like any other. Only a failure to record a failure throws through.
+   */
+  private async contained(due: DueDeliveredReport | UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
+    try {
+      return await this.report(due);
+    } catch (err) {
+      if (err instanceof DeliveredReportFailureUnrecorded) throw err;
+      return this.unread({ kind: "unread", cause: "record", failures: due.failures, recordFailures: due.recordFailures, sweepId: due.sweepId, projectId: due.projectId, error: err });
+    }
+  }
+
+  /** Records a failure on the sweep; a failure to record it is marked, so it is never taken for the report's own. */
+  private async recordFailure(sweepId: string, failure: DeliveredReportFailureRecord): Promise<void> {
+    try {
+      await this.store.recordReportFailure(sweepId, failure);
+    } catch (err) {
+      throw new DeliveredReportFailureUnrecorded(sweepId, err);
+    }
   }
 
   private async report(due: DueDeliveredReport | UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
@@ -377,7 +412,7 @@ export class DeliveredReports implements LiaisonDeliveredReports {
     } catch (err) {
       const reads = due.interfaceReadFailures + 1;
       if (reads < MAX_INTERFACE_READ_FAILURES) return this.failed(due, err, "interface");
-      await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(err), interfaceRead: true, recordUnread: false, retryAfterSeconds: null });
+      await this.recordFailure(due.sweepId, { error: describeErrorChain(err), interfaceRead: true, recordUnread: false, retryAfterSeconds: null });
       console.warn(
         `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): ${this.productInterface.file} ` +
           `could not be read in ${reads} attempts; the report is posted without it: ${describeErrorChain(err)}`,
@@ -389,13 +424,13 @@ export class DeliveredReports implements LiaisonDeliveredReports {
 
   /**
    * A report whose records cannot be read: retried; past its bound of records that do not read as a
-   * report, the client is told it was accepted. A read that failed otherwise is only retried.
+   * report, the client is told it was accepted. A read the database's connection failed is only retried.
    */
   private async unread(due: UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
-    if (due.cause === "read-failed") return this.failed(due, due.error, "read-failed");
+    if (due.cause === "connection") return this.failed(due, due.error, "connection");
     const attempts = due.recordFailures + 1;
     if (attempts < MAX_UNREAD_ATTEMPTS) return this.failed(due, due.error, "record");
-    await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(due.error), interfaceRead: false, recordUnread: true, retryAfterSeconds: null });
+    await this.recordFailure(due.sweepId, { error: describeErrorChain(due.error), interfaceRead: false, recordUnread: true, retryAfterSeconds: null });
     console.warn(
       `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): its records did not read as a report in ` +
         `${attempts} attempts; the client is sent an acceptance notice without the report: ${describeErrorChain(due.error)}`,
@@ -416,11 +451,11 @@ export class DeliveredReports implements LiaisonDeliveredReports {
   private async failed(
     due: DueDeliveredReport | UnreadDeliveredReport,
     err: unknown,
-    what: "interface" | "record" | "read-failed" | "post",
+    what: "interface" | "record" | "connection" | "post",
   ): Promise<DeliveredReportOutcome> {
     const failures = due.failures + 1;
     const failure = new DeliveredReportFailed(due.projectId, due.sweepId, failures, retryAfterSeconds(failures), err);
-    await this.store.recordReportFailure(due.sweepId, {
+    await this.recordFailure(due.sweepId, {
       error: describeErrorChain(err),
       interfaceRead: what === "interface",
       recordUnread: what === "record",

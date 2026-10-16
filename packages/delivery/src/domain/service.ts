@@ -1,30 +1,21 @@
-import type { WorkItemId, DomainEvent } from "@ashara/shared";
+import type { WorkItemId, DomainEvent, StepContainment } from "@ashara/shared";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import type { EventPublisher } from "../lifecycle/ports.js";
-import { DependencyGraph } from "./dependency.js";
 import { GateKeeper } from "./gate.js";
+import type { GatedWork } from "./gate.js";
 import { TaskSelector } from "./select.js";
 import { LifecycleRouter } from "./router.js";
 import type { AttemptVerdict } from "./router.js";
 
 export class PlanningService {
-  static async gate(repo: WorkItemRepository, projects: ActiveProjects, events: EventPublisher): Promise<WorkItem[]> {
-    return GateKeeper.filterAvailable(repo, projects, events);
-  }
-
   /**
-   * How many tasks each eligible task's completion unlocks, from each of their projects' own
-   * dependency graph (a cycle in one project leaves only that project's weights at zero).
+   * The tasks admitted this cycle, each with how many tasks its completion unlocks, from its own
+   * project's dependency graph (a cycle in one project leaves only that project's weights at zero).
    */
-  static async unlockWeights(repo: WorkItemRepository, eligible: readonly WorkItem[]): Promise<Map<string, number>> {
-    const weights = new Map<string, number>();
-    for (const projectId of new Set(eligible.map((item) => item.projectId))) {
-      const graph = await DependencyGraph.load(repo, projectId);
-      for (const [id, weight] of graph.computeUnlockWeights()) weights.set(id, weight);
-    }
-    return weights;
+  static async gate(repo: WorkItemRepository, projects: ActiveProjects, events: EventPublisher, containment: StepContainment): Promise<GatedWork> {
+    return GateKeeper.filterAvailable(repo, projects, events, containment);
   }
 
   static select(

@@ -5,6 +5,7 @@ export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
 export { TargetCheckoutClaimedElsewhere, claimTargetCheckouts } from "./target-claim.js";
 export { insertedRow } from "./inserted-row.js";
+export { isDatabaseConnectionFault } from "./connection-fault.js";
 
 export {
   PROJECT_BLOCK_KINDS,

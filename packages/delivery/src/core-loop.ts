@@ -188,11 +188,10 @@ export class CoreLoop {
     await runAcceptanceSweeps(deps);
     await this.postDeliveredReports();
 
-    const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore);
-    if (eligible.length === 0) return { tasksProcessed: 0, results: [], stop: null };
+    const gated = await PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore, deps.containment);
+    if (gated.available.length === 0) return { tasksProcessed: 0, results: [], stop: null };
 
-    const weights = await PlanningService.unlockWeights(deps.workItemRepo, eligible);
-    const batch = PlanningService.select(eligible, deps.config.maxBatchSize, weights);
+    const batch = PlanningService.select(gated.available, deps.config.maxBatchSize, gated.unlockWeights);
 
     // Each task gets its own worktree (execution-infra's worktree.ts creates per-task branches),
     // so concurrent execution is safe at the process boundary. Every LLM call a

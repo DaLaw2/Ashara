@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { containEach, memoryStepContainment } from "./contained-step.js";
+import { containEach, memoryStepContainment, uncontainedSteps } from "./contained-step.js";
 import { parseProjectId } from "./ids.js";
 
 class Escaping extends Error {}
@@ -74,4 +74,27 @@ describe("containEach", () => {
 
     await expect(containEach(broken, "replan", subjects, (s) => s, async () => Promise.reject(new Error("scripted")))).rejects.toThrow("ledger down");
   });
+
+  test("a subject that keeps failing halts its project on Ashara's own fault, and only past the bound", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const containment = memoryStepContainment(() => false);
+    const [first] = subjects;
+    if (first === undefined) throw new Error("no subject");
+    const fail = async (): Promise<string> => Promise.reject(new TypeError("always"));
+    const faultAgain = async () => {
+      await containment.record({ step: "gate", subjectId: "a", projectId: projectA, error: "seed", retryAfterSeconds: -1 });
+      return containEach(containment, "gate", [first], (s) => s, fail);
+    };
+
+    for (let fault = 2; fault < 6; fault += 2) await faultAgain();
+    expect(containment.halted).toEqual([]);
+    await faultAgain();
+    expect(containment.halted).toEqual([{ projectId: projectA, fault: expect.objectContaining({ name: "StepFaultsExhausted", faults: 6, subjectId: "a" }) }]);
+  });
+
+  test("uncontained steps skip nothing and contain nothing", async () => {
+    const thrown = new TypeError("first failure");
+    await expect(containEach(uncontainedSteps(), "block-report", subjects, (s) => s, async () => Promise.reject(thrown))).rejects.toBe(thrown);
+  });
 });
+

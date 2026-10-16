@@ -135,6 +135,7 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
 ]);
 
 const StoredJudgementSchema = z.strictObject({
+  reviewTaskId: z.string().min(1),
   checkTaskId: z.string().min(1),
   checkName: z.string().min(1),
   outcome: z.enum(["routed", "released"]),
@@ -145,7 +146,7 @@ const StoredJudgementSchema = z.strictObject({
   secondReview: z.enum(["other-model", "re-sample"]),
 });
 
-type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
+export type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
 
 /** A stored judgement does not parse. */
 class SuiteReviewJudgementCorrupt extends Error {
@@ -181,14 +182,12 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
   }
 }
 
-/**
- * Every judgement a review task's reviews recorded, oldest first, each parsed whole.
- * @testseam suite-review-judgements.test.ts reads back what SuiteReviewer recorded; no production path reads them yet
- */
-export async function reviewJudgementsOf(db: DbHandle, reviewTaskId: string): Promise<StoredJudgement[]> {
+/** Every judgement the suite reviews of a project recorded, oldest first, each parsed whole: what the owner's run report states of them. */
+export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): Promise<StoredJudgement[]> {
   const rows = await db
     .select({
       id: suiteReviewJudgements.id,
+      reviewTaskId: suiteReviewJudgements.reviewTaskId,
       checkTaskId: suiteReviewJudgements.checkTaskId,
       checkName: suiteReviewJudgements.checkName,
       outcome: suiteReviewJudgements.outcome,
@@ -199,9 +198,9 @@ export async function reviewJudgementsOf(db: DbHandle, reviewTaskId: string): Pr
       secondReview: suiteReviewJudgements.secondReview,
     })
     .from(suiteReviewJudgements)
-    .where(eq(suiteReviewJudgements.reviewTaskId, reviewTaskId))
+    .where(eq(suiteReviewJudgements.projectId, projectId))
     // One review's judgements are written in one transaction and share created_at.
-    .orderBy(asc(suiteReviewJudgements.createdAt), asc(suiteReviewJudgements.checkName), asc(suiteReviewJudgements.id));
+    .orderBy(asc(suiteReviewJudgements.createdAt), asc(suiteReviewJudgements.reviewTaskId), asc(suiteReviewJudgements.checkName), asc(suiteReviewJudgements.id));
   return rows.map(({ id, ...row }) => {
     const parsed = StoredJudgementSchema.safeParse(row);
     if (!parsed.success) throw new SuiteReviewJudgementCorrupt(id, z.prettifyError(parsed.error));

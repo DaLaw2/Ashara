@@ -1,4 +1,5 @@
-import type { ProjectId } from "@ashara/shared";
+import { containEach } from "@ashara/shared";
+import type { ProjectId, StepContainment } from "@ashara/shared";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
@@ -14,14 +15,28 @@ import {
   type DependencyResolutionResult,
 } from "./dependency.js";
 
+/** The tasks the gate admits this cycle, and how many tasks each one's completion unlocks in its own project. */
+export interface GatedWork {
+  readonly available: WorkItem[];
+  readonly unlockWeights: Map<string, number>;
+}
+
+/** One project's admitted tasks with their unlock weights, from the one read of its items and edges. */
+interface AdmittedProject {
+  readonly kind: "admitted";
+  readonly items: WorkItem[];
+  readonly weights: Map<string, number>;
+}
+
 export class GateKeeper {
   /**
-   * Pending tasks whose dependencies are met, of active projects only. Each
-   * active project is gated on its own: its items and its dependency edges are
-   * read per project, so a blocked project's tasks are never admitted, an active
-   * project with a row that does not parse is blocked and skipped, and one
-   * project's dependency cycle gives that project's tasks on it up, never failing
-   * the gate for every project. A dependency on an item outside the project waits.
+   * Pending tasks whose dependencies are met, of active projects only, with their unlock weights.
+   * Each active project is gated on its own: its items and its dependency edges are read once per
+   * project, so a blocked project's tasks are never admitted, an active project with a row that does
+   * not parse is blocked and skipped, one project's dependency cycle gives that project's tasks on it
+   * up, and any other failure of one project's gating is contained to it (containEach: recorded,
+   * retried after a backoff, its tasks not dispatched meanwhile), never failing the gate for every
+   * project. A dependency on an item outside the project waits.
    *
    * A Pending task whose dependencies can never be met (an Abandoned item, directly or
    * transitively, or a cycle; an Abandoned check task only for the task it checks) is given up here
@@ -35,26 +50,47 @@ export class GateKeeper {
     repo: WorkItemRepository,
     projects: ActiveProjects,
     events: EventPublisher,
-  ): Promise<WorkItem[]> {
+    containment: StepContainment,
+  ): Promise<GatedWork> {
+    const gated = await containEach(
+      containment,
+      "gate",
+      await projects.listActiveIds(),
+      (projectId) => ({ id: projectId, projectId }),
+      (projectId) => gateProject(repo, projects, events, projectId),
+    );
     const available: WorkItem[] = [];
-    for (const projectId of await projects.listActiveIds()) {
-      let items: WorkItem[];
-      try {
-        items = await repo.listByProject(projectId);
-      } catch (err) {
-        if (!(err instanceof WorkItemRowCorrupt)) throw err;
-        const cause = projectBlockCause(err);
-        const result = await projects.block(projectId, cause);
-        console.warn(
-          `[gate] project ${projectId}: ${cause.errorClass} (item ${err.itemId}, ${err.column}); ` +
-            `none of its tasks dispatched; project ${result}: ${cause.reason}`,
-        );
-        continue;
-      }
-      available.push(...(await admitProject(repo, events, projectId, items)));
+    const unlockWeights = new Map<string, number>();
+    for (const project of gated) {
+      if (project.kind !== "admitted") continue;
+      available.push(...project.items);
+      for (const [id, weight] of project.weights) unlockWeights.set(id, weight);
     }
-    return available;
+    return { available, unlockWeights };
   }
+}
+
+/** One project's gating: blocked on a row that does not parse, else its admitted tasks. */
+async function gateProject(
+  repo: WorkItemRepository,
+  projects: ActiveProjects,
+  events: EventPublisher,
+  projectId: ProjectId,
+): Promise<AdmittedProject | { readonly kind: "blocked" }> {
+  let items: WorkItem[];
+  try {
+    items = await repo.listByProject(projectId);
+  } catch (err) {
+    if (!(err instanceof WorkItemRowCorrupt)) throw err;
+    const cause = projectBlockCause(err);
+    const result = await projects.block(projectId, cause);
+    console.warn(
+      `[gate] project ${projectId}: ${cause.errorClass} (item ${err.itemId}, ${err.column}); ` +
+        `none of its tasks dispatched; project ${result}: ${cause.reason}`,
+    );
+    return { kind: "blocked" };
+  }
+  return admitProject(repo, events, projectId, items);
 }
 
 async function admitProject(
@@ -62,7 +98,7 @@ async function admitProject(
   events: EventPublisher,
   projectId: ProjectId,
   items: WorkItem[],
-): Promise<WorkItem[]> {
+): Promise<AdmittedProject> {
   const graph = await DependencyGraph.load(repo, projectId);
   for (const cycle of graph.cycles) {
     console.warn(`[gate] project ${projectId}: ${cycle.message}; the tasks on it and waiting on it are given up`);
@@ -75,7 +111,7 @@ async function admitProject(
     const result = resolution.get(item.id);
     if (result?.resolution === "blocked") await giveUpUnsatisfiable(repo, events, item, result.blockedBy, statusById);
   }
-  return pending.filter((item) => isMet(resolution, item.id));
+  return { kind: "admitted", items: pending.filter((item) => isMet(resolution, item.id)), weights: graph.computeUnlockWeights() };
 }
 
 /**

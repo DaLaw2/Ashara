@@ -41,9 +41,8 @@ vi.mock("./domain/index.js", async (importOriginal) => {
   return {
     ...original,
     PlanningService: {
-      gate: async () => twoTasks(),
+      gate: async () => ({ available: twoTasks(), unlockWeights: new Map<string, number>() }),
       select: (_eligible: WorkItem[], _max: number) => twoTasks(),
-      unlockWeights: async () => new Map<string, number>(),
     },
   };
 });

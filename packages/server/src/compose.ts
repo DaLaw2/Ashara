@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationDriftError, stepFaultLedger } from "@ashara/db";
+import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationDriftError } from "@ashara/db";
 import type { PoolFactory } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
@@ -20,6 +20,7 @@ import {
   createReplanStore,
   gradedCapability,
   reconcileWorkItemsOnStartup,
+  stepContainment,
 } from "@ashara/delivery";
 import type { AgentStaffing, CoreLoopDeps, CycleRunner, TaskLanes, WorkItemRepository } from "@ashara/delivery";
 import {
@@ -74,7 +75,7 @@ import { SecretStore } from "@ashara/security";
 import { DevSessionRepository, terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
-import type { Clock, ProjectId, StepContainment } from "@ashara/shared";
+import type { Clock, ProjectId } from "@ashara/shared";
 import { contendedWait, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
@@ -385,7 +386,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
   // spend-cap refusal escapes to the cycle, which halts at the cap (CoreLoop.step).
-  const containment: StepContainment = { ...stepFaultLedger(db), escapes: (error) => spendCap.refusalOf(error) !== null };
+  const containment = stepContainment(db, (error) => spendCap.refusalOf(error) !== null);
   // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
   const blockReports = new BlockReports(createBlockReportStore(db), containment);
   const coreLoopDeps: CoreLoopDeps = {

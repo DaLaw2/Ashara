@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatRunReport } from "./run-report-format.js";
+import { formatRunReport, formatSuiteReviewJudgements } from "./run-report-format.js";
 
 type Evidence = Parameters<typeof formatRunReport>[0];
 type Task = Evidence["tasks"][number];
@@ -101,3 +101,16 @@ describe("formatRunReport UNTIED: only an agent call that matches no attempt", (
     expect(text).toContain("0 task(s) UNTIED");
   });
 });
+
+describe("formatSuiteReviewJudgements", () => {
+  test("states both reviews' findings whole, side by side, with what the second review was", () => {
+    const first = { kind: "outside-vision" as const, checkTasks: ["c1"], check: "prints-count", judgedItems: ["Monthly totals"], missingClause: "a count", problem: "the check asserts a count", evidence: "line 3" };
+    const text = formatSuiteReviewJudgements([
+      { reviewTaskId: "r1", checkTaskId: "c1", checkName: "prints-count", outcome: "routed", firstFinding: first, secondFindings: [{ ...first, missingClause: "a row count" }], firstModel: "a/m", secondModel: "a/m", secondReview: "re-sample" },
+    ]);
+    expect(text).toContain("routed; second review re-sample (first a/m, second a/m)");
+    expect(text).toContain('first review:  missing "a count": the check asserts a count');
+    expect(text).toContain('second review: missing "a row count": the check asserts a count');
+  });
+});
+

@@ -3,6 +3,7 @@
  * database, no environment, nothing that could carry a secret.
  */
 
+import type { StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
 
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
@@ -193,4 +194,28 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
     lines.push("", `VIOLATION: ${overall.zeroCostCalls} llm_calls row(s) priced at exactly $0; an unknown cost must be NULL, never $0`);
   }
   return { text: lines.join("\n"), zeroCostCalls: overall.zeroCostCalls };
+}
+
+/** One finding of a suite review, as the report states it. */
+function findingLine(finding: StoredJudgement["secondFindings"][number]): string {
+  return finding.kind === "outside-vision" ? `missing "${finding.missingClause}": ${finding.problem}` : `contradiction: ${finding.problem}`;
+}
+
+/**
+ * The suite reviews' judgements on the outside-vision rejections they routed or released, each with
+ * both reviews' findings whole and what the second review was: another model, or a re-sample of the first.
+ */
+export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement[]): string {
+  if (judgements.length === 0) return "Suite review judgements: none recorded";
+  const lines = [`Suite review judgements (${judgements.length}):`];
+  for (const judgement of judgements) {
+    lines.push(
+      `  review ${judgement.reviewTaskId}, check "${judgement.checkName}" of task ${judgement.checkTaskId}: ${judgement.outcome}; ` +
+        `second review ${judgement.secondReview} (first ${judgement.firstModel}, second ${judgement.secondModel})`,
+      `    first review:  ${findingLine(judgement.firstFinding)}`,
+    );
+    if (judgement.secondFindings.length === 0) lines.push("    second review: no rejection of this check task");
+    for (const finding of judgement.secondFindings) lines.push(`    second review: ${findingLine(finding)}`);
+  }
+  return lines.join("\n");
 }

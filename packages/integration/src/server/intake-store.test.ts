@@ -4,7 +4,8 @@ import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, stepFaultLedger } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository } from "@ashara/db";
+import { stepContainment } from "@ashara/delivery";
 import { TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -92,9 +93,9 @@ function ourStore(): IntakeStore {
   };
 }
 
-/** db's step-fault ledger, as the composition root supplies it; a spend-cap refusal escapes. */
+/** The cycle's containment, as the composition root supplies it; a spend-cap refusal escapes. */
 function containment(): StepContainment {
-  return { ...stepFaultLedger(db), escapes: (error) => error instanceof BudgetExceeded };
+  return stepContainment(db, (error) => error instanceof BudgetExceeded);
 }
 
 function intake(): TenderIntake {
