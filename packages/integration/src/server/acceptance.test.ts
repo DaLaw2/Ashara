@@ -32,6 +32,7 @@ const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 const NAME_PREFIX = `acceptance-test-${randomUUID().slice(0, 8)}`;
 const MERGE_A = "a1".repeat(20);
 const MAIN = "c3".repeat(20);
+const SCAFFOLD_MERGE = "5e".repeat(20);
 
 let db: ReturnType<typeof createDb>;
 let clientId: string;
@@ -101,10 +102,12 @@ async function writeVision(projectId: ProjectId, tenderId: string, prefixAsked: 
  * team's design choice. With `prefixAsked`, A3 was asked about when the plan was made, and the
  * review recorded it so.
  */
-async function deliveredProject(options: { readonly prefixAsked: boolean } = { prefixAsked: false }): Promise<Delivered & { readonly question: string | null }> {
+async function deliveredProject(
+  options: { readonly prefixAsked?: boolean; readonly scaffoldMerged?: boolean } = {},
+): Promise<Delivered & { readonly question: string | null }> {
   const { project, message } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Build a key store.");
   ourProjects.add(project.id);
-  const question = await writeVision(project.id, message.id, options.prefixAsked);
+  const question = await writeVision(project.id, message.id, options.prefixAsked === true);
   await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
   const task = async (title: string, spec: unknown): Promise<string> => {
     const id = randomUUID();
@@ -123,11 +126,12 @@ async function deliveredProject(options: { readonly prefixAsked: boolean } = { p
   const remove = await task("Delete keys", { origin: "decomposition", ...removeSpec });
   const checksOfStore = await task("Checks for Store keys", { origin: "check", checksFor: store, ...storeSpec });
   const checksOfRemove = await task("Checks for Delete keys", { origin: "check", checksFor: remove, ...removeSpec });
-  const all = Object.values(options.prefixAsked ? { ...VISION, prefix: { ...VISION.prefix, standing: "asked" } } : VISION);
+  const all = Object.values(options.prefixAsked === true ? { ...VISION, prefix: { ...VISION.prefix, standing: "asked" } } : VISION);
   await task("Review the plan's checks", { origin: "review", visionItems: all.map((item) => item.text), sources: all });
   const workItems = new WorkItemRowRepository(db);
   await workItems.recordMergeCommit(store, MERGE_A, "merged");
   await workItems.recordMergeCommit(remove, MERGE_A, "already_delivered");
+  if (options.scaffoldMerged !== false) await workItems.recordMergeCommit(scaffold, SCAFFOLD_MERGE, "merged");
   for (const [taskId, checkTaskId] of [[store, checksOfStore], [remove, checksOfRemove]] as const) {
     await db.execute(sql`
       INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version)
@@ -235,9 +239,9 @@ describe("acceptance on main", () => {
   test("a passing sweep makes the project accepted, stops its dispatch, and posts one delivered report from the records", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
     const projects = new ProjectHaltRepository(db);
-    // The scaffold's merge is not on record here: the readiness row names it so, and Quality's sweep refuses to compare.
+    // The readiness row names the scaffold with its recorded merge, which Quality's sweep compares main's interface file with.
     expect(await acceptanceStore().readyForAcceptance()).toEqual([
-      { projectId, workspacePath: `/tmp/${NAME_PREFIX}`, goalTaskIds: goals, scaffoldMerges: [{ taskId: scaffold, mergeCommit: null }] },
+      { projectId, workspacePath: `/tmp/${NAME_PREFIX}`, goalTaskIds: goals, scaffoldMerges: [{ taskId: scaffold, mergeCommit: SCAFFOLD_MERGE }] },
     ]);
 
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
@@ -357,9 +361,10 @@ describe("acceptance on main", () => {
     await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Thanks, done.", inReplyTo: null });
     const store = createClientStopStore(db);
     const outcomes = await new ClientStops({ ...store, openStops: async () => (await store.openStops()).filter((stop) => stop.projectId === projectId) }).runPending();
-    expect(outcomes).toEqual([expect.objectContaining({ kind: "stopped", reported: true, merged: 2 })]);
+    expect(outcomes).toEqual([expect.objectContaining({ kind: "stopped", reported: true, merged: 3 })]);
     expect(await statusOf(projectId)).toBe("stopped");
     const stopReport = (await reportsOf(projectId)).find((body) => body.includes("stopped at your request"));
+    expect(stopReport).toContain(`- "Set up the module root": merged, commit ${SCAFFOLD_MERGE}`);
     expect(stopReport).toContain(`- "Store keys": merged, commit ${MERGE_A}`);
     expect(stopReport).toContain(`- "Delete keys": already delivered on commit ${MERGE_A}, nothing of its own merged`);
   });
@@ -416,5 +421,27 @@ describe("acceptance on main", () => {
     expect(block.rows).toEqual([{ faults: 4, category: "fault", errorClass: "AcceptanceFaultBudgetSpent" }]);
     expect(await projects.listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
+  });
+
+  test("a Completed scaffold with no recorded merge halts the project once, as a fault, before any sweep", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { projectId, scaffold } = await deliveredProject({ scaffoldMerged: false });
+    let swept = 0;
+    const deps = {
+      ...sweepDeps(true, "unused"),
+      acceptanceSweeper: {
+        sweepForAcceptance: async () => {
+          swept++;
+          throw new Error("a project with an unrecorded scaffold merge is never swept");
+        },
+      },
+    };
+    for (let round = 0; round < 3; round++) expect(await runAcceptanceSweeps(deps)).toBe(0);
+    expect(swept).toBe(0);
+    expect(await statusOf(projectId)).toBe("blocked");
+    const blocks = await db.execute(sql`
+      SELECT p.acceptance_faults AS faults, p.blocked_category AS category, b.error_class AS "errorClass", b.reason
+      FROM projects p JOIN project_blocks b ON b.project_id = p.id WHERE p.id = ${projectId}`);
+    expect(blocks.rows).toEqual([{ faults: 0, category: "fault", errorClass: "ScaffoldMergeUnrecorded", reason: expect.stringContaining(scaffold) }]);
   });
 });

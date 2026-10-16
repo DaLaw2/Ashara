@@ -8,7 +8,7 @@ import { interfaceStandingOnMain } from "./public-interface.js";
 const PLACEHOLDER = "Run: kv put <key> <value>\nThe product is a placeholder: every command exits 2.\n";
 
 describe("interfaceStandingOnMain", () => {
-  test("names a main still holding the scaffold's file byte for byte, and passes one whose file changed", async () => {
+  test("names a main still holding the scaffold's file byte for byte or holding none, and passes one whose file changed", async () => {
     const repo = await mkdtemp(join(tmpdir(), "interface-standing-test-"));
     try {
       const git = (...args: string[]) =>
@@ -37,11 +37,11 @@ describe("interfaceStandingOnMain", () => {
         scaffoldCommit: scaffold,
       });
       expect(await interfaceStandingOnMain(repo, described, scaffolds)).toEqual({ kind: "described" });
-      expect(await interfaceStandingOnMain(repo, dropped, scaffolds)).toEqual({ kind: "described" });
+      // A main with no interface file states no interface: never read as described, with or without scaffolds.
+      expect(await interfaceStandingOnMain(repo, dropped, scaffolds)).toEqual({ kind: "absent", file: "PUBLIC_INTERFACE.md" });
+      expect(await interfaceStandingOnMain(repo, dropped, [])).toEqual({ kind: "absent", file: "PUBLIC_INTERFACE.md" });
       // A scaffold that wrote no such file leaves nothing of its own on main.
       expect(await interfaceStandingOnMain(repo, stale, [{ taskId: "s0", mergeCommit: dropped }])).toEqual({ kind: "described" });
-      // What a scaffold with no recorded merge wrote is unknown: never read as different.
-      await expect(interfaceStandingOnMain(repo, described, [{ taskId: "s1", mergeCommit: null }])).rejects.toMatchObject({ name: "ScaffoldMergeUnrecorded" });
       await expect(interfaceStandingOnMain(repo, "--output=/tmp/x", scaffolds)).rejects.toMatchObject({ name: "InterfaceCommitInvalid" });
     } finally {
       await rm(repo, { recursive: true, force: true });

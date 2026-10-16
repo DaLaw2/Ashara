@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { CapabilityLevelSchema } from "@ashara/finance";
 import type { LadderAttemptEvent } from "@ashara/finance";
-import { ExecutionEventNameSchema } from "@ashara/quality";
+import { AttemptEventNameSchema, ProjectEventNameSchema } from "@ashara/quality";
 import type { ExecutionEventSink } from "@ashara/quality";
 import type { Clock } from "@ashara/shared";
 
@@ -29,20 +29,22 @@ const cycleCompleteSchema = z.strictObject({
   interrupted: count,
 });
 
-// Execution events carry their own fields beside a closed name; what every one must carry is the
-// task or the project it concerns, and no field named `timestamp`: the writer adds that one.
-const executionEventSchema = z
-  .object({
-    event: ExecutionEventNameSchema,
-    taskId: z.string().min(1).optional(),
-    projectId: z.string().min(1).optional(),
-    attempt: count.optional(),
-  })
-  // An undefined field is dropped by JSON.stringify, as an absent one would be.
-  .catchall(z.union([z.json(), z.undefined()]))
-  .refine((e) => e.taskId !== undefined || e.projectId !== undefined, "names neither a taskId nor a projectId")
-  // A key check, not a value check: `{timestamp: undefined}` would overwrite the writer's timestamp.
-  .refine((e) => !Object.hasOwn(e, "timestamp"), "brings its own timestamp; the writer adds it");
+// Execution events carry their own fields beside a closed name. An attempt's event names its task
+// and attempt; a project's names its project. None brings a field named `timestamp`: the writer
+// adds that one.
+const eventField = z.union([z.json(), z.undefined()]);
+const noTimestamp = (e: object): boolean => !Object.hasOwn(e, "timestamp");
+const NO_TIMESTAMP = "brings its own timestamp; the writer adds it";
+const executionEventSchema = z.union([
+  z
+    .object({ event: AttemptEventNameSchema, taskId: z.string().min(1), attempt: count })
+    .catchall(eventField)
+    .refine(noTimestamp, NO_TIMESTAMP),
+  z
+    .object({ event: ProjectEventNameSchema, projectId: z.string().min(1) })
+    .catchall(eventField)
+    .refine(noTimestamp, NO_TIMESTAMP),
+]);
 
 type EventLine =
   | ({ readonly event: "ladder_attempt" } & LadderAttemptEvent)
@@ -73,17 +75,17 @@ interface EventLog {
 /**
  * The one writer of `[event]` lines: each event is validated against its schema, then written as
  * one JSON object led by an ISO-8601 UTC timestamp from the injected clock, so a simulated run's
- * log reads the simulated time.
+ * log reads the simulated time. An event's types admit only JSON values; one the schema still
+ * refuses (a NaN count) is handed to `refuse` and no line is written. Emitting never throws: a log
+ * line is never a reason for the dispatch path that emits it to stop.
  */
-export function createEventLog(clock: Clock, write: (line: string) => void): EventLog {
+export function createEventLog(clock: Clock, write: (line: string) => void, refuse: (error: EventLineInvalid) => void): EventLog {
   return {
     emit(event) {
       const parsed = schemaFor(event).safeParse(event);
       if (!parsed.success) {
-        throw new EventLineInvalid(
-          event.event,
-          parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`),
-        );
+        refuse(new EventLineInvalid(event.event, parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)));
+        return;
       }
       const timestamp = new Date(clock.now()).toISOString();
       write(`${EVENT_LINE_PREFIX}${JSON.stringify({ timestamp, ...event })}`);

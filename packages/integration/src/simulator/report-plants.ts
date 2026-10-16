@@ -134,7 +134,7 @@ export const deliveredReportMisquotesInterface = rewriteReport(
   (body) =>
     body.includes("Run: sim <behaviour>")
       ? body.replace("Run: sim <behaviour>", "Run: tally <behaviour>")
-      : body.replace("it has no public interface file.", "its public interface file is empty."),
+      : body.replace("its public interface file is missing.", "its public interface file is empty."),
 );
 
 /** A question that says work proceeds on an assumption its vision does not record. */

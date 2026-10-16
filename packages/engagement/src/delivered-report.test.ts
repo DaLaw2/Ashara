@@ -86,7 +86,7 @@ describe("how to run the product", () => {
 
   test("with no public interface file, says the product has none and names the file looked for", async () => {
     expect(howToRun(await render(BASE))).toBe(
-      `How to run the product is not on record: it has no public interface file. ${INTERFACE_FILE} is not on main at commit ${MAIN}.`,
+      `How to run the product is not on record: its public interface file is missing. ${INTERFACE_FILE} is not on main at commit ${MAIN}.`,
     );
   });
 

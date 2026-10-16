@@ -377,9 +377,8 @@ export function sessionEnvironmentVersion(environment: DispatchEnvironment): str
   return environment.kind === "environment" ? environment.version : null;
 }
 
-/** Every execution event a dispatch emits: a name outside this set is a compile error at the emit site and a refused line at the writer. */
-export const ExecutionEventNameSchema = z.enum([
-  "acceptance_sweep",
+/** Every execution event that belongs to one attempt of a task: its line names the task and the attempt. */
+export const AttemptEventNameSchema = z.enum([
   "agent_completed",
   "agent_launched",
   "branch_work_found",
@@ -418,10 +417,28 @@ export const ExecutionEventNameSchema = z.enum([
   "task_started",
 ]);
 
+/** Every execution event a project's acceptance sweep emits: it runs for the project, in no task's attempt. */
+export const ProjectEventNameSchema = z.enum(["acceptance_sweep", "cell_teardown_failed"]);
+
+/** A value JSON.stringify writes as itself: no Date, function, bigint or undefined element is one. */
+type JsonValue = string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue | undefined };
+
+/** An event's own fields; an undefined one is dropped by JSON.stringify, as an absent one would be. */
+type EventFields = { readonly [key: string]: JsonValue | undefined };
+
+/** Whose event a line is: one attempt of a task, or a project when no attempt is involved. */
+export type EventSubject =
+  | { readonly taskId: string; readonly attempt: number }
+  | { readonly projectId: string };
+
+type ExecutionEvent =
+  | (EventFields & { readonly event: z.infer<typeof AttemptEventNameSchema>; readonly taskId: string; readonly attempt: number })
+  | (EventFields & { readonly event: z.infer<typeof ProjectEventNameSchema>; readonly projectId: string });
+
 export interface ExecutionEventSink {
-  // The name is closed; the fields beside it are each event's own, and the writer requires only
-  // that the event names its task or project and that every value serializes as JSON.
-  emit(event: Readonly<Record<string, unknown>> & { readonly event: z.infer<typeof ExecutionEventNameSchema> }): void;
+  // The name is closed and says whether the event belongs to an attempt; every field is a JSON
+  // value, so a value the writer would have to refuse is a compile error at the emit site.
+  emit(event: ExecutionEvent): void;
 }
 
 /** What execution needs of the container substrate; execution-infra's PodmanSubstrate satisfies it. */

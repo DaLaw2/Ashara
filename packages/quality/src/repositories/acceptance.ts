@@ -2,7 +2,6 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { ScaffoldMerge } from "../public-interface.js";
 
 // A delivered project is accepted on one sweep of main HEAD (migration 049; story
 // s-independent-verify-m1 W7, design P11). A project is ready for it once its first plan exists,
@@ -24,6 +23,12 @@ const readyForAcceptance = sql`(${projectAtWork()}
   AND EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id AND w.level = 'Task'
     AND w.status = 'Completed' AND w.task_spec->>'origin' = 'decomposition'))`;
 
+/** A Completed product scaffold with the merge its completion recorded; null when none is on record. */
+interface RecordedScaffold {
+  readonly taskId: string;
+  readonly mergeCommit: string | null;
+}
+
 interface ReadyProjectRow {
   readonly projectId: ProjectId;
   /** null when no workspace was ever minted: nothing can be swept, and the caller says so. */
@@ -31,11 +36,11 @@ interface ReadyProjectRow {
   /** The project's Completed goal tasks (decomposition), oldest completion first. */
   readonly goalTaskIds: readonly string[];
   /** The project's Completed product scaffolds with their recorded merges, oldest completion first. */
-  readonly scaffoldMerges: readonly ScaffoldMerge[];
+  readonly scaffoldMerges: readonly RecordedScaffold[];
 }
 
 /** The project's Completed product scaffolds, each with the merge its completion recorded (migration 041). */
-async function completedScaffolds(db: DbHandle, projectId: string): Promise<ScaffoldMerge[]> {
+async function completedScaffolds(db: DbHandle, projectId: string): Promise<RecordedScaffold[]> {
   const rows = await db
     .select({ taskId: workItems.id, mergeCommit: workItems.mergeCommit })
     .from(workItems)

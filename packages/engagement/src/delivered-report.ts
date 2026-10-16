@@ -106,7 +106,7 @@ function fenceFor(text: string): string {
  */
 function howToRunSection(file: string, commit: string, read: ProductFileAt): string {
   if (read.kind === "absent") {
-    return `How to run the product is not on record: it has no public interface file. ${file} is not on main at commit ${commit}.`;
+    return `How to run the product is not on record: its public interface file is missing. ${file} is not on main at commit ${commit}.`;
   }
   if (read.kind === "not-held") return `How to run the product is not quoted: ${file} on main at commit ${commit} was not read (${read.reason}).`;
   const quoted = keepEnds(wholeText(read.text), INTERFACE_QUOTE_CHARS);

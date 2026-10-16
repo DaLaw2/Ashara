@@ -6,7 +6,7 @@ import type { ProjectBlockCause } from "./project-halt.js";
 import type { TaskVerification } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
-import type { PlaceholderInterface } from "./domain/index.js";
+import type { InterfaceDefect } from "./domain/index.js";
 import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution.js";
 
 // Delivering -> Accepted (story s-independent-verify-m1 W7, design P11): each cycle, every project
@@ -69,6 +69,21 @@ class AcceptanceWorkspaceMissing extends Error {
   }
 }
 
+/** A ready project's Completed product scaffold records no merge: the public interface file it wrote is unknown, so main cannot be compared with it. */
+class ScaffoldMergeUnrecorded extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly scaffoldTaskIds: readonly string[],
+  ) {
+    super(
+      `project ${projectId} is ready for its acceptance sweep, but its Completed product scaffold(s) ${scaffoldTaskIds.join(", ")} ` +
+        `record no merge commit, so the public interface file they wrote is not known and main's cannot be compared with it; ` +
+        `the project halts until the operator records the merge`,
+    );
+    this.name = "ScaffoldMergeUnrecorded";
+  }
+}
+
 /** The project's cause on record when its acceptance sweep failed to run past the fault budget. */
 class AcceptanceFaultBudgetSpent extends Error {
   constructor(
@@ -89,8 +104,8 @@ class AcceptanceFaultBudgetSpent extends Error {
 type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
 
 /** Records a failed sweep with its defect, given up at once, and publishes the defect's events. */
-async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, placeholderInterface: PlaceholderInterface | null): Promise<void> {
-  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details, placeholderInterface });
+async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, interfaceDefect: InterfaceDefect | null): Promise<void> {
+  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details, interfaceDefect });
   const outcome = await deps.acceptance.recordDefect(record, async (workItems) => {
     await PlanningService.createWorkItem(workItems, defect);
     giveUpAcceptanceDefect(defect, record);
@@ -152,7 +167,18 @@ export async function runAcceptanceSweeps(deps: AcceptanceDeps): Promise<number>
       console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
       continue;
     }
-    const sweep = await deps.acceptanceSweeper.sweepForAcceptance(ready.projectId, ready.workspacePath, ready.goalTaskIds, ready.scaffoldMerges);
+    // A Completed scaffold with no merge on record is a gap in the record that no repair task and no
+    // later sweep can fill: the sweep would fault the same way every cycle. So it halts the project
+    // once, as a fault only the operator ends, with the scaffold named in the recorded cause.
+    const unrecorded = ready.scaffoldMerges.filter((scaffold) => scaffold.mergeCommit === null).map((scaffold) => scaffold.taskId);
+    if (unrecorded.length > 0) {
+      const cause = projectBlockCause(new ScaffoldMergeUnrecorded(ready.projectId, unrecorded));
+      const blocked = await deps.projectRepo.block(ready.projectId, cause);
+      console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
+      continue;
+    }
+    const scaffolds = ready.scaffoldMerges.flatMap((scaffold) => (scaffold.mergeCommit === null ? [] : [{ taskId: scaffold.taskId, mergeCommit: scaffold.mergeCommit }]));
+    const sweep = await deps.acceptanceSweeper.sweepForAcceptance(ready.projectId, ready.workspacePath, ready.goalTaskIds, scaffolds);
     if (sweep.kind !== "ran") {
       await routeSweepFault(deps, ready.projectId, sweep);
       continue;
@@ -171,7 +197,8 @@ export async function runAcceptanceSweeps(deps: AcceptanceDeps): Promise<number>
       console.log(`[acceptance] project ${ready.projectId}: sweep on main ${sweep.mainCommit} passed; ${outcome}`);
       continue;
     }
-    await recordDefect(deps, record, sweep.publicInterface.kind === "scaffold-placeholder" ? sweep.publicInterface : null);
+    const standing = sweep.publicInterface;
+    await recordDefect(deps, record, standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null);
   }
   return accepted;
 }

@@ -2,9 +2,10 @@ export { TaskVerification, observeAcceptanceSweeps } from "./verification.js";
 export type { AcceptanceSweep } from "./verification.js";
 export {
   EXECUTION_STATUSES,
-  ExecutionEventNameSchema,
+  AttemptEventNameSchema,
   NO_AGENT,
   NO_CHANGE_REASON,
+  ProjectEventNameSchema,
   agentWorkOf,
   asharaBlocked,
   cellImageOf,

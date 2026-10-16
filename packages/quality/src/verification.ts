@@ -46,6 +46,7 @@ import {
 import type {
   AgentPart,
   CheckAuthoring,
+  EventSubject,
   ExecutionEventSink,
   ExecutionResult,
   VerificationCells,
@@ -71,7 +72,7 @@ import { VerificationInfrastructureFault } from "./gates/finalize.js";
 import type { PostMergeVerdict } from "./gates/finalize.js";
 import { checkBranchOwnership } from "./gates/ownership.js";
 import { discardTaskBranch, taskBranchName } from "./merge.js";
-import { interfaceStandingOnMain, placeholderInterfaceLine, PUBLIC_INTERFACE_FILE } from "./public-interface.js";
+import { interfaceDefectLine, interfaceStandingOnMain, PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { InterfaceStanding, ScaffoldMerge } from "./public-interface.js";
 import type { SuiteReviewing } from "./suite-review.js";
 import {
@@ -207,7 +208,7 @@ export type AcceptanceSweep =
       readonly checkedTasks: readonly string[];
       /** Completed implementation tasks with no stored check: nothing of theirs ran, so they are not checked. */
       readonly uncheckedTasks: readonly string[];
-      /** The public interface file on main against the product scaffold's: a scaffold's byte for byte is not accepted. */
+      /** The public interface file on main against the product scaffold's: a scaffold's byte for byte, or none, is not accepted. */
       readonly publicInterface: InterfaceStanding;
       readonly details: string;
     }
@@ -323,9 +324,23 @@ export class TaskVerification {
       return result;
     }
     const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
+    // A rejection the second review did not reach is released, and both judgements stay on the record.
+    const released =
+      outcome.released.length === 0
+        ? ""
+        : `\nReleased as passing review, the two independent reviews disagreeing:\n` +
+          outcome.released
+            .map(
+              (r) =>
+                `- check ${JSON.stringify(r.check)} of ${r.checkTaskId}: the first review judged ${r.first}; the second ` +
+                (r.second.length === 0 ? "found no problem in that check task" : `judged ${r.second.join("; ")}`),
+            )
+            .join("\n");
+    const releasedChecks = outcome.released.map((r) => `${r.checkTaskId}: ${r.check}`);
     if (outcome.kind === "clean") {
-      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem${setAside}`;
-      eventSink?.emit({ event: "suites_reviewed", taskId: task.id, attempt: task.attempt, reviewed: outcome.reviewed, setAside: outcome.setAside });
+      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem${setAside}${released}`;
+      if (released !== "") console.warn(`[${task.id}] ${detail}`);
+      eventSink?.emit({ event: "suites_reviewed", taskId: task.id, attempt: task.attempt, reviewed: outcome.reviewed, setAside: outcome.setAside, released: releasedChecks });
       return {
         status: "completed",
         delivered: { kind: "suites-reviewed", reviewed: outcome.reviewed },
@@ -339,9 +354,10 @@ export class TaskVerification {
     const summary =
       `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found ` +
       `${outcome.problems.length} problem(s) in the checks of ${named.join(", ")}${setAside}:\n` +
-      outcome.problems.map((p) => `- [${p.kind}; ${p.checkTaskIds.join(", ")}] ${p.problem}`).join("\n");
+      outcome.problems.map((p) => `- [${p.kind}; ${p.checkTaskIds.join(", ")}] ${p.problem}`).join("\n") +
+      released;
     console.warn(`[${task.id}] ${summary}`);
-    eventSink?.emit({ event: "suite_review_problems", taskId: task.id, attempt: task.attempt, checkTasks: named, problems: outcome.problems.length });
+    eventSink?.emit({ event: "suite_review_problems", taskId: task.id, attempt: task.attempt, checkTasks: named, problems: outcome.problems.length, released: releasedChecks });
     return {
       status: "suite_review_problems",
       problems: outcome.problems,
@@ -354,13 +370,14 @@ export class TaskVerification {
   }
 
   /** A failed teardown is logged at warn with its typed context; the substrate keeps the cell for teardownAll and reconcileOrphans. */
-  async teardownCell(taskId: string, cell: Cell): Promise<void> {
+  async teardownCell(subject: EventSubject, cell: Cell): Promise<void> {
     try {
       await cell.teardown();
     } catch (e) {
       if (!(e instanceof CellTeardownFailed)) throw e;
-      console.warn(`[${taskId}] cell teardown failed; teardownAll at shutdown and reconcileOrphans at startup remove it:`, e);
-      this.deps.eventSink?.emit({ event: "cell_teardown_failed", taskId, cellId: e.cellId, exitCode: e.exitCode, stderr: e.stderr });
+      const owner = "projectId" in subject ? `acceptance-${subject.projectId}` : `${subject.taskId} attempt ${subject.attempt}`;
+      console.warn(`[${owner}] cell teardown failed; teardownAll at shutdown and reconcileOrphans at startup remove it:`, e);
+      this.deps.eventSink?.emit({ event: "cell_teardown_failed", ...subject, cellId: e.cellId, exitCode: e.exitCode, stderr: e.stderr });
     }
   }
 
@@ -581,9 +598,9 @@ export class TaskVerification {
    * task in `goalTaskIds` has checks stored: a goal never checked is not accepted on its word.
    * Completed tasks with no stored check are named apart (`uncheckedTasks`), never counted as
    * passed. A main whose public interface file is byte for byte the one a product scaffold in
-   * `scaffolds` wrote fails the sweep, its details opening with what to update: that file describes
-   * the scaffold's placeholder, and the delivered report quotes it to the client as how to run the
-   * product. A main with no environment its cells can be built from fails the sweep, with the
+   * `scaffolds` wrote, or that holds no such file, fails the sweep, its details opening with what to
+   * update or restore: the delivered report quotes that file to the client as how to run the
+   * product, and a placeholder or nothing tells them nothing true. A main with no environment its cells can be built from fails the sweep, with the
    * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or
    * an EnvironmentError); any other error is `faulted`, with the step it stopped at. The caller
    * bounds both (orchestrator acceptance.ts).
@@ -664,7 +681,7 @@ export class TaskVerification {
       targetProjectPath,
       createCell: ({ image, role, hostPath }) =>
         cells.substrate.createCell({ image, project: projectId, task: label, role, instance: cells.instance, mount: { hostPath, shared: true } }),
-      teardownCell: (cell) => this.teardownCell(label, cell),
+      teardownCell: (cell) => this.teardownCell({ projectId }, cell),
       timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
     };
     const dir = join(this.deps.config.workdirBase, "checkouts", `acceptance-${projectId}-${createSessionId()}`);
@@ -674,10 +691,10 @@ export class TaskVerification {
       ...(neverChecked.length === 0 ? [] : [`Goal task(s) with no stored checks, so never checked: ${neverChecked.join(", ")}`]),
       ...(completed.unchecked.length === 0 ? [] : [`Not re-run, no check is stored for them: ${completed.unchecked.join(", ")}`]),
     ];
-    const placeholder = publicInterface.kind === "scaffold-placeholder" ? [placeholderInterfaceLine(publicInterface)] : [];
-    const passed = ran.passed && neverChecked.length === 0 && placeholder.length === 0;
-    // The placeholder line comes first: a repair reads the start of these details when they are long.
-    const details = [...placeholder, ran.details, ...gaps].join("\n");
+    const interfaceDefect = interfaceDefectLine(publicInterface);
+    const passed = ran.passed && neverChecked.length === 0 && interfaceDefect === null;
+    // The interface line comes first: a repair reads the start of these details when they are long.
+    const details = [...(interfaceDefect === null ? [] : [interfaceDefect]), ran.details, ...gaps].join("\n");
     const checkedTasks = completed.checked.map((prior) => prior.taskId);
     eventSink?.emit({
       event: "acceptance_sweep",
@@ -724,7 +741,7 @@ export class TaskVerification {
           instance: cells.instance,
           mount: { hostPath, shared: true },
         }),
-      teardownCell: (cell) => this.teardownCell(task.id, cell),
+      teardownCell: (cell) => this.teardownCell({ taskId: task.id, attempt: task.attempt }, cell),
     };
   }
 
@@ -1599,6 +1616,7 @@ export class TaskVerification {
       eventSink?.emit({
         event: "task_checks_recorded",
         taskId: task.id,
+        attempt: task.attempt,
         checkedTaskId: work.checkedTaskId,
         revision,
         baselineCommit: foundation.commit,

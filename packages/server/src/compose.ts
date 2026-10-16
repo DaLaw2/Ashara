@@ -207,7 +207,12 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   // the injected clock. A ladder attempt's capability, attempt number, validation errors and raw
   // excerpt are in no llm_calls column, and an attempt the ladder judged invalid can be an ok
   // provider call there.
-  const eventLog = createEventLog(ports.clock, (line) => console.log(line));
+  // An event its schema refuses is logged at error with its issues, never thrown into the caller.
+  const eventLog = createEventLog(
+    ports.clock,
+    (line) => console.log(line),
+    (error) => console.error("[event] refused:", error),
+  );
   const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
 
   // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before

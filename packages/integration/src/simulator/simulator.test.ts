@@ -314,8 +314,9 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed([], { mutation: "question-misstates-assumption" }))).toEqual(["I9:question:A1"]);
   }, 120_000);
 
-  // The delivered report quotes the public interface file main holds, cut when it is too
-  // long, or says main holds none. The scaffold writes a short one (benign), none (1) or a long one (2).
+  // The delivered report quotes the public interface file main holds, cut when it is too long. The
+  // scaffold writes a short one (benign), none (1) or a long one (2); with none, acceptance refuses
+  // main, the repair plans the file, and the report quotes it once written.
   it("catches a delivered report whose how-to-run section is not main's public interface file", async () => {
     const scaffold = (form: number): Direction => draw("agent.scaffold.public-interface", "every", form, "scaffold");
     const oversized = await directed([scaffold(2)]);
@@ -442,7 +443,7 @@ describe("lifecycle simulator, directed", () => {
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // r8exit D1: the review rejects a correct check as outside the vision, quoting as missing the
+  // A review that rejects a correct check as outside the vision, quoting as missing the
   // very text its cited item states; Z0 finds the clause in that text, discards the rejection and
   // asks again, so nothing reopens the check (I3's review clause).
   it("discards a suite review's rejection whose missing clause the cited item states", async () => {

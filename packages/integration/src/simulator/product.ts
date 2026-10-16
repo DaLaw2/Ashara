@@ -52,6 +52,9 @@ export function isScaffoldInterface(text: string): boolean {
  */
 export const PLACEHOLDER_INTERFACE_EVIDENCE = `${PUBLIC_INTERFACE_PATH} on main is byte-identical to the one the product scaffold wrote`;
 
+/** What the planner reads when acceptance refused a main that holds no public interface file at all. */
+export const MISSING_INTERFACE_EVIDENCE = `${PUBLIC_INTERFACE_PATH} is missing from main`;
+
 /** The marker ref of the task a repair plans to update the public interface file (never a universe task's). */
 export const INTERFACE_TASK_REF = "iface";
 /** git's conflict marker lines, as `sim resolve` removes them: both sides' lines are kept. */

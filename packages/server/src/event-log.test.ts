@@ -5,9 +5,18 @@ const REFUSED = /^Event line "[a-z_]+" does not match its schema: /;
 
 const AT = Date.UTC(2026, 9, 16, 8, 30, 0, 125);
 
-function capture(): { lines: string[]; log: ReturnType<typeof createEventLog> } {
+function capture(): { lines: string[]; refused: string[]; log: ReturnType<typeof createEventLog> } {
   const lines: string[] = [];
-  return { lines, log: createEventLog({ now: () => AT }, (line) => lines.push(line)) };
+  const refused: string[] = [];
+  return {
+    lines,
+    refused,
+    log: createEventLog(
+      { now: () => AT },
+      (line) => lines.push(line),
+      (error) => refused.push(error.message),
+    ),
+  };
 }
 
 function body(line: string): Record<string, unknown> {
@@ -38,13 +47,39 @@ describe("createEventLog", () => {
     });
   });
 
-  test("an event that fails its schema is refused and nothing is written", () => {
+  test("a project's event names its project and no attempt", () => {
     const { lines, log } = capture();
-    expect(() => log.emit({ event: "task_failed", reason: "names no task" })).toThrow(REFUSED);
-    expect(() => log.emit({ event: "cycle_complete", tasksProcessed: -1, completed: 0, failed: 0, refused: 0, interrupted: 0 })).toThrow(REFUSED);
-    expect(() => log.emit({ event: "task_failed", taskId: "t-1", timestamp: "forged" })).toThrow(REFUSED);
-    expect(() => log.emit({ event: "task_failed", taskId: "t-1", timestamp: undefined })).toThrow(REFUSED);
-    expect(() => log.emit({ event: "task_failed", taskId: "t-1", cost: Number.NaN })).toThrow(REFUSED);
+    log.emit({ event: "cell_teardown_failed", projectId: "p-1", cellId: "c-1", exitCode: 1, stderr: "busy" });
+    expect(body(lines[0])).toEqual({
+      timestamp: "2026-10-16T08:30:00.125Z",
+      event: "cell_teardown_failed",
+      projectId: "p-1",
+      cellId: "c-1",
+      exitCode: 1,
+      stderr: "busy",
+    });
+  });
+
+  test("an event naming no attempt, or a value JSON cannot hold, does not compile", () => {
+    const { lines, refused, log } = capture();
+    // @ts-expect-error an attempt's event names its task and its attempt
+    log.emit({ event: "task_failed", taskId: "t-1", reason: "names no attempt" });
+    // @ts-expect-error a Date is no JSON value
+    log.emit({ event: "task_failed", taskId: "t-1", attempt: 1, at: new Date(AT) });
+    // @ts-expect-error a project's event names its project
+    log.emit({ event: "acceptance_sweep", taskId: "t-1", attempt: 1 });
     expect(lines).toEqual([]);
+    expect(refused).toHaveLength(3);
+  });
+
+  test("an event its schema still refuses is handed to refuse, never thrown, and nothing is written", () => {
+    const { lines, refused, log } = capture();
+    expect(() => log.emit({ event: "task_failed", taskId: "t-1", attempt: 1, cost: Number.NaN })).not.toThrow();
+    log.emit({ event: "cycle_complete", tasksProcessed: -1, completed: 0, failed: 0, refused: 0, interrupted: 0 });
+    log.emit({ event: "task_failed", taskId: "t-1", attempt: 1, timestamp: "forged" });
+    log.emit({ event: "task_failed", taskId: "t-1", attempt: 1, timestamp: undefined });
+    expect(lines).toEqual([]);
+    expect(refused).toHaveLength(4);
+    for (const message of refused) expect(message).toMatch(REFUSED);
   });
 });

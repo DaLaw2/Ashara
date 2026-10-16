@@ -106,19 +106,20 @@ function sessionLine(index: number, s: Session): string {
 
 /**
  * Whether a session's model calls, if it made any, can never be tied to an attempt: it ended, or
- * was closed, with no attempt recorded and may have called a model before it did. An open session
- * is not: it is in flight, and its calls precede the attempt record it has yet to write. A session
- * that completed without an attempt is not: its work was already delivered, so it ran no attempt.
+ * was closed, with no attempt recorded, and its row does not show whether it called a model before
+ * it did. That includes a session that completed without an attempt: its row records the end, not
+ * the absence of a call. An open session is not: it is in flight, and its calls precede the attempt
+ * record it has yet to write.
  */
 function mayHoldUntiedCalls(s: Session): boolean {
   switch (s.attempt.kind) {
     case "reconciled":
     case "predates-attempt-columns":
     case "unrecorded":
+    case "completed-without-attempt":
       return true;
     case "recorded":
     case "open":
-    case "completed-without-attempt":
       return false;
   }
 }
@@ -162,6 +163,10 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
         `  UNTIED: ${callCount} llm_calls row(s) on this task and ${untied} session(s) that ended without a recorded attempt; ` +
           "those calls cannot be tied to an attempt",
       );
+    } else if (task.sessions.length === 0 && callCount > 0) {
+      // A dispatch that runs no agent, such as a review of the plan's suites, opens no dev session.
+      untiedTasks += 1;
+      lines.push(`  UNTIED: ${callCount} llm_calls row(s) on this task and no dev session; those calls cannot be tied to an attempt`);
     }
     if (inFlight > 0 && callCount > 0) {
       lines.push(`  in flight: ${inFlight} session(s) not yet terminal; their calls are tied once their attempt is recorded`);

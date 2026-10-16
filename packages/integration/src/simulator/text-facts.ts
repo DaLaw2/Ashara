@@ -601,7 +601,7 @@ function quotedLead(commit: string): string {
 
 /** How the delivered report says the product has no public interface file, as the oracle words it. */
 function noneLine(commit: string): string {
-  return `How to run the product is not on record: it has no public interface file. ${PUBLIC_INTERFACE_PATH} is not on main at commit ${commit}.`;
+  return `How to run the product is not on record: its public interface file is missing. ${PUBLIC_INTERFACE_PATH} is not on main at commit ${commit}.`;
 }
 
 const CUT_SAID = "so only its start and end are quoted";
@@ -651,8 +651,8 @@ function quoteOf(quoted: string, file: string): "whole" | "cut" | null {
  * marker counting exactly what was cut, and the report says it was cut exactly when it was; with no
  * such file on main, the report says the product has none, naming the file. A delivered main whose
  * file is still a scripted scaffold's was accepted on a placeholder's description: the report then
- * quotes something false to the client however faithfully it quotes. Not judged where no checkout
- * is held.
+ * quotes something false to the client however faithfully it quotes. A delivered main with no such
+ * file was accepted with no description at all. Not judged where no checkout is held.
  */
 function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
   const onMain = records.interfaceOnMain;
@@ -666,6 +666,7 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
     }
     const block = quotedBlock(report.body, quotedLead(commit));
     if (file.kind === "absent") {
+      add("delivered-absent-interface", `the project was delivered with no ${PUBLIC_INTERFACE_PATH} on main at commit ${commit.slice(0, 12)}`);
       if (block !== null || !report.body.includes(`\n\n${noneLine(commit)}`)) {
         add("delivered-interface", `main holds no ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report does not say "${noneLine(commit)}"`);
       }

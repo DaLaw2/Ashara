@@ -18,10 +18,6 @@ export {
   SubstrateUnavailable,
 } from "./errors.js";
 export { CellExecFailed } from "./errors.js";
-/** @testseam readCellLimits and the PodmanSubstrate constructor throw it; exported so a caller can narrow by class (podman.test.ts does) */
-export { CellLimitsInvalid } from "./errors.js";
-/** @testseam teardownAll and reconcileOrphans throw it; exported so a caller can narrow by class (podman.test.ts does) */
-export { TeardownIncomplete } from "./errors.js";
 /** @testseam the integration cell.podman.test.ts asserts the refusal class; loadBaseCell throws it */
 export { BaseCellConfigInvalid } from "./errors.js";
 /** @testseam the integration exit-probes.podman.test.ts plants a control file under it; the cell's own paths are its production callers */

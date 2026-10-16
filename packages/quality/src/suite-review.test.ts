@@ -91,7 +91,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     const prompts: string[] = [];
     const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
 
-    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [] });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [] });
     expect(prompts).toHaveLength(1);
     for (const text of [...VISION, `## Check task ${CHECK_A}`, `## Check task ${CHECK_B}`, "sh checks/count.sh", "sh checks/empty.sh", "--- file checks/t.sh"]) {
       expect(prompts[0]).toContain(text);
@@ -106,6 +106,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       kind: "problems",
       reviewed: [CHECK_A, CHECK_B],
       setAside: [],
+      released: [],
       problems: [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction", problem: problem.problem, evidence: problem.evidence }],
     });
   });
@@ -144,7 +145,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
 
   test("an Abandoned check task is set aside and the other suites are reviewed", async () => {
     const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }]), source: source("Abandoned"), publicInterface: INTERFACE });
-    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A], setAside: [CHECK_B] });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A], setAside: [CHECK_B], released: [] });
   });
 
   test("a review task with no vision items is refused before any model call", async () => {
@@ -177,35 +178,92 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompt).toContain("Using a\n  form the public interface names (a command, an argument, a file, an exit status) is never outside");
   });
 
-  test("an outside-vision finding whose clause no cited item states stands, with what it was judged against", async () => {
-    const finding = {
-      checkTasks: [CHECK_A],
-      kind: "outside-vision",
-      judgedItems: ["S1"],
-      missingClause: "prints the row count",
-      problem: "prints-count requires a row count no cited item asks for",
-      evidence: "sh checks/count.sh",
-    };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [finding] }]), source: source(), publicInterface: INTERFACE });
+  // A rejection the cited text does not disprove is a judgement: it stands only when a second,
+  // independent review reaches it too, and it is told as a judgement, beside the cited text.
+  const rowCount = {
+    checkTasks: [CHECK_A],
+    kind: "outside-vision",
+    check: "prints-count",
+    judgedItems: ["S1"],
+    missingClause: "prints the row count",
+    problem: "prints-count requires a row count no cited item asks for",
+    evidence: "sh checks/count.sh",
+  };
+
+  test("a rejection both independent reviews reach is routed as the reviewers' judgement, the clause beside the cited text", async () => {
+    const prompts: string[] = [];
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [rowCount] }], prompts), source: source(), publicInterface: INTERFACE });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({
       kind: "problems",
       reviewed: [CHECK_A, CHECK_B],
       setAside: [],
+      released: [],
       problems: [
         {
           checkTaskIds: [CHECK_A],
           kind: "outside-vision",
-          problem: `${finding.problem} (judged against S1; none of the items its task cites states "prints the row count")`,
-          evidence: finding.evidence,
+          problem:
+            `${rowCount.problem} This is the reviewers' judgement, not a verified fact: two independent reviews each judged check ` +
+            `"prints-count" to require "prints the row count", which they read none of its task's cited items as asking for ` +
+            `(judged against S1). The clause and the items, side by side: required "prints the row count"; cited S1: "${SCOPE.text}".`,
+          evidence: rowCount.evidence,
         },
       ],
     });
+    // The second review is a fresh call on the same prompt: it never sees the first verdict.
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toBe(prompts[0]);
+    expect(prompts[1]).not.toContain(rowCount.missingClause);
+  });
+
+  test("a paraphrased false rejection the second review does not reach is released as passing review, both judgements kept", async () => {
+    const prompts: string[] = [];
+    const paraphrase = {
+      checkTasks: [CHECK_B],
+      kind: "outside-vision",
+      check: "stdout-empty",
+      judgedItems: ["A3"],
+      missingClause: "refuses malformed rows with a line number",
+      problem: "stdout-empty requires refusing malformed rows, which no cited item asks for",
+      evidence: "sh checks/empty.sh",
+    };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [paraphrase] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({
+      kind: "clean",
+      reviewed: [CHECK_A, CHECK_B],
+      setAside: [],
+      released: [
+        {
+          checkTaskId: CHECK_B,
+          check: "stdout-empty",
+          first: `check "stdout-empty" is outside the vision, requiring "${paraphrase.missingClause}": ${paraphrase.problem}`,
+          second: [],
+        },
+      ],
+    });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toBe(prompts[0]);
+  });
+
+  test("a second review that rejects a different check of the task does not confirm the first's rejection", async () => {
+    const other = { ...rowCount, checkTasks: [CHECK_B], check: "stdout-empty", judgedItems: ["A3"], missingClause: "prints nothing" };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [other] }]), source: source(), publicInterface: INTERFACE });
+    const outcome = await reviewer.review(TASK, PROJECT_PATH);
+    expect(outcome).toMatchObject({ kind: "clean", released: [{ checkTaskId: CHECK_A, check: "prints-count", second: [] }] });
+  });
+
+  test("a rejection naming a check its check task did not write is re-asked", async () => {
+    const prompts: string[] = [];
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [{ ...rowCount, check: "ghost-check" }] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean" });
+    expect(prompts[1]).toContain(`judged check "ghost-check", which check task ${CHECK_A} did not write (it wrote [prints-count])`);
   });
 
   // A model shown an item whole can still read half of it and reject a check the other half requires.
   const misread = {
     checkTasks: [CHECK_B],
     kind: "outside-vision",
+    check: "stdout-empty",
     judgedItems: ["A3"],
     missingClause: "Refused, with their line-number",
     problem: "stdout-empty requires refusing malformed rows with a line number, which no cited item asks for",
@@ -217,7 +275,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       const prompts: string[] = [];
       const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misread] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
 
-      expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [] });
+      expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [] });
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain(`but A3 states it: "${REFUSAL.text}"`);
     }

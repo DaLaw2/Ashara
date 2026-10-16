@@ -53,7 +53,7 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
  * A store and project over one ready project: a block takes it out of readiness (as the projects
  * row's status does), and every sweep fault is counted on it.
  */
-function harness(sweep: Sweep) {
+function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: string; readonly mergeCommit: string | null }> = SCAFFOLDS) {
   const accepted: string[] = [];
   const defects: Array<{ details: string; writes: Array<{ op: string; status: string; source?: string }> }> = [];
   const created: WorkItem[] = [];
@@ -62,7 +62,7 @@ function harness(sweep: Sweep) {
   let blocked = false;
   const acceptance: AcceptanceStore = {
     readyForAcceptance: async () =>
-      blocked ? [] : [{ projectId, workspacePath: "/tmp/ashara-acceptance-test", goalTaskIds: ["g1", "g2"], scaffoldMerges: SCAFFOLDS }],
+      blocked ? [] : [{ projectId, workspacePath: "/tmp/ashara-acceptance-test", goalTaskIds: ["g1", "g2"], scaffoldMerges }],
     recordAccepted: async (record) => {
       accepted.push(record.mainCommit);
       return "accepted";
@@ -191,6 +191,45 @@ describe("the acceptance sweep", () => {
     expect(defect?.title).toBe(`Acceptance on main ${MAIN.slice(0, 12)}: update PUBLIC_INTERFACE.md`);
     expect(defect?.taskSpec?.goal).toContain("Update PUBLIC_INTERFACE.md so it states how the delivered product is started, configured and called");
     expect(defect?.taskSpec?.deliverables).toEqual(["PUBLIC_INTERFACE.md, stating the delivered product's public interface"]);
+  });
+
+  test("a main with no public interface file is a defect asking to restore it, given up for a repair", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const details = "PUBLIC_INTERFACE.md is missing from main: no file states the delivered product's public interface.";
+    const { deps, accepted, defects, created } = harness({
+      kind: "ran",
+      passed: false,
+      mainCommit: MAIN,
+      environmentVersion: "v1",
+      checkedTasks: ["g1", "g2"],
+      uncheckedTasks: [],
+      publicInterface: { kind: "absent", file: "PUBLIC_INTERFACE.md" },
+      details,
+    });
+    expect(await runAcceptanceSweeps(deps)).toBe(0);
+    expect(accepted).toEqual([]);
+    expect(defects[0]?.writes.at(-1)).toEqual({ op: "save", status: "Abandoned", source: "acceptance_failed" });
+    const [defect] = created;
+    expect(defect?.title).toBe(`Acceptance on main ${MAIN.slice(0, 12)}: restore PUBLIC_INTERFACE.md`);
+    expect(defect?.taskSpec?.goal).toContain("Restore PUBLIC_INTERFACE.md so it states how the delivered product is started, configured and called");
+    expect(defect?.taskSpec?.deliverables).toEqual(["PUBLIC_INTERFACE.md, stating the delivered product's public interface"]);
+  });
+
+  test("a Completed scaffold with no recorded merge halts the project once, as a fault the operator ends, and is never swept", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { deps, sweeps, defects, blocks, resume, faults } = harness(
+      { kind: "faulted", mainCommit: MAIN, error: sweepFault() },
+      [...SCAFFOLDS, { taskId: "s2", mergeCommit: null }],
+    );
+    for (let round = 0; round < 3; round++) {
+      await runAcceptanceSweeps(deps);
+      resume();
+    }
+    expect(sweeps).toEqual([]);
+    expect(defects).toEqual([]);
+    expect(faults()).toBe(0);
+    expect(blocks).toEqual([{ projectId, cause: expect.objectContaining({ category: "fault", errorClass: "ScaffoldMergeUnrecorded" }) }]);
+    expect(blocks[0].cause.reason).toContain("s2");
   });
 
   test("a sweep the substrate could not run halts the project on infrastructure with the observed error", async () => {

@@ -14,6 +14,7 @@ import {
   LAYOUT_FILE,
   MANIFEST_FILE,
   MISREAD_REJECTION_MARKER,
+  MISSING_INTERFACE_EVIDENCE,
   PLACEHOLDER_INTERFACE_EVIDENCE,
   PUBLIC_INTERFACE_PATH,
   RECIPE_DEFECT_SYMPTOM,
@@ -338,11 +339,12 @@ export class StandIns {
 
   /**
    * The universe's tasks; a repair whose evidence says acceptance refused main's public interface
-   * file as the scaffold's also plans a task to update it, which no universe task's checks ask for.
+   * file as the scaffold's, or as missing, also plans a task to write it, which no universe task's
+   * checks ask for.
    */
   private plan(prompt: string): unknown {
     const { universe } = this.context;
-    const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE)
+    const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE) || prompt.includes(MISSING_INTERFACE_EVIDENCE)
       ? [
           {
             ref: INTERFACE_TASK_REF,
@@ -397,6 +399,7 @@ export class StandIns {
         problems.push({
           checkTasks: [row.checkTaskId],
           kind: "outside-vision",
+          check: row.name,
           judgedItems: cited.map((item) => item.id),
           missingClause: `does ${spec.requires.join(" and ")}`,
           problem: `Check ${row.name} asks for behaviour no vision item names.`,
@@ -404,7 +407,8 @@ export class StandIns {
         });
       }
     }
-    // A misread (r8exit D1): a correct check rejected as outside the vision, quoting as missing the very text its cited item states.
+    // A misread: a correct check rejected as outside the vision, quoting as missing the very text its cited item
+    // states. Z0 must find that text in the cited item and discard the rejection, so a correct check is never reopened on it.
     const correct = rows.find((row) => specsOf(row.files).some((spec) => spec.kind === "correct"));
     if (correct !== undefined && this.context.tape.chance("model.suite-review.misread", this.context.rates.reviewMisread)) {
       const [item] = await this.citedBy(correct.checkTaskId);
@@ -413,6 +417,7 @@ export class StandIns {
         problems.push({
           checkTasks: [correct.checkTaskId],
           kind: "outside-vision",
+          check: correct.name,
           judgedItems: [item.id],
           missingClause: item.text,
           problem: `Check ${correct.name} asks for behaviour no cited item names (${MISREAD_REJECTION_MARKER}).`,

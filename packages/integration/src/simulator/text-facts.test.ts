@@ -152,7 +152,7 @@ describe("checkTextFacts, the delivered report's standings", () => {
 describe("checkTextFacts, the delivered report's quote of the public interface", () => {
   const commit = "d".repeat(40);
   const lead = `How to run it: the product's public interface, quoted as PUBLIC_INTERFACE.md reads on main at commit ${commit}.`;
-  const none = `How to run the product is not on record: it has no public interface file. PUBLIC_INTERFACE.md is not on main at commit ${commit}.`;
+  const none = `How to run the product is not on record: its public interface file is missing. PUBLIC_INTERFACE.md is not on main at commit ${commit}.`;
   const report = (section: string) => ({ sweepId: "s1", mainCommit: commit, visionAtAcceptance: 1, body: `Your project is delivered.\n\n${section}\n\nNothing more is built.` });
   const onMain = (text: string | null): TextFactRecords["interfaceOnMain"] => ({
     kind: "read",
@@ -169,8 +169,9 @@ describe("checkTextFacts, the delivered report's quote of the public interface",
   });
 
   it("holds the report to saying the product has none exactly when main holds none", () => {
-    expect(judged(null, none)).toEqual([]);
-    expect(judged(null, `${lead}\n\`\`\`\nRun: wc.py\n\`\`\``)).toEqual(["delivered-interface"]);
+    // Acceptance refuses a main with no interface file, so a delivery of one is named whatever the report says.
+    expect(judged(null, none)).toEqual(["delivered-absent-interface"]);
+    expect(judged(null, `${lead}\n\`\`\`\nRun: wc.py\n\`\`\``)).toEqual(["delivered-absent-interface", "delivered-interface"]);
   });
 
   it("accepts a cut quote only with its start, its end, an exact count, and a sentence saying so", () => {

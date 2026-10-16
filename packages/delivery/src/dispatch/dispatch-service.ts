@@ -414,6 +414,7 @@ export class DispatchService {
     eventSink?.emit({
       event: "task_started",
       taskId: task.id,
+      attempt: task.attempt,
       goal: task.taskSpec?.goal ?? task.title,
       // The stored grade as it is (ADR-074 addendum 2 d70), never a default: staffing refuses a task
       // without one, and the model it is staffed with is emitted when its attempt starts.
@@ -476,6 +477,7 @@ export class DispatchService {
       eventSink?.emit({
         event: "environment_resolved",
         taskId: task.id,
+        attempt: task.attempt,
         version: environment.version,
         commit: environment.commit,
         imageId: environment.imageId,
@@ -641,7 +643,7 @@ export class DispatchService {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "a throw out of the dispatch");
       return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink);
     } finally {
-      await this.verification.teardownCell(task.id, cell);
+      await this.verification.teardownCell({ taskId: task.id, attempt: task.attempt }, cell);
     }
   }
 

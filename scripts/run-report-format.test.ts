@@ -34,13 +34,23 @@ function evidence(sessions: readonly Session[]): Evidence {
 }
 
 describe("formatRunReport UNTIED", () => {
-  test("an in-flight session and one completed as already delivered leave a task's calls tied", () => {
-    const text = formatRunReport(
-      evidence([session(1, { kind: "open" }, "Preparing"), session(2, { kind: "completed-without-attempt", endDetail: "already delivered" }, "Completed")]),
-    ).text;
+  test("an in-flight session leaves a task's calls tied", () => {
+    const text = formatRunReport(evidence([session(1, { kind: "open" }, "Preparing")])).text;
     expect(text).not.toContain("UNTIED:");
     expect(text).toContain("0 task(s) UNTIED");
     expect(text).toContain("in flight: 1 session(s) not yet terminal");
+  });
+
+  test("a session completed without an attempt does not show it made no call, so the task's calls are untied", () => {
+    const text = formatRunReport(evidence([session(1, { kind: "completed-without-attempt", endDetail: "already delivered" }, "Completed")])).text;
+    expect(text).toContain("UNTIED: 2 llm_calls row(s) on this task and 1 session(s) that ended without a recorded attempt");
+    expect(text).toContain("1 task(s) UNTIED");
+  });
+
+  test("calls on a task with no dev session, as a review of the plan's suites makes, are untied", () => {
+    const text = formatRunReport(evidence([])).text;
+    expect(text).toContain("UNTIED: 2 llm_calls row(s) on this task and no dev session");
+    expect(text).toContain("1 task(s) UNTIED");
   });
 
   test("a session closed as a crash orphan leaves the task's calls untied", () => {

@@ -8,6 +8,7 @@ import { createCellBackend } from "./cell-backend.js";
 import { readCellLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
+  CellLimitsInvalid,
   CellStartFailed,
   CellTeardownFailed,
   InvalidCellRequest,
@@ -16,8 +17,8 @@ import {
   PodmanCommandFailed,
   ProcessSpawnFailed,
   SubstrateUnavailable,
+  TeardownIncomplete,
 } from "./errors.js";
-import { CellLimitsInvalid, TeardownIncomplete } from "./index.js";
 import { PodmanSubstrate, type CellSpec } from "./podman.js";
 import type { ProcessRequest, ProcessResult } from "./process-runner.js";
 
