@@ -443,9 +443,24 @@ function isOutsideVision(finding: ReviewFinding): finding is OutsideVisionFindin
 }
 
 function findingLine(finding: ReviewFinding): string {
-  if (finding.kind === "contradiction") return `contradiction in ${finding.checkTasks.join(", ")}: ${finding.problem}`;
-  if (finding.kind === "undecided-item") return `cited item ${finding.item} is decided by no check: ${finding.problem}`;
-  return `check ${JSON.stringify(finding.check)} is outside the vision, requiring ${JSON.stringify(finding.missingClause)}: ${finding.problem}`;
+  switch (finding.kind) {
+    case "contradiction":
+      return `contradiction in ${finding.checkTasks.join(", ")}: ${finding.problem}`;
+    case "undecided-item":
+      return `cited item ${finding.item} is decided by no check: ${finding.problem}`;
+    case "outside-vision":
+      return `check ${JSON.stringify(finding.check)} is outside the vision, requiring ${JSON.stringify(finding.missingClause)}: ${finding.problem}`;
+  }
+}
+
+/** A contradiction or undecided-item finding's problem as the reopened check author reads it. */
+function routedProblem(finding: Exclude<ReviewFinding, OutsideVisionFinding>): string {
+  switch (finding.kind) {
+    case "contradiction":
+      return finding.problem;
+    case "undecided-item":
+      return `Cited item ${finding.item} is decided by none of the checks: ${finding.problem}`;
+  }
 }
 
 /**
@@ -513,7 +528,7 @@ export class SuiteReviewer implements SuiteReviewing {
             {
               checkTaskIds: [...new Set(finding.checkTasks)],
               kind: finding.kind,
-              problem: finding.kind === "undecided-item" ? `Cited item ${finding.item} is decided by none of the checks: ${finding.problem}` : finding.problem,
+              problem: routedProblem(finding),
               evidence: finding.evidence,
             },
           ],

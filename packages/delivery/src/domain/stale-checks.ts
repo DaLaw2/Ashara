@@ -320,9 +320,25 @@ function namedCheckTasks(problems: readonly SuiteReviewProblem[]): string[] {
   return [...new Set(problems.flatMap((problem) => problem.checkTaskIds))];
 }
 
-function kindText(kind: SuiteReviewProblem["kind"]): string {
-  return kind === "contradiction" ? "checks that contradict each other" : "a check outside the task's cited vision items";
-}
+/**
+ * Per finding kind, its label and what the check author does about it. Keyed by the whole kind
+ * union so a new kind does not compile until its author is told what it asks for: an undecided
+ * item asks for a check added, never for one dropped.
+ */
+const PROBLEM_KINDS: Readonly<Record<SuiteReviewProblem["kind"], { readonly label: string; readonly fix: string }>> = {
+  contradiction: {
+    label: "checks that contradict each other",
+    fix: "change checks that no product could pass together with the other checks named, so that one product can pass them all",
+  },
+  "outside-vision": {
+    label: "a check outside the task's cited vision items",
+    fix: "drop or narrow a check that tests behaviour no vision item the task cites asks for",
+  },
+  "undecided-item": {
+    label: "a cited item no check decides",
+    fix: "add a check that decides a cited item no check decides: a product that does not do what the item states fails it",
+  },
+};
 
 /**
  * The review's problems as the check author reads them in its reopened task's brief, and every
@@ -335,15 +351,15 @@ function reviewBrief(
   earlier: readonly Omit<SuiteReviewProblem, "checkTaskIds">[],
 ): string {
   const own = problems.filter((problem) => problem.checkTaskIds.includes(checkTaskId));
+  const fixes = [...new Set(own.map((problem) => problem.kind))].map((kind) => PROBLEM_KINDS[kind].fix);
   return [
     `A review of every check this plan's check tasks wrote, read together with the vision before any of the work ` +
       `started, found problems with the checks this task recorded. Define the task's checks again so that none of ` +
-      `these remains: checks that no product could pass together with the other checks named, or that test behaviour ` +
-      `no vision item the task cites asks for. Keep every check that is not part of a problem.`,
+      `these remains: ${fixes.join("; ")}. Keep every check that is not part of a problem.`,
     ...own.map((problem, i) => {
       const others = problem.checkTaskIds.filter((id) => id !== checkTaskId);
       return [
-        `Problem ${i + 1} (${kindText(problem.kind)}): ${problem.problem}`,
+        `Problem ${i + 1} (${PROBLEM_KINDS[problem.kind].label}): ${problem.problem}`,
         others.length > 0 ? `It also involves the checks of check task(s) ${others.join(", ")}.` : "",
         `Evidence: ${problem.evidence}`,
       ]
@@ -355,7 +371,7 @@ function reviewBrief(
       : [
           `Earlier reviews found these problems in this task's checks too. Your new checks must not bring any of them ` +
             `back:\n` +
-            earlier.map((problem, i) => `Earlier problem ${i + 1} (${kindText(problem.kind)}): ${problem.problem}\nEvidence: ${problem.evidence}`).join("\n"),
+            earlier.map((problem, i) => `Earlier problem ${i + 1} (${PROBLEM_KINDS[problem.kind].label}): ${problem.problem}\nEvidence: ${problem.evidence}`).join("\n"),
         ]),
   ].join("\n\n");
 }

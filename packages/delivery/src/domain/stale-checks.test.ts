@@ -131,6 +131,24 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     expect(brief).toContain("Evidence: compact.sh: kill -9");
   });
 
+  test("an undecided cited item is briefed as undecided and asks for a check added, never as a check outside the vision", () => {
+    const review = reviewTask();
+    const a = checkTaskFor("impl-a");
+    const exit = exitSuiteReview(review, new Map([[a.id, a]]), {
+      problems: [{ checkTaskIds: [a.id], kind: "undecided-item", problem: "Cited item scope-1 is decided by none of the checks: no check reads a month's total", evidence: "sh checks/count.sh" }],
+      timesNamed: new Map([[a.id, 1]]),
+      earlierFindings: new Map([[a.id, []]]),
+    });
+
+    expect(exit.kind).toBe("reopened");
+    const brief = a.blockedReason?.source === "replan" ? a.blockedReason.replanContext.detail : "";
+    expect(brief).toContain("Problem 1 (a cited item no check decides): Cited item scope-1 is decided by none of the checks");
+    expect(brief).toContain("add a check that decides a cited item no check decides");
+    expect(brief).toContain("Keep every check that is not part of a problem.");
+    expect(brief).not.toContain("outside the task's cited vision items");
+    expect(brief).not.toContain("no vision item the task cites asks for");
+  });
+
   test("findings naming a check task with no record of its earlier reviews are refused before anything is reopened", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");
