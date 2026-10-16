@@ -134,8 +134,9 @@ function isRequestRejection(error: APICallError): boolean {
  * of Ashara's configuration is checked first: it carries the provider's own HTTP error as its cause.
  * A 4xx rejection of the request (400, 413, 422 and the rest but 408 and 429) is Ashara's: the
  * provider refused what Ashara sent.
+ * @testseam exported for the integration fault-classifiers.test.ts; LLMGateway is its production caller
  */
-function providerFailureOf(error: unknown): ProviderFailure {
+export function providerFailureOf(error: unknown): ProviderFailure {
   for (let current: unknown = error; current instanceof Error; current = current.cause) {
     if (current instanceof ProviderConfigurationRejected) return "ashara";
   }

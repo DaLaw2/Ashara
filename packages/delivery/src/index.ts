@@ -61,6 +61,8 @@ export { FirstPlanner } from "./first-plan.js";
 /** @testseam the integration first-plan tests type their store through it; createFirstPlanStore is its production supplier */
 export type { FirstPlanStore } from "./first-plan.js";
 export { Replanner } from "./replan.js";
+/** @testseam the integration fault-classifiers.test.ts feeds it a last failure that names no party; Replanner.revise is its production caller */
+export { exhaustedRevisionCause } from "./replan.js";
 /** @testseam the integration replan-store.test.ts types its store through it; createReplanStore is its production supplier */
 export type { ReplanStore } from "./replan.js";
 export { createFirstPlanStore } from "./stores/first-plan-store.js";

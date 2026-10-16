@@ -28,6 +28,7 @@ interface ProjectAwaitingReplanRow {
   readonly repairsAwaited: readonly string[];
   readonly replanAttempts: number;
   readonly replanLastError: string | null;
+  readonly replanLastFailure: string | null;
   readonly revisionsSinceReview: number;
   readonly repairsSinceReview: number;
   readonly nextRevision: number;
@@ -62,6 +63,7 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
       name: projects.name,
       replanAttempts: projects.replanAttempts,
       replanLastError: projects.replanLastError,
+      replanLastFailure: projects.replanLastFailure,
       revisionsSinceReview: revisionsSince("client_change", "replan_bound"),
       repairsSinceReview: revisionsSince("repair", "plan_repair"),
       nextRevision: sql<unknown>`(SELECT COALESCE(max(r.revision), 1) + 1 FROM plan_revisions r WHERE r.project_id = projects.id)`,
@@ -108,6 +110,7 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
         repairsAwaited: awaited.map((repair) => repair.id),
         replanAttempts: row.replanAttempts,
         replanLastError: row.replanLastError,
+        replanLastFailure: row.replanLastFailure,
         ...counts,
         vision: row.vision,
       };
@@ -359,7 +362,7 @@ export async function withPlanRevisionTransaction(
       }
       await tx
         .update(projects)
-        .set({ replanAttempts: 0, replanLastError: null })
+        .set({ replanAttempts: 0, replanLastError: null, replanLastFailure: null })
         .where(eq(projects.id, projectId));
     });
   } catch (err) {
@@ -392,11 +395,11 @@ class ProjectNotAwaitingReplan extends Error {
   }
 }
 
-/** Counts one failed attempt to revise the plan, with its error; returns the count after it. */
-export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, error: string): Promise<number> {
+/** Counts one failed attempt to revise the plan, with its error and whose failure it was; returns the count after it. */
+export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, error: string, failure: "model" | "provider"): Promise<number> {
   const [row] = await db
     .update(projects)
-    .set({ replanAttempts: sql`${projects.replanAttempts} + 1`, replanLastError: error })
+    .set({ replanAttempts: sql`${projects.replanAttempts} + 1`, replanLastError: error, replanLastFailure: failure })
     .where(
       and(
         eq(projects.id, projectId),

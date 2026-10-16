@@ -6,7 +6,7 @@ import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
-import { projectBlockCause } from "./project-halt.js";
+import { projectBlockCause, recordedFailureOf } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf, statedChangeOf } from "./acl/engagement-acl.js";
 import { modelCallFailureOf } from "./acl/finance-acl.js";
@@ -95,6 +95,8 @@ interface ProjectAwaitingReplan {
   readonly rosterRows: unknown;
   readonly replanAttempts: number;
   readonly replanLastError: string | null;
+  /** Whose failure the last counted attempt was, as stored (migration 066); read by recordedFailureOf. */
+  readonly replanLastFailure: string | null;
   /** Revisions for client changes written since the operator last reviewed a replan_bound block (all of them when never). */
   readonly revisionsSinceReview: number;
   /** Plan repairs written since the operator last reviewed a plan_repair block (all of them when never). */
@@ -174,8 +176,8 @@ export interface ReplanStore {
    * started, an answer arrived).
    */
   writeRevision(write: PlanRevisionWrite): Promise<"written" | "moved">;
-  /** Counts a failed attempt with its error; returns the count after it. */
-  recordFailedAttempt(projectId: ProjectId, error: string): Promise<number>;
+  /** Counts a failed attempt with its error and whose failure it was; returns the count after it. */
+  recordFailedAttempt(projectId: ProjectId, error: string, failure: RevisionFailure): Promise<number>;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
@@ -238,23 +240,34 @@ class PlanRepairBoundReached extends Error {
 /** Whose failure a counted revision attempt was: Ashara's own is never counted (Replanner.revise). */
 type RevisionFailure = Exclude<ModelCallFailure, "ashara">;
 
-/** The halt an exhausted revision records, by whose failure its last attempt was. */
-function exhaustedRevisionCause(exhausted: ReplanAttemptsExhausted, failure: RevisionFailure): ProjectBlockCause {
-  const cause = projectBlockCause(exhausted);
+/**
+ * The halt an exhausted revision records, by whose failure its last attempt was: the cycle that
+ * counted it classified it (modelCallFailureOf), and a later cycle reads it back from the record
+ * (recordedFailureOf), so both halt the same. A last failure that names no party is Ashara's (`fault`).
+ * @testseam exported for the integration fault-classifiers.test.ts; Replanner.revise is its production caller
+ */
+export function exhaustedRevisionCause(projectId: ProjectId, attempts: number, lastError: string, failure: ModelCallFailure): ProjectBlockCause {
+  const cause = projectBlockCause(new ReplanAttemptsExhausted(projectId, attempts, lastError, failure));
   switch (failure) {
     case "model":
       return { ...cause, category: "replan_stopped" };
     case "provider":
       return { ...cause, category: "replan_provider_failed" };
+    case "ashara":
+      return cause;
   }
 }
 
-/** Revising the plan failed on every attempt: the change is not planned, and the old plan is not dispatched past it. */
+/**
+ * Revising the plan failed on every attempt: the change is not planned, and the old plan is not
+ * dispatched past it. `failure` is whose failure the last attempt was.
+ */
 class ReplanAttemptsExhausted extends Error {
   constructor(
     readonly projectId: ProjectId,
     readonly attempts: number,
     readonly lastError: string,
+    readonly failure: ModelCallFailure,
   ) {
     super(`project ${projectId}: the plan could not be revised after ${attempts} attempt(s); last error: ${lastError}`);
     this.name = "ReplanAttemptsExhausted";
@@ -619,8 +632,8 @@ export class Replanner implements Replanning {
     }
     if (project.replanAttempts >= MAX_REPLAN_ATTEMPTS) {
       if (project.replanLastError === null) throw new ReplanFailureUnrecorded(projectId, project.replanAttempts);
-      const err = new ReplanAttemptsExhausted(projectId, project.replanAttempts, project.replanLastError);
-      return this.block(projectId, projectBlockCause(err));
+      const failure = recordedFailureOf(project.replanLastFailure);
+      return this.block(projectId, exhaustedRevisionCause(projectId, project.replanAttempts, project.replanLastError, failure));
     }
 
     const owners = planOwners(projectId, project.rosterRows);
@@ -807,11 +820,11 @@ export class Replanner implements Replanning {
   private async fail(project: ProjectAwaitingReplan, err: unknown, failure: RevisionFailure): Promise<ReplanOutcome> {
     const { projectId } = project;
     const error = describeErrorChain(err);
-    const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
+    const attempt = await this.deps.store.recordFailedAttempt(projectId, error, failure);
     const asked =
       project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
     console.warn(`[replan] project ${projectId} (vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
-    return this.block(projectId, exhaustedRevisionCause(new ReplanAttemptsExhausted(projectId, attempt, error), failure));
+    return this.block(projectId, exhaustedRevisionCause(projectId, attempt, error, failure));
   }
 }

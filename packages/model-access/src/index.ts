@@ -1,4 +1,6 @@
 export { LLMGateway } from "./gateway.js";
+/** @testseam the integration fault-classifiers.test.ts feeds it an unknown error; LLMGateway is its production caller */
+export { providerFailureOf } from "./gateway.js";
 export type { CapabilityLevel } from "./capability-level.js";
 export { CapabilityLevelSchema } from "./capability-level.js";
 export type { ResolvedModel } from "./gateway.js";

@@ -12,7 +12,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner, createFirstPlanStore, stepContainment } from "@ashara/delivery";
+import { FirstPlanner, ProjectHaltRepository, createFirstPlanStore, stepContainment } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import { systemClock, type ProjectId } from "@ashara/shared";
 import type { StepContainment } from "@ashara/shared";
@@ -461,6 +461,27 @@ describe("the client's answers", () => {
     expect(await haltKindOf(projectId)).toBe("model_failed");
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeNull();
     expect(await visionsOf(projectId)).toHaveLength(1);
+  });
+
+  test("an answer whose readings ran out halts again as the model's after the operator unblocks, read from its record", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [first] = questionIds;
+    if (first === undefined) throw new Error("intake posted no question");
+    const answerId = await answer(projectId, first, "Harbour.");
+    const mock = pipelineModel({ verdict: "maybe" });
+    for (let i = 0; i < 3; i++) await answers().runPending();
+    expect(await haltKindOf(projectId)).toBe("model_failed");
+    const stored = await db.execute(sql`SELECT intake_last_failure AS "failure" FROM client_messages WHERE id = ${answerId}`);
+    expect(z.array(z.object({ failure: z.string().nullable() })).parse(stored.rows)).toEqual([{ failure: "model" }]);
+    const calls = mock.doGenerateCalls.length;
+
+    await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "looked at the answer");
+    const outcomes = await answers().runPending();
+
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
+    // The exhaustion is read from the record, no reading paid for, and blamed as the cycle that counted it blamed it.
+    expect(mock.doGenerateCalls).toHaveLength(calls);
+    expect(await haltKindOf(projectId)).toBe("model_failed");
   });
 
   test("a store failure on one answer is that answer's fault: recorded with a backoff, never counted, and the other project's answer is read", async () => {

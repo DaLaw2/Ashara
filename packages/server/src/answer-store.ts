@@ -10,7 +10,7 @@ export function createAnswerStore(db: ReturnType<typeof createDb>): AnswerStore 
     openAnswers: () => listOpenAnswers(db),
     openAnswer: (answerId) => readOpenAnswer(db, answerId),
     recordAnswer: (write) => recordClientAnswer(db, write),
-    recordFailedAttempt: (answerId, error) => recordAnswerFailure(db, answerId, error),
+    recordFailedAttempt: (answerId, error, failure) => recordAnswerFailure(db, answerId, error, failure),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }

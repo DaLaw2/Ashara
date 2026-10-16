@@ -43,6 +43,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           rosterRows: await latestRosterRoles(db, row.projectId),
           replanAttempts: row.replanAttempts,
           replanLastError: row.replanLastError,
+          replanLastFailure: row.replanLastFailure,
           revisionsSinceReview: row.revisionsSinceReview,
           repairsSinceReview: row.repairsSinceReview,
           nextRevision: row.nextRevision,
@@ -96,7 +97,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
         },
       );
     },
-    recordFailedAttempt: (projectId, error) => recordReplanFailure(db, projectId, error),
+    recordFailedAttempt: (projectId, error, failure) => recordReplanFailure(db, projectId, error, failure),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }

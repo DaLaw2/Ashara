@@ -18,6 +18,8 @@ interface OpenAnswerRow {
   readonly questionId: string;
   readonly intakeAttempts: number;
   readonly intakeLastError: string | null;
+  /** Whose failure the last counted reading attempt was, as stored (migration 066). */
+  readonly intakeLastFailure: string | null;
   /** Whether the project's first plan was written when this answer was read. */
   readonly planned: boolean;
   /** The project's current vision, or null when it has none. */
@@ -52,6 +54,7 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
       questionId: questions.id,
       intakeAttempts: clientMessages.intakeAttempts,
       intakeLastError: clientMessages.intakeLastError,
+      intakeLastFailure: clientMessages.intakeLastFailure,
       firstPlannedAt: projects.firstPlannedAt,
     })
     .from(clientMessages)
@@ -80,6 +83,7 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
       questionId: row.questionId,
       intakeAttempts: row.intakeAttempts,
       intakeLastError: row.intakeLastError,
+      intakeLastFailure: row.intakeLastFailure,
       planned: row.firstPlannedAt !== null,
       vision: await visions.getCurrent(projectId),
     });
@@ -98,11 +102,11 @@ class AnswerNotOpen extends Error {
   }
 }
 
-/** Counts one failed attempt to read an unconsumed answer with its error; returns the count after it. */
-export async function recordAnswerFailure(db: DbHandle, answerId: string, error: string): Promise<number> {
+/** Counts one failed attempt to read an unconsumed answer with its error and whose failure it was; returns the count after it. */
+export async function recordAnswerFailure(db: DbHandle, answerId: string, error: string, failure: "model" | "provider"): Promise<number> {
   const [row] = await db
     .update(clientMessages)
-    .set({ intakeAttempts: sql`${clientMessages.intakeAttempts} + 1`, intakeLastError: error })
+    .set({ intakeAttempts: sql`${clientMessages.intakeAttempts} + 1`, intakeLastError: error, intakeLastFailure: failure })
     .where(
       and(
         eq(clientMessages.id, answerId),

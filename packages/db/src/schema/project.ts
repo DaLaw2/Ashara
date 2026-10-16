@@ -44,6 +44,8 @@ export const projects = pgTable("projects", {
   // last error; reset by a written revision and by the operator's unblock.
   replanAttempts: integer("replan_attempts").notNull().default(0),
   replanLastError: text("replan_last_error"),
+  // Migration 066: whose failure the last counted attempt was, 'model' or 'provider'; reset with it.
+  replanLastFailure: text("replan_last_failure"),
   // Migration 040: the cause's category, which the Liaison's plain report is chosen by.
   blockedCategory: text("blocked_category"),
   // Migration 049: acceptance sweeps that could not run, counted against the fault budget

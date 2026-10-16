@@ -698,6 +698,27 @@ describe("a late client change is planned", () => {
     expect(body).not.toContain("ReplanAttemptsExhausted");
   });
 
+  // A cycle that counted the last attempt and stopped before its halt was written (a restart) leaves
+  // the exhaustion on record: the next cycle halts from it, blamed as the counting cycle blamed it.
+  test("a revision whose attempts ran out before its halt was written halts from its record, blamed by the failure it recorded", async () => {
+    const counted = await plannedProject();
+    await contradict(counted.projectId, counted.questionId);
+    const legacy = await plannedProject();
+    await contradict(legacy.projectId, legacy.questionId);
+    const store = createReplanStore(db);
+    for (let attempt = 0; attempt < 3; attempt += 1) await store.recordFailedAttempt(counted.projectId, "stub provider unavailable", "provider");
+    // A row counted before its failure was recorded (migration 066) names no party.
+    await db.execute(sql`UPDATE projects SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed' WHERE id = ${legacy.projectId}`);
+    const mock = pipelineModel({ revision: { notTasks: "never asked" } });
+
+    const outcomes = await replanner().runPending();
+
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(["project-blocked", "project-blocked"]);
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    expect(await projectRow(counted.projectId)).toMatchObject({ status: "blocked", category: "replan_provider_failed" });
+    expect(await projectRow(legacy.projectId)).toMatchObject({ status: "blocked", category: "fault" });
+  });
+
   // The gateway wraps every failure with no fallback left in ProviderError: one the provider's HTTP
   // error or silence caused is not the model's, and one Ashara's own code threw is Ashara's, never
   // counted toward the revision's bound.

@@ -339,9 +339,14 @@ function argsError(toolName: string, error: z.ZodError): RanTool {
 
 /**
  * A cell error the model can act on (a bad path, a missing file, a utility's own non-zero exit) is
- * a tool error; anything else means the substrate failed, which the model cannot fix.
+ * a tool error; anything else ends the attempt as environment_failure, since the model cannot fix
+ * it. That stops the attempt and blames no one: the dispatch blames the substrate only for an error
+ * whose class names it (environmentErrorOf), and every other error, an unknown one included, as
+ * Ashara's own (fail-closed). Handing an unknown error to the model as the tool's own error instead
+ * would let the attempt go on as if the command had answered.
+ * @testseam exported for the integration fault-classifiers.test.ts; executeTool is its production caller
  */
-function classifyCellError(toolName: string, error: unknown): RanTool {
+export function classifyCellError(toolName: string, error: unknown): RanTool {
   if (error instanceof PathOutsideWorkspace || error instanceof InvalidCellRequest) return toolError(error.message);
   if (error instanceof CellToolFailed && error.exitCode !== null) {
     return toolError(`${toolName} failed (exit ${error.exitCode}${error.timedOut ? ", timed out" : ""}): ${error.stderr.trim() || "(no stderr)"}`);

@@ -158,6 +158,22 @@ function bodyFrom(text: string, start: number): string {
   return text.slice(start, close);
 }
 
+/** `body` with the arguments of every readEach( call cut out, its parentheses matched. */
+function withoutReadEach(body: string): string {
+  let rest = body;
+  for (let at = rest.indexOf("readEach("); at !== -1; at = rest.indexOf("readEach(")) {
+    let depth = 0;
+    let end = at + "readEach".length;
+    for (; end < rest.length; end++) {
+      if (rest[end] === "(") depth++;
+      else if (rest[end] === ")" && --depth === 0) break;
+    }
+    if (depth !== 0) throw new Error(`unbalanced readEach( call at offset ${at}`);
+    rest = rest.slice(0, at) + rest.slice(end + 1);
+  }
+  return rest;
+}
+
 /** Every call the CoreLoop class makes into its dependencies, PlanningService, or a value it imports. */
 function callsOfTheCycle(): Set<string> {
   const text = read(CORE_LOOP);
@@ -246,7 +262,13 @@ describe("the cycle's per-project steps", () => {
     for (const [key, listing] of Object.entries(LISTINGS)) {
       const listed = found.get(key);
       if (listed === undefined) continue;
-      if (listing.kind === "read-each" && !listed.includes("readEach(")) throwing.push(`${key}: does not read its rows with readEach`);
+      if (listing.kind === "read-each") {
+        // Every row read that can fail sits inside a readEach: one readEach over some rows leaves
+        // a plain map over the others free to throw for one row alone.
+        const outside = ROW_FALLIBLE.exec(withoutReadEach(listed));
+        if (!listed.includes("readEach(")) throwing.push(`${key}: does not read its rows with readEach`);
+        else if (outside !== null) throwing.push(`${key}: reads a row with ${outside[0]} outside readEach, which can throw for that row alone`);
+      }
       if (listing.kind === "own" && !listed.includes(listing.marker)) throwing.push(`${key}: no longer contains each row at ${listing.marker}`);
       if (listing.kind === "rows-only") {
         const file = key.slice(0, key.indexOf("#"));

@@ -55,6 +55,8 @@ export const clientMessages = pgTable(
     // Migration 019: failed intake attempts of a tender, with the last one's error.
     intakeAttempts: integer("intake_attempts").notNull().default(0),
     intakeLastError: text("intake_last_error"),
+    // Migration 066: whose failure an answer's last counted reading attempt was, 'model' or 'provider'.
+    intakeLastFailure: text("intake_last_failure"),
     // Migration 020: the planning outcome an outbound report tells the client about.
     reportsOn: varchar("reports_on", { length: 20 }),
     // Migration 022: an outbound question's 1-based rank among those posted with it.

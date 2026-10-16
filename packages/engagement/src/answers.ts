@@ -1,10 +1,10 @@
 import { z } from "zod";
-import type { ContextualLlm } from "@ashara/finance";
+import type { ContextualLlm, ModelCallFailure } from "@ashara/finance";
 import { modelCallFailureOf, withStructuredLadder } from "@ashara/finance";
 import type { LadderAttemptEvent } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
-import { projectBlockCause } from "@ashara/delivery/project-halt";
+import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { Vision, VisionUnreadable } from "./vision.js";
@@ -35,6 +35,8 @@ interface OpenAnswer {
   readonly questionId: string;
   readonly intakeAttempts: number;
   readonly intakeLastError: string | null;
+  /** Whose failure the last counted attempt was, as stored (migration 066); read by recordedFailureOf. */
+  readonly intakeLastFailure: string | null;
   /** Whether the project's first plan had been written when the answer was read. */
   readonly planned: boolean;
   /** The project's current vision, as stored; null when it has none. */
@@ -67,8 +69,8 @@ export interface AnswerStore {
    * that is no longer current writes nothing and returns "moved".
    */
   recordAnswer(write: AnswerWrite): Promise<AnswerRecording>;
-  /** Counts a failed attempt with its error; returns the count after it. */
-  recordFailedAttempt(answerId: string, error: string): Promise<number>;
+  /** Counts a failed attempt with its error and whose failure it was; returns the count after it. */
+  recordFailedAttempt(answerId: string, error: string, failure: Exclude<ModelCallFailure, "ashara">): Promise<number>;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
@@ -118,17 +120,18 @@ class AnswerVisionUnusable extends Error {
 
 /**
  * Reading the answer failed on every attempt: what the client said is not known, so nothing is
- * planned past it. Its cause is the last attempt's error when this cycle made it, so the halt is
- * blamed on the model or its provider; one read back from the record names no party and is Ashara's.
+ * planned past it. `failure` is whose failure the last attempt was: classified by the cycle that
+ * counted it, or read back from the record (recordedFailureOf) by a later cycle, after a restart or
+ * an unblock, so the halt blames the same party either way.
  */
 class AnswerReadingExhausted extends Error {
   constructor(
     readonly answerId: string,
     readonly attempts: number,
     readonly lastError: string,
-    options?: { readonly cause: unknown },
+    readonly failure: ModelCallFailure,
   ) {
-    super(`answer ${answerId} could not be read after ${attempts} attempts; last error: ${lastError}`, options);
+    super(`answer ${answerId} could not be read after ${attempts} attempts; last error: ${lastError}`);
     this.name = "AnswerReadingExhausted";
   }
 }
@@ -257,7 +260,8 @@ export class ClientAnswers implements LiaisonAnswers {
         const blocks =
           err instanceof AnswerVisionUnusable || err instanceof AnswerReadingExhausted || err instanceof AnswerFailureUnrecorded;
         if (!blocks) throw err;
-        return this.block(listed, projectBlockCause(err));
+        const cause = projectBlockCause(err);
+        return this.block(listed, err instanceof AnswerReadingExhausted ? { ...cause, category: modelCallBlockCategory(err.failure) } : cause);
       }
     });
   }
@@ -274,7 +278,8 @@ export class ClientAnswers implements LiaisonAnswers {
     const base = { answerId: answer.id, projectId: answer.projectId };
     if (answer.intakeAttempts >= MAX_ANSWER_ATTEMPTS) {
       if (answer.intakeLastError === null) throw new AnswerFailureUnrecorded(answer.id, answer.intakeAttempts);
-      throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError);
+      // The operator's unblock resets none of an answer's attempts: it halts again, blamed as it was.
+      throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError, recordedFailureOf(answer.intakeLastFailure));
     }
     let context = contextOf(answer);
     let reading = await this.interpret(context);
@@ -316,8 +321,9 @@ export class ClientAnswers implements LiaisonAnswers {
     try {
       return { kind: "read", reading: await this.callModel(context) };
     } catch (err) {
-      if (modelCallFailureOf(err) === "ashara") throw err;
-      return { kind: "failed", outcome: await this.fail(context.answer, err) };
+      const failure = modelCallFailureOf(err);
+      if (failure === "ashara") throw err;
+      return { kind: "failed", outcome: await this.fail(context.answer, err, failure) };
     }
   }
 
@@ -343,13 +349,13 @@ export class ClientAnswers implements LiaisonAnswers {
     return response.data;
   }
 
-  private async fail(answer: OpenAnswer, err: unknown): Promise<AnswerOutcome> {
+  private async fail(answer: OpenAnswer, err: unknown, failure: Exclude<ModelCallFailure, "ashara">): Promise<AnswerOutcome> {
     const error = describeErrorChain(err);
-    const attempt = await this.deps.store.recordFailedAttempt(answer.id, error);
+    const attempt = await this.deps.store.recordFailedAttempt(answer.id, error, failure);
     console.warn(
       `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): attempt ${attempt}/${MAX_ANSWER_ATTEMPTS} failed: ${error}`,
     );
-    if (attempt >= MAX_ANSWER_ATTEMPTS) throw new AnswerReadingExhausted(answer.id, attempt, error, { cause: err });
+    if (attempt >= MAX_ANSWER_ATTEMPTS) throw new AnswerReadingExhausted(answer.id, attempt, error, failure);
     return { kind: "failed", answerId: answer.id, projectId: answer.projectId, attempt, error };
   }
 }

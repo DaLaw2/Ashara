@@ -80,6 +80,16 @@ export function modelCallBlockCategory(failure: ModelCallFailure): "fault" | "mo
 }
 
 /**
+ * Whose failure a counted attempt was, as its record keeps it (migration 066): the model's or its
+ * provider's when the record names one; Ashara's otherwise. A record that names no party (counted
+ * before the column existed) or a value nothing names is Ashara's to look into, never the model's or
+ * the provider's.
+ */
+export function recordedFailureOf(stored: unknown): ModelCallFailure {
+  return stored === "model" || stored === "provider" ? stored : "ashara";
+}
+
+/**
  * A project's record or step failed, blamed by its cause chain through the one classifier of a failed
  * model call: the model's failure or its provider's when the chain names one, Ashara's own (`fault`,
  * which the team must repair) otherwise, every error nothing names included.

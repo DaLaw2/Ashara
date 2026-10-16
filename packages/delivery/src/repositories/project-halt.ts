@@ -215,6 +215,7 @@ export class ProjectHaltRepository extends ProjectRepository {
           blockedReason: null,
           replanAttempts: 0,
           replanLastError: null,
+          replanLastFailure: null,
           ...planningReset,
         })
         .where(eq(projects.id, id));

@@ -29,3 +29,5 @@ export { renderKnowledgeContext } from "./knowledge-context.js";
 export type { KnowledgeSection } from "./knowledge-context.js";
 export { priorAttemptFailure } from "./replan-context.js";
 export { turnFailureOf } from "./errors.js";
+/** @testseam the integration fault-classifiers.test.ts feeds it an unknown error; executeTool is its production caller */
+export { classifyCellError } from "./tools.js";
