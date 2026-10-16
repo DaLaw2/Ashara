@@ -27,7 +27,8 @@ check:
     npx eslint .
 
 # The executable-claims gate. NOT in `check`, and the reason is not that it is optional:
-# it scans CLAUDE.md, docs/*.md and .claude/commands/*.md, and ALL THREE ARE GITIGNORED.
+# it scans CLAUDE.md, .claude/commands/ and docs/ (and checks docs/investigations/ retention),
+# and ALL OF THEM ARE GITIGNORED.
 # CI checks out from git, finds zero documents, and fails closed -- correctly, but it means
 # CI can never run this gate while the claims live in untracked files. Making it pass on zero
 # documents would be the "All 0 checks passed" defect. Run it before every commit; `just save`

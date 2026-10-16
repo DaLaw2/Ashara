@@ -2,10 +2,16 @@
  * Executable-claims gate.
  *
  * Finds every ```verify block in the scan scope set by docs/README.md section 9 —
- * CLAUDE.md, .claude/commands/*.md, docs/*.md, docs/design/*.md and
- * docs/decisions/*.md — runs each command from the repo root, and compares trimmed stdout against
- * the recorded expected output. A mismatch, a non-zero exit, an unreadable
- * document, or an unparseable block is a failure. Exit non-zero on any failure.
+ * CLAUDE.md, .claude/commands/*.md, docs/*.md, docs/design/*.md,
+ * docs/decisions/*.md and docs/rules/*.md — runs each command from the repo root, and compares
+ * trimmed stdout against the recorded expected output. A mismatch, a non-zero exit, an unreadable
+ * document, or an unparseable block is a failure. Zero documents found is a failure.
+ *
+ * Also enforces docs/README.md section 7 on docs/investigations/: every entry there is
+ * cited by name from a live record (else an archive candidate) and has its INDEX.md row.
+ * Exit non-zero on any failure.
+ *
+ * The repo root is the working directory.
  *
  * Design property: only claims someone explicitly wrote into a verify block are
  * checked. A document with no verify blocks is exactly as unchecked as it was
@@ -292,15 +298,21 @@ function markdownFilesIn(dir: string): string[] {
     return fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-      .map((entry) => path.join(dir, entry.name));
+      .map((entry) => path.join(dir, entry.name))
+      .sort();
   } catch (err: unknown) {
     throw new DocumentReadError(dir, err);
   }
 }
 
-// Scan scope is docs/README.md section 9. investigations/ and archive/ are dated
-// observations that never hold verify blocks, so they are deliberately excluded.
-function discoverDocuments(root: string): string[] {
+/**
+ * The verify-block scan scope of docs/README.md section 9, plus docs/rules/*.md, which
+ * holds rules split out of CLAUDE.md together with their verify blocks.
+ * investigations/ and archive/ are dated observations that never hold verify blocks,
+ * so they are deliberately excluded.
+ * @testseam check-docs.test.ts exercises the scan scope on a fixture tree
+ */
+export function discoverDocuments(root: string): string[] {
   const docs: string[] = [];
 
   const claudeMd = path.join(root, "CLAUDE.md");
@@ -311,11 +323,163 @@ function discoverDocuments(root: string): string[] {
     path.join(root, "docs"),
     path.join(root, "docs", "design"),
     path.join(root, "docs", "decisions"),
+    path.join(root, "docs", "rules"),
   ]) {
     docs.push(...markdownFilesIn(dir));
   }
 
   return docs;
+}
+
+// ---------------------------------------------------------------------------
+// Retention (docs/README.md section 7)
+// ---------------------------------------------------------------------------
+
+interface RetentionFailure {
+  /** Repo-relative path of the offending entry or of the missing input */
+  readonly path: string;
+  readonly kind: "archive-candidate" | "unindexed" | "missing-input";
+  readonly rule: string;
+}
+
+const INVESTIGATIONS_DIR = path.join("docs", "investigations");
+const INVESTIGATIONS_INDEX = path.join(INVESTIGATIONS_DIR, "INDEX.md");
+
+/** Live records that must exist: without one, every citation it holds would read as missing. */
+const REQUIRED_LIVE_FILES = [
+  "CLAUDE.md",
+  path.join("docs", "state.toml"),
+  path.join("docs", "backlog.toml"),
+  path.join("docs", "context.md"),
+  path.join("docs", "roadmap.md"),
+];
+
+/** Live-record directories, every file in them read recursively. */
+const LIVE_TREES = [
+  path.join("docs", "design"),
+  path.join("docs", "rules"),
+  path.join(".claude", "commands"),
+  path.join(".claude", "workflows"),
+];
+
+function filesUnder(dir: string): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err: unknown) {
+    throw new DocumentReadError(dir, err);
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...filesUnder(full));
+    else if (entry.isFile()) files.push(full);
+  }
+  return files;
+}
+
+function readText(filePath: string): string {
+  try {
+    return fs.readFileSync(filePath, "utf-8");
+  } catch (err: unknown) {
+    throw new DocumentReadError(filePath, err);
+  }
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * A citation by name is the entry's name as a whole token. A path prefix such as
+ * `docs/investigations/` is allowed and a subdirectory may be cited by a path into it;
+ * an `archive/` prefix is not, since that names the archived copy, not the evidence here.
+ */
+function citesByName(text: string, name: string): boolean {
+  const pattern = new RegExp(
+    `(?<![A-Za-z0-9_.-])(?<!archive/)${escapeRegExp(name)}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`,
+  );
+  return pattern.test(text);
+}
+
+/** The first cell of every Markdown table row, without backticks, link syntax or a trailing slash. */
+function indexedNames(indexText: string): Set<string> {
+  const names = new Set<string>();
+  for (const line of indexText.split("\n")) {
+    const row = /^\|([^|]*)\|/.exec(line);
+    if (!row) continue;
+    const link = /^\s*\[([^\]]*)\]\([^)]*\)\s*$/.exec(row[1]);
+    const cell = (link ? link[1] : row[1]).replace(/`/g, "").trim().replace(/\/$/, "");
+    if (cell !== "") names.add(cell);
+  }
+  return names;
+}
+
+/**
+ * docs/README.md section 7: every file or subdirectory directly under docs/investigations/
+ * (INDEX.md aside) is cited by name from a live record, else it is an archive candidate;
+ * and section 4: each has its own INDEX.md row (a subdirectory: one row). A missing
+ * investigations directory, index or required live record is a failure, never an empty result.
+ * @testseam check-docs.test.ts exercises retention on a fixture tree
+ */
+export function checkRetention(root: string): RetentionFailure[] {
+  const missing: RetentionFailure[] = [];
+  for (const required of [INVESTIGATIONS_DIR, INVESTIGATIONS_INDEX, ...REQUIRED_LIVE_FILES]) {
+    if (!fs.existsSync(path.join(root, required))) {
+      missing.push({
+        path: required,
+        kind: "missing-input",
+        rule: "README section 7: the retention check reads this record and it is absent",
+      });
+    }
+  }
+  if (missing.length > 0) return missing;
+
+  const liveFiles = REQUIRED_LIVE_FILES.map((rel) => path.join(root, rel));
+  liveFiles.push(
+    ...markdownFilesIn(path.join(root, "docs", "decisions")).filter((f) =>
+      path.basename(f).startsWith("ADR-"),
+    ),
+  );
+  for (const tree of LIVE_TREES) {
+    const dir = path.join(root, tree);
+    if (fs.existsSync(dir)) liveFiles.push(...filesUnder(dir));
+  }
+  const liveTexts = liveFiles.map(readText);
+  const indexed = indexedNames(readText(path.join(root, INVESTIGATIONS_INDEX)));
+
+  const investigationsDir = path.join(root, INVESTIGATIONS_DIR);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(investigationsDir, { withFileTypes: true });
+  } catch (err: unknown) {
+    throw new DocumentReadError(investigationsDir, err);
+  }
+
+  const failures: RetentionFailure[] = [];
+  const indexName = path.basename(INVESTIGATIONS_INDEX);
+  for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.name === indexName) continue;
+    const isDir = entry.isDirectory();
+    const rel = path.join(INVESTIGATIONS_DIR, entry.name) + (isDir ? "/" : "");
+    const unit = isDir ? "subdirectory" : "file";
+
+    if (!liveTexts.some((text) => citesByName(text, entry.name))) {
+      failures.push({
+        path: rel,
+        kind: "archive-candidate",
+        rule: `README section 7: no live record cites this ${unit} by name`,
+      });
+    }
+    if (!indexed.has(entry.name)) {
+      failures.push({
+        path: rel,
+        kind: "unindexed",
+        rule: `README section 4: this ${unit} has no row of its own in ${INVESTIGATIONS_INDEX}`,
+      });
+    }
+  }
+  return failures;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,14 +506,15 @@ function formatMultiline(label: string, value: string, labelWidth: number): stri
 // ---------------------------------------------------------------------------
 
 function main(): void {
-  const root = path.resolve(
-    import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname),
-    "..",
-  );
+  // The repo root is the working directory (`just` runs recipes from the justfile's
+  // directory), so the script can check a checkout other than the one it lives in.
+  const root = process.cwd();
 
   let documents: string[];
+  let retentionFailures: RetentionFailure[];
   try {
     documents = discoverDocuments(root);
+    retentionFailures = checkRetention(root);
   } catch (err: unknown) {
     console.error(`\nERROR: ${describeErrorChain(err)}\n`);
     process.exit(1);
@@ -421,17 +586,28 @@ function main(): void {
       console.error(`    ${formatMultiline("actual:   ", f.actual, 14)}`);
       console.error();
     }
-    console.error(
-      `${documents.length} documents scanned, ${blocksChecked} blocks checked, ` +
-        `${commandsRun} commands run, ${failures.length} failed\n`,
-    );
+  }
+
+  if (retentionFailures.length > 0) {
+    console.error("\nRetention failures (docs/README.md sections 4 and 7):\n");
+    for (const f of retentionFailures) {
+      console.error(`  ${f.path}  [${f.kind}]`);
+      console.error(`    ${f.rule}`);
+    }
+    console.error();
+  }
+
+  const summary =
+    `${documents.length} documents scanned, ${blocksChecked} blocks checked, ` +
+    `${commandsRun} commands run, ${failures.length} claims failed, ` +
+    `${retentionFailures.length} retention failures`;
+
+  if (failures.length > 0 || retentionFailures.length > 0) {
+    console.error(`${summary}\n`);
     process.exit(1);
   }
 
-  console.log(
-    `\nAll claims verified. ${documents.length} documents scanned, ` +
-      `${blocksChecked} blocks checked, ${commandsRun} commands passed.\n`,
-  );
+  console.log(`\nAll claims verified and every investigation retained. ${summary}.\n`);
 }
 
 // Direct execution guard — when imported by tests, main() does not run
