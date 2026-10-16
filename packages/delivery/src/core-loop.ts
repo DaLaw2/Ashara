@@ -247,7 +247,8 @@ export class CoreLoop {
 
   /**
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
-   * stops and changes, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds. A project stopped here stays
+   * stops and changes, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds,
+   * the release of what attempts held, and the block reports still due. A project stopped here stays
    * stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
@@ -255,6 +256,9 @@ export class CoreLoop {
     await this.takeClientStops();
     await this.answerClientChanges();
     await this.releaseHeld();
+    // A cap halt's report that faulted in haltAtCap is contained to its project and retried here,
+    // since no full cycle runs again in this process; a block report makes no LLM call.
+    await this.postBlockReports();
   }
 
   /**

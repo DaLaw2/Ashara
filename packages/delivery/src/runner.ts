@@ -6,8 +6,9 @@ import type { CycleResult, LoopStop } from "./types.js";
 export interface CycleRunner {
   runCycle(): Promise<CycleResult>;
   /**
-   * What still runs once a cycle has stopped the loop: the client's stops, each recorded and
-   * answered with no LLM call, so a stop sent while the loop is halted holds.
+   * What still runs once a cycle has stopped the loop, each with no LLM call: the client's stops,
+   * each recorded and answered, so a stop sent while the loop is halted holds, and the block reports
+   * still due, so a halt whose report faulted in the stopping cycle is still told.
    */
   runHaltedCycle(): Promise<void>;
 }
@@ -42,7 +43,7 @@ export class ContinuousRunner {
 
   /**
    * Cycles until `signal` aborts. A cycle that reports a stop halts the loop for good: `onHalt` runs
-   * once with it, and from then on only the client's stops are taken in and answered, each wake or
+   * once with it, and from then on only halted cycles run (CycleRunner.runHaltedCycle), each wake or
    * idle interval, until `signal` aborts, so a stop sent while the loop is halted is answered.
    * Resolves, once `signal` aborted, to the stop that halted the loop, or `null` when
    * none did.

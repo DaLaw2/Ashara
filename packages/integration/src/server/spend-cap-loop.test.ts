@@ -11,15 +11,17 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import { DispatchService, ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import { ClientStops, ClientMessageRepository } from "@ashara/engagement";
-import type { ClientStopStore } from "@ashara/engagement";
+import { BlockReports, ClientStops, ClientMessageRepository } from "@ashara/engagement";
+import type { BlockReportStore, ClientStopStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { CoreLoopDeps } from "@ashara/delivery";
-import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, systemClock, UnreadSubject } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
+import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
@@ -257,6 +259,80 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
     await expect(projects.unblock(projectId, "operator-a", "cap raised")).rejects.toMatchObject({ name: "ProjectNotBlocked" });
     expect((await projects.get(projectId))?.status).toBe("stopped");
     expect(await projects.listActiveIds()).not.toContain(projectId);
+  });
+});
+
+// The deployment's cap halts every active project, each with its report, including a project that
+// never ran and one whose report's post faulted in the stopping cycle: the halted cycles retry it.
+describe("the deployment cap halts two projects", () => {
+  test("every project gets its budget_cap report, the faulted one on a halted cycle once its backoff passed", async () => {
+    const projects = new ProjectHaltRepository(db);
+    const messages = new ClientMessageRepository(db);
+    const client = await new ClientRepository(db).create(`${NAME}-two-projects`);
+    const first = (await projects.create(NAME, client.id)).id;
+    const second = (await projects.create(NAME, client.id)).id;
+    const ours = new Set([first, second]);
+    const store = createBlockReportStore(db);
+    let secondFaults = 1;
+    const projectOfEpisode = new Map<string, ProjectId>();
+    // Only this suite's projects: the listing and the halt over the shared database would reach other suites'.
+    const narrowed: BlockReportStore = {
+      dueReports: async () => {
+        const due = (await store.dueReports()).filter((each) => ours.has(each.projectId));
+        for (const each of due) if (!(each instanceof UnreadSubject)) projectOfEpisode.set(each.episodeId, each.projectId);
+        return due;
+      },
+      postProjectReport: async (episodeId, on, body) => {
+        if (projectOfEpisode.get(episodeId) === second && secondFaults > 0) {
+          secondFaults -= 1;
+          throw new Error("client_messages insert failed");
+        }
+        return store.postProjectReport(episodeId, on, body);
+      },
+    };
+    const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
+    const spend = { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null };
+    const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
+    const loop = new CoreLoop(
+      loopDeps({
+        projectRepo: {
+          ...base.projectRepo,
+          blockAllActive: async (cause) => {
+            const halted: ProjectId[] = [];
+            for (const id of ours) if ((await projects.block(id, cause)) === "blocked") halted.push(id);
+            return halted;
+          },
+        },
+        blockReports: new BlockReports(narrowed, memoryStepContainment(() => false)),
+        spendCap: { deploymentStop: async () => ({ reason: capReason, spend }), refusalOf: () => null },
+      }),
+    );
+    const blockedReports = async (projectId: ProjectId) =>
+      (await messages.listByProject(projectId)).filter((m) => m.direction === "outbound" && m.body.includes("The spending limit for all of Ashara's work has to be raised"));
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const cycle = await loop.runCycle();
+      expect(cycle.stop?.reason).toBe(capReason);
+      expect(await blockedReports(first)).toHaveLength(1);
+      expect(await blockedReports(second)).toHaveLength(0);
+
+      // A halted cycle inside the backoff leaves the faulted report for later; one past it posts it.
+      await loop.runHaltedCycle();
+      expect(await blockedReports(second)).toHaveLength(0);
+      vi.setSystemTime(Date.now() + 61_000);
+      await loop.runHaltedCycle();
+      await loop.runHaltedCycle();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(await blockedReports(first)).toHaveLength(1);
+    expect(await blockedReports(second)).toHaveLength(1);
+    for (const id of ours) {
+      const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${id}`);
+      expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
+    }
   });
 });
 

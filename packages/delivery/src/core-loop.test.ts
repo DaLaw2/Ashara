@@ -380,7 +380,7 @@ describe("CoreLoop first plan", () => {
     expect(order).toEqual(["stop", "change", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
-  test("a cycle halted at the spend cap still takes the client's stops and answers the client's changes, and nothing else", async () => {
+  test("a cycle halted at the spend cap takes the client's stops, answers the client's changes and posts the block reports still due, and nothing else", async () => {
     const order: string[] = [];
     const step = (name: string) =>
       vi.fn(async () => {
@@ -389,9 +389,9 @@ describe("CoreLoop first plan", () => {
       });
     const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop") });
 
-    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") } }).runHaltedCycle();
+    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") } }).runHaltedCycle();
 
-    expect(order).toEqual(["stop", "change"]);
+    expect(order).toEqual(["stop", "change", "block-report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
