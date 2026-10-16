@@ -23,8 +23,8 @@ import type { FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { GitBroker } from "./git-broker.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
-import { asharaFaultHaltOf, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
-import type { Outcome, Snapshot, Violation } from "./invariants.js";
+import { asharaFaultHaltOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
+import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
@@ -32,6 +32,7 @@ import { PLANTED, plantSeamsOf, plantsBypassing } from "./plants.js";
 import type { Mutation } from "./plants.js";
 import { FAULTS, drawRates } from "./profile.js";
 import type { Profile } from "./profile.js";
+import { ResidueWatch, checkResidue } from "./residue.js";
 import { StandIns } from "./scripted-models.js";
 import { SimulatedClient } from "./simulated-client.js";
 import type { ClientReply, ClientRoutes } from "./simulated-client.js";
@@ -59,6 +60,11 @@ export interface RunOptions {
   readonly capUsd?: number;
   /** Every cell start fails for the whole run: the host's container runtime is broken (faults.ts). */
   readonly cellOutage?: boolean;
+  /**
+   * The second project's rows are corrupted as the run reaches them (corruptRows): the containment
+   * scenario, run with `projects: 2`, in which the first project must still progress (I8).
+   */
+  readonly corruptSecondProject?: boolean;
 }
 
 /** The run's shape apart from its seed: how many projects share the deployment, and its cap. */
@@ -308,6 +314,125 @@ function leakedConnections(handle: InstanceHandle, step: number): Violation[] {
 }
 
 /**
+ * I1, the containment clause: a cycle (or a boot) that threw anything but a simulated crash, with no
+ * fault injected while it ran, threw on Ashara's own code over a healthy substrate. The loop then
+ * fails that cycle for every project, and the next cycle meets the same code. One that threw under
+ * an injected fault is the fail-closed answer to it (Discipline A), retried by the next cycle; null.
+ * So is one whose cause chain holds a simulated crash: a process that died before the cycle (a crash
+ * between cycles) throws one from every seam call, wrapped by whatever made the call.
+ *
+ * Blind spot: a throw under an injected fault is never judged, even one the fault did not cause.
+ */
+function unfaultedError(phase: "cycle" | "boot", err: unknown, step: number, faults: readonly FaultRecord[]): Violation | null {
+  if (crashBeneath(err) || faults.length > 0) return null;
+  const name = err instanceof Error ? err.name : typeof err;
+  return {
+    invariant: "I1",
+    step,
+    statement: `a ${phase} threw ${name} with no fault injected while it ran, so every project's ${phase} failed on it: ${describeErrorChain(err)}`,
+    key: `I1:${phase}-error`,
+  };
+}
+
+/** Whether `err` or an error its cause chain holds is a simulated crash. */
+function crashBeneath(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let at: unknown = err; at instanceof Error && !seen.has(at); at = at.cause) {
+    if (at instanceof SimulatedCrash) return true;
+    seen.add(at);
+  }
+  return false;
+}
+
+/** What the containment scenario has corrupted of its project so far. */
+interface Corruption {
+  taskSpec: boolean;
+  blockKind: boolean;
+  /** The steps that have held a contained fault of the project (step_faults), each traced once. */
+  readonly contained: Set<string>;
+}
+
+/** The containment scenario was asked of a run without the second project it corrupts. */
+class CorruptionWithoutSecondProject extends Error {
+  constructor(readonly seed: number) {
+    super(`seed ${seed}: corruptSecondProject needs projects: 2, so one project stays healthy for I8 to judge`);
+    this.name = "CorruptionWithoutSecondProject";
+  }
+}
+
+/**
+ * The containment scenario (ADR-080 d10 C9): between cycles the observer corrupts the project's rows
+ * as the run reaches them: its first task's task_spec once it has tasks (the gate reads it and
+ * halts the project on the row, delivery gate.ts gateProject), then the kind of its open halt
+ * episode with no report yet (the block reports' listing reads it, contained to that report), past
+ * the kind CHECK of the scratch database, as a row written by another version would read. Every step
+ * that comes to hold a contained fault of the project (step_faults) is traced as `contained <step>`.
+ *
+ * Blind spots: once the gate halts the project no listing of an active project names it, so the
+ * corrupted rows never reach the parked exits', the replan's, the acceptance's or the delivered
+ * reports' listings, nor intake, roster, first plan or plan reports; the corruptions are a jsonb
+ * value that does not parse and an unknown enum value, never a row missing its parent, a duplicated
+ * row or a value of the wrong type.
+ */
+async function corruptRows(db: Database, projectId: string, snapshot: Snapshot, corruption: Corruption, trace: string[]): Promise<void> {
+  if (!corruption.taskSpec && snapshot.items.some((item) => item.level === "Task")) {
+    await db.execute(sql`
+      UPDATE work_items SET task_spec = '"planted: not a task spec"'::jsonb
+      WHERE id = (SELECT id FROM work_items WHERE project_id = ${projectId} AND level = 'Task' ORDER BY created_at, id LIMIT 1)`);
+    corruption.taskSpec = true;
+    trace.push("plant: the second project's first task_spec corrupted");
+  }
+  const episode = snapshot.episodes.find((each) => !each.ended && each.reportId === null);
+  if (!corruption.blockKind && episode !== undefined) {
+    await db.execute(sql`ALTER TABLE project_blocks DROP CONSTRAINT IF EXISTS project_blocks_kind_check`);
+    await db.execute(sql`UPDATE project_blocks SET kind = 'planted-unknown-kind' WHERE id = ${episode.id}`);
+    corruption.blockKind = true;
+    trace.push(`plant: the second project's open ${episode.kind} episode given an unknown kind`);
+  }
+  const steps = z.array(z.object({ step: z.string() })).parse((await db.execute(sql`SELECT DISTINCT step FROM step_faults WHERE project_id = ${projectId} ORDER BY step`)).rows);
+  for (const { step } of steps) {
+    if (corruption.contained.has(step)) continue;
+    corruption.contained.add(step);
+    trace.push(`contained ${step}`);
+  }
+}
+
+/** A cycle's I10 window as it opened: the counters, and how many faults and decisions the run had made by then. */
+interface ChargeWindowStart {
+  readonly before: Charges;
+  readonly faults: number;
+  readonly decisions: number;
+}
+
+/** A tape decision that makes a stand-in misbehave: its model answers, or its agent works, other than as asked. */
+const MISBEHAVIOUR_SITE = /^(model|agent)\./;
+
+async function openChargeWindow(db: Database, projectIds: readonly string[], scheduler: Scheduler, tape: Tape, consulted: Set<string>): Promise<ChargeWindowStart> {
+  consulted.clear();
+  return { before: await readCharges(db, projectIds), faults: scheduler.faults().length, decisions: tape.decisions().length };
+}
+
+/** I10 over one cycle: its counters now against those it opened with (invariants.ts checkCharges). */
+async function closeChargeWindow(
+  start: ChargeWindowStart,
+  step: number,
+  db: Database,
+  projectIds: readonly string[],
+  scheduler: Scheduler,
+  tape: Tape,
+  consulted: ReadonlySet<string>,
+): Promise<Violation[]> {
+  return checkCharges({
+    step,
+    before: start.before,
+    after: await readCharges(db, projectIds),
+    faults: scheduler.faults().slice(start.faults),
+    consulted: new Set(consulted),
+    misbehaved: tape.decisions().slice(start.decisions).some((decision) => MISBEHAVIOUR_SITE.test(decision.key)),
+  });
+}
+
+/**
  * Requests one client action may send, read-backs included, before the run gives up on it. Each
  * failure is a fault the tape injected on the composed instance (a failed query, a crash, a
  * SIGTERM, the instance then restarted), and the fault budget bounds those.
@@ -414,6 +539,8 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const capUsd =
     options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : options.profile === "adversarial" ? ADVERSARIAL_CAP_USD : DEFAULT_CAP_USD);
   const projectCount = options.projects ?? 1;
+  if (options.corruptSecondProject === true && projectCount < 2) throw new CorruptionWithoutSecondProject(options.seed);
+  const corruption: Corruption | null = options.corruptSecondProject === true ? { taskSpec: false, blockKind: false, contained: new Set() } : null;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
   const trace: string[] = [`universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`];
@@ -471,8 +598,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver);
   const admissions = new AdmissionLedger();
+  const residue = new ResidueWatch();
   const gitDates = new GitDates();
   let longestQuiet = 0;
+  /** The tasks a stand-in answered for in the cycle running now (I10's window). */
+  const consulted = new Set<string>();
 
   const workdir = await realpath(await mkdtemp(join(tmpdir(), "ashara-sim-")));
   const restoreIds = seededIds(options.seed);
@@ -487,6 +617,8 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   let database: RunDatabase | null = null;
   let observer: Database | null = null;
   let instance: Live | null = null;
+  /** The instance whose runner a cycle stopped: it runs only halted cycles until a restart replaces it. */
+  let haltedLive: Live | null = null;
   const gitBroker = new GitBroker();
   try {
     database = await createRunDatabase(options.databaseUrl, options.template, options.seed);
@@ -522,7 +654,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       universe,
       observer: observing,
       projectIds,
-      onModelCall: (call) => trace.push(`model ${call.site} ${call.action}`),
+      onModelCall: (call) => {
+        trace.push(`model ${call.site} ${call.action}`);
+        const task = interleaver.currentTask();
+        if (task !== null) consulted.add(task);
+      },
       laneTask: () => interleaver.currentTask(),
     });
     const baseCell = await loadBaseCell();
@@ -594,6 +730,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     const compose = async (): Promise<Live> => {
       for (;;) {
         generation += 1;
+        const faultsBefore = scheduler.faults().length;
         const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map(), pools: [] };
         // A new process stages nothing yet: the dead one's staged merge is an orphan its recovery clears.
         checkouts = new CheckoutWatch(report);
@@ -632,6 +769,10 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           trace.push(`instance ${handle.name} failed to boot: ${err instanceof SimulatedCrash ? "crash" : (err instanceof Error ? err.name : "error")}`);
           handle.dead = true;
           if (!(err instanceof SimulatedCrash)) log.push(`boot of ${handle.name} failed: ${describeErrorChain(err)}`);
+          if (!(err instanceof TargetCheckoutClaimedElsewhere)) {
+            const unfaulted = unfaultedError("boot", err, cycles, scheduler.faults().slice(faultsBefore));
+            if (unfaulted !== null) report(unfaulted);
+          }
           // Every earlier instance's sessions are gone before a boot (killBackends, the drain's
           // check), so a refused claim is one nothing in this run holds: never a retry, a finding.
           if (err instanceof TargetCheckoutClaimedElsewhere) {
@@ -793,29 +934,53 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       const statuses: string[] = [];
       let processed = 0;
       let crashed = false;
+      const window = await openChargeWindow(observing, projectIds, scheduler, tape, consulted);
       for (let r = 0; r < repeats && !crashed; r++) {
+        const faultsBefore = scheduler.faults().length;
         try {
+          const faultsBefore = scheduler.faults().length;
+          // The runner's own path (orchestrator runner.ts run): once a cycle stops the loop, the
+          // process runs only halted cycles until it restarts, and its onHalt removes every cell.
+          if (haltedLive === current) {
+            await current.ashara.cycles.runHaltedCycle();
+            residue.cycleRan(scheduler.faults().length === faultsBefore && !current.handle.dead && !current.handle.sigtermed);
+            trace.push(`cycle ${cycles}: halted`);
+            crashed = current.handle.dead || current.handle.sigtermed;
+            continue;
+          }
           const result = await current.ashara.cycles.runCycle();
+          residue.cycleRan(scheduler.faults().length === faultsBefore && !current.handle.dead && !current.handle.sigtermed);
           dispatches += result.tasksProcessed;
           processed += result.tasksProcessed;
           for (const task of result.results) statuses.push(task.status);
           trace.push(`cycle ${cycles}: ${result.tasksProcessed} task(s) [${result.results.map((t) => t.status).join(",")}]${result.stop === null ? "" : ` stop: ${result.stop.reason.split(":")[0]}`}`);
-          if (result.stop !== null && !current.handle.dead) outcome = { kind: "halted", cause: "spend_cap", detail: result.stop.reason };
+          if (result.stop !== null && !current.handle.dead) {
+            outcome = { kind: "halted", cause: "spend_cap", detail: result.stop.reason };
+            haltedLive = current;
+            await current.ashara.teardownCells();
+          }
         } catch (err) {
           trace.push(`cycle ${cycles}: error ${err instanceof SimulatedCrash ? "SimulatedCrash" : err instanceof Error ? err.name : "unknown"}`);
           if (!(err instanceof SimulatedCrash) && !current.handle.dead) log.push(`cycle error: ${describeErrorChain(err)}`);
+          const unfaulted = unfaultedError("cycle", err, cycles, scheduler.faults().slice(faultsBefore));
+          if (unfaulted !== null) report(unfaulted);
         }
         crashed = current.handle.dead || current.handle.sigtermed;
       }
       // The runner's own wait between cycles (orchestrator runner.ts defaults), on the simulated clock.
       clock.jump(processed > 0 ? POLL_INTERVAL_MS : IDLE_INTERVAL_MS);
       await recover(current);
+      for (const violation of await closeChargeWindow(window, cycles, observing, projectIds, scheduler, tape, consulted)) report(violation);
 
       const snapshots = await snapshotsOf();
       const [snapshot] = snapshots;
+      const corrupted = projectIds[1];
+      const second = snapshots[1];
+      if (corruption !== null && corrupted !== undefined && second !== undefined) await corruptRows(observing, corrupted, second, corruption, trace);
       for (const [index, each] of snapshots.entries()) {
         for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: false })) report(ofProject(index, violation));
         sample(coverage, each, scheduler.faults(), executionEvidence(each, statuses));
+        residue.observe(each);
       }
       const overCommitted = await admissions.judge(observing, capUsd, cycles);
       if (overCommitted !== null) report(overCommitted);
@@ -900,6 +1065,9 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     }
     const overCommitted = await admissions.judge(observing, capUsd, cycles);
     if (overCommitted !== null) report(overCommitted);
+    for (const [index, each] of finals.entries()) {
+      for (const violation of await checkResidue(cycles, each, residue.judgeable, { git: gitBroker.runner, workdirBase: workdir, cells: podman.liveCells() })) report(ofProject(index, violation));
+    }
     const spendHalted = outcome.kind === "halted" && outcome.cause === "spend_cap";
     // A run that made no progress did not end, whatever its last snapshot shows (a halt it resumes).
     if (noProgress) outcome = { kind: "open" };

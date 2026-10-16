@@ -218,6 +218,7 @@ async function harness(name: string): Promise<Harness> {
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
     blockReports: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
+    heldCells: { release: async () => {} },
     environmentOwner: async () => ({ kind: "role", roleId: platformRoleId }),
     // One task after another, in the batch's order: the cells and merges of a cycle never interleave.
     taskLanes: async (items, runOne) => {

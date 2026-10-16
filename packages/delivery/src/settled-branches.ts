@@ -29,16 +29,21 @@ interface SettledBranchDeps {
 
 interface SettledBranchSummary {
   readonly released: number;
+  /** Branches of settled tasks, and throwaway checkouts, still in a target. */
   readonly left: number;
+  /** Throwaway checkouts a crash or a faulted cleanup left, removed. */
+  readonly checkouts: number;
   /** Targets whose branches could not be listed, or whose stored path was refused. */
   readonly targetsFailed: number;
 }
 
 /**
- * Releases the branches (and worktree slots) of every settled task in every target, run at startup
- * and each cycle while no attempt is in flight. Release follows the settled status itself, not the
- * path that reached it: every path that gives a task up or completes it is covered, a new one
- * included, and a release a settle path tried and failed is retried here. A leftover is logged at
+ * Releases the branches (and worktree slots) of every settled task in every target, and every
+ * throwaway checkout a target still has registered, run at startup and each cycle while no attempt
+ * is in flight: a checkout outlives its check only when a crash or a faulted cleanup cut it short.
+ * Release follows the settled status itself, not the path that reached it: every path that gives a
+ * task up or completes it is covered, a new one included, and a release a settle path tried and
+ * failed is retried here. A leftover is logged at
  * warn, never a verdict; a store that cannot be read releases nothing this pass, and the next retries.
  */
 export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Promise<SettledBranchSummary> {
@@ -49,10 +54,11 @@ export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Pr
     targets = await deps.projects.listWithWorkspace();
   } catch (err) {
     console.warn(`[settled-branches] the settled tasks or the targets could not be read; no branch is released this pass: ${describeErrorChain(err)}`);
-    return { released: 0, left: 0, targetsFailed: 0 };
+    return { released: 0, left: 0, checkouts: 0, targetsFailed: 0 };
   }
   let released = 0;
   let left = 0;
+  let checkouts = 0;
   let targetsFailed = 0;
   for (const target of targets) {
     try {
@@ -60,13 +66,17 @@ export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Pr
       const result = await releaseSettledBranches(deps.workdirBase, target.workspacePath, settled);
       released += result.released;
       left += result.left;
+      checkouts += result.checkouts;
     } catch (err) {
       targetsFailed += 1;
       console.warn(`[settled-branches] project ${target.id}: the branches of ${target.workspacePath} could not be listed; none is released this pass: ${describeErrorChain(err)}`);
     }
   }
-  if (released > 0 || left > 0 || targetsFailed > 0) {
-    console.log(`[settled-branches] released ${released} branch(es) of settled tasks; ${left} left, ${targetsFailed} target(s) not read`);
+  if (released > 0 || left > 0 || checkouts > 0 || targetsFailed > 0) {
+    console.log(
+      `[settled-branches] released ${released} branch(es) of settled tasks and ${checkouts} throwaway checkout(s) a cut-short check left; ` +
+        `${left} left, ${targetsFailed} target(s) not read`,
+    );
   }
-  return { released, left, targetsFailed };
+  return { released, left, checkouts, targetsFailed };
 }

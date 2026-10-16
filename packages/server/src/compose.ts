@@ -55,6 +55,7 @@ import {
   pruneEnvironmentImages,
   pruneStaleEnvironmentImages,
   reconcileCellsAtStartup,
+  releaseHeldCells,
   substrateProbe,
   sweepOrphanedWorktrees,
   teardownCellsAtShutdown,
@@ -441,6 +442,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     blockReports,
     suiteReviewFindings: new SuiteReviewFindingRepository(db),
     infrastructureProbe: substrateProbe(cellSubstrate),
+    heldCells: { release: () => releaseHeldCells(cellSubstrate) },
     taskLanes: ports.taskLanes,
     // The environment task an implementation needs is owned by the role doing environment work.
     async environmentOwner(projectId) {

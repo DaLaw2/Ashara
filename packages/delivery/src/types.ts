@@ -204,6 +204,11 @@ export interface CoreLoopDeps {
   /** The substrate probe an infrastructure halt waits on; run each cycle while a project is so halted. */
   readonly infrastructureProbe: InfrastructureProbe;
   /**
+   * Removes every cell this process still holds, run each cycle before anything is dispatched: no
+   * attempt is in flight then, so each one held is a cell whose teardown failed. Never throws.
+   */
+  readonly heldCells: { release(): Promise<void> };
+  /**
    * The roster role doing a project's environment work, from its latest roster: the owner of the
    * environment task an implementation's request opens (ADR-074 addendum 2 d66 b). `none`, with
    * why, when the roster names no such role; a roster that cannot be read throws.

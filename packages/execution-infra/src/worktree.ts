@@ -373,6 +373,55 @@ export async function cleanupWorkdir(workDir: string, targetProjectPath: string)
   await removeWorktree(targetProjectPath, workDir);
 }
 
+/**
+ * Where every throwaway checkout of a check goes: a detached worktree of the target, made for one
+ * run of a check and removed on its way out (withCheckoutCell, the verification's own checkouts).
+ */
+export function checkoutsRoot(workdirBase: string): string {
+  return join(workdirBase, "checkouts");
+}
+
+/** Whether `path` lies strictly inside `root`. */
+function isInside(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** The worktrees of the target at `targetProjectPath` registered strictly inside `root` (raw or canonical). */
+async function worktreesUnder(root: string, targetProjectPath: string): Promise<string[]> {
+  const roots = [root, await canonicalizeAllowingMissing(root)];
+  const { stdout } = await runHostGit(targetRepo(targetProjectPath), ["worktree", "list", "--porcelain"]);
+  return stdout
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length))
+    .filter((path) => roots.some((each) => isInside(each, path)));
+}
+
+/** What one target's removal of throwaway checkouts did. */
+interface CheckoutRemoval {
+  readonly removed: number;
+  /** Checkouts still registered after the removal: each is retried by the next one. */
+  readonly left: number;
+}
+
+/**
+ * Removes every throwaway checkout (checkoutsRoot) the target at `targetProjectPath` still has
+ * registered. Run only while no attempt is in flight (at startup and between cycles): a check
+ * removes its checkout on its way out, so each one registered then is one a crash or a faulted
+ * cleanup left, whichever task it ran for and whatever later settled that task. A removal that
+ * fails is logged at warn (removeWorktree) and counted as left; a target whose worktrees cannot be
+ * listed throws.
+ */
+export async function removeThrowawayCheckouts(workdirBase: string, targetProjectPath: string): Promise<CheckoutRemoval> {
+  const root = checkoutsRoot(workdirBase);
+  const found = await worktreesUnder(root, targetProjectPath);
+  if (found.length === 0) return { removed: 0, left: 0 };
+  for (const path of found) await removeWorktree(targetProjectPath, path);
+  const left = (await worktreesUnder(root, targetProjectPath)).length;
+  return { removed: found.length - left, left };
+}
+
 interface TreeChild {
   readonly name: string;
   readonly isDirectory: boolean;
@@ -482,8 +531,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string, wo
   } catch (err) {
     throw new InvalidTargetProjectPath(targetProjectPath, `the path or the workdir base could not be canonicalized (fail-closed): ${describeErrorChain(err)}`);
   }
-  const fromBase = relative(base, canonical);
-  if (fromBase === "" || fromBase === ".." || fromBase.startsWith(`..${sep}`) || isAbsolute(fromBase)) {
+  if (!isInside(base, canonical)) {
     throw new InvalidTargetProjectPath(canonical, `the path is not inside the workdir base ${base}; every target workspace lives under it`);
   }
 }

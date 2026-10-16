@@ -306,6 +306,27 @@ export class EnvironmentVersionUnresolved extends ExecutionInfraError {
   }
 }
 
+/**
+ * Host git could not run a read of the environment's committed objects (a lock, an unreadable
+ * object store): Ashara's own fault, which says nothing of what the commit defines.
+ */
+export class EnvironmentGitFailed extends ExecutionInfraError {
+  readonly gitDir: string;
+  readonly argv: readonly string[];
+  readonly exitCode: number | null;
+  readonly stderr: string;
+
+  constructor(gitDir: string, argv: readonly string[], exitCode: number | null, stderr: string, options?: ErrorOptions) {
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a message placeholder for an empty stderr, which the stderr field still carries verbatim
+    super(`git ${argv.join(" ")} in ${JSON.stringify(gitDir)} failed (exit ${exitCode ?? "unknown"}): ${stderr.trim() || "(no stderr)"}`, options);
+    this.name = "EnvironmentGitFailed";
+    this.gitDir = gitDir;
+    this.argv = argv;
+    this.exitCode = exitCode;
+    this.stderr = stderr;
+  }
+}
+
 /** `podman build` of an environment version did not produce an image. */
 export class EnvironmentBuildFailed extends ExecutionInfraError {
   readonly projectId: string;

@@ -171,6 +171,7 @@ describe("a project whose workspace path is refused", () => {
       suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
       blockReports: { runPending: async () => [] },
       infrastructureProbe: { probe: notExercised("infrastructureProbe") },
+      heldCells: { release: async () => {} },
       environmentOwner: notExercised("environmentOwner"),
       taskLanes: concurrentTaskLanes,
       acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },

@@ -16,6 +16,7 @@ import {
   EnvironmentVersionUnresolved,
   buildContextPaths,
   cellRunBoundMs,
+  checkoutsRoot,
   cleanupWorkdir,
   environmentVersion,
   recipePaths,
@@ -424,7 +425,7 @@ export class TaskVerification {
     } catch (e) {
       if (!(e instanceof CellTeardownFailed)) throw e;
       const owner = "projectId" in subject ? `acceptance-${subject.projectId}` : `${subject.taskId} attempt ${subject.attempt}`;
-      console.warn(`[${owner}] cell teardown failed; teardownAll at shutdown and reconcileOrphans at startup remove it:`, e);
+      console.warn(`[${owner}] cell teardown failed; the next cycle's release of held cells removes it (teardownAll at shutdown and reconcileOrphans at startup if the process ends first):`, e);
       this.deps.eventSink?.emit({ event: "cell_teardown_failed", ...subject, cellId: e.cellId, exitCode: e.exitCode, stderr: e.stderr });
     }
   }
@@ -457,7 +458,7 @@ export class TaskVerification {
       | "substrate-gate"
       | "foundation-build",
   ): string {
-    return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
+    return join(checkoutsRoot(this.deps.config.workdirBase), `${purpose}-${d.task.id}-${d.sessionId}`);
   }
 
   /**
@@ -739,7 +740,7 @@ export class TaskVerification {
       teardownCell: (cell) => this.teardownCell({ projectId }, cell),
       timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
     };
-    const dir = join(this.deps.config.workdirBase, "checkouts", `acceptance-${projectId}-${createSessionId()}`);
+    const dir = join(checkoutsRoot(this.deps.config.workdirBase), `acceptance-${projectId}-${createSessionId()}`);
     const runs: readonly SuiteRun[] = await runSuitesOnCheckout(checkCells, RED_RUN_ROLE, environment.imageId, main, dir, suites);
     const ran = suitesVerdict(suites, runs, completed.checked.length, "main");
     const gaps = [

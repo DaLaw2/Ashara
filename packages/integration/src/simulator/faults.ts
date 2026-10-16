@@ -82,16 +82,39 @@ export interface InstanceHandle {
   readonly pools: pg.Pool[];
 }
 
+/**
+ * What the fake transport answers a `provider-error` with, as a provider adapter throws it: a
+ * connection reset (no status), the provider throttling it (429) or failing (5xx), all the
+ * provider's; or a 4xx rejecting the request as Ashara built it (400 malformed, 413 too large, 422
+ * unprocessable), Ashara's. Index 0 is the draw's benign value.
+ *
+ * @testseam a directed test draws each answer by its index; Scheduler.enter is its production caller
+ */
+export const TRANSPORT_RESPONSES = [
+  { status: null, owner: "provider" },
+  { status: 429, owner: "provider" },
+  { status: 500, owner: "provider" },
+  { status: 503, owner: "provider" },
+  { status: 400, owner: "ashara" },
+  { status: 413, owner: "ashara" },
+  { status: 422, owner: "ashara" },
+] as const satisfies ReadonlyArray<{ readonly status: number | null; readonly owner: "provider" | "ashara" }>;
+type TransportResponse = (typeof TRANSPORT_RESPONSES)[number];
+
 export interface FaultRecord {
   readonly ticket: number;
   readonly instance: string;
   readonly seam: SeamKind;
   readonly label: string;
   readonly fault: FaultKind;
+  /** The task of the batch lane the call was made in (Interleaver.currentTask), null outside every task. */
+  readonly task: string | null;
+  /** A `provider-error`'s answer; null for every other fault. */
+  readonly response: TransportResponse | null;
 }
 
 /** A seam call's fate, decided before it runs. */
-type Fate = { readonly kind: "run"; readonly fault: FaultKind | null; readonly crashAfter: boolean };
+type Fate = { readonly kind: "run"; readonly fault: FaultKind | null; readonly crashAfter: boolean; readonly response: TransportResponse | null };
 
 /** The faults that end or stop the process itself, whatever the call: each seam carries them. */
 const PROCESS_FAULTS: ReadonlySet<FaultKind> = new Set(["crash-before", "crash-after", "sigterm"]);
@@ -168,9 +191,10 @@ export class Scheduler {
     if (fault === null && this.budgetLeft > 0 && this.tape.chance(site, this.rates.perSeamCall)) {
       fault = choices[this.tape.pick(`${site}.kind`, choices.length)] ?? "crash-before";
     }
-    if (fault === null) return { kind: "run", fault: null, crashAfter: false };
+    if (fault === null) return { kind: "run", fault: null, crashAfter: false, response: null };
     this.budgetLeft -= 1;
-    this.records.push({ ticket, instance: instance.name, seam, label, fault });
+    const response = fault === "provider-error" ? (TRANSPORT_RESPONSES[this.tape.pick(`${site}.response`, TRANSPORT_RESPONSES.length)] ?? TRANSPORT_RESPONSES[0]) : null;
+    this.records.push({ ticket, instance: instance.name, seam, label, fault, task: this.interleaver.currentTask(), response });
     if (fault === "crash-before") {
       instance.dead = true;
       throw new SimulatedCrash(instance.name, ticket, `${seam} ${label}`);
@@ -179,7 +203,7 @@ export class Scheduler {
       instance.sigtermed = true;
       instance.abort?.();
     }
-    return { kind: "run", fault, crashAfter: fault === "crash-after" };
+    return { kind: "run", fault, crashAfter: fault === "crash-after", response };
   }
 
   /**
@@ -305,6 +329,37 @@ export const pinInfrastructureFaults: QueryPlant = (args) => {
   if (pinned === text) return null;
   return [typeof parsed.data === "string" ? pinned : { ...parsed.data, text: pinned }, ...args.slice(1)];
 };
+
+/** `text` rewritten by `rewrite`, sent as production sent it (a string or a query config), or null when unchanged. */
+function rewriteText(args: readonly unknown[], rewrite: (text: string) => string): unknown[] | null {
+  const parsed = sentText.safeParse(args[0]);
+  if (!parsed.success) return null;
+  const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
+  const planted = rewrite(text);
+  if (planted === text) return null;
+  return [typeof parsed.data === "string" ? planted : { ...parsed.data, text: planted }, ...args.slice(1)];
+}
+
+/**
+ * A dispatch refund gives nothing back: the count written `dispatch_count - 1` (WorkItemRepository
+ * refundDispatchCount, the startup reconciler's and every routing's refund) stays as it was, so a
+ * dispatch stopped by a fault beneath it stays charged (I10).
+ */
+export const skipDispatchRefund: QueryPlant = (args) => rewriteText(args, (text) => text.replace(/((?:"work_items"\.)?"dispatch_count") - 1/, "$1 - 0"));
+
+/**
+ * A contained subject's fault cannot be kept (the step_faults write fails), so containEach throws
+ * it through as if the step contained nothing: one project's unreadable row fails the cycle for
+ * every project (I1:cycle-error, I8).
+ */
+export const unrecordedStepFault: QueryPlant = (args) => rewriteText(args, (text) => text.replace(/^insert into "step_faults"/, 'insert into "step_faults_planted_absent"'));
+
+/**
+ * The listing of the projects whose work may be dispatched names a table that does not exist, so it
+ * throws on every cycle with no fault beneath it (I1:cycle-error). ProjectRepository listActiveIds.
+ */
+export const throwingActiveListing: QueryPlant = (args) =>
+  rewriteText(args, (text) => (/^select "id" from "projects" where .*"lifecycle"/.test(text) ? text.replace(/^select "id" from "projects"/, 'select "id" from "projects_planted_absent"') : text));
 
 const clientPid = z.object({ processID: z.number().int() });
 /** How long a killed connection's client may take to see its end: past it, the harness is wrong. */
@@ -497,20 +552,38 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
 }
 
 /**
- * A connection reset as a real provider adapter throws it: provider-utils `handleFetchError` wraps a
- * network failure in an APICallError before it leaves the adapter, so the gateway reads it as the
- * provider's failure. A bare Error here would reach the gateway as an Ashara fault instead.
+ * A failed request as a real provider adapter throws it, always an APICallError (a bare Error here
+ * would reach the gateway as an Ashara fault): a connection reset as provider-utils
+ * `handleFetchError` wraps a network failure, or an HTTP error response as `postJsonToApi` reports
+ * it, with its status, its body and whether the SDK would retry it (429 and 5xx).
  */
-function connectionReset(provider: string, modelId: string): APICallError {
-  // eslint-disable-next-line no-restricted-syntax -- the simulated cause is node's own socket error: a plain Error with a code, wrapped as the provider SDK wraps it
-  const cause = Object.assign(new Error("socket hang up (simulated)"), { code: "ECONNRESET" });
+function transportFailure(response: TransportResponse, provider: string, modelId: string): APICallError {
+  const url = `simulated://${provider}/${modelId}`;
+  if (response.status === null) {
+    // eslint-disable-next-line no-restricted-syntax -- the simulated cause is node's own socket error: a plain Error with a code, wrapped as the provider SDK wraps it
+    const cause = Object.assign(new Error("socket hang up (simulated)"), { code: "ECONNRESET" });
+    return new APICallError({ message: `Cannot connect to API: ${cause.message}`, cause, url, requestBodyValues: {}, isRetryable: true });
+  }
+  const responseBody = JSON.stringify({ error: { message: `simulated HTTP ${response.status}` } });
   return new APICallError({
-    message: `Cannot connect to API: ${cause.message}`,
-    cause,
-    url: `simulated://${provider}/${modelId}`,
+    message: `simulated HTTP ${response.status}`,
+    url,
     requestBodyValues: {},
-    isRetryable: true,
+    statusCode: response.status,
+    responseBody,
+    isRetryable: response.status === 429 || response.status >= 500,
   });
+}
+
+/** A provider error's fate came with no transport answer drawn: the scheduler and the transport disagree. */
+class TransportResponseMissing extends Error {
+  constructor(
+    readonly modelId: string,
+    readonly fate: Fate,
+  ) {
+    super(`model call ${modelId} carries fault ${fate.fault ?? "none"} with no transport response drawn (Scheduler.enter draws one for every provider-error)`);
+    this.name = "TransportResponseMissing";
+  }
 }
 
 /** The model transport of one instance (S2): a provider error throws before the stand-in answers. */
@@ -522,7 +595,10 @@ export function faultingModels(context: SeamContext, inner: LanguageModelFactory
       ...resolved,
       doGenerate: async (options: LanguageModelV4CallOptions) => {
         const fate = await context.scheduler.enter(context.instance, "model", model.id, ["provider-error", "clock-jump"]);
-        if (fate.fault === "provider-error") throw connectionReset(provider.name, model.id);
+        if (fate.fault === "provider-error") {
+          if (fate.response === null) throw new TransportResponseMissing(model.id, fate);
+          throw transportFailure(fate.response, provider.name, model.id);
+        }
         if (fate.fault === "clock-jump") context.clock.jump(20 * 60 * 1000);
         const value = await resolved.doGenerate(options);
         context.scheduler.leave(context.instance, fate, "model", model.id);

@@ -139,6 +139,7 @@ function coreLoopDeps(
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
     blockReports: { runPending: notExercised("blockReports") },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
+    heldCells: { release: async () => {} },
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: notExercised("taskLanes"),
     acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
@@ -640,7 +641,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   // re-defines main's environment while every environment task is done, so the task is given up for a repair.
   test("no environment defined: given up with an environment_undefined reason, never Failed, no failure router", async () => {
     const detail = "no environment for task t: no environment is defined on main at abc; no agent ran and nothing executed";
-    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps({
       status: "environment_undefined",
       reason: "no environment is defined on main at abc",
       detail,
@@ -660,6 +661,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
+    // No agent ran: the dispatch is given back.
+    expect(refunds()).toBe(1);
     const reason = stored().blockedReason;
     expect(reason).toMatchObject({ source: "environment_undefined", reason: detail });
     expect(() =>
@@ -672,7 +675,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   // a roster revision after the first, so the task is given up and its repair staffs new tasks.
   test("no owner role: given up with a typed owner_unresolved reason, never Failed, no failed approach, no failure router", async () => {
     const detail = "no roster role can work task t: the work item has no owner role; no agent ran and nothing executed";
-    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps({
       status: "owner_unresolved",
       ownerRoleId: null,
       rosterRevision: 1,
@@ -694,6 +697,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
+    // No agent ran: the dispatch is given back.
+    expect(refunds()).toBe(1);
     const reason = stored().blockedReason;
     expect(reason).toEqual({ source: "owner_unresolved", ownerRoleId: null, rosterRevision: 1, reason: "the work item has no owner role" });
     expect(parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }).blockedReason).toEqual(reason);

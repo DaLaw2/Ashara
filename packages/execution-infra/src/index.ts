@@ -35,6 +35,7 @@ export {
   WorktreeCommitIncomplete,
   assertValidTargetProjectPath,
   buildFileTree,
+  checkoutsRoot,
   cleanupWorkdir,
   clearWorktreeSlot,
   commitAllChanges,
@@ -44,6 +45,7 @@ export {
   ensureTargetGitInit,
   getChangedFiles,
   mergeInProgress,
+  removeThrowawayCheckouts,
   sweepOrphanedWorktrees,
 } from "./worktree.js";
 export type { PartialCommitOutcome, WorkdirInfo } from "./worktree.js";
@@ -59,7 +61,7 @@ export {
   worktreeCommitLine,
 } from "./checkout-cell.js";
 export type { EnvironmentCheckScope } from "./checkout-cell.js";
-export { cellInstanceFor, reconcileCellsAtStartup, substrateProbe, teardownCellsAtShutdown } from "./cells.js";
+export { cellInstanceFor, reconcileCellsAtStartup, releaseHeldCells, substrateProbe, teardownCellsAtShutdown } from "./cells.js";
 export { elidedOutput, spawnProcess } from "./process-runner.js";
 export type { ProcessRunner } from "./process-runner.js";
 export {

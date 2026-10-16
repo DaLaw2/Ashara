@@ -12,6 +12,7 @@ import { checkReports, readReportRecords, uncheckedAtPassedSweeps } from "./clie
 import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
+import type { FaultKind, FaultRecord } from "./faults.js";
 import { MISREAD_REJECTION_MARKER } from "./product.js";
 import { projectState } from "./project-state.js";
 import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
@@ -19,8 +20,8 @@ import type { TextFactRecords } from "./text-facts.js";
 
 const run = promisify(execFile);
 
-/** The invariants of design §2.9, as judged on today's schema. */
-const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9"] as const;
+/** The invariants of design §2.9, as judged on today's schema, and I10 (ADR-080 d10 C1, C2). */
+const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10"] as const;
 type InvariantId = (typeof INVARIANTS)[number];
 
 export interface Violation {
@@ -577,4 +578,178 @@ function blockedReasonOf(raw: unknown): StoredBlockedReason | null {
     console.warn(`[simulator] an unreadable blocked reason is judged as having no exit: ${err.message}`);
     return null;
   }
+}
+
+/** One task's attempt counters (I10). */
+interface TaskCharges {
+  readonly title: string;
+  readonly dispatches: number;
+  /** failed_approaches rows naming the task: a lesson is written only for a failure of its work. */
+  readonly lessons: number;
+}
+
+/** One project's attempt counters (I10): its tenders' intake reads, its first plan, its plan revision. */
+interface ProjectCharges {
+  readonly intakeAttempts: number;
+  readonly planAttempts: number;
+  readonly replanAttempts: number;
+}
+
+/** Every attempt counter of the run's projects at one instant (I10), the projects in the run's order. */
+export interface Charges {
+  readonly tasks: ReadonlyMap<string, TaskCharges>;
+  readonly projects: ReadonlyMap<string, ProjectCharges>;
+}
+
+const taskChargesRow = z.object({ id: z.string(), title: z.string(), dispatches: z.number().int(), lessons: z.number().int() });
+const projectChargesRow = z.object({ intakeAttempts: z.number().int(), planAttempts: z.number().int(), replanAttempts: z.number().int() });
+
+/** The attempt counters of `projectIds`, read by the observer outside every seam. */
+export async function readCharges(db: Database, projectIds: readonly string[]): Promise<Charges> {
+  const tasks = new Map<string, TaskCharges>();
+  const projects = new Map<string, ProjectCharges>();
+  for (const projectId of projectIds) {
+    const rows = z.array(taskChargesRow).parse(
+      (
+        await db.execute(sql`
+          SELECT w.id, w.title, w.dispatch_count AS dispatches,
+                 (SELECT count(*) FROM failed_approaches f WHERE f.task_id = w.id)::int AS lessons
+          FROM work_items w WHERE w.project_id = ${projectId} AND w.level = 'Task'`)
+      ).rows,
+    );
+    for (const row of rows) tasks.set(row.id, { title: row.title, dispatches: row.dispatches, lessons: row.lessons });
+    const [project] = z.array(projectChargesRow).parse(
+      (
+        await db.execute(sql`
+          SELECT plan_attempts AS "planAttempts", replan_attempts AS "replanAttempts",
+                 (SELECT coalesce(sum(m.intake_attempts), 0) FROM client_messages m WHERE m.project_id = projects.id)::int AS "intakeAttempts"
+          FROM projects WHERE id = ${projectId}`)
+      ).rows,
+    );
+    if (project === undefined) throw new SnapshotRowMissing(projectId, "projects", "the project's attempt counters");
+    projects.set(projectId, project);
+  }
+  return { tasks, projects };
+}
+
+/** A provider error was recorded with no transport answer: whose failure it was cannot be told. */
+class FaultBlameUnknown extends Error {
+  constructor(readonly fault: FaultRecord) {
+    super(`fault at ticket ${fault.ticket} (${fault.seam} ${fault.label}: ${fault.fault}) carries no transport response, so I10 cannot tell whose failure it was`);
+    this.name = "FaultBlameUnknown";
+  }
+}
+
+/**
+ * Whose a fault is, for I10: `ashara` a call of the substrate that failed (a database, git or podman
+ * call) or a request Ashara built that the provider rejected (400, 413, 422); `provider` the
+ * provider's failure (a reset, 429, 5xx), which a read is counted against by design (ADR-080 d5);
+ * `process` the process's death or stop (a crash, a SIGTERM), whose dispatch production leaves
+ * counted when no record shows it unfinished or it died before (delivery startup-reconciler.ts
+ * requeueOrphan: a dispatch that keeps killing the process may be what kills it); `none` a clock
+ * jump, which fails no call. Total over FaultKind: a kind added to faults.ts fails the type check
+ * here until it is given a blame.
+ */
+function blameOf(fault: FaultRecord): "ashara" | "provider" | "process" | "none" {
+  const kind: FaultKind = fault.fault;
+  switch (kind) {
+    case "provider-error":
+      if (fault.response === null) throw new FaultBlameUnknown(fault);
+      return fault.response.owner;
+    case "clock-jump":
+      return "none";
+    case "crash-before":
+    case "crash-after":
+    case "sigterm":
+      return "process";
+    case "db-unreachable":
+    case "db-query-failed":
+    case "db-transaction-killed":
+    case "cell-start-failed":
+    case "cell-exec-failed":
+    case "cell-teardown-failed":
+    case "substrate-down":
+    case "image-build-failed":
+    case "git-failed":
+      return "ashara";
+  }
+}
+
+/** What one cycle did to the attempt counters, and what the tape injected and the stand-ins answered while it ran. */
+export interface ChargeWindow {
+  readonly step: number;
+  readonly before: Charges;
+  readonly after: Charges;
+  /** The faults injected in the window, each with the batch lane it was injected in. */
+  readonly faults: readonly FaultRecord[];
+  /** The tasks a stand-in model answered for in the window (an agent turn or a structured answer made in the task's lane). */
+  readonly consulted: ReadonlySet<string>;
+  /** A stand-in misbehaved in the window (a tape decision at a `model.` or `agent.` site). */
+  readonly misbehaved: boolean;
+}
+
+function describeFaults(faults: readonly FaultRecord[]): string {
+  return faults.map((fault) => `${fault.seam} ${fault.label}: ${fault.fault}${fault.response?.status == null ? "" : ` ${fault.response.status}`}`).join("; ");
+}
+
+/**
+ * I10, charged only for agent work (ADR-080 d10 C1, C2): an attempt counter grows only for work a
+ * model did and failed, never for a fault beneath it. Judged per cycle, the cycle being the window:
+ * - task clause: a task whose lane carried a fault of Ashara's (blameOf), none of the provider's
+ *   or the process's, and for which no stand-in model answered in the window, did no work: its
+ *   dispatch_count and its failed_approaches must not grow over the window (production refunds such
+ *   a dispatch and writes no lesson: delivery execution.ts routeAsInfrastructureFault);
+ * - project clause: in a window that carried a fault of Ashara's outside every lane, none of the
+ *   provider's or the process's, and no stand-in misbehaviour, no project's intake_attempts,
+ *   plan_attempts or replan_attempts grows: every model read answered as asked, so a read counted
+ *   as failed was charged for the fault (a provider's rejection of Ashara's request included:
+ *   model-access gateway.ts providerFailureOf).
+ *
+ * Blind spots: the stand-ins never fault the way a real provider does (a status whose body
+ * misleads, a stream cut part way), so the transport's statuses are the gateway's whole input here;
+ * a task's window in which its model answered is not judged (the fault may have struck after work
+ * that earned the charge), so a fault late in an attempt, after its agent worked (a verification
+ * cell that fails to start), goes unjudged; nor is a window with a misbehaviour, a provider's
+ * failure, a crash or a SIGTERM in it; and the project clause's window is the whole cycle, so in a
+ * two-project run one project's misbehaviour exempts the other's counters for that cycle.
+ */
+export function checkCharges(window: ChargeWindow): Violation[] {
+  const violations: Violation[] = [];
+  const add = (key: string, statement: string): void => {
+    violations.push({ invariant: "I10", step: window.step, statement, key: `I10:${key}` });
+  };
+  const ofLane = (task: string | null): readonly FaultRecord[] => window.faults.filter((fault) => fault.task === task);
+  const asharas = (faults: readonly FaultRecord[]): FaultRecord[] => faults.filter((fault) => blameOf(fault) === "ashara");
+  // A window that carried a fault production may charge for by design is not judged.
+  const exempting = (faults: readonly FaultRecord[]): boolean => faults.some((fault) => blameOf(fault) === "provider" || blameOf(fault) === "process");
+  // A crash or a SIGTERM stops every lane of the process, whichever lane it was injected in.
+  const processStopped = window.faults.some((fault) => blameOf(fault) === "process");
+
+  for (const [id, after] of window.after.tasks) {
+    const own = ofLane(id);
+    const faults = asharas(own);
+    if (faults.length === 0 || processStopped || exempting(own) || window.consulted.has(id)) continue;
+    // A task first read after the window began (a plan written in it) started from no attempt at all.
+    const before = window.before.tasks.get(id) ?? { title: after.title, dispatches: 0, lessons: 0 };
+    if (after.dispatches > before.dispatches) {
+      add(`dispatch:${after.title}`, `"${after.title}" was charged an attempt (dispatch_count ${before.dispatches} -> ${after.dispatches}) in a cycle its model did no work for, under ${describeFaults(faults)}`);
+    }
+    if (after.lessons > before.lessons) {
+      add(`lesson:${after.title}`, `"${after.title}" was written a failed-approach lesson in a cycle its model did no work for, under ${describeFaults(faults)}`);
+    }
+  }
+
+  const outside = asharas(ofLane(null));
+  if (outside.length === 0 || window.misbehaved || exempting(window.faults)) return violations;
+  const counters = ["intakeAttempts", "planAttempts", "replanAttempts"] as const;
+  for (const [index, [projectId, after]] of [...window.after.projects].entries()) {
+    // A project first read after the window began started from no attempt at all.
+    const before = window.before.projects.get(projectId) ?? { intakeAttempts: 0, planAttempts: 0, replanAttempts: 0 };
+    const project = index === 0 ? "" : `p${index + 1}:`;
+    for (const counter of counters) {
+      if (after[counter] <= before[counter]) continue;
+      add(`${project}${counter}`, `${index === 0 ? "" : `project ${index + 1}: `}${counter} grew ${before[counter]} -> ${after[counter]} in a cycle whose every model read answered as asked, under ${describeFaults(outside)}`);
+    }
+  }
+  return violations;
 }

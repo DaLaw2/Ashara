@@ -60,9 +60,30 @@ describe("releaseBranchesOfSettledTasks: branch release follows the settled stat
       workdirBase: fixture.base,
     });
 
-    expect(summary).toEqual({ released: 3, left: 0, targetsFailed: 0 });
+    expect(summary).toEqual({ released: 3, left: 0, checkouts: 0, targetsFailed: 0 });
     expect(fixture.branches().sort()).toEqual(["main", `task/${pending}`, `check/${blockedCheck}`, `task/${unknown}`].sort());
     expect(existsSync(join(fixture.base, `task-${abandoned}`))).toBe(false);
+  });
+
+  test("every throwaway checkout a cut-short check left is removed, whichever task it ran for; a task's own worktree is kept", async () => {
+    const [completed, pending] = Array.from({ length: 2 }, () => createWorkItemId());
+    const fixture = targetWithBranches([`task/${pending}`], [`task/${pending}`]);
+    const left = [`post-merge-checks-${completed}-s1`, `define-check-1-${pending}-s2`].map((name) => join(fixture.base, "checkouts", name));
+    for (const dir of left) git(fixture.target, ["worktree", "add", "-q", "--detach", dir, "main"]);
+    // A registration whose directory a crash already removed is released too.
+    rmSync(left[1], { recursive: true, force: true });
+
+    const summary = await releaseBranchesOfSettledTasks({
+      workItemRepo: boardOf(new Map<WorkItemId, WorkItemStatus>([[completed, "Completed"], [pending, "Pending"]])),
+      projects: { listWithWorkspace: async () => [{ id: PROJECT, workspacePath: fixture.target }] },
+      workdirBase: fixture.base,
+    });
+
+    expect(summary).toEqual({ released: 0, left: 0, checkouts: 2, targetsFailed: 0 });
+    const registered = git(fixture.target, ["worktree", "list", "--porcelain"]);
+    expect(registered).not.toContain("checkouts");
+    expect(registered).toContain(`task-${pending}`);
+    expect(existsSync(left[0])).toBe(false);
   });
 
   test("a target with no repository yet holds no branch, and one outside the workdir base is refused, not read", async () => {
@@ -80,6 +101,6 @@ describe("releaseBranchesOfSettledTasks: branch release follows the settled stat
       },
       workdirBase: fixture.base,
     });
-    expect(summary).toEqual({ released: 0, left: 0, targetsFailed: 1 });
+    expect(summary).toEqual({ released: 0, left: 0, checkouts: 0, targetsFailed: 1 });
   });
 });

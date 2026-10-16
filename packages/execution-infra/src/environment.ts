@@ -4,7 +4,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
-import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
+import { EnvironmentDefinitionInvalid, EnvironmentGitFailed, EnvironmentVersionUnresolved } from "./errors.js";
 import { runHostGitObjects } from "./host-git.js";
 
 // The environment definition is the platform role's work product in the repository; Execution
@@ -99,16 +99,33 @@ export function parseEnvironmentFile<D>(text: string, source: string, schema: z.
 }
 
 const commitHash = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+const execFailureSchema = z.object({ code: z.unknown().optional(), stderr: z.unknown().optional() });
+
+/** `rev-parse --verify --quiet`'s exit status for a revision that names no commit. */
+const REV_PARSE_NO_SUCH_COMMIT = 1;
+
+function stderrText(stderr: unknown): string {
+  if (typeof stderr === "string") return stderr;
+  return Buffer.isBuffer(stderr) ? stderr.toString("utf8") : "";
+}
 
 async function resolveCommit(gitDir: string, rev: string): Promise<string> {
   if (rev === "" || rev.startsWith("-")) {
     throw new EnvironmentVersionUnresolved(gitDir, rev, "the revision is empty or starts with '-'");
   }
+  const argv = ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`];
   let stdout: Buffer;
   try {
-    stdout = await runHostGitObjects(gitDir, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`]);
+    stdout = await runHostGitObjects(gitDir, argv);
   } catch (err) {
-    throw new EnvironmentVersionUnresolved(gitDir, rev, `it does not name a commit: ${describeErrorChain(err)}`, { cause: err });
+    // Only git's own answer that the revision names no commit is evidence about the commit; a git
+    // that could not run the read (a lock, an unreadable object store) is Ashara's fault, and throws.
+    const failure = execFailureSchema.safeParse(err);
+    const exitCode = failure.success && typeof failure.data.code === "number" ? failure.data.code : null;
+    if (exitCode === REV_PARSE_NO_SUCH_COMMIT) {
+      throw new EnvironmentVersionUnresolved(gitDir, rev, `it does not name a commit: ${describeErrorChain(err)}`, { cause: err });
+    }
+    throw new EnvironmentGitFailed(gitDir, argv, exitCode, failure.success ? stderrText(failure.data.stderr) : "", { cause: err });
   }
   const hash = commitHash.safeParse(stdout.toString("utf8").trim());
   if (!hash.success) throw new EnvironmentVersionUnresolved(gitDir, rev, `rev-parse printed ${JSON.stringify(stdout.toString("utf8"))}`);

@@ -142,6 +142,7 @@ function buildDeps(
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
     blockReports: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
+    heldCells: { release: async () => {} },
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: concurrentTaskLanes,
     acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
@@ -259,6 +260,65 @@ describe("CoreLoop settled branches", () => {
       }).runCycle();
 
       expect(branchAtDispatch).toEqual(["", ""]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("a cycle at the deployment cap still releases the cells a failed teardown left and a settled task's branch", async () => {
+    const base = mkdtempSync(join(tmpdir(), "ashara-loop-settled-cap-"));
+    const target = join(base, "projects", "p");
+    mkdirSync(target, { recursive: true });
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: target, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      git("commit", "-q", "--allow-empty", "-m", "init");
+      const completed = createWorkItemId();
+      git("branch", `check/${completed}`);
+      const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => true));
+      const release = vi.fn(async () => {});
+
+      const result = await new CoreLoop({
+        ...deps,
+        heldCells: { release },
+        config: { ...deps.config, workdirBase: base },
+        workItemRepo: { ...deps.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Completed") ? [completed] : []) },
+        projectRepo: { ...deps.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] },
+      }).runCycle();
+
+      expect(result.stop).not.toBeNull();
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(git("branch", "--list", `check/${completed}`)).toBe("");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("a halted cycle releases the cells a failed teardown left and a settled task's branch", async () => {
+    const base = mkdtempSync(join(tmpdir(), "ashara-loop-settled-halted-"));
+    const target = join(base, "projects", "p");
+    mkdirSync(target, { recursive: true });
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: target, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      git("commit", "-q", "--allow-empty", "-m", "init");
+      const abandoned = createWorkItemId();
+      git("branch", `task/${abandoned}`);
+      const deps = buildDeps();
+      const release = vi.fn(async () => {});
+
+      await new CoreLoop({
+        ...deps,
+        heldCells: { release },
+        config: { ...deps.config, workdirBase: base },
+        workItemRepo: { ...deps.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [abandoned] : []) },
+        projectRepo: { ...deps.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] },
+      }).runHaltedCycle();
+
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(git("branch", "--list", `task/${abandoned}`)).toBe("");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

@@ -1,6 +1,6 @@
 import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
-import { pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
+import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
 import {
   briefMisstatesStanding,
@@ -16,6 +16,7 @@ import {
   questionMisstatesAssumption,
   stopReportOmitsMerge,
 } from "./report-plants.js";
+import { abandonedReleaseSkipped } from "./residue.js";
 
 /**
  * A plant at a seam (L3 acceptance): the run must catch it, so a green invariant is not a blind one.
@@ -50,7 +51,16 @@ import {
  *   not record (I9);
  * - check-set-skips-item: a check set is stored with one item its check task cites decided by none
  *   of its checks, past Z0's rule, so that item is accepted with no stored check deciding it, though
- *   an acceptance line still cites it (I6, d89 E, ADR-083).
+ *   an acceptance line still cites it (I6, d89 E, ADR-083);
+ * - dispatch-refund-skipped: a dispatch refund gives nothing back, so an attempt stopped by a
+ *   substrate fault before its agent worked stays charged (I10);
+ * - step-fault-unrecorded: a contained subject's fault cannot be kept, so containEach throws it
+ *   through as if no step contained anything: one project's unreadable rows fail every project's
+ *   cycle (I1:cycle-error, and I8 on the healthy project of the corruption scenario, run.ts);
+ * - active-listing-throws: the listing of dispatchable projects throws on every cycle with no fault
+ *   beneath it (I1:cycle-error);
+ * - abandoned-release-skipped: the release of settled tasks' host holdings leaves out the Abandoned
+ *   ones, so a given-up task's branch and worktree slot stay (I7, residue clause).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -70,6 +80,10 @@ export const MUTATIONS = [
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
   "check-set-skips-item",
+  "dispatch-refund-skipped",
+  "step-fault-unrecorded",
+  "active-listing-throws",
+  "abandoned-release-skipped",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -99,6 +113,10 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
   "check-set-skips-item": { bypassed: [], queries: checkSetSkipsItem, code: null },
+  "dispatch-refund-skipped": { bypassed: [], queries: skipDispatchRefund, code: null },
+  "step-fault-unrecorded": { bypassed: [], queries: unrecordedStepFault, code: null },
+  "active-listing-throws": { bypassed: [], queries: throwingActiveListing, code: null },
+  "abandoned-release-skipped": { bypassed: [], queries: abandonedReleaseSkipped, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

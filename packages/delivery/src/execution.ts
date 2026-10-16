@@ -243,7 +243,9 @@ async function executeTask(
   if (execResult.status === "environment_undefined") {
     // Not a task failure, so never Failed: a re-dispatch meets the same main. Nothing re-defines or
     // rebuilds main's environment while every environment task is done, so the task is given up
-    // and its plan repaired, which can plan a new environment (W6: no item waits on a person).
+    // and its plan repaired, which can plan a new environment (W6: no item waits on a person). No
+    // agent ran, so the dispatch is given back: the count is attempts at the task's work.
+    await refundBestEffort(deps, task.id, "an undefined environment");
     await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: execResult.detail });
     return {
       result: blockedResult(task.id, execResult.detail),
@@ -257,6 +259,8 @@ async function executeTask(
     // No roster role can work the task: a re-dispatch meets the same owner and the same roster,
     // and no production path appends a roster revision after the first, so the task is given up,
     // never Failed, and its plan repaired: the repair staffs its new tasks from the latest roster.
+    // No agent ran, so the dispatch is given back.
+    await refundBestEffort(deps, task.id, "an unresolved owner");
     await routeAsGivenUp(deps, task.id, {
       source: "owner_unresolved",
       ownerRoleId: execResult.ownerRoleId,

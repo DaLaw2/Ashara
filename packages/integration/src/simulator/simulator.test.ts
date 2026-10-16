@@ -3,6 +3,7 @@ import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { RARE_UNDER_OWN_PROFILES } from "./coverage.js";
 import { dropStaleRunDatabases, prepareTemplate } from "./database.js";
 import { diffExpected } from "./expected-failures.js";
+import { TRANSPORT_RESPONSES } from "./faults.js";
 import type { FaultKind, SeamKind } from "./faults.js";
 import { minimize } from "./minimize.js";
 import { profileOfSeed } from "./profile.js";
@@ -114,7 +115,7 @@ describe("lifecycle simulator, fast tier", () => {
  * as a seeded one: the same seams, stand-ins and interleaver; only the choice is named.
  */
 describe("lifecycle simulator, directed", () => {
-  type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage"> & { readonly profile?: Profile };
+  type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject"> & { readonly profile?: Profile };
 
   function directed(directions: readonly Direction[], scenario: Scenario = {}): Promise<RunResult> {
     return runSeed({
@@ -296,6 +297,27 @@ describe("lifecycle simulator, directed", () => {
     expect(planted.outcome.kind).toBe("open");
   }, 90_000);
 
+  // ADR-080 d10 C4, I7's residue clause: a given-up task's branch is one no attempt reads. Under the
+  // cell outage above the environment task is given up on its fifth fault, after its attempts made
+  // its branch, and the clean run of that test passes the clause. With the Abandoned left out of the
+  // settled release, the branch stays on the host and the clause names it.
+  it("catches a given-up task's branch left on the host when its cleanup is skipped", async () => {
+    const planted = await directed([], { cellOutage: true, mutation: "abandoned-release-skipped" });
+    expect(keys(planted), statements(planted)).toEqual(["I7:residue:branch:Define and commit the project environment"]);
+  }, 90_000);
+
+  // The settled release runs in the cycle that stops at the deployment cap and on every halted
+  // cycle after it: a check task completes in the batch that reaches a cap of $4, and the deletion
+  // of its throwaway branch fails (the fourth `git branch`). The runner runs no full cycle after the
+  // stop, so a release only at the top of a full cycle would never delete the branch until a
+  // restart; the residue clause would name it.
+  it("releases the branch of a task settled in the cycle that reached the deployment cap", async () => {
+    const result = await directed([...BATCH_OF_TWO, { kind: "fault", seam: "git", label: "branch", nth: 4, fault: "git-failed" }], { capUsd: 4 });
+    expect(result.outcome).toMatchObject({ kind: "halted", cause: "spend_cap" });
+    expect(result.log.some((line) => line.includes("the throwaway branch check/") && line.includes("could not be deleted"))).toBe(true);
+    expect(keys(result), statements(result)).toEqual([]);
+  }, 90_000);
+
   // ADR-074 d84 b, W7: with no adversary the stand-ins drive the project to Accepted on one passed
   // sweep of main; the delivered report is judged against the goal tasks' merge records and the task
   // and check records, so a report that drops a goal's close, misstates what no stored check covers,
@@ -382,6 +404,53 @@ describe("lifecycle simulator, directed", () => {
   it("throws for a plant that rewrote no query", async () => {
     await expect(directed([], { capUsd: 0.02, mutation: "skip-merge-record" })).rejects.toThrow(/plant of mutation skip-merge-record rewrote no query/);
   }, 90_000);
+
+  // I10 (ADR-080 d10 C1): the first cell start fails, before the agent of the environment task ran.
+  // Production refunds the dispatch as a substrate fault; planted, the refund gives nothing back,
+  // and the attempt stays charged for work no model did.
+  it("charges no attempt for a cell that could not start, and names one charged when its refund is skipped", async () => {
+    const unstarted = [fault("podman", "run", "cell-start-failed")];
+    expect(keys(await directed(unstarted))).toEqual([]);
+    const planted = await directed(unstarted, { mutation: "dispatch-refund-skipped" });
+    expect(keys(planted), statements(planted)).toEqual(["I10:dispatch:Define and commit the project environment"]);
+  }, 90_000);
+
+  // The fake transport answers the first model call (the tender's intake read) with each status. A
+  // 4xx rejecting the request as Ashara built it is Ashara's: never counted against the read (I10),
+  // contained to its tender and retried. A reset, a 429 or a 5xx is the provider's, counted against it.
+  for (const [index, response] of TRANSPORT_RESPONSES.entries()) {
+    it(`answers a transport ${response.status ?? "reset"} as ${response.owner === "ashara" ? "Ashara's" : "the provider's"}, charging only what is the provider's`, async () => {
+      const result = await directed([fault("model", /./, "provider-error"), draw(/^fault\.model:.*\.response$/, 1, index)]);
+      expect(result.faults.map((f) => `${f.fault}:${f.response?.status ?? "reset"}`)).toEqual([`provider-error:${response.status ?? "reset"}`]);
+      const blamed = response.owner === "ashara" ? "(a fault on Ashara's side)" : "(the provider failed the request)";
+      expect(result.log.some((line) => line.includes(blamed)), result.log.join("\n")).toBe(true);
+      expect(keys(result), statements(result)).toEqual([]);
+    }, 90_000);
+  }
+
+  // I1:cycle-error: a listing of the projects at work names a table that does not exist, so every
+  // cycle throws with no fault beneath it.
+  it("names a cycle that throws with no fault injected beneath it", async () => {
+    const planted = await directed([], { mutation: "active-listing-throws" });
+    expect(keys(planted)).toContain("I1:cycle-error");
+    expect(planted.faults).toEqual([]);
+  }, 90_000);
+
+  // C9, containment (ADR-080 d10): the second project's rows are corrupted as the run reaches them,
+  // its first task_spec (the gate halts it) and then its halt episode's kind (the block report's
+  // listing reads it, contained to that report). The first project is accepted all the same; the
+  // corrupted episode can never be reported, which I2 names on the second project. With containment
+  // undone (a contained fault cannot be kept, so it throws through), every cycle fails for both
+  // projects, and the healthy one makes no progress (I8).
+  it("keeps one project's corrupted rows from stopping the other, and names the stall when containment is undone", async () => {
+    const corrupted = { projects: 2, corruptSecondProject: true } as const;
+    const contained = await directed([], corrupted);
+    expect(contained.outcome.kind).toBe("accepted");
+    expect(contained.trace).toEqual(expect.arrayContaining(["plant: the second project's first task_spec corrupted", "contained block-report"]));
+    expect(keys(contained), statements(contained)).toEqual(["I2:p2:episode:planted-unknown-kind"]);
+    const uncontained = await directed([], { ...corrupted, mutation: "step-fault-unrecorded" });
+    expect(keys(uncontained)).toEqual(expect.arrayContaining(["I1:cycle-error", "I8:Pending"]));
+  }, 120_000);
 
   it("catches a merge recorded under a commit main does not hold", async () => {
     const clean = await directed([]);

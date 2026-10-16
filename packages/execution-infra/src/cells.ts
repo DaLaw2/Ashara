@@ -50,6 +50,20 @@ export function substrateProbe(substrate: Pick<PodmanSubstrate, "probeSubstrate"
   };
 }
 
+/**
+ * Between cycles, when no attempt is in flight: every cell this process still holds is one whose
+ * teardown failed (its attempt is over, its task may be settled), so it is removed now rather than
+ * left running until shutdown. A failure is logged at warn and the next cycle retries it.
+ */
+export async function releaseHeldCells(substrate: Pick<PodmanSubstrate, "teardownAll">): Promise<void> {
+  try {
+    const removed = await substrate.teardownAll();
+    if (removed.length > 0) console.log(`Cells: removed ${removed.length} cell(s) a failed teardown left: ${removed.join(", ")}`);
+  } catch (err) {
+    console.warn(`Cells: a cell a failed teardown left could not be removed; the next cycle retries it: ${describeErrorChain(err)}`);
+  }
+}
+
 /** Shutdown drain: every cell this process still holds is removed; a failure is reported, never swallowed. */
 export async function teardownCellsAtShutdown(substrate: Pick<PodmanSubstrate, "teardownAll">): Promise<void> {
   try {

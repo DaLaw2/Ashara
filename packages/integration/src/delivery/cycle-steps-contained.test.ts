@@ -58,6 +58,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.taskLanes": { kind: "not-per-project", reason: "each task runs in its own lane and settles on its own (Promise.allSettled); a rejection goes to handleProcessingError" },
   processTask: { kind: "not-per-project", reason: "runs inside a task's lane, whose rejection is settled per task" },
   handleProcessingError: { kind: "not-per-project", reason: "one task's recovery; it catches its own recovery failure and returns the task interrupted" },
+  "deps.heldCells.release": { kind: "not-per-project", reason: "the deployment's cells a failed teardown left, one substrate call for every project; it logs its own failure at warn and never throws" },
   "deps.spendCap.deploymentStop": { kind: "not-per-project", reason: "the deployment's cap, one read for every project" },
   "deps.spendCap.refusalOf": { kind: "not-per-project", reason: "a pure reading of an error" },
   "deps.projectRepo.blockAllActive": { kind: "not-per-project", reason: "the deployment's halt at its cap, one write for every project" },

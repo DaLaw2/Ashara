@@ -125,9 +125,12 @@ export class CoreLoop {
     const delivered = await this.postDeliveredReports();
     if (delivered !== null) return this.haltAtCap(delivered);
 
-    // Every step below makes LLM calls, each admitted by Finance's spend cap.
+    // Every step below makes LLM calls, each admitted by Finance's spend cap. A cycle at the cap
+    // releases what the previous cycle's attempts held inside haltAtCap.
     const atCap = await deps.spendCap.deploymentStop();
     if (atCap) return this.haltAtCap(atCap);
+    const held = await this.releaseHeld();
+    if (held.kind === "stop") return this.haltAtCap(held.stop);
 
     // Tenders first: a project's intake comes before any work on it.
     const intake = await this.stepThenCap("liaison-intake", () => deps.liaisonIntake.runPending());
@@ -200,12 +203,6 @@ export class CoreLoop {
       }),
     );
     if (released.kind === "stop") return this.haltAtCap(released.stop);
-    // Then every settled task's branches are released, whichever path settled it: the previous
-    // cycle awaited every attempt it dispatched, so none is in flight.
-    const branches = await this.step("settled-branches", () =>
-      releaseBranchesOfSettledTasks({ workItemRepo: deps.workItemRepo, projects: deps.projectRepo, workdirBase: deps.config.workdirBase }),
-    );
-    if (branches.kind === "stop") return this.haltAtCap(branches.stop);
 
     // A project with every task settled and a goal task done is swept on main (no LLM call): Accepted
     // and told so, or a defect whose repair the next cycle's replanning plans.
@@ -254,9 +251,25 @@ export class CoreLoop {
    * stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
-    // The loop is already stopped at the cap: a stop either step returns is that same stop.
+    // The loop is already stopped at the cap: a stop any of these returns is that same stop.
     await this.takeClientStops();
     await this.answerClientChanges();
+    await this.releaseHeld();
+  }
+
+  /**
+   * What every attempt held on the host is released, whichever path ended it: the cells a failed
+   * teardown left, then every settled task's branches. Called only where no attempt is in flight:
+   * before a full cycle's dispatch (the previous cycle awaited every attempt it dispatched), in the
+   * cycle that stops at the cap (haltAtCap, after its batch settled), and on each halted cycle,
+   * which dispatches nothing and retries a release the stopping cycle failed. No LLM call. The
+   * branch release is a cycle step like any other: a stop it returns is the caller's to act on.
+   */
+  private async releaseHeld(): Promise<StepEnd<unknown>> {
+    await this.deps.heldCells.release();
+    return this.step("settled-branches", () =>
+      releaseBranchesOfSettledTasks({ workItemRepo: this.deps.workItemRepo, projects: this.deps.projectRepo, workdirBase: this.deps.config.workdirBase }),
+    );
   }
 
   /** The client's stops, each taken once; the deployment cap's stop when a refusal named it, else null. */
@@ -317,6 +330,9 @@ export class CoreLoop {
    * own reason.
    */
   private async haltAtCap(stop: LoopStop): Promise<CycleResult> {
+    // The runner runs no full cycle after this one, so a task settled in it is released here; the
+    // loop stops on `stop`, so a stop the release returns is the cap's too.
+    await this.releaseHeld();
     const halted = await this.deps.projectRepo.blockAllActive(deploymentCapCause(stop));
     if (halted.length > 0) console.warn(`[budget_cap] ${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`);
     // The loop stops here on `stop`: a stop the reports' step returns is the cap's too.

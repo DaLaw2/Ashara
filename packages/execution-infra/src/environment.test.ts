@@ -7,7 +7,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { environmentVersion, readEnvironmentFile } from "./environment.js";
 import type { EnvironmentBuildContext } from "./environment.js";
-import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
+import { EnvironmentDefinitionInvalid, EnvironmentGitFailed, EnvironmentVersionUnresolved } from "./errors.js";
+import { withGitRunner } from "./host-git.js";
 
 const run = promisify(execFile);
 const scratch: string[] = [];
@@ -102,5 +103,23 @@ describe("environmentVersion", () => {
     await expect(readEnvironmentFile(gitDir, "main", z.unknown())).rejects.toBeInstanceOf(EnvironmentDefinitionInvalid);
     await expect(environmentVersion(gitDir, "main", BUILD_CONTEXT)).rejects.toThrow(/recipe file\(s\).*environment\/environment\.toml.*not files/);
     await expect(environmentVersion(gitDir, "--output=x", BUILD_CONTEXT)).rejects.toBeInstanceOf(EnvironmentVersionUnresolved);
+  });
+
+  it("tells a revision that names no commit from a git that could not read the repository", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "ashara-env-version-"));
+    scratch.push(repo);
+    await git(repo, "init", "-q", "-b", "main");
+    await commitFiles(repo, { "environment/environment.toml": DEFINITION_TEXT }, "env");
+    const gitDir = join(repo, ".git");
+    await expect(readEnvironmentFile(gitDir, "no-such-branch", z.unknown())).rejects.toBeInstanceOf(EnvironmentVersionUnresolved);
+    const locked = withGitRunner(
+      {
+        text: () => Promise.reject(Object.assign(new Error("git failed"), { code: 128, stderr: "fatal: Unable to create 'index.lock': File exists.\n" })),
+        bytes: () => Promise.reject(Object.assign(new Error("git failed"), { code: 128, stderr: Buffer.from("fatal: Unable to create 'index.lock': File exists.\n") })),
+      },
+      () => readEnvironmentFile(gitDir, "main", z.unknown()),
+    );
+    await expect(locked).rejects.toBeInstanceOf(EnvironmentGitFailed);
+    await expect(locked).rejects.toThrow(/exit 128.*index\.lock/);
   });
 });
