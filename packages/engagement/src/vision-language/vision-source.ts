@@ -52,6 +52,17 @@ export function visionSourceCitation(item: VisionSource): string {
   return `${item.id} (assumption; ${ASSUMPTION_KIND_LABEL[item.kind]}${citability(item.kind)}): ${item.text}`;
 }
 
-function citability(kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"]): string {
-  return kind === "client-visible" ? "" : ", not citable";
+type AssumptionSourceKind = Extract<VisionSource, { readonly type: "assumption" }>["kind"];
+
+/**
+ * Whether an assumption of this kind is one a check decides (d89 E, ADR-083): every kind but
+ * internal design. An unclassified record is not evidence that no client could observe a breach, so
+ * doubt lands on the side that gets a check.
+ */
+export function assumptionChecked(kind: AssumptionSourceKind): boolean {
+  return kind !== "internal-design";
+}
+
+function citability(kind: AssumptionSourceKind): string {
+  return assumptionChecked(kind) ? "" : ", not citable";
 }

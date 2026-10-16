@@ -5,6 +5,7 @@ import { SchemaValidationError } from "@ashara/finance";
 import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
 import type { IntakeStore } from "./intake.js";
+import { ASSUMPTION_KIND_RULE } from "./vision-language/vision-assumption.js";
 
 describe("TenderIntake failure accounting", () => {
   test("an error nothing names, a thrown circular non-Error, is Ashara's: recorded on the tender with a backoff, never counted against it", async () => {
@@ -524,3 +525,73 @@ describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
   });
 });
 
+// ADR-083: an assumption whose breach a client could observe gets a check, and doubt classifies
+// toward one. Which kind a real model picks is not testable offline: these tests fix what Ashara
+// does with each answer and what every classifying prompt tells the model, never the model's choice.
+describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
+  // A tender for a command-line key-value store, and assumptions an intake of it wrote, as fixture.
+  const TENDER =
+    "I would like a key-value store written in Rust that we can use from the command line. Keep data in a directory we " +
+    "choose, using a write-ahead log. Recover after a crash: a partly written record at the end of the log should be " +
+    "ignored, not treated as fatal corruption.";
+  const REPLAY = "On open, the store replays all complete records in order and ignores a partial or invalid record only at the end of the log.";
+  const FORMAT = "The write-ahead log stores length-prefixed records with a checksum, in append order.";
+
+  async function intakeOf(kinds: { readonly replay: string; readonly format: string }) {
+    const prompts: string[] = [];
+    const response = {
+      summary: "A command-line key-value store.",
+      inScope: ["put, get, delete"],
+      outOfScope: [],
+      questions: [],
+      assumptions: [
+        { statement: REPLAY, rationale: "The tender asks for recovery after a crash.", kind: kinds.replay },
+        { statement: FORMAT, rationale: "A common log format.", kind: kinds.format },
+      ],
+    };
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          prompts.push(request.prompt);
+          return { data: request.schema.parse(response), model: "stub-model", provider: "stub" };
+        },
+      }),
+    };
+    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
+    const store: IntakeStore = {
+      openTenders: async () => [
+        { id: "tender-kv", projectId: parseProjectId("00000000-0000-4000-8000-000000000083", "test"), body: TENDER, intakeAttempts: 0, intakeLastError: null },
+      ],
+      currentVisionVersion: async () => null,
+      recordIntake: async (write) => {
+        writes.push(write);
+        return { kind: "recorded", questionIds: [] };
+      },
+      consumeTender: async () => {},
+      recordFailedAttempt: async () => 1,
+      closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
+    };
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [write] = writes;
+    if (write === undefined) throw new Error("expected one intake write");
+    return { prompt: prompts[0] ?? "", kinds: write.vision([]).inferences.map((a) => [a.statement, a.kind]) };
+  }
+
+  test("an assumption the model classes undecided is recorded client-visible", async () => {
+    const { kinds } = await intakeOf({ replay: "undecided", format: "internal-design" });
+    expect(kinds).toEqual([
+      [REPLAY, "client-visible"],
+      [FORMAT, "internal-design"],
+    ]);
+  });
+
+  test("the intake prompt states the fail-safe rule and offers undecided", async () => {
+    const { prompt } = await intakeOf({ replay: "client-visible", format: "internal-design" });
+    for (const line of ASSUMPTION_KIND_RULE) expect(prompt).toContain(line);
+    expect(prompt).toContain("in its exit status, or in the data the client stores with it");
+    expect(prompt).toContain('"undecided": you cannot tell whether a client could observe a breach');
+  });
+});

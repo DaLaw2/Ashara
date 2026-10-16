@@ -354,7 +354,8 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: ReadonlyMap<number,
         `the brief of "${title}" says assumption ${id} is "${standingWords}"; vision v${brief.visionVersion}, the one it carries, records it "${STANDING_WORDS[recorded.standing]}"`,
       );
     }
-    const citable = recorded.kind === "client-visible";
+    // Every kind but internal design is citable (ADR-083): no recorded kind is not evidence no client could see it.
+    const citable = recorded.kind !== "internal-design";
     if (kindWords !== KIND_WORDS[recorded.kind] || (notCitable === undefined) !== citable || text !== recorded.statement) {
       add(
         `brief-assumption:${title}:${id}`,

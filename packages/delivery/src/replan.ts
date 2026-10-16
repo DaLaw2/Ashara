@@ -16,7 +16,7 @@ import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
 import type { BulkPlanEdge } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import { VisionItemsMissing } from "./decomposition-types.js";
-import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning } from "./decomposition-types.js";
+import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning, VisionItem } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
 import type { FirstPlanWrite } from "./first-plan.js";
@@ -533,6 +533,19 @@ function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
   return { kind: "existing", taskId: latest.item.id };
 }
 
+/**
+ * The vision items an acceptance line of a completed decomposed task names, each as that task cited
+ * it: its stored checks decided them, so a revision need not plan a check of them again (ADR-083).
+ */
+function checkedByDone(completed: readonly PlannedItem[]): VisionItem[] {
+  return completed.flatMap(({ item }) => {
+    const spec = item.taskSpec;
+    if (spec?.origin !== "decomposition" || spec.sources === undefined || spec.acceptance === undefined) return [];
+    const named = new Set(spec.acceptance.flatMap((line) => line.sources));
+    return spec.sources.filter((source) => named.has(source.id));
+  });
+}
+
 /** The work already done, kept as the revision's context: titles and what merged them. */
 function doneSection(completed: readonly PlannedItem[]): string {
   if (completed.length === 0) return "Already done: nothing yet.";
@@ -712,6 +725,7 @@ export class Replanner implements Replanning {
       layout: layoutOf(completed),
       // The same rule as a first plan (ADR-074 addendum 2 d71 d): every new task traces to the current vision.
       visionItems: vision.items,
+      checkedItems: checkedByDone(completed),
     };
     return new DecompositionEngine(llm).decompose(input);
   }

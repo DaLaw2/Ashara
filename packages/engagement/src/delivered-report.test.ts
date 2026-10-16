@@ -192,8 +192,9 @@ describe("the delivered report", () => {
   });
 
   // Exclusions and internal-design assumptions are never unchecked items of what the client asked
-  // for. The vision below has scope lines on both sides and assumptions of every kind.
-  test("a vision with exclusions and design choices: exclusions and the team's design choices are never listed; an uncited assumption is Ashara's, as the client saw it", async () => {
+  // for; every internal-design assumption is named apart, by id and text, as not verified by Ashara
+  // (ADR-083). The vision below has scope lines on both sides and assumptions of every kind.
+  test("a vision with exclusions and design choices: exclusions are never listed, design choices are listed as not verified by Ashara; an uncited assumption is Ashara's, as the client saw it", async () => {
     const body = await render({
       sweepId: "s6",
       projectId,
@@ -230,9 +231,25 @@ describe("the delivered report", () => {
         "- Ashara's assumption, which Ashara has no record of showing you: Empty keys are refused. (not recorded as what you see or as how it is built)",
       ].join("\n"),
     );
+    expect(body.split("\n\n").find((section) => section.includes("not verified by Ashara"))).toBe(
+      [
+        "These assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no check decides them: they are not verified by Ashara.",
+        "- A8: The tool uses an OS advisory lock on a lock file.",
+        "- A10: Each log record is length-prefixed with a checksum.",
+      ].join("\n"),
+    );
     expect(body).not.toContain("network");
-    expect(body).not.toContain("advisory lock");
     expect(body).not.toContain("Several processes");
+  });
+
+  test("a vision with no internal-design assumption, or no recorded coverage, names nothing as not verified", async () => {
+    const fields = { ...BASE, checked: ["Count words"], unchecked: [], givenUp: [] };
+    const visible = await render({
+      ...fields,
+      vision: { kind: "recorded", items: [{ source: assumption("A1", "Totals print last.", "reported", "client-visible"), checked: true }] },
+    });
+    expect(visible).not.toContain("not verified by Ashara");
+    expect(await render({ ...fields, vision: { kind: "unrecorded" } })).not.toContain("not verified by Ashara");
   });
 
   // d95 a: each uncited assumption is worded by where it stood at acceptance, an answer included.

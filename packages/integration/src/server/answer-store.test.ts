@@ -19,6 +19,7 @@ import type { StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { citingAssumptionsToCheck } from "../simulator/scripted-models.js";
 
 // Every row here belongs to a project this suite creates under a unique name, and
 // afterAll deletes exactly those rows. Each store is narrowed to this suite's
@@ -112,7 +113,7 @@ function pipelineModel(reading: unknown): MockLanguageModelV4 {
       if (prompt.includes("Read their answer and say what it does")) return jsonResult(reading);
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
-      return jsonResult(TASKS);
+      return jsonResult(citingAssumptionsToCheck(TASKS, prompt));
     },
   });
   stub.model = mock;
@@ -342,6 +343,32 @@ describe("the client's answers", () => {
     expect(reports[0]?.body).toContain("Work now proceeds on: The hill studio opens first.");
     expect(reports[0]?.body).toContain("you will be told what changes");
     expect(await answers().runPending()).toEqual([]);
+  });
+
+  // ADR-083: doubt classifies toward a check.
+  test("a changed decision the model classes undecided is recorded client-visible", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [, second] = questionIds;
+    if (second === undefined) throw new Error("intake posted no second question");
+    await answer(projectId, second, "Eight seats, not twelve.");
+    pipelineModel({ verdict: "changes", statement: "A class has eight seats.", kind: "undecided" });
+    expect((await answers().runPending()).map((o) => o.kind)).toEqual(["stated"]);
+    expect((await visionsOf(projectId))[1]?.inferences.find((a) => a.key === "A2")).toMatchObject({
+      statement: "A class has eight seats.",
+      kind: "client-visible",
+    });
+  });
+
+  test("the answer prompt states the fail-safe classification rule", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [first] = questionIds;
+    if (first === undefined) throw new Error("intake posted no question");
+    await answer(projectId, first, "Yes, harbour first.");
+    const mock = pipelineModel({ verdict: "confirms" });
+    await answers().runPending();
+    const prompt = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("Read their answer")) ?? "";
+    expect(prompt).toContain("in its exit status, or in the data the client stores with it");
+    expect(prompt).toContain("you cannot tell whether a client could observe a breach. It is recorded as");
   });
 
   test("an answer after the first plan that confirms its assumption is Stated without replanning", async () => {

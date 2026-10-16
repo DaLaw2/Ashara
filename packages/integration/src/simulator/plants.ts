@@ -5,12 +5,13 @@ import type { QueryPlant } from "./faults.js";
 import {
   briefMisstatesStanding,
   deliveredReportMisquotesInterface,
-  deliveredReportMisstatesStanding,
+  deliveredReportOmitsUnverified,
   deliveredReportMisstatesUnchecked,
   deliveredReportOmitsGoal,
   deliveredReportOmitsUncovered,
   deliveredReportUnrecorded,
   haltReportFixedCause,
+  planDropsAssumptionChecks,
   questionMisstatesAssumption,
   stopReportOmitsMerge,
 } from "./report-plants.js";
@@ -36,12 +37,14 @@ import {
  *   it is posted again (I4, exactly once);
  * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
  *   (I9);
- * - delivered-report-misstates-standing: the delivered report says an assumption the client was
- *   asked about was reported to them (I9);
+ * - delivered-report-omits-unverified: the delivered report leaves out an internal-design
+ *   assumption it must name as not verified by Ashara (I4, ADR-083);
  * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
- *   not record (I9).
+ *   not record (I9);
+ * - plan-drops-assumption-checks: a plan is stored with acceptance lines that name no assumption, so
+ *   a client-visible assumption is accepted with no check citing it (I6, ADR-083).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -56,9 +59,10 @@ export const MUTATIONS = [
   "delivered-report-omits-uncovered",
   "delivered-report-unrecorded",
   "brief-misstates-standing",
-  "delivered-report-misstates-standing",
+  "delivered-report-omits-unverified",
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
+  "plan-drops-assumption-checks",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -83,9 +87,10 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncovered, code: null },
   "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
   "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
-  "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
+  "delivered-report-omits-unverified": { bypassed: [], queries: deliveredReportOmitsUnverified, code: null },
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
+  "plan-drops-assumption-checks": { bypassed: [], queries: planDropsAssumptionChecks, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

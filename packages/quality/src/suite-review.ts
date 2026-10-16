@@ -336,7 +336,7 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `- "contradiction": checks, of one check task or of several, that no single product could all pass (one requires`,
     `  an output, a format, a file or an exit status that another forbids). Name every check task whose checks are involved.`,
     `- "outside-vision": a check that requires behaviour none of the vision items its own task cites asks for. Judge`,
-    `  each check only against its own task's cited items, whatever their status: an Inferred client-visible`,
+    `  each check only against its own task's cited items, whatever their status or recorded kind: an Inferred`,
     `  assumption the task cites is asked for. An input a cited item says the product must reject is asked for. Using a`,
     `  form the public interface names (a command, an argument, a file, an exit status) is never outside. Name the one`,
     `  check task that wrote it. Read each cited item's whole text, every clause of it, before you say it does not ask`,

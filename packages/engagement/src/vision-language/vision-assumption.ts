@@ -4,13 +4,44 @@ import { z } from "zod";
 // Reading the stored records is Engagement's alone: its published reader is readVisionVersion.
 
 /**
- * What an assumption is about (d89 E): behaviour the client sees and relies on (an output, an
- * error, what survives a crash), or a choice of how the team builds it (a file name, a lock
- * mechanism). Only a client-visible one may be the source of an acceptance line.
+ * What an assumption is about (d89 E), as the vision records it: behaviour the client could observe
+ * (an output, an error, an exit status, the data the client stores), or a choice of how the team
+ * builds it whose breach no client could observe. Only a client-visible one may be the source of an
+ * acceptance line, and every one is (ADR-083).
  */
 export const AssumptionKindSchema = z.enum(["client-visible", "internal-design"]);
 
 export type AssumptionKind = z.infer<typeof AssumptionKindSchema>;
+
+/**
+ * An assumption's kind as a model classifies it (ADR-083): "undecided" is a value the model may
+ * give, and it is recorded as client-visible, so doubt always lands on the side that gets a check.
+ * Every model-facing schema that classifies an assumption uses this one.
+ */
+export const ClassifiedAssumptionKindSchema = z
+  .enum(["client-visible", "internal-design", "undecided"])
+  .transform((kind): AssumptionKind => (kind === "undecided" ? "client-visible" : kind));
+
+/**
+ * The classification rule every prompt that asks a model for an assumption's kind states, worded
+ * once (ADR-083): a breach the client could observe makes it client-visible, doubt is "undecided"
+ * and gets a check, and internal design is left only for what no client could observe. It names
+ * kinds of observation, never a technology, a file type or a keyword.
+ */
+export const ASSUMPTION_KIND_RULE: readonly string[] = [
+  `  - "client-visible": the client could observe it being broken: in what the deliverable outputs, in`,
+  `    how it reports errors, in its exit status, or in the data the client stores with it (what is kept,`,
+  `    lost, changed or still readable after a failure). Which inputs it accepts or refuses, and what`,
+  `    still holds after a crash or a damaged input, are client-visible. The client's acceptance tests`,
+  `    check it.`,
+  `  - "internal-design": how the team builds it, and only when no client could observe a breach of it`,
+  `    in any of those ways, such as the name of an internal file or which mechanism provides a`,
+  `    guarantee the client sees through another assumption. It guides the work and is never checked.`,
+  `  - "undecided": you cannot tell whether a client could observe a breach. It is recorded as`,
+  `    client-visible and checked.`,
+  `  Ask, for each one: if the deliverable broke this, could the client see it in output, errors,`,
+  `  exit status or their stored data? Yes or unsure means it is not internal design.`,
+];
 
 /**
  * How the client learned of an Inferred assumption (d89 C): asked about it in an intake question,

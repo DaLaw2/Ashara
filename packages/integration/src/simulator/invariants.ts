@@ -8,7 +8,7 @@ import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";
-import { checkReports, readReportRecords } from "./client-reports.js";
+import { checkReports, readReportRecords, uncheckedAtAcceptance } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
@@ -474,7 +474,12 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
   }
   if (snapshot.unrecordedCalls > 0) add("I5", "unpriced", `${snapshot.unrecordedCalls} llm_calls row(s) carry no cost`);
 
-  // I6: no Done without its evidence.
+  // I6: no Done without its evidence. An accepted project is done: every assumption whose breach the
+  // client could observe (not recorded as internal design) is cited by a check the accepting sweep
+  // ran (ADR-083), judged once the run ends.
+  if (context.final && snapshot.project.status === "accepted") {
+    for (const found of uncheckedAtAcceptance(snapshot.reports)) add("I6", `unchecked-assumption:${found.key}`, found.statement);
+  }
   const checkedTasks = new Set(snapshot.checks.map((check) => check.taskId));
   for (const item of snapshot.items) {
     if (item.status !== "Completed" || item.level !== "Task") continue;

@@ -7,7 +7,7 @@ import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import type { AssumptionKind, ScopeLine } from "./vision-language/vision-assumption.js";
-import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
+import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
@@ -47,13 +47,13 @@ function withoutLabelLeadIn(statement: string): string {
 // A statement that is nothing but the lead-in is rejected (and re-asked), never stored empty.
 const AssumptionStatementSchema = z.string().min(1).transform(withoutLabelLeadIn).pipe(z.string().min(1));
 
-// "kind" (d89 E): behaviour the client sees, or the team's own design choice. The Liaison
-// classifies each assumption when it writes it; only a client-visible one may become the
-// source of an acceptance line.
+// "kind" (d89 E, ADR-083): behaviour the client could observe, or the team's own design choice no
+// client could observe. The Liaison classifies each assumption when it writes it; "undecided" is
+// recorded as client-visible, and only a client-visible one may become the source of an acceptance line.
 const AssumptionSchema = z.strictObject({
   statement: AssumptionStatementSchema,
   rationale: z.string().min(1),
-  kind: AssumptionKindSchema,
+  kind: ClassifiedAssumptionKindSchema,
 });
 
 const IntakeResponseSchema = z.strictObject({
@@ -188,14 +188,9 @@ function buildIntakePrompt(tender: string): string {
     `  each with the same "statement" and "rationale". Do not repeat a question's assumption.`,
     `  The client is told of each of them, and work proceeds on them unless the client objects.`,
     `- Every assumption, a question's included, has a "kind":`,
-    `  - "client-visible": behaviour the client sees or relies on when using the deliverable, such`,
-    `    as what it outputs and in what form, which inputs it accepts or refuses and how it says so,`,
-    `    or what still holds after a failure. The client's acceptance tests may check it.`,
-    `  - "internal-design": how the team builds it, which the client neither sees nor relies on,`,
-    `    such as the name of an internal file, the mechanism behind a guarantee, or how data is laid`,
-    `    out. It guides the work and is never checked as the client's requirement.`,
+    ...ASSUMPTION_KIND_RULE,
     `  When one decision fixes both a behaviour and the mechanism behind it, record two`,
-    `  assumptions, one of each kind.`,
+    `  assumptions: the behaviour as client-visible, the mechanism as internal-design.`,
     ``,
     `How to choose the questions:`,
     `- First consider every unknown the tender leaves open. For each, ask: if my assumption is`,
@@ -219,7 +214,7 @@ function buildIntakePrompt(tender: string): string {
     `Use exactly this format: {"summary": "...", "inScope": ["..."], "outOfScope": ["..."], ` +
       `"questions": [{"text": "...", "whyItMatters": "...", ` +
       `"assumption": {"statement": "...", "rationale": "...", "kind": "client-visible"}}], ` +
-      `"assumptions": [{"statement": "...", "rationale": "...", "kind": "internal-design"}]}`,
+      `"assumptions": [{"statement": "...", "rationale": "...", "kind": "undecided"}]}`,
   ].join("\n");
 }
 

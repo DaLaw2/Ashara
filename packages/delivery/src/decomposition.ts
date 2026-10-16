@@ -18,10 +18,12 @@ import type {
     WorkItemSpec,
 } from "./decomposition-types.js";
 import {
+    assumptionsToCheck,
     citable,
     DEFAULT_DECOMPOSITION_CONFIG,
     TaskCapExceededError,
     TaskOutputSchema,
+    UncheckedAssumptionsError,
     UnresolvableDependencyError,
     UntraceableTaskError,
     VisionItemsMissing,
@@ -182,6 +184,7 @@ export class DecompositionEngine {
         cap: number,
         parentId: string,
         visionItems: readonly VisionItem[],
+        checkedItems: readonly VisionItem[],
     ): StructuredValidation {
         if (rawTasks.length > cap) {
             return { ok: false, errors: [new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId }).message] };
@@ -198,6 +201,8 @@ export class DecompositionEngine {
                 return traced.kind === "untraceable" ? [traced.error.message] : [];
             }),
         ];
+        const unchecked = uncheckedAssumptions(rawTasks, visionItems, checkedItems, parentId);
+        if (unchecked !== null) errors.push(unchecked.message);
         return errors.length === 0 ? { ok: true } : { ok: false, errors };
     }
 
@@ -216,10 +221,13 @@ export class DecompositionEngine {
         cap: number,
         parentId: string,
         visionItems: readonly VisionItem[],
+        checkedItems: readonly VisionItem[],
     ): Array<WorkItemSpec & { taskSpec: DecomposedTaskSpec }> {
         if (rawTasks.length > cap) {
             throw new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId });
         }
+        const unchecked = uncheckedAssumptions(rawTasks, visionItems, checkedItems, parentId);
+        if (unchecked !== null) throw unchecked;
 
         const refToId = new Map<string, string>();
         const titleToId = new Map<string, string>();
@@ -300,6 +308,7 @@ export class DecompositionEngine {
             taskCap,
             input.environment,
             input.visionItems,
+            input.checkedItems,
         );
 
         // Every unresolvable edge a rejected attempt carried. The re-ask tells the
@@ -313,7 +322,7 @@ export class DecompositionEngine {
                 for (const unresolved of unresolvedDependencies(value.tasks)) {
                     unresolvedSeen.set(JSON.stringify([unresolved.dependentTaskTitle, unresolved.unresolvedRef]), unresolved);
                 }
-                return this.validateTasks(value.tasks, taskCap, epic.id, input.visionItems);
+                return this.validateTasks(value.tasks, taskCap, epic.id, input.visionItems, input.checkedItems);
             },
         );
         // A ref that now resolves on the same task is kept, not dropped. An edge
@@ -323,7 +332,7 @@ export class DecompositionEngine {
             (seen) =>
                 !parsed.tasks.some((t) => t.title === seen.dependentTaskTitle && t.dependsOn.includes(seen.unresolvedRef)),
         );
-        return { tasks: this.resolveTasks(parsed.tasks, taskCap, epic.id, input.visionItems), droppedDependencies };
+        return { tasks: this.resolveTasks(parsed.tasks, taskCap, epic.id, input.visionItems, input.checkedItems), droppedDependencies };
     }
 
     private buildPriorContext(priorResults?: PriorEpicResult[]): string {
@@ -355,6 +364,7 @@ export class DecompositionEngine {
         taskCap: number,
         environment: EnvironmentPlanning,
         visionItems: readonly VisionItem[],
+        checkedItems: readonly VisionItem[],
     ): string {
         const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["S1"]}], "acceptance": [{"text": "...", "sources": ["S1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
 
@@ -379,9 +389,16 @@ export class DecompositionEngine {
 
         lines.push(
             ``,
-            `Vision items (what the client asked for, each with its id). A scope line or a client-visible assumption may be cited; an internal-design assumption is how the team builds the product, guidance for its implementer that no deliverable or acceptance line cites:`,
+            `Vision items (what the client asked for, each with its id). A scope line or an assumption not marked "not citable" may be cited; an internal-design assumption is how the team builds the product, guidance for its implementer that no deliverable or acceptance line cites:`,
             ...visionItems.map((item) => `- ${visionSourceLine(item)}`),
         );
+        const toCheck = assumptionsToCheck(visionItems).filter((item) => !alreadyChecked(item, checkedItems));
+        if (toCheck.length > 0) {
+            lines.push(
+                ``,
+                `Every one of these assumptions must be named in "sources" by at least one acceptance line, so a check decides it; a plan that leaves one unnamed is rejected: ${toCheck.map((item) => item.id).join(", ")}.`,
+            );
+        }
 
         const examples = DECOMPOSITION_EXAMPLES;
         lines.push(
@@ -707,10 +724,36 @@ type VisionTrace =
     | { readonly kind: "untraceable"; readonly error: UntraceableTaskError };
 
 /**
+ * Whether a completed task's acceptance line already names the assumption as the vision states it
+ * now: one that cited an earlier statement of it checked that statement, not this one.
+ */
+function alreadyChecked(item: VisionItem, checkedItems: readonly VisionItem[]): boolean {
+    return checkedItems.some((checked) => checked.type === item.type && checked.id === item.id && checked.text === item.text);
+}
+
+/**
+ * The assumptions a check must decide (ADR-083) that no acceptance line of the plan names and no
+ * completed task already checks, as the error that re-asks or rejects the plan; null when none.
+ * A line names an item by its id or its exact text, as traceToVision reads it.
+ */
+function uncheckedAssumptions(
+    rawTasks: readonly RawTask[],
+    visionItems: readonly VisionItem[],
+    checkedItems: readonly VisionItem[],
+    parentId: string,
+): UncheckedAssumptionsError | null {
+    const named = new Set(rawTasks.flatMap((raw) => raw.acceptance.flatMap((line) => line.sources.map((entry) => entry.trim()))));
+    const unchecked = assumptionsToCheck(visionItems).filter(
+        (item) => !named.has(item.id) && !named.has(item.text) && !alreadyChecked(item, checkedItems),
+    );
+    return unchecked.length === 0 ? null : new UncheckedAssumptionsError(parentId, unchecked.map(({ id, text }) => ({ id, text })));
+}
+
+/**
  * The vision items a raw task's deliverables and acceptance lines cite (ADR-074 addendum 2 d89 A), each
  * by its id or its exact text. Untraceable when a line cites none, cites anything that is no item of
- * the vision, or cites an item no line may cite (d89 E): an internal-design or unclassified
- * assumption. The task's traced items are then exactly the union of what its lines cite.
+ * the vision, or cites an item no line may cite (d89 E): an internal-design assumption. The task's
+ * traced items are then exactly the union of what its lines cite.
  */
 function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentId: string): VisionTrace {
     const lookup = (entry: string) => visionItems.find((item) => item.id === entry || item.text === entry);
@@ -722,8 +765,8 @@ function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentI
         for (const source of line.sources.map((entry) => entry.trim())) {
             const item = lookup(source);
             if (item === undefined) problems.push({ field, text: line.text, problem: "unknown", source });
-            else if (item.type === "assumption" && item.kind !== "client-visible") {
-                problems.push({ field, text: line.text, problem: "not-citable", source: item.id, kind: item.kind });
+            else if (!citable(item)) {
+                problems.push({ field, text: line.text, problem: "not-citable", source: item.id });
             } else if (!ids.includes(item.id)) ids.push(item.id);
         }
         for (const id of ids) cited.add(id);

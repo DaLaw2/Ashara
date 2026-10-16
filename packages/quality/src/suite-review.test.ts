@@ -192,7 +192,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompt).toContain("- A4 (assumption; internal design, not citable): Totals are cached in totals.db");
     // The rule: inside its task's cited items, whatever their status; outside what none of them asks for.
     expect(prompt).toContain("a check that requires behaviour none of the vision items its own task cites asks for");
-    expect(prompt).toContain("an Inferred client-visible\n  assumption the task cites is asked for");
+    expect(prompt).toContain("whatever their status or recorded kind: an Inferred\n  assumption the task cites is asked for");
     expect(prompt).toContain("Using a\n  form the public interface names (a command, an argument, a file, an exit status) is never outside");
   });
 

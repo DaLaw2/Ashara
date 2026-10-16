@@ -43,6 +43,7 @@ const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), titl
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
+const acceptedVisionRow = z.object({ version: z.number(), inferences: z.unknown() });
 
 export interface ReportRecords {
   /** Every outbound report of the project, in posting order. */
@@ -57,6 +58,8 @@ export interface ReportRecords {
   readonly reviewSpec: unknown;
   /** The check tasks that wrote each Completed goal task's latest stored checks (the sets a sweep runs), with their task_spec. */
   readonly checkAuthors: ReadonlyArray<z.infer<typeof specRow>>;
+  /** The vision version current at the project's first passed acceptance sweep, unparsed; null when no sweep passed. */
+  readonly acceptedVision: z.infer<typeof acceptedVisionRow> | null;
 }
 
 export async function readReportRecords(db: Database, projectId: string): Promise<ReportRecords> {
@@ -108,6 +111,16 @@ export async function readReportRecords(db: Database, projectId: string): Promis
           WHERE g.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
           ORDER BY a.id`,
     ),
+    acceptedVision:
+      (
+        await rows(
+          acceptedVisionRow,
+          sql`SELECT v.version, v.inferences FROM acceptance_sweeps s
+              JOIN LATERAL (SELECT version, inferences FROM vision_documents d
+                            WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
+              WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id LIMIT 1`,
+        )
+      )[0] ?? null,
   };
 }
 
@@ -510,8 +523,57 @@ type CoverageOnRecord =
   | { readonly kind: "recorded"; readonly asked: readonly VisionSource[]; readonly uncovered: readonly VisionSource[]; readonly notAsked: readonly VisionSource[] };
 
 /** An item is the same across a plan's revisions only when its type, id and text all match (as acceptance.ts compares them). */
-function identityOf(source: VisionSource): string {
+function identityOf(source: Pick<VisionSource, "type" | "id" | "text">): string {
   return JSON.stringify([source.type, source.id, source.text]);
+}
+
+/**
+ * The identities every acceptance line of the check tasks a sweep runs cites, or why they cannot be
+ * read: unrecorded when one such check task holds no traced lines.
+ */
+function citedBySweptChecks(
+  checkAuthors: ReportRecords["checkAuthors"],
+): { readonly kind: "cited"; readonly cited: ReadonlySet<string> } | Exclude<CoverageOnRecord, { readonly kind: "recorded" }> {
+  const cited = new Set<string>();
+  for (const author of checkAuthors) {
+    const spec = parseStoredTaskSpec(author.taskSpec);
+    if (spec?.acceptance === undefined || spec.sources === undefined) return { kind: "unrecorded" };
+    const own = new Map(spec.sources.map((source) => [source.id, source]));
+    for (const line of spec.acceptance) {
+      for (const id of line.sources) {
+        const source = own.get(id);
+        if (source === undefined) return { kind: "unreadable", detail: `check task ${author.id}'s line "${line.line}" cites ${id}, which its sources do not hold` };
+        cited.add(identityOf(source));
+      }
+    }
+  }
+  return { kind: "cited", cited };
+}
+
+const acceptedAssumption = z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), kind: z.enum(["client-visible", "internal-design"]).optional() });
+
+/**
+ * ADR-083's guard, judged on an accepted project: every assumption of the vision current at
+ * acceptance that is not recorded as internal design (a client-visible one, or one of no recorded
+ * kind) is cited, as that vision states it, by an acceptance line of a check task the sweep ran. A
+ * breach of such an assumption is one the client could observe, so accepting it with no check
+ * delivers it unverified. One problem per assumption, keyed by its key.
+ */
+export function uncheckedAtAcceptance(records: Pick<ReportRecords, "acceptedVision" | "checkAuthors">): Array<{ readonly key: string; readonly statement: string }> {
+  if (records.acceptedVision === null) return [{ key: "no-vision", statement: "the project is accepted, but no vision version is on record at its passed sweep" }];
+  const inferences = z.array(acceptedAssumption).safeParse(records.acceptedVision.inferences);
+  if (!inferences.success) {
+    return [{ key: "vision-unreadable", statement: `vision v${records.acceptedVision.version} at acceptance cannot be read as keyed assumptions: ${z.prettifyError(inferences.error).slice(0, 200)}` }];
+  }
+  const swept = citedBySweptChecks(records.checkAuthors);
+  if (swept.kind !== "cited") {
+    return [{ key: "coverage-unreadable", statement: `which assumptions the swept checks cite is not on record: ${swept.kind === "unreadable" ? swept.detail : "a check task holds no traced lines"}` }];
+  }
+  return inferences.data.flatMap((record, i) => {
+    const key = record.key ?? `A${i + 1}`;
+    if (record.kind === "internal-design" || swept.cited.has(identityOf({ type: "assumption", id: key, text: record.statement }))) return [];
+    return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is cited by no acceptance line of a check the accepting sweep ran` }];
+  });
 }
 
 /**
@@ -525,25 +587,16 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "checkAuth
   // A corrupt task_spec throws TaskSpecCorrupt through the snapshot check: the run fails, never passes unjudged.
   const items = parseStoredTaskSpec(records.reviewSpec)?.sources;
   if (items === undefined) return { kind: "unrecorded" };
-  const cited = new Set<string>();
-  for (const author of records.checkAuthors) {
-    const spec = parseStoredTaskSpec(author.taskSpec);
-    if (spec?.acceptance === undefined || spec.sources === undefined) return { kind: "unrecorded" };
-    const own = new Map(spec.sources.map((source) => [source.id, source]));
-    for (const line of spec.acceptance) {
-      for (const id of line.sources) {
-        const source = own.get(id);
-        if (source === undefined) return { kind: "unreadable", detail: `check task ${author.id}'s line "${line.line}" cites ${id}, which its sources do not hold` };
-        cited.add(identityOf(source));
-      }
-    }
-  }
+  const swept = citedBySweptChecks(records.checkAuthors);
+  if (swept.kind !== "cited") return swept;
+  const { cited } = swept;
   const isAsked = (source: VisionSource): boolean => (source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design");
   const asked = items.filter(isAsked);
   return { kind: "recorded", asked, uncovered: asked.filter((source) => !cited.has(identityOf(source))), notAsked: items.filter((source) => !isAsked(source)) };
 }
 
 const UNCOVERED_HEAD = "These items of what you asked for are named by no acceptance criterion";
+const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 
 /** Where the delivered report's coverage section departs from the records. */
 function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
@@ -555,9 +608,9 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
       ...(listed.length === 0 ? [] : [`the records hold ${what}, but the delivered report lists ${listed.length} item(s) as not covered`]),
     ];
   if (coverage.kind === "unrecorded") return expectSentence("is not on record for this plan", "no traced acceptance lines");
-  if (coverage.asked.length === 0) return expectSentence("holds no item of what you asked for", "no item the client asked for");
-  if (coverage.uncovered.length === 0) return expectSentence("Every item of what you asked for is named", "every asked-for item cited");
-  const problems: string[] = [];
+  const problems = unverifiedProblems(body, coverage.notAsked);
+  if (coverage.asked.length === 0) return [...problems, ...expectSentence("holds no item of what you asked for", "no item the client asked for")];
+  if (coverage.uncovered.length === 0) return [...problems, ...expectSentence("Every item of what you asked for is named", "every asked-for item cited")];
   for (const source of coverage.uncovered) {
     if (!listed.some((line) => line.includes(source.text))) problems.push(`the delivered report does not list "${source.text}" (${source.id}) as named by no acceptance criterion`);
   }
@@ -566,4 +619,20 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
   }
   if (listed.length !== coverage.uncovered.length) problems.push(`the delivered report lists ${listed.length} item(s) as not covered; the records hold ${coverage.uncovered.length}`);
   return problems;
+}
+
+/**
+ * ADR-083: the delivered report names every assumption recorded as internal design, by id and text,
+ * as not verified by Ashara, and nothing else there; none at all when there is no such assumption.
+ */
+function unverifiedProblems(body: string, notAsked: readonly VisionSource[]): string[] {
+  const expected = notAsked.flatMap((source) => (source.type === "assumption" ? [`- ${source.id}: ${source.text}`] : []));
+  const section = paragraph(body, UNVERIFIED_HEAD);
+  if (expected.length === 0) return section === null ? [] : ["the delivered report names assumptions as not verified by Ashara; the records hold no internal-design assumption"];
+  if (section === null) return [`the delivered report does not name the ${expected.length} internal-design assumption(s) as not verified by Ashara`];
+  const listed = section.split("\n").filter((line) => line.startsWith("- "));
+  if (JSON.stringify(listed) !== JSON.stringify(expected)) {
+    return [`the delivered report names ${JSON.stringify(listed).slice(0, 200)} as not verified by Ashara; the records hold ${JSON.stringify(expected).slice(0, 200)}`];
+  }
+  return [];
 }

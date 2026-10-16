@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import { CapabilityLevelSchema } from "./acl/finance-acl.js";
+import { assumptionChecked } from "./acl/engagement-vision-acl.js";
 import type { VisionSource } from "./acl/engagement-vision-acl.js";
 
 export interface WorkItemSpec {
@@ -84,15 +85,23 @@ export type TaskSpec =
 
 /**
  * One item of the vision a plan is decomposed from: a scope boundary (S1..) or an assumption work
- * proceeds on, by its key in the vision. Only a scope line and a client-visible assumption may be
- * cited by a deliverable or an acceptance line (ADR-074 addendum 2 d89 E); an internal-design or
- * unclassified one is guidance for the implementer.
+ * proceeds on, by its key in the vision. A scope line and every assumption not classed internal
+ * design may be cited by a deliverable or an acceptance line (ADR-074 addendum 2 d89 E, ADR-083),
+ * and every such assumption must be; an internal-design one is guidance for the implementer.
  */
 export type VisionItem = VisionSource;
 
 /** Whether a deliverable or an acceptance line may cite the item (d89 E). */
 export function citable(item: VisionItem): boolean {
-    return item.type === "scope" || item.kind === "client-visible";
+    return item.type === "scope" || assumptionChecked(item.kind);
+}
+
+/**
+ * The assumptions a plan must check (ADR-083): every one an acceptance line may cite. Each is named
+ * by an acceptance line of the plan, or of a completed task that cited it as the vision states it now.
+ */
+export function assumptionsToCheck(items: readonly VisionItem[]): Array<Extract<VisionItem, { readonly type: "assumption" }>> {
+    return items.flatMap((item) => (item.type === "assumption" && assumptionChecked(item.kind) ? [item] : []));
 }
 
 /**
@@ -136,6 +145,12 @@ export interface DecompositionInput {
     readonly layout: LayoutPlanning;
     /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
     readonly visionItems: readonly VisionItem[];
+    /**
+     * The vision items an acceptance line of a completed task already names, each as that task cited
+     * it: an assumption here whose text is the vision's now needs no new line (ADR-083). Empty for a
+     * first plan.
+     */
+    readonly checkedItems: readonly VisionItem[];
 }
 
 export interface PriorEpicResult {
@@ -232,7 +247,6 @@ export type UntracedLine =
           readonly text: string;
           readonly problem: "not-citable";
           readonly source: string;
-          readonly kind: "internal-design" | "unclassified";
       };
 
 /** Context of {@link UntraceableTaskError}: the task, each line whose sources are wrong, and every item it could cite. */
@@ -251,10 +265,10 @@ function untracedText(line: UntracedLine): string {
         case "unknown":
             return `${which} names ${JSON.stringify(line.source)}, which is no vision item`;
         case "not-citable":
-            return line.kind === "internal-design"
-                ? `${which} names ${line.source}, an internal-design assumption: it guides the implementer and is never ` +
-                      `a deliverable or acceptance line's source; drop the line or cite the client-visible item it serves`
-                : `${which} names ${line.source}, an assumption of no recorded kind, which cannot be a source`;
+            return (
+                `${which} names ${line.source}, an internal-design assumption: it guides the implementer and is never ` +
+                `a deliverable or acceptance line's source; drop the line or cite the client-visible item it serves`
+            );
     }
 }
 
@@ -276,6 +290,27 @@ export class UntraceableTaskError extends Error {
         );
         this.name = "UntraceableTaskError";
         this.context = context;
+    }
+}
+
+/**
+ * A plan leaves an assumption a check must decide (ADR-083) named by no acceptance line: neither of
+ * a task it plans nor of a completed task that cited it as the vision states it now. Its breach is
+ * one the client could observe, so accepting without a check on it would deliver it unverified.
+ * Checked mechanically, with no model call: inside the ladder its message is a re-ask; past it the
+ * plan is rejected, never written.
+ */
+export class UncheckedAssumptionsError extends Error {
+    constructor(
+        readonly parentId: string,
+        readonly unchecked: ReadonlyArray<{ readonly id: string; readonly text: string }>,
+    ) {
+        super(
+            `No acceptance line names ${unchecked.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every client-visible ` +
+                `assumption must be named in "sources" by at least one acceptance line of a task, so a check decides it ` +
+                `(decomposition of ${parentId})`,
+        );
+        this.name = "UncheckedAssumptionsError";
     }
 }
 

@@ -6,7 +6,7 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
-import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
+import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { Vision, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 
@@ -152,7 +152,7 @@ const AnswerReadingSchema = z.discriminatedUnion("verdict", [
   z.strictObject({ verdict: z.literal("confirms") }),
   // A changed decision is classified again: the kind of the decision it replaced says
   // nothing about the new one, and only a client-visible decision may be cited by an acceptance line.
-  z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1), kind: AssumptionKindSchema }),
+  z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1), kind: ClassifiedAssumptionKindSchema }),
   z.strictObject({ verdict: z.literal("does-not-answer") }),
 ]);
 
@@ -193,9 +193,7 @@ function buildAnswerPrompt(context: AnswerContext): string {
     `  the assumption, in any part. "statement" is the decision work now proceeds on, stated`,
     `  plainly as what will be built, in the client's terms. Do not add anything the answer and`,
     `  the question do not say. "kind" classifies that new decision:`,
-    `  - "client-visible": behaviour the client sees or relies on when using the deliverable, such`,
-    `    as what it outputs, which inputs it accepts or refuses, or what still holds after a failure.`,
-    `  - "internal-design": how the team builds it, which the client neither sees nor relies on.`,
+    ...ASSUMPTION_KIND_RULE,
     `- {"verdict": "does-not-answer"} when the answer neither agrees with nor changes the`,
     `  assumption (it asks something back, defers, or is about something else).`,
     ``,

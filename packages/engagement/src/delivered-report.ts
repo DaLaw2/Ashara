@@ -1,6 +1,7 @@
 import { describeErrorChain, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
+import { assumptionChecked } from "./vision-language/vision-source.js";
 import type { VisionSource } from "./vision-language/vision-source.js";
 
 // The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8):
@@ -8,7 +9,8 @@ import type { VisionSource } from "./vision-language/vision-source.js";
 // each goal task and how its record says it closed, and which items of what they asked for no
 // stored check covers. Every sentence is rendered from a record: a close
 // whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
-// folded into "delivered" or into what passed: the opening claims only the run that happened.
+// folded into "delivered" or into what passed: the opening claims only the run that happened. Every
+// assumption classed internal design is named as not verified by Ashara (ADR-083): no check decides it.
 
 /** How a goal task's record says it closed. */
 type GoalClose =
@@ -265,7 +267,24 @@ function closeLine(title: string, close: GoalClose): string {
  * was told their acceptance does not depend on. Everything else is, an unclassified one included.
  */
 function askedFor(source: AcceptedVisionItem): boolean {
-  return source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design";
+  return source.type === "scope" ? source.side !== "out" : assumptionChecked(source.kind);
+}
+
+/**
+ * The assumptions recorded as the team's own design choices, by id and text: no check decides one,
+ * so the client is told Ashara did not verify them (ADR-083). Empty when there are none.
+ */
+function unverifiedSection(vision: VisionCoverage): string[] {
+  if (vision.kind === "unrecorded") return [];
+  const design = vision.items.flatMap(({ source }) => (source.type === "assumption" && !assumptionChecked(source.kind) ? [source] : []));
+  if (design.length === 0) return [];
+  return [
+    [
+      `These assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no ` +
+        `check decides them: they are not verified by Ashara.`,
+      ...design.map((source) => `- ${source.id}: ${source.text}`),
+    ].join("\n"),
+  ];
 }
 
 type StatedStanding = Extract<AcceptedAssumptionStanding, "stated" | "confirmed" | "changed">;
@@ -356,6 +375,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
     ...uncheckedSection(due.unchecked),
     ...givenUpSection(due.givenUp),
     coverageSection(due.vision),
+    ...unverifiedSection(due.vision),
     `Nothing more is built on this project; it waits until you stop it.`,
   ].join("\n\n");
 }

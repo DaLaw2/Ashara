@@ -290,6 +290,7 @@ export class FirstPlanner implements FirstPlanning {
       environment: { kind: "new" },
       layout: { kind: "new" },
       visionItems: vision.items,
+      checkedItems: [],
     };
     return new DecompositionEngine(llm).decompose(input);
   }

@@ -291,13 +291,15 @@ describe("acceptance on main", () => {
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store keys".`);
     // The items of what the client asked for that no acceptance line of a passing check task
-    // cites, and only those; the exclusion and the team's design choice are never listed.
+    // cites, and only those; the exclusion is never listed, and the team's design choice is named
+    // apart as not verified by Ashara (ADR-083).
     expect(body).toContain(
       "These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, " +
         "so nothing confirms them either way:\n- Two writers never corrupt the store\n" +
         "- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
     );
-    for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service", "kv.log"]) expect(body).not.toContain(absent);
+    expect(body).toContain("they are not verified by Ashara.\n- A2: The log file is kv.log\n\n");
+    for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service"]) expect(body).not.toContain(absent);
   });
 
   // A goal task a plan revision replaced while it was open is set aside, never given up.

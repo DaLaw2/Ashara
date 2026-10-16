@@ -2,28 +2,33 @@ import { describe, expect, test, beforeEach } from "vitest";
 import type { ZodType } from "zod";
 import { SchemaValidationError, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { StructuredProvider, StructuredValidation } from "./acl/finance-acl.js";
-import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
-import type { DecompositionInput } from "./decomposition-types.js";
+import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UncheckedAssumptionsError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
+import type { DecompositionInput, VisionItem } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 import type { DecompositionLLM } from "./decomposition.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
+const A1: VisionItem = {
+    type: "assumption",
+    id: "A1",
+    text: "A class holds at most twenty members",
+    status: "Inferred",
+    standing: "reported",
+    kind: "client-visible",
+};
+
+// A1 is checked by work already done unless a test says otherwise, so the tests of other rules plan
+// lines citing S1 alone; the tests of ADR-083's coverage rule clear checkedItems.
 const INPUT: DecompositionInput = {
     epicTitle: "Studio bookings",
     epicNorthStar: "Members can book a seat in a class.",
     epicDescription: "Two studios merge their class schedules; members book seats in either.",
     environment: { kind: "new" },
     layout: { kind: "new" },
+    checkedItems: [A1],
     visionItems: [
         { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio", side: "in" },
-        {
-            type: "assumption",
-            id: "A1",
-            text: "A class holds at most twenty members",
-            status: "Inferred",
-            standing: "reported",
-            kind: "client-visible",
-        },
+        A1,
         {
             type: "assumption",
             id: "A2",
@@ -355,6 +360,47 @@ describe("DecompositionEngine", () => {
         expect(prompt).toContain("- A2 (assumption; Inferred; reported to the client; internal design, not citable): Bookings are recorded in one ledger");
         expect(prompt).toContain('Every deliverable and every acceptance line names in "sources" the ids of the citable vision items above it serves');
         expect(prompt).not.toContain('"visionItems"');
+    });
+
+    // ADR-083: an assumption whose breach the client could observe gets a check; a plan cannot leave it to chance.
+    test("a plan whose acceptance lines name no client-visible assumption is rejected through the ladder, never written", async () => {
+        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
+
+        await expect(new DecompositionEngine(llm).decompose({ ...INPUT, checkedItems: [] })).rejects.toBeInstanceOf(UncheckedAssumptionsError);
+        expect(seen.prompts[0]).toContain('Every one of these assumptions must be named in "sources" by at least one acceptance line, so a check decides it; a plan that leaves one unnamed is rejected: A1.');
+        const errors = seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "";
+        expect(errors).toContain('No acceptance line names A1 ("A class holds at most twenty members")');
+    });
+
+    test("a deliverable naming the assumption does not check it; an acceptance line, by id or exact text, does", async () => {
+        const deliverableOnly = scriptedLlm({ tasks: [task("t1", { deliverables: [{ text: "twenty seats", sources: ["A1"] }] })] }, seen);
+        await expect(new DecompositionEngine(deliverableOnly).decompose({ ...INPUT, checkedItems: [] })).rejects.toBeInstanceOf(UncheckedAssumptionsError);
+        for (const source of ["A1", "A class holds at most twenty members"]) {
+            resetIdCounter();
+            const verdicts: StructuredValidation[] = [];
+            const llm = scriptedLlm({ tasks: [task("t1"), task("t2", {}, ["S1", source])] }, { prompts: [], verdicts });
+            await new DecompositionEngine(llm).decompose({ ...INPUT, checkedItems: [] });
+            expect(verdicts).toEqual([{ ok: true }]);
+        }
+    });
+
+    test("work already done checks an assumption only as the vision states it now", async () => {
+        const changed = scriptedLlm({ tasks: [task("t1")] }, seen);
+        const earlier: VisionItem = { ...A1, text: "A class holds at most ten members" };
+        await expect(new DecompositionEngine(changed).decompose({ ...INPUT, checkedItems: [earlier] })).rejects.toBeInstanceOf(UncheckedAssumptionsError);
+        expect(seen.prompts[0]).toContain("a plan that leaves one unnamed is rejected: A1.");
+    });
+
+    // ADR-083: an assumption of no recorded kind is not evidence that no client could observe it.
+    test("an unclassified assumption is citable and must be checked like a client-visible one", async () => {
+        const unclassified: VisionItem = { type: "assumption", id: "A3", text: "Empty names are refused", status: "Inferred", standing: "unrecorded", kind: "unclassified" };
+        const input = { ...INPUT, visionItems: [...INPUT.visionItems, unclassified] };
+        await expect(new DecompositionEngine(scriptedLlm({ tasks: [task("t1")] }, seen)).decompose(input)).rejects.toBeInstanceOf(UncheckedAssumptionsError);
+        expect(seen.prompts[0]).toContain("- A3 (assumption; Inferred; whether the client was shown it is not on record; not classified): Empty names are refused");
+        resetIdCounter();
+        const verdicts: StructuredValidation[] = [];
+        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["S1", "A3"])] }, { prompts: [], verdicts })).decompose(input);
+        expect(verdicts).toEqual([{ ok: true }]);
     });
 
     test("a vision with no item is refused before any model call", async () => {

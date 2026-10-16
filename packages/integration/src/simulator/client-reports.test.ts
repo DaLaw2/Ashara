@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { checkReports } from "./client-reports.js";
+import { checkReports, uncheckedAtAcceptance } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
-const noRecords: ReportRecords = { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [] };
+const noRecords: ReportRecords = { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [], acceptedVision: null };
 
 function haltWith(kind: string, errorClass: string | null, reason: string | null, body: string): ReportRecords {
   return {
@@ -145,8 +145,10 @@ describe("checkReports, a delivered report", () => {
       reviewSpec: { origin: "review", sources },
       checkAuthors: [{ id: "c1", taskSpec: { origin: "check", sources: [sources[0]], acceptance: [{ line: "A user is greeted.", sources: ["S1"] }] } }],
     };
+    const unverified = (lines: readonly string[]): string =>
+      `\n\nThese assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no check decides them: they are not verified by Ashara.\n${lines.join("\n")}`;
     const section = (lines: readonly string[]): string =>
-      `\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${lines.join("\n")}`;
+      `\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${lines.join("\n")}${unverified(["- A2: State lives in memory."])}`;
 
     it("accepts exactly the uncited asked-for items", () => {
       expect(keysOf(delivered(merged, traced, section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."])), "accepted", [mergedGoal])).toEqual([]);
@@ -161,9 +163,19 @@ describe("checkReports, a delivered report", () => {
 
     it("refuses a report that leaves an uncited asked-for item out, or claims coverage the trace does not hold", () => {
       // Each names the item left out and the count that differs.
-      const allCovered = "\n\nEvery item of what you asked for is named by an acceptance criterion of a task whose stored checks passed on main.";
+      const allCovered = `\n\nEvery item of what you asked for is named by an acceptance criterion of a task whose stored checks passed on main.${unverified(["- A2: State lives in memory."])}`;
       expect(keysOf(delivered(merged, traced, allCovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
-      expect(keysOf(delivered(merged, traced, unrecordedTail), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
+      expect(keysOf(delivered(merged, traced, `${unrecordedTail}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
+    });
+
+    // ADR-083: every internal-design assumption is named, by id and text, as not verified by Ashara.
+    it("refuses a report that leaves an internal-design assumption out of what Ashara did not verify, or names another there", () => {
+      const uncovered = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."];
+      const head = `\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${uncovered.join("\n")}`;
+      expect(keysOf(delivered(merged, traced, head), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+      expect(keysOf(delivered(merged, traced, `${head}${unverified(["- A2: State lives in memory.", "- A1: Messages are in English."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+      const noDesign = { ...traced, reviewSpec: { origin: "review", sources: sources.slice(0, 3) } };
+      expect(keysOf(delivered(merged, noDesign, `${head}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
     it("holds a report to saying coverage is not on record when a swept check task records no trace", () => {
@@ -171,5 +183,43 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, untraced, unrecordedTail), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, untraced, section(["- Messages are in English."])), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
     });
+  });
+});
+
+// ADR-083's guard: an accepted project leaves no assumption a client could observe unchecked.
+describe("uncheckedAtAcceptance", () => {
+  const visible = { key: "A1", statement: "Messages are in English.", kind: "client-visible" };
+  const design = { key: "A2", statement: "State lives in memory.", kind: "internal-design" };
+  const undecidedLegacy = { statement: "Empty names are refused." };
+  const author = (cites: ReadonlyArray<{ readonly id: string; readonly text: string }>) => ({
+    id: "c1",
+    taskSpec: {
+      origin: "check",
+      sources: [{ type: "scope", id: "S1", text: "The product greets.", side: "in" }, ...cites.map((cite) => ({ type: "assumption", ...cite, status: "Inferred", standing: "reported", kind: "client-visible" }))],
+      acceptance: [{ line: "A user is greeted.", sources: ["S1", ...cites.map((cite) => cite.id)] }],
+    },
+  });
+  const accepted = (inferences: unknown, cites: ReadonlyArray<{ readonly id: string; readonly text: string }>) => ({
+    acceptedVision: { version: 2, inferences },
+    checkAuthors: [author(cites)],
+  });
+
+  it("passes when every assumption not recorded as internal design is cited as the vision at acceptance states it", () => {
+    expect(uncheckedAtAcceptance(accepted([visible, design], [{ id: "A1", text: visible.statement }]))).toEqual([]);
+  });
+
+  it("names a client-visible assumption no swept check cites, or cites only as an earlier vision stated it", () => {
+    expect(uncheckedAtAcceptance(accepted([visible, design], [])).map((found) => found.key)).toEqual(["A1"]);
+    expect(uncheckedAtAcceptance(accepted([visible], [{ id: "A1", text: "Messages are in French." }])).map((found) => found.key)).toEqual(["A1"]);
+  });
+
+  it("holds an assumption of no recorded kind to a check, keyed by its place", () => {
+    expect(uncheckedAtAcceptance(accepted([visible, undecidedLegacy], [{ id: "A1", text: visible.statement }])).map((found) => found.key)).toEqual(["A2"]);
+  });
+
+  it("fails closed when the vision or the trace cannot be read", () => {
+    expect(uncheckedAtAcceptance({ acceptedVision: null, checkAuthors: [] }).map((found) => found.key)).toEqual(["no-vision"]);
+    expect(uncheckedAtAcceptance(accepted({ planning: "a map" }, [])).map((found) => found.key)).toEqual(["vision-unreadable"]);
+    expect(uncheckedAtAcceptance({ ...accepted([visible], []), checkAuthors: [{ id: "c1", taskSpec: { origin: "check" } }] }).map((found) => found.key)).toEqual(["coverage-unreadable"]);
   });
 });

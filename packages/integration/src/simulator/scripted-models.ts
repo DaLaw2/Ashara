@@ -210,6 +210,34 @@ interface AttemptScript {
   readonly cut: ToolStep | null;
 }
 
+/**
+ * The assumptions the planner's prompt says an acceptance line must name (ADR-083), as an honest
+ * planner reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
+ */
+function assumptionsToCheck(prompt: string): string[] {
+  const listed = /a plan that leaves one unnamed is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
+  return listed === undefined ? [] : listed.split(", ");
+}
+
+interface ScriptedPlan {
+  readonly tasks: ReadonlyArray<Record<string, unknown> & { readonly acceptance: ReadonlyArray<{ readonly text: string; readonly sources: readonly string[] }> }>;
+}
+
+/**
+ * `plan` as an honest planner answers `prompt`: its first task's first acceptance line also names
+ * every assumption the prompt says a line must name (ADR-083).
+ *
+ * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's planner does
+ */
+export function citingAssumptionsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
+  const ids = assumptionsToCheck(prompt);
+  return {
+    tasks: plan.tasks.map((task, i) =>
+      i > 0 ? task : { ...task, acceptance: task.acceptance.map((line, j) => (j > 0 ? line : { ...line, sources: [...line.sources, ...ids] })) },
+    ),
+  };
+}
+
 /** Every text the call's prompt carries, in order: what a model reads. */
 function promptText(options: LanguageModelV4CallOptions): string {
   const parts: string[] = [];
@@ -312,16 +340,18 @@ export class StandIns {
     const { universe } = this.context;
     return {
       summary: `A product with ${universe.behaviours.length} behaviours.`,
-      inScope: universe.behaviours.map((b) => `The product does ${b}.`),
+      // The last line is one no planned task cites, so the delivered report lists it as unchecked.
+      inScope: [...universe.behaviours.map((b) => `The product does ${b}.`), "Every message reads the same on every run."],
       outOfScope: ["Any network service."],
       questions: [
         {
           text: "Which language should messages use?",
           whyItMatters: "It decides what every message shows.",
-          assumption: { statement: "Messages are in English.", rationale: "The tender is written in English.", kind: "client-visible" },
+          // A model that cannot tell answers "undecided" (ADR-083): the vision records it client-visible, so it is checked.
+          assumption: { statement: "Messages are in English.", rationale: "The tender is written in English.", kind: "undecided" },
         },
       ],
-      assumptions: [],
+      assumptions: [{ statement: "The product keeps no state between runs.", rationale: "The tender names no stored data.", kind: "internal-design" }],
     };
   }
 
@@ -345,6 +375,7 @@ export class StandIns {
    */
   private plan(prompt: string): unknown {
     const { universe } = this.context;
+    const toCheck = assumptionsToCheck(prompt);
     const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE) || prompt.includes(MISSING_INTERFACE_EVIDENCE)
       ? [
           {
@@ -356,7 +387,7 @@ export class StandIns {
             endState: `${PUBLIC_INTERFACE_PATH} is no longer the scaffold's.`,
             scope: `${PUBLIC_INTERFACE_PATH} only.`,
             deliverables: [{ text: `${PUBLIC_INTERFACE_PATH} describes the product.`, sources: ["S1"] }],
-            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: ["S1"] }],
+            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: ["S1", ...toCheck] }],
             capability: "Medium",
             capabilityReason: "One file.",
           },
@@ -375,7 +406,7 @@ export class StandIns {
         endState: `${task.behaviours.join(", ")} can be used end to end.`,
         scope: `The ${task.behaviours.join(", ")} part of the product.`,
         deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
-        acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
+        acceptance: task.behaviours.map((b, j) => ({ text: `A user sees ${b}.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`, ...(j === 0 ? toCheck : [])] })),
         capability: "Medium",
         capabilityReason: "One small behaviour.",
       })), ...interfaceTask],
@@ -438,7 +469,7 @@ export class StandIns {
   }
 
   private answer(): unknown {
-    return { verdict: "changes", statement: "Messages are in French.", kind: "client-visible" };
+    return { verdict: "changes", statement: "Messages are in French.", kind: "undecided" };
   }
 
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {

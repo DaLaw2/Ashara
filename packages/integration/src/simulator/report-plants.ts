@@ -112,17 +112,19 @@ function rewriteInsert(table: string, rewrite: (param: string) => string): Query
 
 /**
  * A brief that calls an assumption the client was asked about Stated by the client: the standing it
- * states is not the one of the vision it carries. The
- * stand-ins' one assumption is asked about, and every brief carries it among its assumptions; no
- * stand-in task's text lists it (the stand-ins' plan cites scope lines only, and the suite review is
- * a structured call with no brief), so text-facts.test.ts holds the assumption-line clause.
+ * states is not the one of the vision it carries. The stand-ins' asked assumption is carried by every
+ * brief among its assumptions; a task's text that cites it states no standing (visionSourceCitation),
+ * and the suite review is a structured call with no brief, so text-facts.test.ts holds the
+ * assumption-line clause.
  */
 export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => param.replaceAll(`"note":"Inferred; asked of the client, not yet answered;`, `"note":"Stated by the client;`));
 
-/** A delivered report that says the client was told of an assumption it asked them about. */
-export const deliveredReportMisstatesStanding = rewriteReport(
+const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
+
+/** A delivered report that leaves out the first internal-design assumption it must name as not verified by Ashara (ADR-083). */
+export const deliveredReportOmitsUnverified = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
-  (body) => body.replaceAll("Ashara's assumption, which you were asked about and have not answered:", "Ashara's assumption, which was reported to you:"),
+  (body) => dropFirstNamed(body, UNVERIFIED_HEAD, "- "),
 );
 
 /**
@@ -135,6 +137,15 @@ export const deliveredReportMisquotesInterface = rewriteReport(
     body.includes("Run: sim <behaviour>")
       ? body.replace("Run: sim <behaviour>", "Run: tally <behaviour>")
       : body.replace("its public interface file is missing.", "its public interface file is empty."),
+);
+
+/**
+ * A plan stored with no check on its assumptions (ADR-083): every acceptance line a task's stored
+ * task_spec records keeps its scope line and drops the assumptions it names, after the planner's
+ * validation passed, so the checks written from it decide none of them.
+ */
+export const planDropsAssumptionChecks = rewriteInsert("work_items", (param) =>
+  param.replace(/("line":"(?:[^"\\]|\\.)*","sources":\["S\d+")(?:,"A\d+")+\]/g, "$1]"),
 );
 
 /** A question that says work proceeds on an assumption its vision does not record. */
