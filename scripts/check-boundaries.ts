@@ -24,8 +24,11 @@
  * never imports the production predicate it judges).
  *
  * It also fails on a default on a price or cost column of a packages/db/src/schema/ module
- * (scripts/price-defaults.ts), and on an optional member of a *Deps, *Port or *Config interface that
- * no module the server's main reaches supplies (scripts/optional-deps.ts).
+ * (scripts/price-defaults.ts), on an optional member of a *Deps, *Port or *Config interface that
+ * no module the server's main reaches supplies (scripts/optional-deps.ts), and on a stack literal
+ * (a manifest, language, extension or toolchain name) in a non-test packages/<pkg>/src module,
+ * against the tokens and exemptions of the rules file's [stack-literals] section, which is no
+ * package's section (scripts/stack-literals.ts states what that scan reads and its blind spots).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -38,6 +41,7 @@ import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
 import { OPTIONAL_MEMBER_ALLOWLIST, findUnsuppliedOptionalMembers } from "./optional-deps.js";
 import { findPriceColumnDefaults } from "./price-defaults.js";
+import { findStackLiterals, parseStackLiteralRules, STACK_LITERALS_SECTION } from "./stack-literals.js";
 
 // ---------------------------------------------------------------------------
 // TOML parser (minimal: [section] headers, `allow = [...]`, `restrict.x = [...]`)
@@ -92,6 +96,8 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     { allow: string[]; restrict: Map<string, string[]>; importers: string[] | null; namedOnly: string[]; names: Map<string, string[]> }
   >();
   let currentSection: string | null = null;
+  // The [stack-literals] section is not a package's rules; parseStackLiteralRules reads it.
+  let inStackLiterals = false;
   const lines = toml.split("\n");
 
   for (let i = 0; i < lines.length; i++) {
@@ -101,6 +107,8 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (line === "" || line.startsWith("#")) continue;
 
     const sectionMatch = /^\[([a-z][a-z0-9-]*)\]$/.exec(line);
+    inStackLiterals = sectionMatch ? sectionMatch[1] === STACK_LITERALS_SECTION : inStackLiterals;
+    if (inStackLiterals) continue;
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
@@ -361,6 +369,67 @@ function extractNamedImports(content: string): { imports: NamedImport[]; unaccou
 }
 
 // ---------------------------------------------------------------------------
+// Stack literals (not an import rule; run here so `just check` keeps its four steps)
+// ---------------------------------------------------------------------------
+
+/**
+ * A stack literal in a non-test module under packages/<pkg>/src that no [stack-literals] exemption
+ * admits, and every exempted token no literal of its file uses, so the exemptions only shrink.
+ */
+function stackLiteralViolations(
+  root: string,
+  packagesDir: string,
+  packageDirs: readonly string[],
+  toml: string,
+  rulesRelative: string,
+): Violation[] {
+  const rules = parseStackLiteralRules(toml, rulesRelative);
+  const tokens = [...rules.tokens.values()].flat();
+  const violations: Violation[] = [];
+  const exemptionsUsed = new Set<string>();
+  let scanned = 0;
+  for (const pkgName of packageDirs) {
+    const srcDir = path.join(packagesDir, pkgName, "src");
+    for (const filePath of collectTsFiles(srcDir).filter((file) => !file.endsWith(".test.ts"))) {
+      scanned++;
+      const file = path.relative(root, filePath).split(path.sep).join("/");
+      for (const hit of findStackLiterals(fs.readFileSync(filePath, "utf-8"), filePath, tokens)) {
+        const token = hit.token.toLowerCase();
+        const exemption = rules.exemptions.find((e) => e.file === file && e.tokens.some((t) => t.toLowerCase() === token));
+        if (exemption !== undefined) {
+          exemptionsUsed.add(`${exemption.id}\0${token}`);
+          continue;
+        }
+        violations.push({
+          file,
+          line: hit.line,
+          fromPkg: pkgName,
+          specifier: hit.token,
+          reason: `stack literal in production source: ${hit.literal}; take it from the contract, or exempt it in [${STACK_LITERALS_SECTION}] with a reason`,
+        });
+      }
+    }
+  }
+  if (scanned === 0) {
+    violations.push({ file: "packages", line: 0, fromPkg: "*", specifier: STACK_LITERALS_SECTION, reason: "no source module to scan for stack literals; a scan of nothing would pass" });
+  }
+  for (const exemption of rules.exemptions) {
+    for (const token of exemption.tokens) {
+      if (!exemptionsUsed.has(`${exemption.id}\0${token.toLowerCase()}`)) {
+        violations.push({
+          file: rulesRelative,
+          line: 0,
+          fromPkg: STACK_LITERALS_SECTION,
+          specifier: `exempt.${exemption.id}`,
+          reason: `"${token}" is exempted in ${exemption.file}, but no literal there uses it; remove it`,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -551,6 +620,8 @@ function main(): void {
       reason: found.reason,
     });
   }
+
+  violations.push(...stackLiteralViolations(root, packagesDir, packageDirs, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
 
   // Report
   if (violations.length > 0) {

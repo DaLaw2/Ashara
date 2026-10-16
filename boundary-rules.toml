@@ -13,6 +13,8 @@
 # importers      = [...]        the only packages that may import this one, checked even against a
 #                               wildcard `allow`; `[]` means none may
 # named-only, names.<pkg>       see [integration]
+#
+# [stack-literals] is no package's section: it holds the stack-literal denylist (see its comment).
 
 # --- Kernel and generic persistence -----------------------------------------------------------
 
@@ -148,3 +150,31 @@ names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "cre
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "describeErrorChain", "observeContendedWaits"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT"]
+
+# --- Stack literals (no package's section) ----------------------------------------------------
+
+[stack-literals]
+# CLAUDE.md "Target Generality" (ADR-080 d10, class C8): Ashara provides context and never
+# prescribes a stack. scripts/check-boundaries.ts fails on any token below inside a string, template
+# or regular expression literal of a non-test module under packages/<pkg>/src; comments, identifiers
+# and module specifiers are not read (scripts/stack-literals.ts states why, and its blind spots).
+#
+# tokens.<group> = ["...", ...]   case-insensitive, matched where no letter, digit or `_` touches it
+# exempt.<id>    = { file = "<repo-relative path>", tokens = ["..."], reason = "..." }
+#                  a reviewed literal that names Ashara's own tooling, never the client's stack; an
+#                  exempted token no literal of its file uses is itself a violation
+tokens.manifest = ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.json", "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "pyproject.toml", "setup.py", "requirements.txt", "Pipfile", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile", "composer.json", "CMakeLists.txt", "Makefile"]
+tokens.language = ["typescript", "javascript", "node.js", "nodejs", "deno", "python", "rust", "golang", "java", "kotlin", "scala", "ruby", "php", "swift", "csharp", "c++", "haskell", "elixir", "perl"]
+tokens.extension = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".go", ".java", ".kt", ".scala", ".rb", ".php", ".swift", ".cs", ".c", ".h", ".cpp", ".hpp"]
+tokens.toolchain = ["npm", "npx", "yarn", "pnpm", "bun", "node_modules", "tsc", "tsx", "vitest", "jest", "eslint", "prettier", "cargo", "rustc", "pip", "pip3", "poetry", "pytest", "mvn", "gradle", "javac", "go build", "go test", "go run", "cmake", "gcc", "clang", "composer", "bundle exec", "dotnet"]
+exempt.delivery-unblock-hint = { file = "packages/delivery/src/acceptance.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
+exempt.shared-unblock-hint = { file = "packages/shared/src/contained-step.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
+exempt.finance-unblock-hint = { file = "packages/finance/src/errors.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/project.ts" }
+exempt.model-access-key-hint = { file = "packages/model-access/src/build-gateway.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret.ts" }
+exempt.security-key-length-hint = { file = "packages/security/src/errors.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret-key-init.ts" }
+exempt.security-key-init-hint = { file = "packages/security/src/master-key.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret-key-init.ts" }
+exempt.server-secret-hints = { file = "packages/server/src/secrets.ts", tokens = ["npx", "tsx"], reason = "the operator's commands for Ashara's own scripts/secret-key-init.ts and scripts/secret.ts" }
+exempt.server-access-code-hint = { file = "packages/server/src/web-client.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/client.ts" }
+exempt.server-web-client-script = { file = "packages/server/src/web-client.ts", tokens = ["javascript"], reason = "the media type of Ashara's own web client script" }
+exempt.integration-leak-guard = { file = "packages/integration/src/cell-leak-guard.ts", tokens = ["vitest"], reason = "Ashara's own test runner, whose runs the leak guard tracks" }
+exempt.integration-test-cells = { file = "packages/integration/src/test-cells.ts", tokens = ["vitest"], reason = "Ashara's own test runner, whose run supplies the test cell" }

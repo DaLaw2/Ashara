@@ -4,7 +4,8 @@
  * The map below is the expected side: for every package it states the packages it may import, the
  * packages that admit only some importers, and the files a restricted edge is confined to. The test
  * copies packages/, the rules and the checker into a scratch tree, plants one violating import per
- * forbidden package pair, per restrict rule and for the named-only rule, plus one permitted import
+ * forbidden package pair, per restrict rule and for the named-only rule, one manifest-name literal
+ * in production source for the [stack-literals] denylist, plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -88,6 +89,13 @@ const NAMED_ONLY_PROBE = {
   violation: 'packages/integration/src/simulator/__boundary_probe__.ts:1  integration -> "@ashara/shared"  (named-only file: "NotAListedName" is not in names.shared)',
 };
 
+const STACK_LITERAL_PROBE = {
+  file: "packages/delivery/src/__boundary_probe__/stack-literal.ts",
+  content: 'export const MANIFEST = "Cargo.toml";\n',
+  violation:
+    'packages/delivery/src/__boundary_probe__/stack-literal.ts:1  delivery -> "Cargo.toml"  (stack literal in production source: "Cargo.toml"; take it from the contract, or exempt it in [stack-literals] with a reason)',
+};
+
 const REPO = path.resolve(import.meta.dirname, "..");
 const PROBE_DIR = "src/__boundary_probe__";
 
@@ -154,12 +162,13 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
     }
   }
   probes.push({ name: "integration simulator imports only listed names", ...NAMED_ONLY_PROBE });
+  probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
   return probes;
 }
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/price-defaults.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/price-defaults.ts", "scripts/stack-literals.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.symlinkSync(path.join(REPO, "node_modules"), path.join(into, "node_modules"), "dir");
