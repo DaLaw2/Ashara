@@ -159,11 +159,14 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "scripts/check-boundaries.ts", "scripts/price-defaults.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/price-defaults.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.symlinkSync(path.join(REPO, "node_modules"), path.join(into, "node_modules"), "dir");
   for (const pkg of packages) {
+    // The optional-deps scan resolves @ashara/* by each package's exports.
+    fs.mkdirSync(path.join(into, "packages", pkg), { recursive: true });
+    fs.copyFileSync(path.join(REPO, "packages", pkg, "package.json"), path.join(into, "packages", pkg, "package.json"));
     for (const dir of ["src", "test"]) {
       const from = path.join(REPO, "packages", pkg, dir);
       if (!fs.existsSync(from)) continue;

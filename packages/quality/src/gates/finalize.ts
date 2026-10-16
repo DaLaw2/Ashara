@@ -4,7 +4,7 @@ import type { ErrorLayer } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
 import { environmentErrorOf } from "../fault-class.js";
 import type { EnvironmentError } from "../fault-class.js";
-import type { DispatchRef, ExecutionEventSink } from "../dispatch-result.js";
+import type { DispatchRef } from "../dispatch-result.js";
 import {
   commitMerge,
   recoverOrphanedMerge,
@@ -88,7 +88,6 @@ export interface PostMergeVerdict {
 type PostMergeOperation = "postMergeVerify" | "postMergeTaskChecks" | "postMergeScaffold";
 
 export interface FinalizeDeps {
-  readonly eventSink?: ExecutionEventSink;
   /** Required: what a post-merge failure means differs by check, and routing reads it from here. */
   readonly postMergeOperation: PostMergeOperation;
   /**

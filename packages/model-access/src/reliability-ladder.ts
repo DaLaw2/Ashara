@@ -177,21 +177,13 @@ type LadderAttemptOutcome<T> =
 interface LadderCoreDeps<T> {
   /** Validated attempts PER capability tier (>= 1). */
   readonly attempts: number;
-  /**
-   * Explicit escalation target. `undefined` = default one-step-up
-   * (nextCapability); `null` = escalation disabled (single tier only).
-   */
-  readonly escalateCapability?: CapabilityLevel | null;
   readonly attempt: (capability: CapabilityLevel, attemptNo: number) => Promise<LadderAttemptOutcome<T>>;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
-function resolveTiers<T>(request: LadderRequest, deps: LadderCoreDeps<T>): CapabilityLevel[] {
+function resolveTiers(request: LadderRequest): CapabilityLevel[] {
   const tiers: CapabilityLevel[] = [request.capability];
-  const escalate =
-    deps.escalateCapability === undefined
-      ? nextCapability(request.capability)
-      : deps.escalateCapability;
+  const escalate = nextCapability(request.capability);
   if (escalate && CAPABILITY_RANK[escalate] > CAPABILITY_RANK[request.capability]) {
     tiers.push(escalate);
   }
@@ -208,7 +200,7 @@ async function runLadderCore<T>(
     );
   }
 
-  const tiers = resolveTiers(request, deps);
+  const tiers = resolveTiers(request);
   const perModel: LadderModelAttempts[] = [];
   let attemptNo = 0;
   let lastRawExcerpt = "";

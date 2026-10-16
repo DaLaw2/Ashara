@@ -24,7 +24,8 @@
  * never imports the production predicate it judges).
  *
  * It also fails on a default on a price or cost column of a packages/db/src/schema/ module
- * (scripts/price-defaults.ts).
+ * (scripts/price-defaults.ts), and on an optional member of a *Deps, *Port or *Config interface that
+ * no module the server's main reaches supplies (scripts/optional-deps.ts).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -35,6 +36,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
+import { OPTIONAL_MEMBER_ALLOWLIST, findUnsuppliedOptionalMembers } from "./optional-deps.js";
 import { findPriceColumnDefaults } from "./price-defaults.js";
 
 // ---------------------------------------------------------------------------
@@ -536,6 +538,18 @@ function main(): void {
         reason: `a price or cost column has a default; every writer must supply the rate (${found.text})`,
       });
     }
+  }
+
+  // Not an import rule either: an optional *Deps/*Port/*Config member the server's composition never
+  // supplies is a dependency no production path wires (scripts/optional-deps.ts).
+  for (const found of findUnsuppliedOptionalMembers({ root, entry: "packages/server/src/index.ts", allowlist: OPTIONAL_MEMBER_ALLOWLIST })) {
+    violations.push({
+      file: found.file,
+      line: found.line,
+      fromPkg: found.file.split("/")[1] ?? found.file,
+      specifier: `${found.declaration}.${found.member}`,
+      reason: found.reason,
+    });
   }
 
   // Report

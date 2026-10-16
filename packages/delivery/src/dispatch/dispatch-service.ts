@@ -955,7 +955,6 @@ export class DispatchService {
       const gate = await this.verification.substrateGate(d, outcome.statement, outcome);
       if (gate.kind === "ended") return gate.result;
       finalizeDeps = {
-        eventSink,
         postMergeOperation: "postMergeVerify",
         postMergeVerify: (path, lease) => this.verification.postMergeEnvironmentTest(d, path, gate.tested, lease),
       };
@@ -963,14 +962,12 @@ export class DispatchService {
       // No gate ran the scaffold's build and test before its merge: their verdict there is its
       // own attempt's, never a regression of the tree (ADR-074 addendum 2 d74 D).
       finalizeDeps = {
-        eventSink,
         postMergeOperation: "postMergeScaffold",
         postMergeVerify: (path, lease) => this.verification.postMergeScaffold(d, path, lease),
       };
     } else {
       const { stored } = d.work;
       finalizeDeps = {
-        eventSink,
         postMergeOperation: "postMergeTaskChecks",
         postMergeVerify: (path, lease) => this.verification.postMergeStoredChecks(d, path, stored, lease),
       };
