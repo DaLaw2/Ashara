@@ -331,7 +331,7 @@ export const pinInfrastructureFaults: QueryPlant = (args) => {
 };
 
 /** `text` rewritten by `rewrite`, sent as production sent it (a string or a query config), or null when unchanged. */
-function rewriteText(args: readonly unknown[], rewrite: (text: string) => string): unknown[] | null {
+export function rewriteText(args: readonly unknown[], rewrite: (text: string) => string): unknown[] | null {
   const parsed = sentText.safeParse(args[0]);
   if (!parsed.success) return null;
   const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;

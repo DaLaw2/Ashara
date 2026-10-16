@@ -28,6 +28,7 @@ import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
+import { Personas } from "./personas.js";
 import { PLANTED, plantSeamsOf, plantsBypassing } from "./plants.js";
 import type { Mutation } from "./plants.js";
 import { FAULTS, drawRates } from "./profile.js";
@@ -38,6 +39,8 @@ import { SimulatedClient } from "./simulated-client.js";
 import type { ClientReply, ClientRoutes } from "./simulated-client.js";
 import { Tape } from "./tape.js";
 import type { Decision, TapeMode } from "./tape.js";
+import { PortCount, TerminationWatch, checkLiveness, checkWork, readRequests } from "./termination.js";
+import { WORK_BOUNDS } from "./work-bounds.js";
 
 export interface RunOptions {
   readonly seed: number;
@@ -93,10 +96,6 @@ export interface RunResult {
   readonly log: readonly string[];
 }
 
-/** Design §2.9 I1's bound with today's constants: R repairs, N items, A attempts, K contests. */
-const REPAIRS = 2;
-const ATTEMPTS = 3;
-const CONTESTS = 2;
 const DEFAULT_CAP_USD = 25;
 /**
  * The adversarial profile's cap. Every stand-in call is unpriced and counts at its worst-case
@@ -105,6 +104,12 @@ const DEFAULT_CAP_USD = 25;
  * reached.
  */
 const ADVERSARIAL_CAP_USD = 100;
+/**
+ * The liveness profile's cap: out of reach, so what ends a project is a typed state and never the
+ * dollars (termination.ts W4). Two projects each drawing the bounds table's whole budget at a
+ * dollar a request, a ceiling no stand-in call's worst-case estimate reaches, spend no more.
+ */
+const LIVENESS_CAP_USD = 2 * WORK_BOUNDS.requestsPerProject.value;
 const LOW_CAP_USD = 0.02;
 /**
  * I8's bound: fault-free cycles in a row with no progress (invariants.ts progressFacts) after which
@@ -553,14 +558,18 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const rates = drawRates(options.profile, tape);
   const clock = new SimClock();
   const universe = drawUniverse(tape);
-  const capUsd =
-    options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : options.profile === "adversarial" ? ADVERSARIAL_CAP_USD : DEFAULT_CAP_USD);
+  const personas = Personas.draw(options.profile, tape, () => cycles);
+  const profileCap = options.profile === "adversarial" ? ADVERSARIAL_CAP_USD : options.profile === "liveness" ? LIVENESS_CAP_USD : DEFAULT_CAP_USD;
+  const capUsd = options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : profileCap);
   const projectCount = options.projects ?? 1;
   if (options.corruptSecondProject === true && projectCount < 2) throw new CorruptionWithoutSecondProject(options.seed);
   const corruption: Corruption | null = options.corruptSecondProject === true ? { taskSpec: false, blockKind: false, contained: new Set() } : null;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
-  const trace: string[] = [`universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`];
+  const trace: string[] = [
+    `universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`,
+    personas.describe(),
+  ];
   const log: string[] = [];
   const violations = new Map<string, Violation>();
   const coverage = emptyCoverage();
@@ -614,6 +623,9 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   // eslint-disable-next-line no-restricted-syntax -- policy default: a run with no plant bypasses no seam
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver);
+  /** W1's measure, taken at the model port, outside production; W2's and W3's records, cycle by cycle. */
+  const port = new PortCount();
+  const termination = new TerminationWatch();
   const admissions = new AdmissionLedger();
   const residue = new ResidueWatch();
   const gitDates = new GitDates();
@@ -669,6 +681,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       tape,
       rates,
       universe,
+      personas,
       observer: observing,
       projectIds,
       onModelCall: (call) => {
@@ -676,6 +689,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         const task = interleaver.currentTask();
         if (task !== null) consulted.add(task);
       },
+      onRequest: () => port.record(interleaver.currentTask()),
       laneTask: () => interleaver.currentTask(),
     });
     const baseCell = await loadBaseCell();
@@ -1001,6 +1015,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
       const overCommitted = await admissions.judge(observing, capUsd, cycles);
       if (overCommitted !== null) report(overCommitted);
+      for (const { project, violation } of await termination.observe(cycles, observing, projectIds)) report(ofProject(project, violation));
       trace.push(
         snapshots
           .map((each) => `state ${each.items.filter((i) => i.level === "Task").map((i) => `${i.title.slice(0, 40)}=${i.status}`).join("; ")} | project=${each.project.status}`)
@@ -1099,9 +1114,16 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         report(ofProject(index, { invariant: "I6", step: cycles, statement: `the project was accepted with behaviour(s) ${missing.join(", ")} absent from main`, key: "I6:accepted-missing" }));
       }
     }
-    const tasks = finals.reduce((sum, each) => sum + each.items.filter((item) => item.level === "Task").length, 0);
-    const bound = (REPAIRS + 1) * Math.max(tasks, 1) * ATTEMPTS * (1 + CONTESTS * ATTEMPTS);
-    const open = finals.filter((each, index) => noProgress || (index === 0 ? outcome.kind === "open" : !spendHalted && outcomeOf(each).kind === "open"));
+    // W1 and W4, judged whatever the run ended in: a spend-cap halt is how a runaway loop would
+    // otherwise pass (termination.ts).
+    for (const { project, violation } of checkWork(cycles, port, await readRequests(observing, projectIds))) report(ofProject(project, violation));
+    if (options.profile === "liveness") {
+      for (const [index, each] of finals.entries()) {
+        const end = index === 0 || spendHalted ? outcome : outcomeOf(each);
+        for (const violation of checkLiveness(cycles, end, noProgress, options.maxCycles)) report(ofProject(index, violation));
+      }
+    }
+    const open =finals.filter((each, index) => noProgress || (index === 0 ? outcome.kind === "open" : !spendHalted && outcomeOf(each).kind === "open"));
     if (open.length > 0) {
       const stuck = open
         .flatMap((each) => each.items)
@@ -1117,9 +1139,6 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       if (noProgress) {
         for (const [index, each] of finals.entries()) for (const violation of checkTotality(cycles, each, NO_PROGRESS_CYCLES)) violations.set(ofProject(index, violation).key, ofProject(index, violation));
       }
-    }
-    if (dispatches > bound) {
-      violations.set("I1:bound", { invariant: "I1", step: cycles, statement: `${dispatches} dispatches exceed the bound ${bound}`, key: "I1:bound" });
     }
     trace.push(`outcome ${outcome.kind}${outcome.kind === "halted" ? ` ${outcome.cause}` : ""}`);
   } catch (err) {

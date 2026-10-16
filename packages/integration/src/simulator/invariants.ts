@@ -20,8 +20,11 @@ import type { TextFactRecords } from "./text-facts.js";
 
 const run = promisify(execFile);
 
-/** The invariants of design §2.9, as judged on today's schema, and I10 (ADR-080 d10 C1, C2). */
-const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10"] as const;
+/**
+ * The invariants of design §2.9, as judged on today's schema, I10 (ADR-080 d10 C1, C2), and the
+ * termination invariants W1-W4 (ADR-084 decision 4, termination.ts).
+ */
+const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10", "W1", "W2", "W3", "W4"] as const;
 type InvariantId = (typeof INVARIANTS)[number];
 
 export interface Violation {
@@ -528,11 +531,14 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
  * requeue, a halt and its resumption) adds nothing however busy it is.
  * - a work item in a status (and blocked-reason source) it never held before;
  * - a merge recorded;
- * - a check set's revision (a rewrite or a repair of the checks), and the plan's new items (above);
+ * - the plan's new items (above);
  * - the project in a status (and block category) it never held before;
  * - a bounded count reaching a new high: an item's charged attempts, its infrastructure faults.
  *   Each moves the item toward the bound that ends it; a count refunded and charged again does not.
- * Never a cycle, a model call, a dispatch refunded, or a halt episode alone.
+ * Never a cycle, a model call, a dispatch refunded, a halt episode alone, or a check set's new
+ * revision: a review or dispute loop writes one every round, so counting it would credit the loop's
+ * own churn. I8 judges stalls only; a busy loop that never ends is W1's (every task's and project's
+ * requests within the bounds table) and W3's (a measure every round decreases), termination.ts.
  */
 export function progressFacts(snapshot: Snapshot): string[] {
   const { project } = snapshot;
@@ -545,7 +551,6 @@ export function progressFacts(snapshot: Snapshot): string[] {
     if (item.mergeCommit !== null) facts.push(`merge:${item.id}:${item.mergeCommit}`);
     facts.push(`attempts:${item.id}:${item.dispatchCount}`, `infrastructure:${item.id}:${item.infrastructureFaults}`);
   }
-  for (const check of snapshot.checks) facts.push(`checks:${check.taskId}:${check.revision}`);
   return facts;
 }
 

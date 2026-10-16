@@ -2,11 +2,15 @@ import type { Tape } from "./tape.js";
 
 /**
  * The adversary and fault profiles of design §4.7 and §4.9: each seed draws one, then every
- * event is drawn independently with the profile's probability. `adversarial` is chosen by name
- * only (`--profile adversarial`, never profileOfSeed): the models misbehave at the response level
- * at high rates and no seam fault is injected, so what fails is the code's answer to the model.
+ * event is drawn independently with the profile's probability. `adversarial` and `liveness` are
+ * chosen by name only (`--profile <name>`, never profileOfSeed). Under `adversarial` the models
+ * misbehave at the response level at high rates and no seam fault is injected, so what fails is the
+ * code's answer to the model. Under `liveness` (ADR-084 decision 4) every role's sticky persona
+ * (personas.ts) turns permanent from a cycle on, no seam fault is injected and the spend cap is out
+ * of reach, so the oracle (termination.ts W4) can require that every loop still exits through a
+ * typed, reported state.
  */
-export const PROFILES = ["benign", "typical", "hostile", "chaos", "adversarial"] as const;
+export const PROFILES = ["benign", "typical", "hostile", "chaos", "adversarial", "liveness"] as const;
 export type Profile = (typeof PROFILES)[number];
 
 /** Each event of design §4.7 the simulator models, with where it acts. */
@@ -130,6 +134,14 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     sharedFileEdit: 0.7, conflictMarkersLeft: 0.3, truncatedTurn: 0.06, emptyTurn: 0.06, reasoningExhausted: 0.05, turnCapMidEdit: 0.08,
     truncatedStructured: 0.05, emptyStructured: 0.05,
   },
+  // The personas are the adversary: the rest is typical's, with no client stop and no low budget,
+  // each an end the project would reach before its loops are judged.
+  liveness: {
+    overDelivery: 0.3, underDelivery: 0.15, regression: 0.05, wrongCheck: 0.05, contradictoryCheck: 0.05, vacuousCheck: 0.05,
+    allGuardSet: 0.02, outOfVisionCheck: 0.1, flakyCheck: 0.03, unrunnableCheck: 0.05, authorWritesProduct: 0.4, refusal: 0.02,
+    timeout: 0.05, invalidOutput: 0.1, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, reviewMisread: 0.05, recipeDefect: 0.05,
+    interfaceLeftStale: 0.3, lateChange: 0.1, clientStop: 0, lowBudget: 0, ...COOPERATIVE_RESPONSES,
+  },
 };
 
 export const FAULTS: Readonly<Record<Profile, FaultRates>> = {
@@ -138,6 +150,7 @@ export const FAULTS: Readonly<Record<Profile, FaultRates>> = {
   hostile: { perSeamCall: 0.005, budget: 10 },
   chaos: { perSeamCall: 0.01, budget: 30 },
   adversarial: { perSeamCall: 0, budget: 0 },
+  liveness: { perSeamCall: 0, budget: 0 },
 };
 
 /** A rate drawn once per seed, from its benign end (decision value 0) toward its worst end. */
@@ -162,6 +175,7 @@ const SPREADS: Readonly<Record<Profile, Readonly<Partial<Record<VariedRate, Rate
   hostile: { reviewCatch: { benign: 0.95, worst: 0.2 }, disputeRight: { benign: 0.95, worst: 0.3 }, disputeWrong: { benign: 0.05, worst: 0.5 } },
   chaos: { reviewCatch: { benign: 0.9, worst: 0 }, disputeRight: { benign: 0.95, worst: 0.2 }, disputeWrong: { benign: 0.1, worst: 0.7 } },
   adversarial: { reviewCatch: { benign: 1, worst: 0 }, disputeRight: { benign: 1, worst: 0 }, disputeWrong: { benign: 0, worst: 0.8 } },
+  liveness: {},
 };
 
 /**

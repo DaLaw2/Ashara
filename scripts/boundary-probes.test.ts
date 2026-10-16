@@ -4,8 +4,9 @@
  * The map below is the expected side: for every package it states the packages it may import, the
  * packages that admit only some importers, and the files a restricted edge is confined to. The test
  * copies packages/, the rules and the checker into a scratch tree, plants one violating import per
- * forbidden package pair, per restrict rule, for the named-only rule and for the stand-in rule
- * (directly and through a helper), one manifest-name literal in production source for the
+ * forbidden package pair, per restrict rule, for the named-only rule, for the stand-in rule
+ * (directly and through a helper) and for the bounds-table rule (a package's name and another
+ * file), one manifest-name literal in production source for the
  * [stack-literals] denylist, plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
@@ -128,6 +129,27 @@ const STAND_IN_PROBES = [
   },
 ];
 
+// The oracle's bounds table importing a production bound, by name (a name names.workplace lists, so
+// only the bounds-table rule refuses it) and through another simulator file.
+const BOUNDS_TABLE = "packages/integration/src/simulator/work-bounds.ts";
+const BOUNDS_TABLE_PROBES = [
+  {
+    name: "the oracle's bounds table imports no production bound",
+    file: BOUNDS_TABLE,
+    content: 'import { CHECK_MISSING_EXIT } from "@ashara/workplace";\nimport { PROFILES } from "./profile.js";\n',
+    violation: `${BOUNDS_TABLE}:1  integration -> "@ashara/workplace"  (bounds-table file: it imports nothing from another package; each bound cites its decision instead)`,
+    prepend: true,
+  },
+  {
+    // Planted by the probe above, on its second line: this entry adds nothing to the file.
+    name: "the oracle's bounds table imports no other file",
+    file: BOUNDS_TABLE,
+    content: "",
+    violation: `${BOUNDS_TABLE}:2  integration -> "./profile.js"  (bounds-table file: it imports no other file, which could hand it a production constant)`,
+    prepend: true,
+  },
+];
+
 const REPO = path.resolve(import.meta.dirname, "..");
 const PROBE_DIR = "src/__boundary_probe__";
 
@@ -198,6 +220,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   probes.push({ name: "integration simulator imports only listed names", ...NAMED_ONLY_PROBE });
   probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
   probes.push(...STAND_IN_PROBES);
+  probes.push(...BOUNDS_TABLE_PROBES);
   return probes;
 }
 

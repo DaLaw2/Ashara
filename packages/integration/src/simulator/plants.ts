@@ -2,6 +2,7 @@ import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
 import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
+import { ledgerDrawSkipped, reviewCountReset, reviewLoopUnbounded, suiteReviewBoundIgnored } from "./loop-plants.js";
 import {
   briefMisstatesStanding,
   checkSetSkipsItem,
@@ -60,7 +61,15 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - active-listing-throws: the listing of dispatchable projects throws on every cycle with no fault
  *   beneath it (I1:cycle-error);
  * - abandoned-release-skipped: the release of settled tasks' host holdings leaves out the Abandoned
- *   ones, so a given-up task's branch and worktree slot stay (I7, residue clause).
+ *   ones, so a given-up task's branch and worktree slot stay (I7, residue clause);
+ * - ledger-draw-skipped: the work ledger reads no request as drawn, so no task or project is
+ *   refused for its spent requests (W1);
+ * - review-count-reset: a review drops its earlier findings as it records new ones, so its rounds
+ *   leave no count that grows (W2);
+ * - suite-review-bound-ignored: the reviews naming a check task are read as at most one, so a check
+ *   task is reopened on every review that names it (W3, and W2's bound clause);
+ * - review-loop-unbounded: both of the last two and the ledger's: the review loop has no exit at all
+ *   (W4 under the liveness profile, and W1).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -84,6 +93,10 @@ export const MUTATIONS = [
   "step-fault-unrecorded",
   "active-listing-throws",
   "abandoned-release-skipped",
+  "ledger-draw-skipped",
+  "review-count-reset",
+  "suite-review-bound-ignored",
+  "review-loop-unbounded",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -117,6 +130,10 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "step-fault-unrecorded": { bypassed: [], queries: unrecordedStepFault, code: null },
   "active-listing-throws": { bypassed: [], queries: throwingActiveListing, code: null },
   "abandoned-release-skipped": { bypassed: [], queries: abandonedReleaseSkipped, code: null },
+  "ledger-draw-skipped": { bypassed: [], queries: ledgerDrawSkipped, code: null },
+  "review-count-reset": { bypassed: [], queries: reviewCountReset, code: null },
+  "suite-review-bound-ignored": { bypassed: [], queries: suiteReviewBoundIgnored, code: null },
+  "review-loop-unbounded": { bypassed: [], queries: reviewLoopUnbounded, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

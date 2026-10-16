@@ -30,6 +30,7 @@ import {
 } from "./product.js";
 import type { Database } from "./database.js";
 import type { CheckSpec, InterfaceForm, SimTask, Universe } from "./product.js";
+import type { Personas } from "./personas.js";
 import type { AdversaryRates } from "./profile.js";
 import type { Tape } from "./tape.js";
 
@@ -49,11 +50,15 @@ interface StandInContext {
   readonly tape: Tape;
   readonly rates: AdversaryRates;
   readonly universe: Universe;
+  /** The seed's sticky personas (personas.ts): who misbehaves, and when. */
+  readonly personas: Personas;
   readonly observer: Database;
   /** The run's projects (one, or two on one deployment's caps): an agent turn's task is one of theirs. */
   readonly projectIds: readonly string[];
   /** Set by the run once the first merge of an implementation is recorded: a late client change may follow. */
   readonly onModelCall: (call: ModelCallRecord) => void;
+  /** Once per request the model port receives, before it is answered: W1 counts work here, outside production (termination.ts). */
+  readonly onRequest: () => void;
   /** The task whose lane makes the call (Interleaver.currentTask), or null outside a batch's tasks. */
   readonly laneTask: () => string | null;
 }
@@ -185,6 +190,7 @@ const taskSpecShape = z.object({
 const checkRowSchema = z.object({
   checkTaskId: z.string(),
   taskId: z.string(),
+  revision: z.number().int(),
   name: z.string(),
   command: z.string(),
   files: z.array(z.object({ path: z.string(), content: z.string() })),
@@ -193,6 +199,18 @@ const checkRowSchema = z.object({
 const citedItemSchema = z.object({ id: z.string(), text: z.string() });
 
 type ToolStep = readonly [toolName: string, input: unknown];
+
+/** One review task's round as its persona reads it: a round is the check revisions read; each call of it counts. */
+interface ReviewRound {
+  readonly checks: string;
+  readonly round: number;
+  calls: number;
+  first: unknown[] | null;
+}
+
+/** The bad checks a sticky-bad check author writes again on every rewrite. */
+const STICKY_KINDS = ["contradictory", "wrong", "out_of_vision"] as const;
+type StickyKind = (typeof STICKY_KINDS)[number];
 
 /**
  * What the first turn past an attempt's scripted steps answers:
@@ -283,6 +301,20 @@ export class StandIns {
    */
   private readonly interfaceForms = new Map<string, InterfaceForm | null>();
   private toolCalls = 0;
+  /** Plans answered so far: the oscillating planner reverses every other one. */
+  private plans = 0;
+  /** Classifications the flipping classifier has acted on: every other one is flipped. */
+  private classifications = 0;
+  /** Persona findings worded so far: each new one is worded anew. */
+  private personaWords = 0;
+  /** Each review task's current round: the check revisions it reads, how many calls read them, the first call's answer. */
+  private readonly reviewRounds = new Map<string, ReviewRound>();
+  /** The first rejection a resurrecting reviewer made in each project, raised again word for word ever after. */
+  private readonly resurrected = new Map<string, unknown>();
+  /** The checked tasks a sticky-bad check author has written a bad check for: every rewrite writes it again. */
+  private readonly stickyBad = new Set<string>();
+  /** The bad check a sticky-bad check author writes, drawn once per run. */
+  private stickyKind: StickyKind | null = null;
 
   constructor(private readonly context: StandInContext) {}
 
@@ -302,6 +334,7 @@ export class StandIns {
   }
 
   private async respond(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
+    this.context.onRequest();
     if (options.tools !== undefined && options.tools.length > 0) return this.agentTurn(options);
     const format = options.responseFormat;
     if (format?.type !== "json") throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
@@ -314,10 +347,13 @@ export class StandIns {
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
       const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);
-      return this.structured(options, "replan.environment", () => ({
-        environmentChange: defect,
-        reason: defect ? "The build cannot write its cache directory: the environment's recipe must change." : "The change is to product behaviour the environment already builds and tests.",
-      }));
+      return this.structured(options, "replan.environment", () => {
+        const environmentChange = this.classifierFlips() ? !defect : defect;
+        return {
+          environmentChange,
+          reason: environmentChange ? "The build cannot write its cache directory: the environment's recipe must change." : "The change is to product behaviour the environment already builds and tests.",
+        };
+      });
     }
     throw new StandInUnanswerable("structured", `no stand-in answers a schema with keys [${keys.join(", ")}]`);
   }
@@ -409,7 +445,8 @@ export class StandIns {
       : [];
     // Answering that evidence, it plans only what is still to do: a done task planned again could
     // never have a check fail on its foundation.
-    const planned = interfaceTask.length === 0 ? universe.tasks : universe.tasks.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
+    const todo = interfaceTask.length === 0 ? universe.tasks : universe.tasks.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
+    const planned = this.plannerReverses() ? [...todo].reverse() : todo;
     return {
       tasks: citingPerLine([...planned.map((task, i) => ({
         ref: task.ref,
@@ -427,6 +464,26 @@ export class StandIns {
     };
   }
 
+  /** Whether the oscillating planner reverses this plan: every other plan it answers, when its persona fires. */
+  private plannerReverses(): boolean {
+    const { personas, onModelCall } = this.context;
+    if (personas.of("planner") !== "oscillating") return false;
+    this.plans += 1;
+    if (this.plans % 2 === 1 || !personas.fires("planner")) return false;
+    onModelCall({ site: "decomposition.tasks", action: "persona oscillating: the plan reversed" });
+    return true;
+  }
+
+  /** Whether the flipping classifier answers against its evidence: every other time its persona fires. */
+  private classifierFlips(): boolean {
+    const { personas, onModelCall } = this.context;
+    if (personas.of("classifier") !== "flipping" || !personas.fires("classifier")) return false;
+    this.classifications += 1;
+    if (this.classifications % 2 === 0) return false;
+    onModelCall({ site: "replan.environment", action: "persona flipping: answers against its evidence" });
+    return true;
+  }
+
   /**
    * The suite review finds each contradictory or out-of-vision check with the profile's probability.
    * A contradiction names the two checks, each with its command quoted as what it requires: the
@@ -437,7 +494,14 @@ export class StandIns {
    */
   private async review(): Promise<unknown> {
     // A review is a task of its own (origin review): the checks it reads are its project's.
-    const rows = await this.latestChecks((await this.taskInProgress()).projectId);
+    const task = await this.taskInProgress();
+    const rows = await this.latestChecks(task.projectId);
+    const honest = await this.honestReview(rows);
+    if (this.context.personas.of("suite-review") === "honest") return { problems: honest };
+    return { problems: await this.reviewAsPersona(task, rows, honest) };
+  }
+
+  private async honestReview(rows: ReadonlyArray<z.infer<typeof checkRowSchema>>): Promise<unknown[]> {
     const problems: unknown[] = [];
     for (const row of rows) {
       const own = ownSpecOf(row);
@@ -498,7 +562,131 @@ export class StandIns {
         problems.push({ checkTasks: [sound.checkTaskId], kind: "undecided-item", item: item.id, problem: `No check of the suite is read as deciding ${item.id}.`, evidence: sound.command });
       }
     }
-    return { problems };
+    return problems;
+  }
+
+  /**
+   * The review as the seed's reviewer persona answers it (personas.ts). Its findings name only the
+   * correct checks of the check tasks under review, read from the universe's own check kinds, so
+   * what it raises is plausible and wrong; how production weighs it is production's.
+   */
+  private async reviewAsPersona(task: z.infer<typeof taskRowSchema>, rows: ReadonlyArray<z.infer<typeof checkRowSchema>>, honest: readonly unknown[]): Promise<unknown[]> {
+    const { personas, onModelCall } = this.context;
+    const persona = personas.of("suite-review");
+    const underReview = await this.checkTasksUnderReview(task.id);
+    const read = rows.filter((row) => underReview.includes(row.checkTaskId));
+    const round = this.reviewRound(task.id, read);
+    // The same model asked again with the same prompt answers as it did: the copy is the persona, whatever fired.
+    if (persona === "correlated-second" && round.calls > 1 && round.first !== null) {
+      onModelCall({ site: "suite-review", action: "persona correlated-second: the first review's answer again" });
+      return round.first;
+    }
+    if (!personas.fires("suite-review")) return this.answered(round, [...honest]);
+    onModelCall({ site: "suite-review", action: `persona ${persona} (round ${round.round}, review ${round.calls})` });
+    const targets = [...new Set(read.filter((row) => ownSpecOf(row)?.kind === "correct").map((row) => row.checkTaskId))];
+    const target = (n: number): z.infer<typeof checkRowSchema> | undefined => {
+      const id = targets[n % Math.max(1, targets.length)];
+      return read.find((row) => row.checkTaskId === id && ownSpecOf(row)?.kind === "correct");
+    };
+    switch (persona) {
+      case "never-satisfied": {
+        const row = target(0);
+        if (row === undefined) return this.answered(round, [...honest]);
+        const cited = await this.citedBy(row.checkTaskId);
+        const item = cited[(round.round + round.calls) % Math.max(1, cited.length)];
+        const undecided = item === undefined ? [] : [{ checkTasks: [row.checkTaskId], kind: "undecided-item", item: item.id, problem: `No check is read as deciding ${item.id} (reading ${this.nextWording()}).`, evidence: row.command }];
+        return this.answered(round, [...honest, await this.rejection(row), ...undecided]);
+      }
+      case "rotating": {
+        const row = target(round.round - 1);
+        return this.answered(round, row === undefined ? [...honest] : [...honest, await this.rejection(row)]);
+      }
+      case "resurrecting": {
+        const earlier = this.resurrected.get(task.projectId);
+        if (earlier !== undefined) return this.answered(round, [...honest, earlier]);
+        const row = target(0);
+        if (row === undefined) return this.answered(round, [...honest]);
+        const first = await this.rejection(row);
+        this.resurrected.set(task.projectId, first);
+        return this.answered(round, [...honest, first]);
+      }
+      case "flip-flop": {
+        if (round.round % 2 === 0) return this.answered(round, []);
+        const row = target(0);
+        return this.answered(round, row === undefined ? [...honest] : [...honest, await this.rejection(row, `its round ${round.round}`)]);
+      }
+      case "self-refuting": {
+        const row = target(0);
+        if (row === undefined) return this.answered(round, [...honest]);
+        const side = { checkTask: row.checkTaskId, check: row.name, requires: row.command };
+        return this.answered(round, [
+          ...honest,
+          { checkTasks: [row.checkTaskId], kind: "contradiction", conflict: [side, side], problem: `Check ${row.name} both requires and forbids what it runs.`, evidence: row.command },
+        ]);
+      }
+      case "correlated-second": {
+        const row = target(0);
+        return this.answered(round, row === undefined ? [...honest] : [...honest, await this.rejection(row)]);
+      }
+      case "lazy-pass":
+        return this.answered(round, []);
+      case "honest":
+        return this.answered(round, [...honest]);
+    }
+  }
+
+  /** `problems` as this call's answer, kept as its round's first when it is the first call of the round. */
+  private answered(round: ReviewRound, problems: unknown[]): unknown[] {
+    if (round.calls === 1) round.first = problems;
+    return problems;
+  }
+
+  /** A fresh wording, never used before in the run. */
+  private nextWording(): string {
+    this.personaWords += 1;
+    return `variant ${this.personaWords}`;
+  }
+
+  /**
+   * A rejection of a correct check as outside the vision, its missing clause a paraphrase no cited
+   * item states word for word (the blind spot Z0 names), worded anew unless `wording` fixes it.
+   */
+  private async rejection(row: z.infer<typeof checkRowSchema>, wording?: string): Promise<unknown> {
+    const spec = ownSpecOf(row);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a check whose spec is unreadable requires nothing the clause can name; no oracle reads it
+    const requires = spec?.requires ?? [];
+    const cited = await this.citedBy(row.checkTaskId);
+    return {
+      checkTasks: [row.checkTaskId],
+      kind: "outside-vision",
+      check: row.name,
+      judgedItems: cited.map((item) => item.id),
+      missingClause: `performs ${requires.join(" and ")} in ${wording ?? `its ${this.nextWording()}`}`,
+      problem: `Check ${row.name} asks for a form of behaviour none of its cited items names.`,
+      evidence: row.command,
+    };
+  }
+
+  /** The review's round: a new one whenever the check revisions it reads change; this call counted in it. */
+  private reviewRound(reviewTaskId: string, read: ReadonlyArray<z.infer<typeof checkRowSchema>>): ReviewRound {
+    const checks = [...new Set(read.map((row) => `${row.taskId}@${row.revision}`))].sort().join(" ");
+    const known = this.reviewRounds.get(reviewTaskId);
+    if (known !== undefined && known.checks === checks) {
+      known.calls += 1;
+      return known;
+    }
+    const round: ReviewRound = { checks, round: known === undefined ? 1 : known.round + 1, calls: 1, first: null };
+    this.reviewRounds.set(reviewTaskId, round);
+    return round;
+  }
+
+  /** The finished check tasks a review task depends on: the suites it reads. */
+  private async checkTasksUnderReview(reviewTaskId: string): Promise<string[]> {
+    const result = await this.context.observer.execute(sql`
+      SELECT w.id FROM dependencies d JOIN work_items w ON w.id = d.to_id
+      WHERE d.from_id = ${reviewTaskId} AND w.work_kind = 'check' AND w.status = 'Completed'
+      ORDER BY w.created_at, w.id`);
+    return z.array(z.object({ id: z.string() })).parse(result.rows).map((row) => row.id);
   }
 
   /** The vision items a check task cites, as its task_spec stores them. */
@@ -517,7 +705,7 @@ export class StandIns {
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {
     const { observer } = this.context;
     const result = await observer.execute(sql`
-      SELECT c.check_task_id AS "checkTaskId", c.task_id AS "taskId", c.name, c.command, c.files
+      SELECT c.check_task_id AS "checkTaskId", c.task_id AS "taskId", c.revision, c.name, c.command, c.files
       FROM task_checks c
       WHERE c.project_id = ${projectId}
         AND c.revision = (SELECT max(revision) FROM task_checks l WHERE l.task_id = c.task_id)
@@ -747,6 +935,8 @@ export class StandIns {
     if (tape.chance("agent.check.harness", rates.flakyCheck, "checks")) {
       extra("harness", { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [{ path: `product/harness/${checked.ref}`, content: "harness\n" }] });
     }
+    const sticky = this.stickyBadCheck(checksFor, other);
+    if (sticky !== null) extra(`sticky-${sticky.kind}`, sticky);
     const allGuard = tape.chance("agent.check.all-guard", rates.allGuardSet, "checks");
     const kept = allGuard ? checks.map((check) => ({ ...check, spec: { ...check.spec, kind: "vacuous" as const } })) : checks;
     const steps: ToolStep[] = [];
@@ -762,6 +952,32 @@ export class StandIns {
     }
     steps.push(finished(`Defined ${kept.length} check(s).`));
     return steps;
+  }
+
+  /**
+   * The bad check a sticky-bad check author writes for `checksFor`: none until its persona first
+   * fires on that task's checks, then the same one on every rewrite of them. A contradiction needs
+   * another task to forbid the behaviours of; without one the author writes a wrong check.
+   */
+  private stickyBadCheck(checksFor: string, other: SimTask | undefined): CheckSpec | null {
+    const { personas, tape, universe, onModelCall } = this.context;
+    if (personas.of("check-author") !== "sticky-bad") return null;
+    if (!this.stickyBad.has(checksFor)) {
+      if (!personas.fires("check-author")) return null;
+      this.stickyBad.add(checksFor);
+    }
+    this.stickyKind ??= nthOf(STICKY_KINDS, tape.pick("persona.check-author.kind", STICKY_KINDS.length, "checks"));
+    const kind: StickyKind = this.stickyKind === "contradictory" && other === undefined ? "wrong" : this.stickyKind;
+    onModelCall({ site: "agent-runner", action: `persona sticky-bad: writes a ${kind} check again` });
+    switch (kind) {
+      case "contradictory":
+        // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, the contradictory kind is only chosen with another task (above); no oracle reads it
+        return { kind, requires: [], forbids: [...(other?.behaviours ?? [])], harness: [] };
+      case "wrong":
+        return { kind, requires: ["b-never"], forbids: [], harness: [] };
+      case "out_of_vision":
+        return { kind, requires: [universe.outOfVision], forbids: [], harness: [] };
+    }
   }
 
   /**
@@ -829,6 +1045,13 @@ export class StandIns {
     }
     return null;
   }
+}
+
+/** `list[at]`, where the tape drew `at` from `list.length`. */
+function nthOf<T>(list: readonly T[], at: number): T {
+  const value = list[at];
+  if (value === undefined) throw new StandInUnanswerable("persona", `the tape drew ${at} from a list of ${list.length}`);
+  return value;
 }
 
 function finished(summary: string): ToolStep {

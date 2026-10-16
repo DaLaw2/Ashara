@@ -20,6 +20,9 @@
  *   stand-in-names.<pkg> = [...]    the narrower list those files, and every file they reach by a
  *                                   value import, may import from <pkg>; each name must also be in
  *                                   `names.<pkg>`, and a package with none gives them nothing
+ *   bounds-tables    = [glob, ...]  named-only files that hold an oracle's own bounds: they import
+ *                                   nothing at all, no other package's symbol and no other file,
+ *                                   so no bound in them can be a production constant
  *
  * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
  * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
@@ -101,6 +104,8 @@ interface PackageRule {
   readonly standIns: readonly string[];
   /** importedPkg -> the only symbols the stand-ins, and what they reach, may import from it. */
   readonly standInNames: ReadonlyMap<string, readonly string[]>;
+  /** Named-only file globs holding an oracle's own bounds, which import nothing; empty when the section states none. */
+  readonly boundsTables: readonly string[];
 }
 
 type BoundaryRules = ReadonlyMap<string, PackageRule>;
@@ -122,6 +127,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       names: Map<string, string[]>;
       standIns: string[];
       standInNames: Map<string, string[]>;
+      boundsTables: string[];
     }
   >();
   let currentSection: string | null = null;
@@ -141,7 +147,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [] });
       }
       continue;
     }
@@ -220,6 +226,15 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
+    const boundsTablesMatch = /^bounds-tables\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (boundsTablesMatch) {
+      rule.boundsTables = parseList(boundsTablesMatch[1]);
+      if (rule.boundsTables.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "bounds-tables list is empty");
+      }
+      continue;
+    }
+
     // Fail closed: a typo in a rule key must not silently disable the gate.
     throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
   }
@@ -248,6 +263,9 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (rule.standIns.length > 0 && rule.namedOnly.length === 0) {
       throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-ins`, "names stand-in files, but the section has no named-only files");
     }
+    if (rule.boundsTables.length > 0 && rule.namedOnly.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] bounds-tables`, "names bounds-table files, but the section has no named-only files");
+    }
     for (const [named, standInNames] of rule.standInNames) {
       if (rule.standIns.length === 0) {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, "lists a package's symbols, but the section has no stand-ins");
@@ -274,6 +292,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       names: rule.names,
       standIns: rule.standIns,
       standInNames: rule.standInNames,
+      boundsTables: rule.boundsTables,
     });
   }
 
@@ -670,7 +689,8 @@ function main(): void {
     const namesUsed = new Map<string, Set<string>>();
     const contents = new Map<string, string>();
     const standInFiles: string[] = [];
-    const relativeTo = (filePath: string): string => path.relative(pkgRoot, filePath).split(path.sep).join("/");
+    const boundsTableFiles: string[] = [];
+    const relativeTo =(filePath: string): string => path.relative(pkgRoot, filePath).split(path.sep).join("/");
 
     for (const filePath of files) {
       filesChecked++;
@@ -686,6 +706,21 @@ function main(): void {
           specifier: "stand-ins",
           reason: `a stand-in file must also be a named-only file (${rule.namedOnly.join(", ")})`,
         });
+      }
+
+      if (matchesAnyGlob(pkgRelative, rule.boundsTables)) {
+        boundsTableFiles.push(filePath);
+        const at = (line: number, specifier: string, reason: string): Violation => ({
+          file: path.relative(root, filePath),
+          line,
+          fromPkg: pkgName,
+          specifier,
+          reason: `bounds-table file: ${reason}`,
+        });
+        if (!matchesAnyGlob(pkgRelative, rule.namedOnly)) violations.push(at(0, "bounds-tables", `a bounds-table file must also be a named-only file (${rule.namedOnly.join(", ")})`));
+        // Each bound states its decision, never a production constant: nothing is imported, a type included.
+        scanLines(content, PACKAGE_IMPORT_RE, (line, match) => violations.push(at(line, match[1], "it imports nothing from another package; each bound cites its decision instead")));
+        scanLines(content, RELATIVE_IMPORT_RE, (line, match) => violations.push(at(line, match[1], "it imports no other file, which could hand it a production constant")));
       }
 
       if (rule.namedOnly.length > 0 && matchesAnyGlob(pkgRelative, rule.namedOnly)) {
@@ -763,6 +798,17 @@ function main(): void {
       }
     }
 
+    for (const glob of rule.boundsTables) {
+      if (!boundsTableFiles.some((filePath) => matchesAnyGlob(relativeTo(filePath), [glob]))) {
+        violations.push({
+          file: rulesRelative,
+          line: 0,
+          fromPkg: pkgName,
+          specifier: "bounds-tables",
+          reason: `"${glob}" matches no file; a bounds-table rule that holds nothing passes everything`,
+        });
+      }
+    }
     const standInNamesUsed = checkStandIns({ rule, pkgName, pkgRoot, root, contents, standInFiles, relativeTo, violations });
     for (const glob of rule.standIns) {
       if (!standInFiles.some((filePath) => matchesAnyGlob(relativeTo(filePath), [glob]))) {

@@ -159,6 +159,11 @@ names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT"]
 # is not followed; tests written from observed behaviour are not checked at all.
 stand-ins = ["src/simulator/scripted-models.ts"]
 stand-in-names.model-access = ["LanguageModelFactory"]
+# ADR-084 decision 4: the termination invariants judge work against an oracle-owned bounds table. A
+# bounds table imports nothing at all, no other package's symbol (a production bound such as the work
+# ledger's DEFAULT_WORK_BUDGETS) and no other file that could hand it one, so each bound in it is the
+# value its cited decision states and a production change that moves a bound moves nothing here.
+bounds-tables = ["src/simulator/work-bounds.ts"]
 
 # --- Stack literals (no package's section) ----------------------------------------------------
 
