@@ -63,10 +63,19 @@ interface DueDeliveredReport {
   readonly vision: VisionCoverage;
 }
 
-/** A passed sweep whose report its records could not be read for; `error` says why. */
+/**
+ * A passed sweep whose report its records could not be read for; `error` says why. `cause` is
+ * "record" when the records were read and do not hold together as a report (a row that does not
+ * parse, a reference to nothing), which a retry meets again; "read-failed" when reading them failed
+ * for any other reason (a lost connection, a query that did not complete), which says nothing of
+ * the records.
+ */
 interface UnreadDeliveredReport {
   readonly kind: "unread";
+  readonly cause: "record" | "read-failed";
   readonly failures: number;
+  /** Failed attempts whose records did not read as a report (acceptance_sweeps.report_record_failures). */
+  readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
   readonly error: unknown;
@@ -114,6 +123,8 @@ export interface DeliveredReportFailureRecord {
   readonly error: string;
   /** The public interface file could not be read: counted apart, against MAX_INTERFACE_READ_FAILURES. */
   readonly interfaceRead: boolean;
+  /** The records were read and did not hold together as a report: counted apart, against MAX_UNREAD_ATTEMPTS. */
+  readonly recordUnread: boolean;
   /**
    * The wait before the next attempt, for an attempt that failed; null when this attempt posts the
    * report without what failed, so no attempt is counted and no retry is set.
@@ -203,8 +214,16 @@ function interfaceSection(file: string, commit: string, read: InterfaceTold): st
     uncutText(quoted) === null
       ? ` It is longer than ${INTERFACE_QUOTE_CHARS} characters, so only its start and end are quoted; the marker inside says how many characters were cut.`
       : "";
-  return `Public interface (from ${file} on main at commit ${commit}), quoted as the file reads.${cut}\n${fence}\n${body}${fence}`;
+  return `Public interface (from ${file} on main at commit ${commit}), quoted as the file reads.${cut} ${INTERFACE_UNVERIFIED}\n${fence}\n${body}${fence}`;
 }
+
+/**
+ * What Ashara checked of the quoted file, and what it did not: acceptance compares its bytes with
+ * the product scaffold's placeholder and never judges what it says.
+ */
+const INTERFACE_UNVERIFIED =
+  `This file changed since the product scaffold wrote it: acceptance refuses one left byte for byte as the scaffold ` +
+  `wrote it, or missing. Ashara has not verified that it describes the delivered product.`;
 
 /** What the core loop asks of the Liaison each cycle (no LLM call). */
 export interface LiaisonDeliveredReports {
@@ -339,8 +358,10 @@ export class DeliveredReports implements LiaisonDeliveredReports {
    * One report per due sweep. A failure of one project's report (its records, its interface file,
    * its post) is that project's: recorded on its sweep, logged at warn and tried again after a
    * backoff, never thrown into the cycle. Past MAX_INTERFACE_READ_FAILURES reads the report is
-   * posted without the quote; past MAX_UNREAD_ATTEMPTS the client is sent an acceptance notice
-   * instead of the report. Only a failure to list the reports or to record a failure throws through.
+   * posted without the quote; past MAX_UNREAD_ATTEMPTS attempts whose records did not read as a
+   * report the client is sent an acceptance notice instead of it. A read of the records that failed
+   * otherwise is retried and never counted toward that notice: a lost connection says nothing of
+   * the records. Only a failure to list the reports or to record a failure throws through.
    */
   async runPending(): Promise<readonly DeliveredReportOutcome[]> {
     const outcomes: DeliveredReportOutcome[] = [];
@@ -355,8 +376,8 @@ export class DeliveredReports implements LiaisonDeliveredReports {
       read = await this.productInterface.at(due.targetProjectPath, due.mainCommit);
     } catch (err) {
       const reads = due.interfaceReadFailures + 1;
-      if (reads < MAX_INTERFACE_READ_FAILURES) return this.failed(due, err, true);
-      await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(err), interfaceRead: true, retryAfterSeconds: null });
+      if (reads < MAX_INTERFACE_READ_FAILURES) return this.failed(due, err, "interface");
+      await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(err), interfaceRead: true, recordUnread: false, retryAfterSeconds: null });
       console.warn(
         `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): ${this.productInterface.file} ` +
           `could not be read in ${reads} attempts; the report is posted without it: ${describeErrorChain(err)}`,
@@ -366,13 +387,17 @@ export class DeliveredReports implements LiaisonDeliveredReports {
     return this.post(due, deliveredReport(due, this.productInterface.file, read));
   }
 
-  /** A report whose records cannot be read: retried, and past its bound the client is told it was accepted. */
+  /**
+   * A report whose records cannot be read: retried; past its bound of records that do not read as a
+   * report, the client is told it was accepted. A read that failed otherwise is only retried.
+   */
   private async unread(due: UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
-    const attempts = due.failures + 1;
-    if (attempts < MAX_UNREAD_ATTEMPTS) return this.failed(due, due.error, false);
-    await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(due.error), interfaceRead: false, retryAfterSeconds: null });
+    if (due.cause === "read-failed") return this.failed(due, due.error, "read-failed");
+    const attempts = due.recordFailures + 1;
+    if (attempts < MAX_UNREAD_ATTEMPTS) return this.failed(due, due.error, "record");
+    await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(due.error), interfaceRead: false, recordUnread: true, retryAfterSeconds: null });
     console.warn(
-      `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): its records could not be read in ` +
+      `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): its records did not read as a report in ` +
         `${attempts} attempts; the client is sent an acceptance notice without the report: ${describeErrorChain(due.error)}`,
     );
     return this.post(due, unreadNotice(due, attempts));
@@ -383,14 +408,24 @@ export class DeliveredReports implements LiaisonDeliveredReports {
       const kind = await this.store.postReport(due.sweepId, body);
       return { kind, projectId: due.projectId };
     } catch (err) {
-      return this.failed(due, err, false);
+      return this.failed(due, err, "post");
     }
   }
 
-  private async failed(due: DueDeliveredReport | UnreadDeliveredReport, err: unknown, interfaceRead: boolean): Promise<DeliveredReportOutcome> {
+  /** A failed attempt, counted and backed off; `what` failed says which bound, if any, it counts against too. */
+  private async failed(
+    due: DueDeliveredReport | UnreadDeliveredReport,
+    err: unknown,
+    what: "interface" | "record" | "read-failed" | "post",
+  ): Promise<DeliveredReportOutcome> {
     const failures = due.failures + 1;
     const failure = new DeliveredReportFailed(due.projectId, due.sweepId, failures, retryAfterSeconds(failures), err);
-    await this.store.recordReportFailure(due.sweepId, { error: describeErrorChain(err), interfaceRead, retryAfterSeconds: failure.retryAfterSeconds });
+    await this.store.recordReportFailure(due.sweepId, {
+      error: describeErrorChain(err),
+      interfaceRead: what === "interface",
+      recordUnread: what === "record",
+      retryAfterSeconds: failure.retryAfterSeconds,
+    });
     console.warn(`[liaison-delivered-report] ${failure.message}`);
     return { kind: "failed", projectId: due.projectId, failure };
   }

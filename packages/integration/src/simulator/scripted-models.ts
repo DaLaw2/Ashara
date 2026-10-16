@@ -171,6 +171,7 @@ const taskRowSchema = z.object({
   taskSpec: z.unknown(),
   workKind: z.string().nullable(),
   dispatchCount: z.number(),
+  infrastructureFaults: z.number(),
 });
 
 const taskSpecShape = z.object({ origin: z.string().optional(), checksFor: z.string().optional() });
@@ -457,7 +458,8 @@ export class StandIns {
     const taskId = this.context.laneTask();
     if (taskId === null) throw new StandInUnanswerable("agent-runner", "an agent turn was made outside every task of a batch");
     const result = await observer.execute(sql`
-      SELECT id, project_id AS "projectId", title, task_spec AS "taskSpec", work_kind AS "workKind", dispatch_count AS "dispatchCount"
+      SELECT id, project_id AS "projectId", title, task_spec AS "taskSpec", work_kind AS "workKind", dispatch_count AS "dispatchCount",
+        infrastructure_faults AS "infrastructureFaults"
       FROM work_items WHERE id = ${taskId} AND level = 'Task' AND status = 'InProgress'`);
     const [row] = z.array(taskRowSchema).parse(result.rows);
     if (row === undefined || !projectIds.includes(row.projectId)) {
@@ -476,7 +478,9 @@ export class StandIns {
   private async agentTurn(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
     const task = await this.taskInProgress();
     const toolNames = new Set((options.tools ?? []).map((tool) => tool.name));
-    const key = `${task.id}#${task.dispatchCount}`;
+    // A requeue after a fault that was not the task's work refunds its dispatch, but its next
+    // attempt is a new request to the model, so it draws a new script.
+    const key = `${task.id}#${task.dispatchCount}#${task.infrastructureFaults}`;
     let script = this.attempts.get(key);
     if (script === undefined) {
       script = await this.scriptFor(task, toolNames, promptText(options));

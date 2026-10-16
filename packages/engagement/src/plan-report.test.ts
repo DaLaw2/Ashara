@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
@@ -50,7 +50,7 @@ function reportsFor(
       return "blocked";
     },
   };
-  return { reports: new PlanReports(store), posted, folded, revisionPosts, blocked };
+  return { reports: new PlanReports(store, memoryStepContainment(() => true)), posted, folded, revisionPosts, blocked };
 }
 
 const FOUNDED: Counts = { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 };
@@ -203,7 +203,7 @@ describe("plan revision report", () => {
         return "blocked";
       },
     };
-    return { reports: new PlanReports(store), posted, blocked };
+    return { reports: new PlanReports(store, memoryStepContainment(() => true)), posted, blocked };
   }
 
   test("says what the client said, what the team now does, what is set aside and what stays done", async () => {

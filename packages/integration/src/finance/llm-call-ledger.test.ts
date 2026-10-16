@@ -386,6 +386,89 @@ describe("one llm_calls row per provider call", () => {
     expect(await failureOf(apiError(undefined))).toBe("provider");
     expect(await failureOf(apiError(401))).toBe("ashara");
     expect(await failureOf(new TypeError("a fault in Ashara's own code"))).toBe("ashara");
+    // A 4xx rejection of the request Ashara built is Ashara's; a timeout or a throttle is the provider's.
+    expect(await failureOf(apiError(400))).toBe("ashara");
+    expect(await failureOf(apiError(413))).toBe("ashara");
+    expect(await failureOf(apiError(422))).toBe("ashara");
+    expect(await failureOf(apiError(408))).toBe("provider");
+    expect(await failureOf(apiError(429))).toBe("provider");
+  });
+
+  /** A gateway over two providers, each answering through its own scripted model. */
+  function twoProviders(
+    answers: Readonly<Record<"anthropic" | "deepseek", () => Promise<ReturnType<typeof textResult>>>>,
+    extraModels: readonly ModelConfig[] = [],
+  ): GuardedModelAccess {
+    const providers = (["anthropic", "deepseek"] as const).map((name) => ({
+      name,
+      providerType: name,
+      apiKey: "test-key",
+      baseUrl: "https://stub.invalid/v1",
+      models: [model({ id: `${name}-strong`, provider: name }), ...extraModels.filter((m) => m.provider === name)],
+      enabled: true,
+    }));
+    const models: Parameters<typeof buildGateway>[0]["models"] = (provider) =>
+      new MockLanguageModelV4({ doGenerate: () => answers[provider.name === "anthropic" ? "anthropic" : "deepseek"]() });
+    return new GuardedModelAccess(
+      buildGateway({ models, config: { providers, defaultProvider: "anthropic" }, checkedSources: ["test"], clock: () => PEAK }),
+      new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
+    );
+  }
+
+  test("a request and its fallback that both failed are Ashara's when either failure was Ashara's", async () => {
+    const apiError = (statusCode: number) =>
+      new APICallError({ message: `stub ${statusCode}`, url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode, isRetryable: false });
+    const failureOf = async (first: number, fallback: number): Promise<string> => {
+      const err: unknown = await twoProviders({
+        anthropic: async () => {
+          throw apiError(first);
+        },
+        deepseek: async () => {
+          throw apiError(fallback);
+        },
+      })
+        .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
+        .then(() => null, (e: unknown) => e);
+      if (!(err instanceof ProviderError)) return expect.unreachable(`not a ProviderError: ${String(err)}`);
+      return err.failure;
+    };
+
+    expect(await failureOf(503, 503)).toBe("provider");
+    expect(await failureOf(401, 503)).toBe("ashara");
+    expect(await failureOf(503, 400)).toBe("ashara");
+    expect(await failureOf(413, 503)).toBe("ashara");
+  });
+
+  test("a second opinion goes to another model at the capability when the catalog has one, else to the same model again", async () => {
+    const answer = async () => textResult('{"greeting":"hi"}', { input: 10, output: 5 });
+    const ask = (llm: GuardedModelAccess, otherThan: { provider: string; model: string }) =>
+      llm.forCall({ projectId, taskId: null, callSite: "suite-review" }).generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, otherThan });
+
+    const across = await ask(twoProviders({ anthropic: answer, deepseek: answer }), { provider: "anthropic", model: "anthropic-strong" });
+    expect({ provider: across.provider, model: across.model }).toEqual({ provider: "deepseek", model: "deepseek-strong" });
+
+    // One provider with a second Strong model: that model.
+    stubModel({ doGenerate: answer });
+    const single = (extra: readonly ModelConfig[]) =>
+      new GuardedModelAccess(
+        buildGateway({
+          models: sdkLanguageModels,
+          config: {
+            providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [model({ id: "only-strong" }), ...extra], enabled: true }],
+            defaultProvider: "anthropic",
+          },
+          checkedSources: ["test"],
+          clock: () => PEAK,
+        }),
+        new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
+      );
+    const sibling = await ask(single([model({ id: "sibling-strong", inputCostPer1M: 5 })]), { provider: "anthropic", model: "only-strong" });
+    expect(sibling.model).toBe("sibling-strong");
+
+    // No other model at the capability: the same model answers again, and the response says so.
+    const again = await ask(single([model({ id: "too-light", capabilityLevel: "Light", inputCostPer1M: 0.1 })]), { provider: "anthropic", model: "only-strong" });
+    expect({ provider: again.provider, model: again.model }).toEqual({ provider: "anthropic", model: "only-strong" });
   });
 
   test("unreported usage is written as NULL tokens and NULL cost, never 0", async () => {
@@ -562,6 +645,30 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.outcome).toBe("error");
     expect(rows[0]?.costUsd).toBeNull();
+  });
+
+  test("a failed turn says whose failure it was: a 5xx or an unreadable response the provider's, a 4xx or anything unnamed Ashara's", async () => {
+    const failureOf = async (doGenerate: ConstructorParameters<typeof MockLanguageModelV4>[0]): Promise<string> => {
+      stubModel(doGenerate);
+      try {
+        await turnOn(gateway("anthropic", model({})));
+      } catch (err) {
+        if (!(err instanceof ProviderError)) return expect.unreachable(`not a ProviderError: ${String(err)}`);
+        return err.failure;
+      }
+      return expect.unreachable("the turn did not fail");
+    };
+    const apiError = (statusCode: number) => async () => {
+      throw new APICallError({ message: `stub ${statusCode}`, url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode, isRetryable: false });
+    };
+
+    expect(await failureOf({ doGenerate: apiError(503) })).toBe("provider");
+    expect(await failureOf({ doGenerate: apiError(429) })).toBe("provider");
+    expect(await failureOf({ doGenerate: apiError(400) })).toBe("ashara");
+    expect(await failureOf({ doGenerate: apiError(401) })).toBe("ashara");
+    expect(await failureOf({ doGenerate: async () => Promise.reject(new TypeError("a fault in Ashara's own code")) })).toBe("ashara");
+    // A response with no message to read (TurnResponseInvalid) is the provider's, never the agent's work.
+    expect(await failureOf({ doGenerate: { ...toolCallResult(), content: [] } })).toBe("provider");
   });
 
   test("a truncated turn maps to `truncated`; an `error` finish reason is a provider_error row", async () => {

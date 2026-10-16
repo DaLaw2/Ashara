@@ -1,14 +1,13 @@
 import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
-import { withStructuredLadder } from "@ashara/finance";
+import { modelCallFailureOf, withStructuredLadder } from "@ashara/finance";
 import type { LadderAttemptEvent } from "@ashara/finance";
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import type { AssumptionKind, ScopeLine } from "./vision-language/vision-assumption.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
-import { classifyReadFailure } from "./read-failure.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
@@ -24,7 +23,8 @@ const MAX_QUESTIONS_PER_TENDER = 5;
 
 /**
  * Failed reads of a tender after which the Liaison stops retrying and reports to the client. Only the
- * read counts (read-failure.ts): Ashara's own faults never use up the client's tender.
+ * read counts, the model's failure or its provider's (modelCallFailureOf): Ashara's own faults never
+ * use up the client's tender.
  */
 const MAX_INTAKE_ATTEMPTS = 3;
 
@@ -119,6 +119,8 @@ export type IntakeOutcome =
   | { readonly kind: "recorded"; readonly tenderId: string; readonly projectId: ProjectId; readonly questions: number }
   | { readonly kind: "vision-exists"; readonly tenderId: string; readonly projectId: ProjectId; readonly visionVersion: number }
   | { readonly kind: "failed"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
+  /** The tender's intake failed on Ashara's side: recorded on it and taken in again after the backoff; the other tenders go on. */
+  | StepFaulted
   | { readonly kind: "abandoned"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempts: number }
   | { readonly kind: "project-blocked"; readonly tenderId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
@@ -301,6 +303,8 @@ function failureReport(attempts: number): string {
 interface TenderIntakeDeps {
   readonly llm: ContextualLlm;
   readonly store: IntakeStore;
+  /** Each tender's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
@@ -317,20 +321,21 @@ export class TenderIntake implements LiaisonIntake {
   /**
    * A tender whose own record is inconsistent, or whose questions the store posts
    * wrongly, blocks its project, and the other tenders are still taken in. Any other
-   * failure that is not the read's own (a spend-cap refusal, a ledger or store
-   * failure) throws through with its class and fails the cycle, counting nothing.
+   * failure that is not the read's own (a price refusal, a ledger or store failure, a
+   * provider rejecting what Ashara sent, an error nothing names) is that tender's,
+   * contained to it (containEach), never counted against it; a spend-cap refusal throws
+   * through to the core loop, which halts at the cap.
    */
   async runPending(): Promise<readonly IntakeOutcome[]> {
-    const outcomes: IntakeOutcome[] = [];
-    for (const tender of await this.deps.store.openTenders()) {
+    const tenders = await this.deps.store.openTenders();
+    return containEach(this.deps.containment, "liaison-intake", tenders, (tender) => ({ id: tender.id, projectId: tender.projectId }), async (tender) => {
       try {
-        outcomes.push(await this.intake(tender));
+        return await this.intake(tender);
       } catch (err) {
         if (!(err instanceof IntakeFailureUnrecorded || err instanceof QuestionIdsMismatch)) throw err;
-        outcomes.push(await this.block(tender, projectBlockCause(err)));
+        return this.block(tender, projectBlockCause(err));
       }
-    }
-    return outcomes;
+    });
   }
 
   private async block(tender: OpenTender, cause: ProjectBlockCause): Promise<IntakeOutcome> {
@@ -367,7 +372,7 @@ export class TenderIntake implements LiaisonIntake {
     try {
       response = await this.read(tender);
     } catch (err) {
-      if (classifyReadFailure(err) === "ashara-fault") throw err;
+      if (modelCallFailureOf(err) === "ashara") throw err;
       return this.fail(tender, err);
     }
     const commit = await store.recordIntake(this.toWrite(tender, response));

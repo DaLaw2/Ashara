@@ -4,13 +4,14 @@ import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, stepFaultLedger } from "@ashara/db";
 import { TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
-import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { ProjectId } from "@ashara/shared";
+import type { StepContainment } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 
 // Against the shared dev database: every row here belongs to a project this
@@ -91,8 +92,13 @@ function ourStore(): IntakeStore {
   };
 }
 
+/** db's step-fault ledger, as the composition root supplies it; a spend-cap refusal escapes. */
+function containment(): StepContainment {
+  return { ...stepFaultLedger(db), escapes: (error) => error instanceof BudgetExceeded };
+}
+
 function intake(): TenderIntake {
-  return new TenderIntake({ llm: gateway, store: ourStore() });
+  return new TenderIntake({ containment: containment(), llm: gateway, store: ourStore() });
 }
 
 /** A gateway recording through Finance's real ledger, with the spend cap's ledger port and caps given. */
@@ -316,24 +322,52 @@ describe("Liaison tender intake", () => {
     expect(tenderRow?.intakeLastError).toMatch(/stub provider unavailable/);
   });
 
-  // t-intake-failure-classes: Ashara's own faults never use up the client's tender.
-  test("a store that fails to record the intake throws through: no attempt is counted and the tender stays open", async () => {
+  // Ashara's own faults never use up the client's tender. One tender's fault is that tender's:
+  // recorded in step_faults with a backoff, never thrown into the cycle for every project.
+  const RowFaultSchema = z.object({ faults: z.number(), lastError: z.string(), waiting: z.boolean() });
+
+  async function faultOf(tenderId: string): Promise<z.infer<typeof RowFaultSchema> | null> {
+    const result = await db.execute(sql`
+      SELECT faults, last_error AS "lastError", (retry_at > now()) AS waiting
+      FROM step_faults WHERE step = 'liaison-intake' AND subject_id = ${tenderId}`);
+    return z.array(RowFaultSchema).parse(result.rows)[0] ?? null;
+  }
+
+  async function endBackoff(tenderId: string): Promise<void> {
+    await db.execute(sql`UPDATE step_faults SET retry_at = now() - interval '1 second' WHERE step = 'liaison-intake' AND subject_id = ${tenderId}`);
+  }
+
+  test("a store that fails to record one tender's intake is that tender's fault: recorded with a backoff, the other tender taken in", async () => {
     stubModel({ doGenerate: jsonResult(intakeResponse(1)) });
-    const { projectId, tenderId } = await tender("Menu board for a cafe.");
+    const broken = await tender("Menu board for a cafe.");
+    const healthy = await tender("Opening hours page for a cafe.");
+    const store = ourStore();
     const failing: IntakeStore = {
-      ...ourStore(),
-      recordIntake: async () => {
-        throw new Error("scripted store failure");
+      ...store,
+      recordIntake: async (write) => {
+        if (write.tender.id === broken.tenderId) throw new Error("scripted store failure");
+        return store.recordIntake(write);
       },
     };
+    const liaison = new TenderIntake({ containment: containment(), llm: gateway, store: failing });
 
-    await expect(new TenderIntake({ llm: gateway, store: failing }).runPending()).rejects.toThrow("scripted store failure");
+    const outcomes = await liaison.runPending();
 
-    const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
+    expect(outcomes.map((outcome) => [outcome.kind, outcome.kind === "step-faulted" ? outcome.subjectId : outcome.tenderId])).toEqual([
+      ["step-faulted", broken.tenderId],
+      ["recorded", healthy.tenderId],
+    ]);
+    const tenderRow = (await messagesOf(broken.projectId)).find((m) => m.id === broken.tenderId);
     expect(tenderRow?.consumedAt).toBeNull();
     expect(tenderRow?.intakeAttempts).toBe(0);
     expect(tenderRow?.intakeLastError).toBeNull();
-    expect(await visions(projectId)).toHaveLength(0);
+    expect(await faultOf(broken.tenderId)).toEqual({ faults: 1, lastError: expect.stringContaining("scripted store failure"), waiting: true });
+    expect(await visions(broken.projectId)).toHaveLength(0);
+    // Not read again until its backoff has passed; then read again, and recorded.
+    expect(await liaison.runPending()).toEqual([]);
+    await endBackoff(broken.tenderId);
+    expect((await intake().runPending()).map((outcome) => outcome.kind)).toEqual(["recorded"]);
+    expect(await faultOf(broken.tenderId)).toBeNull();
   });
 
   test("a spend-cap refusal throws through as BudgetExceeded: no attempt is counted and the tender is not consumed", async () => {
@@ -344,7 +378,7 @@ describe("Liaison tender intake", () => {
       caps: { deploymentUsd: 1_000_000, perProjectUsd: 0.000001 },
     });
 
-    await expect(new TenderIntake({ llm: capped, store: ourStore() }).runPending()).rejects.toMatchObject({
+    await expect(new TenderIntake({ containment: containment(), llm: capped, store: ourStore() }).runPending()).rejects.toMatchObject({
       name: "BudgetExceeded",
       scope: { kind: "project", projectId },
     });
@@ -354,10 +388,11 @@ describe("Liaison tender intake", () => {
     expect(tenderRow?.consumedAt).toBeNull();
     expect(tenderRow?.intakeAttempts).toBe(0);
     expect(tenderRow?.intakeLastError).toBeNull();
+    expect(await faultOf(tenderId)).toBeNull();
     expect((await messagesOf(projectId)).filter((m) => m.direction === "outbound")).toHaveLength(0);
   });
 
-  test("a ledger that breaks while admitting the call throws through as LlmCallNotAdmitted: three cycles count nothing", async () => {
+  test("a ledger that breaks while admitting the call is a fault on Ashara's side: each read records one, nothing counted against the tender", async () => {
     const mock = stubModel({ doGenerate: jsonResult(intakeResponse(1)) });
     const { projectId, tenderId } = await tender("Stock list for a bike shop.");
     const repository = new LlmCallRepository(db);
@@ -370,10 +405,13 @@ describe("Liaison tender intake", () => {
       },
       caps: TEST_SPEND_CAPS,
     });
-    const liaison = new TenderIntake({ llm: broken, store: ourStore() });
+    const liaison = new TenderIntake({ containment: containment(), llm: broken, store: ourStore() });
 
-    for (let i = 0; i < 3; i++) {
-      await expect(liaison.runPending()).rejects.toMatchObject({ name: "LlmCallNotAdmitted" });
+    for (let i = 1; i <= 3; i++) {
+      expect(await liaison.runPending()).toEqual([
+        expect.objectContaining({ kind: "step-faulted", subjectId: tenderId, faults: i, retryAfterSeconds: 60 * 2 ** (i - 1), error: expect.stringContaining("LlmCallNotAdmitted") }),
+      ]);
+      await endBackoff(tenderId);
     }
 
     expect(mock.doGenerateCalls).toHaveLength(0);
@@ -385,32 +423,31 @@ describe("Liaison tender intake", () => {
     expect(messages.filter((m) => m.direction === "outbound")).toHaveLength(0);
   });
 
-  test("a provider rejecting Ashara's credentials throws through: no attempt is counted and the tender stays open", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    stubModel({
-      doGenerate: async () => {
-        throw new APICallError({
-          message: "Authentication Fails (invalid api key)",
-          url: "https://stub.invalid/v1/chat/completions",
-          requestBodyValues: {},
-          statusCode: 401,
-        });
-      },
-    });
-    const { projectId, tenderId } = await tender("Loyalty card for a tea shop.");
+  test("a provider rejecting Ashara's credentials or the request Ashara built is Ashara's fault: recorded on the tender, never counted against it", async () => {
+    for (const [statusCode, message] of [
+      [401, "Authentication Fails (invalid api key)"],
+      [413, "Request Entity Too Large"],
+      [422, "Unprocessable Entity: max_tokens out of range"],
+    ] as const) {
+      stubModel({
+        doGenerate: async () => {
+          throw new APICallError({ message, url: "https://stub.invalid/v1/chat/completions", requestBodyValues: {}, statusCode });
+        },
+      });
+      const { projectId, tenderId } = await tender(`Loyalty card for a tea shop (${statusCode}).`);
+      ourProjects.clear();
+      ourProjects.add(projectId);
 
-    await expect(intake().runPending()).rejects.toMatchObject({
-      name: "ProviderError",
-      cause: { name: "ProviderConfigurationRejected", statusCode: 401 },
-    });
+      expect(await intake().runPending()).toEqual([expect.objectContaining({ kind: "step-faulted", subjectId: tenderId, faults: 1, error: expect.stringContaining(message) })]);
 
-    const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
-    expect(tenderRow?.consumedAt).toBeNull();
-    expect(tenderRow?.intakeAttempts).toBe(0);
-    expect(tenderRow?.intakeLastError).toBeNull();
+      const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
+      expect(tenderRow?.consumedAt).toBeNull();
+      expect(tenderRow?.intakeAttempts).toBe(0);
+      expect(tenderRow?.intakeLastError).toBeNull();
+    }
   });
 
-  test("a fault in Ashara's own handling of the request throws through: no attempt is counted and the tender stays open", async () => {
+  test("a fault in Ashara's own handling of the request is recorded on the tender: no attempt is counted and the tender stays open", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     stubModel({
       doGenerate: async () => {
@@ -419,11 +456,12 @@ describe("Liaison tender intake", () => {
     });
     const { projectId, tenderId } = await tender("Price list for a bike shop.");
 
-    await expect(intake().runPending()).rejects.toMatchObject({ name: "ProviderError", failure: "ashara" });
+    expect(await intake().runPending()).toEqual([expect.objectContaining({ kind: "step-faulted", subjectId: tenderId, error: expect.stringContaining("Cannot read properties") })]);
 
     const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
     expect(tenderRow?.consumedAt).toBeNull();
     expect(tenderRow?.intakeAttempts).toBe(0);
+    expect(await faultOf(tenderId)).toMatchObject({ faults: 1, waiting: true });
   });
 
   test("intake on a project that already has a vision writes nothing new", async () => {

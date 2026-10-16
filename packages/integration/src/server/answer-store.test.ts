@@ -3,10 +3,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository, stepFaultLedger } from "@ashara/db";
 import { ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
-import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
@@ -14,6 +14,7 @@ import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, createFirstPlanStore } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
+import type { StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
@@ -121,28 +122,33 @@ function ours<T extends { readonly projectId: string }>(list: () => Promise<read
   return async () => (await list()).filter((row) => ourProjects.has(row.projectId));
 }
 
+/** db's step-fault ledger, as the composition root supplies it; a spend-cap refusal escapes. */
+function containment(): StepContainment {
+  return { ...stepFaultLedger(db), escapes: (error) => error instanceof BudgetExceeded };
+}
+
 function answers(): ClientAnswers {
   const store = createAnswerStore(db);
   const narrowed: AnswerStore = { ...store, openAnswers: ours(() => store.openAnswers()) };
-  return new ClientAnswers({ llm: gateway, store: narrowed });
+  return new ClientAnswers({ containment: containment(), llm: gateway, store: narrowed });
 }
 
 function intake(): TenderIntake {
   const store = createIntakeStore(db);
   const narrowed: IntakeStore = { ...store, openTenders: ours(() => store.openTenders()) };
-  return new TenderIntake({ llm: gateway, store: narrowed });
+  return new TenderIntake({ containment: containment(), llm: gateway, store: narrowed });
 }
 
 function roster(): RosterDerivation {
   const store = createRosterStore(db);
   const narrowed: RosterStore = { ...store, projectsAwaitingRoster: ours(() => store.projectsAwaitingRoster()) };
-  return new RosterDerivation({ llm: gateway, store: narrowed });
+  return new RosterDerivation({ containment: containment(), llm: gateway, store: narrowed });
 }
 
 function planner(): FirstPlanner {
   const store = createFirstPlanStore(db);
   const narrowed: FirstPlanStore = { ...store, projectsAwaitingPlan: ours(() => store.projectsAwaitingPlan()) };
-  return new FirstPlanner({ llm: gateway, store: narrowed });
+  return new FirstPlanner({ containment: containment(), llm: gateway, store: narrowed });
 }
 
 /** A tender taken in: vision v1 with A1 and A2 adopted by the two questions, A3 unasked. */
@@ -395,7 +401,7 @@ describe("the client's answers", () => {
       },
     };
 
-    const outcomes = await new ClientAnswers({ llm: gateway, store: racing }).runPending();
+    const outcomes = await new ClientAnswers({ containment: containment(), llm: gateway, store: racing }).runPending();
 
     expect(outcomes).toEqual([
       { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 3, replanRequested: false },
@@ -419,5 +425,40 @@ describe("the client's answers", () => {
     expect((await new ProjectRepository(db).get(projectId))?.status).toBe("blocked");
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeNull();
     expect(await visionsOf(projectId)).toHaveLength(1);
+  });
+
+  test("a store failure on one answer is that answer's fault: recorded with a backoff, never counted, and the other project's answer is read", async () => {
+    const broken = await intakenProject();
+    const healthy = await intakenProject();
+    const brokenAnswer = await answer(broken.projectId, broken.questionIds[0] ?? "", "Harbour.");
+    const healthyAnswer = await answer(healthy.projectId, healthy.questionIds[0] ?? "", "Yes.");
+    pipelineModel({ verdict: "confirms" });
+    const store = createAnswerStore(db);
+    const failing: AnswerStore = {
+      ...store,
+      openAnswers: ours(() => store.openAnswers()),
+      recordAnswer: async (write) => {
+        if (write.answerId === brokenAnswer) throw new Error("scripted store failure");
+        return store.recordAnswer(write);
+      },
+    };
+
+    const outcomes = await new ClientAnswers({ containment: containment(), llm: gateway, store: failing }).runPending();
+
+    expect(outcomes.map((outcome) => [outcome.kind, outcome.kind === "step-faulted" ? outcome.subjectId : outcome.answerId])).toEqual([
+      ["step-faulted", brokenAnswer],
+      ["stated", healthyAnswer],
+    ]);
+    const attempts = await db.execute(sql`SELECT intake_attempts AS "attempts" FROM client_messages WHERE id = ${brokenAnswer}`);
+    expect(z.array(z.object({ attempts: z.number() })).parse(attempts.rows)).toEqual([{ attempts: 0 }]);
+    const faults = await db.execute(sql`
+      SELECT faults, last_error AS "lastError", (retry_at > now()) AS waiting
+      FROM step_faults WHERE step = 'liaison-answers' AND subject_id = ${brokenAnswer}`);
+    expect(z.array(z.object({ faults: z.number(), lastError: z.string(), waiting: z.boolean() })).parse(faults.rows)).toEqual([
+      { faults: 1, lastError: expect.stringContaining("scripted store failure"), waiting: true },
+    ]);
+    expect((await new ProjectRepository(db).get(broken.projectId))?.status).not.toBe("blocked");
+    // Not read again until its backoff has passed.
+    expect(await new ClientAnswers({ containment: containment(), llm: gateway, store: failing }).runPending()).toEqual([]);
   });
 });

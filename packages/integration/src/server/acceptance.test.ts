@@ -16,6 +16,7 @@ import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
@@ -159,7 +160,7 @@ function acceptanceStore(): AcceptanceStore {
 function clientAnswers(): ClientAnswers {
   const store = createAnswerStore(db);
   const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ verdict: "confirms" }), model: "stub-model", provider: "stub" }) }) };
-  return new ClientAnswers({ llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
+  return new ClientAnswers({ containment: memoryStepContainment(() => true), llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
 }
 
 /** Where each delivered report read the product's interface file: the project's workspace at the accepted commit. */
@@ -186,6 +187,7 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
   const projects = new ProjectHaltRepository(db);
   return {
     acceptance: acceptanceStore(),
+    containment: memoryStepContainment(() => true),
     acceptanceSweeper: {
       sweepForAcceptance: async () => ({
         kind: "ran" as const,
@@ -194,7 +196,7 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
         environmentVersion: "v1",
         checkedTasks: ran.checked,
         uncheckedTasks: ran.unchecked,
-        publicInterface: { kind: "described" as const },
+        publicInterface: { kind: "changed" as const },
         details,
       }),
     },
@@ -279,7 +281,8 @@ describe("acceptance on main", () => {
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(1);
     const [body] = reports;
-    expect(body).toContain(`Public interface (from PUBLIC_INTERFACE.md on main at commit ${MAIN}), quoted as the file reads.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
+    expect(body).toContain(`Public interface (from PUBLIC_INTERFACE.md on main at commit ${MAIN}), quoted as the file reads. This file changed`);
+    expect(body).toContain(`Ashara has not verified that it describes the delivered product.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
     expect(body.split("\n\n")[0]).toContain(`the environment's test and the stored checks of 2 completed tasks passed together on main, commit ${MAIN}`);
     // The scaffold, checked only by the substrate, is done but listed apart from what passed.
     expect(body).toContain(`not checked by a stored check: none was written for them, so nothing in the run above confirms them:\n- "Set up the module root"`);
@@ -340,6 +343,7 @@ describe("acceptance on main", () => {
     await setSpec(broken.checksOfStore, "acceptance", [{ line: "get works", sources: ["A9"] }]);
     expect(await due(broken.projectId)).toMatchObject({
       kind: "unread",
+      cause: "record",
       error: expect.objectContaining({ message: expect.stringMatching(/acceptance line "get works" cites A9, which its task_spec.sources does not hold/) }),
     });
     expect((await due(drifted.projectId))?.kind).toBe("due");
@@ -438,7 +442,7 @@ describe("acceptance on main", () => {
 
     await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Thanks, done.", inReplyTo: null });
     const store = createClientStopStore(db);
-    const outcomes = await new ClientStops({ ...store, openStops: async () => (await store.openStops()).filter((stop) => stop.projectId === projectId) }).runPending();
+    const outcomes = await new ClientStops({ ...store, openStops: async () => (await store.openStops()).filter((stop) => stop.projectId === projectId) }, memoryStepContainment(() => true)).runPending();
     expect(outcomes).toEqual([expect.objectContaining({ kind: "stopped", reported: true, merged: 3 })]);
     expect(await statusOf(projectId)).toBe("stopped");
     const stopReport = (await reportsOf(projectId)).find((body) => body.includes("stopped at your request"));

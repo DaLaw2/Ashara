@@ -23,7 +23,7 @@ import { releaseClearedBlocks, FirstPlanner, PlanningService, Replanner, failWor
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
-import { parseWorkItemId, type DomainEvent, type ProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseWorkItemId, type DomainEvent, type ProjectId, type StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -167,10 +167,10 @@ function ours<T extends { readonly projectId: string }>(list: () => Promise<read
   return async () => (await list()).filter((row) => ourProjects.has(row.projectId));
 }
 
-function replanner(): Replanner {
+function replanner(containment: StepContainment = memoryStepContainment(() => true)): Replanner {
   const store = createReplanStore(db);
   const narrowed: ReplanStore = { ...store, projectsAwaitingReplan: ours(() => store.projectsAwaitingReplan()) };
-  return new Replanner({ llm: gateway, store: narrowed });
+  return new Replanner({ containment, llm: gateway, store: narrowed });
 }
 
 function planReports(): PlanReports {
@@ -180,13 +180,13 @@ function planReports(): PlanReports {
     dueReports: ours(() => store.dueReports()),
     dueRevisionReports: ours(() => store.dueRevisionReports()),
   };
-  return new PlanReports(narrowed);
+  return new PlanReports(narrowed, memoryStepContainment(() => true));
 }
 
 function blockReports(): BlockReports {
   const store = createBlockReportStore(db);
   const narrowed: BlockReportStore = { ...store, dueReports: ours(() => store.dueReports()) };
-  return new BlockReports(narrowed);
+  return new BlockReports(narrowed, memoryStepContainment(() => true));
 }
 
 /** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */
@@ -199,13 +199,13 @@ async function plannedProject(
   pipelineModel({ intake: options.intake });
   const intakeStore = createIntakeStore(db);
   const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
-  expect((await new TenderIntake({ llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const rosterStore = createRosterStore(db);
   const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
-  expect((await new RosterDerivation({ llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  expect((await new FirstPlanner({ containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   if (options.reported) expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
   const questions = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
   const [question] = questions;
@@ -226,7 +226,7 @@ async function contradict(projectId: ProjectId, questionId: string, change: { re
   pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible" } });
   const answerStore = createAnswerStore(db);
   const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
-  const outcomes = await new ClientAnswers({ llm: gateway, store: narrowed }).runPending();
+  const outcomes = await new ClientAnswers({ containment: memoryStepContainment(() => true), llm: gateway, store: narrowed }).runPending();
   expect(outcomes.map((o) => o.kind === "stated" && o.replanRequested)).toEqual([true]);
   return row.id;
 }
@@ -645,9 +645,10 @@ describe("a late client change is planned", () => {
   });
 
   // The gateway wraps every failure with no fallback left in ProviderError: one the provider's HTTP
-  // error or silence caused is not the model's, and one Ashara's own code threw is Ashara's.
-  test("a revision whose provider fails every request halts as replan_provider_failed; one Ashara's code fails halts as fault", async () => {
-    const failing = async (thrown: Error): Promise<ProjectId> => {
+  // error or silence caused is not the model's, and one Ashara's own code threw is Ashara's, never
+  // counted toward the revision's bound.
+  test("a revision whose provider fails every request halts as replan_provider_failed; a fault in Ashara's code is contained, never counted", async () => {
+    const failingWith = async (thrown: Error): Promise<ProjectId> => {
       const { projectId, questionId } = await plannedProject();
       await contradict(projectId, questionId);
       stub.model = new MockLanguageModelV4({
@@ -655,26 +656,34 @@ describe("a late client change is planned", () => {
           throw thrown;
         },
       });
-      const kinds: string[] = [];
-      for (let attempt = 0; attempt < 3; attempt += 1) kinds.push(...(await replanner().runPending()).map((outcome) => outcome.kind));
-      expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
       return projectId;
     };
 
-    const unanswered = await failing(
+    const unanswered = await failingWith(
       new APICallError({ message: "Service Unavailable", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode: 503, isRetryable: true }),
     );
+    const kinds: string[] = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) kinds.push(...(await replanner().runPending()).map((outcome) => outcome.kind));
+    expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
     expect(await projectRow(unanswered)).toMatchObject({ status: "blocked", category: "replan_provider_failed" });
-    const broken = await failing(new TypeError("Cannot read properties of undefined"));
-    expect(await projectRow(broken)).toMatchObject({ status: "blocked", category: "fault" });
 
-    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted", "posted"]);
+    const broken = await failingWith(new TypeError("Cannot read properties of undefined"));
+    const containment = memoryStepContainment(() => false);
+    expect(await replanner(containment).runPending()).toEqual([
+      expect.objectContaining({ kind: "step-faulted", step: "replan", subjectId: broken, error: expect.stringContaining("Cannot read properties") }),
+    ]);
+    // Waiting out its backoff, the project is not replanned again, and nothing was counted against it.
+    expect(await replanner(containment).runPending()).toEqual([]);
+    expect(await projectRow(broken)).toMatchObject({ category: null });
+    const attempts = await db.execute(sql`SELECT replan_attempts AS "attempts" FROM projects WHERE id = ${broken}`);
+    expect(z.array(z.object({ attempts: z.number() })).parse(attempts.rows)).toEqual([{ attempts: 0 }]);
+
+    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
     const body = (await reportsOf(unanswered)).at(-1)?.body ?? "";
     expect(body).toContain(
       "Ashara recorded the cause as this: every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read.",
     );
     expect(body).not.toContain("gave no usable answer");
-    expect((await reportsOf(broken)).at(-1)?.body).toContain("a step of Ashara's own work on this project failed");
   });
 });
 
@@ -870,6 +879,7 @@ describe("a task no roster role can work is planned around, never left waiting",
       eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
       projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectHaltRepository(db).get(id) },
       workdirBase: tmpdir(),
+      containment: memoryStepContainment(() => true),
     });
 
     expect(left).toBe(1);

@@ -69,19 +69,48 @@ interface DueDeliveredReportRow {
   readonly vision: VisionCoverage;
 }
 
-/** A due report whose records could not be read; the rest of the due reports are still listed. */
+/**
+ * A due report whose records could not be read; the rest of the due reports are still listed.
+ * `cause` is "record" when what was read does not hold together as a report (ReportRecordUnreadable),
+ * "read-failed" for any other failure of the read.
+ */
 interface UnreadDeliveredReportRow {
   readonly kind: "unread";
+  readonly cause: "record" | "read-failed";
   readonly failures: number;
+  readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
   readonly error: unknown;
 }
 
+/** What was read of a sweep's records does not hold together as its delivered report; a retry reads the same. */
+abstract class ReportRecordUnreadable extends Error {}
+
+/** A task_spec the report reads does not parse. */
+class ReportTaskSpecUnreadable extends ReportRecordUnreadable {
+  constructor(
+    readonly taskId: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(`work item ${taskId}: its task_spec does not parse for the delivered report`, options);
+    this.name = "ReportTaskSpecUnreadable";
+  }
+}
+
+/** parseStoredTaskSpec, whose every throw is a row that does not parse, as the report's record defect. */
+function storedSpecOf(taskId: string, raw: unknown): ReturnType<typeof parseStoredTaskSpec> {
+  try {
+    return parseStoredTaskSpec(raw);
+  } catch (err) {
+    throw new ReportTaskSpecUnreadable(taskId, { cause: err });
+  }
+}
+
 const SweepTaskIdsSchema = z.array(z.guid());
 
 /** A passed sweep's stored checked_tasks or unchecked_tasks is not a list of work item ids. */
-class SweepTasksUnreadable extends Error {
+class SweepTasksUnreadable extends ReportRecordUnreadable {
   constructor(
     readonly sweepId: string,
     readonly column: "checked_tasks" | "unchecked_tasks",
@@ -93,7 +122,7 @@ class SweepTasksUnreadable extends Error {
 }
 
 /** A sweep names a task id that has no work_items row: the report cannot name it. */
-class SweepTaskMissing extends Error {
+class SweepTaskMissing extends ReportRecordUnreadable {
   constructor(
     readonly sweepId: string,
     readonly taskId: string,
@@ -140,7 +169,7 @@ async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<strin
 }
 
 /** A check task's acceptance line cites an item id its own task_spec.sources does not hold. */
-class AcceptanceTraceBroken extends Error {
+class AcceptanceTraceBroken extends ReportRecordUnreadable {
   constructor(
     readonly checkTaskId: string,
     readonly line: string,
@@ -161,7 +190,7 @@ function sourceIdentity(source: VisionSource): string {
  * lines (written before d89), so what it covers is not on record.
  */
 function citedBy(checkTaskId: string, rawSpec: unknown): Set<string> | null {
-  const spec = parseStoredTaskSpec(rawSpec);
+  const spec = storedSpecOf(checkTaskId, rawSpec);
   if (spec?.acceptance === undefined || spec.sources === undefined) return null;
   const sources = new Map(spec.sources.map((source) => [source.id, source]));
   const cited = new Set<string>();
@@ -215,7 +244,7 @@ async function checkAuthors(db: DbHandle, goalIds: readonly string[]): Promise<A
 }
 
 /** Where an assumption stood with the client at acceptance cannot be read: the report never falls back to the plan's copy. */
-class AcceptedStandingUnreadable extends Error {
+class AcceptedStandingUnreadable extends ReportRecordUnreadable {
   constructor(
     readonly sweepId: string,
     readonly projectId: string,
@@ -328,7 +357,7 @@ async function visionCoverage(
 ): Promise<VisionCoverage> {
   const { projectId } = sweep;
   const [review] = await db
-    .select({ taskSpec: workItems.taskSpec })
+    .select({ id: workItems.id, taskSpec: workItems.taskSpec })
     .from(workItems)
     .where(
       and(
@@ -339,7 +368,7 @@ async function visionCoverage(
     )
     .orderBy(desc(workItems.createdAt), desc(workItems.id))
     .limit(1);
-  const items = review ? parseStoredTaskSpec(review.taskSpec)?.sources : undefined;
+  const items = review ? storedSpecOf(review.id, review.taskSpec)?.sources : undefined;
   if (items === undefined) return { kind: "unrecorded" };
   const cited = new Set<string>();
   for (const author of goalIds.length === 0 ? [] : await checkAuthors(db, goalIds)) {
@@ -371,7 +400,7 @@ async function visionCoverage(
 }
 
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */
-class AcceptedSweepWithoutMain extends Error {
+class AcceptedSweepWithoutMain extends ReportRecordUnreadable {
   constructor(readonly sweepId: string) {
     super(`acceptance sweep ${sweepId} passed but records no main commit (acceptance_sweeps_pass_has_main should forbid it)`);
     this.name = "AcceptedSweepWithoutMain";
@@ -379,7 +408,7 @@ class AcceptedSweepWithoutMain extends Error {
 }
 
 /** A passed sweep's project records no target checkout: main, where the product is, cannot be read. */
-class AcceptedProjectWithoutWorkspace extends Error {
+class AcceptedProjectWithoutWorkspace extends ReportRecordUnreadable {
   constructor(
     readonly sweepId: string,
     readonly projectId: string,
@@ -443,6 +472,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDe
       workspacePath: projects.workspacePath,
       failures: acceptanceSweeps.reportFailures,
       interfaceReadFailures: acceptanceSweeps.reportInterfaceReadFailures,
+      recordFailures: acceptanceSweeps.reportRecordFailures,
     })
     .from(acceptanceSweeps)
     .innerJoin(projects, eq(projects.id, acceptanceSweeps.projectId))
@@ -462,7 +492,10 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDe
     try {
       due.push(await dueReportOf(db, { ...row, projectId }));
     } catch (error) {
-      due.push({ kind: "unread", failures: row.failures, sweepId: row.id, projectId, error });
+      // Only records that do not hold together count toward the notice sent in the report's place;
+      // a read that failed for any other reason (a lost connection) says nothing of them.
+      const cause = error instanceof ReportRecordUnreadable ? "record" : "read-failed";
+      due.push({ kind: "unread", cause, failures: row.failures, recordFailures: row.recordFailures, sweepId: row.id, projectId, error });
     }
   }
   return due;
@@ -478,7 +511,7 @@ class DeliveredReportFailureUnrecorded extends Error {
 
 /**
  * Records a failure at a sweep's delivered report: its error; a failed read of the public interface
- * file counted apart; and, for an attempt that failed, one more failure and when to try again.
+ * file, and records that did not read as a report (migration 063), each counted apart; and, for an attempt that failed, one more failure and when to try again.
  */
 export async function recordDeliveredReportFailure(db: DbHandle, sweepId: string, failure: DeliveredReportFailureRecord): Promise<void> {
   const { retryAfterSeconds } = failure;
@@ -487,6 +520,7 @@ export async function recordDeliveredReportFailure(db: DbHandle, sweepId: string
     .set({
       reportLastError: failure.error,
       ...(failure.interfaceRead ? { reportInterfaceReadFailures: sql`${acceptanceSweeps.reportInterfaceReadFailures} + 1` } : {}),
+      ...(failure.recordUnread ? { reportRecordFailures: sql`${acceptanceSweeps.reportRecordFailures} + 1` } : {}),
       ...(retryAfterSeconds === null
         ? {}
         : { reportFailures: sql`${acceptanceSweeps.reportFailures} + 1`, reportRetryAt: sql`now() + make_interval(secs => ${retryAfterSeconds})` }),

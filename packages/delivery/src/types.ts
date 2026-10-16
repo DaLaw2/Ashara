@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { ProjectId } from "@ashara/shared";
+import type { ProjectId, StepContainment } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
 import type { WorkItemRepository, PlanningService } from "./domain/index.js";
 import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
@@ -150,6 +150,11 @@ export interface CoreLoopDeps {
   readonly failureRouter: FailureRecoveryDeps["failureRouter"];
   /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */
   readonly spendCap: SpendCapPort;
+  /**
+   * Where each step keeps the faults it contains to one subject (containEach), and which errors
+   * escape to the cycle instead: a spend-cap refusal, which halts at the cap.
+   */
+  readonly containment: StepContainment;
   /**
    * The Liaison's handling of the client's stops, run first in every cycle,
    * before the spend-cap check: a stopped project is never intaken, planned or gated.

@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { ZodType } from "zod";
-import { SchemaValidationError, StructuredOutputExhausted } from "./acl/finance-acl.js";
+import { SchemaValidationError, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { StructuredProvider, StructuredValidation } from "./acl/finance-acl.js";
 import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput } from "./decomposition-types.js";
@@ -485,6 +485,6 @@ describe("DecompositionEngine", () => {
         };
         await expect(
             new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT),
-        ).rejects.toBeInstanceOf(StructuredOutputExhausted);
+        ).rejects.toSatisfy((err: unknown) => modelCallFailureOf(err) === "model");
     });
 });

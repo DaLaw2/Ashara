@@ -14,7 +14,6 @@ export type { LanguageModelFactory } from "./provider-registry.js";
 export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
 export {
-  GatewayError,
   NoLLMProvidersConfigured,
   ProviderConfigurationRejected,
   ProviderError,

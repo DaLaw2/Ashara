@@ -1,3 +1,5 @@
+import { modelCallFailureOf } from "@ashara/finance";
+
 /** The caller handed runAttempt an assignment it cannot run; no model call and no cell call was made. */
 export class InvalidAssignment extends Error {
   readonly taskId: string;
@@ -39,4 +41,15 @@ export class AttemptWallClockExhausted extends Error {
     this.turn = turn;
     this.wallClockMs = wallClockMs;
   }
+}
+
+/**
+ * Whose failure the model call that ended an attempt as transport_exhausted was: the provider's when
+ * it answered with an error finish reason or failed the request (modelCallFailureOf "provider");
+ * Ashara's otherwise, its own request or code included. Never the agent's work: no answer of the
+ * model was read.
+ */
+export function turnFailureOf(error: unknown): "provider" | "ashara" {
+  if (error instanceof ProviderErrorFinish) return "provider";
+  return modelCallFailureOf(error) === "provider" ? "provider" : "ashara";
 }

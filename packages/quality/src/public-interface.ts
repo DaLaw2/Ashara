@@ -16,10 +16,12 @@ export interface ScaffoldMerge {
 /**
  * The public interface file on main against the one the product scaffold wrote: compared and
  * changed since, compared and byte for byte the scaffold's, absent from main (so main describes no
- * interface at all), or not compared because the sweep stopped before it.
+ * interface at all), or not compared because the sweep stopped before it. "changed" says only that
+ * the bytes differ: Ashara never judges what the file says, so it is never read as describing the
+ * delivered product.
  */
 export type InterfaceStanding =
-  | { readonly kind: "described" }
+  | { readonly kind: "changed" }
   | { readonly kind: "scaffold-placeholder"; readonly file: string; readonly scaffoldTaskId: string; readonly scaffoldCommit: string }
   | { readonly kind: "absent"; readonly file: string }
   | { readonly kind: "not-compared" };
@@ -63,8 +65,9 @@ async function interfaceBlobAt(targetProjectPath: string, commit: string): Promi
  * Whether main holds the public interface file, and whether exactly as a product scaffold of the
  * project wrote it: then it describes the scaffold's placeholder, not the delivered product. Byte
  * identity is the test (the blob ids), so no wording of any product is read. A main with no such
- * file states no interface, which is never read as described. Scaffolds that wrote none hold
- * nothing of a scaffold's.
+ * file states no interface. Any other file is "changed", whatever it says: a one-byte edit passes
+ * this test, and the delivered report says Ashara has not verified the file. Scaffolds that wrote
+ * none hold nothing of a scaffold's.
  */
 export async function interfaceStandingOnMain(targetProjectPath: string, main: string, scaffolds: readonly ScaffoldMerge[]): Promise<ComparedStanding> {
   const onMain = await interfaceBlobAt(targetProjectPath, main);
@@ -74,13 +77,13 @@ export async function interfaceStandingOnMain(targetProjectPath: string, main: s
       return { kind: "scaffold-placeholder", file: PUBLIC_INTERFACE_FILE, scaffoldTaskId: scaffold.taskId, scaffoldCommit: scaffold.mergeCommit };
     }
   }
-  return { kind: "described" };
+  return { kind: "changed" };
 }
 
-/** What the sweep's details say first of a main whose public interface fails it; null when main's describes the product. */
+/** What the sweep's details say first of a main whose public interface fails it; null when main's changed since the scaffold's. */
 export function interfaceDefectLine(standing: ComparedStanding): string | null {
   switch (standing.kind) {
-    case "described":
+    case "changed":
       return null;
     case "absent":
       return (

@@ -79,7 +79,7 @@ import type {
 import type { Clock, ProjectId, WorkItemId } from "@ashara/shared";
 import type { AgentBrief, ErrorEnvelope } from "@ashara/workplace";
 import { describeErrorChain, parseWorkItemId, wrapError } from "@ashara/shared";
-import { createAgentBrief, createSessionId } from "@ashara/workplace";
+import { createAgentBrief, createSessionId, turnFailureOf } from "@ashara/workplace";
 import {
   ProjectIntentUnavailable,
   attemptSummary,
@@ -1144,7 +1144,8 @@ export class DispatchService {
 
   /**
    * Every terminal except finished(done): finished(blocked) is `blocked`; a cell that failed under
-   * the attempt is environment-blocked (the operator's to fix); every other terminal is `failed`
+   * the attempt is environment-blocked (the operator's to fix), and so is a model call that failed
+   * (transport_exhausted), under the provider's or Ashara's class; every other terminal is `failed`
    * with the terminal named. None of them is read as completed on the agent's word: only a check
    * author's `blocked` whose checked task Z0 finds delivered on main completes (checkedTaskOnMain).
    */
@@ -1202,6 +1203,29 @@ export class DispatchService {
           message: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
           unavailable,
+          outcome,
+          agentWork,
+        },
+        this.deps.eventSink,
+      );
+    }
+
+    if (outcome.kind === "transport_exhausted") {
+      // A model call that failed is never the agent's work: no answer of the model was read. It is
+      // blocked under whose failure it was, the provider's or Ashara's own (turnFailureOf).
+      const fault = turnFailureOf(outcome.error);
+      const errorClass = outcome.error instanceof Error ? outcome.error.name : typeof outcome.error;
+      const model = `${staff.model.provider}/${staff.model.modelId}`;
+      return environmentBlocked(
+        {
+          task,
+          sessionId,
+          stage: "agentAttempt",
+          fault,
+          errorClass,
+          message: `the attempt's model call failed after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
+          chain: wrapError("development", "agentAttempt", outcome.error, { ...context, errorClass, fault }),
+          unavailable: fault === "provider" ? `model provider (${model})` : `Ashara's request to the model provider (${model})`,
           outcome,
           agentWork,
         },
@@ -1319,7 +1343,7 @@ export class DispatchService {
       };
     }
 
-    const cause = outcome.kind === "transport_exhausted" ? outcome.error : outcome.kind === "cancelled" ? outcome.reason : outcome.detail;
+    const cause = outcome.kind === "cancelled" ? outcome.reason : outcome.detail;
     const chain = wrapError("development", "agentAttempt", cause, context);
     const envelope: ErrorEnvelope = {
       outcome: "failed",

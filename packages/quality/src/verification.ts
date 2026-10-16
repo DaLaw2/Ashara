@@ -22,7 +22,7 @@ import {
   resolveCurrentEnvironment,
   targetRepo,
 } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/finance";
+import { PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId, renderElided, wrapError } from "@ashara/shared";
 import { createSessionId } from "@ashara/workplace";
@@ -35,6 +35,7 @@ import {
   NO_CHANGE_REASON,
   PostMergeEnvironmentMissing,
   asharaBlocked,
+  environmentBlocked,
   cellImageOf,
   failedBeforeAgent,
   mainRunBlocked,
@@ -73,6 +74,7 @@ import { checkBranchOwnership } from "./gates/ownership.js";
 import { deleteSettledTaskBranch, discardTaskBranch, taskBranchName } from "./merge.js";
 import { interfaceDefectLine, interfaceStandingOnMain, PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { InterfaceStanding, ScaffoldMerge } from "./public-interface.js";
+import { SuiteVerdictUnfit } from "./suite-review.js";
 import type { SuiteReviewing } from "./suite-review.js";
 import {
   FoundationUnbuildable,
@@ -296,8 +298,9 @@ export class TaskVerification {
    * The review of the plan revision's suites (ADR-074 addendum 2 d71 c). Clean only once the model's
    * verdict validated against its schema and names only suites it read: the plan's implementations
    * are released by completing it. Problems are returned for the orchestrator to route. A refused
-   * model call is a refusal like an agent's; any other error, an unreadable suite or a verdict that
-   * never validated included, fails the review, so nothing is released on it.
+   * model call is a refusal like an agent's; a verdict that never validated or is unfit to act on
+   * fails the review; a provider's failure or Ashara's own (an unreadable suite, a store, its code)
+   * blocks it under that class. Nothing is released on any of them.
    */
   async reviewSuites(task: VerifiedTask, sessionId: string, targetProjectPath: string): Promise<ExecutionResult> {
     const { eventSink } = this.deps;
@@ -318,20 +321,45 @@ export class TaskVerification {
           errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
         };
       }
-      const result = failedBeforeAgent(task, sessionId, "reviewSuites", e, `the review of the plan's checks for ${task.id} gave no verdict`);
-      eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
-      return result;
+      // Only the review model's own failure is the review's (a verdict that never validated, or one
+      // unfit to act on), retried as its work. A provider's failure, or Ashara's (its records, git on
+      // the host, a store, its code), says nothing of the suites: blocked under its class, uncharged.
+      const failure = e instanceof SuiteVerdictUnfit ? "model" : modelCallFailureOf(e);
+      if (failure === "model") {
+        const result = failedBeforeAgent(task, sessionId, "reviewSuites", e, `the review of the plan's checks for ${task.id} gave no verdict`);
+        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
+        return result;
+      }
+      if (failure === "provider") {
+        const errorClass = e instanceof Error ? e.name : typeof e;
+        return environmentBlocked(
+          {
+            task,
+            sessionId,
+            stage: "reviewSuites",
+            fault: "provider",
+            errorClass,
+            message: `the review of the plan's checks for ${task.id} gave no verdict: ${describeErrorChain(e)}`,
+            chain: wrapError("development", "reviewSuites", e, { taskId: task.id, errorClass }),
+            unavailable: "model provider (suite review)",
+            ...NO_AGENT,
+          },
+          eventSink,
+        );
+      }
+      return thrownBlocked(task, sessionId, "reviewSuites", e, { step: "review the plan's checks", cell: "no cell" }, NO_AGENT, eventSink);
     }
     const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
-    // A rejection the second review did not reach is released, and both judgements stay on the record.
+    // A rejection the second review did not reach is released; both judgements are recorded whole
+    // by the reviewer (suite_review_judgements) before this outcome exists.
     const released =
       outcome.released.length === 0
         ? ""
-        : `\nReleased as passing review, the two independent reviews disagreeing:\n` +
+        : `\nReleased as passing review, the two reviews disagreeing:\n` +
           outcome.released
             .map(
               (r) =>
-                `- check ${JSON.stringify(r.check)} of ${r.checkTaskId}: the first review judged ${r.first}; the second ` +
+                `- check ${JSON.stringify(r.check)} of ${r.checkTaskId}: the first review judged ${r.first}; the second, ${r.secondReview}, ` +
                 (r.second.length === 0 ? "found no problem in that check task" : `judged ${r.second.join("; ")}`),
             )
             .join("\n");

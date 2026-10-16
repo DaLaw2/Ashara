@@ -9,7 +9,7 @@ import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
 import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, failWorkItem, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { WorkItemRepository as WorkItemPort } from "@ashara/delivery";
-import { parseWorkItemId } from "@ashara/shared";
+import { memoryStepContainment, parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
@@ -104,7 +104,7 @@ function reports(handle: Handle): PlanReports {
     dueReports: async () => (await store.dueReports()).filter((r) => ourProjects.has(r.projectId)),
     dueRevisionReports: async () => (await store.dueRevisionReports()).filter((r) => ourProjects.has(r.projectId)),
   };
-  return new PlanReports(ours);
+  return new PlanReports(ours, memoryStepContainment(() => true));
 }
 
 function gate(handle: Handle) {

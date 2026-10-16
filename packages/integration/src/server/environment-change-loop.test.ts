@@ -18,7 +18,7 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
@@ -187,6 +187,7 @@ async function harness(name: string): Promise<Harness> {
   const loop = new CoreLoop({
     config: { ...DEFAULT_CONFIG, workdirBase },
     cycleLog: { emit: () => {} },
+    containment: memoryStepContainment(() => true),
     workItemRepo: adaptWorkItemRepo(workItems),
     eventStore: new EventStoreRepository(db),
     failedApproachRepo: new FailedApproachRepository(db),

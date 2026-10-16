@@ -1,13 +1,12 @@
 import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
-import { withStructuredLadder } from "@ashara/finance";
+import { modelCallFailureOf, withStructuredLadder } from "@ashara/finance";
 import type { LadderAttemptEvent } from "@ashara/finance";
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
-import { classifyReadFailure } from "./read-failure.js";
 import { Vision, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 
@@ -96,6 +95,8 @@ export type AnswerOutcome =
    */
   | { readonly kind: "moved"; readonly answerId: string; readonly projectId: ProjectId; readonly detail: string }
   | { readonly kind: "failed"; readonly answerId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
+  /** The answer's read failed on Ashara's side: recorded on it and read again after the backoff; the other answers go on. */
+  | StepFaulted
   | { readonly kind: "project-blocked"; readonly answerId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 /** What the core loop asks of the Liaison each cycle, before planning. */
@@ -219,6 +220,8 @@ function replanReport(context: AnswerContext, statement: string): string {
 interface ClientAnswersDeps {
   readonly llm: ContextualLlm;
   readonly store: AnswerStore;
+  /** Each answer's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
@@ -233,29 +236,27 @@ export class ClientAnswers implements LiaisonAnswers {
 
   /**
    * An answer its project's record cannot take blocks that project, and the other
-   * answers are still read. A spend-cap refusal, a ledger failure, and any other failure
-   * of the store, throws through.
+   * answers are still read. Any other failure that is not the read's own (a price
+   * refusal, a ledger or store failure, an error nothing names) is that answer's,
+   * contained to it (containEach), never counted against it; a spend-cap refusal throws
+   * through to the core loop, which halts at the cap.
    */
   async runPending(): Promise<readonly AnswerOutcome[]> {
-    const outcomes: AnswerOutcome[] = [];
-    for (const listed of await this.deps.store.openAnswers()) {
-      // Read again now: an answer of the same project read earlier this cycle may have written a
-      // vision version, and an answer read against the version before it would be discarded.
-      const answer = await this.deps.store.openAnswer(listed.id);
-      if (answer === null) {
-        outcomes.push({ kind: "not-open", answerId: listed.id, projectId: listed.projectId });
-        continue;
-      }
+    const answers = await this.deps.store.openAnswers();
+    return containEach(this.deps.containment, "liaison-answers", answers, (listed) => ({ id: listed.id, projectId: listed.projectId }), async (listed) => {
       try {
-        outcomes.push(await this.read(answer));
+        // Read again now: an answer of the same project read earlier this cycle may have written a
+        // vision version, and an answer read against the version before it would be discarded.
+        const answer = await this.deps.store.openAnswer(listed.id);
+        if (answer === null) return { kind: "not-open", answerId: listed.id, projectId: listed.projectId } satisfies AnswerOutcome;
+        return await this.read(answer);
       } catch (err) {
         const blocks =
           err instanceof AnswerVisionUnusable || err instanceof AnswerReadingExhausted || err instanceof AnswerFailureUnrecorded;
         if (!blocks) throw err;
-        outcomes.push(await this.block(answer, projectBlockCause(err)));
+        return this.block(listed, projectBlockCause(err));
       }
-    }
-    return outcomes;
+    });
   }
 
   private async block(answer: OpenAnswer, cause: ProjectBlockCause): Promise<AnswerOutcome> {
@@ -305,14 +306,14 @@ export class ClientAnswers implements LiaisonAnswers {
     }
   }
 
-  /** One paid reading of the answer; a failed read is counted (and blocks at the cap), Ashara's own fault throws. */
+  /** One paid reading of the answer; a failed read is counted (and blocks at the cap), Ashara's own fault throws to runPending, which contains it. */
   private async interpret(
     context: AnswerContext,
   ): Promise<{ readonly kind: "read"; readonly reading: AnswerReading } | { readonly kind: "failed"; readonly outcome: AnswerOutcome }> {
     try {
       return { kind: "read", reading: await this.callModel(context) };
     } catch (err) {
-      if (classifyReadFailure(err) === "ashara-fault") throw err;
+      if (modelCallFailureOf(err) === "ashara") throw err;
       return { kind: "failed", outcome: await this.fail(context.answer, err) };
     }
   }

@@ -118,17 +118,30 @@ function errorOutcome(error: unknown): LlmCallOutcome {
 }
 
 /**
+ * HTTP statuses in the 4xx range that say nothing against the request Ashara sent: the provider
+ * timed out waiting for it (408) or throttled it (429). Every other 4xx rejects the request itself.
+ */
+const NOT_A_REQUEST_REJECTION: ReadonlySet<number> = new Set([408, 429]);
+
+/** A provider's 4xx rejection of the request as Ashara built it (its size, its shape, its parameters). */
+function isRequestRejection(error: APICallError): boolean {
+  const status = error.statusCode;
+  return status !== undefined && status >= 400 && status < 500 && !NOT_A_REQUEST_REJECTION.has(status);
+}
+
+/**
  * Whose failure a failed provider request was (ProviderFailure), from its cause chain. A rejection
  * of Ashara's configuration is checked first: it carries the provider's own HTTP error as its cause.
+ * A 4xx rejection of the request (400, 413, 422 and the rest but 408 and 429) is Ashara's: the
+ * provider refused what Ashara sent.
  */
 function providerFailureOf(error: unknown): ProviderFailure {
   for (let current: unknown = error; current instanceof Error; current = current.cause) {
     if (current instanceof ProviderConfigurationRejected) return "ashara";
   }
   for (let current: unknown = error; current instanceof Error; current = current.cause) {
-    if (APICallError.isInstance(current) || EmptyResponseBodyError.isInstance(current) || InvalidResponseDataError.isInstance(current)) {
-      return "provider";
-    }
+    if (APICallError.isInstance(current)) return isRequestRejection(current) ? "ashara" : "provider";
+    if (EmptyResponseBodyError.isInstance(current) || InvalidResponseDataError.isInstance(current)) return "provider";
   }
   return "ashara";
 }
@@ -219,11 +232,15 @@ export class LLMGateway {
         return await execute(request, fallback);
       } catch (fallbackError) {
         if (shouldRethrow?.(fallbackError)) throw fallbackError;
+        // Whose failure it was is read from both requests: Ashara's fault on either side is Ashara's,
+        // whichever request failed last.
+        const failure: ProviderFailure =
+          providerFailureOf(error) === "ashara" || providerFailureOf(fallbackError) === "ashara" ? "ashara" : "provider";
         throw new ProviderError(
           fallback.providerName,
           `${label} failed on provider=${resolved.providerName} (${describeErrorChain(error)}) and on its fallback ` +
             `(${describeErrorChain(fallbackError)})`,
-          providerFailureOf(fallbackError),
+          failure,
           { cause: fallbackError },
         );
       }
@@ -291,8 +308,17 @@ export class LLMGateway {
       requestBytes: utf8Bytes(request.system, JSON.stringify(request.messages), JSON.stringify(request.tools)),
       maxOutputTokens: budget.maxOutputTokens,
     };
-    const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, () =>
-      generateText(params),
+    const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, () => generateText(params)).catch(
+      (error: unknown) => {
+        if (error instanceof GateThrew) throw error;
+        // Whose failure it was travels with it, as for a structured request: no turn has a fallback.
+        throw new ProviderError(
+          target.providerName,
+          `turn request on model=${target.modelConfig.id} failed (${describeErrorChain(error)})`,
+          providerFailureOf(error),
+          { cause: error },
+        );
+      },
     );
 
     // One step, whose usage keeps the raw cache counts that the summed `result.usage` drops.
@@ -311,7 +337,8 @@ export class LLMGateway {
     if (issues.length > 0 || !("assistant" in message)) {
       const invalid = new TurnResponseInvalid({ provider: target.providerName, model: target.modelConfig.id, issues });
       await this.settle(admitted, requestedAt, extraction, recordedReason, errorOutcome(invalid), invalid);
-      throw invalid;
+      // A response not in the API's shape is the provider's failure, as for a structured request.
+      throw new ProviderError(target.providerName, `turn response on model=${target.modelConfig.id} unreadable`, "provider", { cause: invalid });
     }
 
     const finishReason = mapFinishReason(result.finishReason);
@@ -336,7 +363,9 @@ export class LLMGateway {
   }
 
   private async structured<T>(request: StructuredRequest<T>, scope: CallScope): Promise<StructuredResponse<T>> {
-    const resolved = this.registry.resolve(request.capability, [], request.site);
+    // A second opinion with no other model in the catalog asks the same model again; the response names the model either way.
+    const other = request.otherThan === undefined ? null : this.registry.resolveOther(request.capability, request.otherThan, request.site);
+    const resolved = other ?? this.registry.resolve(request.capability, [], request.site);
     return this.withFallback(
       request,
       resolved,

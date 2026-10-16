@@ -1,7 +1,8 @@
 import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewFindings } from "@ashara/db";
+import { suiteReviewFindings, suiteReviewJudgements } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
 // Quality's record of the reviews of plan revisions' check suites (migration 044): each review
 // that found problems is one row per check task it named.
@@ -113,6 +114,99 @@ export class SuiteReviewFindingRepository {
       return { timesNamed: times, earlierFindings };
     });
   }
+}
+
+const StoredFindingSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("contradiction"),
+    checkTasks: z.array(z.string().min(1)).min(1),
+    problem: z.string().min(1),
+    evidence: z.string().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal("outside-vision"),
+    checkTasks: z.array(z.string().min(1)).length(1),
+    check: z.string().min(1),
+    judgedItems: z.array(z.string().min(1)).min(1),
+    missingClause: z.string().min(1),
+    problem: z.string().min(1),
+    evidence: z.string().min(1),
+  }),
+]);
+
+const StoredJudgementSchema = z.strictObject({
+  checkTaskId: z.string().min(1),
+  checkName: z.string().min(1),
+  outcome: z.enum(["routed", "released"]),
+  firstFinding: StoredFindingSchema.refine((finding) => finding.kind === "outside-vision", "the first finding of a judgement is an outside-vision rejection"),
+  secondFindings: z.array(StoredFindingSchema),
+  firstModel: z.string().min(1),
+  secondModel: z.string().min(1),
+  secondReview: z.enum(["other-model", "re-sample"]),
+});
+
+type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
+
+/** A stored judgement does not parse. */
+class SuiteReviewJudgementCorrupt extends Error {
+  constructor(
+    readonly judgementId: string,
+    readonly issues: string,
+  ) {
+    super(`suite_review_judgements row ${judgementId}: ${issues}`);
+    this.name = "SuiteReviewJudgementCorrupt";
+  }
+}
+
+/** Quality's record of a suite review's judgements on the rejections it routed or released (migration 063). */
+export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore {
+  constructor(private readonly db: DbHandle) {}
+
+  async record(review: Parameters<SuiteReviewJudgementStore["record"]>[0]): Promise<void> {
+    if (review.judgements.length === 0) return;
+    await this.db.insert(suiteReviewJudgements).values(
+      review.judgements.map((judgement) => ({
+        projectId: review.projectId,
+        reviewTaskId: review.reviewTaskId,
+        checkTaskId: judgement.checkTaskId,
+        checkName: judgement.check,
+        outcome: judgement.outcome,
+        firstFinding: judgement.first,
+        secondFindings: judgement.second,
+        firstModel: `${judgement.secondReview.first.provider}/${judgement.secondReview.first.model}`,
+        secondModel: `${judgement.secondReview.second.provider}/${judgement.secondReview.second.model}`,
+        secondReview: judgement.secondReview.kind,
+      })),
+    );
+  }
+}
+
+/**
+ * Every judgement a review task's reviews recorded, oldest first, each parsed whole.
+ * @testseam suite-review-judgements.test.ts reads back what SuiteReviewer recorded; no production path reads them yet
+ */
+export async function reviewJudgementsOf(db: DbHandle, reviewTaskId: string): Promise<StoredJudgement[]> {
+  const rows = await db
+    .select({
+      id: suiteReviewJudgements.id,
+      checkTaskId: suiteReviewJudgements.checkTaskId,
+      checkName: suiteReviewJudgements.checkName,
+      outcome: suiteReviewJudgements.outcome,
+      firstFinding: suiteReviewJudgements.firstFinding,
+      secondFindings: suiteReviewJudgements.secondFindings,
+      firstModel: suiteReviewJudgements.firstModel,
+      secondModel: suiteReviewJudgements.secondModel,
+      secondReview: suiteReviewJudgements.secondReview,
+    })
+    .from(suiteReviewJudgements)
+    .where(eq(suiteReviewJudgements.reviewTaskId, reviewTaskId))
+    // One review's judgements are written in one transaction and share created_at.
+    .orderBy(asc(suiteReviewJudgements.createdAt), asc(suiteReviewJudgements.checkName), asc(suiteReviewJudgements.id));
+  return rows.map(({ id, ...row }) => {
+    const parsed = StoredJudgementSchema.safeParse(row);
+    if (!parsed.success) throw new SuiteReviewJudgementCorrupt(id, z.prettifyError(parsed.error));
+    return parsed.data;
+  });
 }
 
 /** The review a suite_review block was written on: what it found, and how often it had named the check task. */

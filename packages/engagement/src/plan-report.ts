@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { ProjectId } from "@ashara/shared";
+import { containEach } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 
@@ -97,7 +98,8 @@ type PlanReportOutcome =
       readonly subject: PlanReportSubject | "plan-revision";
     }
   /** The project's record cannot be reported truthfully: nothing is posted and the project is blocked. */
-  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause }
+  | StepFaulted;
 
 /** What the core loop asks of the Liaison after Delivery's planning step. */
 export interface LiaisonPlanReports {
@@ -337,56 +339,67 @@ function planningStoppedReport(attempts: number): string {
 }
 
 export class PlanReports implements LiaisonPlanReports {
-  constructor(private readonly store: PlanReportStore) {}
+  constructor(
+    private readonly store: PlanReportStore,
+    /** Each report's own fault is contained to it (containEach). */
+    private readonly containment: StepContainment,
+  ) {}
 
   /**
    * One project's bad record blocks that project, and the other projects are
-   * still reported on. Any other failure, a store failure included, throws
-   * through and fails the cycle.
+   * still reported on. Any other failure, a store failure included, is that
+   * report's, contained to it (containEach).
    */
   async runPending(): Promise<readonly PlanReportOutcome[]> {
-    const outcomes: PlanReportOutcome[] = [];
-    for (const due of await this.store.dueReports()) {
-      if (due.subject === "first-plan-unreadable") {
-        outcomes.push(await this.block(due.projectId, due.cause));
-        continue;
-      }
-      let body: string;
-      try {
-        body = this.compose(due);
-      } catch (err) {
-        if (
-          !(err instanceof PlanReportUnfounded) &&
-          !(err instanceof PlanRevisionSummaryUnreadable) &&
-          !(err instanceof RevisionChangesUnrecorded) &&
-          !(err instanceof RepairBeforeFirstPlanReport)
-        ) {
-          throw err;
+    const dueReports = await this.store.dueReports();
+    const outcomes = await containEach(
+      this.containment,
+      "plan-report",
+      dueReports,
+      (due) => ({ id: `${due.subject}:${due.projectId}`, projectId: due.projectId }),
+      async (due): Promise<PlanReportOutcome> => {
+        if (due.subject === "first-plan-unreadable") return this.block(due.projectId, due.cause);
+        let body: string;
+        try {
+          body = this.compose(due);
+        } catch (err) {
+          if (
+            !(err instanceof PlanReportUnfounded) &&
+            !(err instanceof PlanRevisionSummaryUnreadable) &&
+            !(err instanceof RevisionChangesUnrecorded) &&
+            !(err instanceof RepairBeforeFirstPlanReport)
+          ) {
+            throw err;
+          }
+          return this.block(due.projectId, projectBlockCause(err));
         }
-        outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
-        continue;
-      }
-      const revisionIds = due.subject === "first-plan" ? due.revisions.map((r) => r.revisionId) : [];
-      const kind = await this.store.postReport(due.projectId, due.subject, body, revisionIds);
-      outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
-    }
+        const revisionIds = due.subject === "first-plan" ? due.revisions.map((r) => r.revisionId) : [];
+        const kind = await this.store.postReport(due.projectId, due.subject, body, revisionIds);
+        return { kind, projectId: due.projectId, subject: due.subject };
+      },
+    );
     // A project blocked above is not told what the team will now do. The store lists only
     // active projects' revisions; this keeps that so within the pass that blocked it.
     const blocked = new Set(outcomes.filter((o) => o.kind === "project-blocked").map((o) => o.projectId));
-    for (const due of await this.store.dueRevisionReports()) {
-      if (blocked.has(due.projectId)) continue;
-      let summary: PlanRevisionSummary;
-      try {
-        summary = readRevision(due.projectId, due.revisionId, due.summary, due.answersTaken);
-      } catch (err) {
-        if (!(err instanceof PlanRevisionSummaryUnreadable) && !(err instanceof RevisionChangesUnrecorded)) throw err;
-        outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
-        continue;
-      }
-      const kind = await this.store.postRevisionReport(due.revisionId, planRevisionReport(summary));
-      outcomes.push({ kind, projectId: due.projectId, subject: "plan-revision" });
-    }
-    return outcomes;
+    const revisions = (await this.store.dueRevisionReports()).filter((due) => !blocked.has(due.projectId));
+    const revised = await containEach(
+      this.containment,
+      "plan-revision-report",
+      revisions,
+      (due) => ({ id: due.revisionId, projectId: due.projectId }),
+      async (due): Promise<PlanReportOutcome> => {
+        let summary: PlanRevisionSummary;
+        try {
+          summary = readRevision(due.projectId, due.revisionId, due.summary, due.answersTaken);
+        } catch (err) {
+          if (!(err instanceof PlanRevisionSummaryUnreadable) && !(err instanceof RevisionChangesUnrecorded)) throw err;
+          return this.block(due.projectId, projectBlockCause(err));
+        }
+        const kind = await this.store.postRevisionReport(due.revisionId, planRevisionReport(summary));
+        return { kind, projectId: due.projectId, subject: "plan-revision" };
+      },
+    );
+    return [...outcomes, ...revised];
   }
 
   private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<PlanReportOutcome> {

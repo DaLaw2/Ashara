@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "./work-item-language/work-item-row.js";
@@ -111,6 +111,7 @@ function coreLoopDeps(
     // Every target here is made under the temporary directory.
     config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
     cycleLog: { emit: () => {} },
+    containment: memoryStepContainment(() => true),
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
     projectRepo: {

@@ -6,7 +6,9 @@ export { LlmCallLedger } from "./llm-call-ledger.js";
 export { SPEND_CAP_ERROR_CLASS, SpendCap } from "./spend-cap.js";
 export type { SpendAtCap } from "./spend-cap.js";
 export type { CostMeasurement } from "./cost.js";
-export { LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
+export { PreCallRefusal } from "./errors.js";
+export { modelCallFailureOf } from "./model-call-failure.js";
+export type { ModelCallFailure } from "./model-call-failure.js";
 /** @testseam the integration model-catalog.test.ts prices catalog models directly; LlmCallLedger.record is its production caller */
 export { measureCost } from "./cost.js";
 /** @testseam the integration spend-cap.test.ts checks the tiered worst-case estimate; SpendCap.admit is its production caller */
@@ -27,6 +29,7 @@ export type {
   TokenUsage,
   TurnToolSchema,
 } from "@ashara/model-access";
-export { GatewayError, ProviderConfigurationRejected, ProviderError } from "@ashara/model-access";
+/** @testseam a scripted provider in a caller's test fails a call with it, naming the party at fault; modelCallFailureOf reads it */
+export { ProviderError } from "@ashara/model-access";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "@ashara/model-access";

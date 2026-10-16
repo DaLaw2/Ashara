@@ -92,7 +92,7 @@ export class CoreLoop {
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
     // so before the spend-cap check.
     for (const choice of await deps.stackChoices.runPending()) {
-      if (choice.kind !== "project-blocked") {
+      if (choice.kind !== "project-blocked" && choice.kind !== "step-faulted") {
         const version = choice.kind === "recorded" ? ` as vision v${choice.visionVersion}` : "";
         console.log(`[liaison-stack-choice] project ${choice.projectId}: ${choice.kind}${version}`);
       }
@@ -102,7 +102,7 @@ export class CoreLoop {
     // probe per cycle while any is halted, no LLM call), before the reports, so its resumption is
     // told this cycle. Only a halt already told is resumed: one written late in the previous cycle
     // is reported below first, and resumes from the next cycle on.
-    await resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe);
+    await resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe, deps.containment);
 
     // Halts recorded in an earlier cycle (or before a restart) and a project's return to work: one
     // plain report each to the client. No LLM call, so before the spend-cap check: a project the
@@ -147,7 +147,7 @@ export class CoreLoop {
     // and the Liaison's report on each recorded planning outcome. Both before
     // gating, so a plan written this cycle can be dispatched this cycle.
     // A project whose own record is bad is blocked inside each step, logged at
-    // warn there, and skipped; any other failure throws out of the cycle.
+    // warn there, and skipped; any other failure of one project is contained to it (containEach).
     const plans = await this.step("first-plan", () => deps.firstPlanning.runPending());
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(outcome);
@@ -166,7 +166,7 @@ export class CoreLoop {
     if (replans.kind === "stop") return this.haltAtCap(replans.stop);
     for (const outcome of replans.outcomes) logReplan(outcome);
     for (const report of await deps.planReports.runPending()) {
-      if (report.kind !== "project-blocked") {
+      if (report.kind !== "project-blocked" && report.kind !== "step-faulted") {
         console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
       }
     }
@@ -177,6 +177,7 @@ export class CoreLoop {
       eventStore: deps.eventStore,
       projects: deps.projectRepo,
       workdirBase: deps.config.workdirBase,
+      containment: deps.containment,
     });
     // Then every settled task's branches are released, whichever path settled it: the previous
     // cycle awaited every attempt it dispatched, so none is in flight.
@@ -233,13 +234,13 @@ export class CoreLoop {
 
   private async takeClientStops(): Promise<void> {
     for (const stop of await this.deps.clientStops.runPending()) {
-      console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
+      if (stop.kind !== "step-faulted") console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
     }
   }
 
   private async answerClientChanges(): Promise<void> {
     for (const change of await this.deps.clientChanges.runPending()) {
-      console.log(`[liaison-change] change ${change.changeId}: project ${change.projectId} told not applied, reply ${change.replyId}`);
+      if (change.kind === "deferred") console.log(`[liaison-change] change ${change.changeId}: project ${change.projectId} told not applied, reply ${change.replyId}`);
     }
   }
 
@@ -260,7 +261,7 @@ export class CoreLoop {
 
   private async postBlockReports(): Promise<void> {
     for (const report of await this.deps.blockReports.runPending()) {
-      console.log(`[liaison-block-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+      if (report.kind !== "step-faulted") console.log(`[liaison-block-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
     }
   }
 
@@ -288,7 +289,9 @@ export class CoreLoop {
    * thrown out of the step ends the step: a project refusal blocks its project
    * here (Finance refuses, Delivery halts), and the step's remaining projects run
    * next cycle; a deployment refusal stops the loop with the refusal's own reason.
-   * Any other error throws out of the cycle.
+   * Any other error throws out of the cycle: a step contains each subject's failure itself
+   * (containEach records it on the subject and retries it after a backoff), so what reaches here
+   * is a failure of the step as a whole, such as listing its work or recording a fault.
    */
   private async step<T>(name: string, run: () => Promise<readonly T[]>): Promise<StepRun<T>> {
     let outcomes: readonly T[] = [];

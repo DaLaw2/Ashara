@@ -1,12 +1,12 @@
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import type { WorkItemLevel } from "./work-item-language/work-item-status.js";
 import type { WorkKind } from "./acl/organization-acl.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
-import { BudgetExceeded } from "./acl/finance-acl.js";
+import { BudgetExceeded, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "./acl/organization-acl.js";
 import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
@@ -19,6 +19,7 @@ import type {
   TaskSpec,
   WorkItemSpec,
 } from "./decomposition-types.js";
+import { VisionItemsMissing } from "./decomposition-types.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's first plan of a project (story s-liaison-intake-m1, ADR-075): the
@@ -86,7 +87,8 @@ export type FirstPlanOutcome =
   | { readonly kind: "already-planned"; readonly projectId: ProjectId }
   | { readonly kind: "failed"; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
   | { readonly kind: "stopped"; readonly projectId: ProjectId; readonly attempts: number }
-  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause }
+  | StepFaulted;
 
 /** What the core loop asks of Delivery's planning each cycle. */
 export interface FirstPlanning {
@@ -189,6 +191,8 @@ export function toWrite(projectId: ProjectId, result: DecompositionResult, owner
 interface FirstPlannerDeps {
   readonly llm: ContextualLlm;
   readonly store: FirstPlanStore;
+  /** Each project's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
@@ -203,27 +207,28 @@ export class FirstPlanner implements FirstPlanning {
 
   /**
    * A project whose own record is inconsistent is blocked, and the other
-   * projects are still planned. Any other failure, a store failure included,
-   * throws through and fails the cycle.
+   * projects are still planned. Any other failure that escapes an attempt, a store
+   * failure included, is that project's, contained to it (containEach).
    */
   async runPending(): Promise<readonly FirstPlanOutcome[]> {
-    const outcomes: FirstPlanOutcome[] = [];
-    for (const project of await this.deps.store.projectsAwaitingPlan()) {
+    const projects = await this.deps.store.projectsAwaitingPlan();
+    return containEach(this.deps.containment, "first-plan", projects, (project) => ({ id: project.projectId, projectId: project.projectId }), async (project) => {
       try {
-        outcomes.push(await this.plan(project));
+        return await this.plan(project);
       } catch (err) {
-        // A roster that cannot be read or cannot assign an owner, and a vision that cannot be read,
-        // are the project's own record; planning again would not change it.
+        // A roster that cannot be read or cannot assign an owner, and a vision that cannot be read
+        // or holds no item to plan against, are the project's own record; planning again would not
+        // change it.
         const projectRecord =
           err instanceof PlanFailureUnrecorded ||
           err instanceof RosterUnreadable ||
           err instanceof WorkKindOwnerUnresolved ||
-          err instanceof VisionUnreadable;
+          err instanceof VisionUnreadable ||
+          err instanceof VisionItemsMissing;
         if (!projectRecord) throw err;
-        outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
+        return this.block(project.projectId, projectBlockCause(err));
       }
-    }
-    return outcomes;
+    });
   }
 
   private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<FirstPlanOutcome> {
@@ -252,6 +257,11 @@ export class FirstPlanner implements FirstPlanning {
       write = toWrite(projectId, await this.decompose(project, vision), owners);
       commit = await this.deps.store.writeFirstPlan(write);
     } catch (err) {
+      // Only the model's or its provider's failure is a failed plan attempt. Ashara's own (a store
+      // write that failed, a request refused or built wrong, a fault nothing names) never counts
+      // toward the stop: it throws, contained to this project (containEach), or blocks it when it
+      // is the project's record (runPending).
+      if (modelCallFailureOf(err) === "ashara" && !carriesSpendRefusal(err)) throw err;
       return this.fail(project, err);
     }
     if (commit.kind === "already-planned") return { kind: "already-planned", projectId };

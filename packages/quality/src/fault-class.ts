@@ -8,11 +8,14 @@ import { describeErrorChain } from "@ashara/shared";
  *   attempts and recorded as a lesson.
  * - `ashara`: Ashara's own Z0 machinery failed (its process, a store, git on the host, a bug in it).
  * - `substrate`: the machines the work runs on failed (podman, an image build, a cell).
- * The last two say nothing about the work: each blocks or is retried under its class, uncharged
+ * - `provider`: the model provider failed a request of the work (a 5xx, timeout or throttling
+ *   status, no answer: modelCallFailureOf "provider"), so no answer of the model was read.
+ * The last three say nothing about the work: each blocks or is retried under its class, uncharged
  * and never taught to the agent. A throw is never the agent's work: the agent's work fails as a
- * verdict, so a throw is the substrate's when its class says so and Ashara's otherwise (fail-closed).
+ * verdict, so a throw is the substrate's or the provider's when its class says so and Ashara's
+ * otherwise (fail-closed).
  */
-export type FaultClass = "agent_work" | "ashara" | "substrate";
+export type FaultClass = "agent_work" | "ashara" | "substrate" | "provider";
 
 /**
  * A failure of the substrate a stage ran on, never of the work under it: the operator's to fix,

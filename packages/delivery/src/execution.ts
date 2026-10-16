@@ -514,14 +514,30 @@ class AsharaFaultBudgetSpent extends Error {
   }
 }
 
+/** The project's cause on record when a task's faults spent their budget and the last was its model provider's. */
+class ProviderFaultBudgetSpent extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly faults: number,
+    readonly fault: InfrastructureFault,
+  ) {
+    super(
+      `task ${taskId} met ${faults} fault(s) that were not its work, past the budget of ${INFRASTRUCTURE_FAULT_BUDGET} uncharged ` +
+        `requeues, the last its model provider failing a request; the project halts until the operator looks into it. The last ` +
+        `fault: ${fault.unavailable}: ${fault.reason}`,
+    );
+    this.name = "ProviderFaultBudgetSpent";
+  }
+}
+
 /**
  * A fault under a dispatch that is not the task's work (story s-loop-never-stop-m1 W6; ADR-080 d3 c):
  * the substrate's or Ashara's own Z0 machinery. It is counted on the task, durably, and the attempt
  * is not charged and no lesson is written. Within the budget the item goes back to Pending (its
  * dispatch refunded when the seam `counted` it). The fault past the budget halts the project under
  * its class, with one report, and requeues the item the same way: a substrate fault on
- * infrastructure, which the substrate probe resumes; Ashara's own as a fault, which the operator
- * repairs. A fault after that gives the item up: the halt could not wait it out.
+ * infrastructure, which the substrate probe resumes; Ashara's own, or its model provider's, as a
+ * fault, which the operator repairs. A fault after that gives the item up: the halt could not wait it out.
  */
 async function routeAsInfrastructureFault(
   deps: ExecutionRoutingDeps,
@@ -536,8 +552,11 @@ async function routeAsInfrastructureFault(
       source: "environment_unavailable",
       unavailable: fault.unavailable,
       reason:
-        `infrastructure fault ${faults} on this task, after its project halted on infrastructure at fault ` +
-        `${INFRASTRUCTURE_FAULT_BUDGET + 1} and the substrate probe resumed it: ${fault.reason}`,
+        fault.class === "substrate"
+          ? `infrastructure fault ${faults} on this task, after its project halted on infrastructure at fault ` +
+            `${INFRASTRUCTURE_FAULT_BUDGET + 1} and the substrate probe resumed it: ${fault.reason}`
+          : `fault ${faults} on this task that was not its work (${fault.class}), after its project halted at fault ` +
+            `${INFRASTRUCTURE_FAULT_BUDGET + 1} and was returned to work: ${fault.reason}`,
     });
     return;
   }
@@ -550,9 +569,9 @@ async function routeAsInfrastructureFault(
       const halted = await deps.projects.block(task.projectId, { ...projectBlockCause(err), category: "infrastructure" });
       console.warn(`[${task.id}] project ${task.projectId} ${halted} on infrastructure: ${err.message}`);
     } else {
-      const err = new AsharaFaultBudgetSpent(task.id, faults, fault);
+      const err = fault.class === "provider" ? new ProviderFaultBudgetSpent(task.id, faults, fault) : new AsharaFaultBudgetSpent(task.id, faults, fault);
       const halted = await deps.projects.block(task.projectId, projectBlockCause(err));
-      console.warn(`[${task.id}] project ${task.projectId} ${halted} on Ashara's own fault: ${err.message}`);
+      console.warn(`[${task.id}] project ${task.projectId} ${halted} on a fault that was not its work (${fault.class}): ${err.message}`);
     }
   }
 }

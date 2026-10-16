@@ -36,12 +36,12 @@ describe("interfaceStandingOnMain", () => {
         scaffoldTaskId: "s1",
         scaffoldCommit: scaffold,
       });
-      expect(await interfaceStandingOnMain(repo, described, scaffolds)).toEqual({ kind: "described" });
+      expect(await interfaceStandingOnMain(repo, described, scaffolds)).toEqual({ kind: "changed" });
       // A main with no interface file states no interface: never read as described, with or without scaffolds.
       expect(await interfaceStandingOnMain(repo, dropped, scaffolds)).toEqual({ kind: "absent", file: "PUBLIC_INTERFACE.md" });
       expect(await interfaceStandingOnMain(repo, dropped, [])).toEqual({ kind: "absent", file: "PUBLIC_INTERFACE.md" });
       // A scaffold that wrote no such file leaves nothing of its own on main.
-      expect(await interfaceStandingOnMain(repo, stale, [{ taskId: "s0", mergeCommit: dropped }])).toEqual({ kind: "described" });
+      expect(await interfaceStandingOnMain(repo, stale, [{ taskId: "s0", mergeCommit: dropped }])).toEqual({ kind: "changed" });
       await expect(interfaceStandingOnMain(repo, "--output=/tmp/x", scaffolds)).rejects.toMatchObject({ name: "InterfaceCommitInvalid" });
     } finally {
       await rm(repo, { recursive: true, force: true });

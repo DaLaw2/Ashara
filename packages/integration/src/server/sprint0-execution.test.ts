@@ -22,7 +22,7 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
@@ -456,7 +456,7 @@ describe("Sprint 0", () => {
     // The scan reads every project: narrowed to this one, a project another file is running is neither reported nor blocked here.
     const store = createStackChoiceStore(db);
     const ours: StackChoiceStore = { ...store, dueStackChoices: async () => (await store.dueStackChoices()).filter((due) => due.projectId === projectId) };
-    const liaison = new StackChoiceReports(ours);
+    const liaison = new StackChoiceReports(ours, memoryStepContainment(() => true));
     expect(await liaison.runPending()).toEqual([{ kind: "recorded", projectId, visionVersion: 2 }]);
     expect(await liaison.runPending()).toEqual([]);
     const vision = await new VisionRepository(db).getCurrent(projectId);

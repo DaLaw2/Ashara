@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent, ProjectId } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import type { DomainEvent, ProjectId, StepContainment } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
 import type { MergeKind } from "./work-item-language/blocked-reason.js";
 import { blockedExitOf } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
@@ -25,44 +25,54 @@ interface ParkedExitDeps {
   readonly projects: { listActiveIds(): Promise<ProjectId[]> } & TargetPathSource;
   /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
   readonly workdirBase: string;
+  /** Each project's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
 }
 
 /**
  * Takes the exit of every Blocked task of an active project, publishing its events: a
  * merge_unrecorded task is Completed once its merge record is written, an infrastructure block is
  * released to Pending, and any other block is given up. A project whose Blocked rows do not parse
- * is skipped here: the gate blocks it this same cycle. Returns how many tasks left Blocked.
+ * is skipped here: the gate blocks it this same cycle. Any other failure is that project's,
+ * contained to it (containEach). Returns how many tasks left Blocked.
  */
 export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number> {
+  const projects = await deps.projects.listActiveIds();
+  const released = await containEach(deps.containment, "parked-exits", projects, (projectId) => ({ id: projectId, projectId }), (projectId) => releaseProject(deps, projectId));
+  let total = 0;
+  for (const outcome of released) if (typeof outcome === "number") total += outcome;
+  return total;
+}
+
+/** The exits of one project's Blocked tasks; returns how many left Blocked. */
+async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promise<number> {
+  let blocked: WorkItem[];
+  try {
+    blocked = await deps.workItemRepo.findByProjectAndStatus(projectId, "Blocked");
+  } catch (err) {
+    if (!(err instanceof WorkItemRowCorrupt)) throw err;
+    console.warn(`[parked-exits] project ${projectId}: ${describeErrorChain(err)}; its Blocked tasks are not re-checked`);
+    return 0;
+  }
   let released = 0;
-  for (const projectId of await deps.projects.listActiveIds()) {
-    let blocked: WorkItem[];
-    try {
-      blocked = await deps.workItemRepo.findByProjectAndStatus(projectId, "Blocked");
-    } catch (err) {
-      if (!(err instanceof WorkItemRowCorrupt)) throw err;
-      console.warn(`[parked-exits] project ${projectId}: ${describeErrorChain(err)}; its Blocked tasks are not re-checked`);
-      continue;
+  for (const item of blocked) {
+    const exit = blockedExitOf(item.blockedReason);
+    let left: boolean;
+    switch (exit.kind) {
+      case "merge-recorded":
+        left = await completeRecordedMerge(deps, item, exit.mergeCommit, exit.mergeKind);
+        break;
+      case "give-up":
+        left = await giveUp(deps, item);
+        break;
+      case "read-main":
+        left = await settleOnMain(deps, item);
+        break;
+      case "requeue":
+        left = await release(deps, item);
+        break;
     }
-    for (const item of blocked) {
-      const exit = blockedExitOf(item.blockedReason);
-      let left: boolean;
-      switch (exit.kind) {
-        case "merge-recorded":
-          left = await completeRecordedMerge(deps, item, exit.mergeCommit, exit.mergeKind);
-          break;
-        case "give-up":
-          left = await giveUp(deps, item);
-          break;
-        case "read-main":
-          left = await settleOnMain(deps, item);
-          break;
-        case "requeue":
-          left = await release(deps, item);
-          break;
-      }
-      if (left) released++;
-    }
+    if (left) released++;
   }
   return released;
 }

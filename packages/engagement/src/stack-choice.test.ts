@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { StackChoiceReports } from "./stack-choice.js";
 import type { StackChoiceStore } from "./stack-choice.js";
 
@@ -18,7 +18,7 @@ describe("stack-choice report", () => {
       blockProject: async () => "blocked",
     };
 
-    await new StackChoiceReports(store).runPending();
+    await new StackChoiceReports(store, memoryStepContainment(() => true)).runPending();
 
     expect(reports).toHaveLength(1);
     expect(reports[0]).toContain(STATEMENT);

@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { ProjectId } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import type { ProjectId, StepContainment } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import type { TaskVerification } from "./acl/quality-acl.js";
@@ -20,7 +20,8 @@ import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution.js";
 // probe passes, then swept again), and any other fault opens a defect given up at once with the
 // recorded cause, so the plan is repaired around it. The fault past the budget halts the project as
 // undeliverable (category fault, which only the operator ends), with the recorded cause: a sweep
-// that keeps failing to run never loops. A store read that fails throws out of the cycle.
+// that keeps failing to run never loops. Any other failure of one project's sweep, a store write included, is
+// contained to that project (containEach).
 
 /** A project ready for its sweep, as the acceptance store lists it. */
 interface ReadyProject {
@@ -59,6 +60,8 @@ interface AcceptanceDeps {
   readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
   readonly projectRepo: { block(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> };
   readonly eventStore: Pick<EventStoreRepository, "publish">;
+  /** Each project's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
 }
 
 /** A ready project has no workspace: its completed tasks merged nowhere this process can sweep. */
@@ -77,8 +80,11 @@ class ScaffoldMergeUnrecorded extends Error {
   ) {
     super(
       `project ${projectId} is ready for its acceptance sweep, but its Completed product scaffold(s) ${scaffoldTaskIds.join(", ")} ` +
-        `record no merge commit, so the public interface file they wrote is not known and main's cannot be compared with it; ` +
-        `the project halts until the operator records the merge`,
+        `record no merge commit, so the public interface file they wrote is not known and main's cannot be compared with it. ` +
+        `The project halts until an operator repairs the record by hand: for each scaffold task, find the commit on the ` +
+        `target's main that merged it, set it with ` +
+        `UPDATE work_items SET merge_commit = '<commit>', merge_kind = 'merged' WHERE id = '<scaffold task id>', ` +
+        `then return the project to work with npx tsx scripts/project.ts unblock ${projectId} --reason <what was repaired>`,
     );
     this.name = "ScaffoldMergeUnrecorded";
   }
@@ -157,48 +163,54 @@ async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep
   }, null);
 }
 
-/** Runs the sweep of every ready project; returns how many became accepted. */
+/**
+ * Runs the sweep of every ready project, each contained to its project (containEach); returns how
+ * many became accepted.
+ */
 export async function runAcceptanceSweeps(deps: AcceptanceDeps): Promise<number> {
-  let accepted = 0;
-  for (const ready of await deps.acceptance.readyForAcceptance()) {
-    if (ready.workspacePath === null) {
-      const cause = projectBlockCause(new AcceptanceWorkspaceMissing(ready.projectId));
-      const blocked = await deps.projectRepo.block(ready.projectId, cause);
-      console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
-      continue;
-    }
-    // A Completed scaffold with no merge on record is a gap in the record that no repair task and no
-    // later sweep can fill: the sweep would fault the same way every cycle. So it halts the project
-    // once, as a fault only the operator ends, with the scaffold named in the recorded cause.
-    const unrecorded = ready.scaffoldMerges.filter((scaffold) => scaffold.mergeCommit === null).map((scaffold) => scaffold.taskId);
-    if (unrecorded.length > 0) {
-      const cause = projectBlockCause(new ScaffoldMergeUnrecorded(ready.projectId, unrecorded));
-      const blocked = await deps.projectRepo.block(ready.projectId, cause);
-      console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
-      continue;
-    }
-    const scaffolds = ready.scaffoldMerges.flatMap((scaffold) => (scaffold.mergeCommit === null ? [] : [{ taskId: scaffold.taskId, mergeCommit: scaffold.mergeCommit }]));
-    const sweep = await deps.acceptanceSweeper.sweepForAcceptance(ready.projectId, ready.workspacePath, ready.goalTaskIds, scaffolds);
-    if (sweep.kind !== "ran") {
-      await routeSweepFault(deps, ready.projectId, sweep);
-      continue;
-    }
-    const record = {
-      projectId: ready.projectId,
-      mainCommit: sweep.mainCommit,
-      environmentVersion: sweep.environmentVersion,
-      checkedTasks: sweep.checkedTasks,
-      uncheckedTasks: sweep.uncheckedTasks,
-      details: sweep.details,
-    };
-    if (sweep.passed) {
-      const outcome = await deps.acceptance.recordAccepted(record);
-      if (outcome === "accepted") accepted++;
-      console.log(`[acceptance] project ${ready.projectId}: sweep on main ${sweep.mainCommit} passed; ${outcome}`);
-      continue;
-    }
-    const standing = sweep.publicInterface;
-    await recordDefect(deps, record, standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null);
+  const ready = await deps.acceptance.readyForAcceptance();
+  const outcomes = await containEach(deps.containment, "acceptance", ready, (project) => ({ id: project.projectId, projectId: project.projectId }), (project) => sweepOne(deps, project));
+  return outcomes.filter((outcome) => outcome === "accepted").length;
+}
+
+/** One ready project's sweep; "accepted" when it passed and the project became accepted by it. */
+async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"accepted" | "not-accepted"> {
+  if (ready.workspacePath === null) {
+    const cause = projectBlockCause(new AcceptanceWorkspaceMissing(ready.projectId));
+    const blocked = await deps.projectRepo.block(ready.projectId, cause);
+    console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
+    return "not-accepted";
   }
-  return accepted;
+  // A Completed scaffold with no merge on record is a gap in the record that no repair task and no
+  // later sweep can fill: the sweep would fault the same way every cycle. So it halts the project
+  // once, as a fault only the operator ends, with the scaffold named in the recorded cause.
+  const unrecorded = ready.scaffoldMerges.filter((scaffold) => scaffold.mergeCommit === null).map((scaffold) => scaffold.taskId);
+  if (unrecorded.length > 0) {
+    const cause = projectBlockCause(new ScaffoldMergeUnrecorded(ready.projectId, unrecorded));
+    const blocked = await deps.projectRepo.block(ready.projectId, cause);
+    console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
+    return "not-accepted";
+  }
+  const scaffolds = ready.scaffoldMerges.flatMap((scaffold) => (scaffold.mergeCommit === null ? [] : [{ taskId: scaffold.taskId, mergeCommit: scaffold.mergeCommit }]));
+  const sweep = await deps.acceptanceSweeper.sweepForAcceptance(ready.projectId, ready.workspacePath, ready.goalTaskIds, scaffolds);
+  if (sweep.kind !== "ran") {
+    await routeSweepFault(deps, ready.projectId, sweep);
+    return "not-accepted";
+  }
+  const record = {
+    projectId: ready.projectId,
+    mainCommit: sweep.mainCommit,
+    environmentVersion: sweep.environmentVersion,
+    checkedTasks: sweep.checkedTasks,
+    uncheckedTasks: sweep.uncheckedTasks,
+    details: sweep.details,
+  };
+  if (sweep.passed) {
+    const outcome = await deps.acceptance.recordAccepted(record);
+    console.log(`[acceptance] project ${ready.projectId}: sweep on main ${sweep.mainCommit} passed; ${outcome}`);
+    return outcome === "accepted" ? "accepted" : "not-accepted";
+  }
+  const standing = sweep.publicInterface;
+  await recordDefect(deps, record, standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null);
+  return "not-accepted";
 }

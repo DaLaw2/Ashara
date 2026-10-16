@@ -177,6 +177,29 @@ export class ProviderRegistry {
   }
 
   /**
+   * A model other than `avoid` that serves `capability` at `site`, for a second opinion: another
+   * provider's first, by the same routing as any request; else another model of `avoid`'s provider
+   * graded at or above `capability`, the cheapest. Null when the catalog has no other.
+   */
+  resolveOther(capability: CapabilityLevel, avoid: { readonly provider: string; readonly model: string }, site?: KnownLLMSite): ResolvedProvider | null {
+    const elsewhere = this.resolveFallback(capability, avoid.provider, site);
+    if (elsewhere !== null) return elsewhere;
+    const same = this.config.providers.find((p) => p.enabled && p.name === avoid.provider);
+    if (!same) return null;
+    const modelConfig = findBestModel(
+      same.models.filter((m) => m.id !== avoid.model),
+      capability,
+    );
+    if (!modelConfig) return null;
+    return {
+      provider: this.createLanguageModel(same, modelConfig),
+      modelConfig,
+      providerName: same.name,
+      providerType: same.providerType,
+    };
+  }
+
+  /**
    * Static per-site routing lookup (routing-profiles story). Returns `null`,
    * so the caller uses capability logic, in exactly three cases: no profile
    * registered for the enabled-provider combo; an explicitly empty profile

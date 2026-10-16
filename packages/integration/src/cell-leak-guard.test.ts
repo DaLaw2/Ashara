@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { GUARD_PODMAN_BUDGET } from "./cell-leak-guard.js";
 
 // The guard's verdict is the exit code of the vitest run it guards, so each probe runs a vitest of
 // its own with the guard as its globalSetup, against a stand-in podman: a run whose test "leaves" a
@@ -111,5 +112,28 @@ describe("the end-of-run leak check", () => {
   test("a run that leaves nothing keeps its exit code 0", async () => {
     const run = await probe(false, 0);
     expect(run.code, run.output).toBe(0);
+  });
+});
+
+// The guard's podman work is bounded by PODMAN_TIMEOUT_MS per call; the run around it has to wait
+// that long, or a removal in progress is cut off and the cells are left to a later run's reaper.
+describe("the bounds around the guard", () => {
+  const ROOT = path.resolve(HERE, "../../..");
+
+  test("vitest.config.ts sets a teardownTimeout whose share for the end-of-run check covers its podman worst case", async () => {
+    const config = await readFile(path.join(ROOT, "vitest.config.ts"), "utf8");
+    const set = /^\s*teardownTimeout:\s*([\d_]+),/m.exec(config)?.[1];
+    if (set === undefined) return expect.unreachable("vitest.config.ts sets no teardownTimeout: vitest's 10 s default would cut the check short");
+    expect(Number(set.replaceAll("_", "")) * GUARD_PODMAN_BUDGET.teardownShare).toBeGreaterThanOrEqual(GUARD_PODMAN_BUDGET.worstCaseMs);
+  });
+
+  test("just test waits out the guard's signal-time removal before its SIGKILL, and forwards a terminal's Ctrl+C to vitest's process group", async () => {
+    const justfile = await readFile(path.join(ROOT, "justfile"), "utf8");
+    const recipe = /^test:\n((?: {4}.*\n|\n)+)/m.exec(justfile)?.[1] ?? "";
+    const grace = /timeout -k (\d+) \d+ npx vitest run/.exec(recipe)?.[1];
+    if (grace === undefined) return expect.unreachable(`just test runs no bounded vitest:\n${recipe}`);
+    expect(Number(grace) * 1000).toBeGreaterThanOrEqual(GUARD_PODMAN_BUDGET.worstCaseMs);
+    expect(recipe).not.toContain("--foreground");
+    expect(recipe).toMatch(/trap 'kill -INT -- "-\$run"[^']*' INT/);
   });
 });

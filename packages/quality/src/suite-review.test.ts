@@ -68,19 +68,37 @@ function source(statusB = "Completed"): SuiteReviewSource {
   };
 }
 
-/** Answers every structured call with the next scripted answer, parsed by the request's own schema. */
-function scripted(answers: unknown[], prompts: string[] = []): ContextualLlm {
+/**
+ * Answers every structured call with the next scripted answer, parsed by the request's own schema.
+ * A request for a second opinion is answered by `other` when given, as a catalog with another model
+ * at the capability would; else by the same model again.
+ */
+function scripted(answers: unknown[], prompts: string[] = [], other: { provider: string; model: string } | null = null, asked: unknown[] = []): ContextualLlm {
   let next = 0;
   return {
     forCall: () => ({
       generateStructured: async (request) => {
         prompts.push(request.prompt);
+        asked.push(request.otherThan);
         const answer = answers[Math.min(next, answers.length - 1)];
         next++;
         if (answer instanceof Error) throw answer;
-        return { data: request.schema.parse(answer), model: "stub-model", provider: "stub" };
+        const by = request.otherThan !== undefined && other !== null ? other : { provider: "stub", model: "stub-model" };
+        return { data: request.schema.parse(answer), ...by };
       },
     }),
+  };
+}
+
+type Judgements = ConstructorParameters<typeof SuiteReviewer>[0]["judgements"];
+type Recorded = Parameters<Judgements["record"]>[0];
+
+/** Keeps every recorded review's judgements in `into`. */
+function keep(into: Recorded[] = []): Judgements {
+  return {
+    record: async (review) => {
+      into.push(review);
+    },
   };
 }
 
@@ -89,7 +107,7 @@ const TASK = { id: REVIEW_ID, projectId: PROJECT, taskSpec: { origin: "review" a
 describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   test("a clean verdict is accepted after its schema validates; the prompt holds every suite and the vision", async () => {
     const prompts: string[] = [];
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
     expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [] });
     expect(prompts).toHaveLength(1);
@@ -100,7 +118,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
 
   test("problems come back with the check tasks they name", async () => {
     const problem = { checkTasks: [CHECK_A, CHECK_B], kind: "contradiction", problem: "a prints a count, b requires empty stdout", evidence: "count.sh; empty.sh" };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [problem] }]), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [problem] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
     expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({
       kind: "problems",
@@ -114,7 +132,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   test("a verdict naming a check task it did not read is re-asked, and one that never validates gives no verdict", async () => {
     const prompts: string[] = [];
     const ghost = { problems: [{ checkTasks: ["ghost"], kind: "contradiction", problem: "p", evidence: "e" }] };
-    const reviewer = new SuiteReviewer({ llm: scripted([ghost], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([ghost], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toBeInstanceOf(StructuredOutputExhausted);
     expect(prompts.length).toBeGreaterThan(1);
@@ -122,7 +140,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   });
 
   test("an answer that is not the schema is never read as a clean review", async () => {
-    const reviewer = new SuiteReviewer({ llm: scripted([{ verdict: "looks fine" }]), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ verdict: "looks fine" }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toThrow();
   });
 
@@ -132,25 +150,25 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       checkTasksUnderReview: async () => [{ id: CHECK_B, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: null, checkedTitle: "Refuse bad rows" }],
       latest: async () => stored(CHECK_B, "stdout-empty", "sh checks/empty.sh"),
     };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [{ ...misread, judgedItems: ["item 1"] }] }, { problems: [] }], prompts), source: legacy, publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [{ ...misread, judgedItems: ["item 1"] }] }, { problems: [] }], prompts), source: legacy, publicInterface: INTERFACE, judgements: keep() });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean" });
     expect(prompts[0]).toContain(`- item 1: ${REFUSAL.text} (its id, status and kind are not recorded)`);
     expect(prompts[1]).toContain("but item 1 states it");
   });
 
   test("an unfinished check task fails the review instead of passing what it did not read", async () => {
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }]), source: source("Pending"), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }]), source: source("Pending"), publicInterface: INTERFACE, judgements: keep() });
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toMatchObject({ name: "SuitesUnreadable" });
   });
 
   test("an Abandoned check task is set aside and the other suites are reviewed", async () => {
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }]), source: source("Abandoned"), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }]), source: source("Abandoned"), publicInterface: INTERFACE, judgements: keep() });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A], setAside: [CHECK_B], released: [] });
   });
 
   test("a review task with no vision items is refused before any model call", async () => {
     const prompts: string[] = [];
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
     await expect(reviewer.review({ ...TASK, taskSpec: { origin: "review" } }, PROJECT_PATH)).rejects.toMatchObject({ name: "SuitesUnreadable" });
     expect(prompts).toEqual([]);
   });
@@ -160,7 +178,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   test("each suite is judged against its own task's cited items, with their status, and the interface its checks were written against", async () => {
     const prompts: string[] = [];
     const reads: Array<{ path: string; commit: string }> = [];
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: interfaceAt(reads) });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: interfaceAt(reads), judgements: keep() });
 
     await reviewer.review(TASK, PROJECT_PATH);
 
@@ -178,8 +196,8 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompt).toContain("Using a\n  form the public interface names (a command, an argument, a file, an exit status) is never outside");
   });
 
-  // A rejection the cited text does not disprove is a judgement: it stands only when a second,
-  // independent review reaches it too, and it is told as a judgement, beside the cited text.
+  // A rejection the cited text does not disprove is a judgement: it stands only when a second review
+  // reaches it too, and it is told as a judgement, both reviews' clauses beside the cited text.
   const rowCount = {
     checkTasks: [CHECK_A],
     kind: "outside-vision",
@@ -190,9 +208,11 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     evidence: "sh checks/count.sh",
   };
 
-  test("a rejection both independent reviews reach is routed as the reviewers' judgement, the clause beside the cited text", async () => {
+  test("a rejection both reviews reach is routed as the reviewers' judgement, each review's clause beside the cited text", async () => {
     const prompts: string[] = [];
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [rowCount] }], prompts), source: source(), publicInterface: INTERFACE });
+    const recorded: Recorded[] = [];
+    const secondClause = { ...rowCount, missingClause: "a count of the rows read" };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [secondClause] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({
       kind: "problems",
       reviewed: [CHECK_A, CHECK_B],
@@ -203,9 +223,11 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
           checkTaskIds: [CHECK_A],
           kind: "outside-vision",
           problem:
-            `${rowCount.problem} This is the reviewers' judgement, not a verified fact: two independent reviews each judged check ` +
-            `"prints-count" to require "prints the row count", which they read none of its task's cited items as asking for ` +
-            `(judged against S1). The clause and the items, side by side: required "prints the row count"; cited S1: "${SCOPE.text}".`,
+            `${rowCount.problem} This is the reviewers' judgement, not a verified fact: two reviews each judged check ` +
+            `"prints-count" to require behaviour none of its task's cited items asks for. The second was a re-sample of the ` +
+            `first review's model stub/stub-model, so not an independent ` +
+            `judgement. Side by side: the first review (stub/stub-model) judged it against S1 to require "prints the row count"; ` +
+            `the second (stub/stub-model) judged it against S1 to require "a count of the rows read"; cited S1: "${SCOPE.text}".`,
           evidence: rowCount.evidence,
         },
       ],
@@ -214,10 +236,35 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toBe(prompts[0]);
     expect(prompts[1]).not.toContain(rowCount.missingClause);
+    // Both judgements are recorded whole before the outcome is returned.
+    const model = { provider: "stub", model: "stub-model" };
+    expect(recorded).toEqual([
+      {
+        projectId: PROJECT,
+        reviewTaskId: REVIEW_ID,
+        judgements: [
+          { checkTaskId: CHECK_A, check: "prints-count", outcome: "routed", first: rowCount, second: [secondClause], secondReview: { kind: "re-sample", first: model, second: model } },
+        ],
+      },
+    ]);
+  });
+
+  test("the second review is asked of another model when the catalog has one, and is named as that model", async () => {
+    const asked: unknown[] = [];
+    const recorded: Recorded[] = [];
+    const other = { provider: "other", model: "other-strong" };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [rowCount] }], [], other, asked), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
+    const outcome = await reviewer.review(TASK, PROJECT_PATH);
+    expect(asked).toEqual([undefined, { provider: "stub", model: "stub-model" }]);
+    if (outcome.kind !== "problems") return expect.unreachable("an agreed rejection is routed");
+    expect(outcome.problems[0]?.problem).toContain("The second was a review by a different model, other/other-strong, than the first's stub/stub-model.");
+    expect(outcome.problems[0]?.problem).not.toContain("independent");
+    expect(recorded[0]?.judgements[0]?.secondReview).toEqual({ kind: "other-model", first: { provider: "stub", model: "stub-model" }, second: other });
   });
 
   test("a paraphrased false rejection the second review does not reach is released as passing review, both judgements kept", async () => {
     const prompts: string[] = [];
+    const recorded: Recorded[] = [];
     const paraphrase = {
       checkTasks: [CHECK_B],
       kind: "outside-vision",
@@ -227,7 +274,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       problem: "stdout-empty requires refusing malformed rows, which no cited item asks for",
       evidence: "sh checks/empty.sh",
     };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [paraphrase] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [paraphrase] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({
       kind: "clean",
       reviewed: [CHECK_A, CHECK_B],
@@ -238,23 +285,39 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
           check: "stdout-empty",
           first: `check "stdout-empty" is outside the vision, requiring "${paraphrase.missingClause}": ${paraphrase.problem}`,
           second: [],
+          secondReview: "a re-sample of the first review's model stub/stub-model, so not an independent judgement",
         },
       ],
     });
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toBe(prompts[0]);
+    expect(recorded[0]?.judgements).toEqual([expect.objectContaining({ checkTaskId: CHECK_B, outcome: "released", first: paraphrase, second: [] })]);
+  });
+
+  test("judgements that cannot be recorded fail the review: nothing is released or routed on them", async () => {
+    const reviewer = new SuiteReviewer({
+      llm: scripted([{ problems: [rowCount] }, { problems: [] }]),
+      source: source(),
+      publicInterface: INTERFACE,
+      judgements: {
+        record: async () => {
+          throw new Error("connection terminated");
+        },
+      },
+    });
+    await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toMatchObject({ name: "SuiteJudgementsUnrecorded", message: expect.stringMatching(/could not be recorded: .*connection terminated/) });
   });
 
   test("a second review that rejects a different check of the task does not confirm the first's rejection", async () => {
     const other = { ...rowCount, checkTasks: [CHECK_B], check: "stdout-empty", judgedItems: ["A3"], missingClause: "prints nothing" };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [other] }]), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [rowCount] }, { problems: [other] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
     const outcome = await reviewer.review(TASK, PROJECT_PATH);
     expect(outcome).toMatchObject({ kind: "clean", released: [{ checkTaskId: CHECK_A, check: "prints-count", second: [] }] });
   });
 
   test("a rejection naming a check its check task did not write is re-asked", async () => {
     const prompts: string[] = [];
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [{ ...rowCount, check: "ghost-check" }] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [{ ...rowCount, check: "ghost-check" }] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean" });
     expect(prompts[1]).toContain(`judged check "ghost-check", which check task ${CHECK_A} did not write (it wrote [prints-count])`);
   });
@@ -273,7 +336,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   test("a rejection whose clause a cited item states is discarded and re-asked, so every review of the check reaches the same verdict", async () => {
     for (let review = 0; review < 2; review++) {
       const prompts: string[] = [];
-      const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misread] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+      const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misread] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
       expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [] });
       expect(prompts).toHaveLength(2);
@@ -282,14 +345,14 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   });
 
   test("a rejection the cited text contradicts on every attempt is never acted on", async () => {
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misread] }]), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misread] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toBeInstanceOf(StructuredOutputExhausted);
   });
 
   test("a rejection that judged an item its check task does not cite is re-asked", async () => {
     const prompts: string[] = [];
     const elsewhere = { ...misread, judgedItems: ["S1"], missingClause: "an empty stdout" };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [elsewhere] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [elsewhere] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean" });
     expect(prompts[1]).toContain(`judged item "S1", which check task ${CHECK_B} does not cite (it cites [A3])`);
   });
@@ -298,7 +361,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     const { missingClause: _clause, ...unquoted } = misread;
     const { judgedItems: _items, ...unjudged } = misread;
     for (const finding of [unquoted, unjudged, { ...misread, missingClause: " -- " }]) {
-      const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [finding] }]), source: source(), publicInterface: INTERFACE });
+      const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [finding] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
       await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toThrow();
     }
   });
@@ -310,14 +373,14 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
         throw new Error("fatal: bad object");
       },
     };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: broken });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: broken, judgements: keep() });
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toMatchObject({ name: "SuitesUnreadable" });
     expect(prompts).toEqual([]);
   });
 
   test("a refused model call propagates as the refusal", async () => {
     const refusal = new PreCallRefusal("budget_cap: refused");
-    const reviewer = new SuiteReviewer({ llm: scripted([refusal]), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([refusal]), source: source(), publicInterface: INTERFACE, judgements: keep() });
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toBe(refusal);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { SchemaValidationError } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
@@ -69,7 +69,7 @@ describe("FirstPlanner per-project failure", () => {
     const stopped: ProjectId[] = [];
     const store = storeWith([awaiting(lying, null), awaiting(capped, "Error: decomposition failed")], blocked, stopped);
 
-    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => `${o.projectId}:${o.kind}`)).toEqual([`${lying}:project-blocked`, `${capped}:stopped`]);
     expect(blocked).toEqual([
@@ -85,7 +85,7 @@ describe("FirstPlanner per-project failure", () => {
     const blocked: Blocked = [];
     const store = storeWith([awaiting(projectId, null, 0, twoImplementers)], blocked);
 
-    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
     expect(blocked[0]?.cause.errorClass).toBe("RosterUnreadable");
@@ -108,7 +108,7 @@ describe("FirstPlanner decomposition ladder", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000023", "test");
     const store: FirstPlanStore = { ...storeWith([awaiting(projectId, null, 0)], []), recordFailedAttempt: async () => 1 };
 
-    const outcomes = await new FirstPlanner({ llm: failing, store }).runPending();
+    const outcomes = await new FirstPlanner({ containment: memoryStepContainment(() => true), llm: failing, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["failed"]);
     expect(capabilities).toEqual(["Strong", "Strong", "Frontier", "Frontier"]);
@@ -195,27 +195,50 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
     ]);
     const store: FirstPlanStore = { ...storeWith([], blocked), projectsAwaitingPlan: async () => [unreadable] };
 
-    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
     expect(blocked[0]?.cause).toMatchObject({ category: "fault", errorClass: "VisionUnreadable" });
   });
 
-  test("a vision with no item fails the plan attempt before any model call", async () => {
+  test("a vision with no item blocks the project with VisionItemsMissing before any model call; no attempt is counted", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
-    const errors: string[] = [];
+    const blocked: Blocked = [];
     const store: FirstPlanStore = {
-      ...storeWith([awaiting(projectId, null, 0, ROSTER_ROWS, [])], []),
-      recordFailedAttempt: async (_projectId, error) => {
-        errors.push(error);
-        return 1;
+      ...storeWith([awaiting(projectId, null, 0, ROSTER_ROWS, [])], blocked),
+      recordFailedAttempt: async () => {
+        throw new Error("recordFailedAttempt must not be reached: the vision is the project's record");
       },
     };
 
-    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
-    expect(outcomes.map((o) => o.kind)).toEqual(["failed"]);
-    expect(errors[0]).toMatch(/^VisionItemsMissing: /);
+    expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
+    expect(blocked[0]?.cause).toMatchObject({ category: "fault", errorClass: "VisionItemsMissing" });
+  });
+
+  test("a fault nothing names in the planning call is Ashara's: contained to the project, never counted toward the stop", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000027", "test");
+    const store: FirstPlanStore = {
+      ...storeWith([awaiting(projectId, null, 0)], []),
+      recordFailedAttempt: async () => {
+        throw new Error("recordFailedAttempt must not be reached: the plan is not at fault");
+      },
+    };
+    const broken: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async () => {
+          throw new TypeError("Cannot read properties of undefined (reading 'content')");
+        },
+      }),
+    };
+    const containment = memoryStepContainment(() => false);
+
+    const outcomes = await new FirstPlanner({ containment, llm: broken, store }).runPending();
+
+    expect(outcomes).toEqual([expect.objectContaining({ kind: "step-faulted", step: "first-plan", subjectId: projectId, error: expect.stringContaining("Cannot read properties") })]);
+    expect(containment.recorded.get(`first-plan/${projectId}`)).toMatchObject({ faults: 1 });
   });
 });

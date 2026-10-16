@@ -201,6 +201,17 @@ export interface StructuredRequest<T> {
   maxTokens: number;
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
+  /**
+   * A second opinion: the request goes to a model other than this one at the same capability when
+   * the catalog has one, and to this one again otherwise. The response's provider and model say which.
+   */
+  otherThan?: ModelIdentity;
+}
+
+/** One model of the catalog, as a response names the model that answered it. */
+export interface ModelIdentity {
+  readonly provider: string;
+  readonly model: string;
 }
 
 export interface StructuredResponse<T> {

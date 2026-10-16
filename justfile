@@ -45,10 +45,27 @@ typecheck-full:
     npm run --silent typecheck:full
 
 # Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.ts globalSetup)
-# answers by removing the run's cells before vitest exits; SIGKILL 30 s later only if the run is
-# still alive. A bare SIGKILL skips that removal and leaves the cells to the next run's reaper.
+# answers by removing the run's cells before vitest exits; SIGKILL only if the run is still alive
+# 150 s later. That grace outlasts the guard's signal-time removal at its worst, one podman listing
+# and one podman rm of 60 s each (cell-leak-guard.ts PODMAN_TIMEOUT_MS): a SIGKILL inside it would
+# cut the listing short and leave the cells to the next run's reaper.
+#
+# timeout runs vitest in a process group of its own, which a terminal's Ctrl+C does not reach, so
+# this shell forwards SIGINT, SIGTERM and SIGHUP to that group (to timeout itself if it has not made
+# the group yet) and waits for it to end. `timeout --foreground` would let Ctrl+C through, but on
+# expiry it signals vitest alone and leaves its forks workers running.
 test:
-    timeout -k 30 1200 npx vitest run
+    #!/usr/bin/env bash
+    set -u
+    timeout -k 150 1200 npx vitest run &
+    run=$!
+    trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
+    trap 'kill -TERM -- "-$run" 2>/dev/null || kill -TERM "$run"' TERM HUP
+    while :; do
+      wait "$run"
+      status=$?
+      kill -0 "$run" 2>/dev/null || exit "$status"
+    done
 
 # The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, each
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default

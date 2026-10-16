@@ -1,4 +1,4 @@
-import { createDomainEvent, type DomainEvent, type ProjectId } from "@ashara/shared";
+import { containEach, createDomainEvent, type DomainEvent, type ProjectId, type StepContainment, type StepFaulted } from "@ashara/shared";
 
 // The client's change of direction (ADR-075 Engagement, ADR-082 d5). Applying a change to a
 // project under way is not built (M3 X5). Until it is, the Liaison does not leave a change unread:
@@ -20,6 +20,7 @@ export interface ClientChangeStore {
 }
 
 interface ClientChangeOutcome {
+  readonly kind: "deferred";
   readonly changeId: string;
   readonly projectId: ProjectId;
   readonly replyId: string;
@@ -27,7 +28,7 @@ interface ClientChangeOutcome {
 
 /** What the core loop asks of the Liaison at the top of each cycle. */
 export interface LiaisonClientChanges {
-  runPending(): Promise<readonly ClientChangeOutcome[]>;
+  runPending(): Promise<ReadonlyArray<ClientChangeOutcome | StepFaulted>>;
 }
 
 const CHANGE_NOT_APPLIED_REPLY = [
@@ -38,19 +39,22 @@ const CHANGE_NOT_APPLIED_REPLY = [
 ].join("\n\n");
 
 export class ClientChanges implements LiaisonClientChanges {
-  constructor(private readonly store: ClientChangeStore) {}
+  constructor(
+    private readonly store: ClientChangeStore,
+    /** Each change's own fault is contained to it (containEach). */
+    private readonly containment: StepContainment,
+  ) {}
 
-  /** A store failure throws through and fails the cycle: the change stays unconsumed and is answered next cycle. */
-  async runPending(): Promise<readonly ClientChangeOutcome[]> {
-    const outcomes: ClientChangeOutcome[] = [];
-    for (const change of await this.store.openChanges()) {
+  /** A change whose answer cannot be recorded stays unconsumed, contained to it (containEach); only listing them throws through. */
+  async runPending(): Promise<ReadonlyArray<ClientChangeOutcome | StepFaulted>> {
+    const changes = await this.store.openChanges();
+    return containEach(this.containment, "client-change", changes, (change) => ({ id: change.id, projectId: change.projectId }), async (change): Promise<ClientChangeOutcome> => {
       const event = createDomainEvent("client_change.not_applied", "engagement", {
         projectId: change.projectId,
         changeMessageId: change.id,
       });
       const replyId = await this.store.recordDeferred(change, CHANGE_NOT_APPLIED_REPLY, event);
-      outcomes.push({ changeId: change.id, projectId: change.projectId, replyId });
-    }
-    return outcomes;
+      return { kind: "deferred", changeId: change.id, projectId: change.projectId, replyId };
+    });
   }
 }

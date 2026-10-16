@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
@@ -17,7 +17,7 @@ function reportsFor(due: readonly Due[]) {
       return "posted";
     },
   };
-  return { reports: new BlockReports(store), posted };
+  return { reports: new BlockReports(store, memoryStepContainment(() => true)), posted };
 }
 
 describe("project block reports", () => {

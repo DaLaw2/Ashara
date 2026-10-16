@@ -43,7 +43,7 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
-import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
+import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations, stepFaultLedger } from "@ashara/db";
 import { BlockReports, DeliveredReports } from "@ashara/engagement";
 import {
   composedAgain,
@@ -175,7 +175,8 @@ async function main(): Promise<void> {
         file: PUBLIC_INTERFACE_FILE,
         at: async () => ({ kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" }),
       }).runPending();
-      await new BlockReports(createBlockReportStore(db)).runPending();
+      // A replay contains nothing: any report that fails throws, so the replay stops on it.
+      await new BlockReports(createBlockReportStore(db), { ...stepFaultLedger(db), escapes: () => true }).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(
         `today's composers: every recorded brief's facts, and ${recomposed.length} of ${setAside.records.length} kept delivered and halt ` +

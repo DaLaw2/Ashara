@@ -87,6 +87,33 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
 });
 
 // ---------------------------------------------------------------------------
+// suite_review_judgements (migration 063, Quality): one row per outside-vision rejection a suite
+// review made that Z0 could not disprove, routed or released, with both reviews' findings whole and
+// what the second review was. Append-only; the jsonb columns are parsed by the repository.
+// ---------------------------------------------------------------------------
+
+export const suiteReviewJudgements = pgTable("suite_review_judgements", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  reviewTaskId: uuid("review_task_id")
+    .notNull()
+    .references(() => workItems.id, { onDelete: "cascade" }),
+  checkTaskId: uuid("check_task_id")
+    .notNull()
+    .references(() => workItems.id, { onDelete: "cascade" }),
+  checkName: text("check_name").notNull(),
+  outcome: text().notNull(),
+  firstFinding: jsonb("first_finding").notNull(),
+  secondFindings: jsonb("second_findings").notNull(),
+  firstModel: text("first_model").notNull(),
+  secondModel: text("second_model").notNull(),
+  secondReview: text("second_review").notNull(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // acceptance_sweeps (migration 049): one row per acceptance sweep Z0 ran on main HEAD; a passed
 // one made its project 'accepted', a failed one opened its defect item.
 // ---------------------------------------------------------------------------
@@ -113,4 +140,6 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   reportInterfaceReadFailures: integer("report_interface_read_failures").notNull().default(0),
   reportLastError: text("report_last_error"),
   reportRetryAt: timestamptz("report_retry_at"),
+  /** Migration 063: failed attempts whose records are on file but do not read as a report; only these count toward the substitute notice. */
+  reportRecordFailures: integer("report_record_failures").notNull().default(0),
 });

@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
 import { StructuredOutputExhausted, withStructuredLadder } from "@ashara/finance";
 import type { LadderAttemptEvent, StructuredValidation } from "@ashara/finance";
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { VisionUnreadable, rosterVisionOf } from "./acl/engagement-acl.js";
 import type { RosterVision, StoredVision } from "./acl/engagement-acl.js";
 import { CapabilityClassSchema, describeViolation, nonEmptyOrNull, validateRoster } from "./roster.js";
@@ -52,7 +52,8 @@ interface RosterRefusal {
 export type RosterOutcome =
   | { readonly kind: "recorded"; readonly projectId: ProjectId; readonly revision: number; readonly roles: readonly string[] }
   | { readonly kind: "roster-exists"; readonly projectId: ProjectId }
-  | { readonly kind: "refused"; readonly projectId: ProjectId; readonly refusal: RosterRefusal };
+  | { readonly kind: "refused"; readonly projectId: ProjectId; readonly refusal: RosterRefusal }
+  | StepFaulted;
 
 /** What the core loop asks of Organization each cycle. */
 export interface RosterDerivationStep {
@@ -164,30 +165,32 @@ function violationsOf(roster: Roster): readonly string[] {
 interface RosterDerivationDeps {
   readonly llm: ContextualLlm;
   readonly store: RosterStore;
+  /** Each project's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
 /**
  * Organization's roster step. Each project with vision v1 and no roster gets one
  * derived and recorded whole, or is refused with the violations that kept it from
- * being valid (RosterRefusal). A store or provider failure throws through and fails the cycle.
+ * being valid (RosterRefusal). Any other failure, a store's or a provider's, is that
+ * project's, contained to it (containEach).
  */
 export class RosterDerivation implements RosterDerivationStep {
   constructor(private readonly deps: RosterDerivationDeps) {}
 
   async runPending(): Promise<readonly RosterOutcome[]> {
-    const outcomes: RosterOutcome[] = [];
-    for (const awaiting of await this.deps.store.projectsAwaitingRoster()) {
+    const awaiting = await this.deps.store.projectsAwaitingRoster();
+    return containEach(this.deps.containment, "roster", awaiting, (project) => ({ id: project.projectId, projectId: project.projectId }), async (project) => {
       try {
-        outcomes.push(await this.derive({ projectId: awaiting.projectId, ...rosterVisionOf(awaiting.vision) }));
+        return await this.derive({ projectId: project.projectId, ...rosterVisionOf(project.vision) });
       } catch (err) {
         if (!(err instanceof RosterDerivationExhausted || err instanceof VisionUnreadable)) throw err;
         const refusal: RosterRefusal = { errorClass: err.name, reason: describeErrorChain(err) };
-        console.warn(`[roster] project ${awaiting.projectId}: ${refusal.errorClass}; no roster is derived: ${refusal.reason}`);
-        outcomes.push({ kind: "refused", projectId: awaiting.projectId, refusal });
+        console.warn(`[roster] project ${project.projectId}: ${refusal.errorClass}; no roster is derived: ${refusal.reason}`);
+        return { kind: "refused", projectId: project.projectId, refusal } satisfies RosterOutcome;
       }
-    }
-    return outcomes;
+    });
   }
 
   private async derive(vision: DerivationInput): Promise<RosterOutcome> {

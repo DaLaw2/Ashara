@@ -18,7 +18,7 @@ import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { CoreLoopDeps } from "@ashara/delivery";
-import { createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
@@ -78,6 +78,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: join(root, "unused") },
     cycleLog: { emit: () => {} },
+    containment: memoryStepContainment((error) => parts.spendCap.refusalOf(error) !== null),
     workItemRepo: {
       create: notExercised("create"),
       findById: notExercised("findById"),
@@ -214,7 +215,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
     const projectId = (await projects.create(NAME, client.id)).id;
     const stopStore = createClientStopStore(db);
     const narrowed: ClientStopStore = { ...stopStore, openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === projectId) };
-    const clientStops = new ClientStops(narrowed);
+    const clientStops = new ClientStops(narrowed, memoryStepContainment(() => true));
     const abort = new AbortController();
     const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
     const capReason = "budget_cap: the deployment has spent $1.000000 (llm_calls) of its $1.000000 cap";

@@ -6,6 +6,7 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import { ClientChanges, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientChangeStore } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared";
 import { createClientChangeStore } from "@ashara/server/client-change-store";
 
 // ADR-082 d5: a client's change is never left unread. Until changes are applied (M3 X5), the
@@ -23,6 +24,7 @@ function liaison(handle: ReturnType<typeof createDb>, wrap: (store: ClientChange
   const store = createClientChangeStore(handle);
   return new ClientChanges(
     wrap({ ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) }),
+    memoryStepContainment(() => true),
   );
 }
 
@@ -98,7 +100,8 @@ describe("a client's change", () => {
     expect(await consumedAt(change.id)).not.toBeNull();
     const events = await eventsFor(change.id);
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ sourceContext: "engagement", payload: { projectId, replyMessageId: outcomes[0]?.replyId } });
+    const [deferred] = outcomes;
+    expect(events[0]).toMatchObject({ sourceContext: "engagement", payload: { projectId, replyMessageId: deferred?.kind === "deferred" ? deferred.replyId : "not deferred" } });
 
     // A restart: a fresh connection and a fresh Liaison find nothing open.
     const restarted = createDb(DATABASE_URL);
@@ -128,7 +131,7 @@ describe("a client's change", () => {
     expect(await consumedAt(change.id)).toBeNull();
 
     const answered = await liaison(db).runPending();
-    expect(answered.map((o) => o.changeId)).toEqual([change.id]);
+    expect(answered.map((o) => (o.kind === "deferred" ? o.changeId : o.kind))).toEqual([change.id]);
     expect(await repliesTo(change.id)).toHaveLength(1);
     expect(await consumedAt(change.id)).not.toBeNull();
   });

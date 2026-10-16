@@ -1,5 +1,5 @@
-import type { ProjectId } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import type { ProjectId, StepContainment } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
 
 // The automatic exit of a project halted on infrastructure (story s-loop-never-stop-m1 W6; design
 // P17, exit X2): the owner fixes the host, and the loop resumes the project by itself. Each cycle,
@@ -26,8 +26,8 @@ export interface InfrastructureHalts {
   resumeFromInfrastructureHalt(projectId: ProjectId, evidence: string): Promise<"resumed" | "moved" | "unreported">;
 }
 
-/** Returns how many projects resumed this cycle. */
-export async function resumeInfrastructureHalts(halts: InfrastructureHalts, probe: InfrastructureProbe): Promise<number> {
+/** Returns how many projects resumed this cycle; a project whose resumption fails is contained to it (containEach). */
+export async function resumeInfrastructureHalts(halts: InfrastructureHalts, probe: InfrastructureProbe, containment: StepContainment): Promise<number> {
   const halted = await halts.listInfrastructureHalted();
   if (halted.length === 0) return 0;
   let result: InfrastructureProbeResult;
@@ -40,17 +40,17 @@ export async function resumeInfrastructureHalts(halts: InfrastructureHalts, prob
     console.warn(`[infrastructure] ${halted.length} project(s) stay halted, the substrate probe failed: ${result.evidence}`);
     return 0;
   }
-  let resumed = 0;
-  for (const projectId of halted) {
-    const outcome = await halts.resumeFromInfrastructureHalt(projectId, result.evidence);
+  const evidence = result.evidence;
+  const outcomes = await containEach(containment, "infrastructure-resume", halted, (projectId) => ({ id: projectId, projectId }), async (projectId) => {
+    const outcome = await halts.resumeFromInfrastructureHalt(projectId, evidence);
     if (outcome === "resumed") {
-      resumed++;
-      console.log(`[infrastructure] project ${projectId} resumed, the substrate probe passed: ${result.evidence}`);
+      console.log(`[infrastructure] project ${projectId} resumed, the substrate probe passed: ${evidence}`);
     } else if (outcome === "unreported") {
       console.warn(`[infrastructure] project ${projectId} not resumed yet: its halt report is not posted, so it stays halted until the client is told`);
     } else {
       console.warn(`[infrastructure] project ${projectId} not resumed: it is no longer halted on infrastructure`);
     }
-  }
-  return resumed;
+    return outcome;
+  });
+  return outcomes.filter((outcome) => outcome === "resumed").length;
 }

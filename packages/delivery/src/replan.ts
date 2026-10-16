@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
-import type { DomainEvent, ProjectId } from "@ashara/shared";
+import { containEach, describeErrorChain } from "@ashara/shared";
+import type { DomainEvent, ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { withStructuredLadder } from "./acl/finance-acl.js";
 import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
@@ -9,19 +9,13 @@ import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf, statedChangeOf } from "./acl/engagement-acl.js";
-import {
-  LlmCallNotAdmitted,
-  LlmCallNotRecorded,
-  PreCallRefusal,
-  ProviderConfigurationRejected,
-  ProviderError,
-  StructuredOutputExhausted,
-} from "./acl/finance-acl.js";
-import type { ContextualLlm } from "./acl/finance-acl.js";
+import { modelCallFailureOf } from "./acl/finance-acl.js";
+import type { ContextualLlm, ModelCallFailure } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved } from "./acl/organization-acl.js";
 import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
 import type { BulkPlanEdge } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
+import { VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
@@ -193,7 +187,8 @@ export type ReplanOutcome =
   /** Something read for the revision changed before it was written; it is tried again next cycle. */
   | { readonly kind: "moved"; readonly projectId: ProjectId }
   | { readonly kind: "failed"; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
-  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause }
+  | StepFaulted;
 
 /** What the core loop asks of Delivery's planning each cycle, after the first plans. */
 export interface Replanning {
@@ -234,31 +229,8 @@ class PlanRepairBoundReached extends Error {
   }
 }
 
-/**
- * Whose failure a failed revision attempt was, from its cause chain:
- * - "model": the planning model answered and its structured output never validated.
- * - "provider": the model's provider failed the request (an HTTP error, or no answer), so no answer
- *   was read (ProviderError.failure).
- * - "ashara": one of Ashara's own refusals or faults is in the chain, or nothing in it says
- *   otherwise: an error not recognised as the model's or the provider's is Ashara's to look into.
- */
-type RevisionFailure = "model" | "provider" | "ashara";
-
-function revisionFailureOf(err: unknown): RevisionFailure {
-  let failure: RevisionFailure = "ashara";
-  for (let current: unknown = err; current instanceof Error; current = current.cause) {
-    if (current instanceof PreCallRefusal || current instanceof LlmCallNotAdmitted || current instanceof LlmCallNotRecorded || current instanceof ProviderConfigurationRejected) {
-      return "ashara";
-    }
-    if (failure !== "ashara") continue;
-    if (current instanceof StructuredOutputExhausted) failure = "model";
-    else if (current instanceof ProviderError) {
-      if (current.failure !== "provider") return "ashara";
-      failure = "provider";
-    }
-  }
-  return failure;
-}
+/** Whose failure a counted revision attempt was: Ashara's own is never counted (Replanner.revise). */
+type RevisionFailure = Exclude<ModelCallFailure, "ashara">;
 
 /** The halt an exhausted revision records, by whose failure its last attempt was. */
 function exhaustedRevisionCause(exhausted: ReplanAttemptsExhausted, failure: RevisionFailure): ProjectBlockCause {
@@ -268,8 +240,6 @@ function exhaustedRevisionCause(exhausted: ReplanAttemptsExhausted, failure: Rev
       return { ...cause, category: "replan_stopped" };
     case "provider":
       return { ...cause, category: "replan_provider_failed" };
-    case "ashara":
-      return cause;
   }
 }
 
@@ -522,13 +492,6 @@ function judgmentReask(ctx: { readonly errors: readonly string[] }): string {
   );
 }
 
-function isPreCallRefusal(err: unknown): boolean {
-  for (let current: unknown = err; current instanceof Error; current = current.cause) {
-    if (current instanceof PreCallRefusal) return true;
-  }
-  return false;
-}
-
 function isTask(planned: PlannedItem): boolean {
   return planned.item.level === "Task";
 }
@@ -581,6 +544,8 @@ function doneSection(completed: readonly PlannedItem[]): string {
 interface ReplannerDeps {
   readonly llm: ContextualLlm;
   readonly store: ReplanStore;
+  /** Each project's own fault is contained to it (containEach). */
+  readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
@@ -595,13 +560,14 @@ export class Replanner implements Replanning {
 
   /**
    * A project whose own record cannot be revised is blocked, and the other projects are still
-   * revised. Any other failure, a store failure included, throws through and fails the cycle.
+   * revised. Any other failure that escapes an attempt, a store failure included, is that
+   * project's, contained to it (containEach).
    */
   async runPending(): Promise<readonly ReplanOutcome[]> {
-    const outcomes: ReplanOutcome[] = [];
-    for (const project of await this.deps.store.projectsAwaitingReplan()) {
+    const projects = await this.deps.store.projectsAwaitingReplan();
+    return containEach(this.deps.containment, "replan", projects, (project) => ({ id: project.projectId, projectId: project.projectId }), async (project) => {
       try {
-        outcomes.push(await this.revise(project));
+        return await this.revise(project);
       } catch (err) {
         const projectRecord =
           err instanceof ReplanFailureUnrecorded ||
@@ -610,12 +576,12 @@ export class Replanner implements Replanning {
           err instanceof RepairSubjectUnreadable ||
           err instanceof RosterUnreadable ||
           err instanceof WorkKindOwnerUnresolved ||
-          err instanceof VisionUnreadable;
+          err instanceof VisionUnreadable ||
+          err instanceof VisionItemsMissing;
         if (!projectRecord) throw err;
-        outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
+        return this.block(project.projectId, projectBlockCause(err));
       }
-    }
-    return outcomes;
+    });
   }
 
   private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<ReplanOutcome> {
@@ -660,9 +626,13 @@ export class Replanner implements Replanning {
       write = this.compose(project, cause, decomposition, owners, environment, completed, [...open, ...openEpics]);
       result = await this.deps.store.writeRevision(write);
     } catch (err) {
-      // A spend-cap refusal is not a failed attempt: the core loop's step handles it.
-      if (isPreCallRefusal(err)) throw err;
-      return this.fail(project, err);
+      // Only the model's or its provider's failure is a failed revision attempt. Ashara's own (a
+      // refusal before the call, a store write that failed, a request built wrong, a fault nothing
+      // names) never counts toward the bound: a spend cap's refusal is the core loop's step's, any
+      // other is contained to this project (containEach), or blocks it when it is the project's record.
+      const failure = modelCallFailureOf(err);
+      if (failure === "ashara") throw err;
+      return this.fail(project, err, failure);
     }
     if (result === "moved") return { kind: "moved", projectId };
     const why =
@@ -817,7 +787,7 @@ export class Replanner implements Replanning {
     };
   }
 
-  private async fail(project: ProjectAwaitingReplan, err: unknown): Promise<ReplanOutcome> {
+  private async fail(project: ProjectAwaitingReplan, err: unknown, failure: RevisionFailure): Promise<ReplanOutcome> {
     const { projectId } = project;
     const error = describeErrorChain(err);
     const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
@@ -825,6 +795,6 @@ export class Replanner implements Replanning {
       project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
     console.warn(`[replan] project ${projectId} (vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
-    return this.block(projectId, exhaustedRevisionCause(new ReplanAttemptsExhausted(projectId, attempt, error), revisionFailureOf(err)));
+    return this.block(projectId, exhaustedRevisionCause(new ReplanAttemptsExhausted(projectId, attempt, error), failure));
   }
 }

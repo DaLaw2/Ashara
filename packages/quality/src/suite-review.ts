@@ -25,8 +25,11 @@ import type { TaskChecks } from "./task-checks.js";
 // bound. Z0 cannot tell that a paraphrased clause is absent, so a rejection it cannot disprove is
 // the reviewer's judgement, not a verified fact: it is acted on only when a second review, a fresh
 // call with the same prompt that never sees the first verdict, rejects the same check as outside
-// the vision too. When it does not, the check is released as passing review and both judgements
-// are recorded with the outcome.
+// the vision too. The second review is asked of another model at the same capability when the
+// catalog has one; otherwise it is a re-sample of the first review's model, and every text that
+// names it says which it was. When the second does not reject that check, the check is released as
+// passing review. Either way both judgements are recorded whole (suite_review_judgements), and a
+// routed rejection carries both reviews' clauses side by side.
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */
 interface CheckTaskUnderReview {
@@ -91,13 +94,60 @@ interface SuiteReviewProblem {
 /**
  * An outside-vision rejection the first review made and the second did not: the check passes review.
  * Both judgements are kept: the first's rejection, and every finding the second made on that check
- * task (none when it found nothing there).
+ * task (none when it found nothing there), with what the second review was.
  */
 interface ReleasedRejection {
   readonly checkTaskId: string;
   readonly check: string;
   readonly first: string;
   readonly second: readonly string[];
+  /** What the second review was, in words: another model, or a re-sample of the first's (secondReviewText). */
+  readonly secondReview: string;
+}
+
+/** The model a review's verdict came from, as the response named it. */
+interface ReviewModel {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** The second review against the first: another model, or the first's model asked again. */
+interface SecondReview {
+  readonly kind: "other-model" | "re-sample";
+  readonly first: ReviewModel;
+  readonly second: ReviewModel;
+}
+
+function secondReviewOf(first: ReviewModel, second: ReviewModel): SecondReview {
+  const kind = first.provider === second.provider && first.model === second.model ? "re-sample" : "other-model";
+  return { kind, first, second };
+}
+
+function modelName(model: ReviewModel): string {
+  return `${model.provider}/${model.model}`;
+}
+
+/** What the second review was, as every routed or recorded text says it: never "independent" for a re-sample. */
+function secondReviewText(review: SecondReview): string {
+  return review.kind === "re-sample"
+    ? `a re-sample of the first review's model ${modelName(review.first)}, so not an independent judgement`
+    : `a review by a different model, ${modelName(review.second)}, than the first's ${modelName(review.first)}`;
+}
+
+/** One outside-vision rejection as recorded: both reviews' findings on its check task whole, and what the second review was. */
+interface ReviewJudgement {
+  readonly checkTaskId: string;
+  readonly check: string;
+  readonly outcome: "routed" | "released";
+  readonly first: OutsideVisionFinding;
+  /** Every finding the second review made on the check task, none when it found nothing there. */
+  readonly second: readonly ReviewFinding[];
+  readonly secondReview: SecondReview;
+}
+
+/** Where a review's judgements on its outside-vision rejections are recorded; a write that fails fails the review. */
+export interface SuiteReviewJudgementStore {
+  record(review: { readonly projectId: ProjectId; readonly reviewTaskId: WorkItemId; readonly judgements: readonly ReviewJudgement[] }): Promise<void>;
 }
 
 /**
@@ -136,6 +186,29 @@ class SuitesUnreadable extends Error {
   ) {
     super(`review task ${reviewTaskId} cannot review its plan's suites: ${detail}`);
     this.name = "SuitesUnreadable";
+  }
+}
+
+/** The model's verdict passed its schema and is still unfit to act on: the review model's failure, never Ashara's record's. */
+export class SuiteVerdictUnfit extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly detail: string,
+  ) {
+    super(`review task ${reviewTaskId}: the review's verdict is unfit to act on: ${detail}`);
+    this.name = "SuiteVerdictUnfit";
+  }
+}
+
+/** The reviews' judgements could not be recorded, so none of them is acted on. */
+class SuiteJudgementsUnrecorded extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly judgements: number,
+    options: { readonly cause: unknown },
+  ) {
+    super(`review task ${reviewTaskId}: the reviews' judgements on ${judgements} rejection(s) could not be recorded: ${describeErrorChain(options.cause)}`, options);
+    this.name = "SuiteJudgementsUnrecorded";
   }
 }
 
@@ -352,21 +425,22 @@ function findingLine(finding: ReviewFinding): string {
 }
 
 /**
- * An outside-vision rejection as Delivery routes it: the reviewers' judgement, said to be one, with
- * the clause they say is missing and the exact text of every item the check's task cites side by
- * side, so whoever acts on it reads both.
+ * An outside-vision rejection both reviews reached, as Delivery routes it: the reviewers' judgement,
+ * said to be one, with what the second review was, each review's clause and the exact text of every
+ * item the check's task cites side by side, so whoever acts on it reads all of them.
  */
-function judgedRejection(finding: OutsideVisionFinding, suite: ReviewedSuite): SuiteReviewProblem {
+function judgedRejection(first: OutsideVisionFinding, second: OutsideVisionFinding, suite: ReviewedSuite, review: SecondReview): SuiteReviewProblem {
   const items = suite.cited.map((item) => `${item.id}: ${JSON.stringify(item.text)}`).join("; ");
   return {
     checkTaskIds: [suite.checkTaskId],
     kind: "outside-vision",
     problem:
-      `${finding.problem} This is the reviewers' judgement, not a verified fact: two independent reviews each judged check ` +
-      `${JSON.stringify(finding.check)} to require ${JSON.stringify(finding.missingClause)}, which they read none of its task's ` +
-      `cited items as asking for (judged against ${finding.judgedItems.join(", ")}). The clause and the items, side by side: ` +
-      `required ${JSON.stringify(finding.missingClause)}; cited ${items}.`,
-    evidence: finding.evidence,
+      `${first.problem} This is the reviewers' judgement, not a verified fact: two reviews each judged check ` +
+      `${JSON.stringify(first.check)} to require behaviour none of its task's cited items asks for. The second was ` +
+      `${secondReviewText(review)}. Side by side: the first review (${modelName(review.first)}) judged it against ` +
+      `${first.judgedItems.join(", ")} to require ${JSON.stringify(first.missingClause)}; the second (${modelName(review.second)}) ` +
+      `judged it against ${second.judgedItems.join(", ")} to require ${JSON.stringify(second.missingClause)}; cited ${items}.`,
+    evidence: first.evidence === second.evidence ? first.evidence : `first review: ${first.evidence}\nsecond review: ${second.evidence}`,
   };
 }
 
@@ -374,6 +448,7 @@ interface SuiteReviewerDeps {
   readonly llm: ContextualLlm;
   readonly source: SuiteReviewSource;
   readonly publicInterface: PublicInterfaceReader;
+  readonly judgements: SuiteReviewJudgementStore;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
@@ -393,45 +468,56 @@ export class SuiteReviewer implements SuiteReviewing {
       { site: "suite-review", attempts: 2, onAttempt: this.deps.onAttempt, reask: reviewReask },
     );
     const prompt = reviewPrompt(itemLines(task.taskSpec?.sources, vision), interfaces, suites);
-    const ask = () =>
+    const ask = (otherThan?: ReviewModel) =>
       provider.generateStructured({
         capability: "Strong",
         prompt,
         schema: ReviewResponseSchema,
         validate: (value) => verdictValidation(value, bySuite),
         maxTokens: 4096,
+        otherThan,
       });
     const reviewedIds = [...bySuite.keys()];
-    const first = await this.verdict(task.id, ask, bySuite);
-    const contradictions = first.problems.filter((finding) => finding.kind === "contradiction");
-    const rejections = first.problems.filter(isOutsideVision);
-    // The second review sees exactly the first's inputs and none of its verdict; it is asked only
-    // when there is a rejection Z0 could not disprove.
-    const second = rejections.length === 0 ? [] : (await this.verdict(task.id, ask, bySuite)).problems;
+    const first = await this.verdict(task.id, () => ask(), bySuite);
+    const contradictions = first.data.problems.filter((finding) => finding.kind === "contradiction");
+    const rejections = first.data.problems.filter(isOutsideVision);
     const routed: SuiteReviewProblem[] = contradictions.map((finding) => ({
       checkTaskIds: [...new Set(finding.checkTasks)],
       kind: finding.kind,
       problem: finding.problem,
       evidence: finding.evidence,
     }));
+    if (rejections.length === 0) {
+      if (routed.length === 0) return { kind: "clean", reviewed: reviewedIds, setAside, released: [] };
+      return { kind: "problems", reviewed: reviewedIds, setAside, released: [], problems: routed };
+    }
+    // The second review sees exactly the first's inputs and none of its verdict, asked of another
+    // model when the catalog has one; it is asked only when there is a rejection Z0 could not disprove.
+    const answered = await this.verdict(task.id, () => ask(first.model), bySuite);
+    const second = answered.data.problems;
+    const review = secondReviewOf(first.model, answered.model);
     const released: ReleasedRejection[] = [];
+    const judgements: ReviewJudgement[] = [];
     for (const finding of rejections) {
       const [checkTaskId] = finding.checkTasks;
       const suite = checkTaskId === undefined ? undefined : bySuite.get(checkTaskId);
       if (checkTaskId === undefined || suite === undefined) {
-        throw new SuitesUnreadable(task.id, `a validated rejection names check task ${JSON.stringify(finding.checkTasks)}, which is not one it read`);
+        throw new SuiteVerdictUnfit(task.id, `a validated rejection names check task ${JSON.stringify(finding.checkTasks)}, which is not one it read`);
       }
-      const agreed = second.some((other) => isOutsideVision(other) && other.checkTasks[0] === checkTaskId && other.check === finding.check);
-      if (agreed) {
-        routed.push(judgedRejection(finding, suite));
+      const onTask = second.filter((other) => other.checkTasks.includes(checkTaskId));
+      const agreeing = second.find((other): other is OutsideVisionFinding => isOutsideVision(other) && other.checkTasks[0] === checkTaskId && other.check === finding.check);
+      judgements.push({ checkTaskId, check: finding.check, outcome: agreeing === undefined ? "released" : "routed", first: finding, second: onTask, secondReview: review });
+      if (agreeing !== undefined) {
+        routed.push(judgedRejection(finding, agreeing, suite, review));
         continue;
       }
-      released.push({
-        checkTaskId,
-        check: finding.check,
-        first: findingLine(finding),
-        second: second.filter((other) => other.checkTasks.includes(checkTaskId)).map(findingLine),
-      });
+      released.push({ checkTaskId, check: finding.check, first: findingLine(finding), second: onTask.map(findingLine), secondReview: secondReviewText(review) });
+    }
+    // Recorded before anything is released or routed on them: a judgement that cannot be kept is not acted on.
+    try {
+      await this.deps.judgements.record({ projectId: task.projectId, reviewTaskId: task.id, judgements });
+    } catch (err) {
+      throw new SuiteJudgementsUnrecorded(task.id, judgements.length, { cause: err });
     }
     if (routed.length === 0) return { kind: "clean", reviewed: reviewedIds, setAside, released };
     return { kind: "problems", reviewed: reviewedIds, setAside, released, problems: routed };
@@ -440,13 +526,13 @@ export class SuiteReviewer implements SuiteReviewing {
   /** One review's verdict, validated by the ladder and again here: a model that ignored validate is caught, never acted on. */
   private async verdict(
     reviewTaskId: WorkItemId,
-    ask: () => Promise<{ readonly data: ReviewResponse }>,
+    ask: () => Promise<{ readonly data: ReviewResponse; readonly provider: string; readonly model: string }>,
     suites: ReadonlyMap<string, ReviewedSuite>,
-  ): Promise<ReviewResponse> {
-    const { data } = await ask();
+  ): Promise<{ readonly data: ReviewResponse; readonly model: ReviewModel }> {
+    const { data, provider, model } = await ask();
     const unfit = verdictErrors(data, suites);
-    if (unfit.length > 0) throw new SuitesUnreadable(reviewTaskId, `the review's verdict is unfit to act on: ${unfit.join("; ")}`);
-    return data;
+    if (unfit.length > 0) throw new SuiteVerdictUnfit(reviewTaskId, unfit.join("; "));
+    return { data, model: { provider, model } };
   }
 
   /**

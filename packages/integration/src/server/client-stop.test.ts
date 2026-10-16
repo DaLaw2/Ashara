@@ -7,6 +7,7 @@ import { ClientStops, ClientMessageRepository, createProjectWithTender } from "@
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { projectState } from "../simulator/project-state.js";
@@ -63,7 +64,7 @@ function liaison(): ClientStops {
     ...store,
     openStops: async () => (await store.openStops()).filter((stop) => ourProjects.has(stop.projectId)),
   };
-  return new ClientStops(ours);
+  return new ClientStops(ours, memoryStepContainment(() => true));
 }
 
 function gate() {

@@ -422,7 +422,7 @@ describe("lifecycle simulator, directed", () => {
   it("ends an attempt whose turn answers nothing", async () => {
     const result = await adversarial([implementation("agent.empty-turn", 1)]);
     expectReached(result, ["agent-runner empty"], ["turn:empty"], ["transport_exhausted"]);
-    expect(result.outcome.kind).toBe("accepted");
+    expect(result.outcome, JSON.stringify(result.outcome)).toMatchObject({ kind: "accepted" });
   }, 90_000);
 
   // (e) The turn cap ends an attempt after its first edit; the task still completes.

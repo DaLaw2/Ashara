@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DomainEvent } from "@ashara/shared";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { BLOCKED_REASON_SOURCES, blockedExitOf } from "./work-item-language/blocked-reason.js";
@@ -71,6 +71,7 @@ function run(
     eventStore: { publish: async (event) => void published.push(event) },
     projects: { listActiveIds: async () => [PROJECT], get: async () => ({ workspacePath }) },
     workdirBase: tmpdir(),
+    containment: memoryStepContainment(() => true),
   });
   return { released, saves, published };
 }

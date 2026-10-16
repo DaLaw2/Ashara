@@ -23,6 +23,7 @@ export {
   projects,
   replanRequests,
   suiteReviewFindings,
+  suiteReviewJudgements,
   taskChecks,
   visionDocuments,
   workItems,
@@ -32,6 +33,7 @@ export { ProjectRepository, noOpenAnswer, noOpenStop, pendingChange, pendingRepa
 export type { ProjectRecord } from "./repositories/project.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
 export { completedGoalTasks } from "./repositories/goal-tasks.js";
+export { stepFaultLedger } from "./repositories/step-fault.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";

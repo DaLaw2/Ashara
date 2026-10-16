@@ -79,7 +79,11 @@ describe("how to run the product", () => {
     const text = "Run: python wc.py <file>...\n\nPrints lines, words and bytes, then a total.\n";
     const body = await render(BASE, { kind: "present", text });
     expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("Public interface"));
-    expect(howToRun(body)).toBe(`Public interface (from ${INTERFACE_FILE} on main at commit ${MAIN}), quoted as the file reads.\n\`\`\`\n${text}\`\`\``);
+    expect(howToRun(body)).toBe(
+      `Public interface (from ${INTERFACE_FILE} on main at commit ${MAIN}), quoted as the file reads. ` +
+        `This file changed since the product scaffold wrote it: acceptance refuses one left byte for byte as the scaffold wrote it, or missing. ` +
+        `Ashara has not verified that it describes the delivered product.\n\`\`\`\n${text}\`\`\``,
+    );
     expect(body).not.toContain("How to run it");
   });
 
@@ -363,27 +367,27 @@ describe("a delivered report that fails is its own project's", () => {
       ["posted", projectId],
     ]);
     expect(posted.map((p) => p.sweepId)).toEqual(["s-ok"]);
-    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, retryAfterSeconds: 60 }]);
+    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, recordUnread: false, retryAfterSeconds: 60 }]);
     const [failed] = outcomes;
     if (failed?.kind !== "failed") return expect.unreachable("the broken project's report did not fail");
     expect(failed.failure.message).toContain(`project ${otherId} (acceptance sweep s-broken) failed, attempt 1; tried again in 60s`);
   });
 
-  test("a report whose records cannot be read is recorded and retried, the backoff doubling with each failure", async () => {
-    const unread: Listed = { kind: "unread", failures: 2, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
+  test("a report whose records do not read as a report is recorded and retried, the backoff doubling with each failure", async () => {
+    const unread: Listed = { kind: "unread", cause: "record", failures: 2, recordFailures: 2, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
     const { reports, posted, failures } = store([unread, due("s-ok", projectId, WORKSPACE, 0)]);
 
     expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed", "posted"]);
     expect(posted.map((p) => p.sweepId)).toEqual(["s-ok"]);
-    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, retryAfterSeconds: 240 }]);
+    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, recordUnread: true, retryAfterSeconds: 240 }]);
   });
 
-  test("past its bound of unread attempts, the client is told the project was accepted and where the error is kept", async () => {
-    const unread: Listed = { kind: "unread", failures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
+  test("past its bound of records that do not read as a report, the client is told the project was accepted and where the error is kept", async () => {
+    const unread: Listed = { kind: "unread", cause: "record", failures: 4, recordFailures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
     const { reports, posted, failures } = store([unread]);
 
     expect((await reports.runPending()).map((o) => o.kind)).toEqual(["posted"]);
-    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, retryAfterSeconds: null }]);
+    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, recordUnread: true, retryAfterSeconds: null }]);
     expect(posted[0]?.body).toBe(
       `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
         `records in 5 attempts. Ashara keeps the error in its record of this delivery, acceptance sweep s-unread.\n\n` +
@@ -391,11 +395,20 @@ describe("a delivered report that fails is its own project's", () => {
     );
   });
 
+  test("a read of the records that failed (a lost connection) is retried and never counts toward the notice, however often", async () => {
+    const lost: Listed = { kind: "unread", cause: "read-failed", failures: 9, recordFailures: 0, sweepId: "s-lost", projectId: otherId, error: new Error("Connection terminated unexpectedly") };
+    const { reports, posted, failures } = store([lost]);
+
+    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+    expect(posted).toEqual([]);
+    expect(failures).toEqual([{ sweepId: "s-lost", error: expect.stringContaining("Connection terminated"), interfaceRead: false, recordUnread: false, retryAfterSeconds: 3600 }]);
+  });
+
   test("past its bound of failed reads, the report is posted saying the file could not be read and where the error is kept", async () => {
     const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 2)]);
 
     expect((await reports.runPending()).map((o) => o.kind)).toEqual(["posted"]);
-    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, retryAfterSeconds: null }]);
+    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, recordUnread: false, retryAfterSeconds: null }]);
     expect(howToRun(posted[0]?.body ?? "")).toBe(
       `How to run the product is not quoted: ${INTERFACE_FILE} on main at commit ${MAIN} could not be read in 3 attempts. ` +
         `Ashara keeps the error in its record of this delivery, acceptance sweep s-broken.`,
@@ -408,7 +421,7 @@ describe("a delivered report that fails is its own project's", () => {
 
     expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
     expect(posted).toEqual([]);
-    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, retryAfterSeconds: 960 }]);
+    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, recordUnread: false, retryAfterSeconds: 960 }]);
   });
 
   test("a post that fails after the reads ran out counts one failed attempt, the attempt the log names", async () => {

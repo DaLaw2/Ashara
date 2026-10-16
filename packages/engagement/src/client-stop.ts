@@ -1,4 +1,5 @@
-import type { ProjectId } from "@ashara/shared";
+import { containEach } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 
 // The client's stop (story s-client-channel-m1, ADR-075 Engagement). The web
 // client's Stop promises a halt; the Liaison, the only writer to the client,
@@ -58,7 +59,7 @@ type ClientStopOutcome = ClientStopCommit & { readonly stopId: string; readonly 
 
 /** What the core loop asks of the Liaison at the top of each cycle. */
 export interface LiaisonClientStops {
-  runPending(): Promise<readonly ClientStopOutcome[]>;
+  runPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>>;
 }
 
 function mergedLine(task: MergedTask): string {
@@ -96,18 +97,22 @@ function stopReport(mergedTasks: readonly MergedTask[], paused: boolean): string
 }
 
 export class ClientStops implements LiaisonClientStops {
-  constructor(private readonly store: ClientStopStore) {}
+  constructor(
+    private readonly store: ClientStopStore,
+    /** Each stop's own fault is contained to it (containEach). */
+    private readonly containment: StepContainment,
+  ) {}
 
   /**
    * A second stop on a stopped project is consumed and not answered: the client
    * already holds the stop report, a second one would say nothing new, and the
-   * one-report-per-project index (migration 020) would refuse it anyway. A store
-   * failure throws through and fails the cycle, so no work is dispatched past an
-   * unread stop.
+   * one-report-per-project index (migration 020) would refuse it anyway. A stop whose
+   * recording fails is contained to it (containEach) and stays unconsumed, so its
+   * project is still held from all work (noOpenStop) while the other stops are taken.
    */
-  async runPending(): Promise<readonly ClientStopOutcome[]> {
-    const outcomes: ClientStopOutcome[] = [];
-    for (const stop of await this.store.openStops()) {
+  async runPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>> {
+    const stops = await this.store.openStops();
+    return containEach(this.containment, "client-stop", stops, (stop) => ({ id: stop.id, projectId: stop.projectId }), async (stop): Promise<ClientStopOutcome> => {
       const commit = await this.store.recordStop(stop, stopReport);
       if (commit.kind === "stopped" && !commit.reported) {
         console.warn(
@@ -115,8 +120,7 @@ export class ClientStops implements LiaisonClientStops {
             `existed, so none was posted; the project was re-activated after an earlier stop`,
         );
       }
-      outcomes.push({ ...commit, stopId: stop.id, projectId: stop.projectId });
-    }
-    return outcomes;
+      return { ...commit, stopId: stop.id, projectId: stop.projectId };
+    });
   }
 }

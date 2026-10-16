@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationDriftError } from "@ashara/db";
+import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationDriftError, stepFaultLedger } from "@ashara/db";
 import type { PoolFactory } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
@@ -38,6 +38,7 @@ import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster }
 import {
   CheckDisputeRepository,
   SuiteReviewFindingRepository,
+  SuiteReviewJudgementRepository,
   SuiteReviewer,
   gitPublicInterface,
   readEnvironmentDefinition,
@@ -73,7 +74,7 @@ import { SecretStore } from "@ashara/security";
 import { DevSessionRepository, terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
-import type { Clock, ProjectId } from "@ashara/shared";
+import type { Clock, ProjectId, StepContainment } from "@ashara/shared";
 import { contendedWait, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
@@ -375,14 +376,18 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       llm: modelCalls,
       source: createSuiteReviewSource(db),
       publicInterface: gitPublicInterface,
+      judgements: new SuiteReviewJudgementRepository(db),
       onAttempt: ladderAttemptSink,
     }),
     shutdownSignal: abortController.signal,
     clock: ports.clock,
   });
 
+  // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
+  // spend-cap refusal escapes to the cycle, which halts at the cap (CoreLoop.step).
+  const containment: StepContainment = { ...stepFaultLedger(db), escapes: (error) => spendCap.refusalOf(error) !== null };
   // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
-  const blockReports = new BlockReports(createBlockReportStore(db));
+  const blockReports = new BlockReports(createBlockReportStore(db), containment);
   const coreLoopDeps: CoreLoopDeps = {
     config: config.coreLoop,
     cycleLog: eventLog,
@@ -396,35 +401,41 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     deliveredReports: createDeliveredReports(createDeliveredReportStore(db)),
     failureRouter,
     spendCap,
-    clientStops: new ClientStops(createClientStopStore(db)),
-    clientChanges: new ClientChanges(createClientChangeStore(db)),
+    containment,
+    clientStops: new ClientStops(createClientStopStore(db), containment),
+    clientChanges: new ClientChanges(createClientChangeStore(db), containment),
     liaisonIntake: new TenderIntake({
       llm: modelCalls,
       store: createIntakeStore(db),
+      containment,
       onAttempt: ladderAttemptSink,
     }),
     liaisonAnswers: new ClientAnswers({
       llm: modelCalls,
       store: createAnswerStore(db),
+      containment,
       onAttempt: ladderAttemptSink,
     }),
     rosterDerivation: new RosterDerivation({
       llm: modelCalls,
       store: createRosterStore(db),
+      containment,
       onAttempt: ladderAttemptSink,
     }),
     firstPlanning: new FirstPlanner({
       llm: modelCalls,
       store: createFirstPlanStore(db),
+      containment,
       onAttempt: ladderAttemptSink,
     }),
     replanning: new Replanner({
       llm: modelCalls,
       store: createReplanStore(db),
+      containment,
       onAttempt: ladderAttemptSink,
     }),
-    planReports: new PlanReports(createPlanReportStore(db)),
-    stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
+    planReports: new PlanReports(createPlanReportStore(db), containment),
+    stackChoices: new StackChoiceReports(createStackChoiceStore(db), containment),
     checkDisputes: new CheckDisputeRepository(db),
     blockReports,
     suiteReviewFindings: new SuiteReviewFindingRepository(db),

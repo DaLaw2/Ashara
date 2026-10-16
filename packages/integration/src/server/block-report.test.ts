@@ -8,6 +8,7 @@ import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";
 import { projectState } from "../simulator/project-state.js";
@@ -35,7 +36,7 @@ function reports(): BlockReports {
     ...store,
     dueReports: async () => (await store.dueReports()).filter((r) => ourProjects.has(r.projectId)),
   };
-  return new BlockReports(ours);
+  return new BlockReports(ours, memoryStepContainment(() => true));
 }
 
 const MessagesSchema = z.array(z.object({ body: z.string() }));

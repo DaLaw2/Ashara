@@ -68,7 +68,9 @@ export {
 export type { TaskCheckStore, TaskChecks } from "./task-checks.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
-export { SuiteReviewFindingRepository, blockingReview } from "./repositories/suite-review.js";
+export { SuiteReviewFindingRepository, SuiteReviewJudgementRepository, blockingReview } from "./repositories/suite-review.js";
+/** @testseam the integration suite-review-judgements.test.ts reads back what SuiteReviewer recorded; no production path reads the judgements */
+export { reviewJudgementsOf } from "./repositories/suite-review.js";
 export {
   listProjectsReadyForAcceptance,
   recordAcceptance,

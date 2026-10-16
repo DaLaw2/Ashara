@@ -71,7 +71,8 @@ type EnvironmentStage =
   | "ownershipGate"
   | "conflictResolution"
   | "postMergeVerify"
-  | "postMergeCheckRun";
+  | "postMergeCheckRun"
+  | "reviewSuites";
 
 /**
  * What became of the agent's work when a dispatch ended without done: no agent ran; it is
@@ -150,7 +151,7 @@ export function environmentBlocked(block: EnvironmentBlock, eventSink: Execution
   const { task, stage, errorClass } = block;
   const taskId = task.id;
   const kept = describeAgentWork(block.agentWork);
-  const failed = block.fault === "substrate" ? "environment failed" : "Ashara's own machinery failed";
+  const failed = block.fault === "substrate" ? "environment failed" : block.fault === "provider" ? "the model provider failed" : "Ashara's own machinery failed";
   const envelope: ErrorEnvelope = {
     outcome: "blocked",
     summary: `${failed} at stage ${stage} (${errorClass}): ${block.message}; task ${taskId} blocked, ${kept}`,

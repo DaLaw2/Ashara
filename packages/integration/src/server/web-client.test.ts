@@ -18,7 +18,7 @@ import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository
 import { DevSessionRepository } from "@ashara/workplace";
 import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { buildApp } from "@ashara/server/app";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -801,7 +801,7 @@ describe("recorded web-client session", () => {
       const stops = await new ClientStops({
         ...stopStore,
         openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === project.id),
-      }).runPending();
+      }, memoryStepContainment(() => true)).runPending();
       expect(stops).toMatchObject([{ kind: "stopped", reported: true, merged: 0, projectId: project.id }]);
       const stoppedState = page.locator('#project-state[data-status="stopped"]');
       await stoppedState.waitFor({ timeout: 15_000 });

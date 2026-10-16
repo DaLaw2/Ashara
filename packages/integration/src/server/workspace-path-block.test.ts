@@ -11,7 +11,7 @@ import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, Failure
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
-import { createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
@@ -141,6 +141,7 @@ describe("a project whose workspace path is refused", () => {
     const loop = new CoreLoop({
       config: { ...DEFAULT_CONFIG, workdirBase },
       cycleLog: { emit: () => {} },
+      containment: memoryStepContainment(() => true),
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: new EventStoreRepository(db),
       failedApproachRepo: new FailedApproachRepository(db),

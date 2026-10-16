@@ -1,13 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
-import { PreCallRefusal } from "@ashara/finance";
+import { BudgetExceeded, PreCallRefusal, ProviderError } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
 import { SchemaValidationError } from "@ashara/finance";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
 import type { IntakeStore } from "./intake.js";
 
 describe("TenderIntake failure accounting", () => {
-  test("a thrown circular non-Error is still counted as a failed attempt", async () => {
+  test("an error nothing names, a thrown circular non-Error, is Ashara's: recorded on the tender with a backoff, never counted against it", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const circular: Record<string, unknown> = { reason: "provider exploded" };
     circular["self"] = circular;
@@ -18,7 +18,6 @@ describe("TenderIntake failure accounting", () => {
         },
       }),
     };
-    const recorded: string[] = [];
     const tender = {
       id: "tender-1",
       projectId: parseProjectId("00000000-0000-4000-8000-000000000001", "test"),
@@ -33,21 +32,25 @@ describe("TenderIntake failure accounting", () => {
         throw new Error("recordIntake must not be reached");
       },
       consumeTender: async () => {},
-      recordFailedAttempt: async (_tenderId, error) => {
-        recorded.push(error);
-        return recorded.length;
+      recordFailedAttempt: async () => {
+        throw new Error("recordFailedAttempt must not be reached: the client's tender is not at fault");
       },
       closeFailedTender: async () => {},
       blockProject: async () => {
         throw new Error("blockProject must not be reached");
       },
     };
+    const containment = memoryStepContainment(() => false);
 
-    const [outcome] = await new TenderIntake({ llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ containment, llm, store }).runPending();
 
-    expect(outcome?.kind).toBe("failed");
-    expect(recorded).toHaveLength(1);
-    expect(recorded[0]).toContain('non-Error thrown: {"reason":"provider exploded","self":"[circular]"}');
+    expect(outcome).toMatchObject({ kind: "step-faulted", step: "liaison-intake", subjectId: "tender-1", faults: 1, retryAfterSeconds: 60 });
+    expect(containment.recorded.get("liaison-intake/tender-1")).toMatchObject({
+      faults: 1,
+      error: expect.stringContaining('non-Error thrown: {"reason":"provider exploded","self":"[circular]"}'),
+    });
+    // Waiting out its backoff, the tender is not read again on the next cycle.
+    expect(await new TenderIntake({ containment, llm, store }).runPending()).toEqual([]);
   });
 
   test("a model that never validates is asked 2 times per tier on 2 tiers before the tender attempt fails", async () => {
@@ -83,7 +86,7 @@ describe("TenderIntake failure accounting", () => {
       },
     };
 
-    const [outcome] = await new TenderIntake({ llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("failed");
     expect(capabilities).toEqual(["Strong", "Strong", "Frontier", "Frontier"]);
@@ -128,9 +131,9 @@ describe("TenderIntake per-project failure", () => {
       }),
     };
 
-    const outcomes = await new TenderIntake({ llm, store }).runPending();
+    const outcomes = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
-    expect(outcomes.map((o) => `${o.tenderId}:${o.kind}`)).toEqual(["tender-lying:project-blocked", "tender-next:vision-exists"]);
+    expect(outcomes.map((o) => `${o.kind === "step-faulted" ? o.subjectId : o.tenderId}:${o.kind}`)).toEqual(["tender-lying:project-blocked", "tender-next:vision-exists"]);
     expect(blocked).toEqual([
       { projectId: lying.projectId, category: "fault", errorClass: "IntakeFailureUnrecorded", reason: expect.stringMatching(/^IntakeFailureUnrecorded: /) },
     ]);
@@ -183,7 +186,7 @@ describe("TenderIntake response schema", () => {
       },
     };
 
-    await new TenderIntake({ llm, store }).runPending();
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(verdicts.slice(0, 2)).toEqual([false, true]);
   });
@@ -238,7 +241,7 @@ describe("TenderIntake assumption label", () => {
       },
     };
 
-    const [outcome] = await new TenderIntake({ llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("recorded");
     const [write] = writes;
@@ -292,7 +295,7 @@ describe("TenderIntake assumption label", () => {
       },
     };
 
-    await new TenderIntake({ llm, store }).runPending();
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(verdicts[0]).toBe(false);
   });
@@ -338,7 +341,7 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
       writes.push(write);
       return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
     });
-    await new TenderIntake({ llm, store }).runPending();
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
     const [write, ...more] = writes;
     if (write === undefined || more.length > 0) throw new Error(`expected one intake write, got ${writes.length}`);
     return write;
@@ -391,7 +394,7 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
     const store = storeOf("tender-k", async () => {
       throw new Error("recordIntake must not be reached");
     });
-    await new TenderIntake({ llm, store }).runPending();
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
     expect(verdicts[0]).toBe(false);
   });
 });
@@ -459,7 +462,7 @@ describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
       throw new Error("unreachable: the vision callback throws first");
     }, counted, blocked);
 
-    const [outcome] = await new TenderIntake({ llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("project-blocked");
     expect(blocked).toEqual(["QuestionIdsMismatch"]);
@@ -467,12 +470,20 @@ describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
     expect(reads).toBe(1);
   });
 
-  test("a refusal before the call is sent throws through with its class and counts nothing", async () => {
-    class ScriptedRefusal extends PreCallRefusal {}
+  test("a spend-cap refusal throws through with its class, for the core loop to halt at the cap, and counts nothing", async () => {
+    const refusal = new BudgetExceeded({
+      scope: { kind: "deployment" },
+      provider: "stub",
+      model: "stub-model",
+      capUsd: 1,
+      spentUsd: 1,
+      inFlightUsd: 0,
+      estimatedCostUsd: 0.1,
+    });
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async () => {
-          throw new ScriptedRefusal("budget_cap: scripted");
+          throw refusal;
         },
       }),
     };
@@ -481,7 +492,35 @@ describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
       throw new Error("recordIntake must not be reached");
     }, counted, []);
 
-    await expect(new TenderIntake({ llm, store }).runPending()).rejects.toBeInstanceOf(ScriptedRefusal);
+    const containment = memoryStepContainment((error) => error instanceof BudgetExceeded);
+    await expect(new TenderIntake({ containment, llm, store }).runPending()).rejects.toBe(refusal);
+    expect(containment.recorded.size).toBe(0);
     expect(counted).toEqual([]);
   });
+
+  test("any other refusal, or a provider rejecting the request Ashara sent, is that tender's fault on Ashara's side: recorded, retried, the other tenders go on", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    class ScriptedRefusal extends PreCallRefusal {}
+    const thrown = [new ScriptedRefusal("unpriced model: scripted"), new ProviderError("stub", "request rejected (413)", "ashara")];
+    for (const error of thrown) {
+      const llm: ContextualLlm = {
+        forCall: () => ({
+          generateStructured: async () => {
+            throw error;
+          },
+        }),
+      };
+      const counted: string[] = [];
+      const store = storeWith(async () => {
+        throw new Error("recordIntake must not be reached");
+      }, counted, []);
+      const containment = memoryStepContainment(() => false);
+
+      const [outcome] = await new TenderIntake({ containment, llm, store }).runPending();
+
+      expect(outcome).toMatchObject({ kind: "step-faulted", faults: 1, retryAfterSeconds: 60, error: expect.stringContaining(error.message) });
+      expect(counted).toEqual([]);
+    }
+  });
 });
+

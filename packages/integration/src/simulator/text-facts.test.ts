@@ -151,7 +151,9 @@ describe("checkTextFacts, the delivered report's standings", () => {
 // The report says how to run the product from the interface file the scaffold wrote on main.
 describe("checkTextFacts, the delivered report's quote of the public interface", () => {
   const commit = "d".repeat(40);
-  const lead = `Public interface (from PUBLIC_INTERFACE.md on main at commit ${commit}), quoted as the file reads.`;
+  const intro = `Public interface (from PUBLIC_INTERFACE.md on main at commit ${commit}), quoted as the file reads.`;
+  const unjudged = "Ashara has not verified that it describes the delivered product.";
+  const lead = `${intro} ${unjudged}`;
   const none = `How to run the product is not on record: its public interface file is missing. PUBLIC_INTERFACE.md is not on main at commit ${commit}.`;
   const report = (section: string) => ({ sweepId: "s1", mainCommit: commit, visionAtAcceptance: 1, body: `Your project is delivered.\n\n${section}\n\nNothing more is built.` });
   const onMain = (text: string | null): TextFactRecords["interfaceOnMain"] => ({
@@ -168,6 +170,12 @@ describe("checkTextFacts, the delivered report's quote of the public interface",
     expect(judged(file, none)).toEqual(["delivered-interface"]);
   });
 
+  // Acceptance compares the file's bytes with the scaffold's; a quote that does not say so passes it off as checked.
+  it("names a faithful quote that does not say Ashara never verified what the file describes", () => {
+    const file = "Run: wc.py <file>\n";
+    expect(judged(file, `${intro}\n\`\`\`\n${file}\`\`\``)).toEqual(["delivered-interface-claim"]);
+  });
+
   it("holds the report to saying the product has none exactly when main holds none", () => {
     // Acceptance refuses a main with no interface file, so a delivery of one is named whatever the report says.
     expect(judged(null, none)).toEqual(["delivered-absent-interface"]);
@@ -176,7 +184,7 @@ describe("checkTextFacts, the delivered report's quote of the public interface",
 
   it("accepts a cut quote only with its start, its end, an exact count, and a sentence saying so", () => {
     const file = `${"H".repeat(10)}${"m".repeat(50)}${"T".repeat(10)}`;
-    const said = `${lead} It is longer than 20 characters, so only its start and end are quoted; the marker inside says how many characters were cut.`;
+    const said = `${intro} It is longer than 20 characters, so only its start and end are quoted; the marker inside says how many characters were cut. ${unjudged}`;
     const quote = (cut: number) => `\`\`\`\n${"H".repeat(10)}\n[truncated by Ashara: ${cut} characters cut here]\n${"T".repeat(10)}\n\`\`\``;
     expect(judged(file, `${said}\n${quote(50)}`)).toEqual([]);
     expect(judged(file, `${said}\n${quote(49)}`)).toEqual(["delivered-interface"]);

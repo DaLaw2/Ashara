@@ -6,10 +6,11 @@
  */
 
 export type { ContextualLlm } from "@ashara/finance";
-export { BudgetExceeded, PreCallRefusal } from "@ashara/finance";
-// Whose failure an exhausted plan revision was: Ashara's own refusals and faults around a model
-// call, or the model's answer that never validated, or its provider's failure (replan.ts).
-export { LlmCallNotAdmitted, LlmCallNotRecorded, ProviderConfigurationRejected, ProviderError, StructuredOutputExhausted } from "@ashara/finance";
+export { BudgetExceeded } from "@ashara/finance";
+// Whose failure a failed model call was, the model's, its provider's or Ashara's: an exhausted plan
+// revision's halt is recorded by it (replan.ts).
+export { modelCallFailureOf } from "@ashara/finance";
+export type { ModelCallFailure } from "@ashara/finance";
 export { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 export type { SpendAtCap } from "@ashara/finance";
 

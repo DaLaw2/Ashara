@@ -1,6 +1,7 @@
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { SpendAtCap } from "@ashara/finance";
-import type { ProjectId } from "@ashara/shared";
+import { containEach } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
@@ -116,7 +117,7 @@ interface BlockReportOutcome {
 
 /** What the core loop asks of the Liaison each cycle, at the spend cap too (no LLM call). */
 export interface LiaisonBlockReports {
-  runPending(): Promise<readonly BlockReportOutcome[]>;
+  runPending(): Promise<ReadonlyArray<BlockReportOutcome | StepFaulted>>;
 }
 
 /**
@@ -375,25 +376,32 @@ function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-b
 }
 
 export class BlockReports implements LiaisonBlockReports {
-  constructor(private readonly store: BlockReportStore) {}
+  constructor(
+    private readonly store: BlockReportStore,
+    /** Each report's own fault is contained to it (containEach). */
+    private readonly containment: StepContainment,
+  ) {}
 
-  /** A store failure throws through and fails the cycle. */
-  async runPending(): Promise<readonly BlockReportOutcome[]> {
-    const outcomes: BlockReportOutcome[] = [];
-    for (const due of await this.store.dueReports()) {
-      switch (due.subject) {
-        case "project-blocked": {
-          const kind = await this.store.postProjectReport(due.episodeId, "blocked", blockedBody(due));
-          outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
-          break;
+  /** A report that cannot be posted is that report's, contained to it (containEach); only listing them throws through. */
+  async runPending(): Promise<ReadonlyArray<BlockReportOutcome | StepFaulted>> {
+    const due = await this.store.dueReports();
+    return containEach(
+      this.containment,
+      "block-report",
+      due,
+      (report) => ({ id: `${report.subject}:${report.episodeId}`, projectId: report.projectId }),
+      async (report): Promise<BlockReportOutcome> => {
+        switch (report.subject) {
+          case "project-blocked": {
+            const kind = await this.store.postProjectReport(report.episodeId, "blocked", blockedBody(report));
+            return { kind, projectId: report.projectId, subject: report.subject };
+          }
+          case "project-resumed": {
+            const kind = await this.store.postProjectReport(report.episodeId, "resumed", projectResumedReport(report.how));
+            return { kind, projectId: report.projectId, subject: report.subject };
+          }
         }
-        case "project-resumed": {
-          const kind = await this.store.postProjectReport(due.episodeId, "resumed", projectResumedReport(due.how));
-          outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
-          break;
-        }
-      }
-    }
-    return outcomes;
+      },
+    );
   }
 }

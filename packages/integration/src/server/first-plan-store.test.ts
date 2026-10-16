@@ -14,6 +14,7 @@ import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, ProjectHaltRepository, createFirstPlanStore } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
@@ -101,7 +102,7 @@ function planner(): FirstPlanner {
     ...store,
     projectsAwaitingPlan: async () => (await store.projectsAwaitingPlan()).filter((p) => ourProjects.has(p.projectId)),
   };
-  return new FirstPlanner({ llm: gateway, store: ours });
+  return new FirstPlanner({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 function intake(): TenderIntake {
@@ -110,7 +111,7 @@ function intake(): TenderIntake {
     ...store,
     openTenders: async () => (await store.openTenders()).filter((t) => ourProjects.has(t.projectId)),
   };
-  return new TenderIntake({ llm: gateway, store: ours });
+  return new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 const INTAKE = {
@@ -144,7 +145,7 @@ function reports(): PlanReports {
     dueReports: async () => (await store.dueReports()).filter((r) => ourProjects.has(r.projectId)),
     dueRevisionReports: async () => (await store.dueRevisionReports()).filter((r) => ourProjects.has(r.projectId)),
   };
-  return new PlanReports(ours);
+  return new PlanReports(ours, memoryStepContainment(() => true));
 }
 
 const ROSTER = {
@@ -172,7 +173,7 @@ function rosterStep(): RosterDerivation {
     projectsAwaitingRoster: async () =>
       (await store.projectsAwaitingRoster()).filter((p) => ourProjects.has(p.projectId)),
   };
-  return new RosterDerivation({ llm: gateway, store: ours });
+  return new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 const NO_ACCOUNT = { statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred" };

@@ -1,4 +1,5 @@
-import type { ProjectId } from "@ashara/shared";
+import { containEach } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
@@ -40,7 +41,8 @@ export interface StackChoiceStore {
 type StackChoiceOutcome =
   | { readonly kind: "recorded" | "already-reported"; readonly projectId: ProjectId; readonly visionVersion: number }
   /** The project's record cannot carry the assumption truthfully: nothing is posted and the project is blocked. */
-  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause }
+  | StepFaulted;
 
 /** What the core loop asks of the Liaison after a Sprint 0 task has merged. */
 export interface LiaisonStackChoices {
@@ -72,30 +74,32 @@ function stackChoiceReport(statement: string): string {
 }
 
 export class StackChoiceReports implements LiaisonStackChoices {
-  constructor(private readonly store: StackChoiceStore) {}
+  constructor(
+    private readonly store: StackChoiceStore,
+    /** Each project's own fault is contained to it (containEach). */
+    private readonly containment: StepContainment,
+  ) {}
 
   /**
    * One project's unusable vision blocks that project, and the others are still reported on. Any
-   * other failure, a store failure included, throws through and fails the cycle.
+   * other failure, a store failure included, is that project's, contained to it (containEach).
    */
   async runPending(): Promise<readonly StackChoiceOutcome[]> {
-    const outcomes: StackChoiceOutcome[] = [];
-    for (const due of await this.store.dueStackChoices()) {
+    const due = await this.store.dueStackChoices();
+    return containEach(this.containment, "stack-choice", due, (choice) => ({ id: choice.taskId, projectId: choice.projectId }), async (choice): Promise<StackChoiceOutcome> => {
       let write: StackChoiceWrite;
       try {
-        write = this.compose(due);
+        write = this.compose(choice);
       } catch (err) {
         if (!(err instanceof StackChoiceVisionUnusable)) throw err;
         const cause = projectBlockCause(err);
-        const result = await this.store.blockProject(due.projectId, cause);
-        console.warn(`[liaison-stack-choice] project ${due.projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
-        outcomes.push({ kind: "project-blocked", projectId: due.projectId, cause });
-        continue;
+        const result = await this.store.blockProject(choice.projectId, cause);
+        console.warn(`[liaison-stack-choice] project ${choice.projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
+        return { kind: "project-blocked", projectId: choice.projectId, cause };
       }
       const kind = await this.store.recordStackChoice(write);
-      outcomes.push({ kind, projectId: due.projectId, visionVersion: write.vision.basedOnVersion + 1 });
-    }
-    return outcomes;
+      return { kind, projectId: choice.projectId, visionVersion: write.vision.basedOnVersion + 1 };
+    });
   }
 
   private compose(due: DueStackChoice): StackChoiceWrite {

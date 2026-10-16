@@ -28,3 +28,4 @@ export type { ProjectIntentSource } from "./project-intent.js";
 export { renderKnowledgeContext } from "./knowledge-context.js";
 export type { KnowledgeSection } from "./knowledge-context.js";
 export { priorAttemptFailure } from "./replan-context.js";
+export { turnFailureOf } from "./errors.js";

@@ -14,11 +14,12 @@ declare module "vitest" {
 
 // vitest's globalSetup. A test cell's instance names the run that made it, so the run's end can
 // tell its own cells from a concurrent run's, and a later run can tell a dead run's from a live
-// one's. A test process that dies before its afterAll (a test that timed out with a cell still
-// starting, a killed worker) leaves cells no production reaper selects: reconcileOrphans selects
-// one instance, and every test file draws its own. A run stopped by a signal removes its cells in
-// the signal listener; a run killed outright (SIGKILL, an out-of-memory kill) leaves them to the
-// next run's reaper.
+// one's. vitest answers SIGTERM, SIGINT and SIGHUP with process.exit a millisecond later, so neither
+// a test file's afterAll nor this file's teardown runs, and a run stopped from outside would leave
+// every cell it had started; no production reaper selects them (reconcileOrphans selects one
+// instance, and every test file draws its own). So a run stopped by one of those signals removes its
+// cells in the signal listener, and a run killed outright (SIGKILL, an out-of-memory kill) leaves
+// them to the next run's reaper. Why: docs/investigations/test-process-death-2026-10-16.md.
 
 const run = promisify(execFile);
 const PODMAN_TIMEOUT_MS = 60_000;
@@ -27,6 +28,14 @@ const LABEL_INSTANCE = "ashara.instance";
 const RUN_INSTANCE = /^test-(\d+)x[0-9a-f]{8}-/;
 /** The part of vitest's teardownTimeout the end-of-run check may spend on podman, so it ends first. */
 const TEARDOWN_SHARE = 0.8;
+
+/**
+ * What the guard's podman work needs at worst, at a run's end or on a signal: one listing and one
+ * removal, each bounded by PODMAN_TIMEOUT_MS. vitest.config.ts's teardownTimeout gives the end-of-run
+ * check at least this through TEARDOWN_SHARE, and `just test` waits at least this before its SIGKILL.
+ * @testseam cell-leak-guard.test.ts checks vitest.config.ts and the justfile against it; the guard's own calls read PODMAN_TIMEOUT_MS
+ */
+export const GUARD_PODMAN_BUDGET = { teardownShare: TEARDOWN_SHARE, worstCaseMs: 2 * PODMAN_TIMEOUT_MS } as const;
 
 /** Time left until `deadline`, at least 1 ms: execFile reads a timeout of 0 as none. */
 function remainingMs(deadline: number): number {

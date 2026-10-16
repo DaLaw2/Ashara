@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { ProjectId } from "@ashara/shared";
-import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import type { AcceptanceStore } from "./acceptance.js";
@@ -79,6 +79,7 @@ function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: 
   const scaffoldsSwept: unknown[] = [];
   const deps: AcceptanceDeps = {
     acceptance,
+    containment: memoryStepContainment(() => true),
     acceptanceSweeper: {
       sweepForAcceptance: async (_id, _path, goals, scaffolds) => {
         sweeps.push(goals);
@@ -131,7 +132,7 @@ describe("the acceptance sweep", () => {
       environmentVersion: "v1",
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
-      publicInterface: { kind: "described" },
+      publicInterface: { kind: "changed" },
       details: "all passed",
     });
     expect(await runAcceptanceSweeps(deps)).toBe(1);
@@ -152,7 +153,7 @@ describe("the acceptance sweep", () => {
       environmentVersion: "v1",
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
-      publicInterface: { kind: "described" },
+      publicInterface: { kind: "changed" },
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);
@@ -230,6 +231,9 @@ describe("the acceptance sweep", () => {
     expect(faults()).toBe(0);
     expect(blocks).toEqual([{ projectId, cause: expect.objectContaining({ category: "fault", errorClass: "ScaffoldMergeUnrecorded" }) }]);
     expect(blocks[0].cause.reason).toContain("s2");
+    // What the operator does is said with what exists: the column the merge is recorded in and the unblock command.
+    expect(blocks[0].cause.reason).toContain("UPDATE work_items SET merge_commit = '<commit>', merge_kind = 'merged' WHERE id = '<scaffold task id>'");
+    expect(blocks[0].cause.reason).toContain(`npx tsx scripts/project.ts unblock ${projectId} --reason`);
   });
 
   test("a sweep the substrate could not run halts the project on infrastructure with the observed error", async () => {

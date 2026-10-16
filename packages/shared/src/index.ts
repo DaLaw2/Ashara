@@ -13,6 +13,11 @@ export { systemClock } from "./clock.js";
 export type { ContendedWaitKind, ContendedWaitObserver } from "./contended-wait.js";
 export { contendedWait, observeContendedWaits } from "./contended-wait.js";
 
+export type { StepContainment, StepFaultLedger, StepFaultStanding, StepFaulted } from "./contained-step.js";
+export { containEach } from "./contained-step.js";
+/** @testseam unit tests of the cycle's steps contain their subjects with it; the composition root supplies db's ledger */
+export { memoryStepContainment } from "./contained-step.js";
+
 export type { DomainEvent } from "./types.js";
 export { createDomainEvent } from "./types.js";
 

@@ -605,6 +605,8 @@ function noneLine(commit: string): string {
 }
 
 const CUT_SAID = "so only its start and end are quoted";
+/** What the quote must say Ashara did not check: whether the file describes the product. */
+const INTERFACE_UNJUDGED = "Ashara has not verified that it describes the delivered product.";
 const CUT_MARKER = /(?:^|\n)\[truncated by Ashara: (\d+) characters cut here\]\n/g;
 const FENCE = /^`{3,}$/;
 
@@ -692,6 +694,9 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
         "delivered-interface-cut",
         `the delivered report quotes ${PUBLIC_INTERFACE_PATH} ${quote}, but ${quote === "cut" ? "does not say" : "says"} it was cut: "${block.said.slice(0, 200)}"`,
       );
+    }
+    if (!block.said.includes(INTERFACE_UNJUDGED)) {
+      add("delivered-interface-claim", `the delivered report quotes ${PUBLIC_INTERFACE_PATH} without saying "${INTERFACE_UNJUDGED}": acceptance compares its bytes with the scaffold's, never what it says`);
     }
   }
 }
