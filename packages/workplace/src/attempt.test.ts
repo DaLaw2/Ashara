@@ -4,7 +4,7 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/finance";
+import { PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult, CostMeasurement } from "@ashara/finance";
 import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
@@ -13,7 +13,7 @@ import { runAttempt } from "./attempt.js";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
-import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
+import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish, turnFailureOf } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { promptDigest } from "./prompt-digest.js";
 import type { AttemptRecord } from "./records.js";
@@ -321,6 +321,9 @@ describe("runAttempt", () => {
     if (outcome.kind !== "transport_exhausted") throw new Error(`expected transport_exhausted, got ${outcome.kind}`);
     expect(outcome.error).toBeInstanceOf(ProviderErrorFinish);
     expect(outcome.error).toMatchObject({ turn: 1, provider: "fake", model: "fake-model", rawFinishReason: "overloaded" });
+    // The provider's failure as the one classifier reads it, with no second reading of its class.
+    expect(modelCallFailureOf(outcome.error)).toBe("provider");
+    expect(turnFailureOf(outcome.error)).toBe("provider");
   });
 
   it("ends as model_stopped_without_finish when a response has no tool call", async () => {

@@ -6,7 +6,8 @@ import type { ProjectId } from "./ids.js";
 // A step that let it throw would stop the cycle for every project, cycle after cycle. That holds for
 // reading a subject as much as for acting on it: a listing reads each subject's rows on their own
 // (readEach), so a row that cannot be read is its subject's fault, never the listing's. A subject that
-// keeps failing halts its project as Ashara's own fault, so it reaches the client's report and the
+// keeps failing halts its project, blamed on whose failure its last fault was (the containment's halt
+// reads it with the one classifier of a failed model call), so it reaches the client's report and the
 // owner's unblock, and is parked: never tried again while its project is not at work, so a subject
 // of a project already halted, stopped or accepted ends on its record instead of retrying unseen.
 
@@ -60,8 +61,10 @@ export interface StepContainment extends StepFaultLedger {
   /** An error the cycle handles for every subject at once (a spend-cap refusal): it throws through. */
   escapes(error: unknown): boolean;
   /**
-   * Halts the project as Ashara's own fault (Delivery's halt, O3 c). A project already halted keeps
-   * its first cause, and one stopped or accepted is not halted: either is "already-blocked".
+   * Halts the project (Delivery's halt, O3 c) under whose failure the subject's last fault was, read
+   * from the fault's cause (its last error) by the one classifier of a failed model call: the model's,
+   * its provider's, or Ashara's own. A project already halted keeps its first cause, and one stopped
+   * or accepted is not halted: either is "already-blocked".
    */
   halt(projectId: ProjectId, fault: StepFaultsExhausted): Promise<"blocked" | "already-blocked">;
 }
@@ -69,15 +72,19 @@ export interface StepContainment extends StepFaultLedger {
 /** Faults in a row after which a subject's project is halted: with the backoff below, about an hour of failing. */
 const MAX_SUBJECT_FAULTS = 6;
 
-/** A subject of a cycle step failed MAX_SUBJECT_FAULTS times in a row or more: its project halts on Ashara's own fault. */
+/**
+ * A subject of a cycle step failed MAX_SUBJECT_FAULTS times in a row or more: its project halts. Its
+ * cause is the last fault's error, so the halt is blamed on whose failure that was, never assumed.
+ */
 class StepFaultsExhausted extends Error {
   constructor(
     readonly step: CycleStep,
     readonly subjectId: string,
     readonly faults: number,
     readonly lastError: string,
+    options: { readonly cause: unknown },
   ) {
-    super(`step ${step} failed on ${subjectId} ${faults} times in a row (step_faults); the last: ${lastError}`);
+    super(`step ${step} failed on ${subjectId} ${faults} times in a row (step_faults); the last: ${lastError}`, options);
     this.name = "StepFaultsExhausted";
   }
 }
@@ -190,10 +197,10 @@ export async function containEach<T, O>(
     const faults = await containment.record({ step, subjectId: subject.id, projectId: subject.projectId, error, retryAfterSeconds });
     const where = `[${step}] ${subject.id} (project ${subject.projectId}): fault ${faults} in a row`;
     if (faults >= MAX_SUBJECT_FAULTS) {
-      const halted = await containment.halt(subject.projectId, new StepFaultsExhausted(step, subject.id, faults, error));
+      const halted = await containment.halt(subject.projectId, new StepFaultsExhausted(step, subject.id, faults, error, { cause: result.error }));
       await containment.park(step, subject.id);
       const project =
-        halted === "blocked" ? "its project is now halted on Ashara's own fault" : "its project was already halted, stopped or accepted, and keeps its first cause";
+        halted === "blocked" ? "its project is now halted, under whose failure this last fault was" : "its project was already halted, stopped or accepted, and keeps its first cause";
       console.error(
         `${where}; ${project}; the subject is parked in step_faults and not tried again until its project is back at work ` +
           `(npx tsx scripts/project.ts unblock ${subject.projectId} --reason <what was repaired>); the step goes on with its other subjects: ${error}`,

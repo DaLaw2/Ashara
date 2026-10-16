@@ -56,6 +56,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.cycleLog.emit": { kind: "not-per-project", reason: "the cycle's own log line" },
   parseProjectId: { kind: "not-per-project", reason: "a pure parse" },
   projectCapCause: { kind: "not-per-project", reason: "a pure constructor" },
+  projectBlockCause: { kind: "not-per-project", reason: "a pure constructor" },
   deploymentCapCause: { kind: "not-per-project", reason: "a pure constructor" },
 };
 
@@ -125,6 +126,14 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/server/src/intake-store.ts#openTenders": { kind: "rows-only", why: "message rows as stored" },
   "packages/server/src/roster-store.ts#projectsAwaitingRoster": { kind: "rows-only", why: "each project with its vision row as stored" },
   "packages/workplace/src/dev-session-repository.ts#listActive": { kind: "not-a-step-listing", why: "the HTTP API's live sessions" },
+};
+
+const CLASSIFIER = "packages/finance/src/model-call-failure.ts";
+/** Readers of an error that decide nothing about whose failure it was. */
+const SAFE_READERS = new Set(["describeErrorChain"]);
+/** A reading of the error before the classifier that routes it apart from any count, with why. */
+const EARLIER_READERS: Readonly<Record<string, string>> = {
+  "packages/quality/src/verification.ts#preCallRefusalOf": "a call refused before it was sent ends the review as a refusal, which counts toward nothing",
 };
 
 function read(file: string): string {
@@ -240,13 +249,45 @@ describe("the cycle's per-project steps", () => {
     expect(throwing).toEqual([]);
   });
 
+  test("every per-project call of the cycle runs inside step(), which handles a spend-cap refusal out of it", () => {
+    const text = read(CORE_LOOP);
+    const body = bodyFrom(text, text.indexOf("export class CoreLoop {"));
+    const outside: string[] = [];
+    for (const [call, classified] of Object.entries(CYCLE_CALLS)) {
+      if (classified.kind !== "step") continue;
+      const pattern = new RegExp(`\\b${call.replaceAll(".", "\\.")}\\(`, "g");
+      for (const match of body.matchAll(pattern)) {
+        const statement = body.slice(body.lastIndexOf(";", match.index) + 1, match.index);
+        if (!/\bthis\.(?:step|stepThenCap)\(/.test(statement)) outside.push(`${call}: ${body.slice(match.index, body.indexOf("\n", match.index)).trim()}`);
+      }
+    }
+    expect(outside).toEqual([]);
+  });
+
   test("every failure counted toward a stop is read by modelCallFailureOf alone, never qualified by a second reading", () => {
     const qualified: string[] = [];
     for (const pkg of readdirSync(join(ROOT, "packages")).filter((name) => name !== "integration")) {
       for (const path of sourceFiles(join(ROOT, "packages", pkg, "src"))) {
+        const file = relative(ROOT, path);
+        if (file === CLASSIFIER) continue;
         const text = readFileSync(path, "utf8");
-        for (const line of text.split("\n")) {
-          if (/\bmodelCallFailureOf\(/.test(line) && /&&|\|\|/.test(line)) qualified.push(`${relative(ROOT, path)}: ${line.trim()}`);
+        for (const match of text.matchAll(/\bmodelCallFailureOf\((\w+)\)/g)) {
+          const [, read] = match;
+          const at = match.index;
+          // The statement the classifier is read in: no second reading may qualify it there.
+          const start = Math.max(text.lastIndexOf(";", at), text.lastIndexOf("{", at), text.lastIndexOf("}", at)) + 1;
+          const statement = text.slice(start, text.indexOf(";", at));
+          const inStatement = /&&|\|\||\?\?|\s\?\s|\binstanceof\b/.exec(statement);
+          if (inStatement !== null) qualified.push(`${file}: "${inStatement[0].trim()}" qualifies the classifier in: ${statement.trim()}`);
+          // The scope it is read in, after the line that opens it (a catch clause or a function): no
+          // earlier reading of the same error may decide its fate first.
+          const opens = Math.max(text.lastIndexOf("catch (", at), text.lastIndexOf("function ", at));
+          const scope = text.slice(text.indexOf("\n", opens), at);
+          for (const earlier of scope.matchAll(new RegExp(`\\b${read} instanceof \\w+|\\b(\\w+)\\(${read}\\b`, "g"))) {
+            const reader = earlier[1];
+            if (reader !== undefined && (SAFE_READERS.has(reader) || EARLIER_READERS[`${file}#${reader}`] !== undefined)) continue;
+            qualified.push(`${file}: ${earlier[0]} reads ${read} before modelCallFailureOf does`);
+          }
         }
       }
     }

@@ -74,7 +74,6 @@ import { checkBranchOwnership } from "./gates/ownership.js";
 import { deleteSettledTaskBranch, discardTaskBranch, taskBranchName } from "./merge.js";
 import { interfaceDefectLine, interfaceStandingOnMain, PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { InterfaceStanding, ScaffoldMerge } from "./public-interface.js";
-import { SuiteVerdictUnfit } from "./suite-review.js";
 import type { SuiteReviewing } from "./suite-review.js";
 import {
   FoundationUnbuildable,
@@ -324,7 +323,7 @@ export class TaskVerification {
       // Only the review model's own failure is the review's (a verdict that never validated, or one
       // unfit to act on), retried as its work. A provider's failure, or Ashara's (its records, git on
       // the host, a store, its code), says nothing of the suites: blocked under its class, uncharged.
-      const failure = e instanceof SuiteVerdictUnfit ? "model" : modelCallFailureOf(e);
+      const failure = modelCallFailureOf(e);
       if (failure === "model") {
         const result = failedBeforeAgent(task, sessionId, "reviewSuites", e, `the review of the plan's checks for ${task.id} gave no verdict`);
         eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });

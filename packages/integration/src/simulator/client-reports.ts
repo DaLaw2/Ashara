@@ -142,6 +142,8 @@ const KIND_JUDGEMENT = {
   infrastructure: "stated",
   replan_stopped: "stated",
   replan_provider_failed: "stated",
+  model_failed: "stated",
+  provider_failed: "stated",
   plan_repair: "repair",
   check_dispute: "retired",
   suite_review: "retired",
@@ -149,7 +151,18 @@ const KIND_JUDGEMENT = {
 type Judged = typeof KIND_JUDGEMENT;
 type StatedKind = { [K in keyof Judged]: Judged[K] extends "stated" ? K : never }[keyof Judged];
 const JUDGEMENT_OF: ReadonlyMap<string, Judged[keyof Judged]> = new Map(Object.entries(KIND_JUDGEMENT));
-const STATED_KINDS: ReadonlyArray<StatedKind> = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed"];
+const STATED_KINDS: ReadonlyArray<StatedKind> = [
+  "budget_cap",
+  "configuration",
+  "fault",
+  "planning_stopped",
+  "replan_bound",
+  "infrastructure",
+  "replan_stopped",
+  "replan_provider_failed",
+  "model_failed",
+  "provider_failed",
+];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
   return JUDGEMENT_OF.get(kind) ?? "unknown";
@@ -251,6 +264,10 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
       return "every attempt to revise the plan failed, the last because the model planning it gave no usable answer";
     case "replan_provider_failed":
       return "every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read";
+    case "model_failed":
+      return "a step of the work kept failing because the model doing it gave no usable answer";
+    case "provider_failed":
+      return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
   }
 }
 

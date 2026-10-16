@@ -370,6 +370,14 @@ class StubRefusal extends Error {
   }
 }
 
+/** A roster refusal whose cause chain names no model or provider failure: Ashara's own, as an unreadable vision is. */
+class StubVisionUnreadable extends Error {
+  constructor() {
+    super("no valid roster");
+    this.name = "VisionUnreadable";
+  }
+}
+
 /** The amounts a stub cap refuses at. */
 const STUB_SPEND = { capUsd: 5, spentUsd: 4.5, inFlightUsd: 0.25, nextCallUsd: 0.5 };
 
@@ -483,7 +491,7 @@ describe("CoreLoop spend cap", () => {
     expect(result.tasksProcessed).toBe(2);
   });
 
-  test("a roster Organization refuses halts its project as a fault; Organization halts nothing itself", async () => {
+  test("a roster Organization refuses halts its project, blamed by the refusal's cause chain; Organization halts nothing itself", async () => {
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({
       taskId: task.id,
       status: "completed" as const,
@@ -492,7 +500,7 @@ describe("CoreLoop spend cap", () => {
     const halted: Array<{ projectId: string; cause: unknown }> = [];
     const deps = buildDeps(undefined, undefined, undefined, undefined, {
       runPending: async () => [
-        { kind: "refused", projectId: TEST_PROJECT_ID, refusal: { errorClass: "RosterDerivationExhausted", reason: "no valid roster" } },
+        { kind: "refused", projectId: TEST_PROJECT_ID, refusal: { errorClass: "VisionUnreadable", reason: "no valid roster", error: new StubVisionUnreadable() } },
       ],
     });
 
@@ -508,7 +516,7 @@ describe("CoreLoop spend cap", () => {
     }).runCycle();
 
     expect(halted).toEqual([
-      { projectId: TEST_PROJECT_ID, cause: { category: "fault", errorClass: "RosterDerivationExhausted", reason: "no valid roster" } },
+      { projectId: TEST_PROJECT_ID, cause: { category: "fault", errorClass: "VisionUnreadable", reason: expect.stringContaining("no valid roster") } },
     ]);
   });
 

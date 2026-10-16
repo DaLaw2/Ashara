@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { ContextualLlm } from "@ashara/finance";
-import { withStructuredLadder } from "@ashara/finance";
+import { ModelAnswerUnfit, withStructuredLadder } from "@ashara/finance";
 import type { LadderAttemptEvent, StructuredValidation } from "@ashara/finance";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
@@ -189,8 +189,8 @@ class SuitesUnreadable extends Error {
   }
 }
 
-/** The model's verdict passed its schema and is still unfit to act on: the review model's failure, never Ashara's record's. */
-export class SuiteVerdictUnfit extends Error {
+/** The model's verdict passed its schema and is still unfit to act on: the review model's failure, never Ashara's record's (modelCallFailureOf "model"). */
+class SuiteVerdictUnfit extends ModelAnswerUnfit {
   constructor(
     readonly reviewTaskId: string,
     readonly detail: string,

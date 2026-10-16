@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ProviderError, StructuredOutputExhausted } from "@ashara/model-access";
-import { LlmCallNotAdmitted, PreCallRefusal } from "./errors.js";
+import { LlmCallNotAdmitted, ModelAnswerUnfit, PreCallRefusal } from "./errors.js";
 import { modelCallFailureOf } from "./model-call-failure.js";
 
 const exhausted = () => new StructuredOutputExhausted("test-site", [], "", ["never valid"], null);
@@ -12,6 +12,13 @@ describe("modelCallFailureOf", () => {
     expect(modelCallFailureOf(exhausted())).toBe("model");
     expect(modelCallFailureOf(new ProviderError("stub", "503", "provider"))).toBe("provider");
     expect(modelCallFailureOf(new Error("wrapped", { cause: new ProviderError("stub", "503", "provider") }))).toBe("provider");
+  });
+
+  test("an answer that validated and is unfit to act on is the model's, through any caller's class for it", () => {
+    class VerdictUnfit extends ModelAnswerUnfit {}
+    expect(modelCallFailureOf(new VerdictUnfit("names a suite it never read"))).toBe("model");
+    expect(modelCallFailureOf(new Error("wrapped", { cause: new VerdictUnfit("unfit") }))).toBe("model");
+    expect(modelCallFailureOf(new ModelAnswerUnfit("unfit", { cause: new PreCallRefusal("unpriced") }))).toBe("ashara");
   });
 
   test("anything it cannot name is Ashara's, never the model's or the provider's", () => {

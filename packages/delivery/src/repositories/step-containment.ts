@@ -7,7 +7,8 @@ import { ProjectHaltRepository } from "./project-halt.js";
 /**
  * The cycle's containment of its steps' subjects: their faults kept in step_faults, the errors the
  * cycle handles itself escaping, and a subject that keeps failing halting its project through
- * Delivery's guard, the one writer of a project halt (O3 c).
+ * Delivery's guard, the one writer of a project halt (O3 c), blamed on whose failure its last fault
+ * was (projectBlockCause reads the fault's cause chain).
  */
 export function stepContainment(db: DbHandle, escapes: (error: unknown) => boolean): StepContainment {
   const halts = new ProjectHaltRepository(db);
@@ -15,8 +16,9 @@ export function stepContainment(db: DbHandle, escapes: (error: unknown) => boole
     ...stepFaultLedger(db),
     escapes,
     halt: async (projectId, fault) => {
-      const result = await halts.block(projectId, projectBlockCause(fault));
-      console.warn(`[step-faults] project ${projectId} ${result}: ${fault.message}`);
+      const cause = projectBlockCause(fault);
+      const result = await halts.block(projectId, cause);
+      console.warn(`[step-faults] project ${projectId} ${result} (${cause.category}): ${fault.message}`);
       return result;
     },
   };

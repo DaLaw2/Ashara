@@ -13,6 +13,18 @@ export class PreCallRefusal extends Error {
   }
 }
 
+/**
+ * The model's answer validated against its schema and its caller still finds it unfit to act on: the
+ * model's failure, as an answer that never validated is (modelCallFailureOf "model"). A caller's own
+ * class for an unfit answer extends it, so the one classifier names it and no caller reads it apart.
+ */
+export class ModelAnswerUnfit extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ModelAnswerUnfit";
+  }
+}
+
 interface LlmCallNotRecordedContext {
   readonly projectId: string;
   readonly callSite: string;

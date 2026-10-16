@@ -1,13 +1,14 @@
 import { describeErrorChain } from "@ashara/shared";
-import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
-import type { SpendAtCap } from "./acl/finance-acl.js";
+import { SPEND_CAP_ERROR_CLASS, modelCallFailureOf } from "./acl/finance-acl.js";
+import type { ModelCallFailure, SpendAtCap } from "./acl/finance-acl.js";
 
 // Delivery's published language for a project halt (O3 c, ADR-080 d3): Delivery owns the halt
 // (an open episode in project_blocks, migration 059); Engagement owns the engagement lifecycle
 // (projects.lifecycle: active, stopped, accepted). Every context that asks for a halt, and Engagement's
 // reports of one, read the cause in these words. This module imports nothing but the kernel and
-// Finance's spend-cap class names and amounts, neither of which reads Delivery, so a context
-// Delivery itself reads can read it back without a cycle at load time.
+// Finance's spend-cap class names and amounts and its classifier of a failed model call, none of
+// which reads Delivery, so a context Delivery itself reads can read it back without a cycle at load
+// time.
 
 /**
  * What kind of cause blocked a project (migration 040): the closed vocabulary the Liaison's plain
@@ -27,7 +28,10 @@ import type { SpendAtCap } from "./acl/finance-acl.js";
  * planning model's structured output never validated (migrations 060, 062): the model's failure.
  * `replan_provider_failed`: every attempt failed, the last because the planning model's provider
  * failed the request, an HTTP error or no answer, so no answer was read (migration 062). A revision
- * exhausted by any other error is Ashara's own (`fault`).
+ * exhausted by any other error is Ashara's own (`fault`). `model_failed`: any other step stopped on
+ * the model's failure, its structured answer never validated or unfit to act on (migration 063).
+ * `provider_failed`: any other step stopped on its model provider failing the request, so no answer
+ * was read (migration 063).
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -39,7 +43,9 @@ type ProjectBlockCategory =
   | "plan_repair"
   | "infrastructure"
   | "replan_stopped"
-  | "replan_provider_failed";
+  | "replan_provider_failed"
+  | "model_failed"
+  | "provider_failed";
 
 /**
  * Why a project was blocked (migration 025): the cause's category, the error's class and its full
@@ -61,7 +67,23 @@ export function deploymentCapCause(stop: { readonly reason: string; readonly spe
   return { category: "budget_cap", errorClass: SPEND_CAP_ERROR_CLASS.deployment, reason: stop.reason, spend: stop.spend };
 }
 
-/** A project's own record or step failed: Ashara's fault, which the team must repair. */
+/** The category a halt on a failed model call is recorded under, by whose failure it was (modelCallFailureOf). */
+export function modelCallBlockCategory(failure: ModelCallFailure): "fault" | "model_failed" | "provider_failed" {
+  switch (failure) {
+    case "model":
+      return "model_failed";
+    case "provider":
+      return "provider_failed";
+    case "ashara":
+      return "fault";
+  }
+}
+
+/**
+ * A project's record or step failed, blamed by its cause chain through the one classifier of a failed
+ * model call: the model's failure or its provider's when the chain names one, Ashara's own (`fault`,
+ * which the team must repair) otherwise, every error nothing names included.
+ */
 export function projectBlockCause(err: Error): UnpricedBlockCause {
-  return { category: "fault", errorClass: err.name, reason: describeErrorChain(err) };
+  return { category: modelCallBlockCategory(modelCallFailureOf(err)), errorClass: err.name, reason: describeErrorChain(err) };
 }

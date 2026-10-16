@@ -1,4 +1,4 @@
-import { modelCallFailureOf } from "@ashara/finance";
+import { ProviderError, modelCallFailureOf } from "@ashara/finance";
 
 /** The caller handed runAttempt an assignment it cannot run; no model call and no cell call was made. */
 export class InvalidAssignment extends Error {
@@ -13,18 +13,20 @@ export class InvalidAssignment extends Error {
   }
 }
 
-/** The provider returned a response but marked it with an error finish reason; the turn's output is not trusted. */
-export class ProviderErrorFinish extends Error {
+/**
+ * The provider returned a response but marked it with an error finish reason; the turn's output is not
+ * trusted. The provider's failure, as a ProviderError of failure "provider" is, so the one classifier
+ * (modelCallFailureOf) names it.
+ */
+export class ProviderErrorFinish extends ProviderError {
   readonly turn: number;
-  readonly provider: string;
   readonly model: string;
   readonly rawFinishReason: string | null;
 
   constructor(turn: number, provider: string, model: string, rawFinishReason: string | null) {
-    super(`Turn ${turn}: ${provider}/${model} ended the response with an error finish reason (raw: ${rawFinishReason ?? "none sent"})`);
+    super(provider, `turn ${turn}: ${provider}/${model} ended the response with an error finish reason (raw: ${rawFinishReason ?? "none sent"})`, "provider");
     this.name = "ProviderErrorFinish";
     this.turn = turn;
-    this.provider = provider;
     this.model = model;
     this.rawFinishReason = rawFinishReason;
   }
@@ -50,6 +52,14 @@ export class AttemptWallClockExhausted extends Error {
  * model was read.
  */
 export function turnFailureOf(error: unknown): "provider" | "ashara" {
-  if (error instanceof ProviderErrorFinish) return "provider";
-  return modelCallFailureOf(error) === "provider" ? "provider" : "ashara";
+  const failure = modelCallFailureOf(error);
+  switch (failure) {
+    case "provider":
+      return "provider";
+    // A turn reads no structured answer, so no turn fails as the model's; one that did would be
+    // Ashara's to look into, never charged to the provider.
+    case "model":
+    case "ashara":
+      return "ashara";
+  }
 }

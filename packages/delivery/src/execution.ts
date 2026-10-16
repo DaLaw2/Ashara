@@ -4,7 +4,7 @@ import { describeErrorChain, InvalidId, parseWorkItemId } from "@ashara/shared";
 import type { MergeKind, StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { ErrorEnvelope } from "./acl/workplace-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "./work-item-language/transitions.js";
-import { projectBlockCause, projectCapCause } from "./project-halt.js";
+import { modelCallBlockCategory, projectBlockCause, projectCapCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { RawFailureContext } from "./failure-router.js";
 import { PlanningService, salvagedReason, failWorkItem, blockWorkItem, giveUpWorkItem, requeueWorkItem, takeEvents, startWorkItem, exitStaleChecks, exitDisputedCheck, exitSuiteReview, requestEnvironmentChange } from "./domain/index.js";
@@ -569,8 +569,11 @@ async function routeAsInfrastructureFault(
       const halted = await deps.projects.block(task.projectId, { ...projectBlockCause(err), category: "infrastructure" });
       console.warn(`[${task.id}] project ${task.projectId} ${halted} on infrastructure: ${err.message}`);
     } else {
+      // The fault's class was read by the one classifier when the task was blocked under it
+      // (modelCallFailureOf, through environmentBlocked's fault): the halt is blamed the same way.
       const err = fault.class === "provider" ? new ProviderFaultBudgetSpent(task.id, faults, fault) : new AsharaFaultBudgetSpent(task.id, faults, fault);
-      const halted = await deps.projects.block(task.projectId, projectBlockCause(err));
+      const cause = { ...projectBlockCause(err), category: modelCallBlockCategory(fault.class) };
+      const halted = await deps.projects.block(task.projectId, cause);
       console.warn(`[${task.id}] project ${task.projectId} ${halted} on a fault that was not its work (${fault.class}): ${err.message}`);
     }
   }

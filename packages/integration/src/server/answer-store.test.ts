@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -186,6 +187,12 @@ async function visionsOf(projectId: ProjectId) {
     SELECT version, inferences, open_questions AS "openQuestions", change_reason AS "changeReason"
     FROM vision_documents WHERE project_id = ${projectId} ORDER BY version`);
   return z.array(VisionRowSchema).parse(result.rows);
+}
+
+/** The kind of the project's open block episode, or null when it is not halted. */
+async function haltKindOf(projectId: ProjectId): Promise<string | null> {
+  const result = await db.execute(sql`SELECT kind FROM project_blocks WHERE project_id = ${projectId} AND ended_at IS NULL`);
+  return z.array(z.object({ kind: z.string() })).parse(result.rows)[0]?.kind ?? null;
 }
 
 /** The answers whose plan revision the project awaits (replan_requests, migration 052), oldest first. */
@@ -423,6 +430,8 @@ describe("the client's answers", () => {
 
     expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
     expect((await new ProjectRepository(db).get(projectId))?.status).toBe("blocked");
+    // Blamed by the one classifier: the model never answered in the schema, so the halt is the model's, not Ashara's.
+    expect(await haltKindOf(projectId)).toBe("model_failed");
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeNull();
     expect(await visionsOf(projectId)).toHaveLength(1);
   });
@@ -460,5 +469,29 @@ describe("the client's answers", () => {
     expect((await new ProjectRepository(db).get(broken.projectId))?.status).not.toBe("blocked");
     // Not read again until its backoff has passed.
     expect(await new ClientAnswers({ containment: containment(), llm: gateway, store: failing }).runPending()).toEqual([]);
+  });
+
+  test("a roster whose provider fails every request halts its project at the fault bound as the provider's failure, never Ashara's", async () => {
+    const { projectId } = await intakenProject();
+    const outage = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new APICallError({ message: "stub provider unavailable", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode: 503, isRetryable: true });
+      },
+    });
+    stub.model = outage;
+
+    const kinds: string[] = [];
+    for (let cycle = 0; cycle < 10 && (await haltKindOf(projectId)) === null; cycle++) {
+      for (const outcome of await roster().runPending()) kinds.push(outcome.kind);
+      await db.execute(sql`UPDATE step_faults SET retry_at = now() - interval '1 second' WHERE step = 'roster' AND subject_id = ${projectId}`);
+    }
+
+    expect(kinds.length).toBeGreaterThan(1);
+    expect(new Set(kinds)).toEqual(new Set(["step-faulted"]));
+    expect(await haltKindOf(projectId)).toBe("provider_failed");
+    const halted = await db.execute(sql`SELECT blocked_category AS "category" FROM projects WHERE id = ${projectId}`);
+    expect(z.array(z.object({ category: z.string() })).parse(halted.rows)).toEqual([{ category: "provider_failed" }]);
+    // The parked subject of the halted project is not tried again.
+    expect(await roster().runPending()).toEqual([]);
   });
 });

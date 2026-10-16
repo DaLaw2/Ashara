@@ -47,6 +47,8 @@ export interface RosterStore {
 interface RosterRefusal {
   readonly errorClass: string;
   readonly reason: string;
+  /** The refusal's error, whose cause chain the halt is blamed by: a ladder run out is the model's failure. */
+  readonly error: Error;
 }
 
 export type RosterOutcome =
@@ -186,7 +188,7 @@ export class RosterDerivation implements RosterDerivationStep {
         return await this.derive({ projectId: project.projectId, ...rosterVisionOf(project.vision) });
       } catch (err) {
         if (!(err instanceof RosterDerivationExhausted || err instanceof VisionUnreadable)) throw err;
-        const refusal: RosterRefusal = { errorClass: err.name, reason: describeErrorChain(err) };
+        const refusal: RosterRefusal = { errorClass: err.name, reason: describeErrorChain(err), error: err };
         console.warn(`[roster] project ${project.projectId}: ${refusal.errorClass}; no roster is derived: ${refusal.reason}`);
         return { kind: "refused", projectId: project.projectId, refusal } satisfies RosterOutcome;
       }

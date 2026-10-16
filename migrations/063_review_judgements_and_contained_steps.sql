@@ -10,12 +10,18 @@
 -- first's. Append-only.
 --
 -- step_faults: a subject of a cycle step (a tender, an answer, a project, a report) whose run failed
--- on Ashara's side is recorded here with how many faults in a row, the last error, and when it is
--- tried again, instead of failing the loop's cycle for every project. A subject whose retry_at is
--- in the future is skipped by its step; one that runs through has its row deleted. These faults
--- never count against the client's input or the work. A subject that exhausted its faults halted
--- its project and is parked (parked_at): skipped while its project is not at work, so a subject of
--- a project already halted, stopped or accepted stops retrying, and an owner's unblock returns it.
+-- is recorded here with how many faults in a row, the last error, and when it is tried again,
+-- instead of failing the loop's cycle for every project. A subject whose retry_at is in the future
+-- is skipped by its step; one that runs through has its row deleted. These faults never count
+-- against the client's input or the work. A subject that exhausted its faults halted its project
+-- and is parked (parked_at): skipped while its project is not at work, so a subject of a project
+-- already halted, stopped or accepted stops retrying, and an owner's unblock returns it.
+--
+-- model_failed, provider_failed: a halt is blamed on whose failure its cause was, read by the one
+-- classifier of a failed model call: model_failed when the model's structured answer never
+-- validated or was unfit to act on, provider_failed when the model's provider failed the request so
+-- no answer was read. 'fault' stays Ashara's own. replan_stopped and replan_provider_failed are kept
+-- for an exhausted plan revision. Existing rows keep the kind they were written with.
 --
 -- acceptance_sweeps.report_record_failures: the failed attempts at a delivered report whose
 -- records are on file but do not read as a report; only these count toward the acceptance notice
@@ -65,3 +71,16 @@ CREATE TABLE step_faults (
 
 ALTER TABLE acceptance_sweeps
   ADD COLUMN report_record_failures INTEGER NOT NULL DEFAULT 0 CHECK (report_record_failures >= 0);
+
+ALTER TABLE projects
+  DROP CONSTRAINT projects_blocked_category_known,
+  ADD CONSTRAINT projects_blocked_category_known CHECK (
+    blocked_category IS NULL
+    OR blocked_category IN ('budget_cap', 'configuration', 'fault', 'check_dispute', 'replan_bound', 'suite_review', 'plan_repair', 'infrastructure', 'replan_stopped', 'replan_provider_failed', 'model_failed', 'provider_failed')
+  );
+
+ALTER TABLE project_blocks
+  DROP CONSTRAINT project_blocks_kind_check,
+  ADD CONSTRAINT project_blocks_kind_check CHECK (
+    kind IN ('budget_cap', 'configuration', 'fault', 'planning_stopped', 'check_dispute', 'replan_bound', 'suite_review', 'plan_repair', 'infrastructure', 'replan_stopped', 'replan_provider_failed', 'model_failed', 'provider_failed')
+  );

@@ -1,10 +1,11 @@
 import { ProviderConfigurationRejected, ProviderError, StructuredOutputExhausted } from "@ashara/model-access";
-import { LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
+import { LlmCallNotAdmitted, LlmCallNotRecorded, ModelAnswerUnfit, PreCallRefusal } from "./errors.js";
 
 /**
  * Whose failure a failed call through the guarded model port was, read from its cause chain. The
  * one classification every context routes a failed model call by, so no caller writes its own:
- * - "model": the model answered and its structured output never validated (StructuredOutputExhausted).
+ * - "model": the model answered and its structured output never validated (StructuredOutputExhausted),
+ *   or validated and was unfit to act on (ModelAnswerUnfit).
  * - "provider": the provider failed the request (ProviderError.failure "provider": a 5xx, 408 or 429
  *   status, no answer, a body not in the API's shape), so no answer was read.
  * - "ashara": anything else. Ashara refused or broke around the call (a spend-cap or price refusal,
@@ -31,7 +32,7 @@ export function modelCallFailureOf(err: unknown): ModelCallFailure {
       return "ashara";
     }
     if (named) continue;
-    if (current instanceof StructuredOutputExhausted) {
+    if (current instanceof StructuredOutputExhausted || current instanceof ModelAnswerUnfit) {
       failure = "model";
       named = true;
     } else if (current instanceof ProviderError) {

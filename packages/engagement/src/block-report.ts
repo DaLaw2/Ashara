@@ -25,7 +25,9 @@ type ProjectBlockKind =
   | "replan_bound"
   | "infrastructure"
   | "replan_stopped"
-  | "replan_provider_failed";
+  | "replan_provider_failed"
+  | "model_failed"
+  | "provider_failed";
 
 /**
  * The cause recorded on a block episode: the error's class and its described chain, each null when
@@ -204,6 +206,10 @@ function recordedKind(halt: ToldHalt): string {
       return "every attempt to revise the plan failed, the last because the model planning it gave no usable answer";
     case "replan_provider_failed":
       return "every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read";
+    case "model_failed":
+      return "a step of the work kept failing because the model doing it gave no usable answer";
+    case "provider_failed":
+      return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
   }
 }
 
@@ -249,6 +255,9 @@ function nextStep(halt: ToldHalt): string {
     case "replan_stopped":
     case "replan_provider_failed":
       return `The team has to look into it before the plan is revised again. ${WAITS_ON_OPERATOR}`;
+    case "model_failed":
+    case "provider_failed":
+      return `The team has to look into it before that step is tried again. ${WAITS_ON_OPERATOR}`;
     case "replan_bound":
       return `Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. ${WAITS_ON_OPERATOR}`;
     case "infrastructure":

@@ -116,14 +116,19 @@ class AnswerVisionUnusable extends Error {
   }
 }
 
-/** Reading the answer failed on every attempt: what the client said is not known, so nothing is planned past it. */
+/**
+ * Reading the answer failed on every attempt: what the client said is not known, so nothing is
+ * planned past it. Its cause is the last attempt's error when this cycle made it, so the halt is
+ * blamed on the model or its provider; one read back from the record names no party and is Ashara's.
+ */
 class AnswerReadingExhausted extends Error {
   constructor(
     readonly answerId: string,
     readonly attempts: number,
     readonly lastError: string,
+    options?: { readonly cause: unknown },
   ) {
-    super(`answer ${answerId} could not be read after ${attempts} attempts; last error: ${lastError}`);
+    super(`answer ${answerId} could not be read after ${attempts} attempts; last error: ${lastError}`, options);
     this.name = "AnswerReadingExhausted";
   }
 }
@@ -346,7 +351,7 @@ export class ClientAnswers implements LiaisonAnswers {
     console.warn(
       `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): attempt ${attempt}/${MAX_ANSWER_ATTEMPTS} failed: ${error}`,
     );
-    if (attempt >= MAX_ANSWER_ATTEMPTS) throw new AnswerReadingExhausted(answer.id, attempt, error);
+    if (attempt >= MAX_ANSWER_ATTEMPTS) throw new AnswerReadingExhausted(answer.id, attempt, error, { cause: err });
     return { kind: "failed", answerId: answer.id, projectId: answer.projectId, attempt, error };
   }
 }
