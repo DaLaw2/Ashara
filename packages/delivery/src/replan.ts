@@ -63,7 +63,7 @@ interface PlannedItem {
   /** A Sprint 0 task's statement of the environment it set up (migration 033); null when none is recorded. */
   readonly environmentStatement: string | null;
   /**
-   * The vision items its latest stored checks decide (task_checks.decides, migration 063), each as
+   * The vision items its latest stored checks decide (task_checks.decides, migration 064), each as
    * its check task cites it; empty when it has no stored checks or they record no items they decide.
    */
   readonly decided: readonly VisionItem[];

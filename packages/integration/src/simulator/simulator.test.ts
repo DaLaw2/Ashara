@@ -233,8 +233,9 @@ describe("lifecycle simulator, directed", () => {
   }
 
   // ADR-074 d82 W3: two implementations run in one batch and one finalize waits on the other's
-  // checkout. Skipping that wait lets one finalize reset, merge into and clean the checkout while
-  // the other's merge is staged there, which I7's merge-queue clause names. The turn is handed on at every host git call, so each
+  // checkout. Skipping that wait lets one finalize reset, merge into or clean the checkout while
+  // the other's merge is staged there, which I7's merge-queue clause names; which of its git calls
+  // meets the staged merge first is the schedule's, not the clause's. The turn is handed on at every host git call, so each
   // finalize is entered while the other is part way through its own. A directed run is a function
   // of its directions alone: run twice, its trace is byte-identical.
   it("catches two finalizes overlapping on one checkout when the checkout lock is skipped", async () => {
@@ -245,7 +246,8 @@ describe("lifecycle simulator, directed", () => {
     const again = await directed(race);
     expect(again.trace.join("\n")).toBe(clean.trace.join("\n"));
     const planted = await directed(race, { mutation: "no-checkout-lock" });
-    expect(keys(planted)).toContain("I7:checkout-overlap:reset");
+    const overlaps = keys(planted).filter((key) => key.startsWith("I7:checkout-overlap:"));
+    expect(overlaps.length, statements(planted)).toBeGreaterThan(0);
   }, 120_000);
 
   // ADR-074 d84 b. With one project the admission queue's absence admits nothing more, so here two

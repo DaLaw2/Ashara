@@ -126,7 +126,7 @@ async function awaitedAnswers(db: DbHandle, projectId: string): Promise<string[]
   return rows.map((row) => row.id);
 }
 
-/** task_checks.decides (migration 063): the ids of the vision items one stored check decides; null on a row written before it. */
+/** task_checks.decides (migration 064): the ids of the vision items one stored check decides; null on a row written before it. */
 const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
 
 /** A stored check's decides does not parse, or names an item its check task's task_spec.sources does not hold. */
@@ -144,7 +144,7 @@ class StoredDecisionUnreadable extends Error {
 /**
  * The vision items the latest stored check revision of each task of the project decides, keyed by
  * the task's id, each item as its check task cites it (ADR-083). A check that records no items it
- * decides (written before migration 063) decides none, and a task with no stored checks is absent:
+ * decides (written before migration 064) decides none, and a task with no stored checks is absent:
  * a citation never stands in for a check.
  */
 export async function decidedByLatestChecks(db: DbHandle, projectId: string): Promise<Map<string, VisionItem[]>> {

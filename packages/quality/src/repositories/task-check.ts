@@ -10,7 +10,7 @@ import type { VisionSource } from "../acl/engagement-acl.js";
 
 const TaskCheckFilesSchema = z.array(z.object({ path: z.string().min(1), content: z.string() }).strict());
 
-/** task_checks.decides (migration 063): the ids of the vision items a check decides; null on a row written before it. */
+/** task_checks.decides (migration 064): the ids of the vision items a check decides; null on a row written before it. */
 const TaskCheckDecidesSchema = z.tuple([z.string().min(1)], z.string().min(1)).nullable();
 
 type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
@@ -25,7 +25,7 @@ interface DefinedTaskCheck extends TaskCheckDefinition {
   readonly decides: readonly [string, ...string[]];
 }
 
-/** A stored check: the items it decides, or null when its row records none (written before migration 063). */
+/** A stored check: the items it decides, or null when its row records none (written before migration 064). */
 interface StoredTaskCheck extends TaskCheckDefinition {
   readonly decides: DefinedTaskCheck["decides"] | null;
 }

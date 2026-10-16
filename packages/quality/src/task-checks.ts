@@ -56,7 +56,7 @@ export interface TaskChecks {
 }
 
 /**
- * One stored check with the ids of the vision items it decides (migration 063); null for a check
+ * One stored check with the ids of the vision items it decides (migration 064); null for a check
  * stored before they were recorded, which is not evidence that it decides any item.
  */
 interface StoredCheck extends CheckDefinition {

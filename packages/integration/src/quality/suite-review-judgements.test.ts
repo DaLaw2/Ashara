@@ -58,13 +58,15 @@ describe("suite review judgements (migration 063)", () => {
         revision: 1,
         environmentVersion: "v1",
         baselineCommit: null,
-        checks: [{ name: taskId === implA ? "prints-count" : "stdout-empty", command: "sh check.sh" }],
+        checks: [{ name: taskId === implA ? "prints-count" : "stdout-empty", command: "sh check.sh", decides: ["item 1"] }],
         files: [],
       }),
     };
     const rejectA = { checkTasks: [checkA], kind: "outside-vision", check: "prints-count", judgedItems: ["item 1"], missingClause: "prints the row count", problem: "a row count is asked for by nothing", evidence: "sh check.sh" };
     const rejectB = { checkTasks: [checkB], kind: "outside-vision", check: "stdout-empty", judgedItems: ["item 1"], missingClause: "an empty stdout", problem: "an empty stdout is asked for by nothing", evidence: "sh check.sh" };
-    const answers = [{ problems: [rejectA, rejectB] }, { problems: [{ ...rejectA, missingClause: "a count of the rows" }] }];
+    // The second review's undecided-item on check B is kept whole among its findings, and B is still released.
+    const undecidedB = { checkTasks: [checkB], kind: "undecided-item", item: "item 1", problem: "no check reads a malformed row", evidence: "sh check.sh" };
+    const answers = [{ problems: [rejectA, rejectB] }, { problems: [{ ...rejectA, missingClause: "a count of the rows" }, undecidedB] }];
     let next = 0;
     const llm: ContextualLlm = {
       forCall: () => ({
@@ -99,7 +101,7 @@ describe("suite review judgements (migration 063)", () => {
         checkName: "stdout-empty",
         outcome: "released",
         firstFinding: rejectB,
-        secondFindings: [],
+        secondFindings: [undecidedB],
         firstModel: "first/strong-a",
         secondModel: "second/strong-b",
         secondReview: "other-model",

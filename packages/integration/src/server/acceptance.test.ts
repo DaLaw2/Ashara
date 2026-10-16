@@ -142,7 +142,7 @@ async function deliveredProject(
   return { projectId: project.id, goals: [store, remove], scaffold, store, checksOfStore, question };
 }
 
-/** One stored check of a task's first revision, deciding `decides` (null: a row written before migration 063). */
+/** One stored check of a task's first revision, deciding `decides` (null: a row written before migration 064). */
 async function storeCheck(projectId: string, taskId: string, checkTaskId: string, decides: readonly string[] | null): Promise<void> {
   await db.execute(sql`
     INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)

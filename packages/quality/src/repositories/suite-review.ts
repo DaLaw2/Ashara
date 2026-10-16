@@ -132,6 +132,13 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
     problem: z.string().min(1),
     evidence: z.string().min(1),
   }),
+  z.strictObject({
+    kind: z.literal("undecided-item"),
+    checkTasks: z.array(z.string().min(1)).length(1),
+    item: z.string().min(1),
+    problem: z.string().min(1),
+    evidence: z.string().min(1),
+  }),
 ]);
 
 const StoredJudgementSchema = z.strictObject({

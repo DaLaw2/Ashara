@@ -44,7 +44,7 @@ const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks:
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
 const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown() });
-/** One stored check, with the check task that wrote it and what it says it decides (migration 063). */
+/** One stored check, with the check task that wrote it and what it says it decides (migration 064). */
 const storedCheckRow = z.object({ checkTaskId: z.string(), taskSpec: z.unknown(), name: z.string(), decides: z.unknown() });
 type SweptCheck = z.infer<typeof storedCheckRow>;
 /** One stored check a passed sweep ran. */
@@ -557,7 +557,7 @@ function identityOf(source: Pick<VisionSource, "type" | "id" | "text">): string 
 
 /**
  * The identities the stored checks decide (ADR-083): each id a check names in `decides`, read as its
- * check task cites it. Unrecorded when a check names none (a row from before migration 063) or its
+ * check task cites it. Unrecorded when a check names none (a row from before migration 064) or its
  * check task records no cited items; unreadable when a check names an id its check task does not
  * cite or its `decides` is no list of ids. Either way no stored fact says which items were checked.
  */

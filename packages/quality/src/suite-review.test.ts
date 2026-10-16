@@ -134,7 +134,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     const prompts: string[] = [];
     const undecided = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
     const uncited = { ...undecided, item: REFUSAL.id };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [uncited] }, { problems: [undecided] }], prompts), source: source(), publicInterface: INTERFACE });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [uncited] }, { problems: [undecided] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({
       kind: "problems",

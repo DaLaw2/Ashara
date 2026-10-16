@@ -1,4 +1,4 @@
--- Migration 063: each stored check names the vision items it decides (ADR-083).
+-- Migration 064: each stored check names the vision items it decides (ADR-083).
 --
 -- task_checks.decides: the ids of the vision items the check task cites that this check's verdict
 -- decides, as the check author named them in define_check, a non-empty JSON array of non-empty

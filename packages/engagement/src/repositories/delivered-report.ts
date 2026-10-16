@@ -188,12 +188,12 @@ function sourceIdentity(source: VisionSource): string {
   return JSON.stringify([source.type, source.id, source.text]);
 }
 
-/** task_checks.decides (migration 063): the ids of the vision items one stored check decides; null on a row written before it. */
+/** task_checks.decides (migration 064): the ids of the vision items one stored check decides; null on a row written before it. */
 const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
 
 /**
  * The items one stored check decides, by identity, each read as its check task cites it; null when
- * the check records no items it decides (written before migration 063) or its check task records no
+ * the check records no items it decides (written before migration 064) or its check task records no
  * cited items, so what it covers is not on record.
  */
 function decidedBy(check: { readonly checkTaskId: string; readonly name: string; readonly decides: unknown; readonly taskSpec: unknown }): Set<string> | null {
