@@ -211,12 +211,17 @@ interface AttemptScript {
 }
 
 /**
- * The assumptions the planner's prompt says an acceptance line must name (ADR-083), as an honest
- * planner reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
+ * The vision items the planner's prompt says an acceptance line must name (d89 E, ADR-083), as an
+ * honest planner reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
  */
-function assumptionsToCheck(prompt: string): string[] {
+function itemsToCheck(prompt: string): string[] {
   const listed = /a plan that leaves one unnamed is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
   return listed === undefined ? [] : listed.split(", ");
+}
+
+/** `sources` with every id of `toCheck` it does not already name appended. */
+function naming(sources: readonly string[], toCheck: readonly string[]): string[] {
+  return [...sources, ...toCheck.filter((id) => !sources.includes(id))];
 }
 
 interface ScriptedPlan {
@@ -225,15 +230,15 @@ interface ScriptedPlan {
 
 /**
  * `plan` as an honest planner answers `prompt`: its first task's first acceptance line also names
- * every assumption the prompt says a line must name (ADR-083).
+ * every item the prompt says a line must name (d89 E, ADR-083).
  *
  * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's planner does
  */
-export function citingAssumptionsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
-  const ids = assumptionsToCheck(prompt);
+export function citingItemsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
+  const ids = itemsToCheck(prompt);
   return {
     tasks: plan.tasks.map((task, i) =>
-      i > 0 ? task : { ...task, acceptance: task.acceptance.map((line, j) => (j > 0 ? line : { ...line, sources: [...line.sources, ...ids] })) },
+      i > 0 ? task : { ...task, acceptance: task.acceptance.map((line, j) => (j > 0 ? line : { ...line, sources: naming(line.sources, ids) })) },
     ),
   };
 }
@@ -375,7 +380,7 @@ export class StandIns {
    */
   private plan(prompt: string): unknown {
     const { universe } = this.context;
-    const toCheck = assumptionsToCheck(prompt);
+    const toCheck = itemsToCheck(prompt);
     const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE) || prompt.includes(MISSING_INTERFACE_EVIDENCE)
       ? [
           {
@@ -387,7 +392,7 @@ export class StandIns {
             endState: `${PUBLIC_INTERFACE_PATH} is no longer the scaffold's.`,
             scope: `${PUBLIC_INTERFACE_PATH} only.`,
             deliverables: [{ text: `${PUBLIC_INTERFACE_PATH} describes the product.`, sources: ["S1"] }],
-            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: ["S1", ...toCheck] }],
+            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: naming(["S1"], toCheck) }],
             capability: "Medium",
             capabilityReason: "One file.",
           },
@@ -406,7 +411,7 @@ export class StandIns {
         endState: `${task.behaviours.join(", ")} can be used end to end.`,
         scope: `The ${task.behaviours.join(", ")} part of the product.`,
         deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
-        acceptance: task.behaviours.map((b, j) => ({ text: `A user sees ${b}.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`, ...(j === 0 ? toCheck : [])] })),
+        acceptance: task.behaviours.map((b, j) => ({ text: `A user sees ${b}.`, sources: naming([`S${universe.behaviours.indexOf(b) + 1}`], j === 0 ? toCheck : []) })),
         capability: "Medium",
         capabilityReason: "One small behaviour.",
       })), ...interfaceTask],

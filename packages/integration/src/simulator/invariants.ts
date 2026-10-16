@@ -8,7 +8,7 @@ import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";
-import { checkReports, readReportRecords, uncheckedAtAcceptance } from "./client-reports.js";
+import { checkReports, readReportRecords, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
@@ -474,11 +474,12 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
   }
   if (snapshot.unrecordedCalls > 0) add("I5", "unpriced", `${snapshot.unrecordedCalls} llm_calls row(s) carry no cost`);
 
-  // I6: no Done without its evidence. An accepted project is done: every assumption whose breach the
-  // client could observe (not recorded as internal design) is cited by a check the accepting sweep
-  // ran (ADR-083), judged once the run ends.
-  if (context.final && snapshot.project.status === "accepted") {
-    for (const found of uncheckedAtAcceptance(snapshot.reports)) add("I6", `unchecked-assumption:${found.key}`, found.statement);
+  // I6: no Done without its evidence. A passed sweep accepted the project: every item a check must
+  // decide (an in-scope line, an assumption not recorded as internal design) is cited by a check
+  // that sweep ran (d89 E, ADR-083). Judged on every passed sweep once the run ends, whatever the
+  // project's status then.
+  if (context.final) {
+    for (const found of uncheckedAtPassedSweeps(snapshot.reports)) add("I6", `unchecked-item:${found.key}`, found.statement);
   }
   const checkedTasks = new Set(snapshot.checks.map((check) => check.taskId));
   for (const item of snapshot.items) {

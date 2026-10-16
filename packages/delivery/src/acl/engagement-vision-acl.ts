@@ -7,4 +7,4 @@
  */
 
 export type { ScopeSide, VisionSource } from "@ashara/engagement/vision";
-export { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, VisionSourceSchema, assumptionChecked, visionSourceCitation, visionSourceLine } from "@ashara/engagement/vision";
+export { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, VisionSourceSchema, checkDecides, visionSourceCitation, visionSourceLine } from "@ashara/engagement/vision";

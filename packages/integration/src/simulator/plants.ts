@@ -5,13 +5,14 @@ import type { QueryPlant } from "./faults.js";
 import {
   briefMisstatesStanding,
   deliveredReportMisquotesInterface,
+  deliveredReportMisstatesStanding,
   deliveredReportOmitsUnverified,
   deliveredReportMisstatesUnchecked,
   deliveredReportOmitsGoal,
-  deliveredReportOmitsUncovered,
+  deliveredReportOmitsUncoveredOfDroppedChecks,
   deliveredReportUnrecorded,
   haltReportFixedCause,
-  planDropsAssumptionChecks,
+  planDropsChecks,
   questionMisstatesAssumption,
   stopReportOmitsMerge,
 } from "./report-plants.js";
@@ -31,20 +32,25 @@ import {
  * - stop-report-omits-merge: the stop report leaves out a merge on record (I4);
  * - delivered-report-omits-goal, delivered-report-misstates-unchecked: the delivered report leaves
  *   out a goal's close, or states the wrong tasks as not checked by a stored check (I4);
- * - delivered-report-omits-uncovered: the delivered report leaves out an asked-for item no
- *   acceptance line of a swept check task cites (I4);
+ * - delivered-report-omits-uncovered: on a plan stored with fewer checks (plan-drops-checks), the
+ *   delivered report leaves out an asked-for item no acceptance line of a swept check task cites
+ *   (I4; I6 names the dropped checks);
  * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
  *   it is posted again (I4, exactly once);
  * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
  *   (I9);
+ * - delivered-report-misstates-standing: on a plan stored with fewer checks (plan-drops-checks),
+ *   the delivered report says an assumption the client was asked about was reported to them (I9;
+ *   I6 names the dropped checks);
  * - delivered-report-omits-unverified: the delivered report leaves out an internal-design
  *   assumption it must name as not verified by Ashara (I4, ADR-083);
  * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9);
- * - plan-drops-assumption-checks: a plan is stored with acceptance lines that name no assumption, so
- *   a client-visible assumption is accepted with no check citing it (I6, ADR-083).
+ * - plan-drops-checks: a plan is stored with acceptance lines that keep only the first item each
+ *   names, so an in-scope line and a client-visible assumption are accepted with no check citing
+ *   them (I6, d89 E, ADR-083).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -59,10 +65,11 @@ export const MUTATIONS = [
   "delivered-report-omits-uncovered",
   "delivered-report-unrecorded",
   "brief-misstates-standing",
+  "delivered-report-misstates-standing",
   "delivered-report-omits-unverified",
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
-  "plan-drops-assumption-checks",
+  "plan-drops-checks",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -84,13 +91,14 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "stop-report-omits-merge": { bypassed: [], queries: stopReportOmitsMerge, code: null },
   "delivered-report-omits-goal": { bypassed: [], queries: deliveredReportOmitsGoal, code: null },
   "delivered-report-misstates-unchecked": { bypassed: [], queries: deliveredReportMisstatesUnchecked, code: null },
-  "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncovered, code: null },
+  "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncoveredOfDroppedChecks, code: null },
   "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
   "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
+  "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
   "delivered-report-omits-unverified": { bypassed: [], queries: deliveredReportOmitsUnverified, code: null },
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
-  "plan-drops-assumption-checks": { bypassed: [], queries: planDropsAssumptionChecks, code: null },
+  "plan-drops-checks": { bypassed: [], queries: planDropsChecks, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

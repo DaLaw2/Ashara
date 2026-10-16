@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { checkReports, uncheckedAtAcceptance } from "./client-reports.js";
+import { checkReports, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
-const noRecords: ReportRecords = { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [], acceptedVision: null };
+const noRecords: ReportRecords = { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [], passedSweeps: [] };
 
 function haltWith(kind: string, errorClass: string | null, reason: string | null, body: string): ReportRecords {
   return {
@@ -186,40 +186,63 @@ describe("checkReports, a delivered report", () => {
   });
 });
 
-// ADR-083's guard: an accepted project leaves no assumption a client could observe unchecked.
-describe("uncheckedAtAcceptance", () => {
+// The guard of d89 E and ADR-083: no passed sweep leaves an in-scope line, or an assumption a client
+// could observe, unchecked.
+describe("uncheckedAtPassedSweeps", () => {
   const visible = { key: "A1", statement: "Messages are in English.", kind: "client-visible" };
   const design = { key: "A2", statement: "State lives in memory.", kind: "internal-design" };
   const undecidedLegacy = { statement: "Empty names are refused." };
-  const author = (cites: ReadonlyArray<{ readonly id: string; readonly text: string }>) => ({
+  const greets = { text: "The product greets.", side: "in" };
+  const counts = { text: "The product counts words.", side: "in" };
+  const network = { text: "Any network service.", side: "out" };
+  type Cite = { readonly type: "scope" | "assumption"; readonly id: string; readonly text: string };
+  const S1: Cite = { type: "scope", id: "S1", text: greets.text };
+  const A1: Cite = { type: "assumption", id: "A1", text: visible.statement };
+  const author = (cites: readonly Cite[]) => ({
     id: "c1",
     taskSpec: {
       origin: "check",
-      sources: [{ type: "scope", id: "S1", text: "The product greets.", side: "in" }, ...cites.map((cite) => ({ type: "assumption", ...cite, status: "Inferred", standing: "reported", kind: "client-visible" }))],
-      acceptance: [{ line: "A user is greeted.", sources: ["S1", ...cites.map((cite) => cite.id)] }],
+      sources: cites.map((cite) => (cite.type === "scope" ? { ...cite, side: "in" } : { ...cite, status: "Inferred", standing: "reported", kind: "client-visible" })),
+      acceptance: [{ line: "A user is greeted.", sources: cites.map((cite) => cite.id) }],
     },
   });
-  const accepted = (inferences: unknown, cites: ReadonlyArray<{ readonly id: string; readonly text: string }>) => ({
-    acceptedVision: { version: 2, inferences },
+  const sweep = (inferences: unknown, cites: readonly Cite[], scopeBoundaries: unknown = [greets, network]) => ({
+    id: "sweep-1",
+    version: 2,
+    inferences,
+    scopeBoundaries,
     checkAuthors: [author(cites)],
   });
+  const keysOf = (...sweeps: ReportRecords["passedSweeps"]) => uncheckedAtPassedSweeps({ passedSweeps: sweeps }).map((found) => found.key);
 
-  it("passes when every assumption not recorded as internal design is cited as the vision at acceptance states it", () => {
-    expect(uncheckedAtAcceptance(accepted([visible, design], [{ id: "A1", text: visible.statement }]))).toEqual([]);
+  it("passes when every in-scope line and every assumption not recorded as internal design is cited as the sweep's vision states it", () => {
+    expect(keysOf(sweep([visible, design], [S1, A1]))).toEqual([]);
   });
 
   it("names a client-visible assumption no swept check cites, or cites only as an earlier vision stated it", () => {
-    expect(uncheckedAtAcceptance(accepted([visible, design], [])).map((found) => found.key)).toEqual(["A1"]);
-    expect(uncheckedAtAcceptance(accepted([visible], [{ id: "A1", text: "Messages are in French." }])).map((found) => found.key)).toEqual(["A1"]);
+    expect(keysOf(sweep([visible, design], [S1]))).toEqual(["A1"]);
+    expect(keysOf(sweep([visible], [S1, { ...A1, text: "Messages are in French." }]))).toEqual(["A1"]);
+  });
+
+  it("names an in-scope line, or one of no recorded side, no swept check cites; never an out-of-scope one", () => {
+    expect(keysOf(sweep([visible], [S1, A1], [greets, counts, network]))).toEqual(["S2"]);
+    expect(keysOf(sweep([visible], [A1], ["The product greets."]))).toEqual(["S1"]);
   });
 
   it("holds an assumption of no recorded kind to a check, keyed by its place", () => {
-    expect(uncheckedAtAcceptance(accepted([visible, undecidedLegacy], [{ id: "A1", text: visible.statement }])).map((found) => found.key)).toEqual(["A2"]);
+    expect(keysOf(sweep([visible, undecidedLegacy], [S1, A1]))).toEqual(["A2"]);
+  });
+
+  it("judges every passed sweep against the vision current when it passed, naming each item once", () => {
+    const reworded = { ...visible, statement: "Messages are in French." };
+    expect(keysOf(sweep([visible], [S1, A1]), { ...sweep([reworded], [S1, A1]), id: "sweep-2" })).toEqual(["A1"]);
+    expect(keysOf(sweep([visible], [S1]), { ...sweep([visible], [S1]), id: "sweep-2" })).toEqual(["A1"]);
   });
 
   it("fails closed when the vision or the trace cannot be read", () => {
-    expect(uncheckedAtAcceptance({ acceptedVision: null, checkAuthors: [] }).map((found) => found.key)).toEqual(["no-vision"]);
-    expect(uncheckedAtAcceptance(accepted({ planning: "a map" }, [])).map((found) => found.key)).toEqual(["vision-unreadable"]);
-    expect(uncheckedAtAcceptance({ ...accepted([visible], []), checkAuthors: [{ id: "c1", taskSpec: { origin: "check" } }] }).map((found) => found.key)).toEqual(["coverage-unreadable"]);
+    expect(keysOf({ ...sweep([], []), version: null })).toEqual(["no-vision"]);
+    expect(keysOf(sweep({ planning: "a map" }, []))).toEqual(["vision-unreadable"]);
+    expect(keysOf(sweep([visible], [S1], [{ text: "" }]))).toEqual(["vision-unreadable"]);
+    expect(keysOf({ ...sweep([visible], []), checkAuthors: [{ id: "c1", taskSpec: { origin: "check" } }] })).toEqual(["coverage-unreadable"]);
   });
 });

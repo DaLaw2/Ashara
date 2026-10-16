@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import { CapabilityLevelSchema } from "./acl/finance-acl.js";
-import { assumptionChecked } from "./acl/engagement-vision-acl.js";
+import { checkDecides } from "./acl/engagement-vision-acl.js";
 import type { VisionSource } from "./acl/engagement-vision-acl.js";
 
 export interface WorkItemSpec {
@@ -86,22 +86,24 @@ export type TaskSpec =
 /**
  * One item of the vision a plan is decomposed from: a scope boundary (S1..) or an assumption work
  * proceeds on, by its key in the vision. A scope line and every assumption not classed internal
- * design may be cited by a deliverable or an acceptance line (ADR-074 addendum 2 d89 E, ADR-083),
- * and every such assumption must be; an internal-design one is guidance for the implementer.
+ * design may be cited by a deliverable or an acceptance line (ADR-074 addendum 2 d89 E, ADR-083);
+ * every one a check decides (checkDecides) must be; an internal-design one is guidance for the
+ * implementer.
  */
 export type VisionItem = VisionSource;
 
-/** Whether a deliverable or an acceptance line may cite the item (d89 E). */
+/** Whether a deliverable or an acceptance line may cite the item (d89 E): any scope line, and an assumption a check decides. */
 export function citable(item: VisionItem): boolean {
-    return item.type === "scope" || assumptionChecked(item.kind);
+    return item.type === "scope" || checkDecides(item);
 }
 
 /**
- * The assumptions a plan must check (ADR-083): every one an acceptance line may cite. Each is named
- * by an acceptance line of the plan, or of a completed task that cited it as the vision states it now.
+ * The items a plan must check (d89 E, ADR-083): every in-scope line and every assumption a check
+ * decides, whether the planner chose to cite it or not. Each is named by an acceptance line of the
+ * plan, or of a completed task that cited it as the vision states it now.
  */
-export function assumptionsToCheck(items: readonly VisionItem[]): Array<Extract<VisionItem, { readonly type: "assumption" }>> {
-    return items.flatMap((item) => (item.type === "assumption" && assumptionChecked(item.kind) ? [item] : []));
+export function itemsToCheck(items: readonly VisionItem[]): VisionItem[] {
+    return items.filter(checkDecides);
 }
 
 /**
@@ -294,23 +296,23 @@ export class UntraceableTaskError extends Error {
 }
 
 /**
- * A plan leaves an assumption a check must decide (ADR-083) named by no acceptance line: neither of
- * a task it plans nor of a completed task that cited it as the vision states it now. Its breach is
- * one the client could observe, so accepting without a check on it would deliver it unverified.
- * Checked mechanically, with no model call: inside the ladder its message is a re-ask; past it the
- * plan is rejected, never written.
+ * A plan leaves an item a check must decide (d89 E, ADR-083) named by no acceptance line: neither
+ * of a task it plans nor of a completed task that cited it as the vision states it now. It is
+ * something the client asked for or could observe, so accepting without a check on it would
+ * deliver it unverified. Checked mechanically, with no model call: inside the ladder its message is
+ * a re-ask; past it the plan is rejected, never written.
  */
-export class UncheckedAssumptionsError extends Error {
+export class UncheckedVisionItemsError extends Error {
     constructor(
         readonly parentId: string,
         readonly unchecked: ReadonlyArray<{ readonly id: string; readonly text: string }>,
     ) {
         super(
-            `No acceptance line names ${unchecked.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every client-visible ` +
-                `assumption must be named in "sources" by at least one acceptance line of a task, so a check decides it ` +
-                `(decomposition of ${parentId})`,
+            `No acceptance line names ${unchecked.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every in-scope line ` +
+                `and every assumption not marked "not citable" must be named in "sources" by at least one acceptance line of a ` +
+                `task, so a check decides it (decomposition of ${parentId})`,
         );
-        this.name = "UncheckedAssumptionsError";
+        this.name = "UncheckedVisionItemsError";
     }
 }
 

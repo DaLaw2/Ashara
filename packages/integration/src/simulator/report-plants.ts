@@ -91,7 +91,7 @@ export const deliveredReportMisstatesUnchecked = rewriteReport(
 const UNCOVERED_HEAD = "These items of what you asked for are named by no acceptance criterion";
 
 /** A delivered report that leaves out the first asked-for item no acceptance line cites. */
-export const deliveredReportOmitsUncovered = rewriteReport(
+const deliveredReportOmitsUncovered = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
   (body) => dropFirstNamed(body, UNCOVERED_HEAD, "- "),
 );
@@ -140,12 +140,38 @@ export const deliveredReportMisquotesInterface = rewriteReport(
 );
 
 /**
- * A plan stored with no check on its assumptions (ADR-083): every acceptance line a task's stored
- * task_spec records keeps its scope line and drops the assumptions it names, after the planner's
- * validation passed, so the checks written from it decide none of them.
+ * A plan stored with fewer checks than it was validated with (d89 E, ADR-083): every acceptance line
+ * a task's stored task_spec records keeps only the first item it names, after the planner's
+ * validation passed, so the checks written from it decide none of the others. The honest planner
+ * names every item to check on each task's first line, so an in-scope line and an assumption the
+ * client could observe are left with no check citing them.
  */
-export const planDropsAssumptionChecks = rewriteInsert("work_items", (param) =>
-  param.replace(/("line":"(?:[^"\\]|\\.)*","sources":\["S\d+")(?:,"A\d+")+\]/g, "$1]"),
+export const planDropsChecks = rewriteInsert("work_items", (param) =>
+  param.replace(/("line":"(?:[^"\\]|\\.)*","sources":\["(?:[^"\\]|\\.)*")(?:,"(?:[^"\\]|\\.)*")+\]/g, "$1]"),
+);
+
+/** `plant` on a run whose plan is stored with fewer checks (planDropsChecks): the items it leaves uncited are what the report then states. */
+function onPlanDroppingChecks(plant: QueryPlant): QueryPlant {
+  return (args) => planDropsChecks(args) ?? plant(args);
+}
+
+/**
+ * A delivered report that leaves out the first asked-for item no acceptance line of a swept check
+ * task cites. Such an item exists only when a plan was stored with fewer checks than the planner's
+ * rule asks for, so the plant stores one so (I6 names that too).
+ */
+export const deliveredReportOmitsUncoveredOfDroppedChecks = onPlanDroppingChecks(deliveredReportOmitsUncovered);
+
+/**
+ * A delivered report that says an assumption the client was asked about was reported to them. The
+ * report states the standing of an asked-for item no check cites, so the plant stores the plan with
+ * fewer checks (I6 names that too).
+ */
+export const deliveredReportMisstatesStanding = onPlanDroppingChecks(
+  rewriteReport(
+    (body) => body.startsWith("Your project is delivered."),
+    (body) => body.replaceAll("Ashara's assumption, which you were asked about and have not answered:", "Ashara's assumption, which was reported to you:"),
+  ),
 );
 
 /** A question that says work proceeds on an assumption its vision does not record. */

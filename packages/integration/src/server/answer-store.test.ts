@@ -19,7 +19,7 @@ import type { StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
-import { citingAssumptionsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // Every row here belongs to a project this suite creates under a unique name, and
 // afterAll deletes exactly those rows. Each store is narrowed to this suite's
@@ -113,7 +113,7 @@ function pipelineModel(reading: unknown): MockLanguageModelV4 {
       if (prompt.includes("Read their answer and say what it does")) return jsonResult(reading);
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
-      return jsonResult(citingAssumptionsToCheck(TASKS, prompt));
+      return jsonResult(citingItemsToCheck(TASKS, prompt));
     },
   });
   stub.model = mock;

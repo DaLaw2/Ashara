@@ -30,7 +30,7 @@ import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
-import { citingAssumptionsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // A late client change is planned (t-replan-on-change). Every row here belongs to a project
 // this suite creates under a unique name, and afterAll deletes exactly those rows. Each store
@@ -155,9 +155,9 @@ function pipelineModel(
       if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {
         return jsonResult({ environmentChange: options.environmentChange ?? false, reason: "Only what is booked changes." });
       }
-      if (prompt.includes("changed what is built after work began")) return jsonResult(options.revision ?? citingAssumptionsToCheck(REVISED_TASKS, prompt));
-      if (prompt.includes("Plan the work still to do again")) return jsonResult(citingAssumptionsToCheck(REPAIRED_TASKS, prompt));
-      return jsonResult(citingAssumptionsToCheck(FIRST_TASKS, prompt));
+      if (prompt.includes("changed what is built after work began")) return jsonResult(options.revision ?? citingItemsToCheck(REVISED_TASKS, prompt));
+      if (prompt.includes("Plan the work still to do again")) return jsonResult(citingItemsToCheck(REPAIRED_TASKS, prompt));
+      return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
     },
   });
   stub.model = mock;

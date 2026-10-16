@@ -593,5 +593,8 @@ describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
     for (const line of ASSUMPTION_KIND_RULE) expect(prompt).toContain(line);
     expect(prompt).toContain("in its exit status, or in the data the client stores with it");
     expect(prompt).toContain('"undecided": you cannot tell whether a client could observe a breach');
+    // A17 of the M2.5 exit run sits beside another recovery assumption; the rule gives no reason to class it internal.
+    expect(prompt).toContain("is not internal design even when another assumption states something close to it");
+    expect(prompt).not.toContain("through another assumption");
   });
 });

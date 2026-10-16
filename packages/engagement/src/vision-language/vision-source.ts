@@ -54,15 +54,20 @@ export function visionSourceCitation(item: VisionSource): string {
 
 type AssumptionSourceKind = Extract<VisionSource, { readonly type: "assumption" }>["kind"];
 
+/** The fields of a vision item that decide whether a check must decide it. */
+type CheckedFields = { readonly type: "scope"; readonly side: ScopeSide } | { readonly type: "assumption"; readonly kind: AssumptionSourceKind };
+
 /**
- * Whether an assumption of this kind is one a check decides (d89 E, ADR-083): every kind but
- * internal design. An unclassified record is not evidence that no client could observe a breach, so
- * doubt lands on the side that gets a check.
+ * Whether a check must decide the item before the project is accepted (d89 E, ADR-083): every scope
+ * line not recorded as out of scope, and every assumption not recorded as internal design. An
+ * unclassified side or kind is not evidence that the client did not ask for it or could not observe
+ * a breach of it, so doubt lands on the side that gets a check. The one statement of this rule: the
+ * planner's coverage rule, the delivered report and the citable label all read it.
  */
-export function assumptionChecked(kind: AssumptionSourceKind): boolean {
-  return kind !== "internal-design";
+export function checkDecides(item: CheckedFields): boolean {
+  return item.type === "scope" ? item.side !== "out" : item.kind !== "internal-design";
 }
 
 function citability(kind: AssumptionSourceKind): string {
-  return assumptionChecked(kind) ? "" : ", not citable";
+  return checkDecides({ type: "assumption", kind }) ? "" : ", not citable";
 }

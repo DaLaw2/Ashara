@@ -54,9 +54,10 @@ const ClientAnswerRecordSchema = z.looseObject({
 /**
  * One assumption as vision_documents.inferences stores it. A record written before keys, kinds or
  * disclosures were recorded holds none of them: it is keyed by its place, its kind reads
- * "unclassified" (not evidence that it is client-visible) and, Inferred, its standing reads "unrecorded". A
- * Stated record carries the client's answer that stated it. Fields this schema does not name (a
- * rationale, the answered question's id) are kept as stored.
+ * "unclassified" (not evidence that no client could observe it, so a check decides it: ADR-083)
+ * and, Inferred, its standing reads "unrecorded". A Stated record carries the client's answer that
+ * stated it. Fields this schema does not name (a rationale, the answered question's id) are kept
+ * as stored.
  */
 const AssumptionRecordSchema = z
   .looseObject({

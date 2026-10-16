@@ -1,7 +1,7 @@
 import { describeErrorChain, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
-import { assumptionChecked } from "./vision-language/vision-source.js";
+import { checkDecides } from "./vision-language/vision-source.js";
 import type { VisionSource } from "./vision-language/vision-source.js";
 
 // The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8):
@@ -267,7 +267,7 @@ function closeLine(title: string, close: GoalClose): string {
  * was told their acceptance does not depend on. Everything else is, an unclassified one included.
  */
 function askedFor(source: AcceptedVisionItem): boolean {
-  return source.type === "scope" ? source.side !== "out" : assumptionChecked(source.kind);
+  return checkDecides(source);
 }
 
 /**
@@ -276,7 +276,7 @@ function askedFor(source: AcceptedVisionItem): boolean {
  */
 function unverifiedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
-  const design = vision.items.flatMap(({ source }) => (source.type === "assumption" && !assumptionChecked(source.kind) ? [source] : []));
+  const design = vision.items.flatMap(({ source }) => (source.type === "assumption" && !checkDecides(source) ? [source] : []));
   if (design.length === 0) return [];
   return [
     [

@@ -47,6 +47,9 @@ function seeded(seed: number, scenario: Pick<RunOptions, "projects" | "capUsd"> 
   });
 }
 
+/** What I6 names when the stand-ins' plan is stored with only each acceptance line's first item (plan-drops-checks). */
+const DROPPED_CHECKS = ["I6:unchecked-item:A1", "I6:unchecked-item:S3"];
+
 function keys(result: RunResult): string[] {
   return result.violations.map((v) => v.key).sort();
 }
@@ -304,22 +307,25 @@ describe("lifecycle simulator, directed", () => {
     expect([...clean.coverage.sweeps]).toEqual(["ran:passed"]);
     expect(keys(await directed([], { mutation: "delivered-report-omits-goal" }))).toEqual(["I4:delivered-close"]);
     expect(keys(await directed([], { mutation: "delivered-report-misstates-unchecked" }))).toEqual(["I4:delivered-unchecked"]);
-    // The stand-ins' last scope line is cited by no acceptance line, so the report lists it; dropped, it is named.
-    expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage"]);
+    // The planner must name every in-scope line and the asked assumption (classed undecided, so client-visible) in an
+    // acceptance line. A plan stored with only each line's first item leaves the last scope line and A1 with no check
+    // citing them: each is named (d89 E, ADR-083), and the delivered report must list both as not covered.
+    expect(keys(await directed([], { mutation: "plan-drops-checks" }))).toEqual(DROPPED_CHECKS);
+    expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage", ...DROPPED_CHECKS]);
     // The stand-ins' internal-design assumption is named as not verified by Ashara; dropped, it is named (ADR-083).
     expect(keys(await directed([], { mutation: "delivered-report-omits-unverified" }))).toEqual(["I4:delivered-coverage"]);
-    // The stand-ins' asked assumption, classed undecided, is client-visible: accepted with no check citing it, it is named (ADR-083).
-    expect(keys(await directed([], { mutation: "plan-drops-assumption-checks" }))).toEqual(["I6:unchecked-assumption:A1"]);
     expect(keys(await directed([], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
   }, 120_000);
 
-  // I9 (text against fact): what a composer states is what the store held when it composed it. The
-  // stand-ins' asked assumption is checked (ADR-083), so the delivered report lists no standing of it,
-  // which text-facts.test.ts judges; every brief carries its standing, and the question states it.
-  it("catches a brief and a question that state what their records do not hold", async () => {
+  // I9 (text against fact): what a composer states is what the store held when it composed it. Every
+  // brief carries the stand-ins' asked assumption with its standing, and the question states it. The
+  // delivered report states the standing of an asked-for item no check cites, so its plant stores the
+  // plan with fewer checks, which I6 names too.
+  it("catches a brief, a question and a delivered report that state what their records do not hold", async () => {
     const briefs = keys(await directed([], { mutation: "brief-misstates-standing" }));
     expect(briefs).toContain("I9:brief-assumptions:Define and commit the project environment");
     expect(briefs.every((key) => key.startsWith("I9:brief-assumptions:"))).toBe(true);
+    expect(keys(await directed([], { mutation: "delivered-report-misstates-standing" }))).toEqual([...DROPPED_CHECKS, "I9:delivered-standing:A1"]);
     expect(keys(await directed([], { mutation: "question-misstates-assumption" }))).toEqual(["I9:question:A1"]);
   }, 120_000);
 

@@ -43,7 +43,8 @@ const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), titl
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
-const acceptedVisionRow = z.object({ version: z.number(), inferences: z.unknown() });
+const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown() });
+const sweptAuthorRow = specRow.extend({ sweepId: z.string() });
 
 export interface ReportRecords {
   /** Every outbound report of the project, in posting order. */
@@ -58,8 +59,12 @@ export interface ReportRecords {
   readonly reviewSpec: unknown;
   /** The check tasks that wrote each Completed goal task's latest stored checks (the sets a sweep runs), with their task_spec. */
   readonly checkAuthors: ReadonlyArray<z.infer<typeof specRow>>;
-  /** The vision version current at the project's first passed acceptance sweep, unparsed; null when no sweep passed. */
-  readonly acceptedVision: z.infer<typeof acceptedVisionRow> | null;
+  /**
+   * Every passed acceptance sweep, in order, with the vision version current when it passed (its
+   * fields unparsed; version null when none was) and the check tasks that wrote the checks it ran:
+   * each goal task it checked, at its latest checks revision written before the sweep.
+   */
+  readonly passedSweeps: ReadonlyArray<z.infer<typeof passedSweepRow> & { readonly checkAuthors: ReadonlyArray<z.infer<typeof specRow>> }>;
 }
 
 export async function readReportRecords(db: Database, projectId: string): Promise<ReportRecords> {
@@ -111,17 +116,36 @@ export async function readReportRecords(db: Database, projectId: string): Promis
           WHERE g.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
           ORDER BY a.id`,
     ),
-    acceptedVision:
-      (
-        await rows(
-          acceptedVisionRow,
-          sql`SELECT v.version, v.inferences FROM acceptance_sweeps s
-              JOIN LATERAL (SELECT version, inferences FROM vision_documents d
-                            WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
-              WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id LIMIT 1`,
-        )
-      )[0] ?? null,
+    passedSweeps: await passedSweepsOf(projectId, rows),
   };
+}
+
+async function passedSweepsOf(
+  projectId: string,
+  rows: <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>) => Promise<T[]>,
+): Promise<ReportRecords["passedSweeps"]> {
+  const sweeps = await rows(
+    passedSweepRow,
+    sql`SELECT s.id, v.version, v.inferences, v.scope_boundaries AS "scopeBoundaries" FROM acceptance_sweeps s
+        LEFT JOIN LATERAL (SELECT version, inferences, scope_boundaries FROM vision_documents d
+                           WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
+        WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
+  );
+  const authors = await rows(
+    sweptAuthorRow,
+    sql`SELECT DISTINCT s.id AS "sweepId", a.id, a.task_spec AS "taskSpec"
+        FROM acceptance_sweeps s
+        CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
+        JOIN task_checks c ON c.task_id::text = t.task_id
+          AND c.revision = (SELECT max(l.revision) FROM task_checks l WHERE l.task_id = c.task_id AND l.created_at <= s.created_at)
+        JOIN work_items a ON a.id = c.check_task_id
+        WHERE s.project_id = ${projectId} AND s.passed
+        ORDER BY s.id, a.id`,
+  );
+  return sweeps.map((sweep) => ({
+    ...sweep,
+    checkAuthors: authors.filter((author) => author.sweepId === sweep.id).map(({ id, taskSpec }) => ({ id, taskSpec })),
+  }));
 }
 
 /** What I4 reads of a work item beyond its records above. */
@@ -550,30 +574,59 @@ function citedBySweptChecks(
   return { kind: "cited", cited };
 }
 
-const acceptedAssumption = z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), kind: z.enum(["client-visible", "internal-design"]).optional() });
+const sweptAssumption = z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), kind: z.enum(["client-visible", "internal-design"]).optional() });
+/** A scope line as stored: with its side, or a bare string written before sides were recorded (no side on record). */
+const sweptScopeLine = z.union([z.looseObject({ text: z.string().min(1), side: z.enum(["in", "out"]) }), z.string().min(1)]);
+
+/** One finding of the guard, keyed by the item (or the record that could not be read). */
+interface UncheckedFinding {
+  readonly key: string;
+  readonly statement: string;
+}
 
 /**
- * ADR-083's guard, judged on an accepted project: every assumption of the vision current at
- * acceptance that is not recorded as internal design (a client-visible one, or one of no recorded
- * kind) is cited, as that vision states it, by an acceptance line of a check task the sweep ran. A
- * breach of such an assumption is one the client could observe, so accepting it with no check
- * delivers it unverified. One problem per assumption, keyed by its key.
+ * The guard of d89 E and ADR-083, judged on every passed acceptance sweep, whatever the project did
+ * after it: every item of the vision current when the sweep passed that a check must decide (an
+ * in-scope line or one of no recorded side, an assumption not recorded as internal design) is
+ * cited, as that vision states it, by an acceptance line of a check task whose checks the sweep
+ * ran. It is something the client asked for or could observe, so accepting with no check on it
+ * delivers it unverified. One finding per item, keyed by its id, at the first sweep that misses it.
  */
-export function uncheckedAtAcceptance(records: Pick<ReportRecords, "acceptedVision" | "checkAuthors">): Array<{ readonly key: string; readonly statement: string }> {
-  if (records.acceptedVision === null) return [{ key: "no-vision", statement: "the project is accepted, but no vision version is on record at its passed sweep" }];
-  const inferences = z.array(acceptedAssumption).safeParse(records.acceptedVision.inferences);
-  if (!inferences.success) {
-    return [{ key: "vision-unreadable", statement: `vision v${records.acceptedVision.version} at acceptance cannot be read as keyed assumptions: ${z.prettifyError(inferences.error).slice(0, 200)}` }];
+export function uncheckedAtPassedSweeps(records: Pick<ReportRecords, "passedSweeps">): UncheckedFinding[] {
+  const found = new Map<string, string>();
+  for (const [n, sweep] of records.passedSweeps.entries()) {
+    for (const finding of uncheckedAtSweep(sweep, `passed sweep ${n + 1} (${sweep.id})`)) {
+      if (!found.has(finding.key)) found.set(finding.key, finding.statement);
+    }
   }
-  const swept = citedBySweptChecks(records.checkAuthors);
+  return [...found].map(([key, statement]) => ({ key, statement }));
+}
+
+function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: string): UncheckedFinding[] {
+  if (sweep.version === null) return [{ key: "no-vision", statement: `${at} passed with no vision version on record` }];
+  const inferences = z.array(sweptAssumption).safeParse(sweep.inferences);
+  const scope = z.array(sweptScopeLine).safeParse(sweep.scopeBoundaries);
+  if (!inferences.success || !scope.success) {
+    const error = inferences.error ?? scope.error;
+    return [{ key: "vision-unreadable", statement: `vision v${sweep.version} at ${at} cannot be read as keyed assumptions and scope lines: ${error === undefined ? "" : z.prettifyError(error).slice(0, 200)}` }];
+  }
+  const swept = citedBySweptChecks(sweep.checkAuthors);
   if (swept.kind !== "cited") {
-    return [{ key: "coverage-unreadable", statement: `which assumptions the swept checks cite is not on record: ${swept.kind === "unreadable" ? swept.detail : "a check task holds no traced lines"}` }];
+    return [{ key: "coverage-unreadable", statement: `which items the checks ${at} ran cite is not on record: ${swept.kind === "unreadable" ? swept.detail : "a check task holds no traced lines"}` }];
   }
-  return inferences.data.flatMap((record, i) => {
-    const key = record.key ?? `A${i + 1}`;
-    if (record.kind === "internal-design" || swept.cited.has(identityOf({ type: "assumption", id: key, text: record.statement }))) return [];
-    return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is cited by no acceptance line of a check the accepting sweep ran` }];
+  const missed = (type: "scope" | "assumption", id: string, text: string): boolean => !swept.cited.has(identityOf({ type, id, text }));
+  const scopeFindings = scope.data.flatMap((line, i) => {
+    const id = `S${i + 1}`;
+    const { text, side } = typeof line === "string" ? { text: line, side: "of no recorded side" } : line;
+    if (side === "out" || !missed("scope", id, text)) return [];
+    return [{ key: id, statement: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, is cited by no acceptance line of a check ${at} ran` }];
   });
+  const assumptionFindings = inferences.data.flatMap((record, i) => {
+    const key = record.key ?? `A${i + 1}`;
+    if (record.kind === "internal-design" || !missed("assumption", key, record.statement)) return [];
+    return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is cited by no acceptance line of a check ${at} ran` }];
+  });
+  return [...scopeFindings, ...assumptionFindings];
 }
 
 /**

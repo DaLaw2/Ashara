@@ -13,7 +13,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     unrecordedCalls: 0,
     events,
     main: [],
-    reports: { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [], acceptedVision: null },
+    reports: { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [], passedSweeps: [] },
     textFacts: {
       visions: [],
       briefs: [],

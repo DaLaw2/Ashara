@@ -19,7 +19,7 @@ import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
-import { citingAssumptionsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -94,7 +94,7 @@ const TASKS = {
 
 /** Answers the task call. */
 function decompositionModel(): MockLanguageModelV4 {
-  return stubModel({ doGenerate: async (call) => jsonResult(citingAssumptionsToCheck(TASKS, JSON.stringify(call.prompt))) });
+  return stubModel({ doGenerate: async (call) => jsonResult(citingItemsToCheck(TASKS, JSON.stringify(call.prompt))) });
 }
 
 function planner(): FirstPlanner {
@@ -408,7 +408,7 @@ describe("first plan", () => {
         const [classList, bookingForm] = TASKS.tasks;
         // First answer names a task it never wrote; the corrected one drops that edge.
         const plan = taskCalls === 1 && classList !== undefined && bookingForm !== undefined ? { tasks: [classList, { ...bookingForm, dependsOn: ["t1", "payments"] }] } : TASKS;
-        return jsonResult(citingAssumptionsToCheck(plan, JSON.stringify(call.prompt)));
+        return jsonResult(citingItemsToCheck(plan, JSON.stringify(call.prompt)));
       },
     });
     const projectId = await projectWithVision();
