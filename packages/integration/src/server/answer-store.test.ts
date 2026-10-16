@@ -14,7 +14,7 @@ import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, createFirstPlanStore, stepContainment } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
-import type { ProjectId } from "@ashara/shared";
+import { systemClock, type ProjectId } from "@ashara/shared";
 import type { StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -126,7 +126,7 @@ function ours<T extends { readonly projectId: string }>(list: () => Promise<read
 
 /** The cycle's containment, as the composition root supplies it; a spend-cap refusal escapes. */
 function containment(): StepContainment {
-  return stepContainment(db, (error) => error instanceof BudgetExceeded);
+  return stepContainment(db, systemClock, (error) => error instanceof BudgetExceeded);
 }
 
 function answers(): ClientAnswers {

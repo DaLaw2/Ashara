@@ -386,7 +386,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
   // spend-cap refusal escapes to the cycle, which halts at the cap (CoreLoop.step).
-  const containment = stepContainment(db, (error) => spendCap.refusalOf(error) !== null);
+  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null);
   // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
   const blockReports = new BlockReports(createBlockReportStore(db), containment);
   const coreLoopDeps: CoreLoopDeps = {

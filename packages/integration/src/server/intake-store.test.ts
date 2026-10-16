@@ -11,7 +11,7 @@ import type { IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import type { ProjectId } from "@ashara/shared";
+import { systemClock, type ProjectId } from "@ashara/shared";
 import type { StepContainment } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 
@@ -95,7 +95,7 @@ function ourStore(): IntakeStore {
 
 /** The cycle's containment, as the composition root supplies it; a spend-cap refusal escapes. */
 function containment(): StepContainment {
-  return stepContainment(db, (error) => error instanceof BudgetExceeded);
+  return stepContainment(db, systemClock, (error) => error instanceof BudgetExceeded);
 }
 
 function intake(): TenderIntake {

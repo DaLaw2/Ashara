@@ -1,6 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import type { StepFaultLedger, StepFaultStanding } from "@ashara/shared";
+import type { Clock, StepFaultLedger, StepFaultStanding } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { projects, stepFaults } from "../schema/index.js";
 import { projectAtWork } from "./project.js";
@@ -31,12 +31,14 @@ class StepFaultNotOnRecord extends Error {
 
 /**
  * The cycle steps' faults per subject (migration 063), kept in step_faults so a backoff, and the
- * parking of a subject that exhausted its faults, outlive a restart.
+ * parking of a subject that exhausted its faults, outlive a restart. A backoff is set and read on
+ * `clock`, the time the cycle itself runs on, never the database's: a wait measured on another
+ * clock than the one that spaces the cycles passes in no number of cycles, or in none at all.
  */
-export function stepFaultLedger(db: DbHandle): StepFaultLedger {
+export function stepFaultLedger(db: DbHandle, clock: Clock): StepFaultLedger {
   return {
     async faultsOf(step) {
-      const due = sql<unknown>`(${stepFaults.retryAt} <= now() AND (${stepFaults.parkedAt} IS NULL OR ${projectAtWork()}))`;
+      const due = sql<unknown>`(${lte(stepFaults.retryAt, new Date(clock.now()))} AND (${stepFaults.parkedAt} IS NULL OR ${projectAtWork()}))`;
       const rows = await db
         .select({ subjectId: stepFaults.subjectId, faults: stepFaults.faults, due })
         .from(stepFaults)
@@ -51,7 +53,7 @@ export function stepFaultLedger(db: DbHandle): StepFaultLedger {
       return standing;
     },
     async record(fault) {
-      const retryAt = sql`now() + make_interval(secs => ${fault.retryAfterSeconds})`;
+      const retryAt = new Date(clock.now() + fault.retryAfterSeconds * 1000);
       const [row] = await db
         .insert(stepFaults)
         .values({ step: fault.step, subjectId: fault.subjectId, projectId: fault.projectId, faults: 1, lastError: fault.error, retryAt })
