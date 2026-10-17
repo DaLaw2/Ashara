@@ -9,7 +9,7 @@ type LlmCallOutcomeColumns =
   | { readonly outcome: "ok"; readonly errorKind: null }
   | { readonly outcome: "error"; readonly errorKind: string };
 
-/** An admitted call's row, written before the call is sent: all that admission knows (migration 053). */
+/** An admitted call's row, written before the call is sent: all that admission knows. */
 interface AdmittedLlmCall {
   /** The gateway's call id; the call's record completes the row by it. */
   readonly id: string;
@@ -18,9 +18,9 @@ interface AdmittedLlmCall {
   readonly callSite: string;
   readonly provider: string;
   readonly model: string;
-  /** Finance's worst-case estimate of the call (migration 035). */
+  /** Finance's worst-case estimate of the call. */
   readonly estimatedCostUsd: number;
-  /** The trace of the log scope the call was admitted in (migration 076): its row leads to its records. */
+  /** The trace of the log scope the call was admitted in: its row leads to its records. */
   readonly traceId: string;
 }
 
@@ -32,7 +32,7 @@ export type LlmCallMeasurement = {
   readonly cacheWriteTokens: number | null;
   /** Output tokens the provider reported as reasoning; `null` when it reported no such count. */
   readonly reasoningTokens: number | null;
-  /** The context window of the model the call was sent to (model_configs.max_context_tokens), migration 074. */
+  /** The context window of the model the call was sent to (model_configs.max_context_tokens). */
   readonly contextWindowTokens: number;
   readonly costUsd: number | null;
   /** Why the provider stopped (`no-response` when the request threw before one arrived). */
@@ -57,7 +57,7 @@ function describeScope(scope: SpendScope): string {
 }
 
 /**
- * llm_calls holds a row with neither a cost nor an estimate. Migration 035's
+ * llm_calls holds a row with neither a cost nor an estimate. The schema's
  * validated CHECK llm_calls_spend_known forbids one, so this means the schema
  * is not what the code was written against.
  */
@@ -123,7 +123,7 @@ interface DrawnRequests {
 /** What the work ledger reads before one request: the project's drawn requests and grants, and the task's when one is served. */
 interface WorkDrawn {
   readonly project: DrawnRequests & {
-    /** Requests the owner granted the project (work_grants, migration 067). */
+    /** Requests the owner granted the project (work_grants). */
     readonly granted: number;
   };
   /** null when the request serves no task. */
@@ -232,7 +232,7 @@ export class LlmCallRepository {
   }
 
   /**
-   * The model requests drawn in `scope` (migration 067, ADR-084 decision 1): every llm_calls row of
+   * The model requests drawn in `scope`: every llm_calls row of
    * the project, and of the task when one is named, in any state, so a request is drawn from the
    * moment it is admitted and stays drawn through a refund, an unblock or a restart; with the
    * requests the owner granted the project, read in the same statement.

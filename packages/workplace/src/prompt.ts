@@ -80,8 +80,8 @@ const staticPrompt = (identity: string): string => [
 ].join("\n\n");
 
 /**
- * The paths Z0 refuses the work for changing, named before work starts (ADR-074 addendum 2 d66 c,
- * d72 B1), for every task that does not write the recipe itself; null when the brief carries none
+ * The paths Z0 refuses the work for changing, named before work starts,
+ * for every task that does not write the recipe itself; null when the brief carries none
  * (the BaseCell) or the attempt builds the environment, which may change the recipe and nothing else.
  */
 function protectedPathsSection(brief: AssignmentBrief, toolProfile: ToolProfile): string | null {

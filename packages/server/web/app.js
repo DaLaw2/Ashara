@@ -1,4 +1,4 @@
-// Ashara web client (ADR-076). Plain browser JavaScript, served as-is: no build step.
+// Ashara web client. Plain browser JavaScript, served as-is: no build step.
 // Holds no credential: the session lives in an HttpOnly cookie the script cannot read.
 // Every message body is rendered with textContent, never as HTML.
 "use strict";

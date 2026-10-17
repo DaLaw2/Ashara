@@ -6,7 +6,7 @@ import { projects } from "./project.js";
 // Execution Infrastructure: environment builds.
 
 // ---------------------------------------------------------------------------
-// environment_builds (migration 032, Execution Infrastructure): one row per
+// environment_builds (Execution Infrastructure): one row per
 // podman build of a project's environment version. Outcome columns are CHECKed
 // in the migration; one succeeded row per (project, version) by a partial
 // unique index.

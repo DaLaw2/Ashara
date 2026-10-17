@@ -238,7 +238,7 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
   });
 });
 
-// ADR-084 addendum 3 decision 12: a second opinion is chosen by strength from the catalog alone.
+// A second opinion is chosen by strength from the catalog alone.
 describe("ProviderRegistry.resolveSecondOpinion", () => {
   const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, inputCostPer1M });
   const deployment = (...providers: ReadonlyArray<readonly [string, readonly ModelConfig[]]>): ProviderRegistry =>
@@ -279,7 +279,7 @@ describe("ProviderRegistry.resolveSecondOpinion", () => {
   });
 });
 
-// t-context-overflow-routing: a task whose attempt overflowed a window goes on to one larger.
+// A task whose attempt overflowed a window goes on to one larger.
 describe("a model whose context window is larger than one overflowed", () => {
   const OVERFLOW = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
   const small: ModelConfig = { ...MODEL, id: "small", inputCostPer1M: 0.5, maxContextTokens: 32_000 };

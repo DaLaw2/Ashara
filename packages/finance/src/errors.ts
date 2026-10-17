@@ -171,7 +171,7 @@ interface BudgetExceededContext {
   readonly capUsd: number;
   /** Summed from llm_calls rows no longer pending: each call's cost, or its pre-call estimate when unmeasured. */
   readonly spentUsd: number;
-  /** Estimates of calls admitted and not recorded yet: llm_calls rows in state 'pending' (migration 053). */
+  /** Estimates of calls admitted and not recorded yet: llm_calls rows in state 'pending'. */
   readonly inFlightUsd: number;
   /** This call's worst-case cost. */
   readonly estimatedCostUsd: number;
@@ -228,7 +228,7 @@ type WorkBudgetScope =
   | { readonly kind: "project"; readonly projectId: string };
 
 /**
- * The work ledger as it stood when it refused a request (ADR-084 decision 1), in model requests:
+ * The work ledger as it stood when it refused a request, in model requests:
  * the budget in force (its policy default plus the owner's grants), the verification reserve in it,
  * the requests drawn against it, recorded and in flight, and which call sites drew them, most first.
  */
@@ -238,8 +238,8 @@ export interface WorkAtBudget {
   /** Requests the owner granted; always 0 at task scope, whose budget no grant raises. */
   readonly grantedRequests: number;
   /**
-   * The requests of the budget only verification and acceptance may draw (ADR-084 addendum 1
-   * decision 6); always 0 at task scope, since the reserve is the project's.
+   * The requests of the budget only verification and acceptance may draw;
+   * always 0 at task scope, since the reserve is the project's.
    */
   readonly reserveRequests: number;
   /**
@@ -257,8 +257,8 @@ function describeSites(bySite: WorkAtBudget["bySite"]): string {
 }
 
 /**
- * A model request was refused before it was sent: its scope's work budget has no request left
- * (ADR-084 decision 1). At task scope Delivery gives the task up (source work_budget_spent) and its
+ * A model request was refused before it was sent: its scope's work budget has no request left.
+ * At task scope Delivery gives the task up (source work_budget_spent) and its
  * plan is repaired; at project scope Delivery halts the project (block kind work_budget) until the
  * owner grants more requests and the operator returns it to work.
  */

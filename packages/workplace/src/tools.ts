@@ -246,8 +246,8 @@ const RUN_CHECKS_SCHEMA: TurnToolSchema = {
 };
 
 /**
- * Only implementation work decided by stored checks may dispute one (ADR-074 addendum 2 d65 c): one
- * of its own, or one of an already merged task's that verification also runs on its merge (d74 D).
+ * Only implementation work decided by stored checks may dispute one: one
+ * of its own, or one of an already merged task's that verification also runs on its merge.
  */
 const DISPUTE_CHECK_SCHEMA: TurnToolSchema = {
   description:

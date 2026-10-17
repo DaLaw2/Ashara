@@ -105,14 +105,14 @@ import { reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
 import { createEventLog } from "./event-log.js";
 
-// Policy defaults for the web client's sessions (ADR-076). A session lasts a
+// Policy defaults for the web client's sessions. A session lasts a
 // working day; a failed login answers one second after it arrived.
 const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
 // Policy default: info and above reach the log; debug is subprocess and model-call detail.
 const LOG_MIN_LEVEL = "info";
-// The limits of one agent attempt. Its wall clock is Workplace's own 20 minutes
-// (ADR-074 d56); 25 turns is a policy cap on the agent loop.
+// The limits of one agent attempt. Its wall clock is Workplace's own default;
+// 25 turns is a policy cap on the agent loop.
 const ATTEMPT_POLICY = {
   maxTurns: 25,
   perCommandTimeoutSeconds: 300,
@@ -120,7 +120,7 @@ const ATTEMPT_POLICY = {
 };
 
 // Login throttle, per fifteen-minute window and per source (an IPv4 address or an
-// IPv6 /64, source-network.ts), task t-login-hardening:
+// IPv6 /64, source-network.ts):
 // - 5 per (name, source): a client is closed out only by its own source's failures.
 // - 20 per source across names: one source cannot walk many names.
 // No cap counts across sources, so no number of sources locks out a client, or
@@ -214,7 +214,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
 
-  // Phase 2: API token from the secret store (ADR-075 C4). Fail-closed: a
+  // Phase 2: API token from the secret store. Fail-closed: a
   // missing token means the server cannot authenticate any request.
   const apiToken = await loadApiToken(secretStore);
 
@@ -228,10 +228,10 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const eventLog = createEventLog(logger);
   const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
 
-  // Finance's cost ledger (K10), its one spend cap and its one work ledger, all on llm_calls: before
+  // Finance's cost ledger, its one spend cap and its one work ledger, all on llm_calls: before
   // every provider request Finance's guarded port refuses an unpriced model, a call whose
   // worst case would cross the project's or the deployment's cap, and a call whose project or task
-  // has drawn its budget of model requests (ADR-084 decision 1), and writes the admitted call's
+  // has drawn its budget of model requests, and writes the admitted call's
   // llm_calls row as pending; after it, the call's record completes that row. The loop reads the
   // same cap to stop at the deployment's.
   const llmCallRepo = new LlmCallRepository(db);
@@ -246,7 +246,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       `work budgets: ${config.workBudgets.perTaskRequests} model requests per task, ${config.workBudgets.perProjectRequests} per project`,
   );
   const llmCallLedger = new LlmCallLedger(llmCallRepo, spendCap);
-  // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
+  // Model catalog is DB-authoritative (seeded by a migration).
   // Load from DB, convert to the model-access ModelConfig shape, and build the
   // gateway config. Routing profiles remain deployment-specific TOML config.
   const dbModelRows = await configRepo.listModelConfigs();
@@ -254,8 +254,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   for (const row of dbModelRows) {
     models[row.modelId] = toModelConfig("model_configs", row);
   }
-  // Provider keys from the secret store, one per provider_configs row
-  // (ADR-075 C2): their only source. The agent's turns run in this process
+  // Provider keys from the secret store, one per provider_configs row:
+  // their only source. The agent's turns run in this process
   // through this gateway, so no key leaves it.
   const dbProviderRows = await configRepo.listProviderConfigs();
   const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
@@ -267,7 +267,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     loadContextOverflowFromToml(resolveModelsConfigPath()),
     loadThinkingPolicyFromToml(resolveModelsConfigPath()),
   );
-  // Single composition-root call for the LLM gateway (ADR-030). There is no
+  // Single composition-root call for the LLM gateway. There is no
   // silent fallback here: zero providers -> NoLLMProvidersConfigured
   // propagates to the caller and the server refuses to start.
   const llmGateway: LLMGateway = buildGateway({
@@ -342,7 +342,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     emit: (event) => eventLog.emit(event),
   };
 
-  // A task's project is the project_id on its own row (migration 014): the
+  // A task's project is the project_id on its own row: the
   // vision is keyed by it, so no reader walks the parent chain or falls back on
   // a global latest. A task that cannot be found yields null and blocks the
   // dispatch — handing an agent some other project's intent would be worse than
@@ -507,7 +507,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
   };
 
-  // The web client (ADR-076) authenticates with a session cookie, never the API token.
+  // The web client authenticates with a session cookie, never the API token.
   const app = buildApp(config.apiToken, appDeps, {
     projectRepo: appDeps.projectRepo,
     clientMessageRepo: appDeps.clientMessageRepo,

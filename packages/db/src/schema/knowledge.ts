@@ -22,7 +22,7 @@ export const knowledgeEntries = pgTable("knowledge_entries", {
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   freshness: varchar({ length: 10 }).notNull().default("fresh"),
   sourceTaskId: uuid("source_task_id").references(() => workItems.id),
-  // Migration 051: every entry belongs to one project, and every read filters by it.
+  // Every entry belongs to one project, and every read filters by it.
   projectId: uuid("project_id")
     .notNull()
     .references(() => projects.id),
@@ -34,13 +34,13 @@ export const knowledgeEntries = pgTable("knowledge_entries", {
 
 export const failedApproaches = pgTable("failed_approaches", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
-  // Nullable + ON DELETE SET NULL (migration 021): a lesson outlives
+  // Nullable + ON DELETE SET NULL: a lesson outlives
   // the task that produced it, mirroring knowledge_entries.source_task_id.
   taskId: uuid("task_id").references(() => workItems.id, {
     onDelete: "set null",
   }),
   epicId: uuid("epic_id").references(() => workItems.id),
-  // Migration 051: every lesson belongs to one project, and every read filters by it.
+  // Every lesson belongs to one project, and every read filters by it.
   projectId: uuid("project_id")
     .notNull()
     .references(() => projects.id),

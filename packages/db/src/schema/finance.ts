@@ -6,7 +6,7 @@ import { projects } from "./project.js";
 // Finance: the cost ledger.
 
 // ---------------------------------------------------------------------------
-// llm_calls (migration 015, K10 cost ledger, Finance context)
+// llm_calls (the cost ledger, Finance context)
 // ---------------------------------------------------------------------------
 // One row per provider call. Token and cost columns are nullable with no
 // default: NULL means unmeasured, never zero.
@@ -27,33 +27,33 @@ export const llmCalls = pgTable(
     cacheReadTokens: integer("cache_read_tokens"),
     cacheWriteTokens: integer("cache_write_tokens"),
     costUsd: numeric("cost_usd", { precision: 20, scale: 12, mode: "number" }),
-    // Migration 053: NULL exactly while the call is not recorded.
+    // NULL exactly while the call is not recorded.
     outcome: text(),
     errorKind: text("error_kind"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
-    // Migration 030: NULL only on rows written before it and on rows not recorded yet (053).
+    // NULL only on rows written before the column existed and on rows not recorded yet.
     finishReason: text("finish_reason"),
     reasoningTokens: integer("reasoning_tokens"),
-    // Migration 035: Finance's worst-case estimate, made before the call; the cap counts it when costUsd is NULL.
+    // Finance's worst-case estimate, made before the call; the cap counts it when costUsd is NULL.
     estimatedCostUsd: numeric("estimated_cost_usd", { precision: 20, scale: 12, mode: "number" }),
-    // Migration 053: 'pending' from admission to record, 'recorded' after it, 'unmeasured_after_crash'
+    // 'pending' from admission to record, 'recorded' after it, 'unmeasured_after_crash'
     // when a later process's startup found it pending. A row in every state counts against the cap.
     state: text().notNull(),
-    // Migration 075: the window of the model the call was sent to, written with its record; its
-    // utilisation is inputTokens over it. NULL on rows recorded before it and on rows not recorded yet.
+    // The window of the model the call was sent to, written with its record; its
+    // utilisation is inputTokens over it. NULL on rows recorded before the column existed and on rows not recorded yet.
     contextWindowTokens: integer("context_window_tokens"),
-    // Migration 078: the trace of the log scope the call was admitted in; NULL only on rows admitted before it.
+    // The trace of the log scope the call was admitted in; NULL only on rows admitted before the column existed.
     traceId: text("trace_id"),
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),
-    // Migration 067: a task's drawn requests are counted on every request it sends.
+    // A task's drawn requests are counted on every request it sends.
     taskIdx: index("idx_llm_calls_task").on(t.taskId).where(sql`task_id IS NOT NULL`),
   }),
 );
 
 // ---------------------------------------------------------------------------
-// work_grants (migration 067, ADR-084 decision 1, Finance context)
+// work_grants (Finance context)
 // ---------------------------------------------------------------------------
 // The owner's explicit grant of more model requests to one project: the only way its work budget
 // grows past the policy default. Append-only.

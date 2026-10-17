@@ -721,7 +721,7 @@ describe("define_check", () => {
     expect(first).toMatchObject({ value: expect.stringContaining("Cited items no check defined so far decides (the checks are not kept until each has one): S2.") });
   });
 
-  // ADR-083: a check names the items it decides; a definition that names none is no check.
+  // A check names the items it decides; a definition that names none is no check.
   it("refuses a definition that names no item it decides", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "define_check", input: { name: "greets", command: "grep -q hello greet.txt", decides: [] } }]),
@@ -887,7 +887,7 @@ describe("run_checks", () => {
     expect(records.at(-1)).toMatchObject({ kind: "outcome", outcome: { kind: "disputed", checkName: "lists", ofTask: null } });
   });
 
-  // ADR-074 addendum 2 d74 D: a merged task's check that blocks this task's merge may be disputed by its task id.
+  // A merged task's check that blocks this task's merge may be disputed by its task id.
   it("dispute_check names a merged task's check by that task, and refuses a check that task does not hold", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "dispute_check", input: { name: "lists", task: "t-merged", reason: "x" } }]),
@@ -938,7 +938,7 @@ describe("workplace boundaries", () => {
     expect(prompt).toContain("A greeting file");
   });
 
-  // ADR-074 addendum 2 d73: the recipe's author and the implementer both learn the run-as user.
+  // The recipe's author and the implementer both learn the run-as user.
   it.each(["run-and-dispute-checks", "build-environment"] as const)("the %s brief states that cells run as a non-root user with a writable HOME", (profile) => {
     const prompt = buildSystemPrompt(assignment().brief, CHARTER, profile);
     expect(prompt).toContain("non-root user");

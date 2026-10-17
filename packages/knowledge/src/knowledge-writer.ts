@@ -12,9 +12,9 @@ export interface KnowledgeSink {
 }
 
 /**
- * Task-scoping input for `KnowledgeSource` queries (kl-t2). `projectId` is the
- * task's project: a read never returns another project's rows (migration 051,
- * ADR-074 d92 a). `epicId` is the task's true Epic ancestor (`null` when the
+ * Task-scoping input for `KnowledgeSource` queries. `projectId` is the
+ * task's project: a read never returns another project's rows.
+ * `epicId` is the task's true Epic ancestor (`null` when the
  * walk found none), narrowing within the project. `queryText` is embedder-free
  * lexical signal derived from the task's own spec (title + goal + endState +
  * scope + deliverables), letting the port rank rows by relevance to THIS task

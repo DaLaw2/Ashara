@@ -26,7 +26,7 @@ export interface BaseCellReference {
 }
 
 /**
- * Loads the BaseCell reference (ADR-074 addendum 2 d61). A missing file, a reference without a
+ * Loads the BaseCell reference. A missing file, a reference without a
  * digest, or any extra key fails closed.
  */
 export async function loadBaseCell(path: string = DEFAULT_BASE_CELL_PATH): Promise<BaseCellReference> {

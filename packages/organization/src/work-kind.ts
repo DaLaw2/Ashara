@@ -2,7 +2,7 @@ import type { ProjectId } from "@ashara/shared";
 import type { CapabilityClass, Role, RoleRef, Roster, RosterViolation } from "./roster.js";
 import { ref } from "./roster.js";
 
-// The kinds of work a task can be (migration 031, work_items.work_kind): Organization's language.
+// The kinds of work a task can be (work_items.work_kind): Organization's language.
 // Delivery reads the kind of a task and maps it, in its ACL, to what Workplace gives the attempt.
 
 /** @testseam the integration attempt-profile.test.ts runs an attempt for every kind of work; assignmentViolations is its production reader */
@@ -27,9 +27,9 @@ export function parseWorkKind(value: string): WorkKind {
   return value;
 }
 
-// Who owns a WorkKind (ADR-075 context map: Organization is upstream of Delivery).
-// The owner is the role holding the capability the kind of work needs; M1 assigns
-// deterministically, so that capability must have exactly one holder.
+// Who owns a WorkKind (Organization is upstream of Delivery).
+// The owner is the role holding the capability the kind of work needs; assignment is
+// deterministic, so that capability must have exactly one holder.
 
 const CAPABILITY_FOR: Readonly<Record<WorkKind, CapabilityClass>> = {
   environment: "write-environment",

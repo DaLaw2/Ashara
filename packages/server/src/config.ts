@@ -16,7 +16,7 @@ interface ServerConfig {
     readonly deploymentUsd: number;
     readonly perProjectUsd: number;
   };
-  /** Finance's work ledger budgets in model requests, counted from llm_calls (ADR-084 decision 1, see WorkLedger). */
+  /** Finance's work ledger budgets in model requests, counted from llm_calls (see WorkLedger). */
   readonly workBudgets: WorkBudgets;
   /** The podman executable every cell runs through (ASHARA_PODMAN_BINARY). */
   readonly podmanBinary: string;
@@ -100,7 +100,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const perProjectUsd =
     rawProjectLimit === undefined ? deploymentUsd : parseBudgetLimit("ASHARA_PROJECT_BUDGET_LIMIT_USD", rawProjectLimit);
 
-  // Policy defaults: unset, ADR-084 decision 1's budgets and addendum 1 decision 6's verification
+  // Policy defaults: unset, Finance's budgets and verification
   // reserve (DEFAULT_WORK_BUDGETS). A set but unusable
   // one is refused, never replaced.
   const rawTaskWork = nonEmptyEnv("ASHARA_TASK_WORK_BUDGET_REQUESTS");
@@ -128,7 +128,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   // Policy default: unset means "podman on PATH". Pointing it at a missing
   // binary is how an unavailable substrate is observed without uninstalling.
   const podmanBinary = nonEmptyEnv("ASHARA_PODMAN_BINARY") ?? "podman";
-  // No default: the host also runs Postgres and Z0, so the caps are the owner's choice (ADR-074 d82 W9).
+  // No default: the host also runs Postgres and Z0, so the caps are the owner's choice.
   const cellLimits = readCellLimits(process.env);
 
   return {

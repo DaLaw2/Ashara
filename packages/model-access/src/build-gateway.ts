@@ -106,7 +106,7 @@ interface BuildGatewayOptions {
  * Single composition-root factory for constructing an `LLMGateway`.
  *
  * Refuse-to-start invariants:
- * - ADR-030: zero configured providers is never a silent success — it throws
+ * - Zero configured providers is never a silent success — it throws
  *   {@link NoLLMProvidersConfigured}.
  * - A non-empty routing profile for this deployment's enabled-provider combo
  *   must map every known LLM site — it throws {@link RoutingProfileIncomplete}

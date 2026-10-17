@@ -4,9 +4,9 @@ import { timestamptz } from "./columns.js";
 // Security: the secret store's ciphertext rows.
 
 // ---------------------------------------------------------------------------
-// secrets (migration 012) — owned by the Security context (ADR-075 S1)
+// secrets — owned by the Security context
 // ---------------------------------------------------------------------------
-// Ciphertext only: the AES-256-GCM key never enters the database (ADR-073 Q10).
+// Ciphertext only: the AES-256-GCM key never enters the database.
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {

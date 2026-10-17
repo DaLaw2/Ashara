@@ -16,7 +16,7 @@ const FATAL_SHUTDOWN_DEADLINE_MS = 30_000;
 
 async function main(): Promise<void> {
   // Phase 1: the master key, before anything else — without it no credential
-  // can be read (ADR-075 C2). Then the database URL from env or policy default.
+  // can be read. Then the database URL from env or policy default.
   const masterKey = loadServerMasterKey(process.env);
   const databaseUrl = loadDatabaseUrl();
 

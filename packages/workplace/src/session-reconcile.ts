@@ -39,7 +39,7 @@ type SessionReconcile =
 
 /**
  * Startup (Discipline B): closes every session a previous process left in a non-terminal phase.
- * The server is single-process (ADR-022), so at boot no session can legitimately be in flight: an
+ * The server is single-process, so at boot no session can legitimately be in flight: an
  * exact classification, not a heuristic timeout. Left open, they are reported as live agents forever.
  *
  * Run after Delivery's reconcile of its work items, which reads a still-open session as evidence

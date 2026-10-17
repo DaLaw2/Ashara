@@ -9,7 +9,7 @@ import { timestamptz } from "./columns.js";
 // ---------------------------------------------------------------------------
 
 // Provider API keys live in the secret store as provider/<name>/api_key, never
-// here (ADR-075 C2); migration 013 drops the plaintext api_key column.
+// here; the table has no plaintext api_key column.
 export const providerConfigs = pgTable("provider_configs", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
   name: text().notNull().unique(),
@@ -31,7 +31,7 @@ export const modelConfigs = pgTable("model_configs", {
     .references(() => providerConfigs.name),
   apiModelId: text("api_model_id"),
   capability: text().notNull(),
-  // No defaults (migration 054): a forgotten price would read as a free model, a forgotten window as a measured one.
+  // No defaults: a forgotten price would read as a free model, a forgotten window as a measured one.
   inputCostPer1m: doublePrecision("input_cost_per_1m").notNull(),
   outputCostPer1m: doublePrecision("output_cost_per_1m").notNull(),
   maxContextTokens: integer("max_context_tokens").notNull(),
@@ -42,7 +42,7 @@ export const modelConfigs = pgTable("model_configs", {
 });
 
 // ---------------------------------------------------------------------------
-// model_price_windows (migration 021): time-of-day rates replacing a model's base rates
+// model_price_windows: time-of-day rates replacing a model's base rates
 // ---------------------------------------------------------------------------
 
 export const modelPriceWindows = pgTable("model_price_windows", {
@@ -63,7 +63,7 @@ export const modelPriceWindows = pgTable("model_price_windows", {
 }));
 
 // ---------------------------------------------------------------------------
-// model_price_tiers (migration 047): prompt-length rates replacing a model's base rates
+// model_price_tiers: prompt-length rates replacing a model's base rates
 // ---------------------------------------------------------------------------
 
 export const modelPriceTiers = pgTable("model_price_tiers", {

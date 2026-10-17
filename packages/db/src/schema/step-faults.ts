@@ -3,7 +3,7 @@ import { timestamptz } from "./columns.js";
 import { projects } from "./project.js";
 
 // ---------------------------------------------------------------------------
-// step_faults (migration 063): a subject of a cycle step (a tender, an answer, a project, a report)
+// step_faults: a subject of a cycle step (a tender, an answer, a project, a report)
 // whose run failed on Ashara's side, with how many times in a row, the last error, and when it is
 // tried again. A subject that runs through has its row deleted. One that exhausted its faults is
 // parked (parked_at): not tried again while its project is not at work.

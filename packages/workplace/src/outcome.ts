@@ -46,7 +46,7 @@ export type Outcome =
   | (OutcomeBase & {
       /**
        * The implementer called dispute_check: it holds that a stored check cannot pass on correct
-       * work (ADR-074 addendum 2 d65 c). Not a failure of the task: the caller routes it to the
+       * work. Not a failure of the task: the caller routes it to the
        * check's author, never to the failure router.
        */
       readonly kind: "disputed";
@@ -67,7 +67,7 @@ export type Outcome =
   | (OutcomeBase & {
       /**
        * A turn's output was cut at the output token limit. None of its tool calls ran: a call
-       * written in a cut response may itself be cut, so it is never executed (ADR-074 d92 c).
+       * written in a cut response may itself be cut, so it is never executed.
        */
       readonly kind: "output_truncated";
       readonly turn: number;
@@ -96,7 +96,7 @@ export type Outcome =
   | (OutcomeBase & { readonly kind: "wall_clock"; readonly wallClockMs: number; readonly elapsedMs: number })
   | (OutcomeBase & {
       readonly kind: "transport_exhausted";
-      /** The generateTurn failure itself, typed context intact (no fallback inside an attempt, ADR-074 d44). */
+      /** The generateTurn failure itself, typed context intact (no fallback inside an attempt). */
       readonly error: unknown;
     })
   | (OutcomeBase & {

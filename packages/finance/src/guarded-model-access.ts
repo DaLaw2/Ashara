@@ -60,7 +60,7 @@ export interface ContextualLlm {
   forCall(context: LlmCallContext): StructuredProvider;
 }
 
-/** The turn port of the same guard: one admitted and recorded single-step call per agent turn (ADR-074 d7). */
+/** The turn port of the same guard: one admitted and recorded single-step call per agent turn. */
 export interface ContextualTurnLlm {
   forCall(context: LlmCallContext): CostedTurnLlm;
 }

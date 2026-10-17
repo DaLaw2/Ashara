@@ -7,18 +7,18 @@ import { PUBLIC_INTERFACE_FILE, gitPublicInterface, listProjectsReadyForAcceptan
 
 type Db = ReturnType<typeof createDb>;
 
-/** Delivery's acceptance store over projects, work_items and acceptance_sweeps (migration 049). */
+/** Delivery's acceptance store over projects, work_items and acceptance_sweeps. */
 export function createAcceptanceStore(db: Db): AcceptanceStore {
   return {
     readyForAcceptance: () => listProjectsReadyForAcceptance(db),
-    // The move to 'accepted' is Engagement's lifecycle guard, in the sweep's transaction (O3 c).
+    // The move to 'accepted' is Engagement's lifecycle guard, in the sweep's transaction.
     recordAccepted: (sweep) => recordAcceptance(db, sweep, acceptProject),
     recordSweepFault: (projectId) => recordAcceptanceSweepFault(db, projectId),
     recordDefect: (sweep, writeDefect) => recordAcceptanceDefect(db, sweep, (tx) => writeDefect(adaptWorkItemRepo(new WorkItemRowRepository(tx)))),
   };
 }
 
-/** Engagement's delivered-report store over acceptance_sweeps, work_items, task_checks and client_messages (migration 049). */
+/** Engagement's delivered-report store over acceptance_sweeps, work_items, task_checks and client_messages. */
 export function createDeliveredReportStore(db: Db): DeliveredReportStore {
   return {
     dueReports: () => listDueDeliveredReports(db),

@@ -3,10 +3,10 @@ import { InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 
 /*
- * Probes run from inside a real cell (roadmap M2 exit 6, ADR-074 d82 W9). Each one returns what the
+ * Probes run from inside a real cell. Each one returns what the
  * cell itself printed and its outcome; none throws on a breach, so an operator run records every
  * verdict. A probe whose in-cell command could not run, or that had no way to observe the
- * protection, is `unverifiable`, never `held` (fail closed, ADR-074 d96).
+ * protection, is `unverifiable`, never `held` (fail closed).
  */
 
 /**

@@ -10,7 +10,7 @@ import { projects } from "./project.js";
 // ---------------------------------------------------------------------------
 
 // `version` counts per project; UNIQUE (project_id, version) fails a racing
-// writer closed instead of letting two rows share a version (migration 014).
+// writer closed instead of letting two rows share a version.
 export const visionDocuments = pgTable(
   "vision_documents",
   {
@@ -34,7 +34,7 @@ export const visionDocuments = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// client_messages (migration 016, K1 client channel, Engagement context)
+// client_messages (the client channel, Engagement context)
 // ---------------------------------------------------------------------------
 // Direction/kind pairing, non-empty body and "an answer names its question" are
 // CHECKs in the migration; inbound inserts NOTIFY 'ashara_events'.
@@ -52,14 +52,14 @@ export const clientMessages = pgTable(
     inReplyTo: uuid("in_reply_to").references((): AnyPgColumn => clientMessages.id),
     consumedAt: timestamptz("consumed_at"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
-    // Migration 019: failed intake attempts of a tender, with the last one's error.
+    // Failed intake attempts of a tender, with the last one's error.
     intakeAttempts: integer("intake_attempts").notNull().default(0),
     intakeLastError: text("intake_last_error"),
-    // Migration 066: whose failure an answer's last counted reading attempt was, 'model' or 'provider'.
+    // Whose failure an answer's last counted reading attempt was, 'model' or 'provider'.
     intakeLastFailure: text("intake_last_failure"),
-    // Migration 020: the planning outcome an outbound report tells the client about.
+    // The planning outcome an outbound report tells the client about.
     reportsOn: varchar("reports_on", { length: 20 }),
-    // Migration 022: an outbound question's 1-based rank among those posted with it.
+    // An outbound question's 1-based rank among those posted with it.
     position: integer(),
   },
   (t) => ({
@@ -68,7 +68,7 @@ export const clientMessages = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// intake_readings (migration 074, ADR-084 addenda 2 and 3 applied to intake, Engagement context)
+// intake_readings (Engagement context)
 // ---------------------------------------------------------------------------
 // One row per project, written with vision v1: how many questions the tender's first reading asked
 // and, when it asked none, the second reading that confirmed it or raised questions, with its
@@ -94,7 +94,7 @@ export const intakeReadings = pgTable("intake_readings", {
 });
 
 // ---------------------------------------------------------------------------
-// work_burn_warnings (migration 068, ADR-084 addendum 1 decision 7, Engagement context)
+// work_burn_warnings (Engagement context)
 // ---------------------------------------------------------------------------
 // One row per zone of the work ledger's fever chart a project entered in one plan revision, with
 // the figures it was decided on and the Liaison's one report of it; the red zone's also carries

@@ -15,7 +15,7 @@ class RunReportProjectMissing extends Error {
 }
 
 /**
- * schema_migrations has no row for migration 046, so no session can be dated against it and a
+ * schema_migrations has no row for ATTEMPT_MIGRATION, so no session can be dated against it and a
  * session without attempt columns cannot be told apart from one written before they existed.
  */
 class RunReportAttemptMigrationUnrecorded extends Error {
@@ -103,7 +103,7 @@ const WorkItemRowSchema = z.object({
  * each NULL case names only what the row actually shows.
  * - `open`: the phase is not terminal (in flight, or a crash orphan not yet reconciled).
  * - `reconciled`: a reconciler (`by`), not the session itself, wrote its terminal phase.
- * - `predates-attempt-columns`: created before migration 046 applied.
+ * - `predates-attempt-columns`: created before ATTEMPT_MIGRATION applied.
  * - `completed-without-attempt`: it completed with no attempt (its work already delivered on main,
  *   so it says why); `endDetail` is its terminal write's own detail, null on a row written before a
  *   completion recorded one.
@@ -134,7 +134,7 @@ interface SessionEvidence {
  * AGENT_CALL_SITE, the only site an attempt calls as, so it belongs to one of the task's dev
  * sessions; a call of any other site is no attempt's turn. `costUsd` is NULL when no cost was
  * measured, `inputTokens` when the provider reported none, `contextWindowTokens` (the window of the
- * model it was sent to, migration 074) on a row recorded before that migration or not recorded yet.
+ * model it was sent to) on a row recorded before the column existed or not recorded yet.
  */
 interface TaskCall {
   readonly callSite: string;
@@ -149,14 +149,14 @@ interface TaskCall {
  * One work item of the project, whatever it spent: its level, its parent (work_items.parent_id),
  * its work kind (work_items.work_kind), the producer that wrote it and, for a check task, the task
  * its checks decide (task_spec.origin, task_spec.checksFor; NULL when the row records none), and, on
- * an environment-change task, the task it was opened for (work_items.repairs_task_id, migration 077;
+ * an environment-change task, the task it was opened for (work_items.repairs_task_id;
  * NULL when the row records none).
  */
 type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
 
 /**
  * One task's (or, with taskId null, the project's own) llm_calls of one provider. An unmeasured
- * row is one of three (migration 053): `pendingCalls` admitted and not yet recorded, `lostCalls`
+ * row is one of three: `pendingCalls` admitted and not yet recorded, `lostCalls`
  * admitted by a process that ended before recording them (unmeasured_after_crash), and the rest
  * recorded with no cost measured. `zeroCostCalls` counts rows priced at exactly $0, which the
  * ledger must never write; `cacheCountedCalls` are the
@@ -181,7 +181,7 @@ interface RunEvidence {
 
 function attemptRecord(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: Date): AttemptRecord {
   const columns = [row.attemptPromptDigest, row.attemptTerminal, row.attemptTurns, row.attemptProvider, row.attemptModel, row.attemptCell];
-  // Migration 046's CHECK keeps the six together; parse them only when they are present.
+  // ATTEMPT_MIGRATION's CHECK keeps the six together; parse them only when they are present.
   if (!columns.every((c) => c === null)) {
     return {
       kind: "recorded",

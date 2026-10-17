@@ -35,8 +35,8 @@ function parseUuid<S extends z.ZodType>(brand: IdBrand, schema: S, raw: unknown,
 }
 
 /**
- * The one way an external value becomes a `ProjectId` — a projects.id
- * (migration 014), the key of a project's visions and work items.
+ * The one way an external value becomes a `ProjectId` — a projects.id,
+ * the key of a project's visions and work items.
  */
 export function parseProjectId(raw: unknown, field: string): ProjectId {
   return parseUuid("ProjectId", ProjectIdSchema, raw, field);

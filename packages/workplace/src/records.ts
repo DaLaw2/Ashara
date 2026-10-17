@@ -73,8 +73,8 @@ type Plain<O> = O extends Outcome
   : never;
 
 /**
- * Where an attempt's record goes. The caller points it outside the worktree (t-isolated-switchover:
- * workdirBase/records/<task>/). A write that fails ends the attempt as environment_failure.
+ * Where an attempt's record goes. The caller points it outside the worktree
+ * (workdirBase/records/<task>/). A write that fails ends the attempt as environment_failure.
  */
 export interface AttemptRecordSink {
   append(record: AttemptRecord): Promise<void>;

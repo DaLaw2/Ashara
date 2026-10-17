@@ -21,48 +21,48 @@ export const workItems = pgTable("work_items", {
   northStar: text("north_star"),
   successCriteria: jsonb("success_criteria"),
   blockedReason: jsonb("blocked_reason"),
-  // No default: every insert names its project (migration 014).
+  // No default: every insert names its project.
   projectId: uuid("project_id")
     .notNull()
     .references(() => projects.id),
-  // Dispatch-guaranteed attempt counter (migration 018, r9f-t1). Incremented at the
+  // Dispatch-guaranteed attempt counter. Incremented at the
   // dispatch seam so the retry bound survives a crashed agent or discarded output —
   // decoupled from any cost record. See CoreLoop.processTask. A dispatch that never ran the
   // work (a pre-call refusal, stale checks, a check dispute, an environment change) is refunded,
   // so the count is attempts counted against the task, not every dispatch.
   dispatchCount: integer("dispatch_count").notNull().default(0),
-  // Who owns the item (migration 031): its kind of work and the roster role
+  // Who owns the item: its kind of work and the roster role
   // holding the capability that kind needs. Both or neither; only on a Task.
   workKind: text("work_kind"),
   ownerRoleId: uuid("owner_role_id"),
-  // Migration 033: a Sprint 0 task's stack statement, written when its substrate
-  // gate passed. On environment work, and (migration 043) on an implementation whose
+  // A Sprint 0 task's stack statement, written when its substrate
+  // gate passed. On environment work, and on an implementation whose
   // verified merge produced a new environment version.
   environmentStatement: text("environment_statement"),
-  // Migration 037: the environment version the statement was tested on; a later task's
-  // statement is chosen by it. NULL on a statement recorded before 037.
+  // The environment version the statement was tested on; a later task's
+  // statement is chosen by it. NULL on a statement recorded before the column existed.
   environmentStatementVersion: text("environment_statement_version"),
-  // Migration 048: infrastructure faults observed on the item's dispatches, none charged as an
+  // Infrastructure faults observed on the item's dispatches, none charged as an
   // attempt; the bound of its uncharged requeues.
   infrastructureFaults: integer("infrastructure_faults").notNull().default(0),
-  // Migration 070: the startups in a row that found the item InProgress, left by a process that
+  // The startups in a row that found the item InProgress, left by a process that
   // died; the bound of its re-dispatches after a crash (startup reconciler).
   crashOrphans: integer("crash_orphans").notNull().default(0),
-  // Migration 076: the largest context window an attempt of the item did not fit; its next
+  // The largest context window an attempt of the item did not fit; its next
   // dispatch is on a model whose window is larger. NULL when no attempt has overflowed one.
   overflowedWindowTokens: integer("overflowed_window_tokens"),
-  // Migration 041: the merge commit Z0's merge step made on the target's main for this task;
+  // The merge commit Z0's merge step made on the target's main for this task;
   // the only record of what was merged. NULL when nothing of the task was merged.
   mergeCommit: text("merge_commit"),
-  // Migration 049: how merge_commit closed the task, 'merged' or 'already_delivered'; NULL when
-  // not recorded (a record from before 049).
+  // How merge_commit closed the task, 'merged' or 'already_delivered'; NULL when
+  // not recorded (a record from before the column existed).
   mergeKind: text("merge_kind"),
-  // Migration 058: Quality's verdict on the last attempt, written with every entry into Failed and
-  // cleared on every exit from it. NULL on a Failed row that failed before 058.
+  // Quality's verdict on the last attempt, written with every entry into Failed and
+  // cleared on every exit from it. NULL on a Failed row that failed before the column existed.
   failureVerdict: jsonb("failure_verdict"),
-  // Migration 077: on an environment-change task, the task it was opened for (the task whose
+  // On an environment-change task, the task it was opened for (the task whose
   // implementer needed the change), written when it is created; NULL on every other task and on an
-  // environment-change task created before 077. Its spend is charged by this link, never by reading
+  // environment-change task created before the column existed. Its spend is charged by this link, never by reading
   // the dependency graph.
   repairsTaskId: uuid("repairs_task_id"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
@@ -85,8 +85,8 @@ export const dependencies = pgTable("dependencies", {
 });
 
 // ---------------------------------------------------------------------------
-// project_blocks (migration 040): one row per time Delivery halted a project. An open row is
-// the halt itself (migration 059): opened and ended by Delivery's halt guard, ended as
+// project_blocks: one row per time Delivery halted a project. An open row is
+// the halt itself: opened and ended by Delivery's halt guard, ended as
 // 'client_stop' by the projects_stop_ends_halt trigger when the client stops the project.
 // ---------------------------------------------------------------------------
 
@@ -124,23 +124,23 @@ export const projectBlocks = pgTable("project_blocks", {
   endKind: text("end_kind"),
   unblockedBy: text("unblocked_by"),
   unblockReason: text("unblock_reason"),
-  /** Migration 048: what the passing substrate probe observed, on an infrastructure halt it ended. */
+  /** What the passing substrate probe observed, on an infrastructure halt it ended. */
   resumeEvidence: text("resume_evidence"),
   resumedReportId: uuid("resumed_report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   /**
-   * Migration 060: on a budget_cap halt, the amounts its cap was judged on (capUsd, spentUsd,
-   * inFlightUsd, nextCallUsd); NULL on every other kind and on a budget_cap halt recorded before it.
+   * On a budget_cap halt, the amounts its cap was judged on (capUsd, spentUsd,
+   * inFlightUsd, nextCallUsd); NULL on every other kind and on a budget_cap halt recorded before the column existed.
    */
   spend: jsonb("spend"),
   /**
-   * Migration 067: on a work_budget halt, the work ledger as Finance read it when it refused the
+   * On a work_budget halt, the work ledger as Finance read it when it refused the
    * request (budget, granted, spent, in flight, requests by call site); NULL on every other kind.
    */
   work: jsonb("work"),
 });
 
 // ---------------------------------------------------------------------------
-// plan_revisions (migration 042): one row per revision of a project's plan after
+// plan_revisions: one row per revision of a project's plan after
 // the first, with what it did and the Liaison's one report on it.
 // ---------------------------------------------------------------------------
 
@@ -154,11 +154,11 @@ export const planRevisions = pgTable(
     revision: integer().notNull(),
     visionVersion: integer("vision_version").notNull(),
     /**
-     * The earliest client answer it took in, which its report replies to; null for a plan repair
-     * (migration 045). Every answer it took in is a replan_requests row naming it (migration 052).
+     * The earliest client answer it took in, which its report replies to; null for a plan repair.
+     * Every answer it took in is a replan_requests row naming it.
      */
     requestedBy: uuid("requested_by").references(() => clientMessages.id, { onDelete: "cascade" }),
-    /** 'client_change' or 'repair' (migration 045). */
+    /** 'client_change' or 'repair'. */
     kind: text().notNull().default("client_change"),
     summary: jsonb().notNull(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
@@ -170,7 +170,7 @@ export const planRevisions = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// plan_repairs (migration 045): one row per task the failure router abandoned, written by a
+// plan_repairs: one row per task the failure router abandoned, written by a
 // trigger on the abandonment; the plan revision that re-planned around it is recorded on it.
 // ---------------------------------------------------------------------------
 
@@ -186,7 +186,7 @@ export const planRepairs = pgTable("plan_repairs", {
 });
 
 // ---------------------------------------------------------------------------
-// replan_requests (migration 052): one row per client answer that changed an assumption the plan
+// replan_requests: one row per client answer that changed an assumption the plan
 // was built on. While a row has no plan_revision_id the project awaits a revision and none of its
 // tasks is dispatched; the revision that took the answer in is recorded on it.
 // ---------------------------------------------------------------------------

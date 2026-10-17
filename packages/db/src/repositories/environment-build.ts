@@ -56,7 +56,7 @@ function toRecord(row: EnvironmentBuildRow): EnvironmentBuildRecord {
 }
 
 /**
- * Execution Infrastructure's environment builds (migration 032). Implements execution-infra's
+ * Execution Infrastructure's environment builds. Implements execution-infra's
  * EnvironmentBuildRecorder; the composition root supplies it.
  */
 export class EnvironmentBuildRepository {

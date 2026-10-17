@@ -4,7 +4,7 @@ import { CapabilityClassSchema, RoleSchema, describeViolation, nonEmptyArray, va
 import type { Role, Roster } from "./roster.js";
 import { assignmentViolations } from "./work-kind.js";
 
-// A roster read back from roster_roles (migration 031): the rows of one revision,
+// A roster read back from roster_roles: the rows of one revision,
 // parsed, never cast, and held to the same rules derivation enforced.
 
 const RosterSchema = z.strictObject({

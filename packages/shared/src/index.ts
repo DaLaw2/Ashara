@@ -15,7 +15,7 @@ export { contendedWait, observeContendedWaits } from "./contended-wait.js";
 
 export type { StepContainment, StepFaultLedger, StepFaultStanding, StepFaulted } from "./contained-step.js";
 export { UnreadSubject, containEach, faultBackoffSeconds, readEach, uncontainedSteps } from "./contained-step.js";
-/** @testseam the simulator may not import it (ADR-081), so a cross-package test holds the simulator's report retry wait equal to it */
+/** @testseam the simulator may not import it, so a cross-package test holds the simulator's report retry wait equal to it */
 export { FIRST_FAULT_BACKOFF_SECONDS } from "./contained-step.js";
 /** @testseam unit tests of the cycle's steps contain their subjects with it; the composition root supplies db's ledger */
 export { memoryStepContainment } from "./contained-step.js";

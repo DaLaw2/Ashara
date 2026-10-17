@@ -5,7 +5,7 @@ import { readManifestContext } from "./dispatch-utils.js";
 
 /**
  * Renders what can be OBSERVED about the target tree. An empty tree returns an
- * explicit statement of that emptiness rather than "" (ADR-046): "" renders as
+ * explicit statement of that emptiness rather than "": "" renders as
  * no context section at all, which the agent cannot distinguish from a normal
  * project whose context happened to be omitted — so it proceeds on its prior.
  * Saying the directory is empty is what makes the frame the only thing known.

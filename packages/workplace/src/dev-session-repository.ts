@@ -12,7 +12,7 @@ class DispatchEvidenceUnread extends Error {
 }
 
 /**
- * What the session's Workplace attempt was (migration 046), written with its terminal phase. The
+ * What the session's Workplace attempt was, written with its terminal phase. The
  * terminal is the attempt's typed end ("finished:done", "turn_cap", ...); `cell` says whether it
  * ran on the BaseCell or on the session's environment version.
  */
@@ -39,15 +39,15 @@ function attemptColumns(attempt: SessionAttempt | null) {
 /**
  * dev_sessions is an attempt log: when each attempt opened and how it ended (`phase`, and the end's
  * outcome and detail in verification_result). It holds no verdict on the task
- * and no record of what was merged, which is work_items.merge_commit (migration 041): its terminal
+ * and no record of what was merged, which is work_items.merge_commit: its terminal
  * write is fail-soft (withSessionLifecycle), so no report or decision reads it as delivery.
  */
 export class DevSessionRepository {
   constructor(private readonly db: DbHandle) {}
 
   /**
-   * `environmentVersion`: the environment version the session's cells were built from; null on the BaseCell (migration 034).
-   * `traceId`: the trace of the dispatched attempt the session opens in (migration 076).
+   * `environmentVersion`: the environment version the session's cells were built from; null on the BaseCell.
+   * `traceId`: the trace of the dispatched attempt the session opens in.
    */
   async insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null, traceId: string) {
     await this.db.insert(devSessions).values({
@@ -62,7 +62,7 @@ export class DevSessionRepository {
 
   /**
    * `attempt`: null when no attempt outcome reached the session (it ended before the model, or its
-   * attempt threw). Required, never defaulted: the six columns of migration 046 then stay NULL, and
+   * attempt threw). Required, never defaulted: the six attempt columns then stay NULL, and
    * NULL means only "no attempt recorded", never "no model call" (run-report reads it that way).
    * `attemptEnd`: how the session ended, in its own words, as `fail` writes a failure's, so a session
    * that completed without an attempt (work already delivered on main) says why.
@@ -93,7 +93,7 @@ export class DevSessionRepository {
 
   /**
    * Terminalizes every session left in a non-terminal phase, for the startup
-   * reconciler (Discipline B). The server is single-process (ADR-022), so at boot
+   * reconciler (Discipline B). The server is single-process, so at boot
    * no session can legitimately be in flight. Leaving them would keep `listActive()`
    * reporting dead sessions as live agents forever. A session of a task the start found
    * InProgress (`inProgressTaskIds`) is a crash orphan whose agent died with the process, closed

@@ -122,7 +122,7 @@ describe("the work ledger's draw", () => {
   });
 });
 
-// ADR-084 addendum 1 decision 6: a share of each project's budget only verification may draw.
+// A share of each project's budget only verification may draw.
 describe("the verification reserve", () => {
   const budgets = { perTaskRequests: 50, perProjectRequests: 8, verificationReservePercent: 25 };
 
@@ -179,7 +179,7 @@ describe("the verification reserve", () => {
   });
 });
 
-// The one draw point (ADR-084 decision 1): every gateway request is admitted through SpendCap,
+// The one draw point: every gateway request is admitted through SpendCap,
 // whose admission draws through WorkLedger.draw, and the llm_calls row a request is counted by is
 // written only there. A second writer of that row would be a request no work budget counted.
 describe("the llm_calls row a request is counted by", () => {

@@ -11,7 +11,7 @@ import { CapabilityClassSchema, describeViolation, nonEmptyOrNull, validateRoste
 import type { Role, Roster } from "./roster.js";
 import { assignmentViolations } from "./work-kind.js";
 
-// Roster derivation per tender (story s-team-roster-m1, ADR-075 Organization): the
+// Roster derivation per tender: the
 // roles a project needs, derived from vision v1 by one structured call on the
 // `roster` site. validateRoster is the ladder's validate hook, so a violating
 // roster is re-asked with its violations named; a ladder that runs out is refused with
@@ -42,7 +42,7 @@ export interface RosterStore {
 /**
  * Why no roster can be derived for the project from what it holds: no valid roster came of the
  * ladder, or its vision cannot be read. Organization never halts a project itself; the project's
- * halt is Delivery's (O3 c, ADR-080 d3), which blocks it on this refusal.
+ * halt is Delivery's, which blocks it on this refusal.
  */
 interface RosterRefusal {
   readonly errorClass: string;

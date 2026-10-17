@@ -29,8 +29,8 @@ const VisionAssumptionSchema = z.strictObject({
 });
 
 /**
- * AgentBriefSchema: the validated task instruction Delivery's dispatch assembles for one attempt
- * (ADR-013; ADR-033 §5). It is built in-process, handed to the Workplace attempt loop as its
+ * AgentBriefSchema: the validated task instruction Delivery's dispatch assembles for one attempt.
+ * It is built in-process, handed to the Workplace attempt loop as its
  * AssignmentBrief, recorded in dev_sessions and written to workdirBase/records/<task>/. Every field
  * is explicit so a producer field outside the schema is a compile error or a parse error
  * (`.strict()`), never an invisible drop: a field assembled at cost and lost on the way to the
@@ -59,8 +59,8 @@ const AgentBriefSchema = z
     contextMap: z.string().optional(),
     // Non-empty when present: the producer only emits it when it has real content.
     priorAttemptFailure: z.string().min(1).optional(),
-    // The paths Z0 refuses a task's work for changing, stated before work starts (ADR-074
-    // addendum 2 d66 c, d72): `recipe`, the platform role's files, and every stored check file of
+    // The paths Z0 refuses a task's work for changing, stated before work starts:
+    // `recipe`, the platform role's files, and every stored check file of
     // the project; `inputs` are product files the image build reads, which work may change but
     // which rebuild the environment. Absent only on the BaseCell (Sprint 0), where no environment
     // exists yet.

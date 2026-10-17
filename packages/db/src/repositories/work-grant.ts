@@ -28,7 +28,7 @@ class WorkGrantInvalid extends Error {
 const GrantedRowSchema = z.object({ granted: z.coerce.number().int().positive() });
 
 /**
- * The owner's grants of model requests (migration 067, ADR-084 decision 1): the only way a
+ * The owner's grants of model requests: the only way a
  * project's work budget grows. Append-only: a grant is never taken back or edited.
  */
 export class WorkGrantRepository {

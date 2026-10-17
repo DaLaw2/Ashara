@@ -55,7 +55,7 @@ export interface GatewayConfig {
   routingProfiles?: RoutingProfiles;
   /**
    * Thinking mode per call site (config/models.toml `[thinking]`). Absent is
-   * thinking off at every site: the decided default (ADR-074 D13), not a guess.
+   * thinking off at every site: the policy default, not a guess.
    */
   thinking?: ThinkingPolicy;
   /** How each provider states a context overflow (config/models.toml `[context_overflow]`). */
@@ -76,7 +76,7 @@ export interface ContextOverflowSignatures {
   readonly phrases: readonly string[];
 }
 
-/** Whether a reasoning model thinks before it answers (ADR-074 D13: per role tier, default off). */
+/** Whether a reasoning model thinks before it answers (per role tier, default off). */
 export const THINKING_MODES = ["off", "on"] as const;
 
 export type ThinkingMode = (typeof THINKING_MODES)[number];
@@ -235,7 +235,7 @@ export interface ModelIdentity {
 }
 
 /**
- * How independent a second opinion is of the first (ADR-084 addendum 3 decision 12), strongest
+ * How independent a second opinion is of the first, strongest
  * first: a model of another provider; another model of the first's provider; the first's model
  * asked again. Agreement within one family shares more blind spots, which every record of it names.
  */

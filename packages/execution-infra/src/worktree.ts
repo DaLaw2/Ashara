@@ -315,7 +315,7 @@ export async function commitAllChanges(repo: HostRepo, message: string): Promise
 }
 
 // ---------------------------------------------------------------------------
-// Partial-work commit (ADR-036 point 6)
+// Partial-work commit
 // ---------------------------------------------------------------------------
 
 export type PartialCommitOutcome =
@@ -327,7 +327,7 @@ export type PartialCommitOutcome =
 
 /**
  * Best-effort commit of whatever the agent left in the worktree before cleanup
- * on a failure path. ADR-036 point 6: a retry's worktree seeds from the task
+ * on a failure path. A retry's worktree seeds from the task
  * branch, so uncommitted work destroyed with the worktree is work lost.
  *
  * Never throws. The caller is already on a failure path, and a commit problem

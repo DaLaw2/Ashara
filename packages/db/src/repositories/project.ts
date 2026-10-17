@@ -13,10 +13,10 @@ export interface ProjectRecord {
    * Engagement's lifecycle (active, stopped, accepted). Only an active project is ever halted.
    */
   readonly status: string;
-  /** The client this project belongs to (migration 018). */
+  /** The client this project belongs to. */
   readonly clientId: string;
   readonly createdAt: Date;
-  /** The target workspace Delivery works in (migration 024); null until first minted. */
+  /** The target workspace Delivery works in; null until first minted. */
   readonly workspacePath: string | null;
 }
 
@@ -27,7 +27,7 @@ export interface ProjectRecord {
 const qualified = (column: AnyColumn): SQL => sql`${sql.identifier(getTableName(column.table))}.${sql.identifier(column.name)}`;
 
 /**
- * Delivery's halt as stored (O3 c, ADR-080 d3; migration 059): the project has an open block
+ * Delivery's halt as stored: the project has an open block
  * episode. The episode is the halt's one record, and Delivery's halt guard its only writer.
  */
 export const projectHalted = (projectId: AnyColumn): SQL =>
@@ -77,7 +77,7 @@ function toRecord(row: ProjectRow): ProjectRecord {
 
 /**
  * True while the project has no inbound stop the Liaison has yet to consume
- * (migration 028). The Liaison consumes stops once per cycle, at its top; a stop
+ * The Liaison consumes stops once per cycle, at its top; a stop
  * the client sends later in the cycle must already hold, so every reader that
  * admits only active projects to take in, plan, report on or dispatch also
  * requires this. A stop committed before such a read is honoured by it.
@@ -87,14 +87,14 @@ export const noOpenStop = (projectId: AnyColumn) =>
     AND s.direction = 'inbound' AND s.kind = 'stop' AND s.consumed_at IS NULL)`;
 
 /**
- * The project awaits a plan repair (migration 045): a task the failure router gave up that no plan
+ * The project awaits a plan repair: a task the failure router gave up that no plan
  * revision has re-planned around yet. Its dispatch is held until one has (listActiveIds).
  */
 export const pendingRepair = (projectId: AnyColumn) =>
   sql`EXISTS (SELECT 1 FROM plan_repairs pr WHERE pr.project_id = ${projectId} AND pr.plan_revision_id IS NULL)`;
 
 /**
- * The project awaits a plan revision for a client's change (migration 052): an answer that changed
+ * The project awaits a plan revision for a client's change: an answer that changed
  * an assumption the plan was built on, which no revision has taken in yet. Its dispatch is held
  * until one has (listActiveIds).
  */
@@ -113,7 +113,7 @@ const firstPlanUnreported = (): SQL =>
     WHERE fr.project_id = ${qualified(projects.id)} AND fr.direction = 'outbound' AND fr.reports_on = 'first-plan'))`;
 
 // An answer the Liaison has yet to read may change the vision: the project is
-// planned once its answers are in (migration 038).
+// planned once its answers are in.
 export const noOpenAnswer = () =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages a WHERE a.project_id = projects.id
     AND a.direction = 'inbound' AND a.kind = 'answer' AND a.consumed_at IS NULL)`;
@@ -131,9 +131,9 @@ class WorkspacePathNotRecorded extends Error {
 }
 
 /**
- * The Project Record (architecture K3): one row per tender, owned by one client. Its lifecycle is
- * Engagement's (its project-lifecycle guard); its halt, the open block episode, is Delivery's (O3 c,
- * ADR-080 d3): Delivery's repository extends this one with the only writes of it.
+ * The Project Record: one row per tender, owned by one client. Its lifecycle is
+ * Engagement's (its project-lifecycle guard); its halt, the open block episode, is Delivery's:
+ * Delivery's repository extends this one with the only writes of it.
  */
 export class ProjectRepository {
   constructor(protected readonly db: DbHandle) {}
@@ -180,7 +180,7 @@ export class ProjectRepository {
 
   /**
    * The projects whose work may be dispatched: at work (active, not halted), no stop
-   * awaiting the Liaison, no revision awaited for a client's change (migration 052: a client
+   * awaiting the Liaison, no revision awaited for a client's change (a client
    * answer contradicted an assumption the plan was built on), no plan repair awaited and no
    * first-plan report awaited (firstPlanUnreported), oldest first.
    * This read is the dispatch decision: a stop committed after it is ordered

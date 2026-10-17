@@ -6,7 +6,7 @@ import { InvalidThinkingPolicy, ModelsConfigUnreadable } from "./errors.js";
 import { KNOWN_LLM_SITES, THINKING_MODES } from "./types.js";
 import type { KnownLLMSite, ProviderType, ThinkingMode, ThinkingPolicy } from "./types.js";
 
-/** Thinking off at every site: the decided default (ADR-074 D13). */
+/** Thinking off at every site: the policy default. */
 const THINKING_OFF: ThinkingPolicy = { default: "off", sites: {} };
 
 const ThinkingModeSchema = z.enum(THINKING_MODES);
@@ -22,7 +22,7 @@ const TomlThinkingRootSchema = z.object({ thinking: z.unknown().optional() });
 
 /**
  * Reads the `[thinking]` table of a models.toml file. A file that parses with
- * no `[thinking]` table is thinking off everywhere (ADR-074 D13); a missing or
+ * no `[thinking]` table is thinking off everywhere; a missing or
  * unparseable file throws {@link ModelsConfigUnreadable}, and a table that IS
  * present and invalid throws {@link InvalidThinkingPolicy}.
  */
@@ -87,8 +87,8 @@ const MIN_REASONING_ALLOWANCE_TOKENS = 32_768;
 /**
  * Reasoning tokens allowed per byte of a one-shot request's prompt, above the
  * minimum, for every site that runs with thinking on (decomposition among
- * them). The suite review runs with thinking off (config/models.toml, ADR-074
- * d95 b) and gets no allowance: a larger allowance does not stop it spending
+ * them). The suite review runs with thinking off (config/models.toml)
+ * and gets no allowance: a larger allowance does not stop it spending
  * its whole bound on reasoning. How much reasoning any site needs
  * as its prompt grows is unmeasured. One token per byte is about four per
  * prompt token. The worst-case price follows, because

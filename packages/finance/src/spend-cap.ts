@@ -59,7 +59,7 @@ interface SpendCapDeps {
   /** llm_calls: the spend a cap reads, the requests the work ledger reads, and the row an admitted call is written to before it is sent. */
   readonly ledger: Pick<LlmCallRepository, "spend" | "admit" | "work" | "workBySite">;
   readonly caps: SpendCaps;
-  /** The work ledger's budgets in model requests (policy default: DEFAULT_WORK_BUDGETS, ADR-084 decision 1). */
+  /** The work ledger's budgets in model requests (policy default: DEFAULT_WORK_BUDGETS). */
   readonly workBudgets?: WorkBudgets;
   /**
    * What an admission awaits the admissions ahead of it through (policy default: as is). The
@@ -102,7 +102,7 @@ export function worstCaseCostUsd(model: ModelConfig, requestBytes: number, maxOu
  * Finance's one spend authority. The cap is read from llm_calls on every call,
  * so it survives a restart; an unmeasured call counts at its recorded estimate.
  * An admitted call's row is written at admission with its worst-case estimate
- * (state 'pending', migration 053), so a call admitted and never recorded, its
+ * (state 'pending'), so a call admitted and never recorded, its
  * process dead or its record failed, still counts after a restart. Admission is
  * serialized, so concurrent calls cannot each see the same headroom.
  */
@@ -113,7 +113,7 @@ export class SpendCap {
 
   constructor(private readonly deps: SpendCapDeps) {
     const { caps } = deps;
-    // Policy default: ADR-084 decision 1 names these budgets; the composition root passes the deployment's.
+    // Policy default: DEFAULT_WORK_BUDGETS; the composition root passes the deployment's.
     this.work = new WorkLedger({ ledger: deps.ledger, budgets: deps.workBudgets ?? DEFAULT_WORK_BUDGETS });
     const valid =
       isPositiveAmount(caps.deploymentUsd) && isPositiveAmount(caps.perProjectUsd) && caps.perProjectUsd <= caps.deploymentUsd;
@@ -124,8 +124,8 @@ export class SpendCap {
 
   /**
    * Admits a call whose worst case fits under both caps and whose project and task have a model
-   * request left, or throws `BudgetExceeded` or `WorkBudgetSpent`, Finance's typed refusals. Finance never halts a project itself: the project's halt is Delivery's (O3 c,
-   * ADR-080 d3), which blocks a project its refusal names wherever the refusal surfaces.
+   * request left, or throws `BudgetExceeded` or `WorkBudgetSpent`, Finance's typed refusals. Finance never halts a project itself: the project's halt is Delivery's,
+   * which blocks a project its refusal names wherever the refusal surfaces.
    */
   admit(call: PendingLlmCall): Promise<void> {
     const ahead = this.deps.admissionTurn?.(this.admissions) ?? this.admissions;

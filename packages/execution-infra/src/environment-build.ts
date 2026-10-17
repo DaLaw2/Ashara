@@ -12,7 +12,7 @@ import type { PodmanSubstrate } from "./podman.js";
 import { elidedOutput } from "./process-runner.js";
 
 /**
- * podman build's own default network namespace. ADR-074 addendum 2 d62: only this Z0-run build of
+ * podman build's own default network namespace: only this Z0-run build of
  * the environment reaches the network; every cell keeps --network=none.
  */
 const BUILD_NETWORK = "private";
@@ -55,7 +55,7 @@ interface FailedEnvironmentBuild extends EnvironmentBuildIdentity {
   readonly error: string;
 }
 
-/** Persistence of environment builds (environment_builds, migration 032), supplied by the composition root. */
+/** Persistence of environment builds (environment_builds), supplied by the composition root. */
 interface EnvironmentBuildRecorder {
   findSucceeded(projectId: ProjectId, version: string): Promise<{ readonly imageId: string } | null>;
   /** The one succeeded build of (project, version); a rebuild replaces it. */

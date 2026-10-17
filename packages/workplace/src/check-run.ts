@@ -22,7 +22,7 @@ export interface TaskCheckRunPort {
   readonly checkNames: readonly string[];
   /**
    * The checks of the tasks already merged, which verification also runs on the merge: any of them
-   * that blocks the merge may be disputed too, named with its task's id (ADR-074 addendum 2 d74 D).
+   * that blocks the merge may be disputed too, named with its task's id.
    */
   readonly mergedChecks: ReadonlyArray<{ readonly taskId: string; readonly name: string }>;
   run(timeoutSeconds: number): Promise<VerdictReport>;

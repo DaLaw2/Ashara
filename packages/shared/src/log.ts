@@ -24,8 +24,8 @@ const MAX_ERROR_CHARS = 64_000;
 const REDACTED = "[redacted]";
 
 /**
- * Field names whose value is redacted whatever its type: the second guard behind `Secret`
- * (Decided: owner 2026-10-17, c-observability O5). A name matches when, lowercased with every
+ * Field names whose value is redacted whatever its type: the second guard behind `Secret`.
+ * A name matches when, lowercased with every
  * non-alphanumeric character removed, it ends with one of these.
  */
 const DENIED_FIELD_SUFFIXES = [
@@ -53,7 +53,7 @@ function isDeniedFieldName(name: string): boolean {
  * A value that must never reach a log line: it serializes, prints and logs as `[redacted]`. The
  * value is held in a private slot, so no enumeration of the object (the error serializer's
  * included) reads it; `reveal()` is the one way to the value.
- * @testseam log.test.ts proves the redaction; its production carriers are the call sites t-obs-migrate-* moves onto the logger
+ * @testseam log.test.ts proves the redaction
  */
 export class Secret {
   readonly #value: string;

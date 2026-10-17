@@ -88,8 +88,7 @@ export const sdkLanguageModels: LanguageModelFactory = (providerConfig, modelCon
  * The cheapest model graded at or above `capability`: base input rate, then
  * base output rate, then id, so the choice never depends on catalog order.
  * Picking the lowest qualifying level would send a Light request to a dearer,
- * weaker model whenever a cheaper one is graded higher
- * (docs/investigations/model-catalog-2026-10-14.md §7 flag 2).
+ * weaker model whenever a cheaper one is graded higher.
  */
 function findBestModel(
   models: ModelConfig[],

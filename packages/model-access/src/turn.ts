@@ -18,7 +18,7 @@ export interface TurnToolSchema {
 }
 
 export interface TurnRequest {
-  /** Resolved once per attempt by the caller; the turn never re-routes or falls back (ADR-074 d44). */
+  /** Resolved once per attempt by the caller; the turn never re-routes or falls back. */
   readonly model: ResolvedModel;
   readonly system: string;
   readonly messages: readonly ModelMessage[];

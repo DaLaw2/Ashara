@@ -277,8 +277,8 @@ export class LLMGateway {
   /**
    * One agent turn: exactly one provider request, one step, one settlement through the gate.
    * Tools go out as schemas and come back as calls; nothing is executed and
-   * nothing loops (ADR-074 d7). The model is the caller's pinned resolution:
-   * no re-routing, no fallback (ADR-074 d44), and no SDK
+   * nothing loops. The model is the caller's pinned resolution:
+   * no re-routing, no fallback, and no SDK
    * retry, so every provider request is the one the gate settles.
    *
    * Called through Finance's guarded port by @ashara/workplace runAttempt.

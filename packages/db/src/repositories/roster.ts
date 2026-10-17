@@ -4,7 +4,7 @@ import type { Database, DbHandle } from "../connection.js";
 import { projects, rosterRoles, visionDocuments } from "../schema/index.js";
 import { noOpenStop, projectAtWork } from "./project.js";
 
-// A project's roster (migration 031): the rows of its latest revision. Derived
+// A project's roster: the rows of its latest revision. Derived
 // from vision v1 before the first plan; the table is append-only.
 
 /** The vision a first roster is derived from. */

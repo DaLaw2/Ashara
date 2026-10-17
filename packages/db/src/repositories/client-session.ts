@@ -6,10 +6,10 @@ import { clientSessions } from "../schema/index.js";
 type ClientSessionRow = typeof clientSessions.$inferSelect;
 
 /**
- * The web client's browser sessions (migration 017), each acting for one client
- * (migration 018). Keyed by the SHA-256 of the cookie token. Expiry is judged
- * against the database clock, so the expiry a session was created with and the
- * expiry it is checked against share one clock.
+ * The web client's browser sessions, each acting for one client. Keyed by the
+ * SHA-256 of the cookie token. Expiry is judged against the database clock, so
+ * the expiry a session was created with and the expiry it is checked against
+ * share one clock.
  */
 export class ClientSessionRepository {
   constructor(private readonly db: DbHandle) {}

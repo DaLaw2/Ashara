@@ -108,7 +108,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           startWorkItem(item);
           break;
         case "Completed":
-          // Nothing outside Quality marks work passed (ADR-075 §5): a task is Completed only by the
+          // Nothing outside Quality marks work passed: a task is Completed only by the
           // loop, once its delivery is verified and recorded, never by an operator's say-so.
           return c.json(
             { error: `cannot complete ${item.id} by hand: a task is completed only by the loop, once Quality has verified its delivery` },

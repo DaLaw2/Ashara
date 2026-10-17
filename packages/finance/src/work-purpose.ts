@@ -1,8 +1,8 @@
 import type { KnownLLMSite } from "@ashara/model-access";
 
 /**
- * What a model request is for, as the work ledger's verification reserve reads it (ADR-084
- * addendum 1 decision 6): `verification`, checking and accepting work already built (the check
+ * What a model request is for, as the work ledger's verification reserve reads it:
+ * `verification`, checking and accepting work already built (the check
  * runs that decide a task, acceptance sweeps, post-merge checks, the delivered report), which may
  * draw the reserve; `upstream`, every other request (planning, check authoring, suite review,
  * implementation, the Liaison's reading of the client), which may not.

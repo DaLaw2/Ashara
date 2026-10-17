@@ -99,7 +99,7 @@ describe("buildGatewayConfig reads the provider type, not the name", () => {
     });
 });
 
-// t-overflow-edges: the boot check reserves what the gateway's preflight reserves for a turn at
+// The boot check reserves what the gateway's preflight reserves for a turn at
 // every site, the reasoning allowance included where thinking is on.
 describe("buildGatewayConfig: a window must hold input beside the output a turn reserves at every site", () => {
     const deepseek = (maxContextTokens: number) =>

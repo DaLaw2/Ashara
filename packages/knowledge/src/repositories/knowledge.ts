@@ -27,13 +27,13 @@ export class KnowledgeRepository {
   }
 
   /**
-   * Task-scoped knowledge injection (kl-t2, investigation Q3/Q5). Combines:
-   *   - project scope (migration 051, ADR-074 d92 a): only `projectId`'s rows, so two
+   * Task-scoped knowledge injection. Combines:
+   *   - project scope: only `projectId`'s rows, so two
    *     projects on one database never see each other's findings.
-   *   - epic scope (Q3a): within the project, `epic_id = epicId` or a row written
+   *   - epic scope: within the project, `epic_id = epicId` or a row written
    *     outside any epic (`epic_id IS NULL`, a project-wide note). A task with no epic
    *     ancestor (`epicId === null`) matches only the project-wide rows.
-   *   - lexical relevance (Q3b): `ts_rank` over `plainto_tsquery` ranks matches by
+   *   - lexical relevance: `ts_rank` over `plainto_tsquery` ranks matches by
    *     relevance to the task's own spec text; a blank query or no lexical overlap
    *     falls back to recency via the `eventTime` tiebreak.
    */

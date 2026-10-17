@@ -16,11 +16,11 @@ export const devSessions = pgTable("dev_sessions", {
   phase: varchar({ length: 20 }).notNull().default("Preparing"),
   brief: jsonb(),
   verificationResult: jsonb("verification_result"),
-  // Migration 034: the environment version the session's cells were built from; NULL when they
+  // The environment version the session's cells were built from; NULL when they
   // ran on the BaseCell (only the Sprint 0 task does).
   environmentVersion: text("environment_version"),
-  // Migration 046: the session's attempt, all six set or all NULL. NULL is "no attempt recorded"
-  // (still open, ended before the model, attempt threw, reconciled orphan, or a pre-046 row), never
+  // The session's attempt, all six set or all NULL. NULL is "no attempt recorded"
+  // (still open, ended before the model, attempt threw, reconciled orphan, or a row written before the column existed), never
   // "no model call was made".
   attemptPromptDigest: text("attempt_prompt_digest"),
   attemptTerminal: text("attempt_terminal"),
@@ -28,7 +28,7 @@ export const devSessions = pgTable("dev_sessions", {
   attemptProvider: text("attempt_provider"),
   attemptModel: text("attempt_model"),
   attemptCell: text("attempt_cell"),
-  // Migration 078: the trace of the dispatched attempt the session was opened in; NULL only on rows written before it.
+  // The trace of the dispatched attempt the session was opened in; NULL only on rows written before the column existed.
   traceId: text("trace_id"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),

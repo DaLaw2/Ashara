@@ -8,13 +8,13 @@ import { EnvironmentDefinitionInvalid, EnvironmentGitFailed, EnvironmentVersionU
 import { runHostGitObjects } from "./host-git.js";
 
 // The environment definition is the platform role's work product in the repository; Execution
-// Infrastructure owns only its build context (ADR-075 §5): the recipe and the inputs the image is
+// Infrastructure owns only its build context: the recipe and the inputs the image is
 // built from, and the version that is their digest. The definition's commands, and the parse of
 // the whole file, are Quality's, which runs them.
 
 /** Where the definition lives; it is always part of the recipe. */
 export const ENVIRONMENT_DEFINITION_PATH = "environment/environment.toml";
-/** Every recipe file lives under it; nothing else about it is special (ADR-074 addendum 2 d72). */
+/** Every recipe file lives under it; nothing else about it is special. */
 export const ENVIRONMENT_DIR = "environment/";
 
 /** Why `path` is not a normalized repo-relative file path, or null. */
@@ -149,7 +149,7 @@ export async function readEnvironmentFile<D>(gitDir: string, commit: string, sch
 
 /**
  * The recipe: the definition, its containerfile and the recipe files it names. Only environment work
- * changes them (ADR-074 addendum 2 d72 B1), and environment work changes nothing else.
+ * changes them, and environment work changes nothing else.
  */
 export function recipePaths(definition: EnvironmentBuildContext): readonly string[] {
   return [ENVIRONMENT_DEFINITION_PATH, definition.containerfile, ...definition.recipe];

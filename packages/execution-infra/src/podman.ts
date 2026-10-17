@@ -233,7 +233,7 @@ export interface CellSpec {
 }
 
 /*
- * What every cell sees besides its tree (ADR-074 addendum 2 d73), with no option to leave it out:
+ * What every cell sees besides its tree, with no option to leave it out:
  * - It runs as the host's uid (--userns=keep-id), not root, with HOME set to a writable, empty
  *   directory of its own (CELL_HOME); the image's HOME, if any, is overridden.
  * - When hostPath holds a `.git` (a worktree's gitlink file, or a checkout's git dir), the cell

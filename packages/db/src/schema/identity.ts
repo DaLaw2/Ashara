@@ -5,7 +5,7 @@ import { timestamptz } from "./columns.js";
 // Generic identity: clients, their web-client sessions and the login throttle.
 
 // ---------------------------------------------------------------------------
-// clients (migration 018): who a project belongs to and a session acts for
+// clients: who a project belongs to and a session acts for
 // ---------------------------------------------------------------------------
 
 export const clients = pgTable("clients", {
@@ -15,14 +15,14 @@ export const clients = pgTable("clients", {
 });
 
 // ---------------------------------------------------------------------------
-// client_sessions (migration 017, ADR-076 web client)
+// client_sessions (the web client's sessions)
 // ---------------------------------------------------------------------------
 
 export const clientSessions = pgTable("client_sessions", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
   // SHA-256 of the cookie's token, hex; the token itself is never stored.
   tokenHash: text("token_hash").notNull().unique(),
-  // The one client this session acts for (migration 018).
+  // The one client this session acts for.
   clientId: uuid("client_id")
     .notNull()
     .references(() => clients.id),
@@ -32,14 +32,14 @@ export const clientSessions = pgTable("client_sessions", {
 });
 
 // ---------------------------------------------------------------------------
-// client_login_failures (migration 018): the login throttle's evidence
+// client_login_failures: the login throttle's evidence
 // ---------------------------------------------------------------------------
 
 export const clientLoginFailures = pgTable(
   "client_login_failures",
   {
     clientName: text("client_name").notNull(),
-    // The attempt's source (migration 027): an IPv4 address or an IPv6 /64 (server/src/source-network.ts sourceNetwork).
+    // The attempt's source: an IPv4 address or an IPv6 /64 (server/src/source-network.ts sourceNetwork).
     sourceAddress: text("source_address").notNull(),
     failedAt: timestamptz("failed_at").notNull().defaultNow(),
   },

@@ -6,9 +6,8 @@ import { CALL_SITE_PURPOSE } from "./work-purpose.js";
 import type { WorkPurpose } from "./work-purpose.js";
 
 /**
- * The model requests one task, and one project with all its tasks, may draw (ADR-084 decision 1),
- * and the share of each project's budget, in whole percent, that only verification may draw
- * (ADR-084 addendum 1 decision 6).
+ * The model requests one task, and one project with all its tasks, may draw,
+ * and the share of each project's budget, in whole percent, that only verification may draw.
  */
 export interface WorkBudgets {
   readonly perTaskRequests: number;
@@ -17,13 +16,12 @@ export interface WorkBudgets {
 }
 
 /**
- * Policy defaults, each overridable by the deployment's config. Per task 60 and per project 600
- * (Decided: ADR-084 decision 1, owner 2026-10-16): more than two full dispatches of the agent's 25
+ * Policy defaults, each overridable by the deployment's config. Per task 60 and per project 600:
+ * more than two full dispatches of the agent's 25
  * turns, so a task's own retry bounds stop it first in the ordinary case and the ledger only where
  * loops compose; ten such tasks' worth, two orders of magnitude under the worst case the loops
- * compose to without it (loop-convergence investigation, about 108,000). Reserve 25 percent
- * (Decided: ADR-084 addendum 1 decision 6, owner 2026-10-17; the share is task
- * t-ledger-reserve-warning's policy default): a CCPM feeding buffer at the end of the chain.
+ * compose to without it. Reserve 25 percent:
+ * a CCPM feeding buffer at the end of the chain.
  */
 export const DEFAULT_WORK_BUDGETS: WorkBudgets = { perTaskRequests: 60, perProjectRequests: 600, verificationReservePercent: 25 };
 
@@ -64,13 +62,13 @@ interface WorkLedgerDeps {
 }
 
 /**
- * Finance's one work ledger (ADR-084 decision 1): the bound on how much model work a task and a
+ * Finance's one work ledger: the bound on how much model work a task and a
  * project get, in model requests, scoped project then task; the per-dispatch turn cap stays the
  * attempt's. Nothing here counts: a scope's drawn requests are its llm_calls rows, so a refund, an
  * unblock or a restart cannot return one, and the owner's recorded grant is the only way a
  * project's budget grows. A task draws only while its project has requests left, and upstream work
- * only while more than the project's verification reserve is left (CALL_SITE_PURPOSE, ADR-084
- * addendum 1 decision 6), so a ledger drained by planning, authoring and review still holds the
+ * only while more than the project's verification reserve is left (CALL_SITE_PURPOSE),
+ * so a ledger drained by planning, authoring and review still holds the
  * reserve for verifying what was built.
  */
 export class WorkLedger {

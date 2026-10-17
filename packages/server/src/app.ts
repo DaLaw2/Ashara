@@ -12,7 +12,7 @@ import type { WebClientDeps } from "./web-client.js";
 /**
  * The server's HTTP surface. The web client's routes are registered before the
  * bearer middleware and answer every request they match, so a browser reaches
- * them with its session cookie alone (ADR-076); every other route still requires
+ * them with its session cookie alone; every other route still requires
  * the operator's bearer token, and a bearer token opens no /client/api route. Every request, refused
  * ones included, runs in its own log trace (requestTrace).
  */

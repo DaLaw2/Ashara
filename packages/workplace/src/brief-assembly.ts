@@ -6,7 +6,7 @@
 import type { TaskSpec } from "./task-spec.js";
 
 /**
- * The context map for a working directory with no files in it (ADR-046). An
+ * The context map for a working directory with no files in it. An
  * empty string would render as no context section at all — indistinguishable to
  * the agent from a normal project — so emptiness is stated instead of implied.
  * The Sprint 0 task sees this on a new project: it runs before any other task.

@@ -143,12 +143,12 @@ async function waitBehind(key: string, state: CheckoutState, previous: Promise<v
  * Runs `use` while holding the target checkout's lock: one holder at a time per canonical target
  * path, in arrival order, released when `use` settles either way. The target's main checkout is the
  * merge queue's staging area (its index holds a tentative merge while its checks run), so whatever
- * resets, merges into, commits or initialises it runs here (ADR-074 d82 W3).
+ * resets, merges into, commits or initialises it runs here.
  *
  * The wait is bounded: a holder declares a bound, HOST_WORK_BOUND_MS for its host-side work plus
  * what it adds for each phase in cells (CheckoutLease.extend), and a waiter whose holder outlasts
- * that bound fails with CheckoutHolderOverran naming the holder rather than wait forever (ADR-074
- * d82). The waiter does not take the checkout: it may still hold a staged merge, so the waiters
+ * that bound fails with CheckoutHolderOverran naming the holder rather than wait forever.
+ * The waiter does not take the checkout: it may still hold a staged merge, so the waiters
  * behind it keep queueing behind the stuck holder and fail the same way.
  *
  * In-process only: one Ashara process drives a target, which the server holds a database claim on

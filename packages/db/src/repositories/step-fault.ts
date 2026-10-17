@@ -30,7 +30,7 @@ class StepFaultNotOnRecord extends Error {
 }
 
 /**
- * The cycle steps' faults per subject (migration 063), kept in step_faults so a backoff, and the
+ * The cycle steps' faults per subject, kept in step_faults so a backoff, and the
  * parking of a subject that exhausted its faults, outlive a restart. A backoff is set and read on
  * `clock`, the time the cycle itself runs on, never the database's: a wait measured on another
  * clock than the one that spaces the cycles passes in no number of cycles, or in none at all.

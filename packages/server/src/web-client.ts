@@ -18,12 +18,12 @@ import type { ChannelCaller, ClientChannelDeps } from "./client-channel.js";
 import type { SecretReader } from "./secrets.js";
 import { sourceNetwork } from "./source-network.js";
 
-// The web client (ADR-076): one static page, one plain script and one stylesheet,
+// The web client: one static page, one plain script and one stylesheet,
 // served by this process with no build step, plus a session-authenticated copy of
 // the client channel under /client/api. The browser never holds the server's API
 // token: a client logs in with its name and its own access code from the secret
 // store, and gets a random session token in an HttpOnly cookie, stored server-side
-// only as its hash and bound to that one client (migration 018).
+// only as its hash and bound to that one client.
 
 /** @testseam web-client.test.ts reads and sends the session cookie by name */
 export const CLIENT_SESSION_COOKIE = "ashara_client";

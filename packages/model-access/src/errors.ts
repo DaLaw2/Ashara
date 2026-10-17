@@ -261,7 +261,7 @@ export class InvalidContextOverflowSignatures extends GatewayError {
 /**
  * Thrown by `buildGateway` when zero LLM providers are configured.
  *
- * Per ADR-030 (docs/decisions/ADR-030-llm-boundary-reliability.md), this is the structural fix for the
+ * This is the structural fix for the
  * "run silently executes on stubs" failure class — a mis-set provider
  * config must refuse to start, never fall back to a stub silently.
  */
@@ -324,7 +324,7 @@ interface RoutingProfileIncompleteContext {
  * bug: the unmapped site falls through to capability logic and silently lands
  * on whatever model that picks — which may be exactly the provider the
  * profile was written to reserve. Refuse-to-start makes that a boot failure
- * instead of a per-call surprise (ADR-030 refuse-to-start precedent).
+ * instead of a per-call surprise.
  */
 export class RoutingProfileIncomplete extends GatewayError {
   readonly combo: string;

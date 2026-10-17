@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 /**
- * ADR-075's ten bounded contexts, the only sources of a domain event written now. A row written
+ * The ten bounded contexts, the only sources of a domain event written now. A row written
  * before a context was named (source_context 'planning') stays readable: no reader parses
  * source_context into this union.
  */

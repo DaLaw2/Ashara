@@ -73,7 +73,7 @@ class RecordWriteFailed extends Error {
 }
 
 /**
- * Runs one attempt of an assignment: an explicit loop in Z0 (ADR-074 d7, no SDK stopWhen) where each
+ * Runs one attempt of an assignment: an explicit loop in Z0 (no SDK stopWhen) where each
  * turn is one recorded model call and each returned tool call runs, in order, through the cell.
  * Resolves to exactly one Outcome terminal; throws only InvalidAssignment, before any call is made.
  */

@@ -30,7 +30,7 @@ const createdModelIds: string[] = [];
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
-// Every work item and vision needs a project (migration 014); this suite owns one.
+// Every work item and vision needs a project; this suite owns one.
 let testProjectId: ProjectId;
 let testClientId: string;
 
@@ -150,7 +150,7 @@ describe("ConfigRepository", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Two projects on one database (migration 051, ADR-074 d92 a)
+// 6. Two projects on one database: every read filters by its project
 // ---------------------------------------------------------------------------
 
 describe("two projects", () => {

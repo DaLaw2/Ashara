@@ -9,7 +9,7 @@ interface ClientRecord {
   readonly createdAt: Date;
 }
 
-/** The firm's clients (migration 018): who a project belongs to and a session acts for. */
+/** The firm's clients: who a project belongs to and a session acts for. */
 export class ClientRepository {
   constructor(private readonly db: DbHandle) {}
 

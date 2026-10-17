@@ -227,7 +227,7 @@ function priceTierIssues(model: CatalogModel): string[] {
 
 /**
  * Why a model's context window cannot be used: it is not a positive integer. The window has no
- * default anywhere (migration 054): a model whose window is unknown cannot have its turns guarded
+ * default anywhere: a model whose window is unknown cannot have its turns guarded
  * (context-window.ts), so it fails the catalog at boot rather than at the first attempt. Whether
  * the window holds input beside a turn's output reserve depends on the provider type and the
  * thinking policy, so buildGatewayConfig judges that (reserveIssues).

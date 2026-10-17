@@ -14,10 +14,10 @@ export function parseSecretName(name: string): string {
   return result.data;
 }
 
-/** The server's bearer token for its HTTP API (ADR-075 C4). */
+/** The server's bearer token for its HTTP API. */
 export const API_TOKEN_SECRET_NAME = "server/api_token";
 
-/** The code one client presents to the web client's login (ADR-076, migration 018). */
+/** The code one client presents to the web client's login. */
 export function clientAccessCodeSecretName(clientId: string): string {
   return parseSecretName(`client/${clientId}/access_code`);
 }
@@ -34,7 +34,7 @@ export function isClientAccessCodeSecretName(name: string): boolean {
  */
 export const MIN_CLIENT_ACCESS_CODE_LENGTH = 20;
 
-/** Where a provider's API key lives in the store (ADR-075 C2). */
+/** Where a provider's API key lives in the store. */
 export function providerApiKeySecretName(provider: string): string {
   return parseSecretName(`provider/${provider}/api_key`);
 }

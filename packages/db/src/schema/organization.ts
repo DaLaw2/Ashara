@@ -5,7 +5,7 @@ import { projects } from "./project.js";
 // Organization: the project roster.
 
 // ---------------------------------------------------------------------------
-// roster_roles (migration 031): a project's roster, one row per role, append-only
+// roster_roles: a project's roster, one row per role, append-only
 // ---------------------------------------------------------------------------
 
 export const rosterRoles = pgTable(

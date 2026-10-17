@@ -2,7 +2,7 @@ import { z } from "zod";
 import { CellLimitsInvalid } from "./errors.js";
 
 /**
- * The resource caps every cell and every image build runs under (ADR-074 d82 W9). Required
+ * The resource caps every cell and every image build runs under. Required
  * configuration with no default in code: the host also runs Postgres and Z0, and a cap nobody
  * chose is not a cap the owner consented to.
  */

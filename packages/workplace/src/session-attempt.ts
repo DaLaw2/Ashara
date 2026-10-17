@@ -17,7 +17,7 @@ export function outcomeRecord(outcome: Outcome): Record<string, unknown> {
   return { ...toRecordedOutcome(outcome) };
 }
 
-/** An attempt as the session's terminal write records it (migration 046). */
+/** An attempt as the session's terminal write records it. */
 export interface SessionAttempt {
   readonly promptDigest: string;
   /** The Outcome kind, with a finished attempt's status: "finished:done", "finished:blocked", "turn_cap", ... */

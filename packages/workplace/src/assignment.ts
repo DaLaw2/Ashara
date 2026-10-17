@@ -5,7 +5,7 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { AgentBrief } from "./agent-brief.js";
 import { InvalidAssignment } from "./errors.js";
 
-/** ADR-074 d56: an attempt's wall clock is 20 minutes unless the caller sets its own. */
+/** An attempt's wall clock is 20 minutes unless the caller sets its own. */
 const DEFAULT_WALL_CLOCK_MS = 20 * 60 * 1000;
 
 /** The task instruction: the fields of the agent brief that describe the work. */
@@ -70,7 +70,7 @@ export interface Assignment {
   readonly brief: AssignmentBrief;
   /** The image the attempt's cell was started from; recorded with the attempt. */
   readonly cellImage: AttemptCellImage;
-  /** Resolved once by the caller; every turn of the attempt uses it (ADR-074 d44). */
+  /** Resolved once by the caller; every turn of the attempt uses it. */
   readonly model: ResolvedModel;
   readonly limits: AttemptLimits;
 }

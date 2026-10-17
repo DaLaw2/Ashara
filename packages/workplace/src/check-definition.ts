@@ -7,7 +7,7 @@ export interface CheckDefinition {
 }
 
 /**
- * A check as its author defines it (ADR-083): with the ids of the vision items its verdict decides,
+ * A check as its author defines it: with the ids of the vision items its verdict decides,
  * never none. A check task's set is kept only when every item its task cites is decided by at least
  * one of its checks, so which items are checked is a stored fact, never read off an acceptance line.
  */
@@ -58,8 +58,7 @@ export type CheckRedRunPreview =
       readonly rejection: string | null;
       /**
        * It passes on the foundation and the red run at finish keeps it, as a guard of behaviour
-       * that already holds there: the set is kept only if another of its checks fails there
-       * (ADR-074 addendum 2 d74 A).
+       * that already holds there: the set is kept only if another of its checks fails there.
        */
       readonly holdsAlready: boolean;
     }

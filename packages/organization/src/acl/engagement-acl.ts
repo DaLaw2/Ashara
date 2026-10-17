@@ -1,8 +1,8 @@
 import { VisionUnreadable, readVisionVersion } from "@ashara/engagement";
 import type { StoredVision } from "@ashara/engagement";
 
-// Organization reads the client's vision only as Engagement's published VisionVersion (ADR-075 §6,
-// S7, S8), through this file.
+// Organization reads the client's vision only as Engagement's published VisionVersion,
+// through this file.
 
 export { VisionUnreadable };
 export type { StoredVision };

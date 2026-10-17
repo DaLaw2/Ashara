@@ -8,7 +8,7 @@ import { projects } from "./project.js";
 // Quality: stored checks, disputes, suite reviews and acceptance sweeps.
 
 // ---------------------------------------------------------------------------
-// task_checks (migration 036, Quality): the checks the check author wrote for an
+// task_checks (Quality): the checks the check author wrote for an
 // implementation task, one row per check, append-only by revision. files is
 // jsonb [{path, content}], parsed by the repository.
 // ---------------------------------------------------------------------------
@@ -31,9 +31,9 @@ export const taskChecks = pgTable(
     command: text().notNull(),
     files: jsonb().notNull(),
     environmentVersion: text("environment_version").notNull(),
-    /** The commit the revision was red-run on, its plan revision's foundation (migration 045); null before 045. */
+    /** The commit the revision was red-run on, its plan revision's foundation; null on a row written before the column existed. */
     baselineCommit: text("baseline_commit"),
-    /** The ids of the vision items the check decides, a non-empty jsonb array (migration 064); null before 064. */
+    /** The ids of the vision items the check decides, a non-empty jsonb array; null on a row written before the column existed. */
     decides: jsonb(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
@@ -43,7 +43,7 @@ export const taskChecks = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// check_disputes (migration 039, Quality): an implementer's disputes of its task's
+// check_disputes (Quality): an implementer's disputes of its task's
 // stored checks, one row per dispute, append-only. Their count per check task
 // bounds how often that check task is reopened to answer one.
 // ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ export const checkDisputes = pgTable("check_disputes", {
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_findings (migration 044, Quality): one row per check task a review of a plan
+// suite_review_findings (Quality): one row per check task a review of a plan
 // revision's suites named, with the problems naming it, append-only. Their count per check task
 // bounds how often that check task is reopened for a review. problems is jsonb, parsed by the
 // repository.
@@ -179,7 +179,7 @@ export const undecidedItems = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// check_set_freezes (migration 069, Quality): one row per review task, written when the first
+// check_set_freezes (Quality): one row per review task, written when the first
 // implementation task depending on it is dispatched, with the check set it reviewed as it then
 // stood. Append-only; check_set is parsed by the repository.
 // ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ export const checkSetFreezes = pgTable("check_set_freezes", {
 });
 
 // ---------------------------------------------------------------------------
-// acceptance_sweeps (migration 049): one row per acceptance sweep Z0 ran on main HEAD; a passed
+// acceptance_sweeps: one row per acceptance sweep Z0 ran on main HEAD; a passed
 // one made its project 'accepted', a failed one opened its defect item.
 // ---------------------------------------------------------------------------
 
@@ -218,15 +218,15 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   /**
-   * Migration 062: failed attempts at the delivered report, the failed reads of its public interface
+   * Failed attempts at the delivered report, the failed reads of its public interface
    * file among them, the last error, and when it is tried again.
    */
   reportFailures: integer("report_failures").notNull().default(0),
   reportInterfaceReadFailures: integer("report_interface_read_failures").notNull().default(0),
   reportLastError: text("report_last_error"),
   reportRetryAt: timestamptz("report_retry_at"),
-  /** Migration 063: failed attempts whose records are on file but do not read as a report; only these count toward the substitute notice. */
+  /** Failed attempts whose records are on file but do not read as a report; only these count toward the substitute notice. */
   reportRecordFailures: integer("report_record_failures").notNull().default(0),
-  /** Migration 065: the stored checks a passed sweep ran and saw pass, [{taskId, name, command}]; null on a failed sweep or one recorded before 065. */
+  /** The stored checks a passed sweep ran and saw pass, [{taskId, name, command}]; null on a failed sweep or one recorded before the column existed. */
   executedChecks: jsonb("executed_checks"),
 });

@@ -10,10 +10,10 @@ import {
 import { describeErrorChain, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 
-// The client channel's handlers (K1), shared by the operator's bearer API and the
-// web client's session API (ADR-076) so both speak through one validation path.
+// The client channel's handlers, shared by the operator's bearer API and the
+// web client's session API so both speak through one validation path.
 // Inbound only: no handler writes an outbound message; the Liaison writes those
-// server-side. Every inbound insert NOTIFYs the loop (migration 016).
+// server-side. Every inbound insert NOTIFYs the loop (a database trigger).
 
 export interface ClientChannelDeps {
   readonly projectRepo: ProjectRepository;

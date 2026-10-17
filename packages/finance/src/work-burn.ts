@@ -1,5 +1,5 @@
 /**
- * The work ledger's early warning (ADR-084 addendum 1 decision 7; CCPM's fever chart): how much of
+ * The work ledger's early warning (CCPM's fever chart): how much of
  * a project's budget its work has drawn, against how much of the current plan revision's
  * implementation is done. `yellow` is told to the client; `red`, to the operator and the client,
  * before the budget runs out.
@@ -21,8 +21,7 @@ export interface WorkBurn {
 }
 
 /**
- * The zone a burn is in, the higher first, or null in neither. Policy defaults (Decided: ADR-084
- * addendum 1 decision 7, owner 2026-10-17; the thresholds are task t-ledger-reserve-warning's):
+ * The zone a burn is in, the higher first, or null in neither. Policy defaults:
  * yellow at 50 percent drawn with at most 25 percent of the planned tasks done, red at 80 percent
  * drawn with the plan not finished. A revision with no implementation task planned has none done:
  * an empty plan never reads as a finished one. Integer arithmetic, so no rounding decides a zone.

@@ -62,7 +62,7 @@ describe("measureCost", () => {
     expect(cost).toEqual({ measured: false, missingCounts: ["inputTokens", "outputTokens"], missingRates: [] });
   });
   describe("a prompt-length tier prices the whole call from its reported input count", () => {
-    // claude-haiku-5-5 as migration 047 stores it: a prompt over 100,000 tokens, cache classes included.
+    // claude-haiku-5-5 as the seeded catalog stores it: a prompt over 100,000 tokens, cache classes included.
     const haiku = model({
       inputCostPer1M: 0.1, outputCostPer1M: 0.5, cacheReadCostPer1M: 0.01, cacheWriteCostPer1M: 0.125,
       priceTiers: [{

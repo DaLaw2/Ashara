@@ -12,8 +12,7 @@ import type { KnownLLMSite, SecondOpinion } from "./types.js";
 const ESCALATION_SITE: KnownLLMSite = "escalation";
 
 // ---------------------------------------------------------------------------
-// Structured-output reliability ladder (Phase 4 t1, ADR-030 §"Structured-output
-// reliability" / ADR-032 §3).
+// Structured-output reliability ladder.
 //
 // One shared control-flow combinator behind EVERY structured/verdict LLM call:
 //   N validated attempts against the current model → escalate ONE capability
@@ -22,9 +21,8 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 //   the base tier is spent: the escalation is recorded as unavailable, never
 //   substituted, and never thrown past the caller's exhaustion handling.
 //
-// History it must respect (ADR-025): free-text judge parsing and text-fallback
-// structured parsing were chosen deliberately because generateObject failed
-// ~30% on the cheaper models. So the ladder is NOT "just retry" — it is
+// Free-text judge parsing and text-fallback structured parsing are deliberate:
+// generateObject fails often on the cheaper models. So the ladder is NOT "just retry" — it is
 // MODEL-PARAMETERISED: persistent validation failure escalates to a stronger
 // model (capability tier step-up) exactly once, then BLOCKS with a typed,
 // self-diagnosing error (Discipline A: never silently accept; Discipline C:
@@ -43,7 +41,7 @@ const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong
 
 /**
  * The next capability tier up, or null when already at the top. Escalation is a
- * SINGLE step (ADR-030: escalate at most one tier per site invocation — no
+ * SINGLE step (escalate at most one tier per site invocation — no
  * unbounded climb burning budget).
  */
 function nextCapability(capability: CapabilityLevel): CapabilityLevel | null {
