@@ -85,8 +85,10 @@ export interface InstanceHandle {
 /**
  * What the fake transport answers a `provider-error` with, as a provider adapter throws it: a
  * connection reset (no status), the provider throttling it (429) or failing (5xx), all the
- * provider's; or a 4xx rejecting the request as Ashara built it (400 malformed, 413 too large, 422
- * unprocessable), Ashara's. Index 0 is the draw's benign value.
+ * provider's; or a 4xx rejecting the request as Ashara built it, Ashara's. One status per class
+ * the gateway tells apart (model-access gateway.ts isRequestRejection, providerFailureOf): another
+ * 5xx, or another 4xx but 408 and 429 (413, 422), takes the branch its class's member here takes.
+ * Index 0 is the draw's benign value.
  *
  * @testseam a directed test draws each answer by its index; Scheduler.enter is its production caller
  */
@@ -94,10 +96,7 @@ export const TRANSPORT_RESPONSES = [
   { status: null, owner: "provider" },
   { status: 429, owner: "provider" },
   { status: 500, owner: "provider" },
-  { status: 503, owner: "provider" },
   { status: 400, owner: "ashara" },
-  { status: 413, owner: "ashara" },
-  { status: 422, owner: "ashara" },
 ] as const satisfies ReadonlyArray<{ readonly status: number | null; readonly owner: "provider" | "ashara" }>;
 type TransportResponse = (typeof TRANSPORT_RESPONSES)[number];
 

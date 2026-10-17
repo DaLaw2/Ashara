@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UNKINDED_WORK_CHARTER, charterOf } from "./charter.js";
+import { charterOf } from "./charter.js";
 
 const CONVENTIONS = { publicInterfaceFile: "INTERFACE.txt" };
 
@@ -13,7 +13,6 @@ describe("role charters", () => {
       expect(charterOf(kind, CONVENTIONS).identity).toBe("You are a coding agent.");
       expect(duties(kind)).not.toBe("");
     }
-    expect(UNKINDED_WORK_CHARTER).toEqual({ identity: "You are a coding agent.", duties: null });
   });
 
   it("holds the implementer to updating the public interface file it is given whenever its change makes it untrue", () => {

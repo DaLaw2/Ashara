@@ -2,15 +2,12 @@ import { describe, test, expect } from "vitest";
 import { parseStoredTaskSpec, TaskSpecCorrupt } from "./task-spec.js";
 
 describe("parseStoredTaskSpec", () => {
-  test("null returns undefined (policy default: absent spec is deliberate delegation)", () => {
+  test("null and undefined return undefined (policy default: absent spec is deliberate delegation)", () => {
     expect(parseStoredTaskSpec(null)).toBeUndefined();
-  });
-
-  test("undefined returns undefined", () => {
     expect(parseStoredTaskSpec(undefined)).toBeUndefined();
   });
 
-  test("non-object value throws TaskSpecCorrupt with structured context", () => {
+  test("a non-object value throws TaskSpecCorrupt with structured context, a number too (not silently coerced)", () => {
     const corrupt = "not an object";
     try {
       parseStoredTaskSpec(corrupt);
@@ -23,9 +20,6 @@ describe("parseStoredTaskSpec", () => {
       expect(err.name).toBe("TaskSpecCorrupt");
       expect(err.message).toContain("stored task_spec is not a valid object");
     }
-  });
-
-  test("number throws TaskSpecCorrupt (not silently coerced)", () => {
     expect(() => parseStoredTaskSpec(42)).toThrow(TaskSpecCorrupt);
   });
 

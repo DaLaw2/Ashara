@@ -51,7 +51,7 @@ describe("I10, charged only for agent work", () => {
   const window = (over: Partial<ChargeWindow>): ChargeWindow => ({
     step: 3, before: charges(0, 0, 0), after: charges(0, 0, 0), faults: [], consulted: new Set(), misbehaved: false, ...over,
   });
-  const [, throttled, , , malformed] = TRANSPORT_RESPONSES;
+  const [, throttled, , malformed] = TRANSPORT_RESPONSES;
 
   it("names an attempt and a lesson charged under a substrate fault its model did no work for", () => {
     const planted = window({ after: charges(1, 1, 0), faults: [fault("impl", "cell-start-failed")] });

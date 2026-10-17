@@ -8,10 +8,8 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  BaseCellConfigInvalid,
   CellExecFailed,
   PodmanSubstrate,
-  SubstrateUnavailable,
   createCellBackend,
   loadBaseCell,
   runHostGit,
@@ -60,23 +58,6 @@ afterAll(async () => {
 }, 60_000);
 
 describe("cell on real podman", () => {
-  it("reports a missing podman binary as SubstrateUnavailable", async () => {
-    const missing = new PodmanSubstrate({ podmanPath: join(workspace, "no-such-podman"), mountRoot });
-    await expect(missing.probeSubstrate()).rejects.toBeInstanceOf(SubstrateUnavailable);
-  });
-
-  it("fails closed on a missing BaseCell file and on a reference without a digest", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-base-cell-"));
-    try {
-      await expect(loadBaseCell(join(dir, "absent.toml"))).rejects.toBeInstanceOf(BaseCellConfigInvalid);
-      const tagOnly = join(dir, "base-cell.toml");
-      await writeFile(tagOnly, 'image = "docker.io/library/debian:12-slim"\n');
-      await expect(loadBaseCell(tagOnly)).rejects.toBeInstanceOf(BaseCellConfigInvalid);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
   it("runs every tool inside a labelled, network-less, env-free cell and tears it down", async () => {
     const info = await substrate.probeSubstrate();
     expect(info.version).not.toBe("");

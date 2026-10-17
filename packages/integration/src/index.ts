@@ -1,6 +1,8 @@
 export { dropRunDatabasesOf, dropStaleRunDatabases, prepareTemplate } from "./simulator/database.js";
 export { RARE_UNDER_OWN_PROFILES, behavioursBelowFloor, countBehaviours, emptyBehaviourCounts, emptyCoverage, mergeCoverage } from "./simulator/coverage.js";
 export type { Floor } from "./simulator/coverage.js";
+export { DETERMINISM_RECHECKS, recheckDeterminism } from "./simulator/determinism.js";
+export type { DeterminismVerdict } from "./simulator/determinism.js";
 export { diffExpected } from "./simulator/expected-failures.js";
 export { minimize } from "./simulator/minimize.js";
 export { PROFILES, profileOfSeed } from "./simulator/profile.js";

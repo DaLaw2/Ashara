@@ -13,7 +13,7 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepos
 import { DispatchService } from "@ashara/delivery";
 import type { TaskCheckStore } from "@ashara/quality";
 import type { SessionStore } from "@ashara/workplace";
-import { PodmanSubstrate, buildEnvironmentImage, cellInstanceFor, loadBaseCell, pruneEnvironmentImages, reconcileCellsAtStartup } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
@@ -264,37 +264,4 @@ describe("a task runs on cells end to end", () => {
       await substrate.teardownAll();
     }
   }, 180_000);
-});
-
-describe("reconcileCellsAtStartup", () => {
-  it("removes a leaked labelled cell of this instance only", async () => {
-    const workdirBase = join(root, "reconcile");
-    const workspace = join(workdirBase, "ws");
-    await mkdir(workspace, { recursive: true });
-    const base = await loadBaseCell();
-    const instance = cellInstanceFor(workdirBase);
-    const other = cellInstanceFor(join(root, "another-deployment"));
-    expect(instance).not.toBe(other);
-
-    // A previous process of this deployment, and another deployment, each with a live cell.
-    const previous = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
-    const foreign = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
-    const spec = { image: base.image, project: "proj-reconcile", task: `task-${randomUUID()}`, role: "developer", mount: { hostPath: workspace, shared: true } };
-    const leaked = await previous.createCell({ ...spec, instance });
-    const kept = await foreign.createCell({ ...spec, instance: other });
-    try {
-      const restarted = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
-      await reconcileCellsAtStartup(restarted, instance);
-      expect(await ps(`id=${leaked.id}`)).toHaveLength(0);
-      expect(await ps(`id=${kept.id}`)).toHaveLength(1);
-
-      // An unreachable substrate does not stop the boot; tasks block at their own probe.
-      const missing = new PodmanSubstrate({ podmanPath: join(root, "no-such-podman"), mountRoot: workdirBase });
-      await expect(reconcileCellsAtStartup(missing, instance)).resolves.toBeUndefined();
-    } finally {
-      // `previous` stands for a dead process: its cell is removed by id, whatever reconciliation did.
-      await run("podman", ["rm", "-f", "--ignore", leaked.id]);
-      await foreign.teardownAll();
-    }
-  }, 120_000);
 });

@@ -9,8 +9,10 @@
  * written as a replay file; `--minimize` reduces it to the decisions it needs first. Exits 1 when
  * any seed fails an invariant it is not listed as failing, or never reports, or when a soak of at
  * least FLOOR_SEEDS seeds leaves a floored behaviour key (coverage.ts behavioursBelowFloor) reached
- * by no seed. Every soak prints how many seeds reached each key, and every project that ended
- * halted on Ashara's own fault.
+ * by no seed, or whose determinism recheck fails: a soak of at least FLOOR_SEEDS seeds also runs
+ * its project count's second determinism seed twice in one process (DETERMINISM_RECHECKS) and
+ * fails on traces that differ. Every soak prints how many seeds reached each key, and every
+ * project that ended halted on Ashara's own fault.
  *
  * `--jobs J` runs the seeds on J worker processes, each this script with `--worker`, one seed at a
  * time per worker (default: the host's cores, at most DEFAULT_JOBS; `--jobs 1` runs every seed in
@@ -31,6 +33,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import {
+  DETERMINISM_RECHECKS,
   PROFILES,
   ReplayFileSchema,
   SeedRequestSchema,
@@ -49,9 +52,10 @@ import {
   minimize,
   prepareTemplate,
   profileOfSeed,
+  recheckDeterminism,
   runSeed,
 } from "@ashara/integration";
-import type { Decision, Floor, Profile, RunMode, RunOptions, RunResult, SeedReport } from "@ashara/integration";
+import type { Decision, DeterminismVerdict, Floor, Profile, RunMode, RunOptions, RunResult, SeedReport } from "@ashara/integration";
 import { describeErrorChain, parseJson } from "@ashara/shared";
 
 const USAGE = "Usage: npx tsx scripts/simulate.ts [--seeds N] [--start S] [--jobs J] [--profile P] [--projects 1|2] [--cap USD] [--minimize] [--trace] [--replay FILE]";
@@ -179,6 +183,19 @@ function floorOf(args: Args): Floor | null {
   if (args.seeds < FLOOR_SEEDS) return null;
   if (args.profile === null) return "own";
   return args.profile === "adversarial" ? "adversarial" : null;
+}
+
+/**
+ * The determinism recheck a soak of at least FLOOR_SEEDS seeds runs, every merge-lane and deep
+ * soak among them: its project count's second determinism seed (DETERMINISM_RECHECKS), run twice
+ * in this process under the seed's own profile, whatever this soak's profile and cap. Null for a
+ * smaller run.
+ */
+function determinismOf(args: Args, base: Base): Promise<DeterminismVerdict> | null {
+  if (args.seeds < FLOOR_SEEDS) return null;
+  return recheckDeterminism(DETERMINISM_RECHECKS[args.projects], (seed, mode) =>
+    runSeed({ ...base, ...mode, seed, profile: profileOfSeed(seed), tape: { kind: "seeded", seed } }),
+  );
 }
 
 /** The minimiser's predicate: the replay fails at least one of the original run's violation keys. */
@@ -430,12 +447,18 @@ async function main(): Promise<void> {
     countBehaviours(counts, report.coverage);
     if (report.unexpected) unexpected += 1;
   };
+  let determinism: Promise<DeterminismVerdict> | null;
   if (args.jobs === 1) {
     for (const seed of seeds) emit(await reportSeed(seed, args, base, mode));
+    determinism = determinismOf(args, base);
   } else {
+    // This process runs no seed of its own here: the recheck runs in it while the workers soak.
+    determinism = determinismOf(args, base);
     const reportBoundMs = SEED_TIMEOUT_MS * (1 + (args.minimize ? MINIMIZE_REPLAYS : 0)) + REPORT_GRACE_MS;
     await soakInWorkers(seeds, { jobs: args.jobs, argv, reportBoundMs, databaseUrl }, emit);
   }
+  const recheck = determinism === null ? null : await determinism;
+  if (recheck !== null) console.log(recheck.line);
   console.log("");
   for (const line of describeCoverage(coverage)) console.log(line);
   console.log("\nseeds reaching each behaviour key:");
@@ -455,7 +478,7 @@ async function main(): Promise<void> {
   console.log(`\nprojects ending halted on Ashara's own fault (block kind fault): ${asharaHalts.length}`);
   for (const halt of asharaHalts) console.log(`  ${halt}`);
   console.log(`\n${args.seeds} seed(s), ${unexpected} with an unexpected failure`);
-  process.exitCode = unexpected > 0 || atZero.length > 0 ? 1 : 0;
+  process.exitCode = unexpected > 0 || atZero.length > 0 || recheck?.failed === true ? 1 : 0;
 }
 
 main().catch((err: unknown) => {

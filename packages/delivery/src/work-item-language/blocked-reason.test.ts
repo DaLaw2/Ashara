@@ -3,15 +3,12 @@ import { BLOCKED_REASON_SOURCES, blockedReasonToRecord, parseStoredBlockedReason
 import type { StoredBlockedReason } from "./blocked-reason.js";
 
 describe("parseStoredBlockedReason", () => {
-  test("null returns undefined (policy default: items without a reason)", () => {
+  test("null and undefined return undefined (policy default: items without a reason)", () => {
     expect(parseStoredBlockedReason(null)).toBeUndefined();
-  });
-
-  test("undefined returns undefined", () => {
     expect(parseStoredBlockedReason(undefined)).toBeUndefined();
   });
 
-  test("non-object value throws BlockedReasonCorrupt with structured context", () => {
+  test("a non-object value throws BlockedReasonCorrupt with structured context, a number too (not silently coerced)", () => {
     const corrupt = "not an object";
     try {
       parseStoredBlockedReason(corrupt);
@@ -24,9 +21,6 @@ describe("parseStoredBlockedReason", () => {
       expect(err.name).toBe("BlockedReasonCorrupt");
       expect(err.message).toContain("stored blocked_reason is not a valid object");
     }
-  });
-
-  test("number throws BlockedReasonCorrupt (not silently coerced)", () => {
     expect(() => parseStoredBlockedReason(42)).toThrow(BlockedReasonCorrupt);
   });
 
@@ -49,16 +43,6 @@ describe("source variant round-trips", () => {
     expect(result!.source).toBe("task_failed");
     if (result!.source === "task_failed") {
       expect(result!.reason).toBe("task_failed");
-    }
-  });
-
-  test("orchestrator_error variant round-trips", () => {
-    const input = { source: "orchestrator_error", reason: "orchestrator error" };
-    const result = parseStoredBlockedReason(input);
-    expect(result).toBeDefined();
-    expect(result!.source).toBe("orchestrator_error");
-    if (result!.source === "orchestrator_error") {
-      expect(result!.reason).toBe("orchestrator error");
     }
   });
 

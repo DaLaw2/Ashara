@@ -89,7 +89,9 @@ test-affected base *ARGS:
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default
 # DATABASE_URL), run by `--jobs J` worker processes at once (default: the host's cores, at most 16;
 # at most 20; `--jobs 1` runs them in one process). Output and exit code are the serial run's, each
-# seed's lines in seed order. Bounded: at most 500 seeds, 120 cycles and 120 s per seed.
+# seed's lines in seed order. A soak of at least 80 seeds also reruns its project count's second
+# determinism seed (6 at one project, 59 at two) in one process and fails on a trace that differs.
+# Bounded: at most 500 seeds, 120 cycles and 120 s per seed.
 # Example: just simulate --seeds 50 --start 100 --minimize
 simulate *ARGS:
     choom -n 1000 -- npx tsx scripts/simulate.ts {{ARGS}}
