@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, WHOLE_SUITE_RULES, type ChangedPath, type SelectionSources } from "./affected-tests.js";
+import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, WHOLE_SUITE_RULES, type ChangedPath, type SelectionSources } from "./affected-tests.js";
 
 const REPO = path.join(import.meta.dirname, "..");
 const SCRIPT = path.join(import.meta.dirname, "affected-tests.ts");
@@ -13,6 +13,7 @@ function stubSources(over: Partial<SelectionSources> = {}): SelectionSources {
     allTests: ["packages/a/src/a.test.ts", `${SIMULATOR_DIR}one.test.ts`, `${SIMULATOR_DIR}two.test.ts`, "packages/integration/src/workplace/snap.test.ts"],
     testsImporting: () => Promise.resolve(["packages/a/src/a.test.ts"]),
     filesNaming: () => [],
+    testsImportingDirectly: () => Promise.resolve([]),
     ...over,
   };
 }
@@ -99,7 +100,71 @@ describe("the selected rules", () => {
   });
 });
 
+describe("the cap", () => {
+  const CORE = "packages/a/src/core.ts";
+  const COLOCATED = "packages/a/src/core.test.ts";
+  const IMPORTER = "packages/b/src/b.test.ts";
+  const TRANSITIVE = ["packages/c/src/c1.test.ts", "packages/c/src/c2.test.ts", "packages/c/src/c3.test.ts", "packages/c/src/c4.test.ts", "packages/c/src/c5.test.ts"];
+  const ALL = [COLOCATED, IMPORTER, ...TRANSITIVE, "packages/d/src/unrelated.test.ts"];
+
+  // core.ts is imported by its colocated test and b.test.ts directly, and by the c tests through b.
+  const graph = stubSources({
+    allTests: ALL,
+    testsImporting: (modules) => Promise.resolve(modules.includes(CORE) ? [COLOCATED, IMPORTER, ...TRANSITIVE] : []),
+    testsImportingDirectly: (modules) => Promise.resolve(modules.includes(CORE) ? [IMPORTER] : []),
+  });
+
+  test("a related set under the cap runs whole, with no cap line", async () => {
+    const run = boundSelection(await selectTests([modified(CORE)], graph), ALL.length, { maxTests: 10 });
+    expect(run).toEqual({ kind: "tests", tests: [COLOCATED, ...TRANSITIVE, IMPORTER].sort(), notice: undefined });
+  });
+
+  test("a related set over the cap runs only the direct tests and says so", async () => {
+    const run = boundSelection(await selectTests([modified(CORE)], graph), ALL.length, { maxTests: 3 });
+    expect(run).toMatchObject({ kind: "tests", tests: [COLOCATED, IMPORTER] });
+    if (run.kind !== "tests") throw new Error("expected a test run");
+    expect(run.notice).toMatch(/^selection capped: 7 test files exceed the cap of 3; running the 2 direct test file\(s\).*, 5 skipped; the merge lane's full suite covers them$/);
+  });
+
+  test("a whole-suite verdict over the cap falls back to the direct tests", async () => {
+    const selection = await selectTests([modified(CORE), modified("migrations/added.sql")], graph);
+    expect(selection.kind).toBe("whole-suite");
+    const run = boundSelection(selection, ALL.length, { maxTests: 3 });
+    expect(run).toMatchObject({ kind: "tests", tests: [COLOCATED, IMPORTER] });
+    if (run.kind !== "tests") throw new Error("expected a test run");
+    expect(run.notice).toContain("8 test files exceed the cap of 3");
+    expect(run.notice).toContain("6 skipped; the merge lane's full suite covers them");
+    expect(boundSelection(selection, ALL.length, { maxTests: 8 })).toEqual({ kind: "whole-suite", count: 8 });
+  });
+
+  test("a source change that selects no test fails the run; a change that touches no source passes it", async () => {
+    const orphan = boundSelection(await selectTests([modified("packages/d/src/orphan.ts")], graph), ALL.length, { maxTests: 10 });
+    expect(orphan).toMatchObject({ kind: "nothing", exitCode: 1 });
+    const cappedToNothing = boundSelection(await selectTests([modified("migrations/added.sql")], graph), ALL.length, { maxTests: 3 });
+    expect(cappedToNothing).toMatchObject({ kind: "nothing", exitCode: 1 });
+    const docs = boundSelection(await selectTests([modified("README.md")], graph), ALL.length, { maxTests: 10 });
+    expect(docs).toMatchObject({ kind: "nothing", exitCode: 0 });
+  });
+
+  test("a cap that is not a positive whole number is refused", async () => {
+    const selection = await selectTests([modified(CORE)], graph);
+    expect(() => boundSelection(selection, ALL.length, { maxTests: 0 })).toThrow(/not a positive whole number/);
+  });
+});
+
 describe("this repository's graph", () => {
+  test("the direct importers are the tests whose own specifiers resolve to the module", async () => {
+    const sources = await repositorySources(REPO);
+    try {
+      const tests = await sources.testsImportingDirectly(["packages/shared/src/json.ts"]);
+      expect(tests).toContain("packages/shared/src/json.test.ts");
+      expect(tests).not.toContain("packages/engagement/src/vision.test.ts");
+    } finally {
+      await sources.close();
+    }
+  });
+
+
   test("a shared kernel module selects tests in other packages that reach it only through other modules", async () => {
     const sources = await repositorySources(REPO);
     try {
