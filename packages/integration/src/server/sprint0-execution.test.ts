@@ -86,7 +86,7 @@ interface DefinitionOptions {
   readonly inputs?: readonly string[];
 }
 
-/** An environment definition (ADR-074 addendum 2 d72): the recipe, its inputs, the probe and the product's commands. */
+/** An environment definition: the recipe, its inputs, the probe and the product's commands. */
 function definition(probe: string, options: DefinitionOptions = {}): string {
   return [
     'containerfile = "environment/Containerfile"',
@@ -150,7 +150,7 @@ async function environmentChangeTask(product: "present" | "absent"): Promise<Tas
 
 /**
  * An implementation task on record, as a first plan writes it after Sprint 0, with the check its
- * check task stored for it (s-independent-verify-m1).
+ * check task stored for it.
  */
 async function implementationTask(check: string, environmentVersion: string, baselineCommit = "0".repeat(40)): Promise<TaskDescriptor> {
   const id = createWorkItemId();
@@ -314,7 +314,7 @@ afterAll(async () => {
 }, 120_000);
 
 describe("Sprint 0", () => {
-  // ADR-074 addendum 2 d72 S: the gate builds the image and runs the probe on a tree that holds no
+  // The gate builds the image and runs the probe on a tree that holds no
   // product; the product's build and test, which would fail there, are never run.
   it("the environment role writes only its recipe, its probe passes on an empty product, it passes the substrate gate and merges", async () => {
     const recipe = definition("echo toolchain ok", { build: "echo no product to build >&2; exit 1", test: "exit 1", inputs: ["manifest.txt"] });
@@ -526,7 +526,7 @@ describe("Sprint 0", () => {
     expect(moved.mock.doGenerateCalls).toHaveLength(0);
   }, 600_000);
 
-  // ADR-074 addendum 2 d72 B1, B3: an input the recipe reads is the product's, versioned, not fenced;
+  // An input the recipe reads is the product's, versioned, not fenced;
   // only the recipe is protected, and a change there is requested, not parked.
   it("an implementation writing an input merges once the rebuilt image passes the product's build and test and the checks; the next dispatch runs on that version", async () => {
     const sprint0 = await runSprint0("owned", [
@@ -594,7 +594,7 @@ describe("Sprint 0", () => {
 
   // The product scaffold asking for an environment change opens one whose
   // merge lands on a main with no product; running the product's build and test there fails it and
-  // stalls every task behind the scaffold. Recorded "absent", only the probe runs (d72 S).
+  // stalls every task behind the scaffold. Recorded "absent", only the probe runs.
   it("an environment change opened with no product on main runs the probe only; one opened with a product runs its build and test", async () => {
     const recipe = definition("echo toolchain ok", { build: "cat product.txt", test: "cat product.txt" });
     const sprint0 = await runSprint0("scaffold-asks", [

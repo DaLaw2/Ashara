@@ -174,7 +174,7 @@ describe("Finance's spend cap, read from llm_calls", () => {
     expect((await projectRow(projectId)).status).toBe("active");
     if (!(refusal instanceof BudgetExceeded)) throw new Error("expected a BudgetExceeded refusal");
     expect(refusal.message).toMatch(/^budget_cap: the spend cap of project /);
-    // The reason names the one exit migration 040 leaves: a bare status UPDATE is refused.
+    // The reason names the one exit the schema leaves: a bare status UPDATE is refused.
     expect(refusal.message).toContain(`scripts/project.ts unblock ${projectId}`);
     expect(refusal.message).not.toContain("UPDATE projects");
   });

@@ -13,7 +13,7 @@ import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";
 import { projectState } from "../simulator/project-state.js";
 
-// Story s-loop-never-stop-m1, migrations 040 and 048: every project halt is told to the client
+// Every project halt is told to the client
 // once, in plain words, stating its cause, and its end (an operator's unblock, or the substrate
 // probe passing after an infrastructure halt) is recorded and told once. Every row belongs to a project this
 // suite creates; the Liaison's due list is narrowed to them, and afterAll deletes them.
@@ -233,7 +233,7 @@ async function workItem(projectId: ProjectId, title: string, taskSpec: unknown =
   return id;
 }
 
-// Story s-loop-never-stop-m1 W6 (design P15, P17): the halt is told once, and it ends by itself.
+// The halt is told once, and it ends by itself.
 describe("an infrastructure halt is told once with its cause, resumes by itself when the probe passes, and is told once again", () => {
   test("halt, report naming the task, probe resume with evidence, resumed report", async () => {
     const projectId = await newProject();
@@ -304,7 +304,7 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
   });
 });
 
-// Story s-loop-never-stop-m1 W6 (migration 048): every give-up opens a plan repair; R = 2 then one undeliverable report.
+// Every give-up opens a plan repair; R = 2 then one undeliverable report.
 describe("every task given up opens a plan repair, and the undeliverable halt names each and why", () => {
   async function giveUp(id: string, reason: unknown): Promise<void> {
     await db.execute(sql`UPDATE work_items SET status = 'Abandoned', blocked_reason = ${JSON.stringify(reason)}::jsonb WHERE id = ${id}`);
@@ -343,7 +343,7 @@ describe("every task given up opens a plan repair, and the undeliverable halt na
   });
 });
 
-// ADR-074 addendum 2 d71 c: a suite_review halt recorded before migration 048 is
+// A suite_review halt, a kind no code path writes now, is
 // still told once, with the last review's problems.
 describe("a suite review halt recorded before migration 048 is told once", () => {
   test("the counts per check task survive in the record, and the block's report states the last review's problems", async () => {

@@ -67,7 +67,7 @@ export function replayed(seed: number, decisions: RunResult["decisions"]): Promi
 type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject"> & { readonly profile?: Profile };
 
 /**
- * The directed tier (t-simulator-directed-plants): each fault, plant and misbehaviour a test judges
+ * The directed tier: each fault, plant and misbehaviour a test judges
  * is forced by name on a directed tape (tape.ts Direction), every other draw benign, rather than
  * reached by a seed found by scanning. A seed is re-rolled by any change that adds a seam call on
  * its path; a direction is not, and one the run never takes fails the run (run.ts DirectionsNotTaken) instead of letting the

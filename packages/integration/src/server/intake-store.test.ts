@@ -168,7 +168,7 @@ const ReadingRowSchema = z.object({
   passedOver: z.array(z.object({ strength: z.string(), outcome: z.string(), reason: z.string() })),
 });
 
-/** The project's intake_readings row (migration 074). */
+/** The project's intake_readings row. */
 async function readingOf(projectId: ProjectId): Promise<z.infer<typeof ReadingRowSchema>> {
   const result = await db.execute(sql`
     SELECT confirmation, first_questions AS "firstQuestions", second_strength AS "secondStrength", second_model AS "secondModel",
@@ -261,7 +261,7 @@ describe("Liaison tender intake", () => {
       expect(questions[i]?.body).toContain(`we proceed on this assumption: ${adopted?.statement}`);
     }
 
-    // The two unasked assumptions reach the client in one report, posted with the questions (d89 C).
+    // The two unasked assumptions reach the client in one report, posted with the questions.
     const reports = messages.filter((m) => m.direction === "outbound" && m.kind === "report");
     expect(reports).toHaveLength(1);
     expect(reports[0]?.inReplyTo).toBe(tenderId);
@@ -283,7 +283,7 @@ describe("Liaison tender intake", () => {
     expect(await readingOf(projectId)).toEqual({ confirmation: "not-needed", firstQuestions: 3, secondStrength: null, secondModel: null, secondQuestions: null, passedOver: [] });
   });
 
-  // ADR-084 addenda 2 and 3 applied to intake: a reading that asks nothing is a claim. The catalog holds
+  // A reading of a tender that asks nothing is a claim. The catalog holds
   // one provider whose two models are priced alike, so the first reading goes to intake-frontier (the
   // id breaks the tie) and the second to intake-strong, from the ambiguity angle, through the
   // real gateway and ledger; the question it raises is the one posted, and the reading is recorded with

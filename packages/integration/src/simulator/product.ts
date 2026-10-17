@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Tape } from "./tape.js";
 
 /**
- * The client's product as the simulator models it (design §4.4, in today's in-repository layout:
+ * The client's product as the simulator models it (in today's in-repository layout:
  * the recipe under `environment/`, check files written over the checkout). A delivered behaviour
  * is one file; a regression deletes it. Behaviour files are distinct, so they never conflict in
  * git; the shared index is one file every implementation may append its line to, so two tasks of
@@ -14,7 +14,7 @@ export const MANIFEST_FILE = "product/MANIFEST";
 export const SHARED_INDEX_FILE = "product/INDEX";
 /**
  * Where the scaffold's brief asks the product's public interface to be written, as the simulator
- * knows it (never read from Quality: the oracle states what it expects on its own, ADR-081).
+ * knows it (never read from Quality: the oracle states what it expects on its own).
  */
 export const PUBLIC_INTERFACE_PATH = "PUBLIC_INTERFACE.md";
 
@@ -137,7 +137,7 @@ export const CheckSpecSchema = z.strictObject({
   kind: z.enum(CHECK_KINDS),
   requires: z.array(z.string()),
   forbids: z.array(z.string()),
-  /** Files the check copies into the workspace before it runs (a product-side harness, design §2.10). */
+  /** Files the check copies into the workspace before it runs (a product-side harness). */
   harness: z.array(z.strictObject({ path: z.string().min(1), content: z.string() })),
 });
 

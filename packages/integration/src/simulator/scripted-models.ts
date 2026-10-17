@@ -296,7 +296,7 @@ interface AttemptScript {
 }
 
 /**
- * The vision items the planner's prompt says a task must cite (d89 E, ADR-083), as an honest planner
+ * The vision items the planner's prompt says a task must cite, as an honest planner
  * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
  */
 function itemsToCheck(prompt: string): string[] {
@@ -321,8 +321,8 @@ function citingPerLine<T extends { readonly acceptance: readonly ScriptedLine[] 
 }
 
 /**
- * `plan` as an honest planner answers `prompt`: every item the prompt says a task must cite (d89 E,
- * ADR-083) that no line cites yet gets an acceptance line of its own that cites it alone.
+ * `plan` as an honest planner answers `prompt`: every item the prompt says a task must cite
+ * that no line cites yet gets an acceptance line of its own that cites it alone.
  *
  * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's planner does
  */
@@ -348,7 +348,7 @@ function assistantTurns(options: LanguageModelV4CallOptions): number {
 }
 
 /**
- * The stand-in for every model call site (design §4.6). A pure function of the tape, the
+ * The stand-in for every model call site. A pure function of the tape, the
  * universe, the call and the database: an agent turn reads its task from the lane making the call
  * rather than parsing prompts, since the model port sees no call context (projectId, taskId, callSite).
  */
@@ -549,7 +549,7 @@ export class StandIns {
       {
         text: "Which language should messages use?",
         whyItMatters: "It decides what every message shows.",
-        // A model that cannot tell answers "undecided" (ADR-083): the vision records it client-visible, so it is checked.
+        // A model that cannot tell answers "undecided": the vision records it client-visible, so it is checked.
         assumption: { statement: "Messages are in English.", rationale: "The tender is written in English.", kind: "undecided" },
       },
     ];
@@ -557,7 +557,7 @@ export class StandIns {
 
   /**
    * The project whose tender a reading is asked of: the one the call's pending llm_calls row names,
-   * written at its admission before the call is sent (migration 053). Intake reads one tender at a
+   * written at its admission before the call is sent. Intake reads one tender at a
    * time, so the latest pending intake row is this call's; null when none is, which the oracle names.
    */
   private async intakeProject(): Promise<string | null> {
@@ -1056,7 +1056,7 @@ export class StandIns {
   }
 
   /**
-   * A check task's turns. Each check names the cited items it decides (ADR-083): a behaviour's check
+   * A check task's turns. Each check names the cited items it decides: a behaviour's check
    * decides its scope line, and every cited item no such check decides gets a check of its own, so the
    * set decides every item its task cites, as an honest author writes it.
    */

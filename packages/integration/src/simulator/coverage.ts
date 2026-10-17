@@ -15,7 +15,7 @@ import type { Snapshot } from "./invariants.js";
 import { MUTATIONS } from "./plants.js";
 
 /**
- * What a run reached, against the code's own iterable lifecycle lists (design §4.12, S7): every
+ * What a run reached, against the code's own iterable lifecycle lists: every
  * work-item transition, blocked-reason source, project status, project block kind and execution
  * status, and every fault kind at every seam; every acceptance sweep outcome (W7) and every halt
  * by its cause and block kind (W6/W7).

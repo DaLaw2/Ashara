@@ -24,7 +24,7 @@ import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { projectState } from "../simulator/project-state.js";
 
-// Story s-independent-verify-m1 W7 (design P11, §2.8): a project whose goal tasks are
+// A project whose goal tasks are
 // all done is swept on main once; a pass makes it Accepted with one delivered report rendered from
 // the records, a failure is a defect repaired like any task given up. The sweep itself (cells, main)
 // is Quality's and is stood in here; every record is real Postgres. Every row belongs to a
@@ -61,7 +61,7 @@ const VISION = {
   prefix: { type: "assumption", id: "A3", text: "An empty prefix lists every key", status: "Inferred", standing: "reported", kind: "client-visible" },
 } satisfies Record<string, VisionSource>;
 
-/** A task's traced items and acceptance lines (d89 A), as decomposition stores them. */
+/** A task's traced items and acceptance lines, as decomposition stores them. */
 function traced(sources: readonly VisionSource[], acceptance: ReadonlyArray<{ readonly line: string; readonly sources: readonly string[] }>) {
   return { visionItems: sources.map((source) => source.text), sources, acceptance };
 }
@@ -142,7 +142,7 @@ async function deliveredProject(
   return { projectId: project.id, goals: [store, remove], scaffold, store, checksOfStore, question };
 }
 
-/** One stored check of a task's first revision, deciding `decides` (null: a row written before migration 064). */
+/** One stored check of a task's first revision, deciding `decides` (null: a row from before checks recorded what they decide). */
 async function storeCheck(projectId: string, taskId: string, checkTaskId: string, decides: readonly string[] | null): Promise<void> {
   await db.execute(sql`
     INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
@@ -311,14 +311,14 @@ describe("acceptance on main", () => {
     expect(body).toContain(`the merge of "Store keys".`);
     // The items of what the client asked for that no stored check of a passing task decides, and
     // only those; the exclusion is never listed, and the team's design choice is named
-    // apart as not verified by Ashara (ADR-083).
+    // apart as not verified by Ashara.
     expect(body).toContain(
       "These items of what you asked for are decided by no stored check of a task whose stored checks passed on main, " +
         "so nothing confirms them either way:\n- Two writers never corrupt the store\n" +
         "- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
     );
     expect(body).toContain("they are not verified by Ashara.\n- A2: The log file is kv.log\n\n");
-    // ADR-084 addendum 3 decision 12: no suite review is on record, so the decided items are listed
+    // No suite review is on record, so the decided items are listed
     // as unconfirmed and none is counted.
     expect(body).toContain(
       "None of the 5 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.\n\n" +
@@ -328,7 +328,7 @@ describe("acceptance on main", () => {
     expect(body).not.toContain("Any network service");
   });
 
-  // ADR-084 decision 2: an item a suite review left undecided on a delivered task's check task is
+  // An item a suite review left undecided on a delivered task's check task is
   // read back as undecided and told as not verified, never as covered, though its stored check passed.
   test("an item a suite review left undecided is read as undecided and reported as not verified", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
@@ -353,7 +353,7 @@ describe("acceptance on main", () => {
     );
   });
 
-  // ADR-084 addendum 2 decision 11: an item a clean review covered that no second review confirmed
+  // An item a clean review covered that no second review confirmed
   // is read back as undecided and told as not verified, with why, never as decided.
   test("an item an unconfirmed clean review covered is read as undecided and reported as not verified", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
@@ -474,7 +474,7 @@ describe("acceptance on main", () => {
       driftedRow?.kind === "due" && driftedRow.vision.kind === "recorded" && driftedRow.vision.items.filter((item) => item.checked).map((item) => item.source.id),
     ).toEqual(["S1", "S2"]);
 
-    // A line citing an item is no check of it (ADR-083): A1 cited, its check deciding S1 alone, is not checked.
+    // A line citing an item is no check of it: A1 cited, its check deciding S1 alone, is not checked.
     const lineOnly = await accepted();
     await db.execute(sql`DELETE FROM task_checks WHERE task_id = ${lineOnly.store}`);
     await storeCheck(lineOnly.projectId, lineOnly.store, lineOnly.checksOfStore, ["S1"]);
@@ -549,7 +549,7 @@ describe("acceptance on main", () => {
     }
   });
 
-  // ADR-074 d95 a: a confirming answer read after the plan was made asks for no replan, so the
+  // A confirming answer read after the plan was made asks for no replan, so the
   // review's copy of the vision can still say the item was asked about when the project is accepted.
   test("an answer confirming an assumption after the plan was made is reported as confirmed, and an unreadable standing is refused", async () => {
     const { projectId, goals, scaffold, question } = await deliveredProject({ prefixAsked: true });

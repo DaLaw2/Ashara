@@ -22,7 +22,7 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
 
-// ADR-074 d96 d, d99: two tasks dispatched in one batch leave the same main and change the
+// Two tasks dispatched in one batch leave the same main and change the
 // same file. The first merges; the second's merge conflicts, and its retry must start with that
 // conflict, since its branch unchanged would conflict again by construction. Real podman, real git, the scratch
 // database and the real failure router, with a scripted model: no real LLM call.
@@ -321,7 +321,7 @@ describe("a merge conflict between two tasks of one batch", () => {
     };
     const { result, mock } = await withGitRunner(failingMergeTree, () => runTask({ ...third, attempt: 2, dispatchCount: 2 }, []));
 
-    // Z0's git, never the task's work (ADR-080 d3 c): blocked under class ashara, not routed against
+    // Z0's git, never the task's work: blocked under class ashara, not routed against
     // the task, and the branch is never dispatched as it is.
     expect(result.status).toBe("environment_blocked");
     if (result.status !== "environment_blocked") return;

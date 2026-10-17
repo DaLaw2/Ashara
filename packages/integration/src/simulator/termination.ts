@@ -5,7 +5,7 @@ import type { Outcome, Violation } from "./invariants.js";
 import { WORK_BOUNDS } from "./work-bounds.js";
 
 /*
- * The termination invariants of ADR-084 decision 4, each judged from outside production and against
+ * The termination invariants, each judged from outside production and against
  * the oracle's own bounds (work-bounds.ts), never production's constants or counters as the measure:
  * - W1, work bounded: the model requests of each task and each project, counted at the model port
  *   the stand-ins serve (PortCount) and cross-checked against llm_calls, stay within the bounds
@@ -18,7 +18,7 @@ import { WORK_BOUNDS } from "./work-bounds.js";
  *   lexicographic tuple (plan revisions, review namings left, disputes left, requests left) strictly
  *   smaller, or shrinks the set of reopened check tasks; no component is ever below zero; and once
  *   an implementation is dispatched on a review's check set, no review records a new finding on it
- *   (the open-blocker set after the freeze never grows, ADR-084 decision 3);
+ *   (the open-blocker set after the freeze never grows);
  * - W4, liveness: under the liveness profile every project ends through a typed, reported state,
  *   accepted, stopped or halted with its report on anything but the spend cap, never left open and
  *   never ended by the dollars.
@@ -68,7 +68,7 @@ interface ProjectRequests {
   readonly tasks: ReadonlyMap<string, { readonly title: string; readonly requests: number }>;
 }
 
-/** Every llm_calls row of each project, in every state: a drawn request is its row (ADR-084 decision 1). */
+/** Every llm_calls row of each project, in every state: a drawn request is its row. */
 export async function readRequests(db: Database, projectIds: readonly string[]): Promise<ProjectRequests[]> {
   const projects: ProjectRequests[] = [];
   for (const projectId of projectIds) {

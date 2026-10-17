@@ -5,7 +5,7 @@ import type { RunMode, RunResult } from "./run.js";
 /**
  * The seeds that fail on today's code, each with the violation keys it fails (the
  * invariant and its subject, invariants.ts Violation.key) and the baseline entry naming the
- * defect (docs/investigations/simulator-baseline-2026-10-14.md). A seed here must fail exactly
+ * defect. A seed here must fail exactly
  * these keys: a new violation in a known-failing seed, even of an invariant it already fails, is
  * unexpected, and a fix makes the seed fail its test until its entry is removed, so a known
  * failure can neither hide a new one nor outlive its fix. An entry applies only to a run under the

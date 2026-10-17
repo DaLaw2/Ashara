@@ -38,7 +38,7 @@ import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // The "moved" loops have no counter of their own: a plan revision whose write finds the project
 // moved (L17) and an answer whose record finds it moved (L19) are tried again next cycle,
-// uncounted. Each attempt draws from the work ledger (ADR-084 decision 1), so a project that
+// uncounted. Each attempt draws from the work ledger, so a project that
 // keeps moving under them halts as work_budget with its report, and nothing is drawn after the
 // halt. The store answers "moved" on every write, as a project that never stops moving would.
 // Against Postgres; no real LLM call is made.

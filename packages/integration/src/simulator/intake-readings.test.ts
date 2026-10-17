@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { lazyIntakes } from "./intake-readings.js";
 import type { IntakeRecords, ObservedIntake } from "./intake-readings.js";
 
-// I3's intake clause, judged on the stand-ins' observations against the records (ADR-084 addenda 2
-// and 3 applied to intake). The expected records are written here, never read from production.
+// I3's intake clause, judged on the stand-ins' observations against the records.
+// The expected records are written here, never read from production.
 const P = "p1";
 const reading = (questions: number, model = "big"): ObservedIntake => ({ projectId: P, kind: "reading", provider: "sim", model, questions });
 const asked = (model: string): ObservedIntake => ({ projectId: P, kind: "second-asked", provider: "sim", model, questions: 0 });

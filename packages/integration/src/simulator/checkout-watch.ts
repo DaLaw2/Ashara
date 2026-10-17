@@ -20,7 +20,7 @@ function workTreeOf(args: readonly string[], cwd: string): string {
 }
 
 /**
- * I7, the merge-queue clause (ADR-074 d82 W3): a tentative merge staged in a checkout by one
+ * I7, the merge-queue clause: a tentative merge staged in a checkout by one
  * task's finalize belongs to that task until it commits or undoes it. Another task changing that
  * checkout meanwhile (its own merge on top, a reset, its recovery's `merge --abort`) is two
  * finalizes overlapping on one checkout, which the checkout lock exists to prevent. Judged on the

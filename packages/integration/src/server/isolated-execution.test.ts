@@ -110,7 +110,7 @@ describe("a task runs on cells end to end", () => {
     const taskId = createWorkItemId();
 
     // /workspace exists only inside a cell: a check that passes on it ran in one. The check
-    // author stored it before the task started (s-independent-verify-m1).
+    // author stored it before the task started.
     const check = "test -f /workspace/hello.txt && grep cell /workspace/hello.txt || exit 99";
     const checks: TaskCheckStore = {
       foundationOf: async () => {

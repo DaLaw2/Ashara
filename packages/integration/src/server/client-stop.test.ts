@@ -12,7 +12,7 @@ import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { projectState } from "../simulator/project-state.js";
 
-// Story s-client-channel-m1: a client's stop halts its project. Every row belongs
+// A client's stop halts its project. Every row belongs
 // to a project this suite creates under a unique name, and every step is
 // narrowed to those projects; afterAll deletes them.
 

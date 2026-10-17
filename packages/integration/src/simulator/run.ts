@@ -54,7 +54,7 @@ export interface RunOptions {
   readonly template: string;
   readonly maxCycles: number;
   readonly mutation?: Mutation;
-  /** Hard wall clock of the run; past it the run ends as an I1 violation (design §4.14). */
+  /** Hard wall clock of the run; past it the run ends as an I1 violation. */
   readonly timeoutMs: number;
   /**
    * Projects on the one deployment (policy default 1). Two share the deployment's spend cap, so
@@ -122,16 +122,15 @@ const LOW_CAP_USD = 0.02;
  * every status it first reaches, and what may pass between two such facts without a fault is the
  * loop's own bookkeeping: a parked exit taken on the next cycle's sweep, a replan waiting one cycle
  * for its project's tasks to settle, a halt's report and the probe's resumption, each one cycle. A
- * cycle that carried an injected fault or a restart does not count: the fault budget bounds those
- * (design §4.9). The longest such stretch the baseline measured is 2 cycles
- * (docs/investigations/simulator-baseline-2026-10-14.md §7.7), so the bound is three times that.
+ * cycle that carried an injected fault or a restart does not count: the fault budget bounds those.
+ * The longest such stretch the baseline measured is 2 cycles, so the bound is three times that.
  */
 const NO_PROGRESS_CYCLES = 6;
 const POLL_INTERVAL_MS = 10_000;
 const IDLE_INTERVAL_MS = 30_000;
 /**
  * @testseam The wait before a report whose post faulted is tried again: the product's first fault
- * backoff (shared FIRST_FAULT_BACKOFF_SECONDS). The simulator may not import it (ADR-081), so
+ * backoff (shared FIRST_FAULT_BACKOFF_SECONDS). The simulator may not import it, so
  * integration server/settle-cycles.test.ts holds the two equal.
  */
 export const REPORT_RETRY_MS = 60_000;
@@ -281,7 +280,7 @@ const SIM_ENV = [
   "ASHARA_BUDGET_LIMIT_USD",
   "ASHARA_BUDGET_TOTAL",
   "ASHARA_PROJECT_BUDGET_LIMIT_USD",
-  // Unset for the run: the work budgets are production's policy defaults (ADR-084 decision 1).
+  // Unset for the run: the work budgets are production's policy defaults.
   "ASHARA_TASK_WORK_BUDGET_REQUESTS",
   "ASHARA_PROJECT_WORK_BUDGET_REQUESTS",
   "ASHARA_WORK_RESERVE_PERCENT",
@@ -302,7 +301,7 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   delete process.env["ASHARA_PROJECT_WORK_BUDGET_REQUESTS"];
   delete process.env["ASHARA_WORK_RESERVE_PERCENT"];
   delete process.env["MAX_BATCH_SIZE"];
-  // Required configuration (ADR-074 d82 W9); the fake runtime accepts and ignores the caps they become.
+  // Required configuration; the fake runtime accepts and ignores the caps they become.
   process.env["ASHARA_CELL_MEMORY"] = "4g";
   process.env["ASHARA_CELL_CPUS"] = "4";
   process.env["ASHARA_CELL_PIDS_LIMIT"] = "1024";
@@ -315,7 +314,7 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
 }
 
 /**
- * Replaces each id, commit and hex digest by its kind and order of first appearance (design §4.3),
+ * Replaces each id, commit and hex digest by its kind and order of first appearance,
  * and the run's own working directory, drawn by mkdtemp, by a fixed name.
  */
 function canonical(lines: readonly string[], workdir: string): string[] {
@@ -404,7 +403,7 @@ class CorruptionWithoutSecondProject extends Error {
 }
 
 /**
- * The containment scenario (ADR-080 d10 C9): between cycles the observer corrupts the project's rows
+ * The containment scenario (C9): between cycles the observer corrupts the project's rows
  * as the run reaches them: its first task's task_spec once it has tasks (the gate reads it and
  * halts the project on the row, delivery gate.ts gateProject), then the kind of its open halt
  * episode with no report yet (the block reports' listing reads it, contained to that report), past
@@ -571,7 +570,7 @@ function standing(snapshot: Snapshot): string {
 }
 
 /**
- * One seed, start to end (design §4.8-§4.11): the real system composed over a private scratch
+ * One seed, start to end: the real system composed over a private scratch
  * database, real git, the fake container runtime and the scripted models; the invariants judged
  * after every cycle; crashes and SIGTERMs answered by composing a new instance on the same workdir.
  */

@@ -1,4 +1,4 @@
-// The web client (ADR-076): login, throttling, session, client scoping, CSRF and
+// The web client: login, throttling, session, client scoping, CSRF and
 // page headers against the composed app, then a recorded headless-browser session
 // against a live port.
 

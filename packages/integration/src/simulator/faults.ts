@@ -11,12 +11,12 @@ import type { Interleaver } from "./interleave.js";
 import type { FaultRates } from "./profile.js";
 import type { Tape } from "./tape.js";
 
-/** The seams of design §4.3 a fault can be injected at. */
+/** The seams a fault can be injected at. */
 export const SEAM_KINDS = ["db", "git", "podman", "model"] as const;
 export type SeamKind = (typeof SEAM_KINDS)[number];
 
 /**
- * The fault catalogue of design §4.9, as injected here. F11 (two admissions racing the spend cap)
+ * The fault catalogue, as injected here. F11 (two admissions racing the spend cap)
  * is no fault kind: it is the batch of two itself, interleaved at seam calls (interleave.ts).
  */
 const FAULT_KINDS = [
@@ -146,7 +146,7 @@ function offeredFaults(instance: InstanceHandle, seam: SeamKind, label: string, 
 }
 
 /**
- * Every seam call takes a ticket here (design §4.10), after its task's turn (Interleaver.turn):
+ * Every seam call takes a ticket here, after its task's turn (Interleaver.turn):
  * tickets are taken one task at a time, in the order the seed's interleaving gives. A ticket may
  * carry one fault from the seed's tape while the fault budget lasts, or the one a directed tape
  * forces on it (Tape.directedFault); a crash marks the instance dead.

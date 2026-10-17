@@ -122,7 +122,7 @@ export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => p
 
 const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 
-/** A delivered report that leaves out the first internal-design assumption it must name as not verified by Ashara (ADR-083). */
+/** A delivered report that leaves out the first internal-design assumption it must name as not verified by Ashara. */
 export const deliveredReportOmitsUnverified = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
   (body) => dropFirstNamed(body, UNVERIFIED_HEAD, "- "),
@@ -155,7 +155,7 @@ function decidesOf(param: unknown): string[] | null {
 }
 
 /**
- * A check set stored with one cited item decided by none of its checks (ADR-083): the check author
+ * A check set stored with one cited item decided by none of its checks: the check author
  * wrote no check for it, and the set reached the store past Z0's rule. Each stored check of the
  * revision that names the set's last decided item names the set's first instead, so the revision's
  * rows decide every item but that one. A set deciding one item only is left as it is.
@@ -216,7 +216,7 @@ export const deliveredReportUnrecorded: QueryPlant = (args) => {
 
 /**
  * A clean review's claim that no second opinion confirmed leaves no item undecided
- * (SuiteReviewJudgementRepository, migration 072): an insert of undecided_items rows that names a
+ * (SuiteReviewJudgementRepository): an insert of undecided_items rows that names a
  * claim is sent as a statement that writes nothing, so every item it covers reads as decided by a
  * stored check in the delivered report, as when no second review was asked of a clean one. The
  * statement keeps every parameter, each read as text, so the server binds what was sent.

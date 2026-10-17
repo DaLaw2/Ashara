@@ -5,7 +5,7 @@ import type { Database } from "./database.js";
 import type { Violation } from "./invariants.js";
 
 /*
- * L1, log correlation (story c-observability §3 and §6 task 2): a record names the work it is
+ * L1, log correlation: a record names the work it is
  * about by its scope, never by text in its message. Judged here:
  * - a record emitted while a cycle runs carries the cycle's number: the design asks it of warn and
  *   error records, and every level is held to it, since all a cycle runs is awaited inside its scope;

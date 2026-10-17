@@ -31,10 +31,10 @@ import type { WorkKind } from "@ashara/organization";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
 
-// Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
+// Independent verification end to end on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
 // no skip. A check task's checks are red-run on the plan's foundation (the product scaffold's merge
-// here, which the environment builds, ADR-074 addendum 2 d74 A) and stored; an implementation task is swept for delivery on main, then
+// here, which the environment builds) and stored; an implementation task is swept for delivery on main, then
 // decided by them on its tentative merge.
 
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
@@ -99,7 +99,7 @@ interface CitedScope {
   readonly side: "in";
 }
 
-/** The vision item every planned pair cites unless a test names more: its checks must decide each one (ADR-083). */
+/** The vision item every planned pair cites unless a test names more: its checks must decide each one. */
 const CITED: CitedScope = { type: "scope", id: "S1", text: "The product writes the files its users ask for.", side: "in" };
 
 /** An implementation task and its check task on record, as a first plan writes them after Sprint 0. */
@@ -443,7 +443,7 @@ describe("independent verification", () => {
     expect(withoutVersion.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/g)).toBeNull();
   }, 300_000);
 
-  // ADR-083: a cited item no stored check decides would be accepted unchecked, whatever line cites it.
+  // A cited item no stored check decides would be accepted unchecked, whatever line cites it.
   it("a set that leaves one cited item decided by no check is rejected before its red run, and nothing is stored", async () => {
     const pair = await plannedPair("Write two notes", [CITED, { type: "scope", id: "S2", text: "The product keeps every note it is given.", side: "in" }]);
 
@@ -474,7 +474,7 @@ describe("independent verification", () => {
     expect(await checkRowsOf(unrunnable.implementation.id)).toEqual([]);
   }, 300_000);
 
-  // ADR-074 addendum 2 d74 A: one set rule for every authoring. A check that passes on the foundation
+  // One set rule for every authoring. A check that passes on the foundation
   // guards behaviour that already holds; the set is kept when another fails there.
   it("keeps a set where one check passes on the foundation and another fails there, and tells the author so", async () => {
     const pair = await plannedPair("Write bye.txt");
@@ -634,7 +634,7 @@ describe("post-merge regression suite", () => {
     expect(existsSync(join(target, "BROKEN"))).toBe(false);
   }, 300_000);
 
-  // s-independent-verify-m1 C2: the task's own stored check failing on its merge fails it; Z0 merges nothing.
+  // The task's own stored check failing on its merge fails it; Z0 merges nothing.
   it("a merge on which the task's own stored check fails fails the task, not as a regression; nothing merged", async () => {
     const sun = await checkedPair("Write sun.txt", { name: "shines", command: "grep sun sun.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
@@ -675,7 +675,7 @@ describe("post-merge regression suite", () => {
     expect(existsSync(join(target, "checks"))).toBe(false);
   }, 300_000);
 
-  // The review of t-regression-suite-postmerge: CompletedTaskUnchecked blocked every later merge with no exit.
+  // A completed task with no stored check must never block every later merge with no exit.
   it("an earlier task Completed with no stored check is named as not re-run, never a block; the merge is decided by the rest", async () => {
     const legacy = await plannedPair("Write legacy.txt");
     await markCompleted(legacy.implementation.id);
@@ -745,7 +745,7 @@ describe("post-merge regression suite", () => {
     expect(result.detail).toContain('check "empties" FAILED: exited 99');
   }, 300_000);
 
-  // ADR-074 addendum 2 d74 A: when an earlier task delivered beyond its scope, the sweep
+  // When an earlier task delivered beyond its scope, the sweep
   // before dispatch closes the later task with no implementer, never parking it for the operator.
   it("its checks and the regression suite pass on main itself: completed as already delivered at main before any model call, nothing merged", async () => {
     const again = await checkedPair("Write wave.txt again", { name: "waves again", command: "grep wave wave.txt || exit 99" });
@@ -767,7 +767,7 @@ describe("post-merge regression suite", () => {
     expect(await git("branch", "--list", `task/${again.implementation.id}`)).toBe("");
   }, 300_000);
 
-  // ADR-074 addendum 2 d74 A: checks re-authored for work an earlier task already delivered
+  // Checks re-authored for work an earlier task already delivered
   // would all pass on main, so they are red-run on the foundation, where they fail; the set is kept,
   // and the sweep closes the task as already delivered with no implementer dispatched.
   it("a re-authored set is red-run on the foundation, not main; the task it decides is then closed already delivered with no model call", async () => {
@@ -830,8 +830,8 @@ describe("post-merge regression suite", () => {
     expect(result.detail).toContain('check "missing" FAILED');
   }, 300_000);
 
-  // ADR-074 addendum 2 d74 D: a merged task's check blocking this merge could only be read as this
-  // task's regression; the implementer may now dispute it, which reopens that check's own check task.
+  // A merged task's check blocking this merge is not read only as this
+  // task's regression: the implementer may dispute it, which reopens that check's own check task.
   it("an implementer disputes a merged task's check by that task's id: the dispute names that task's check task", async () => {
     const echo = await checkedPair("Write echo.txt", { name: "echoes", command: "grep echo echo.txt || exit 99" });
 
@@ -850,8 +850,8 @@ describe("post-merge regression suite", () => {
     });
   }, 300_000);
 
-  // ADR-074 addendum 2 d74 D: the scaffold's own build and test failing on its merge was read as a
-  // tree regression and abandoned at once; it is the scaffold's own work, retried.
+  // The scaffold's own build and test failing on its merge is no tree regression to abandon
+  // at once: it is the scaffold's own work, retried.
   it("a product scaffold whose merge fails the build and test is a verification gap the router retries, never a tree regression", async () => {
     const scaffoldId = createWorkItemId();
     const taskSpec = {
@@ -889,8 +889,8 @@ describe("post-merge regression suite", () => {
   }, 300_000);
 });
 
-// Quality's dispute record (migration 039): the count per check task survives in the table; past
-// the bound the disputing task is given up (story s-loop-never-stop-m1 W6).
+// Quality's dispute record: the count per check task survives in the table; past
+// the bound the disputing task is given up.
 describe("check disputes on record", () => {
   it("counts each check task's disputes", async () => {
     const pair = await plannedPair("Write disputed.txt");

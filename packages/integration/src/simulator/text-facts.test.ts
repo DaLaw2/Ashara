@@ -3,7 +3,7 @@ import { deliveredInterfaceText, publicInterfaceText } from "./product.js";
 import { checkTextFacts } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
 
-// The expected wording is written here, never taken from a composer (ADR-081).
+// The expected wording is written here, never taken from a composer.
 const none: TextFactRecords = {
   visions: [],
   briefs: [],

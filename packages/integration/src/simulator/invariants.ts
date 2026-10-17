@@ -23,9 +23,8 @@ import type { TextFactRecords } from "./text-facts.js";
 const run = promisify(execFile);
 
 /**
- * The invariants of design §2.9, as judged on today's schema, I10 (ADR-080 d10 C1, C2), and the
- * termination invariants W1-W4 (ADR-084 decision 4, termination.ts), and L1, log correlation
- * (c-observability §3, log-correlation.ts).
+ * The invariants I1-I10, as judged on today's schema, the termination invariants W1-W4
+ * (termination.ts), and L1, log correlation (log-correlation.ts).
  */
 const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10", "W1", "W2", "W3", "W4", "L1"] as const;
 type InvariantId = (typeof INVARIANTS)[number];
@@ -54,7 +53,7 @@ const itemRow = z.object({
   checksFor: z.string().nullable(),
   blockedReason: z.unknown(),
   mergeCommit: z.string().nullable(),
-  /** How the recorded commit closed the item (migration 049): merged or already_delivered. */
+  /** How the recorded commit closed the item: merged or already_delivered. */
   mergeKind: z.string().nullable(),
   ownerRoleId: z.string().nullable(),
   dispatchCount: z.number(),
@@ -68,7 +67,7 @@ const projectRow = z.object({
   blockedReason: z.string().nullable(),
   planStopped: z.boolean(),
   workspacePath: z.string().nullable(),
-  /** A passed acceptance sweep's delivered report is posted (migration 049). */
+  /** A passed acceptance sweep's delivered report is posted. */
   deliveredReported: z.boolean(),
 });
 type ProjectRow = z.infer<typeof projectRow>;
@@ -126,7 +125,7 @@ class SnapshotRowMissing extends Error {
   }
 }
 
-/** Every lifecycle row of the run's one project, and main's first-parent log (design §4.8). */
+/** Every lifecycle row of the run's one project, and main's first-parent log. */
 export async function readSnapshot(db: Database, projectId: string): Promise<Snapshot> {
   const [project] = z.array(projectRow).parse(
     (
@@ -294,7 +293,7 @@ export function sourceOf(raw: unknown): (typeof BLOCKED_REASON_SOURCES)[number] 
 /** `unrecognized`: a block kind outside the code's list, whose cause the simulator cannot name. */
 type HaltCause = "spend_cap" | "work_budget" | "infrastructure" | "undeliverable" | "unrecognized";
 
-/** What a run ended in, in design §2.2's terms mapped onto today's project states. */
+/** What a run ended in, mapped onto today's project states. */
 export type Outcome =
   | { readonly kind: "accepted" }
   | { readonly kind: "halted"; readonly cause: HaltCause; readonly detail: string }
@@ -307,7 +306,7 @@ export type Outcome =
  * which the substrate probe ends; `fault` is Ashara's own record or step failing, which W7 calls
  * undeliverable (orchestrator acceptance.ts); `configuration` (a model call refused by anything but a
  * spend cap) is Ashara's setup, kept with infrastructure as before. `work_budget` is the work
- * ledger's halt on a project's spent model requests (ADR-084 decision 1), which the owner's grant
+ * ledger's halt on a project's spent model requests, which the owner's grant
  * and the operator's unblock end.
  */
 const HALT_CAUSES = {
@@ -352,7 +351,7 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
     const category = project.blockedCategory ?? (project.planStopped ? "planning_stopped" : "unknown");
     return { kind: "halted", cause: haltCauseOf(category), detail: `${category}: ${project.blockedReason ?? "(no reason)"}` };
   }
-  // Accepted is production's own state since migration 049: every goal task done is not acceptance
+  // Accepted is production's own state: every goal task done is not acceptance
   // until the sweep on main passes.
   if (project.status === "accepted") return { kind: "accepted" };
   return { kind: "open" };
@@ -423,7 +422,7 @@ export function cellRoleViolations(
 }
 
 /**
- * I2-I7 and I9, judged on one project's snapshot (design §4.8). I1, I8 (checkTotality) and I5's admission
+ * I2-I7 and I9, judged on one project's snapshot. I1, I8 (checkTotality) and I5's admission
  * clause (admissions.ts, the deployment's) are judged by the run over its whole course.
  */
 export function checkSnapshot(
@@ -508,11 +507,11 @@ export function checkSnapshot(
 
   // I6: no Done without its evidence. A passed sweep accepted the project: every item a check must
   // decide (an in-scope line, an assumption not recorded as internal design) is decided by a
-  // stored check that sweep ran, as its recorded decides names it (d89 E, ADR-083), and every such
+  // stored check that sweep ran, as its recorded decides names it, and every such
   // item a suite review left undecided is named unverified in the sweep's delivered report, never
-  // covered (ADR-084 decision 2), and every such item the report calls decided had its suite's
-  // review found clean on it by a second model family, as the stand-ins answered it (addendum 2
-  // decision 11). Judged on every passed sweep once the run ends, whatever the project's status then.
+  // covered, and every such item the report calls decided had its suite's
+  // review found clean on it by a second model family, as the stand-ins answered it.
+  // Judged on every passed sweep once the run ends, whatever the project's status then.
   if (context.final) {
     for (const found of uncheckedAtPassedSweeps(snapshot.reports)) add("I6", `unchecked-item:${found.key}`, found.statement);
     for (const found of unconfirmedAtPassedSweeps(snapshot.reports, context.reviews)) add("I6", `unconfirmed-clean:${found.key}`, found.statement);
@@ -680,7 +679,7 @@ class FaultBlameUnknown extends Error {
 /**
  * Whose a fault is, for I10: `ashara` a call of the substrate that failed (a database, git or podman
  * call) or a request Ashara built that the provider rejected (400, 413, 422); `provider` the
- * provider's failure (a reset, 429, 5xx), which a read is counted against by design (ADR-080 d5);
+ * provider's failure (a reset, 429, 5xx), which a read is counted against by design;
  * `process` the process's death or stop (a crash, a SIGTERM, a killed transaction), whose dispatch
  * production leaves counted when no record shows it unfinished or it died before (delivery
  * startup-reconciler.ts requeueOrphan: a dispatch that keeps killing the process may be what kills
@@ -734,7 +733,7 @@ function describeFaults(faults: readonly FaultRecord[]): string {
 }
 
 /**
- * I10, charged only for agent work (ADR-080 d10 C1, C2): an attempt counter grows only for work a
+ * I10, charged only for agent work: an attempt counter grows only for work a
  * model did and failed, never for a fault beneath it. Judged per cycle, the cycle being the window:
  * - task clause: a task whose lane carried a fault of Ashara's (blameOf), none of the provider's
  *   or the process's, and for which no stand-in model answered in the window, did no work: its

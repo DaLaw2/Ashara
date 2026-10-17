@@ -19,7 +19,7 @@ const stated = (sentence: string, record: string): string =>
   `Work on this project is paused.\n\nAshara recorded the cause as this: ${sentence}. Ashara keeps the technical detail in its own record of this pause, record ${record}.`;
 
 describe("checkReports, a halt's cause", () => {
-  // The expected sentences are written here, not taken from Engagement (ADR-081): a test that asks
+  // The expected sentences are written here, not taken from Engagement: a test that asks
   // the composer what to expect pins whatever it says.
   const FAULT = "a step of Ashara's own work on this project failed, or Ashara's own record of the project did not hold together";
   const INFRASTRUCTURE = "the machines Ashara runs the work on kept failing while they ran this project's work";
@@ -164,7 +164,7 @@ describe("checkReports, a delivered report", () => {
     expect(keysOf(delivered(`- "Goal": closed on commit c1; whether it was merged or already delivered there is not on record.`, {}, unrecordedTail), "accepted", [already])).toEqual(["delivered-close"]);
   });
 
-  // Coverage comes from what the stored checks decide (ADR-083); an out-of-scope line or an
+  // Coverage comes from what the stored checks decide; an out-of-scope line or an
   // internal-design assumption is never listed as not covered, and every undecided asked-for item is.
   describe("coverage from the stored checks", () => {
     const merged = `- "Goal": built and merged, commit c1.`;
@@ -209,7 +209,7 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, traced, `${unrecordedTail}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(Array(5).fill("delivered-coverage"));
     });
 
-    // ADR-084 addendum 3 decision 12: only decided items a second review confirmed are counted, and none is said as none.
+    // Only decided items a second review confirmed are counted, and none is said as none.
     it("holds the count to the decided items listed as confirmed, saying none when none is", () => {
       const uncovered = "\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n- Ashara's assumption, which Ashara has no record of showing you: Messages are in English.";
       const tail = unverified(["- A2: State lives in memory."]);
@@ -223,7 +223,7 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, traced, `${uncovered}${unreviewed}${tail}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
-    // ADR-083: every internal-design assumption is named, by id and text, as not verified by Ashara.
+    // Every internal-design assumption is named, by id and text, as not verified by Ashara.
     it("refuses a report that leaves an internal-design assumption out of what Ashara did not verify, or names another there", () => {
       const uncovered = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."];
       const head =
@@ -235,7 +235,7 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, noDesign, `${head}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
-    // ADR-084 decision 2: an item a review left undecided is named as not verified, never covered.
+    // An item a review left undecided is named as not verified, never covered.
     const undecidedHead = (lines: readonly string[]): string =>
       `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n${lines.join("\n")}`;
     it("holds an item a review left undecided to being named as not verified, never counted covered", () => {
@@ -257,7 +257,7 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
-    // ADR-084 addendum 2 decision 11: an item an unconfirmed clean review covered is named under a
+    // An item an unconfirmed clean review covered is named under a
     // section that says why, and a failed confirmation never reads as a contradicted one.
     it("holds an item whose clean review was not confirmed to a section saying why", () => {
       const head = (why: string, lines: readonly string[]): string =>
@@ -282,7 +282,7 @@ describe("checkReports, a delivered report", () => {
   });
 });
 
-// The guard of d89 E and ADR-083: no passed sweep leaves an in-scope line, or an assumption a client
+// No passed sweep leaves an in-scope line, or an assumption a client
 // could observe, unchecked.
 describe("uncheckedAtPassedSweeps", () => {
   const visible = { key: "A1", statement: "Messages are in English.", kind: "client-visible" };
@@ -320,7 +320,7 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf(sweep([visible], [S1, { ...A1, text: "Messages are in French." }]))).toEqual(["A1"]);
   });
 
-  // ADR-083: a line citing an item is no check of it; only a stored check's decides is.
+  // A line citing an item is no check of it; only a stored check's decides is.
   it("names an item its check task cites, on an acceptance line too, that no stored check decides", () => {
     expect(keysOf(sweep([visible], [S1], [greets, network], [S1, A1]))).toEqual(["A1"]);
   });
@@ -340,7 +340,7 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf(sweep([visible], [S1]), { ...sweep([visible], [S1]), id: "sweep-2" })).toEqual(["A1"]);
   });
 
-  // ADR-084 decision 2: an item a suite review left undecided reaches I6 as unverified, never covered.
+  // An item a suite review left undecided reaches I6 as unverified, never covered.
   it("names an item a review left undecided that the sweep's delivered report does not name as unverified, or calls covered", () => {
     const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text, reason: "unsettled" as const }] });
     const named = `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but nothing settled it.\n- ${greets.text}`;
@@ -360,7 +360,7 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, decides: ["A1"] }] })).toEqual(["coverage-unreadable"]);
   });
 
-  // ADR-084 addendum 2 decision 11 and addendum 3 decision 12: an item reads as decided only on a
+  // An item reads as decided only on a
   // clean review a second opinion confirmed, judged from the stand-ins' answers, never from production's claim.
   describe("unconfirmedAtPassedSweeps", () => {
     const delivered = { ...sweep([visible], [S1, A1]), reportBody: "Delivered." };
@@ -398,7 +398,7 @@ describe("uncheckedAtPassedSweeps", () => {
 });
 
 describe("checkReports, a burn warning", () => {
-  // ADR-084 addendum 1 decision 7: a warning states the figures it recorded, its zone held on them,
+  // A warning states the figures it recorded, its zone held on them,
   // and each zone is told once per plan revision.
   const yellow = {
     planRevision: 1,

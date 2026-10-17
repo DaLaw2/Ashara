@@ -8,7 +8,7 @@ import { ClientMessageRepository, acceptProject, recordClientStop } from "@ashar
 import type { ProjectId } from "@ashara/shared";
 import { projectState } from "../simulator/project-state.js";
 
-// O3 c (ADR-080 d3; migration 059): the lifecycle (Engagement's) and the halt (Delivery's open block
+// The lifecycle (Engagement's) and the halt (Delivery's open block
 // episode) are separate records, each written through its owner's guard. The state the client sees
 // is unchanged for every combination the two guards can reach: 'blocked' while halted, otherwise the
 // lifecycle. Each project here is driven through the guards only, and read three ways: the

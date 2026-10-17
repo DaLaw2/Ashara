@@ -27,7 +27,7 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause);
  * - no-admission-queue: a spend-cap admission goes on without waiting for the ones ahead of it (I5,
  *   admission clause). Planted on a run of two projects, where only the deployment's check stands
- *   between them. Since migration 053 an admission's own estimate is a row written
+ *   between them. An admission's own estimate is a row written
  *   after the project's check, an await later; whether one project now catches it too: unverified;
  * - pending-uncounted: a spend-cap admission's read leaves out the pending rows of calls admitted
  *   and not yet recorded, so it counts the recorded spend alone (I5, admission clause);
@@ -47,20 +47,19 @@ import { abandonedReleaseSkipped } from "./residue.js";
  *   (check-set-skips-item), the delivered report says an assumption the client was asked about was
  *   reported to them (I9; I6 names the undecided item);
  * - delivered-report-omits-unverified: the delivered report leaves out an internal-design
- *   assumption it must name as not verified by Ashara (I4, ADR-083);
+ *   assumption it must name as not verified by Ashara (I4);
  * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9);
  * - unconfirmed-claim-dropped: a clean review's claim no second opinion confirmed leaves no item
- *   undecided, so the delivered report calls those items decided by a stored check (I6, ADR-084
- *   addendum 2 decision 11);
+ *   undecided, so the delivered report calls those items decided by a stored check (I6);
  * - intake-second-reading-dropped: a tender reading that asks the client nothing goes on with no
- *   second reading asked, recorded as another family's agreement (I3, ADR-084 addenda 2 and 3 applied
- *   to intake); caught under the lazy intake persona;
+ *   second reading asked, recorded as another family's agreement (I3); caught
+ *   under the lazy intake persona;
  * - check-set-skips-item: a check set is stored with one item its check task cites decided by none
  *   of its checks, past Z0's rule, so that item is accepted with no stored check deciding it, though
- *   an acceptance line still cites it (I6, d89 E, ADR-083);
+ *   an acceptance line still cites it (I6);
  * - dispatch-refund-skipped: a dispatch refund gives nothing back, so an attempt stopped by a
  *   substrate fault before its agent worked stays charged (I10);
  * - step-fault-unrecorded: a contained subject's fault cannot be kept, so containEach throws it

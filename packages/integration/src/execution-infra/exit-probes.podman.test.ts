@@ -13,7 +13,7 @@ import {
 } from "@ashara/execution-infra";
 import { testCellInstance } from "../test-cells.js";
 
-// Roadmap M2 exit 6 (ADR-074 d82 W9), from inside a real cell on real podman, no skip. The
+// The cell's isolation probes, from inside a real cell on real podman, no skip. The
 // environment-file write probe needs the ownership gate and lives in packages/quality.
 
 /** A busybox image with wget, pinned like the BaseCell; .github/workflows/ci.yml pulls it by this reference. */

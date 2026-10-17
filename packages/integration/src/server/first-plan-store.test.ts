@@ -256,17 +256,17 @@ async function edgesOf(projectId: ProjectId): Promise<string[]> {
 }
 
 const SPRINT0_TITLE = "Define and commit the project environment";
-/** The product scaffold decomposition adds after Sprint 0 (ADR-074 addendum 2 d72 B2). */
+/** The product scaffold decomposition adds after Sprint 0. */
 const SCAFFOLD_TITLE = "Set up the product's layout";
 const checksOf = (title: string) => `Write the checks for "${title}"`;
 
-/** The review of every check of the plan, which every implementation waits on (ADR-074 addendum 2 d71 c). */
+/** The review of every check of the plan, which every implementation waits on. */
 const REVIEW_TITLE = "Review the plan's checks together against the vision";
 
 /**
  * t2 depends on t1, every decomposed task depends on the Sprint 0 task decomposition adds, on the
- * product scaffold after it and on every check task of the plan (ADR-074 addendum 2 d67 a), and
- * each check task depends on the scaffold (d72 B2), which depends on Sprint 0.
+ * product scaffold after it and on every check task of the plan, and
+ * each check task depends on the scaffold, which depends on Sprint 0.
  */
 const EXPECTED_EDGES = [
   `${BOOKING_FORM} -> ${CLASS_LIST}`,
@@ -443,7 +443,7 @@ describe("first plan", () => {
       ].sort(),
     );
     expect(rows.every((r) => !("priorWorkPointers" in r.taskSpec))).toBe(true);
-    // ADR-074 addendum 2 d70: the planner's grade and reason are stored; dispatch reads the grade.
+    // The planner's grade and reason are stored; dispatch reads the grade.
     const graded = new Map(rows.map((r) => [r.title, r.taskSpec]));
     expect(graded.get(CLASS_LIST)).toMatchObject({ capability: "Light", capabilityReason: "graded for the test" });
     expect(graded.get(BOOKING_FORM)).toMatchObject({ capability: "Frontier" });
@@ -686,7 +686,7 @@ describe("tender to first plan", () => {
       expect(question.body.match(/until you answer/gi)).toHaveLength(1);
     }
     expect(questions[0]?.body).toContain("Until you answer, we proceed on this assumption: The harbour studio opens first.");
-    // Intake told the client of the assumption no question carries, in reply to the tender (ADR-074 addendum 2 d89 C).
+    // Intake told the client of the assumption no question carries, in reply to the tender.
     const assumptionsReport = outbound.filter((m) => m.kind === "report" && m.inReplyTo === created.message.id);
     expect(assumptionsReport).toHaveLength(1);
     expect(assumptionsReport[0]?.body).toContain("Bookings need no account.");

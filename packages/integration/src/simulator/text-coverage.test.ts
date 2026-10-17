@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { CLIENT_MESSAGE_WRITERS, TEXT_COVERED, TEXT_EXCLUDED } from "./text-facts.js";
 
 /**
- * ADR-080 d10 class C3: every composer of a brief, a prompt or a client report is on I9's covered
+ * Every composer of a brief, a prompt or a client report is on I9's covered
  * list (judged by I9 or by I4) or on its excluded list with a reason, and every writer of
  * client_messages rows is on the writers list with the composers whose text it posts. Both are
  * found by parsing the production source, never by a list typed here, so a composer or writer added

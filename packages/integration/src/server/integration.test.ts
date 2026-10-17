@@ -200,7 +200,7 @@ describe("Work Items", () => {
     return { id, projectId };
   }
 
-  // Story s-loop-never-stop-m1 W6: no work item waits on a person, so nobody unblocks or blocks a task by hand.
+  // No work item waits on a person, so nobody unblocks or blocks a task by hand.
   test.each([
     { source: "environment_change_needed", paths: ["environment/environment.toml"], reason: "edited" },
     { source: "merge_unrecorded", mergeCommit: "0123456789abcdef0123456789abcdef01234567", reason: "connection reset" },
@@ -230,7 +230,7 @@ describe("Work Items", () => {
     expect(await statusOf(id)).toBe("Pending");
   });
 
-  // ADR-075 §5: nothing outside Quality marks work passed.
+  // Nothing outside Quality marks work passed.
   test("a task is not completed by hand: refused, and it stays InProgress", async () => {
     const id = randomUUID();
     const projectId = await newProject();

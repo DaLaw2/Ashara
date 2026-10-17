@@ -32,7 +32,7 @@ import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
-// A late client change is planned (t-replan-on-change). Every row here belongs to a project
+// A late client change is planned. Every row here belongs to a project
 // this suite creates under a unique name, and afterAll deletes exactly those rows. Each store
 // is narrowed to this suite's projects. No real LLM call is made: the provider factory returns
 // a MockLanguageModelV4 that answers each call by what its prompt asks.
@@ -405,7 +405,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher." });
     pipelineModel({ environmentChange: false });
     expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
-    // The record as COALESCE left it before migration 052: the summary names one change of the two taken in.
+    // A record in the form a COALESCE update leaves: the summary names one change of the two taken in.
     await db.execute(sql`
       UPDATE plan_revisions SET summary = jsonb_set(summary, '{changes}', (summary->'changes') - 1) WHERE project_id = ${projectId}`);
 
@@ -500,7 +500,7 @@ describe("a late client change is planned", () => {
     ]);
     // No new environment task: the new work builds on the Sprint 0 already done. The first plan's
     // scaffold was still open, so it is superseded and the revision sets up the layout again on that
-    // Sprint 0 (ADR-074 addendum 2 d72 B2); the check and review tasks wait on it.
+    // Sprint 0; the check and review tasks wait on it.
     const scaffold = added.find((i) => i.origin === "product-scaffold");
     if (scaffold === undefined) throw new Error("the revision planned no product scaffold");
     expect(await dependenciesOf(scaffold.id)).toEqual([sprint0.id]);
@@ -577,7 +577,7 @@ describe("a late client change is planned", () => {
     if (before.kind === "none") expect(before.reason).toContain("not after the project's product scaffold");
   });
 
-  // ADR-083: what a revision need not plan again is what a completed task's stored checks decide, never what it cites.
+  // What a revision need not plan again is what a completed task's stored checks decide, never what it cites.
   test.each([
     { stored: "no checks", decides: undefined },
     { stored: "a check that records no items it decides", decides: null },
@@ -708,7 +708,7 @@ describe("a late client change is planned", () => {
     await contradict(legacy.projectId, legacy.questionId);
     const store = createReplanStore(db);
     for (let attempt = 0; attempt < 3; attempt += 1) await store.recordFailedAttempt(counted.projectId, "stub provider unavailable", "provider");
-    // A row counted before its failure was recorded (migration 066) names no party.
+    // A row counted before failures named their party names no party.
     await db.execute(sql`UPDATE projects SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed' WHERE id = ${legacy.projectId}`);
     const mock = pipelineModel({ revision: { notTasks: "never asked" } });
 
@@ -796,7 +796,7 @@ async function gateOurs(): Promise<void> {
   );
 }
 
-// ADR-074 addendum 2 d74 D: a task the failure router gave up parked every task depending on it as
+// A task the failure router gave up would park every task depending on it as
 // dependency_unsatisfiable, each for the operator. The project is held and its plan repaired instead.
 describe("a task the team gives up is planned around", () => {
   test("the project is held, no dependent is parked, and a repair supersedes the open work around the given-up task and is reported once", async () => {
@@ -847,7 +847,7 @@ describe("a task the team gives up is planned around", () => {
     expect(await replanner().runPending()).toEqual([]);
   });
 
-  // Story s-loop-never-stop-m1 W6: a check task given up for a cause the
+  // A check task given up for a cause the
   // failure router never saw (here a dispute past its bound) is repaired, never left for a person.
   test("a check task given up past its dispute bound is repaired like any give-up, with the dispute as its evidence", async () => {
     const { projectId } = await plannedProject();
@@ -913,7 +913,7 @@ describe("a task the team gives up is planned around", () => {
   });
 });
 
-// Story s-loop-never-stop-m1 W6: a task no roster role can work is never parked at Blocked until a
+// A task no roster role can work is never parked at Blocked until a
 // newer roster revision, which no production path writes (recordFirstRoster refuses any revision
 // but 1). It is given up instead, and the repair staffs its new tasks.
 describe("a task no roster role can work is planned around, never left waiting", () => {
@@ -926,7 +926,7 @@ describe("a task no roster role can work is planned around, never left waiting",
     await startTask(sprint0.id);
     await completeTask(sprint0.id);
     await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
-    // A task planned before owners were assigned (migration 031): no work kind and no owner.
+    // A task planned before owners were assigned: no work kind and no owner.
     await db.execute(sql`UPDATE work_items SET owner_role_id = NULL, work_kind = NULL WHERE id = ${harbour.id}`);
 
     const workItems = new WorkItemRowRepository(db);

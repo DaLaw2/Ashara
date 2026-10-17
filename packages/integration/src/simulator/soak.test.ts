@@ -44,8 +44,8 @@ async function soak(jobs: number, args: readonly string[] = ["--seeds", "2", "--
 }
 
 describe("simulate.ts --jobs", () => {
-  // Seeds 85-86 at one project. A worker's seed is a function of the seed and the mode alone (owner
-  // 2026-10-15, ADR-081): in two processes at once, every line but the time is the serial run's.
+  // Seeds 85-86 at one project. A worker's seed is a function of the seed and the mode alone:
+  // in two processes at once, every line but the time is the serial run's.
   it("reports every seed as the serial run does, in seed order", async () => {
     const serial = await soak(1);
     const parallel = await soak(2);

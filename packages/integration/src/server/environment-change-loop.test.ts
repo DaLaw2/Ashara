@@ -23,7 +23,7 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
 
-// c-platform-role C2 (ADR-074 d96 c), end to end through the real contractor loop, the real
+// The environment change loop, end to end through the real contractor loop, the real
 // DispatchService, real podman and git, and the recorded gateway with scripted models: an
 // implementer's change to the environment recipe becomes a platform task whose new version the
 // implementation's next dispatch runs on; a platform task whose definition does not build merges
@@ -267,7 +267,7 @@ async function sprint0(h: Harness): Promise<void> {
 
 /**
  * A Pending implementation task with the checks its completed check task stored on `version`, red-run
- * on `baseline` (s-independent-verify-m1).
+ * on `baseline`.
  */
 async function implementationTask(h: Harness, title: string, check: string, version: string, baseline: string): Promise<WorkItemId> {
   const id = createWorkItemId();

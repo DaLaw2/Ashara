@@ -11,7 +11,7 @@ interface Minimized {
 }
 
 /**
- * Zeller's ddmin over a failing run's non-benign decisions (design §4.11): removes chunks, then
+ * Zeller's ddmin over a failing run's non-benign decisions: removes chunks, then
  * halves the chunk size, until no single decision can be removed. Each probe is one replay, so the
  * replay budget bounds it.
  */

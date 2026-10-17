@@ -35,8 +35,8 @@ import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 
-// The dispatch loops that have no counter of their own end through the work ledger (ADR-084
-// decision 1), each in a typed, recorded state: a task requeued after every shutdown (L6) and a
+// The dispatch loops that have no counter of their own end through the work ledger,
+// each in a typed, recorded state: a task requeued after every shutdown (L6) and a
 // task whose dispatch dies with the process at every restart (L7). L7 also stops early, before its
 // ledger share is spent: a task found InProgress at two startups in a row is given up as crash_loop.
 // A crash here is a process whose dispatch never returns: its model request never answers, and

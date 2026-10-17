@@ -9,7 +9,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { recordingLogger } from "@ashara/shared";
 
-// An admitted call's estimate is durable (migration 053): a process that dies between a call's
+// An admitted call's estimate is durable: a process that dies between a call's
 // admission and its record leaves a row the next process still counts. Against Postgres; no real
 // LLM call is made.
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));

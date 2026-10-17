@@ -20,7 +20,7 @@ import { createRunDatabase, prepareTemplate } from "../simulator/database.js";
 import type { RunDatabase } from "../simulator/database.js";
 import { projectState } from "../simulator/project-state.js";
 
-// c-liaison-intake C3: a gateway that cannot be built stops intake with a typed error and no
+// A gateway that cannot be built stops intake with a typed error and no
 // constant alignment is produced. The gateway is built once, in composeAshara, before the core
 // loop or the HTTP app exist, so the stop is the process refusing to compose: a tender already on
 // record stays open and untouched for the process that can build a gateway. Each test runs on its

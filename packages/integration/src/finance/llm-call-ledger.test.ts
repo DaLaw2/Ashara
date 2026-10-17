@@ -471,7 +471,7 @@ describe("one llm_calls row per provider call", () => {
     expect(await failureOf(413, 503)).toBe("ashara");
   });
 
-  // ADR-084 addendum 3 decision 12: each strength of second opinion goes only to a model of that strength.
+  // Each strength of second opinion goes only to a model of that strength.
   test("a second opinion of each strength goes to the model the catalog offers for it, and a strength it does not offer is refused unsent", async () => {
     await clearRows();
     const answer = async () => textResult('{"greeting":"hi"}', { input: 10, output: 5 });

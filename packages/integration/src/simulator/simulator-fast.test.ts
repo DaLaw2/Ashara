@@ -5,7 +5,7 @@ import { minimize } from "./minimize.js";
 import { seeded, statements, useSimulatorDatabase } from "./simulator-harness.js";
 
 /**
- * The fast tier (design §4.13): fixed seeds on today's code, each judged against
+ * The fast tier: fixed seeds on today's code, each judged against
  * expected-failures.ts. A seed listed there must fail exactly the violation keys listed; any
  * other seed must pass every invariant. The soak tier is `just simulate`. Every run is a batch of
  * two (production's MAX_BATCH_SIZE default). A test that needs one behaviour forces it on a directed

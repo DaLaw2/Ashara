@@ -13,7 +13,7 @@ useSimulatorDatabase();
 const SKIPPED_ITEM = ["I6:unchecked-item:A1"];
 
 describe("lifecycle simulator, directed", () => {
-  // ADR-074 d82 W3: two implementations run in one batch and one finalize waits on the other's
+  // Two implementations run in one batch and one finalize waits on the other's
   // checkout. Skipping that wait lets one finalize reset, merge into or clean the checkout while
   // the other's merge is staged there, which I7's merge-queue clause names; which of its git calls
   // meets the staged merge first is the schedule's, not the clause's. The turn is handed on at every host git call, so each
@@ -31,7 +31,7 @@ describe("lifecycle simulator, directed", () => {
     expect(overlaps.length, statements(planted)).toBeGreaterThan(0);
   }, 120_000);
 
-  // ADR-074 d84 b. With one project the admission queue's absence admits nothing more, so here two
+  // With one project the admission queue's absence admits nothing more, so here two
   // projects share one deployment cap of $10, spent to the cap. The turn is
   // handed on after every database call returns, so an admission's spend read is followed by the
   // other task's: skipping the queue lets both pass on one headroom smaller than their two
@@ -61,7 +61,7 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
-  // ADR-074 d84 b, I8 on no progress: the host cannot start a cell all run. Production requeues the
+  // I8 on no progress: the host cannot start a cell all run. Production requeues the
   // environment task uncharged three times, halts the project on the fourth fault, the probe resumes
   // it, and the fifth gives the task up, so the plan is repaired until it halts undeliverable. With
   // the count pinned at the halt, the project halts and resumes forever: busy, every cycle a new
@@ -77,7 +77,7 @@ describe("lifecycle simulator, directed", () => {
     expect(planted.outcome.kind).toBe("open");
   }, 90_000);
 
-  // ADR-080 d10 C4, I7's residue clause: a given-up task's branch is one no attempt reads. Under the
+  // I7's residue clause: a given-up task's branch is one no attempt reads. Under the
   // cell outage above the environment task is given up on its fifth fault, after its attempts made
   // its branch, and the clean run of that test passes the clause. With the Abandoned left out of the
   // settled release, the branch stays on the host and the clause names it.
@@ -98,7 +98,7 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result), statements(result)).toEqual([]);
   }, 90_000);
 
-  // ADR-074 d84 b, W7: with no adversary the stand-ins drive the project to Accepted on one passed
+  // W7: with no adversary the stand-ins drive the project to Accepted on one passed
   // sweep of main; the delivered report is judged against the goal tasks' merge records and the task
   // and check records, so a report that drops a goal's close, misstates what no stored check covers,
   // leaves out an asked-for item no acceptance line cites, or is posted with no record of it (and so
@@ -112,17 +112,17 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed([], { mutation: "delivered-report-omits-goal" }))).toEqual(["I4:delivered-close"]);
     expect(keys(await directed([], { mutation: "delivered-report-misstates-unchecked" }))).toEqual(["I4:delivered-unchecked"]);
     // Every in-scope line and the asked assumption (classed undecided, so client-visible) must be decided by a stored
-    // check (d89 E, ADR-083). A check set stored with one cited item decided by none of its checks leaves it unchecked,
+    // check. A check set stored with one cited item decided by none of its checks leaves it unchecked,
     // though an acceptance line still cites it: I6 names it.
     expect(keys(await directed([], { mutation: "check-set-skips-item" }))).toEqual(SKIPPED_ITEM);
     // The delivered report must list that item as decided by no stored check.
     expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage", ...SKIPPED_ITEM]);
-    // The stand-ins' internal-design assumption is named as not verified by Ashara; dropped, it is named (ADR-083).
+    // The stand-ins' internal-design assumption is named as not verified by Ashara; dropped, it is named.
     expect(keys(await directed([], { mutation: "delivered-report-omits-unverified" }))).toEqual(["I4:delivered-coverage"]);
     expect(keys(await directed([], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
   }, 120_000);
 
-  // ADR-084 addendum 3 decision 12: the first review finds nothing. The simulator's catalog holds one
+  // The first review finds nothing. The simulator's catalog holds one
   // model family, so the second opinion is asked within it, from what each check cannot observe; its
   // clean answer confirms the claim, and every item the suites' checks decide reads as verified.
   it("verifies the items a clean review covered on a second opinion within the one model family", async () => {
@@ -133,7 +133,7 @@ describe("lifecycle simulator, directed", () => {
     expect(clean.log.some((line) => line.includes("Not verified, to be reported unverified"))).toBe(false);
   }, 120_000);
 
-  // ADR-084 addendum 2 decision 11: here the second opinion never answers whole (each of its ladder's
+  // Here the second opinion never answers whole (each of its ladder's
   // attempts is invalid output), so every item the suites' checks decide is reported unverified, and
   // the project is still delivered. With the claim's undecided rows dropped, the report calls them
   // decided on the first review alone, as when no second review was asked of a clean one, and I6
@@ -151,7 +151,7 @@ describe("lifecycle simulator, directed", () => {
     expect(planted.every((key) => key.startsWith("I6:unconfirmed-clean:")), planted.join(", ")).toBe(true);
   }, 120_000);
 
-  // ADR-084 addenda 2 and 3 applied to intake, I3's intake clause: the lazy intake persona's reading asks
+  // I3's intake clause: the lazy intake persona's reading asks
   // the client nothing. The simulator's catalog holds one model family, so the second reading is
   // another model of it, asked what is ambiguous or assumed; it raises the question the tender leaves
   // open, which is the one the client is sent, and the project is delivered. With the second reading
@@ -241,7 +241,7 @@ describe("lifecycle simulator, directed", () => {
     await expect(directed([], { capUsd: 0.02, mutation: "skip-merge-record" })).rejects.toThrow(/plant of mutation skip-merge-record rewrote no query/);
   }, 90_000);
 
-  // I10 (ADR-080 d10 C1): the first cell start fails, before the agent of the environment task ran.
+  // I10: the first cell start fails, before the agent of the environment task ran.
   // Production refunds the dispatch as a substrate fault; planted, the refund gives nothing back,
   // and the attempt stays charged for work no model did.
   it("charges no attempt for a cell that could not start, and names one charged when its refund is skipped", async () => {
@@ -259,7 +259,7 @@ describe("lifecycle simulator, directed", () => {
     expect(planted.faults).toEqual([]);
   }, 90_000);
 
-  // C9, containment (ADR-080 d10): the second project's rows are corrupted as the run reaches them,
+  // C9, containment: the second project's rows are corrupted as the run reaches them,
   // its first task_spec (the gate halts it) and then its halt episode's kind (the block report's
   // listing reads it, contained to that report). The first project is accepted all the same; the
   // corrupted episode can never be reported, which I2 names on the second project. With containment

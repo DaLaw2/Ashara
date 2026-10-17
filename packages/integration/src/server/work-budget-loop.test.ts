@@ -26,7 +26,7 @@ import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 
-// The work ledger end to end (ADR-084 decision 1): Finance draws one model request from the
+// The work ledger end to end: Finance draws one model request from the
 // project's and the task's budgets before every gateway request, counted from llm_calls rows, and
 // the loop routes its refusal: a task's spent budget gives the task up, a project's halts the
 // project with a report naming what was drawn and by which call site. Against Postgres; no real

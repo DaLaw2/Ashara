@@ -130,8 +130,7 @@ describe("the migrated catalog (021, 026, 047)", () => {
   });
 });
 
-// docs/investigations/model-catalog-2026-10-14.md §8 with ADR-074 item 83: level as
-// called (deepseek-flash with thinking on), base-tier prices, mistral-large-4 at list.
+// The catalog as seeded: level as called (deepseek-flash with thinking on), base-tier prices, mistral-large-4 at list.
 const CATALOG_047: readonly (readonly [string, string, string, number, number, number | null, number | null, number])[] = [
   ["claude-fable-5-1", "anthropic", "Frontier", 10, 50, 0.25, 12.5, 1_000_000],
   ["claude-opus-5-5", "anthropic", "Frontier", 4, 20, 0.2, 5, 1_000_000],

@@ -8,7 +8,7 @@ import type { ProjectId } from "@ashara/shared";
 import { WorkItemRowRepository } from "@ashara/delivery";
 
 // Knowledge's repositories against real Postgres: one insert -> read round trip each, and the
-// project scoping of their reads (migration 051, ADR-074 d92 a).
+// project scoping of their reads.
 
 let db: Database;
 
@@ -18,7 +18,7 @@ const createdFailedApproachTaskIds: string[] = [];
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
-// Every work item needs a project (migration 014); this suite owns one.
+// Every work item needs a project; this suite owns one.
 let testProjectId: ProjectId;
 let testClientId: string;
 
@@ -165,7 +165,7 @@ describe("FailedApproachRepository", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Two projects on one database (migration 051, ADR-074 d92 a)
+// 3. Two projects on one database
 // ---------------------------------------------------------------------------
 
 describe("project-scoped knowledge", () => {

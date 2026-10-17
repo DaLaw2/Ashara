@@ -9,7 +9,7 @@ import { replayed, seeded, useSimulatorDatabase } from "./simulator-harness.js";
 useSimulatorDatabase();
 
 describe("lifecycle simulator, fast tier", () => {
-  // A seed is a function of itself alone (owner 2026-10-15, fixed seeds and replay): run twice in
+  // A seed is a function of itself alone: run twice in
   // one process, the second after the first moved every counter a run can leave behind, its trace
   // (what it did, ids and commits canonical, its violations last) is byte-identical, and so is a
   // replay of the first run's decisions.

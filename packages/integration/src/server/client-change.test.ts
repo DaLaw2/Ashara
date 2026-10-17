@@ -9,7 +9,7 @@ import type { ProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared";
 import { createClientChangeStore } from "@ashara/server/client-change-store";
 
-// ADR-082 d5: a client's change is never left unread. Until changes are applied (M3 X5), the
+// A client's change is never left unread: the
 // Liaison consumes each with one plain reply and a domain event. Every row belongs to a project
 // this suite creates under a unique name, and the Liaison is narrowed to those projects.
 

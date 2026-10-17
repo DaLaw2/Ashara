@@ -9,7 +9,7 @@ import type { ProjectId } from "@ashara/shared";
 import { createWorkItemId, memoryStepContainment } from "@ashara/shared";
 import { checkReports, readReportRecords } from "../simulator/client-reports.js";
 
-// ADR-084 addendum 1 decision 7, migration 068: the work ledger's yellow and red zones are each told
+// The work ledger's yellow and red zones are each told
 // once per project and plan revision, from the ledger's own rows, and a restart (a new BurnWarnings
 // over a new store, nothing in memory carried over) tells neither again. Every row belongs to a
 // project this suite creates; the listing is narrowed to them, and afterAll deletes them.

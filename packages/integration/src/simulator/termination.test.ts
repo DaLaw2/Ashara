@@ -6,7 +6,7 @@ import type { RunOptions, RunResult } from "./run.js";
 import type { Direction } from "./tape.js";
 
 /**
- * The termination invariants (ADR-084 decision 4, termination.ts) on directed tapes under the
+ * The termination invariants (termination.ts) on directed tapes under the
  * liveness profile: each persona, forced by name, permanent from the first cycle, and the project
  * still ends through a typed, reported state with every invariant holding; then each W fails on a
  * plant that removes the bound it judges.

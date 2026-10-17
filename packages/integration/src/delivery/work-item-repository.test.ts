@@ -73,7 +73,7 @@ function movedTo(id: string, status: string) {
   return { id, status, blockedReason: null, failureVerdict: null, updatedAt: new Date() };
 }
 
-// The crash-loop bound (ADR-084 d1) reads crash_orphans: a dispatch that ended in its own process
+// The crash-loop bound reads crash_orphans: a dispatch that ended in its own process
 // sets it back to 0 in the write that routes it out of InProgress, never in a write of its own a
 // fault could lose while the routing commits.
 describe("WorkItemRowRepository: the startups in a row that found a task InProgress", () => {
@@ -109,7 +109,7 @@ describe("WorkItemRowRepository: the startups in a row that found a task InProgr
   });
 });
 
-// t-context-overflow-routing: the largest window a task overflowed is what its next dispatch must
+// The largest window a task overflowed is what its next dispatch must
 // exceed, so a later, smaller record never lowers it, and it survives every routing of the task.
 describe("WorkItemRowRepository: the largest context window an attempt of a task did not fit", () => {
   async function inProgressTask(repo: WorkItemRowRepository, dispatchCount: number): Promise<string> {

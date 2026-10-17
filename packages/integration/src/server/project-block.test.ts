@@ -14,7 +14,7 @@ import type { ProjectId } from "@ashara/shared";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
 
-// Story s-loop-never-stop-m1: one project's bad record blocks that project, with
+// One project's bad record blocks that project, with
 // the cause on its row, and the other projects proceed. Every row belongs to a
 // project this suite creates under a unique name; afterAll deletes them. A
 // corrupt jsonb row is only ever written inside a transaction rolled back at the
@@ -42,9 +42,9 @@ interface TaskRow {
 const SPRINT0: TaskRow = { taskSpec: { origin: "sprint0", checkedBy: "substrate" } };
 /** The check task a reportable first plan holds for each decomposed task. */
 const CHECKS: TaskRow = { taskSpec: { origin: "check" } };
-/** The review of every check task a reportable first plan holds (ADR-074 addendum 2 d71 c). */
+/** The review of every check task a reportable first plan holds. */
 const REVIEW: TaskRow = { taskSpec: { origin: "review" } };
-/** The product scaffold every reportable first plan holds (ADR-074 addendum 2 d72 B2). */
+/** The product scaffold every reportable first plan holds. */
 const SCAFFOLD: TaskRow = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate" } };
 
 const jsonb = (value: unknown) => (value === undefined ? sql`NULL` : sql`${JSON.stringify(value)}::jsonb`);
@@ -263,7 +263,7 @@ describe("one project's bad record at startup", () => {
   });
 });
 
-// G4 across a restart (c-loop-never-stop criterion 3; ADR-080 d5): the verdict is saved with the
+// G4 across a restart: the verdict is saved with the
 // Failed transition and a parked Failed item is routed by it.
 describe("a parked Failed item at startup is routed by the verdict saved with its Failed transition", () => {
   const VerdictRowSchema = z.array(z.object({ status: z.string(), dispatchCount: z.number(), failureVerdict: z.unknown() }));

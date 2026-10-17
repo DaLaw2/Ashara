@@ -9,7 +9,7 @@ import type { Database } from "./database.js";
 import { PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
 
 /**
- * I9, text against fact (ADR-081): every fact a composer
+ * I9, text against fact: every fact a composer
  * states in what it writes for an agent or the client is the fact the store held when it composed
  * it. Judged by structure, not language: the oracle recomputes from the rows each fact a composer
  * is meant to state, and compares it with the structured part of what was written (a brief's vision
@@ -43,7 +43,7 @@ export interface TextFactRecords {
   readonly answerReplies: ReadonlyArray<z.infer<typeof replyRow>>;
   /** Outbound reports posted in reply to the tender: the assumptions report and the reading report. */
   readonly tenderReports: ReadonlyArray<z.infer<typeof messageRow>>;
-  /** The tender's reading as intake_readings records it (migration 074), or null when none is. */
+  /** The tender's reading as intake_readings records it, or null when none is. */
   readonly intakeReading: z.infer<typeof intakeReadingRow> | null;
   /** Every posted delivered report, with the vision version current at its sweep. */
   readonly delivered: ReadonlyArray<z.infer<typeof deliveredRow>>;
@@ -325,7 +325,7 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: Versions, add: Add)
     add(`brief-vision-unreadable:${title}`, `the brief of "${title}" carries vision v${brief.visionVersion}, which ${vision === undefined ? "is not on record" : `cannot be read: ${vision.detail.slice(0, 200)}`}`);
     return;
   }
-  // A brief written before standings and kinds were recorded (d89) states neither: only what it states is judged.
+  // A brief written before standings and kinds were recorded states neither: only what it states is judged.
   const expected = vision.assumptions.map((a, i) => {
     const said = brief.assumptions[i];
     if (said?.form === "noted") return JSON.stringify([a.key, a.statement, `${STANDING_WORDS[a.standing]}; ${KIND_WORDS[a.kind]}`]);
@@ -354,7 +354,7 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: Versions, add: Add)
         `the brief of "${title}" says assumption ${id} is "${standingWords}"; vision v${brief.visionVersion}, the one it carries, records it "${STANDING_WORDS[recorded.standing]}"`,
       );
     }
-    // Every kind but internal design is citable (ADR-083): no recorded kind is not evidence no client could see it.
+    // Every kind but internal design is citable: no recorded kind is not evidence no client could see it.
     const citable = recorded.kind !== "internal-design";
     if (kindWords !== KIND_WORDS[recorded.kind] || (notCitable === undefined) !== citable || text !== recorded.statement) {
       add(
@@ -441,7 +441,7 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
     const { version, assumption } = recordedBy;
     const before = versions.get(version - 1);
     const prior = before?.kind === "read" ? before.assumptions.find((a) => a.key === assumption.key) : undefined;
-    // An answer recorded before its verdict was (d95 a) changed the assumption when the two versions' statements differ.
+    // An answer recorded before its verdict was changed the assumption when the two versions' statements differ.
     const verdict = assumption.answer?.verdict ?? (prior === undefined ? null : prior.statement === assumption.statement ? "confirms" : "changes");
     const problems = [
       ...(verdict === "changes" ? [] : [`tells the client their answer changed ${assumption.key}, which the vision records as ${verdict ?? "no verdict and no prior statement"}`]),
@@ -519,8 +519,8 @@ function readingClaims(reading: NonNullable<TextFactRecords["intakeReading"]>, d
 }
 
 /**
- * The reading report and the delivered report's sentence on the tender's reading (ADR-084 addenda 2
- * and 3 applied to intake), against intake_readings: a reading that asked nothing is told once, at
+ * The reading report and the delivered report's sentence on the tender's reading,
+ * against intake_readings: a reading that asked nothing is told once, at
  * intake, with the strength of the second reading and what it found or that none answered, and so is
  * every delivered report; a reading that asked questions is told neither way; one not on record is
  * said to be so in the delivered report.
@@ -589,7 +589,7 @@ function checkFirstPlan(records: TextFactRecords, add: Add): void {
   }
 }
 
-/** Where an assumption stands with the client at acceptance, as d95 a defines it, recomputed here. */
+/** Where an assumption stands with the client at acceptance, as the acceptance rule defines it, recomputed here. */
 type AcceptedStanding = "stated" | "confirmed" | "changed" | "answered" | "answer-unread" | "asked" | "reported" | "unrecorded";
 
 const ACCEPTED_STATED: Readonly<Partial<Record<AcceptedStanding, string>>> = {

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { describeErrorChain, parseJson } from "@ashara/shared";
 
 /**
- * The simulated client, as a browser on the web client (ADR-076) is one: it logs in with its name
+ * The simulated client, as a browser on the web client is one: it logs in with its name
  * and access code, keeps the session cookie the server sets, and sends its tender, its stop and
  * its answers to the server's client routes, in process through the composed app's own request
  * handler. It never writes a client message itself, so every seed drives Engagement's client

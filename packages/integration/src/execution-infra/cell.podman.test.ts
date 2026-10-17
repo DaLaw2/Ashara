@@ -113,7 +113,7 @@ describe("cell on real podman", () => {
   });
 
   // A worktree's gitlink names its git dir's host path, which a cell cannot reach, and a toolchain
-  // that reads the repository needs a usable one, not a stand-in (ADR-074 addendum 2 d73).
+  // that reads the repository needs a usable one, not a stand-in.
   it("a cell created inside a logger scope is found by that scope's trace label, and by no other trace's", async () => {
     const logger = recordingLogger();
     const traced = new PodmanSubstrate({ podmanPath: "podman", mountRoot, trace: () => logger.trace() });
@@ -269,8 +269,8 @@ describe("cell on real podman", () => {
     }
   }, 60_000);
 
-  // t-exec-timeout-orphans: busybox's timeout signals only its direct child, so before the sweep
-  // `sh -c "sleep 30; echo after"` timed out on alpine while sleep stayed in the cell.
+  // busybox's timeout signals only its direct child, so without the sweep
+  // `sh -c "sleep 30; echo after"` times out on alpine while sleep stays in the cell.
   it.each([
     ["alpine (busybox timeout)", ALPINE_IMAGE],
     ["debian (GNU timeout)", "base"],

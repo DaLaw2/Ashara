@@ -1,5 +1,5 @@
 /**
- * The oracle's own bounds on work (ADR-084 decision 4: "an oracle-owned bounds table"): what the
+ * The oracle's own bounds on work: what the
  * termination invariants W1-W3 (termination.ts) hold production's records to. Each entry states
  * its value and the decision it is taken from, never a production constant: this file imports
  * nothing (boundary-rules.toml `bounds-tables`), so a production change that moves a bound changes

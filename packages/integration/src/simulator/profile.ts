@@ -1,11 +1,11 @@
 import type { Tape } from "./tape.js";
 
 /**
- * The adversary and fault profiles of design §4.7 and §4.9: each seed draws one, then every
+ * The adversary and fault profiles: each seed draws one, then every
  * event is drawn independently with the profile's probability. `adversarial` and `liveness` are
  * chosen by name only (`--profile <name>`, never profileOfSeed). Under `adversarial` the models
  * misbehave at the response level at high rates and no seam fault is injected, so what fails is the
- * code's answer to the model. Under `liveness` (ADR-084 decision 4) every role's sticky persona
+ * code's answer to the model. Under `liveness` every role's sticky persona
  * (personas.ts) turns permanent from a cycle on, no seam fault is injected and the spend cap is out
  * of reach, so the oracle (termination.ts W4) can require that every loop still exits through a
  * typed, reported state.
@@ -13,7 +13,7 @@ import type { Tape } from "./tape.js";
 export const PROFILES = ["benign", "typical", "hostile", "chaos", "adversarial", "liveness"] as const;
 export type Profile = (typeof PROFILES)[number];
 
-/** Each event of design §4.7 the simulator models, with where it acts. */
+/** Each event the simulator models, with where it acts. */
 export interface AdversaryRates {
   /** An implementation also writes behaviours of later tasks. */
   readonly overDelivery: number;
@@ -64,7 +64,7 @@ export interface AdversaryRates {
   /** The spend cap is set below what the plan needs. */
   readonly lowBudget: number;
   /*
-   * Response-level misbehaviour (docs/investigations/test-retro-2026-10-15/, pattern 2). Each reaches production as a
+   * Response-level misbehaviour. Each reaches production as a
    * provider's response would: through the gateway, the attempt loop and the routers.
    */
   /** An implementation also writes the product's shared index, which a batch partner may write too. */
@@ -90,7 +90,7 @@ export interface AdversaryRates {
 export interface FaultRates {
   /** Probability that one seam call carries a fault, while the budget lasts. */
   readonly perSeamCall: number;
-  /** Faults a run may carry at most (design §4.9), so liveness stays meaningful. */
+  /** Faults a run may carry at most, so liveness stays meaningful. */
   readonly budget: number;
 }
 

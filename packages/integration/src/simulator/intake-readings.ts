@@ -3,10 +3,10 @@ import { z } from "zod";
 import type { Database } from "./database.js";
 
 /*
- * I3's intake clause (ADR-084 addenda 2 and 3, decisions 11 and 12, applied to intake): a reading of a
+ * I3's intake clause: a reading of a
  * tender that asks the client nothing is a claim that the tender leaves nothing open worth asking, and
  * is held to a second reading by another model, as a clean suite review is. Judged on what the
- * stand-ins were asked and answered, outside production, against intake_readings (migration 074) and
+ * stand-ins were asked and answered, outside production, against intake_readings and
  * the questions posted: never on production's own account of whether it asked.
  */
 

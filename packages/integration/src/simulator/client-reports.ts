@@ -15,13 +15,13 @@ import type { Database } from "./database.js";
  * client asked for that no stored check the sweep ran decides. Every expectation is read
  * from the rows; the report's text is only what is judged. The oracle states its own expected wording
  * and classification and imports none of Engagement's composers or the acceptance repository's
- * predicates (ADR-081; boundary-rules.toml [integration] `named-only` admits into src/simulator/ only
+ * predicates (boundary-rules.toml [integration] `named-only` admits into src/simulator/ only
  * the symbols it lists, none of them a composer or predicate): an oracle that asks production what to
  * expect can never find production wrong.
  */
 
 const reportRow = z.object({ id: z.string(), body: z.string(), reportsOn: z.string().nullable(), inReplyTo: z.string().nullable() });
-/** The amounts a budget_cap halt's cap was judged on, as project_blocks.spend holds them (migration 060). */
+/** The amounts a budget_cap halt's cap was judged on, as project_blocks.spend holds them. */
 const spendRecord = z.strictObject({
   capUsd: z.number(),
   spentUsd: z.number(),
@@ -52,7 +52,7 @@ const episodeRecord = z.object({
   resumedReportId: z.string().nullable(),
   ended: z.boolean(),
 });
-/** One zone of the work ledger's early warning a project entered (work_burn_warnings, migration 068), with its report's text. */
+/** One zone of the work ledger's early warning a project entered (work_burn_warnings), with its report's text. */
 const burnWarningRow = z.object({
   planRevision: z.number(),
   zone: z.string(),
@@ -74,8 +74,8 @@ const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
 const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown(), reportBody: z.string().nullable() });
 /**
  * Why a suite review left an item undecided, as the delivered report must say it: a finding that
- * did not act, its second review not agreeing (unsettled) or failing (migration 071); or a clean
- * review whose claim a second review contradicted or never confirmed (migrations 072, 073).
+ * did not act, its second review not agreeing (unsettled) or failing; or a clean
+ * review whose claim a second review contradicted or never confirmed.
  */
 const UNDECIDED_REASONS = ["review-failed", "clean-unconfirmed", "clean-contradicted", "unsettled"] as const;
 type UndecidedReason = (typeof UNDECIDED_REASONS)[number];
@@ -97,7 +97,7 @@ const UNDECIDED_REASON_SQL = sql.raw(`CASE WHEN j.basis = 'second-review-failed'
  */
 const undecidedRow = z.object({ id: z.string(), text: z.string(), reason: z.enum(UNDECIDED_REASONS) });
 const sweptUndecidedRow = undecidedRow.extend({ sweepId: z.string() });
-/** One stored check, with the check task that wrote it and what it says it decides (migration 064). */
+/** One stored check, with the check task that wrote it and what it says it decides. */
 const storedCheckRow = z.object({ checkTaskId: z.string(), taskSpec: z.unknown(), name: z.string(), decides: z.unknown() });
 type SweptCheck = z.infer<typeof storedCheckRow>;
 /** One stored check a passed sweep ran, with the task it checks and the revision of that task's checks it ran. */
@@ -268,8 +268,8 @@ interface ReportedItem {
  * How I4 judges each block kind's report, over the code's own list (`satisfies`: a kind added there
  * fails the type check here until it is placed). `stated`: the report states the episode's recorded
  * kind in the words expectedKindWords states for it. `repair`: the report names the given-up tasks with their recorded causes.
- * `retired`: check_dispute and suite_review are written only before migration 048 (shared
- * work-item-row.ts ProjectBlockCategory); no code path writes either now and a run database starts
+ * `retired`: check_dispute and suite_review are kinds no code path writes (shared
+ * work-item-row.ts ProjectBlockCategory), and a run database starts
  * empty, so one in a run is a writer that should not exist, not a report to judge.
  */
 const KIND_JUDGEMENT = {
@@ -455,7 +455,7 @@ function expectedBurnFigures(warning: z.infer<typeof burnWarningRow>): string {
 }
 
 /**
- * Whether a warning's recorded figures put it in its zone (ADR-084 addendum 1 decision 7, the policy
+ * Whether a warning's recorded figures put it in its zone (the policy
  * defaults restated here): yellow at 50 percent of what upstream work may draw with at most 25
  * percent of the planned tasks done, red at 80 percent with the plan not finished, none planned
  * counting as none done.
@@ -532,7 +532,7 @@ function statedCause(
     const work = z.union([z.null(), workRecord]).safeParse(episode.work ?? null);
     if (!work.success) return null;
     amounts = `${expectedWorkWords(work.data)} `;
-    // A refusal that kept the verification reserve says the reserve is kept (ADR-084 addendum 1 decision 6).
+    // A refusal that kept the verification reserve says the reserve is kept.
     if (work.data?.reserveProtected === true) {
       words =
         "the budget of model requests set for this project was used up except for the share set aside for checking and accepting the " +
@@ -758,8 +758,8 @@ type CoverageOnRecord =
       readonly asked: readonly VisionSource[];
       readonly uncovered: readonly VisionSource[];
       /**
-       * Asked items a stored check records it decides but a suite review left undecided (ADR-084
-       * decision 2, addendum 2 decision 11), each with why.
+       * Asked items a stored check records it decides but a suite review left undecided,
+       * each with why.
        */
       readonly undecided: ReadonlyArray<{ readonly source: VisionSource; readonly reason: UndecidedReason }>;
       readonly notAsked: readonly VisionSource[];
@@ -771,8 +771,8 @@ function identityOf(source: Pick<VisionSource, "type" | "id" | "text">): string 
 }
 
 /**
- * The identities the stored checks decide (ADR-083): each id a check names in `decides`, read as its
- * check task cites it. Unrecorded when a check names none (a row from before migration 064) or its
+ * The identities the stored checks decide: each id a check names in `decides`, read as its
+ * check task cites it. Unrecorded when a check names none (a row from before checks recorded what they decide) or its
  * check task records no cited items; unreadable when a check names an id its check task does not
  * cite or its `decides` is no list of ids. Either way no stored fact says which items were checked.
  */
@@ -806,7 +806,7 @@ interface UncheckedFinding {
 }
 
 /**
- * The guard of d89 E and ADR-083, judged on every passed acceptance sweep, whatever the project did
+ * The evidence guard, judged on every passed acceptance sweep, whatever the project did
  * after it: every item of the vision current when the sweep passed that a check must decide (an
  * in-scope line or one of no recorded side, an assumption not recorded as internal design) is
  * decided, as that vision states it, by a stored check the sweep ran: one whose recorded `decides`
@@ -850,7 +850,7 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
 }
 
 /**
- * ADR-084 decision 2: an item of what the client asked for that a suite review left undecided is
+ * An item of what the client asked for that a suite review left undecided is
  * unverified, never covered, whatever a stored check records it decides. Once the sweep's delivered
  * report is posted, it names every such item apart as not verified and never says every item is
  * decided. Judged per item, keyed by its id.
@@ -918,8 +918,7 @@ function namesItem(problem: unknown, checkTaskId: string, itemId: string): boole
 }
 
 /**
- * ADR-084 addendum 2 decision 11 and addendum 3 decision 12, judged from the stand-ins' own answers,
- * never production's claim record: an asked-for item a passed sweep's delivered report calls decided
+ * Judged from the stand-ins' own answers, never production's claim record: an asked-for item a passed sweep's delivered report calls decided
  * by a stored check (a check the sweep ran decides it and no undecided row names it) whose suite a
  * review read at the revision the sweep ran was confirmed by a second opinion. Some review round of
  * that revision holds a second opinion that says nothing about the item: an answer from a provider
@@ -976,7 +975,7 @@ function roundsOf(reviews: readonly ObservedReview[]): ObservedReview[][] {
 /**
  * The coverage the delivered report must state, from the records alone: the review task's
  * sources are every item of the vision; an item is checked when a check of a goal task's latest
- * stored revision records that it decides it (ADR-083); an out-of-scope line, or an assumption
+ * stored revision records that it decides it; an out-of-scope line, or an assumption
  * recorded as the team's own design choice, is not part of what the client asked for and is never
  * listed. Unrecorded when the review holds no traced items or one such check records none it decides.
  */
@@ -1031,7 +1030,7 @@ function reasonsSaid(head: string): UndecidedReason[] {
 type CoverageUndecided = Extract<CoverageOnRecord, { readonly kind: "recorded" }>["undecided"];
 const ALL_COVERED = "Every item of what you asked for is decided";
 /**
- * The sentence counting the asked-for items decided and confirmed (ADR-084 addendum 3 decision 12):
+ * The sentence counting the asked-for items decided and confirmed:
  * every one, none of N, or K of N.
  */
 const CONFIRMED_COUNT =
@@ -1040,7 +1039,7 @@ const CONFIRMED_HEAD = "These items of what you asked for are decided by a store
 const UNREVIEWED_HEAD = "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review";
 
 /**
- * ADR-084 addendum 3 decision 12: every asked-for item a stored check decides and no review left
+ * Every asked-for item a stored check decides and no review left
  * undecided is listed once, as confirmed by a second review or as not confirmed; the count sentence
  * counts only the confirmed ones, of every asked-for item, and says none when none is.
  */
@@ -1090,7 +1089,7 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
 }
 
 /**
- * ADR-084 decision 2 and addendum 2 decision 11: the delivered report names every asked-for item a
+ * The delivered report names every asked-for item a
  * suite review left undecided as not verified, and nothing else there; no such section when there
  * is none. Each item is named in a section that states its reason and no other, so the client can
  * tell a failed review from one that did not settle the item, and a clean review a second opinion
@@ -1121,7 +1120,7 @@ function undecidedProblems(body: string, undecided: CoverageUndecided): string[]
 }
 
 /**
- * ADR-083: the delivered report names every assumption recorded as internal design, by id and text,
+ * The delivered report names every assumption recorded as internal design, by id and text,
  * as not verified by Ashara, and nothing else there; none at all when there is no such assumption.
  */
 function unverifiedProblems(body: string, notAsked: readonly VisionSource[]): string[] {

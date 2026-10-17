@@ -14,7 +14,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
 
-// t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
+// A project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other
 // directory. Against Postgres, with a real DispatchService on a recording substrate.
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
@@ -185,7 +185,7 @@ describe("a project whose workspace path is refused", () => {
 
     const cycle = await loop.runCycle();
 
-    // An uncharged infrastructure fault (story s-loop-never-stop-m1 W6): back to Pending, no dispatch counted.
+    // An uncharged infrastructure fault: back to Pending, no dispatch counted.
     expect(cycle.results).toEqual([
       expect.objectContaining({ taskId: itemId, status: "interrupted", detail: expect.stringContaining("not inside the workdir base") }),
     ]);

@@ -15,7 +15,7 @@ export function describeRun(result: RunResult, minimized: readonly Decision[] | 
   return lines;
 }
 
-/** The coverage block of design §4.12: what was reached and what never was, per lifecycle list. */
+/** The coverage block: what was reached and what never was, per lifecycle list. */
 export function describeCoverage(coverage: Coverage): string[] {
   const lines: string[] = [];
   for (const machine of coverageReport(coverage)) {

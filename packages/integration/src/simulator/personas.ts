@@ -2,7 +2,7 @@ import type { Profile } from "./profile.js";
 import type { Tape } from "./tape.js";
 
 /**
- * The stand-ins' sticky personas (ADR-084 decision 4): each model role draws one once per seed, then
+ * The stand-ins' sticky personas: each model role draws one once per seed, then
  * fires it per occurrence. A per-occurrence draw alone (tape.ts, keyed by site and occurrence)
  * re-rolls every round of a loop independently, so a misbehaviour that is not certain dies out
  * geometrically and a loop that waits for the model to behave always ends: a non-convergent loop

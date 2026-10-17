@@ -20,7 +20,7 @@ declare module "vitest" {
 // every cell it had started; no production reaper selects them (reconcileOrphans selects one
 // instance, and every test file draws its own). So a run stopped by one of those signals removes its
 // cells in the signal listener, and a run killed outright (SIGKILL, an out-of-memory kill) leaves
-// them to the next run's reaper. Why: docs/investigations/test-process-death-2026-10-16.md.
+// them to the next run's reaper.
 
 const run = promisify(execFile);
 const PODMAN_TIMEOUT_MS = 60_000;

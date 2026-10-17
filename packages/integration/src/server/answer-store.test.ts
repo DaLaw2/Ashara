@@ -196,7 +196,7 @@ async function haltKindOf(projectId: ProjectId): Promise<string | null> {
   return z.array(z.object({ kind: z.string() })).parse(result.rows)[0]?.kind ?? null;
 }
 
-/** The answers whose plan revision the project awaits (replan_requests, migration 052), oldest first. */
+/** The answers whose plan revision the project awaits (replan_requests), oldest first. */
 async function awaitedChangesOf(projectId: ProjectId): Promise<string[]> {
   const result = await db.execute(sql`
     SELECT answer_id AS "answerId" FROM replan_requests WHERE project_id = ${projectId} AND plan_revision_id IS NULL ORDER BY created_at`);
@@ -339,7 +339,7 @@ describe("the client's answers", () => {
     });
     expect(await awaitedChangesOf(projectId)).toEqual([answerId]);
     expect(await projectRepo.listActiveIds()).not.toContain(projectId);
-    // Beside intake's report of the unasked assumptions, in reply to the tender (ADR-074 addendum 2 d89 C),
+    // Beside intake's report of the unasked assumptions, in reply to the tender,
     // and the first-plan report, in reply to nothing.
     const reports = (await new ClientMessageRepository(db).listByProject(projectId)).filter(
       (m) => m.kind === "report" && m.inReplyTo !== tenderId && m.inReplyTo !== null,
@@ -352,7 +352,7 @@ describe("the client's answers", () => {
     expect(await answers().runPending()).toEqual([]);
   });
 
-  // ADR-083: doubt classifies toward a check.
+  // Doubt classifies toward a check.
   test("a changed decision the model classes undecided is recorded client-visible", async () => {
     const { projectId, questionIds } = await intakenProject();
     const [, second] = questionIds;
