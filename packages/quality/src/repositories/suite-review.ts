@@ -309,6 +309,114 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
   });
 }
 
+/** A stored second review's strength (migration 073); null where none answered. */
+const StoredStrengthSchema = z.enum(SECOND_OPINION_STRENGTHS).nullable();
+
+/**
+ * A stored claim's second_strength is no strength of second opinion, or a confirmed claim records none: never read as verified.
+ * @testseam exported for suite-review.test.ts; storedClaimOf throws it in production
+ */
+export class SuiteReviewStrengthUnreadable extends Error {
+  constructor(
+    readonly claimId: string,
+    readonly detail: string,
+  ) {
+    super(`suite_review_claims row ${claimId}: second_strength is not a strength of second opinion: ${detail}`);
+    this.name = "SuiteReviewStrengthUnreadable";
+  }
+}
+
+/** A stored claim, or an item it leaves unverified, does not parse. */
+class SuiteReviewClaimCorrupt extends Error {
+  constructor(
+    readonly claimId: string,
+    readonly issues: string,
+  ) {
+    super(`suite_review_claims row ${claimId}: ${issues}`);
+    this.name = "SuiteReviewClaimCorrupt";
+  }
+}
+
+const StoredClaimSchema = z
+  .strictObject({
+    reviewTaskId: z.string().min(1),
+    // no-other-family: a same-provider answer that confirmed nothing, on rows written before migration 073.
+    basis: z.enum(["second-opinion-clean", "second-opinion-found", "no-other-family", "second-review-failed"]),
+    covered: z.array(z.string().min(1)).min(1),
+    firstModel: z.string().min(1),
+    secondModel: z.string().min(1).nullable(),
+    secondStrength: StoredStrengthSchema,
+    passedOver: z.array(PassedOverSchema),
+    secondFindings: z.array(StoredFindingSchema),
+    secondFailure: z.string().min(1).nullable(),
+    unverified: z.array(z.strictObject({ checkTaskId: z.string().min(1), itemId: z.string().min(1), itemText: z.string() })),
+  })
+  .refine((row) => row.basis !== "second-opinion-clean" || row.unverified.length === 0, "a claim a second review confirmed clean leaves no item unverified")
+  .transform(({ secondModel, secondStrength, secondFindings, secondFailure, ...claim }, ctx) => {
+    if (secondModel !== null && secondStrength !== null && secondFailure === null && claim.basis !== "second-review-failed") {
+      return { ...claim, second: { kind: "answered" as const, model: secondModel, strength: secondStrength, findings: secondFindings } };
+    }
+    if (secondModel === null && secondStrength === null && secondFailure !== null && claim.basis === "second-review-failed" && secondFindings.length === 0) {
+      return { ...claim, second: { kind: "failed" as const, reason: secondFailure } };
+    }
+    ctx.addIssue({ code: "custom", message: "a claim's second review either answered (model, strength, no failure) or failed (failure, no model, strength or finding), as its basis says" });
+    return z.NEVER;
+  });
+
+export type StoredClaim = z.infer<typeof StoredClaimSchema>;
+
+/**
+ * One suite_review_claims row with the undecided_items tied to it, parsed whole. The strength is read
+ * first: one that is no strength of second opinion, or a confirmed claim with none, throws
+ * SuiteReviewStrengthUnreadable, so no claim reads as verified at a strength the record does not hold.
+ * @testseam exported for suite-review.test.ts; suiteReviewClaimsOf is its production caller
+ */
+export function storedClaimOf(id: string, row: Record<string, unknown> & { readonly basis: unknown; readonly secondStrength: unknown }): StoredClaim {
+  const strength = StoredStrengthSchema.safeParse(row.secondStrength);
+  if (!strength.success) throw new SuiteReviewStrengthUnreadable(id, z.prettifyError(strength.error));
+  if (strength.data === null && (row.basis === "second-opinion-clean" || row.basis === "second-opinion-found")) {
+    throw new SuiteReviewStrengthUnreadable(id, `the claim is ${row.basis} but records no strength`);
+  }
+  const parsed = StoredClaimSchema.safeParse(row);
+  if (!parsed.success) throw new SuiteReviewClaimCorrupt(id, z.prettifyError(parsed.error));
+  return parsed.data;
+}
+
+/**
+ * Every claim the suite reviews of a project recorded when they routed nothing, oldest first, each
+ * with the covered items it leaves unverified (migrations 072, 073): what the owner's run report states of them.
+ */
+export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Promise<StoredClaim[]> {
+  const rows = await db
+    .select({
+      id: suiteReviewClaims.id,
+      reviewTaskId: suiteReviewClaims.reviewTaskId,
+      basis: suiteReviewClaims.basis,
+      covered: suiteReviewClaims.covered,
+      firstModel: suiteReviewClaims.firstModel,
+      secondModel: suiteReviewClaims.secondModel,
+      secondStrength: suiteReviewClaims.secondStrength,
+      passedOver: suiteReviewClaims.passedOver,
+      secondFindings: suiteReviewClaims.secondFindings,
+      secondFailure: suiteReviewClaims.secondFailure,
+    })
+    .from(suiteReviewClaims)
+    .where(eq(suiteReviewClaims.projectId, projectId))
+    .orderBy(asc(suiteReviewClaims.createdAt), asc(suiteReviewClaims.id));
+  if (rows.length === 0) return [];
+  const items = await db
+    .select({ claimId: undecidedItems.claimId, checkTaskId: undecidedItems.checkTaskId, itemId: undecidedItems.itemId, itemText: undecidedItems.itemText })
+    .from(undecidedItems)
+    .where(inArray(undecidedItems.claimId, rows.map((row) => row.id)))
+    .orderBy(asc(undecidedItems.checkTaskId), asc(undecidedItems.itemId));
+  return rows.map(({ id, ...row }) =>
+    storedClaimOf(id, {
+      ...row,
+      unverified: items.filter((item) => item.claimId === id).map(({ checkTaskId, itemId, itemText }) => ({ checkTaskId, itemId, itemText })),
+    }),
+  );
+}
+
 /** The review a suite_review block was written on: what it found, and how often it had named the check task. */
 interface BlockingReviewRow {
   readonly times: number;

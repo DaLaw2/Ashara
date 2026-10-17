@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
 import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
-import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewJudgementsOf } from "@ashara/quality";
+import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
@@ -312,20 +312,26 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
 
   test("a clean review the other family contradicts stores only the items it named undecided, tied to the claim", async () => {
     const doubt = (check: string) => ({ checkTasks: [check], kind: "undecided-item", item: "S9", problem: "no check distinguishes fsynced from written data", evidence: "sh put.sh" });
-    const { outcome, kept, claims } = await reviewClean((check) => ({ problems: [doubt(check)] }));
+    const { outcome, kept, claims, check } = await reviewClean((check) => ({ problems: [doubt(check)] }));
     expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "second-opinion-found", unconfirmed: [{ itemId: "S9" }] } });
     expect(kept).toEqual([{ itemId: "S9", judgementId: null, basis: "second-opinion-found" }]);
     expect(claims).toMatchObject([{ basis: "second-opinion-found", secondFindings: [{ kind: "undecided-item", item: "S9" }] }]);
+    const read = (await suiteReviewClaimsOf(db, projectId)).filter((claim) => claim.covered.includes(check));
+    expect(read).toMatchObject([
+      { basis: "second-opinion-found", second: { kind: "answered", strength: "other-family", findings: [{ item: "S9" }] }, unverified: [{ checkTaskId: check, itemId: "S9" }] },
+    ]);
   });
 
   test("a clean review whose second review failed stores every covered item undecided, with why", async () => {
     const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
-    const { kept, claims } = await reviewClean(failure);
+    const { kept, claims, check } = await reviewClean(failure);
     expect(kept).toEqual([
       { itemId: "S8", judgementId: null, basis: "second-review-failed" },
       { itemId: "S9", judgementId: null, basis: "second-review-failed" },
     ]);
     expect(claims).toMatchObject([{ basis: "second-review-failed", secondModel: null, secondStrength: null, secondFindings: [], secondFailure: expect.stringContaining("got no answer") }]);
+    const read = (await suiteReviewClaimsOf(db, projectId)).filter((claim) => claim.covered.includes(check));
+    expect(read).toMatchObject([{ basis: "second-review-failed", second: { kind: "failed", reason: expect.stringContaining("got no answer") }, unverified: [{ itemId: "S8" }, { itemId: "S9" }] }]);
   });
 
   test("an undecided item tied to neither a judgement nor a claim is refused, and a claim's basis must fit its second review", async () => {

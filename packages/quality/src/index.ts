@@ -73,8 +73,8 @@ export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
 export { CheckSetFreezeRepository } from "./repositories/check-set-freeze.js";
 export { SuiteReviewFindingRepository, SuiteReviewJudgementRepository, blockingReview } from "./repositories/suite-review.js";
-export { suiteReviewJudgementsOf } from "./repositories/suite-review.js";
-export type { StoredJudgement } from "./repositories/suite-review.js";
+export { suiteReviewClaimsOf, suiteReviewJudgementsOf } from "./repositories/suite-review.js";
+export type { StoredClaim, StoredJudgement } from "./repositories/suite-review.js";
 export {
   listProjectsReadyForAcceptance,
   recordAcceptance,

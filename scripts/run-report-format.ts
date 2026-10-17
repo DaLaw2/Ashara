@@ -3,7 +3,7 @@
  * database, no environment, nothing that could carry a secret.
  */
 
-import type { StoredJudgement } from "@ashara/quality";
+import type { StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
 
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
@@ -513,6 +513,52 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
     );
     if (judgement.secondStrength !== null && judgement.secondFindings.length === 0) lines.push("    second review: no finding on this check task");
     for (const finding of judgement.secondFindings) lines.push(`    second review: ${findingLine(finding)}`);
+  }
+  return lines.join("\n");
+}
+
+type Strength = Extract<StoredClaim["second"], { readonly kind: "answered" }>["strength"];
+
+/** What each strength of second opinion was, as the report names it (ADR-084 d12). */
+const STRENGTH_TEXT: Readonly<Record<Strength, string>> = {
+  "other-family": "another model family",
+  "same-family-other-model": "another model of the family",
+  "same-model": "the same model from another angle",
+};
+
+/** What each claim basis leaves of the claim (ADR-084 d11), and why an item it leaves undecided reads unverified. */
+const CLAIM_BASIS: Readonly<Record<StoredClaim["basis"], { readonly label: string; readonly unverified: string }>> = {
+  "second-opinion-clean": { label: "clean: the second opinion found no problem either", unverified: "a clean claim leaves no item unverified" },
+  "second-opinion-found": { label: "finding: the second opinion found a problem", unverified: "the second opinion named a problem in it" },
+  "no-other-family": {
+    label: "unconfirmed: the second opinion came from the first review's provider (recorded before migration 073)",
+    unverified: "no second opinion of another provider confirmed it",
+  },
+  "second-review-failed": { label: "unconfirmed: the second opinion failed at every strength", unverified: "no second opinion answered" },
+};
+
+/**
+ * The claims of the suite reviews that routed nothing: what each covered, its basis, the strength of
+ * the second opinion that answered (or none, and why), every strength passed over before it, its
+ * findings, and each covered item it leaves unverified with the reason.
+ */
+export function formatSuiteReviewClaims(claims: readonly StoredClaim[]): string {
+  if (claims.length === 0) return "Suite review claims: none recorded";
+  const lines = [`Suite review claims (${claims.length}):`];
+  for (const claim of claims) {
+    const second =
+      claim.second.kind === "failed"
+        ? `second opinion: none (first ${claim.firstModel}): ${claim.second.reason}`
+        : `second opinion: ${claim.second.strength}, ${STRENGTH_TEXT[claim.second.strength]} (first ${claim.firstModel}, second ${claim.second.model})`;
+    const basis = CLAIM_BASIS[claim.basis];
+    lines.push(
+      `  review ${claim.reviewTaskId}, covering check task(s) ${claim.covered.join(", ")}: ${claim.basis} (${basis.label}); ${second}`,
+      ...claim.passedOver.map((over) => `    passed over ${over.strength} (${over.outcome}): ${over.reason}`),
+      ...(claim.second.kind === "answered" ? claim.second.findings.map((finding) => `    second review: ${findingLine(finding)}`) : []),
+    );
+    if (claim.unverified.length === 0) lines.push("    unverified: none");
+    const why = claim.second.kind === "failed" ? `${basis.unverified}: ${claim.second.reason}` : `${basis.unverified} (${STRENGTH_TEXT[claim.second.strength]})`;
+    for (const item of claim.unverified) lines.push(`    unverified ${item.itemId} of task ${item.checkTaskId} "${item.itemText}": ${why}`);
   }
   return lines.join("\n");
 }

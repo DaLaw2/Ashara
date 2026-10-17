@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatRunReport, formatSuiteReviewJudgements } from "./run-report-format.js";
+import { formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
 
 type Evidence = Parameters<typeof formatRunReport>[0];
 type Task = Evidence["tasks"][number];
@@ -301,3 +301,67 @@ describe("formatSuiteReviewJudgements", () => {
   });
 });
 
+
+describe("formatSuiteReviewClaims", () => {
+  type Claim = Parameters<typeof formatSuiteReviewClaims>[0][number];
+  const finding = { kind: "undecided-item" as const, checkTasks: ["c2"], item: "S4", problem: "no check forces data to disk", evidence: "put.sh" };
+  type Answered = Extract<Claim["second"], { kind: "answered" }>;
+  const answered = (strength: Answered["strength"], model: string, findings: Answered["findings"] = []): Answered => ({ kind: "answered", model, strength, findings });
+  const claims: Claim[] = [
+    { reviewTaskId: "r1", basis: "second-opinion-clean", covered: ["c1"], firstModel: "a/m", passedOver: [], unverified: [], second: answered("other-family", "b/n") },
+    {
+      reviewTaskId: "r2",
+      basis: "second-opinion-found",
+      covered: ["c1", "c2"],
+      firstModel: "a/m",
+      passedOver: [{ strength: "other-family", outcome: "unavailable", reason: "SecondOpinionUnavailable: no other provider" }],
+      unverified: [{ checkTaskId: "c2", itemId: "S4", itemText: "data survives a restart" }],
+      second: answered("same-family-other-model", "a/n", [finding]),
+    },
+    {
+      reviewTaskId: "r3",
+      basis: "second-opinion-clean",
+      covered: ["c3"],
+      firstModel: "a/m",
+      passedOver: [
+        { strength: "other-family", outcome: "unavailable", reason: "SecondOpinionUnavailable: no other provider" },
+        { strength: "same-family-other-model", outcome: "failed", reason: "SecondOpinionUnanswered: unfit answer" },
+      ],
+      unverified: [],
+      second: answered("same-model", "a/m"),
+    },
+    {
+      reviewTaskId: "r4",
+      basis: "second-review-failed",
+      covered: ["c4"],
+      firstModel: "a/m",
+      passedOver: [{ strength: "same-model", outcome: "failed", reason: "SecondOpinionUnanswered: no answer" }],
+      unverified: [{ checkTaskId: "c4", itemId: "S7", itemText: "a full disk is reported" }],
+      second: { kind: "failed", reason: "SecondOpinionUnanswered: no answer at any strength" },
+    },
+  ];
+
+  test("prints each claim's coverage, basis, second-opinion strength or none with why, passed-over list and unverified items with their reason", () => {
+    const text = formatSuiteReviewClaims(claims);
+    expect(text).not.toContain("none recorded");
+    expect(text).toContain("Suite review claims (4):");
+    expect(text).toContain(
+      "  review r1, covering check task(s) c1: second-opinion-clean (clean: the second opinion found no problem either); second opinion: other-family, another model family (first a/m, second b/n)\n    unverified: none",
+    );
+    expect(text).toContain(
+      "  review r2, covering check task(s) c1, c2: second-opinion-found (finding: the second opinion found a problem); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
+    );
+    expect(text).toContain("    passed over other-family (unavailable): SecondOpinionUnavailable: no other provider\n    second review: undecided S4: no check forces data to disk");
+    expect(text).toContain('    unverified S4 of task c2 "data survives a restart": the second opinion named a problem in it (another model of the family)');
+    expect(text).toContain("second opinion: same-model, the same model from another angle (first a/m, second a/m)");
+    expect(text).toContain("    passed over same-family-other-model (failed): SecondOpinionUnanswered: unfit answer");
+    expect(text).toContain(
+      "  review r4, covering check task(s) c4: second-review-failed (unconfirmed: the second opinion failed at every strength); second opinion: none (first a/m): SecondOpinionUnanswered: no answer at any strength",
+    );
+    expect(text).toContain('    unverified S7 of task c4 "a full disk is reported": no second opinion answered: SecondOpinionUnanswered: no answer at any strength');
+  });
+
+  test("states that no claim is recorded, apart from the judgements", () => {
+    expect(formatSuiteReviewClaims([])).toBe("Suite review claims: none recorded");
+  });
+});
