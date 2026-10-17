@@ -128,9 +128,18 @@ server:
 probes *ARGS:
     npx tsx scripts/probes.ts {{ARGS}}
 
-# One project's run evidence (roadmap M2 exit 7): attempts, cost coverage, cache-hit share. Read-only.
-run-report project:
-    npx tsx scripts/run-report.ts {{project}}
+# One project's run evidence: attempts, cost coverage, cache-hit share, and Ashara's verdict beside the hidden
+# suite's. Read-only. `just run-report <id> --hidden <verdict.json> --run <label>` adds the hidden verdict and the
+# run's tender pick (pool from --pool or ASHARA_TENDER_POOL).
+run-report project *ARGS:
+    npx tsx scripts/run-report.ts {{project}} {{ARGS}}
+
+# Picks a real run's tender from the pool (fewest recorded runs, ties drawn by sha256 of run label and commit) and
+# appends the pick to the pool's ledger. The pool directory is --pool or ASHARA_TENDER_POOL, never a path in this
+# repository. Example:
+#   just pool-select --run <label> --commit "$(git rev-parse HEAD)" [--pin <tender id> --reason <text>]
+pool-select *ARGS:
+    npx tsx scripts/pool-select.ts {{ARGS}}
 
 # A hidden acceptance suite run against a delivered product in its environment image, in one capped cell with no
 # network; the suite's directory is an argument, never a path in this repository. scripts/hidden-suite.ts states the

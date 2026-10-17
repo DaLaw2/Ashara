@@ -6,6 +6,8 @@
 import { isGoalTask } from "@ashara/db";
 import type { StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
+import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
+import type { PickRecord } from "./pool-selection.js";
 
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
 type CallTotals = RunEvidence["calls"][number];
@@ -476,6 +478,68 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
     lines.push("", `VIOLATION: ${overall.zeroCostCalls} llm_calls row(s) priced at exactly $0; an unknown cost must be NULL, never $0`);
   }
   return { text: lines.join("\n"), zeroCostCalls: overall.zeroCostCalls, attributionViolation: cost.violation };
+}
+
+/** The hidden suite's verdict and the pool's pick record a run report is given, each or neither. */
+export interface PoolEvidence {
+  readonly hidden: JudgedVerdict | null;
+  readonly pick: PickRecord | null;
+}
+
+/** Ashara's own outcome, read off the project's status: accepted, halted, or no acceptance verdict. */
+type AsharaOutcome = { readonly kind: "accepted" } | { readonly kind: "halted" } | { readonly kind: "none"; readonly status: string };
+
+function asharaOutcome(status: string): AsharaOutcome {
+  if (status === "accepted") return { kind: "accepted" };
+  if (status === "blocked") return { kind: "halted" };
+  return { kind: "none", status };
+}
+
+function asharaText(outcome: AsharaOutcome): string {
+  switch (outcome.kind) {
+    case "accepted":
+      return "Ashara Accepted";
+    case "halted":
+      return "Ashara halted";
+    case "none":
+      return `Ashara gave no acceptance verdict (status ${outcome.status})`;
+  }
+}
+
+/**
+ * Whether the two verdicts agree. A disagreement is Ashara accepting what the hidden suite does not pass, or halting
+ * on what it passes; a pair that cannot disagree but does not agree either is named as not compared, with why.
+ */
+function comparison(outcome: AsharaOutcome, overall: Overall): string {
+  if (outcome.kind === "none") return "not compared: Ashara gave no acceptance verdict";
+  if (outcome.kind === "accepted") return overall === "pass" ? "agree" : "DISAGREE";
+  if (overall === "pass") return "DISAGREE";
+  return overall === "fail" ? "agree" : "not compared: the hidden suite is incomplete";
+}
+
+/**
+ * The pool lines a run report prints after its first line: the tender pick (id, seed, reason) and Ashara's verdict
+ * beside the hidden suite's, every guarantee named. No verdict file reads "hidden suite: not run", never a pass; a
+ * verdict file for another tender than the pick is a violation.
+ */
+export function formatPoolVerdicts(status: string, pool: PoolEvidence): { readonly lines: string[]; readonly violation: boolean } {
+  const { hidden, pick } = pool;
+  const pickLine =
+    pick === null
+      ? "tender pick: not recorded (run-report was given no --run)"
+      : `tender pick: ${pick.tender} seed ${pick.seed} (${pick.reason}; run ${pick.run}, commit ${pick.commit})`;
+  const ashara = asharaText(asharaOutcome(status));
+  if (hidden === null) return { lines: [pickLine, `verdicts: ${ashara} | hidden suite: not run`], violation: false };
+  const passed = hidden.guarantees.filter((entry) => entry.verdict === "pass").length;
+  const guarantees = hidden.guarantees.map((entry) => `${entry.id} ${entry.verdict}`).join(", ");
+  const seed = pick === null ? "seed not recorded" : `seed ${pick.seed.slice(0, 12)}`;
+  const lines = [
+    pickLine,
+    `verdicts: ${ashara} | hidden suite ${hidden.tender} ${seed}: ${hidden.overall.toUpperCase()} ${passed}/${hidden.guarantees.length} pass, ${guarantees} | ${comparison(asharaOutcome(status), hidden.overall)}`,
+  ];
+  const mismatch = pick !== null && pick.tender !== hidden.tender;
+  if (mismatch) lines.push(`VIOLATION: the hidden verdict judges tender ${hidden.tender}, the run picked ${pick.tender}`);
+  return { lines, violation: mismatch };
 }
 
 /** One finding of a suite review, as the report states it. */

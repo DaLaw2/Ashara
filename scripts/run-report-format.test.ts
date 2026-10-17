@@ -1,6 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { isGoalTask } from "@ashara/db";
-import { formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
+import { judgedVerdictSchema, overallOf, type JudgedVerdict } from "./hidden-verdict.js";
+import type { PickRecord } from "./pool-selection.js";
+import { formatPoolVerdicts, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
+
+const TSX = path.join(import.meta.dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
 
 type Evidence = Parameters<typeof formatRunReport>[0];
 type Task = Evidence["tasks"][number];
@@ -434,5 +442,88 @@ describe("formatSuiteReviewClaims", () => {
 
   test("states that no claim is recorded, apart from the judgements", () => {
     expect(formatSuiteReviewClaims([])).toBe("Suite review claims: none recorded");
+  });
+});
+
+describe("formatPoolVerdicts: Ashara's verdict beside the hidden suite's", () => {
+  const PICK: PickRecord = { kind: "pick", run: "pool-1", commit: "0e2adaf9", tender: "T1", seed: "c".repeat(64), reason: "fewest runs (0) among T1, T2; drawn by seed", at: "2026-10-18T00:00:00.000Z" };
+
+  function verdict(guarantees: JudgedVerdict["guarantees"], problems: readonly string[] = []): JudgedVerdict {
+    return judgedVerdictSchema.parse({
+      tender: "T1",
+      suiteDigest: "sha256:aa",
+      product: { dir: "/p", digest: "sha256:bb" },
+      image: "img",
+      suiteArgs: ["--cmd", "{product}/x"],
+      timeoutSeconds: 60,
+      startedAt: "2026-10-18T00:00:00.000Z",
+      endedAt: "2026-10-18T00:01:00.000Z",
+      overall: overallOf(guarantees, problems),
+      guarantees,
+      problems,
+      runs: {},
+    });
+  }
+  const allPass = verdict([{ id: "G1", verdict: "pass" }, { id: "G2", verdict: "pass" }]);
+  const oneFail = verdict([{ id: "G1", verdict: "pass" }, { id: "G2", verdict: "fail" }, { id: "G3", verdict: "unjudged", reason: "no tool" }]);
+  const incomplete = verdict([{ id: "G1", verdict: "unjudged", reason: "suite crashed" }], ["the suite exited 1"]);
+
+  test("Accepted and a hidden pass agree, every guarantee named, the pick's tender and seed printed", () => {
+    const { lines, violation } = formatPoolVerdicts("accepted", { hidden: allPass, pick: PICK });
+    expect(lines).toEqual([
+      `tender pick: T1 seed ${"c".repeat(64)} (fewest runs (0) among T1, T2; drawn by seed; run pool-1, commit 0e2adaf9)`,
+      `verdicts: Ashara Accepted | hidden suite T1 seed ${"c".repeat(12)}: PASS 2/2 pass, G1 pass, G2 pass | agree`,
+    ]);
+    expect(violation).toBe(false);
+  });
+
+  test("Accepted over a hidden fail, and over a hidden incomplete, is DISAGREE", () => {
+    expect(formatPoolVerdicts("accepted", { hidden: oneFail, pick: PICK }).lines[1]).toBe(
+      `verdicts: Ashara Accepted | hidden suite T1 seed ${"c".repeat(12)}: FAIL 1/3 pass, G1 pass, G2 fail, G3 unjudged | DISAGREE`,
+    );
+    expect(formatPoolVerdicts("accepted", { hidden: incomplete, pick: PICK }).lines[1]).toMatch(/: INCOMPLETE 0\/1 pass, G1 unjudged \| DISAGREE$/);
+  });
+
+  test("Ashara halting on what the hidden suite passes is DISAGREE; halting on a hidden fail agrees", () => {
+    expect(formatPoolVerdicts("blocked", { hidden: allPass, pick: PICK }).lines[1]).toMatch(/^verdicts: Ashara halted \| .* \| DISAGREE$/);
+    expect(formatPoolVerdicts("blocked", { hidden: oneFail, pick: PICK }).lines[1]).toMatch(/^verdicts: Ashara halted \| .* \| agree$/);
+  });
+
+  test("no --hidden prints 'hidden suite: not run', never a pass", () => {
+    const { lines } = formatPoolVerdicts("accepted", { hidden: null, pick: null });
+    expect(lines).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara Accepted | hidden suite: not run"]);
+  });
+
+  test("a verdict for another tender than the pick is a violation", () => {
+    const { lines, violation } = formatPoolVerdicts("accepted", { hidden: allPass, pick: { ...PICK, tender: "T2" } });
+    expect(violation).toBe(true);
+    expect(lines).toContain("VIOLATION: the hidden verdict judges tender T1, the run picked T2");
+  });
+
+  test("a verdict file whose overall does not follow from its guarantees fails the schema", () => {
+    expect(judgedVerdictSchema.safeParse({ ...oneFail, overall: "pass" }).success).toBe(false);
+  });
+});
+
+describe("run-report --hidden with a verdict file that fails the schema", () => {
+  let dir = "";
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "run-report-hidden-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("exits 1 naming the file, before any database is read", async () => {
+    const file = path.join(dir, "verdict.json");
+    await writeFile(file, JSON.stringify({ tender: "T1", overall: "pass", guarantees: [{ id: "G1", verdict: "maybe" }] }));
+    const result = spawnSync(process.execPath, [TSX, path.join(import.meta.dirname, "run-report.ts"), "00000000-0000-4000-8000-0000000000a1", "--hidden", file], {
+      encoding: "utf8",
+      // An unreachable database: the report must stop on the verdict file before it connects.
+      env: { ...process.env, DATABASE_URL: "postgresql://nobody@127.0.0.1:1/none" },
+      timeout: 60_000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`run-report --hidden ${file}: JSON of an unexpected shape`);
   });
 });

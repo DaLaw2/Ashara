@@ -369,9 +369,10 @@ describe("runReport, the body run-report prints", () => {
       },
     });
 
-    const { text } = await runReport(db, projectId);
+    const { text } = await runReport(db, projectId, { hidden: null, pick: null });
 
     expect(text).toContain(`run-report: project ${NAME} (${projectId})`);
+    expect(text.split("\n").slice(1, 3)).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara gave no acceptance verdict (status active) | hidden suite: not run"]);
     expect(text).toContain(`Suite review judgements (1):\n  review ${judged}, its undecided-item finding of task ${check}: advisory (second-opinion-disagreed); second review same-model (first p/m, second p/m)`);
     expect(text).toContain(
       `Suite review claims (1):\n  review ${claimed}, covering check task(s) ${check}: second-review-failed (unconfirmed: the second opinion failed at every strength); second opinion: none (first p/m): no second opinion answered`,

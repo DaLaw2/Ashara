@@ -31,6 +31,7 @@ import { z } from "zod";
 import { PodmanSubstrate, WORKSPACE_ROOT, type Cell, type ExecResult } from "@ashara/execution-infra";
 import { parseEnvironmentDefinition } from "@ashara/quality";
 import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
+import { evidenceSchema, guaranteeIdSchema, guaranteeVerdictSchema, overallOf, overallSchema, type JudgedGuarantee, type JudgedVerdict, type Overall, type RunRecord } from "./hidden-verdict.js";
 
 const USAGE =
   "Usage: npx tsx scripts/hidden-suite.ts --suite <suite dir> --product <product dir> --image <image> --out <verdict.json>\n" +
@@ -115,8 +116,6 @@ function parseArgs(argv: readonly string[]): RunnerArgs {
 
 // --- The suite's manifest and its verdict file ------------------------------------------------------------------
 
-const guaranteeIdSchema = z.string().regex(/^[A-Za-z0-9._-]+$/, "a guarantee id is letters, digits, '.', '_' or '-'");
-
 const manifestSchema = z.object({
   tender: z.string().min(1),
   guarantee: z
@@ -130,25 +129,19 @@ interface SuiteManifest {
   readonly ids: readonly string[];
 }
 
-const verdictValueSchema = z.enum(["pass", "fail", "unjudged"]);
-type GuaranteeVerdictValue = z.infer<typeof verdictValueSchema>;
-
-const evidenceSchema = z.object({ case: z.string(), observed: z.string() });
-type Evidence = z.infer<typeof evidenceSchema>;
-
 const suiteVerdictSchema = z.object({
   tender: z.string().min(1),
   guarantees: z.array(
     z.object({
       id: guaranteeIdSchema,
-      verdict: verdictValueSchema,
+      verdict: guaranteeVerdictSchema,
       cases: z.number().int().nonnegative().optional(),
       failed: z.number().int().nonnegative().optional(),
       reason: z.string().optional(),
       evidence: z.array(evidenceSchema).optional(),
     }),
   ),
-  overall: z.enum(["pass", "fail", "incomplete"]).optional(),
+  overall: overallSchema.optional(),
   complete: z.boolean().optional(),
 });
 type SuiteVerdict = z.infer<typeof suiteVerdictSchema>;
@@ -167,19 +160,6 @@ async function readManifest(suiteDir: string): Promise<SuiteManifest> {
 }
 
 // --- Judging ----------------------------------------------------------------------------------------------------
-
-interface JudgedGuarantee {
-  readonly id: string;
-  readonly verdict: GuaranteeVerdictValue;
-  readonly cases?: number;
-  readonly failed?: number;
-  /** Set when the verdict is unjudged. */
-  readonly reason?: string;
-  /** The cases the suite reported, when it reported any. */
-  readonly evidence?: readonly Evidence[];
-}
-
-type Overall = "pass" | "fail" | "incomplete";
 
 /** What came back from the cell: the problems that make the run incomplete, and the verdict file if it parsed. */
 interface SuiteOutcome {
@@ -216,14 +196,7 @@ function judge(manifest: SuiteManifest, outcome: SuiteOutcome): { guarantees: Ju
     if (!complete) return { id, verdict: "unjudged", ...counts, reason: `reported pass, but the run is incomplete: ${problems.join("; ")}`, ...evidence };
     return { id, verdict: "pass", ...counts, ...evidence };
   });
-  const overall: Overall = guarantees.some((entry) => entry.verdict === "fail")
-    ? complete
-      ? "fail"
-      : "incomplete"
-    : complete && guarantees.every((entry) => entry.verdict === "pass")
-      ? "pass"
-      : "incomplete";
-  return { guarantees, overall, problems };
+  return { guarantees, overall: overallOf(guarantees, problems), problems };
 }
 
 // --- Staging and the cell ---------------------------------------------------------------------------------------
@@ -266,14 +239,6 @@ async function requireDirectory(path: string, what: string): Promise<void> {
 
 function tail(text: string): string {
   return text.length <= OUTPUT_TAIL_CHARS ? text : `[... ${text.length - OUTPUT_TAIL_CHARS} characters cut]${text.slice(-OUTPUT_TAIL_CHARS)}`;
-}
-
-interface RunRecord {
-  readonly exitCode: number | null;
-  readonly timedOut: boolean;
-  readonly statusLost: boolean;
-  readonly stdoutTail: string;
-  readonly stderrTail: string;
 }
 
 function recordOf(result: ExecResult): RunRecord {
@@ -356,7 +321,7 @@ async function runInCell(args: RunnerArgs, manifest: SuiteManifest, build: strin
   }
 }
 
-function printVerdict(record: { tender: string; overall: Overall; guarantees: readonly JudgedGuarantee[]; problems: readonly string[] }, out: string): void {
+function printVerdict(record: JudgedVerdict, out: string): void {
   console.log(`hidden-suite: tender ${record.tender} overall ${record.overall}`);
   for (const entry of record.guarantees) {
     const counts = entry.cases === undefined ? "" : ` (${entry.cases} cases${entry.failed === undefined ? "" : `, ${entry.failed} failed`})`;
@@ -396,7 +361,7 @@ async function main(): Promise<number> {
     const { outcome, runs } = await runInCell(args, manifest, definition.build, stage);
     const endedAt = new Date().toISOString();
     const judged = judge(manifest, outcome);
-    const record = {
+    const record: JudgedVerdict = {
       tender: manifest.tender,
       suiteDigest,
       product: { dir: args.product, digest: productDigest },
