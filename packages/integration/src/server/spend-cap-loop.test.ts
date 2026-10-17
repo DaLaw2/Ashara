@@ -97,7 +97,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
       save: notExercised("save"),
       incrementDispatchCount: notExercised("incrementDispatchCount"),
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");

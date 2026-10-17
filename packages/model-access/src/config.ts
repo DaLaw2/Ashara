@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseCapabilityLevel } from "./capability-level.js";
-import { TURN_MAX_OUTPUT_TOKENS } from "./context-window.js";
 import { InvalidGatewayCatalog } from "./errors.js";
+import { widestTurnOutputReserve } from "./thinking.js";
 import { PROVIDER_TYPES } from "./types.js";
 import type {
   ContextOverflowSignatures,
@@ -10,6 +10,7 @@ import type {
   ProviderConfig,
   ProviderType,
   RoutingProfiles,
+  ThinkingPolicy,
   TokenRates,
 } from "./types.js";
 
@@ -51,12 +52,16 @@ function parseProviderType(source: string, providerName: string, raw: string): P
  * is logged at warn, since leaving one out changes the enabled-provider combo
  * and so the routing profile that applies. Zero providers leaves
  * `defaultProvider` null, which `buildGateway` refuses.
+ *
+ * Throws {@link InvalidGatewayCatalog} when a provider row's model has a window no larger than the
+ * output a turn reserves in it at some site under `thinking` (reserveIssues).
  */
 export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
   routingProfiles: RoutingProfiles,
   credentials: readonly ProviderCredential[],
   contextOverflow: ContextOverflowSignatures,
+  thinking: ThinkingPolicy,
 ): GatewayConfig {
   const modelsByProvider: Record<string, Record<string, ModelConfig>> = {};
   for (const [id, model] of Object.entries(allModels)) {
@@ -67,6 +72,7 @@ export function buildGatewayConfig(
   }
 
   const providers: ProviderConfig[] = [];
+  const reserve: string[] = [];
   for (const cred of credentials) {
     const providerType = parseProviderType("provider_configs", cred.name, cred.providerType);
     const providerModels = modelsByProvider[cred.name];
@@ -74,6 +80,7 @@ export function buildGatewayConfig(
       console.warn(`[GatewayConfig] provider "${cred.name}" left out: no model_configs row names it`);
       continue;
     }
+    reserve.push(...reserveIssues(Object.values(providerModels), providerType, thinking));
 
     const hasCredentials =
       (cred.apiKey != null && cred.apiKey !== "") ||
@@ -95,13 +102,32 @@ export function buildGatewayConfig(
       enabled: true,
     });
   }
+  if (reserve.length > 0) throw new InvalidGatewayCatalog("model_configs", reserve);
 
   return {
     providers,
     defaultProvider: providers.length > 0 ? providers[0].name : null,
     routingProfiles,
     contextOverflow,
+    thinking,
   };
+}
+
+/**
+ * Why a provider's models cannot serve a turn: a window no larger than the output a turn reserves
+ * in it at some site (thinking.ts widestTurnOutputReserve, the reserve the gateway's preflight
+ * takes), so no turn's input would fit there and every turn at that site would be refused. Judged
+ * at boot rather than at the first attempt.
+ */
+function reserveIssues(models: readonly ModelConfig[], providerType: ProviderType, thinking: ThinkingPolicy): string[] {
+  const widest = widestTurnOutputReserve(providerType, thinking);
+  return models
+    .filter((model) => model.maxContextTokens <= widest.tokens)
+    .map(
+      (model) =>
+        `${model.id}: maxContextTokens ${model.maxContextTokens} is not larger than the ${widest.tokens} output tokens a turn ` +
+        `reserves in it (provider type ${providerType}, site ${widest.site}), so no turn's input would fit`,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -200,22 +226,16 @@ function priceTierIssues(model: CatalogModel): string[] {
 }
 
 /**
- * Why a model's context window cannot be used: it is not a positive integer, or it is no larger
- * than the output every agent turn reserves in it (TURN_MAX_OUTPUT_TOKENS). The window has no
+ * Why a model's context window cannot be used: it is not a positive integer. The window has no
  * default anywhere (migration 054): a model whose window is unknown cannot have its turns guarded
- * (context-window.ts), and one that holds no input beside the reserve would refuse every turn, so
- * either fails the catalog at boot rather than at the first attempt.
+ * (context-window.ts), so it fails the catalog at boot rather than at the first attempt. Whether
+ * the window holds input beside a turn's output reserve depends on the provider type and the
+ * thinking policy, so buildGatewayConfig judges that (reserveIssues).
  */
 function windowIssues(model: CatalogModel): string[] {
   const window: unknown = model.maxContextTokens;
   if (typeof window !== "number" || !Number.isInteger(window) || window <= 0) {
     return [`${model.modelId}: maxContextTokens ${String(window)} is not a positive integer; the model's context window must be catalogued`];
-  }
-  if (window <= TURN_MAX_OUTPUT_TOKENS) {
-    return [
-      `${model.modelId}: maxContextTokens ${window} is not larger than the ${TURN_MAX_OUTPUT_TOKENS} output tokens every agent turn ` +
-        `reserves in it, so no turn's input would fit`,
-    ];
   }
   return [];
 }

@@ -348,6 +348,7 @@ function categoryWords(reason: StoredBlockedReason): string {
     case "work_budget_spent":
       return "it used every model request the budget of one task allows";
     case "context_window_exceeded":
+    case "no_wider_model":
       return "the work it was given was more than any model available to the team can hold in view at once";
     case "crash_loop":
       return "Ashara's own process stopped while working on it, each time it was tried";

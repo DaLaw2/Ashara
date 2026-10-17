@@ -260,8 +260,13 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const dbProviderRows = await configRepo.listProviderConfigs();
   const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
   const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
-  const gwConfig = buildGatewayConfig(models, routingProfiles, credentials, loadContextOverflowFromToml(resolveModelsConfigPath()));
-  gwConfig.thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
+  const gwConfig = buildGatewayConfig(
+    models,
+    routingProfiles,
+    credentials,
+    loadContextOverflowFromToml(resolveModelsConfigPath()),
+    loadThinkingPolicyFromToml(resolveModelsConfigPath()),
+  );
   // Single composition-root call for the LLM gateway (ADR-030). There is no
   // silent fallback here: zero providers -> NoLLMProvidersConfigured
   // propagates to the caller and the server refuses to start.

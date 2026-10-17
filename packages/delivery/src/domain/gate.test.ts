@@ -31,7 +31,7 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     incrementDispatchCount: async () => 1,
     saveRefunded: async () => 0,
     recordInfrastructureFault: async () => 1,
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");

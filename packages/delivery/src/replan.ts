@@ -386,6 +386,11 @@ function givenUpEvidence(reason: GivenUpReason): string {
         `${reason.projectedInputTokens === null ? "" : ` (a projected input of ${reason.projectedInputTokens} tokens)`}, ` +
         `and no model graded for it has a larger one: ${reason.reason}`
       );
+    case "no_wider_model":
+      return (
+        `An attempt of its work overflowed a ${reason.overflowedWindowTokens}-token context window, ` +
+        `and no model graded for it now has a larger one: ${reason.reason}`
+      );
     case "crash_loop":
       return `Ashara's process died while it was in progress at ${reason.boots} startups in a row, so it is not dispatched again: ${reason.reason}`;
     case "task_failed":

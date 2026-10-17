@@ -309,6 +309,24 @@ export class WorkItemRowRepository {
   }
 
   /**
+   * saveRefunded for a turn that overflowed a context window: raises the largest window an attempt
+   * of the item did not fit to `windowTokens` (migration 076), never lowering it, in the same
+   * transaction as the transition and the refund. A fault under any of the three writes none, so
+   * the item is never requeued without the window that sends it to a wider model.
+   */
+  async saveRefundedOverflow(
+    item: { id: string; status: string; blockedReason?: unknown; failureVerdict: FailureVerdict | null; updatedAt: Date },
+    expectedPreviousStatus: string,
+    windowTokens: number,
+  ): Promise<number> {
+    return this.withTransaction(async (tx) => {
+      await tx.raiseOverflowedWindow(item.id, windowTokens);
+      await tx.save(item, expectedPreviousStatus);
+      return tx.takeBackDispatch(item.id);
+    });
+  }
+
+  /**
    * The startup reconciler's move of a crash orphan out of InProgress: written as `save` writes it,
    * except that its startups in a row found InProgress are kept, since the dispatch did not end in
    * the process that started it. With `refund`, the dispatch the dead process counted is taken back
@@ -363,11 +381,8 @@ export class WorkItemRowRepository {
     return row.crashOrphans;
   }
 
-  /**
-   * Raises the largest context window an attempt of the item did not fit to `windowTokens`
-   * (migration 076), never lowering it, in a single UPDATE.
-   */
-  async recordOverflowedWindow(id: string, windowTokens: number): Promise<void> {
+  /** Raises the largest context window an attempt of the item did not fit to `windowTokens`, never lowering it. */
+  private async raiseOverflowedWindow(id: string, windowTokens: number): Promise<void> {
     const [row] = await this.db
       .update(workItems)
       .set({ overflowedWindowTokens: sql`GREATEST(COALESCE(${workItems.overflowedWindowTokens}, 0), ${windowTokens})` })

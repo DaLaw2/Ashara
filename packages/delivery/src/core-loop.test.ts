@@ -100,7 +100,7 @@ function buildDeps(
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");

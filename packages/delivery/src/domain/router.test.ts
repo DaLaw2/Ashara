@@ -26,7 +26,7 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: async () => 1,
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");

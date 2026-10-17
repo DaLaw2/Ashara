@@ -219,6 +219,20 @@ const contextWindowExceededSchema = z.object({
 });
 
 /**
+ * An attempt of the task overflowed a context window of `overflowedWindowTokens`
+ * (work_items.overflowed_window_tokens), and at its next dispatch no catalog model graded for it has
+ * a larger one: the catalog changed since the overflow found one. Every re-dispatch meets the same
+ * catalog, so the task is given up (Abandoned) before any model runs, and its plan repaired, which
+ * can cut the work smaller. `reason` carries the full statement.
+ */
+const noWiderModelSchema = z.object({
+  source: z.literal("no_wider_model"),
+  overflowedWindowTokens: z.number().int().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * The task was InProgress at `boots` startups in a row, each time left by a process that died
  * while it ran, and `boots` reached the bound of re-dispatches after a crash (`bound`, the startup
  * reconciler's): its dispatch may be what kills the process, so the reconciler gives it up
@@ -342,6 +356,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   suiteReviewUnresolvedSchema,
   workBudgetSpentSchema,
   contextWindowExceededSchema,
+  noWiderModelSchema,
   crashLoopSchema,
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
@@ -379,6 +394,7 @@ export const BLOCKED_REASON_SOURCES = [
   "suite_review_unresolved",
   "work_budget_spent",
   "context_window_exceeded",
+  "no_wider_model",
   "crash_loop",
   "dependency_unsatisfiable",
   "merge_unrecorded",
@@ -424,6 +440,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "suite_review_unresolved":
     case "work_budget_spent":
     case "context_window_exceeded":
+    case "no_wider_model":
     case "crash_loop":
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
@@ -479,6 +496,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "suite_review_unresolved":
     case "work_budget_spent":
     case "context_window_exceeded":
+    case "no_wider_model":
     case "crash_loop":
     case "dependency_unsatisfiable":
     case "api":

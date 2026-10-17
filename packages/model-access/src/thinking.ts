@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
+import { TURN_MAX_OUTPUT_TOKENS } from "./context-window.js";
 import { InvalidThinkingPolicy, ModelsConfigUnreadable } from "./errors.js";
 import { KNOWN_LLM_SITES, THINKING_MODES } from "./types.js";
 import type { KnownLLMSite, ProviderType, ThinkingMode, ThinkingPolicy } from "./types.js";
@@ -119,4 +120,34 @@ export function outputBudget(providerType: ProviderType, mode: ThinkingMode, ans
   const allowance = Math.max(MIN_REASONING_ALLOWANCE_TOKENS, Math.ceil(promptBytes * REASONING_TOKENS_PER_PROMPT_BYTE));
   const maxOutputTokens = Math.min(answerTokens + allowance, DEEPSEEK_MAX_OUTPUT_TOKENS);
   return { maxOutputTokens, reasoningAllowance: maxOutputTokens - answerTokens };
+}
+
+/**
+ * The output one agent turn reserves in its model's window: the turn's answer bound plus, when
+ * thinking is sent on, the reasoning allowance. The gateway's preflight and the catalog's boot
+ * check (config.ts) both read it, so a window boot admits is one a turn can fit input in.
+ */
+export function turnOutputBudget(providerType: ProviderType, mode: ThinkingMode): OutputBudget {
+  return outputBudget(providerType, mode, TURN_MAX_OUTPUT_TOKENS, 0);
+}
+
+/** The largest output a turn on a provider type reserves, and the site whose mode sets it. */
+export interface TurnOutputReserve {
+  readonly tokens: number;
+  /** "untagged" is a turn that names no known site, which runs on the policy's default. */
+  readonly site: KnownLLMSite | "untagged";
+}
+
+/**
+ * The largest {@link turnOutputBudget} a turn on a provider of `providerType` reserves under
+ * `policy`, over every known site and an untagged turn: a model may serve a turn at any of them,
+ * so the catalog's boot check compares each window with this.
+ */
+export function widestTurnOutputReserve(providerType: ProviderType, policy: ThinkingPolicy): TurnOutputReserve {
+  let widest: TurnOutputReserve = { tokens: turnOutputBudget(providerType, policy.default).maxOutputTokens, site: "untagged" };
+  for (const site of KNOWN_LLM_SITES) {
+    const tokens = turnOutputBudget(providerType, thinkingModeFor(policy, site)).maxOutputTokens;
+    if (tokens > widest.tokens) widest = { tokens, site };
+  }
+  return widest;
 }

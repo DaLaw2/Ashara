@@ -199,6 +199,35 @@ function ownerUnresolved(
   };
 }
 
+/**
+ * No catalog model has a window larger than one an attempt of the task overflowed: `no_wider_model`
+ * before any worktree or cell exists, and the orchestrator gives the task up for a plan repair.
+ */
+function noWiderModel(
+  task: DispatchRef,
+  sessionId: string,
+  unfit: NoWiderModel,
+  eventSink: ExecutionEventSink | undefined,
+): ExecutionResult {
+  const taskId = task.id;
+  const reason =
+    `an attempt of task ${taskId} overflowed a context window of ${unfit.overflowedWindowTokens} tokens, and no catalog model ` +
+    `graded for it has a larger one`;
+  const chain = wrapError("development", "assignAgent", reason, { taskId, overflowedWindowTokens: unfit.overflowedWindowTokens });
+  const summary = `${reason}; no agent ran and nothing executed`;
+  console.warn(`[${taskId}] ${summary}`);
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage: "assignAgent", reason: summary });
+  return {
+    status: "no_wider_model",
+    overflowedWindowTokens: unfit.overflowedWindowTokens,
+    detail: summary,
+    outcome: null,
+    sessionId,
+    attempt: task.attempt,
+    errorEnvelope: { outcome: "blocked", summary, chain },
+  };
+}
+
 /** The cells every dispatch runs on: verification's, and the BaseCell. */
 interface ExecutionCells extends VerificationCells {
   /** The image the Sprint 0 task's cells start from (config/base-cell.toml); no other task uses it. */
@@ -221,7 +250,18 @@ interface OwnerUnresolved {
   readonly reason: string;
 }
 
-type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | OwnerUnresolved;
+/**
+ * A task an attempt of which overflowed a context window of `overflowedWindowTokens`
+ * (work_items.overflowed_window_tokens) is dispatched only on a model whose window is larger, and
+ * the catalog offers none. The dispatch gives the task up; no model runs it on a window it is known
+ * not to fit.
+ */
+interface NoWiderModel {
+  readonly kind: "no-wider-model";
+  readonly overflowedWindowTokens: number;
+}
+
+type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | OwnerUnresolved | NoWiderModel;
 
 /**
  * Builds the agent half of a task's Assignment: its owner role and its model, resolved once per
@@ -574,6 +614,7 @@ export class DispatchService {
     try {
       const staffing = await this.deps.staffing.staff(task);
       if (staffing.kind === "owner-unresolved") return ownerUnresolved(task, sessionId, staffing, eventSink);
+      if (staffing.kind === "no-wider-model") return noWiderModel(task, sessionId, staffing, eventSink);
       staff = staffing.staff;
       records = new DispatchRecords(base, task.id, sessionId);
       await records.writeBrief(brief);

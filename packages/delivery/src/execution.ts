@@ -35,7 +35,8 @@ type GiveUpCause = Extract<
       | "environment_undefined"
       | "owner_unresolved"
       | "work_budget_spent"
-      | "context_window_exceeded";
+      | "context_window_exceeded"
+      | "no_wider_model";
   }
 >;
 
@@ -315,6 +316,24 @@ async function executeTask(
     };
   }
 
+  if (execResult.status === "no_wider_model") {
+    // The catalog holds no model whose window is larger than one the task overflowed, and every
+    // re-dispatch meets the same catalog: given up, never requeued nor a fault of Ashara's, and its
+    // plan repaired, which can cut the work smaller. No agent ran, so the dispatch is given back.
+    await routeAsGivenUp(
+      deps,
+      task.id,
+      { source: "no_wider_model", overflowedWindowTokens: execResult.overflowedWindowTokens, reason: execResult.detail },
+      "refund",
+    );
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      outcome: execResult.outcome,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
   if (execResult.status === "refused") {
     // One rule for every refusal: no lesson, no failure router, the dispatch given back. A
     // refusal no spend cap made (an unpriced model, an unestimable cost) is a configuration
@@ -461,6 +480,20 @@ function configurationRefusal(task: WorkItem, refused: Error): TaskRefusal {
  * gate skips the item until the owner returns the project to work; a deployment refusal stops the loop.
  */
 async function requeueAndRefund(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], why: string, site: string): Promise<void> {
+  await requeueWith(deps, taskId, why, site, (item, previousStatus) => deps.workItemRepo.saveRefunded(item, previousStatus));
+}
+
+/**
+ * {@link requeueAndRefund}, with `write` the one write that returns the item to Pending and gives
+ * its dispatch back (with whatever else belongs to the same routing), returning the dispatch count after it.
+ */
+async function requeueWith(
+  deps: ExecutionRoutingDeps,
+  taskId: WorkItem["id"],
+  why: string,
+  site: string,
+  write: (item: WorkItem, previousStatus: WorkItem["status"]) => Promise<number>,
+): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
     console.warn(`[${taskId}] work item vanished before it could be returned to Pending after ${why}`);
@@ -474,17 +507,18 @@ async function requeueAndRefund(deps: ExecutionRoutingDeps, taskId: WorkItem["id
     console.warn(`[${taskId}] requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`);
     return;
   }
-  const dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
+  const dispatchCount = await write(item, previousStatus);
   console.warn(`[${taskId}] back to Pending after ${why}, its dispatch given back (dispatch count ${dispatchCount})`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), site);
 }
 
 /**
  * A turn that did not fit its model's context window. With a catalog model whose window is larger,
- * the window is recorded on the item and it goes back to Pending with its dispatch given back, and
- * staffing dispatches it next on a model whose window is larger than any it overflowed: each
- * overflow raises the recorded window, so these requeues end within the catalog. With none, the task
- * is given up naming the window and the estimate, and its plan repaired, which can cut it smaller.
+ * the window is recorded on the item as it goes back to Pending with its dispatch given back, in
+ * one transaction (a fault leaves neither), and staffing dispatches it next on a model whose window
+ * is larger than any it overflowed: each overflow raises the recorded window, so these requeues end
+ * within the catalog. With none, the task is given up naming the window and the estimate, and its
+ * plan repaired, which can cut it smaller.
  */
 async function routeAsContextExceeded(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], exceeded: ContextExceededResult): Promise<void> {
   const { model, windowTokens, wider } = exceeded;
@@ -505,11 +539,12 @@ async function routeAsContextExceeded(deps: ExecutionRoutingDeps, taskId: WorkIt
     );
     return;
   }
-  await deps.workItemRepo.recordOverflowedWindow(taskId, windowTokens);
   const why =
     `a turn that did not fit the ${windowTokens}-token window of ${model.provider}/${model.modelId}; ` +
     `dispatched next on a model whose window is larger (${wider.provider}/${wider.modelId}, ${wider.windowTokens} tokens)`;
-  await requeueAndRefund(deps, taskId, why, "execution.routeAsContextExceeded");
+  await requeueWith(deps, taskId, why, "execution.routeAsContextExceeded", (item, previousStatus) =>
+    deps.workItemRepo.saveRefundedOverflow(item, previousStatus, windowTokens),
+  );
 }
 
 /**

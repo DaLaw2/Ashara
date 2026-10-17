@@ -40,7 +40,7 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");

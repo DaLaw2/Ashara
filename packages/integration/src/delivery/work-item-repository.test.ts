@@ -112,22 +112,53 @@ describe("WorkItemRowRepository: the startups in a row that found a task InProgr
 // t-context-overflow-routing: the largest window a task overflowed is what its next dispatch must
 // exceed, so a later, smaller record never lowers it, and it survives every routing of the task.
 describe("WorkItemRowRepository: the largest context window an attempt of a task did not fit", () => {
-  test("is null until recorded, rises to the largest recorded, never falls, and is read back with the item", async () => {
-    const repo = new WorkItemRowRepository(db);
+  async function inProgressTask(repo: WorkItemRowRepository, dispatchCount: number): Promise<string> {
     const id = randomUUID();
     taskIds.push(id);
-    await repo.create({ id, level: "Task", status: "InProgress", parentId: null, title: "overflowed window", blockedReason: null, projectId });
+    await repo.create({ id, level: "Task", status: "InProgress", parentId: null, title: "overflowed window", blockedReason: null, projectId, dispatchCount });
+    return id;
+  }
+
+  async function stateOf(id: string): Promise<{ status: string; overflowedWindowTokens: number | null; dispatchCount: number }> {
+    const result = await db.execute(
+      sql`SELECT status, overflowed_window_tokens AS "overflowedWindowTokens", dispatch_count AS "dispatchCount" FROM work_items WHERE id = ${id}`,
+    );
+    return z.object({ status: z.string(), overflowedWindowTokens: z.number().nullable(), dispatchCount: z.number() }).parse(result.rows[0]);
+  }
+
+  test("is null until recorded, rises to the largest recorded with the requeue and its refund, never falls, and is read back with the item", async () => {
+    const repo = new WorkItemRowRepository(db);
+    const id = await inProgressTask(repo, 2);
     expect((await repo.findById(id))?.overflowedWindowTokens).toBeNull();
 
-    await repo.recordOverflowedWindow(id, 64_000);
-    await repo.recordOverflowedWindow(id, 32_000);
-    expect((await repo.findById(id))?.overflowedWindowTokens).toBe(64_000);
+    expect(await repo.saveRefundedOverflow(movedTo(id, "Pending"), "InProgress", 64_000)).toBe(1);
+    expect(await stateOf(id)).toEqual({ status: "Pending", overflowedWindowTokens: 64_000, dispatchCount: 1 });
 
-    await repo.save(movedTo(id, "Pending"), "InProgress");
+    await repo.save(movedTo(id, "InProgress"), "Pending");
+    await repo.saveRefundedOverflow(movedTo(id, "Pending"), "InProgress", 32_000);
+    expect(await stateOf(id)).toEqual({ status: "Pending", overflowedWindowTokens: 64_000, dispatchCount: 0 });
     expect((await repo.findById(id))?.overflowedWindowTokens).toBe(64_000);
   });
 
+  // t-overflow-edges: the window and the requeue are one transaction, so a fault between them never
+  // leaves the window raised on an item still InProgress, nor an item requeued without it.
+  test("a requeue refused after the window is raised writes neither: the item stays InProgress with no window and its dispatch counted", async () => {
+    const repo = new WorkItemRowRepository(db);
+    const id = await inProgressTask(repo, 1);
+    await expect(repo.saveRefundedOverflow(movedTo(id, "Pending"), "Blocked", 64_000)).rejects.toThrow();
+    expect(await stateOf(id)).toEqual({ status: "InProgress", overflowedWindowTokens: null, dispatchCount: 1 });
+  });
+
+  test("a refund refused after the window and the requeue are written writes neither", async () => {
+    const repo = new WorkItemRowRepository(db);
+    const id = await inProgressTask(repo, 0);
+    await expect(repo.saveRefundedOverflow(movedTo(id, "Pending"), "InProgress", 64_000)).rejects.toThrow();
+    expect(await stateOf(id)).toEqual({ status: "InProgress", overflowedWindowTokens: null, dispatchCount: 0 });
+  });
+
   test("of an item that does not exist is refused", async () => {
-    await expect(new WorkItemRowRepository(db).recordOverflowedWindow(randomUUID(), 64_000)).rejects.toThrow(/not found/i);
+    await expect(new WorkItemRowRepository(db).saveRefundedOverflow(movedTo(randomUUID(), "Pending"), "InProgress", 64_000)).rejects.toThrow(
+      /not found/i,
+    );
   });
 });

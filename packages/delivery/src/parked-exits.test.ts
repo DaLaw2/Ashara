@@ -60,7 +60,7 @@ function run(
     },
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");
@@ -193,6 +193,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     context_window_exceeded: {
       source: "context_window_exceeded", provider: "p", model: "m", windowTokens: 32_000, outputReserveTokens: 16_384, projectedInputTokens: null, reason: "no larger window",
     },
+    no_wider_model: { source: "no_wider_model", overflowedWindowTokens: 32_000, reason: "no larger window in the catalog" },
     crash_loop: { source: "crash_loop", boots: 2, bound: 2, reason: "died twice" },
     dependency_unsatisfiable: { source: "dependency_unsatisfiable", blockedBy: ["x"], reason: "abandoned" },
     merge_unrecorded: { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" },

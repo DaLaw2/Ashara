@@ -128,8 +128,8 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
     async recordCrashOrphan(id) {
       return db.recordCrashOrphan(id);
     },
-    async recordOverflowedWindow(id, windowTokens) {
-      await db.recordOverflowedWindow(id, windowTokens);
+    async saveRefundedOverflow(item, expectedPreviousStatus, windowTokens) {
+      return db.saveRefundedOverflow(workItemSaveRow(item), expectedPreviousStatus, windowTokens);
     },
     async saveOrphanExit(item, expectedPreviousStatus, refund) {
       await db.saveOrphanExit(workItemSaveRow(item), expectedPreviousStatus, refund);

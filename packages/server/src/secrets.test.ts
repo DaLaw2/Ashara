@@ -80,7 +80,7 @@ describe("server startup secrets", () => {
       capabilityLevel: "Strong",
       inputCostPer1M: 1,
       outputCostPer1M: 1,
-      maxContextTokens: 1000,
+      maxContextTokens: 200_000,
       cacheReadCostPer1M: null,
       cacheWriteCostPer1M: null,
       priceWindows: [], priceTiers: [],
@@ -96,6 +96,7 @@ describe("server startup secrets", () => {
       {},
       credentials,
       { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
+      { default: "off", sites: {} },
     );
     expect(config.providers.map((p) => [p.name, p.apiKey])).toEqual([["deepseek", "store-value"]]);
   });

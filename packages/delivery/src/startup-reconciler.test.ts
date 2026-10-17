@@ -26,7 +26,7 @@ function emptyWorkItemRepo(): WorkItemRepository {
     save: unused("save"),
     incrementDispatchCount: unused("incrementDispatchCount"),
     recordInfrastructureFault: unused("recordInfrastructureFault"),
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: unused("saveOrphanExit"),
     saveRefunded: unused("saveRefunded"),

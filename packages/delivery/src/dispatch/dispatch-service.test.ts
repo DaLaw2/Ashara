@@ -194,6 +194,17 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "context", chain: wrapError("development", "agentAttempt", error) },
     };
   }
+  if (status === "no_wider_model") {
+    return {
+      status,
+      overflowedWindowTokens: 32_000,
+      detail: `${status} detail`,
+      outcome: null,
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "no wider model", chain: wrapError("development", "assignAgent", "no wider model") },
+    };
+  }
   if (status === "interrupted") {
     return {
       status,
@@ -386,7 +397,10 @@ function serviceOn(
   turns?: (probe: Probe) => CostedTurnResult,
   checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
   shutdownSignal: AbortSignal = new AbortController().signal,
-  staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string } = "owned",
+  staffing:
+    | "owned"
+    | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string }
+    | { readonly kind: "no-wider-model"; readonly overflowedWindowTokens: number } = "owned",
   wider: AssignmentStaff["model"] | null = null,
 ): { service: DispatchService; probe: Probe; events: Array<Record<string, unknown>> } {
   const probe: Probe = {
@@ -618,6 +632,44 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(result.errorEnvelope.chain.operation).toBe("assignAgent");
     expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "assignAgent", attempt: 3 })]);
     expect(probe.staffed).toBe(1);
+    expect(probe.modelCalls).toBe(0);
+    expect(probe.sessions.phases.size).toBe(0);
+    expect(await git(target, "branch", "--list", taskBranchName(task.id))).toBe("");
+    vi.restoreAllMocks();
+  });
+
+  // t-overflow-edges: a catalog with no window larger than one the task overflowed is a typed result
+  // the orchestrator gives the task up on, never a throw routed as Ashara's fault.
+  test("no catalog model wider than the task's overflow: no_wider_model; no worktree, no cell, no model, no session", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nowider-")));
+    scratch.push(root);
+    const workdirBase = join(root, "work");
+    const target = join(workdirBase, "projects", "target");
+    await mkdir(target, { recursive: true });
+    await ensureTargetGitInit(target, workdirBase);
+    await commitEnvironment(target);
+    const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
+    const substrate = new PodmanSubstrate({ trace: () => "test-trace",
+      podmanPath: "podman",
+      mountRoot: root,
+      runner: async (request) => {
+        if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
+        return { exitCode: 0, signal: null, stdout: info, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null, statusReport: null };
+      },
+    });
+    const unfit = { kind: "no-wider-model", overflowedWindowTokens: 32_000 } as const;
+    const { service, probe, events } = serviceOn(substrate, workdirBase, undefined, checkStore(STORED_CHECKS), undefined, unfit);
+
+    const task = { ...someTask(), attempt: 2, overflowedWindowTokens: 32_000 };
+    const result = await service.execute(task, target);
+
+    expect(result.status).toBe("no_wider_model");
+    if (result.status !== "no_wider_model") return;
+    expect(result.overflowedWindowTokens).toBe(32_000);
+    expect(result.detail).toMatch(/overflowed a context window of 32000 tokens, and no catalog model graded for it has a larger one/);
+    expect(result.errorEnvelope.chain.operation).toBe("assignAgent");
+    expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "assignAgent", attempt: 2 })]);
     expect(probe.modelCalls).toBe(0);
     expect(probe.sessions.phases.size).toBe(0);
     expect(await git(target, "branch", "--list", taskBranchName(task.id))).toBe("");

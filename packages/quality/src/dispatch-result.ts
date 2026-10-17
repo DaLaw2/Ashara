@@ -659,6 +659,22 @@ interface OwnerUnresolvedResult {
 }
 
 /**
+ * An attempt of the task overflowed a context window of `overflowedWindowTokens`, and no catalog
+ * model graded for it has a larger one when it is dispatched again (the catalog changed since the
+ * overflow found one). Nothing ran; the orchestrator gives the item up with a `no_wider_model`
+ * reason, for a plan repair that can cut the work smaller.
+ */
+interface NoWiderModelResult {
+  readonly status: "no_wider_model";
+  readonly overflowedWindowTokens: number;
+  readonly detail: string;
+  readonly outcome: null;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
  * The review of a plan revision's suites (ADR-074 addendum 2 d71 c) found problems: checks no
  * product can pass together, or checks of behaviour no vision item asks for. Its schema validated
  * and every check task it names is one whose suite it read. Not the review's failure and no lesson:
@@ -699,6 +715,7 @@ export const EXECUTION_STATUSES = [
   "owner_unresolved",
   "interrupted",
   "context_exceeded",
+  "no_wider_model",
 ] as const satisfies readonly ExecutionResult["status"][];
 
 export type ExecutionResult =
@@ -713,7 +730,8 @@ export type ExecutionResult =
   | EnvironmentChangeRequestedResult
   | OwnerUnresolvedResult
   | InterruptedResult
-  | ContextExceededResult;
+  | ContextExceededResult
+  | NoWiderModelResult;
 
 interface AgentExecutionResult {
   readonly status: "failed" | "blocked";

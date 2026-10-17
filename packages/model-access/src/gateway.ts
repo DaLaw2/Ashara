@@ -13,7 +13,7 @@ import { z } from "zod";
 import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
-import { TURN_MAX_OUTPUT_TOKENS, contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
+import { contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
 import {
   ContextBudgetExceeded,
   ProviderConfigurationRejected,
@@ -30,7 +30,7 @@ import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
 import { SchemaUnacceptable, refuseUnacceptableSchema, sendsStructuredSchema, wireSchemaOf } from "./schema-acceptance.js";
-import { outputBudget, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
+import { outputBudget, thinkingModeFor, thinkingProviderOptions, turnOutputBudget } from "./thinking.js";
 import type { OutputBudget } from "./thinking.js";
 import { SdkFinishReasonSchema, assistantMessageOf, cachedTurnPrompt, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
 import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
@@ -300,7 +300,10 @@ export class LLMGateway {
       );
     }
     const tools = toSdkTools(request.tools);
-    const { providerOptions, budget } = this.thinkingFor(target, site, TURN_MAX_OUTPUT_TOKENS, 0);
+    const mode = thinkingModeFor(this.thinking, site);
+    const providerOptions = thinkingProviderOptions(target.providerType, mode);
+    // The same reserve the catalog's boot check compares every window with (config.ts).
+    const budget = turnOutputBudget(target.providerType, mode);
     const window = target.modelConfig.maxContextTokens;
     const projection = projectTurnInput(request.priorInputTokens, request);
     const preflight = contextPreflight(projection, window, budget.maxOutputTokens);

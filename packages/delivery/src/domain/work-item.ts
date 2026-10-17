@@ -53,7 +53,7 @@ export interface WorkItem {
   ownerRoleId?: string;
   /**
    * The largest context window an attempt of the item did not fit (migration 076), written only by
-   * WorkItemRepository.recordOverflowedWindow; null when no attempt has overflowed one.
+   * WorkItemRepository.saveRefundedOverflow; null when no attempt has overflowed one.
    */
   overflowedWindowTokens: number | null;
   /**

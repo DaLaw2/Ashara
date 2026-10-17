@@ -12,8 +12,9 @@ import type { ContextOverflowSignatures } from "./types.js";
  * and an unbounded request has no worst-case cost to check against the cap. 16k
  * holds one tool call that writes a file of about 50 KB; a turn that needs more
  * stops at `length`, which the attempt loop reads as a truncated turn. Every turn
- * reserves it in its model's window, so a model whose window is no larger fails
- * the catalog at boot (config.ts).
+ * reserves it in its model's window, with a reasoning allowance on top where
+ * thinking is on (thinking.ts turnOutputBudget), so a model whose window is no
+ * larger than that reserve fails the catalog at boot (config.ts).
  */
 export const TURN_MAX_OUTPUT_TOKENS = 16_384;
 

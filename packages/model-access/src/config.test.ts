@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildGatewayConfig, toModelConfig } from "./config.js";
 import { TURN_MAX_OUTPUT_TOKENS } from "./context-window.js";
 import { InvalidGatewayCatalog } from "./errors.js";
+import type { ThinkingPolicy } from "./types.js";
 
 function validCatalog() {
     return {
@@ -73,22 +74,6 @@ describe("toModelConfig: the context window has no default", () => {
         expect(() => toModelConfig("model_configs", model)).toThrow(/test-model: maxContextTokens .* is not a positive integer/);
     });
 
-    test.each([TURN_MAX_OUTPUT_TOKENS, TURN_MAX_OUTPUT_TOKENS - 1, 8_192])(
-        "refuses window %s at boot, naming the model: no larger than every turn's output reserve, no turn's input would fit",
-        (maxContextTokens) => {
-            const model = { ...validCatalog().models[0]!, maxContextTokens };
-            expect(() => toModelConfig("model_configs", model)).toThrow(InvalidGatewayCatalog);
-            expect(() => toModelConfig("model_configs", model)).toThrow(
-                new RegExp(`test-model: maxContextTokens ${maxContextTokens} is not larger than the ${TURN_MAX_OUTPUT_TOKENS} output tokens`),
-            );
-        },
-    );
-
-    test("loads a window one token larger than the output reserve", () => {
-        const model = { ...validCatalog().models[0]!, maxContextTokens: TURN_MAX_OUTPUT_TOKENS + 1 };
-        expect(toModelConfig("model_configs", model).maxContextTokens).toBe(TURN_MAX_OUTPUT_TOKENS + 1);
-    });
-
     test("refuses a row that carries no window at all", () => {
         const { maxContextTokens: _dropped, ...withoutWindow } = validCatalog().models[0]!;
         const row: Parameters<typeof toModelConfig>[1] = Object.assign(withoutWindow, { maxContextTokens: undefined as unknown as number });
@@ -96,18 +81,66 @@ describe("toModelConfig: the context window has no default", () => {
     });
 });
 
+const OVERFLOW = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
+const THINKING_OFF: ThinkingPolicy = { default: "off", sites: {} };
+
 describe("buildGatewayConfig reads the provider type, not the name", () => {
-    const OVERFLOW = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
     const model = toModelConfig("model_configs", { ...validCatalog().models[0]!, providerName: "ollama" });
 
     test("a local-type row of any name needs no key; an unknown type refuses to build", () => {
         const local = buildGatewayConfig({ m: model }, {}, [
             { name: "ollama", providerType: "local", apiKey: null, baseUrl: "http://localhost:11434/v1" },
-        ], OVERFLOW);
+        ], OVERFLOW, THINKING_OFF);
         expect(local.providers.map((p) => [p.name, p.providerType])).toEqual([["ollama", "local"]]);
 
         expect(() =>
-            buildGatewayConfig({ m: model }, {}, [{ name: "ollama", providerType: "vllm", apiKey: "k", baseUrl: null }], OVERFLOW),
+            buildGatewayConfig({ m: model }, {}, [{ name: "ollama", providerType: "vllm", apiKey: "k", baseUrl: null }], OVERFLOW, THINKING_OFF),
         ).toThrow(/provider "ollama": provider_type "vllm"/);
+    });
+});
+
+// t-overflow-edges: the boot check reserves what the gateway's preflight reserves for a turn at
+// every site, the reasoning allowance included where thinking is on.
+describe("buildGatewayConfig: a window must hold input beside the output a turn reserves at every site", () => {
+    const deepseek = (maxContextTokens: number) =>
+        toModelConfig("model_configs", { ...validCatalog().models[0]!, providerName: "deepseek", maxContextTokens });
+    const build = (maxContextTokens: number, thinking: ThinkingPolicy) =>
+        buildGatewayConfig({ m: deepseek(maxContextTokens) }, {}, [{ name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: null }], OVERFLOW, thinking);
+    const agentRunnerThinks: ThinkingPolicy = { default: "off", sites: { "agent-runner": "on" } };
+    // A turn's answer bound plus the least reasoning allowance (thinking.ts).
+    const THINKING_TURN_RESERVE = TURN_MAX_OUTPUT_TOKENS + 32_768;
+
+    test.each([TURN_MAX_OUTPUT_TOKENS, TURN_MAX_OUTPUT_TOKENS - 1, 8_192])(
+        "thinking off: refuses window %s, no larger than a turn's answer bound, naming the model",
+        (maxContextTokens) => {
+            expect(() => build(maxContextTokens, THINKING_OFF)).toThrow(InvalidGatewayCatalog);
+            expect(() => build(maxContextTokens, THINKING_OFF)).toThrow(
+                new RegExp(`test-model: maxContextTokens ${maxContextTokens} is not larger than the ${TURN_MAX_OUTPUT_TOKENS} output tokens`),
+            );
+        },
+    );
+
+    test("thinking off: loads a window one token larger than a turn's answer bound", () => {
+        expect(build(TURN_MAX_OUTPUT_TOKENS + 1, THINKING_OFF).providers[0]!.models[0]!.maxContextTokens).toBe(TURN_MAX_OUTPUT_TOKENS + 1);
+    });
+
+    test.each([TURN_MAX_OUTPUT_TOKENS + 1, 30_000, THINKING_TURN_RESERVE])(
+        "a site with thinking on: refuses window %s, larger than the answer bound but not the answer plus reasoning, naming the site",
+        (maxContextTokens) => {
+            expect(() => build(maxContextTokens, agentRunnerThinks)).toThrow(InvalidGatewayCatalog);
+            expect(() => build(maxContextTokens, agentRunnerThinks)).toThrow(
+                new RegExp(`test-model: maxContextTokens ${maxContextTokens} is not larger than the ${THINKING_TURN_RESERVE} output tokens .*site agent-runner`),
+            );
+        },
+    );
+
+    test("a site with thinking on: loads a window one token larger than the answer plus reasoning", () => {
+        expect(build(THINKING_TURN_RESERVE + 1, agentRunnerThinks).thinking).toEqual(agentRunnerThinks);
+    });
+
+    test("a provider type that takes no thinking switch reserves only the answer bound, whatever the policy", () => {
+        const model = toModelConfig("model_configs", { ...validCatalog().models[0]!, maxContextTokens: 30_000 });
+        const config = buildGatewayConfig({ m: model }, {}, [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: null }], OVERFLOW, agentRunnerThinks);
+        expect(config.providers.map((p) => p.name)).toEqual(["anthropic"]);
     });
 });

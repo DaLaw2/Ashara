@@ -205,7 +205,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    recordOverflowedWindow: async () => undefined,
+    saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");
@@ -438,7 +438,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: async () => ++faults,
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -509,7 +509,11 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         contextExceeded({ provider: "p", modelId: "wide-model", windowTokens: 200_000 }),
       );
       const recorded: number[] = [];
-      deps.workItemRepo.recordOverflowedWindow = async (_id, windowTokens) => void recorded.push(windowTokens);
+      const repo = deps.workItemRepo;
+      repo.saveRefundedOverflow = async (item, expectedPreviousStatus, windowTokens) => {
+        recorded.push(windowTokens);
+        return repo.saveRefunded(item, expectedPreviousStatus);
+      };
 
       const result = await processTask(deps, freshPendingItem());
 
@@ -538,7 +542,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
     test("with none larger: given up naming the model, the window and the estimate; never Failed, no lesson, no failure router", async () => {
       const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps(contextExceeded(null));
-      deps.workItemRepo.recordOverflowedWindow = async () => {
+      deps.workItemRepo.saveRefundedOverflow = async () => {
         throw new Error("no window is recorded when nothing larger exists");
       };
 
@@ -554,6 +558,36 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         outputReserveTokens: 16_384,
         projectedInputTokens: 20_000,
       });
+      expect(failureRoutes()).toBe(0);
+      expect(failedApproaches()).toBe(0);
+    });
+
+    // t-overflow-edges: the catalog changed since the overflow found a wider model. Every re-dispatch
+    // meets the same catalog, so the task is given up typed; it is no fault of Ashara's to requeue
+    // and count toward a project halt.
+    test("no catalog model wider than a recorded overflow: given up as no_wider_model, its dispatch given back; no requeue, no fault counted, no halt", async () => {
+      const noWider: ExecutionResult = {
+        status: "no_wider_model",
+        overflowedWindowTokens: 32_000,
+        detail: "an attempt overflowed a context window of 32000 tokens, and no catalog model graded for it has a larger one",
+        outcome: null,
+        sessionId: "test-session",
+        attempt: 1,
+        errorEnvelope: { outcome: "blocked", summary: "no wider", chain: { boundary: "development", operation: "assignAgent", message: "no wider", timestamp: new Date().toISOString() } },
+      };
+      const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts } = buildEnvironmentBlockedDeps(noWider);
+      let faultsCounted = 0;
+      deps.workItemRepo.recordInfrastructureFault = async () => ++faultsCounted;
+
+      const result = await processTask(deps, { ...freshPendingItem(), overflowedWindowTokens: 32_000 });
+
+      expect(result.status).toBe("blocked");
+      expect(stored().status).toBe("Abandoned");
+      expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
+      expect(stored().blockedReason).toMatchObject({ source: "no_wider_model", overflowedWindowTokens: 32_000 });
+      expect(refunds()).toBe(1);
+      expect(faultsCounted).toBe(0);
+      expect(halts).toEqual([]);
       expect(failureRoutes()).toBe(0);
       expect(failedApproaches()).toBe(0);
     });
@@ -592,7 +626,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         return row.dispatchCount;
       },
       recordInfrastructureFault: async () => 1,
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -960,7 +994,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -1115,7 +1149,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -1285,7 +1319,7 @@ describe("an environment change requested: an environment task is opened and the
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -1483,7 +1517,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         return row.dispatchCount;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -1628,7 +1662,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");
@@ -1859,7 +1893,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      recordOverflowedWindow: async () => undefined,
+      saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async () => {
         throw new Error("saveOrphanExit is not exercised by this test");

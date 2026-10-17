@@ -71,11 +71,13 @@ export interface WorkItemRepository {
    */
   recordCrashOrphan(id: WorkItemId): Promise<number>;
   /**
-   * Raises the largest context window an attempt of the item did not fit to `windowTokens`
-   * (migration 076), never lowering it, in a single UPDATE: the item is dispatched next only on a
-   * model whose window is larger. Throws when the item does not exist.
+   * {@link saveRefunded}, raising in the same transaction the largest context window an attempt of
+   * the item did not fit to `windowTokens` (migration 076), never lowering it: the item is
+   * dispatched next only on a model whose window is larger. Returns the dispatch count after the
+   * refund. Throws, writing none of the three, when any fails: a requeue never commits without the
+   * window that sends it to a wider model, nor the window without its requeue.
    */
-  recordOverflowedWindow(id: WorkItemId, windowTokens: number): Promise<void>;
+  saveRefundedOverflow(item: WorkItem, expectedPreviousStatus: WorkItemStatus, windowTokens: number): Promise<number>;
   /**
    * The startup reconciler's move of a crash orphan out of InProgress: written as `save` writes it,
    * except that its count of startups in a row found InProgress is kept, since its dispatch did not
