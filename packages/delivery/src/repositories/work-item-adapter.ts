@@ -10,7 +10,7 @@ import type { StoredFailureVerdict, WorkItem, WorkItemRepository } from "../doma
 type DbRow = Awaited<ReturnType<WorkItemRowRepository["findById"]>>;
 
 /**
- * The failure_verdict column read through Quality's schema (migration 058). A value that does not
+ * The failure_verdict column read through Quality's schema. A value that does not
  * parse is kept as `unreadable` with its issues rather than thrown: only the routing of a Failed
  * item reads the verdict, and it takes that case's fail-closed path; every other read of the row
  * is unaffected.

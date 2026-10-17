@@ -57,7 +57,7 @@ export interface CycleResult {
 
 /**
  * Finance's admission refusing an LLM call, as the loop routes it: a spend cap's (`project`,
- * `deployment`), or the work ledger's (ADR-084 decision 1), a task's model requests spent
+ * `deployment`), or the work ledger's, a task's model requests spent
  * (`task_work`: the task is given up) or its project's (`project_work`: the project halts).
  */
 type SpendRefusal =
@@ -116,7 +116,7 @@ export function blockedResult(taskId: string, detail: string): TaskResult {
 
 /**
  * Halts every active project at once: the deployment's spend cap, which binds them all, was
- * reached (design P14). Returns the projects it halted.
+ * reached. Returns the projects it halted.
  */
 interface SpendCapHalts {
   blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]>;
@@ -142,17 +142,17 @@ export interface CoreLoopDeps {
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;
   /**
-   * Holds each project's target workspace path (migration 024) and its status:
+   * Holds each project's target workspace path and its status:
    * the gate admits only active projects' tasks and blocks a project with a bad
-   * row (migration 025); the infrastructure halts and the deployment cap's halt
-   * (migration 048); every target, whose settled tasks' branches each cycle releases.
+   * row; the infrastructure halts and the deployment cap's halt;
+   * every target, whose settled tasks' branches each cycle releases.
    * ProjectHaltRepository satisfies it.
    */
   readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts & SettledTargets;
   readonly dispatchService: Pick<DispatchService, "execute">;
   /** Z0's acceptance sweep of a project on main HEAD (Quality; no model is called). */
   readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
-  /** The acceptance sweeps recorded on main (migration 049): which projects are ready, and their verdicts. */
+  /** The acceptance sweeps recorded on main: which projects are ready, and their verdicts. */
   readonly acceptance: AcceptanceStore;
   /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */
   readonly deliveredReports: LiaisonDeliveredReports;
@@ -201,7 +201,7 @@ export interface CoreLoopDeps {
   /** Quality's durable record of check disputes: their count per check task bounds the reopens. */
   readonly checkDisputes: CheckDisputeRecord;
   /**
-   * Quality's durable record of the reviews of plan revisions' suites (ADR-074 addendum 2 d71 c):
+   * Quality's durable record of the reviews of plan revisions' suites:
    * how many reviews named each check task bounds its reopens.
    */
   readonly suiteReviewFindings: SuiteReviewFindingRecord;
@@ -217,7 +217,7 @@ export interface CoreLoopDeps {
    */
   readonly blockReports: LiaisonBlockReports;
   /**
-   * The Liaison's early warning on each project's work ledger (ADR-084 addendum 1 decision 7): one
+   * The Liaison's early warning on each project's work ledger: one
    * report per zone and plan revision, the red zone's to the operator too; run every cycle after the
    * block reports, before the spend-cap check (no LLM call).
    */
@@ -231,7 +231,7 @@ export interface CoreLoopDeps {
   readonly heldCells: { release(): Promise<void> };
   /**
    * The roster role doing a project's environment work, from its latest roster: the owner of the
-   * environment task an implementation's request opens (ADR-074 addendum 2 d66 b). `none`, with
+   * environment task an implementation's request opens. `none`, with
    * why, when the roster names no such role; a roster that cannot be read throws.
    */
   readonly environmentOwner: (projectId: ProjectId) => Promise<EnvironmentOwner>;
@@ -286,7 +286,7 @@ interface SuiteReviewFindingRecord {
 }
 
 /**
- * Quality's freeze of a plan revision's check set (ADR-084 decision 3): freezes the check set of
+ * Quality's freeze of a plan revision's check set: freezes the check set of
  * every review task the dispatched task depends on that is not frozen yet, and resolves to the review
  * tasks it froze. A task that depends on no review freezes nothing.
  */

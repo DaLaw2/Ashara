@@ -22,7 +22,7 @@ function decompositionReask(ctx: { readonly errors: readonly string[] }): string
 }
 
 /**
- * Decomposition LLM wired through its OWN reliability ladder (ADR-030):
+ * Decomposition LLM wired through its OWN reliability ladder:
  * two validated attempts per tier, escalate one capability tier,
  * then `StructuredOutputExhausted`. It runs a SEMANTIC
  * `validate` (phantom `dependsOn` ref detection) inside each attempt and re-asks

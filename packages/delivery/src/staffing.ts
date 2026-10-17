@@ -7,7 +7,7 @@ type Staffing = Awaited<ReturnType<AgentStaffing["staff"]>>;
 
 /**
  * A task reached dispatch with no capability level on its stored spec. Every producer sets one
- * (ADR-074 addendum 2 d70: the planner grades a decomposed task, and sets a fixed level on every
+ * (the planner grades a decomposed task, and sets a fixed level on every
  * task it adds), so its absence is a row written before grading or by a producer that skipped it.
  * Dispatch fails rather than assuming a level the planner never chose.
  */
@@ -65,7 +65,7 @@ function modelFor(
 
 /**
  * Staffs each attempt with the work item's owner role, read from Organization's latest stored
- * roster (s-team-roster-m1): an item without an owner, or whose owner the roster does not hold
+ * roster: an item without an owner, or whose owner the roster does not hold
  * (or whose roster cannot be read), is owner-unresolved and blocks. No default role exists. Its
  * model is one whose window is larger than any an attempt of the task overflowed; with none in the
  * catalog the task is no-wider-model, which gives it up.

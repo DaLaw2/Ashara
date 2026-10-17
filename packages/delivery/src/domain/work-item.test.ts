@@ -302,7 +302,7 @@ describe("Completed re-entry", () => {
   });
 });
 
-// Story s-loop-never-stop-m1 W6: a give-up is the one way a work item leaves without a person.
+// A give-up is the one way a work item leaves without a person.
 describe("giveUpWorkItem", () => {
   const CAUSE: StoredBlockedReason = { source: "check_disputed", checkTaskId: "c1", checkName: "put", reason: "past the bound" };
 

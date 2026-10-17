@@ -9,7 +9,7 @@ import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEven
 import type { InterfaceDefect } from "./domain/index.js";
 import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution.js";
 
-// Delivering -> Accepted (story s-independent-verify-m1 W7, design P11): each cycle, every project
+// Delivering -> Accepted: each cycle, every project
 // whose plan has no open task and at least one goal task done gets one acceptance sweep on main
 // HEAD, run by Z0 with no model. A sweep that passes makes the project Accepted, and nothing is
 // dispatched for it again; the Liaison's delivered report follows. A sweep that fails is a defect,
@@ -44,7 +44,7 @@ interface SweepRecord {
   readonly details: string;
 }
 
-/** The acceptance store (migration 049); the composition root supplies it. */
+/** The acceptance store; the composition root supplies it. */
 export interface AcceptanceStore {
   readyForAcceptance(): Promise<readonly ReadyProject[]>;
   /**

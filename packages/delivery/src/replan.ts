@@ -24,13 +24,12 @@ import type { FirstPlanWrite } from "./first-plan.js";
 import { planOwners, toWrite } from "./first-plan.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
-// Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
-// t-replan-on-change, migration 042), asked for in one of two ways. A client answer that changed an
-// assumption the plan was built on is recorded as a request (replan_requests, migration 052); every
+// Delivery's revision of a plan already under way, asked for in one of two ways. A client answer
+// that changed an assumption the plan was built on is recorded as a request (replan_requests); every
 // such answer awaiting a revision is taken in by the next one, and its report names each, since
 // each was promised the client would hear what it changed. A task given up, for any cause
 // (the failure router's attempt bound, a dispute or review bound, the environment-change bound, an
-// unsatisfiable dependency: ADR-074 addendum 2 d74 D, d76; migrations 045, 048), opens a plan repair:
+// unsatisfiable dependency), opens a plan repair:
 // no person releases its dependents; the remaining work is planned again around it. Either stops the project's
 // dispatch. Once no task of the project is in progress, the current vision is decomposed again with
 // the completed work, and for a repair the given-up work and its evidence, as context: completed work
@@ -46,10 +45,10 @@ const MAX_REPLAN_ATTEMPTS = 3;
 const MAX_REVISIONS_PER_REVIEW = 3;
 
 /**
- * Plan repairs Delivery writes before the project halts as undeliverable (R = 2, ADR-074 addendum 2
- * d74 D, d76): past it the same work is being given up again, and the next give-up halts the
+ * Plan repairs Delivery writes before the project halts as undeliverable (R = 2):
+ * past it the same work is being given up again, and the next give-up halts the
  * project (a plan_repair block) with one report naming the work given up and why. Counted since the
- * owner last reviewed such a halt (exit X3).
+ * owner last reviewed such a halt.
  */
 const MAX_REPAIRS_PER_REVIEW = 2;
 
@@ -59,18 +58,18 @@ const MAX_ABANDONMENT_EVIDENCE_CHARS = 3000;
 /** One of the project's work items as the store reads it, with what was merged for it. */
 interface PlannedItem {
   readonly item: WorkItem;
-  /** The merge commit on the target's main (migration 041); null when none is recorded. */
+  /** The merge commit on the target's main; null when none is recorded. */
   readonly mergeCommit: string | null;
-  /** A Sprint 0 task's statement of the environment it set up (migration 033); null when none is recorded. */
+  /** A Sprint 0 task's statement of the environment it set up; null when none is recorded. */
   readonly environmentStatement: string | null;
   /**
-   * The vision items its latest stored checks decide (task_checks.decides, migration 064), each as
+   * The vision items its latest stored checks decide (task_checks.decides), each as
    * its check task cites it; empty when it has no stored checks or they record no items they decide.
    */
   readonly decided: readonly VisionItem[];
 }
 
-/** A task given up whose repair the project awaits (plan_repairs, migrations 045, 048). */
+/** A task given up whose repair the project awaits (plan_repairs). */
 interface AbandonedTask {
   readonly id: string;
   readonly title: string;
@@ -96,7 +95,7 @@ interface ProjectAwaitingReplan {
   readonly rosterRows: unknown;
   readonly replanAttempts: number;
   readonly replanLastError: string | null;
-  /** Whose failure the last counted attempt was, as stored (migration 066); read by recordedFailureOf. */
+  /** Whose failure the last counted attempt was, as stored; read by recordedFailureOf. */
   readonly replanLastFailure: string | null;
   /** Revisions for client changes written since the operator last reviewed a replan_bound block (all of them when never). */
   readonly revisionsSinceReview: number;
@@ -276,8 +275,8 @@ class ReplanAttemptsExhausted extends Error {
 }
 
 /**
- * The project has spent its revision attempts but holds no error for them. The CHECK of migration
- * 042 makes this unrepresentable; meeting it means the store lied.
+ * The project has spent its revision attempts but holds no error for them. A database CHECK
+ * constraint makes this unrepresentable; meeting it means the store lied.
  */
 class ReplanFailureUnrecorded extends Error {
   constructor(
@@ -555,7 +554,7 @@ function isEnvironmentTask(item: WorkItem): boolean {
 }
 
 /**
- * The product layout a revision builds on (ADR-074 addendum 2 d72 B2), or a new one when no scaffold
+ * The product layout a revision builds on, or a new one when no scaffold
  * completed (an open one is superseded with the rest). Built on, its taskId is the layout's latest
  * merged state: of the latest completed product scaffold and every task with a merge on record that
  * completed after it, the last to complete. Never a task merged before the scaffold, whose commit
@@ -575,7 +574,7 @@ function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
 }
 
 /**
- * The vision items the stored checks of a completed goal task (isGoalTask) decide (ADR-083), so a revision
+ * The vision items the stored checks of a completed goal task (isGoalTask) decide, so a revision
  * need not give them a task again. What the task cites is never read here: an item it cites that no
  * stored check decides, a check stored before decides was recorded or a task completed with no
  * stored checks, is planned again.
@@ -764,7 +763,7 @@ export class Replanner implements Replanning {
             ],
       environment,
       layout: layoutOf(completed),
-      // The same rule as a first plan (ADR-074 addendum 2 d71 d): every new task traces to the current vision.
+      // The same rule as a first plan: every new task traces to the current vision.
       visionItems: vision.items,
       checkedItems: checkedByDone(completed),
     };

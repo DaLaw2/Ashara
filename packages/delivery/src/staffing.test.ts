@@ -66,7 +66,7 @@ describe("dispatch staffs the work item's owner from the latest stored roster", 
   });
 });
 
-// t-context-overflow-routing: a task an attempt of which overflowed a window is never staffed on
+// A task an attempt of which overflowed a window is never staffed on
 // that model again, nor on one no larger.
 describe("a task whose attempt overflowed a context window is staffed on a model whose window is larger", () => {
   const wide: ResolvedModel = { ...model, modelId: "wide-model", modelConfig: { ...model.modelConfig, id: "wide-model", maxContextTokens: 200_000 } };

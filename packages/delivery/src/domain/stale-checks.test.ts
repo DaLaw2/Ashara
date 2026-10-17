@@ -81,7 +81,7 @@ function checkTaskFor(checkedTaskId: string): WorkItem {
   return { ...completedCheckTask(), taskSpec: { origin: "check", checksFor: checkedTaskId } };
 }
 
-describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
+describe("exitSuiteReview: the plan review reopens the check tasks it names", () => {
   test("problems reopen every named check task with its own problems in its brief; the review waits on them at Pending", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");
@@ -126,7 +126,7 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     expect(brief).not.toContain("no vision item the task cites asks for");
   });
 
-  // ADR-084 decision 3: a check task is reopened by its review at most once, counted from the durable record.
+  // A check task is reopened by its review at most once, counted from the durable record.
   test("a check task named a second time is past the bound: the review is given up and no check task is reopened", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");
@@ -160,7 +160,7 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
 });
 
 
-describe("exitDisputedCheck (ADR-074 addendum 2 d65 c, d76 K = 2)", () => {
+describe("exitDisputedCheck: an implementer disputes one check task's checks at most K = 2 times", () => {
   const dispute = (checkTaskId: string, disputes: number) => ({
     checkTaskId,
     revision: 1,

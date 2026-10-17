@@ -474,7 +474,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, refunds: () => refunded, halts };
   }
 
-  // t-context-overflow-routing: a turn that did not fit its model's window meets the same window
+  // A turn that did not fit its model's window meets the same window
   // on that model every time, so it is never Failed, never a lesson, never retried on that model.
   describe("a turn that did not fit its model's window", () => {
     const contextExceeded = (wider: { provider: string; modelId: string; windowTokens: number } | null): ExecutionResult => ({
@@ -593,7 +593,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     });
   });
 
-  // Story s-loop-never-stop-m1 W6: one transient fault must not park a task for a person.
+  // One transient fault must not park a task for a person.
   test("an infrastructure fault within the budget: back to Pending, the dispatch refunded, never Failed, no failure router, no halt", async () => {
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts } = buildEnvironmentBlockedDeps();
 
@@ -608,7 +608,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts).toEqual([]);
   });
 
-  // ADR-080 d3 c: a fault under the refund itself must not charge the task for Ashara's own fault.
+  // A fault under the refund itself must not charge the task for Ashara's own fault.
   test("a refund whose write faults leaves the task uncharged: the requeue and its refund fail together and the recovery writes both", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     let row = freshPendingItem();
@@ -736,7 +736,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts[0]?.reason).toContain("podman binary not found");
   });
 
-  // ADR-080 d3 c: Ashara's own Z0 fault is not the machines; the substrate probe cannot end its halt.
+  // Ashara's own Z0 fault is not the machines; the substrate probe cannot end its halt.
   test("Ashara's own fault past the budget halts the project as a fault for the operator, never on infrastructure", async () => {
     const detail = "Ashara's own machinery failed at stage commitWork (DispatchFault): git add failed: index.lock exists";
     const asharaBlocked: ExecutionResult = {
@@ -786,7 +786,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(failedApproaches()).toBe(0);
   });
 
-  // ADR-084 decision 3: the check set a task is judged by freezes before the task is dispatched.
+  // The check set a task is judged by freezes before the task is dispatched.
   test("the dispatch freezes the check set of the reviews the task depends on before it is counted; a freeze that fails stops it uncounted", async () => {
     const { deps } = buildEnvironmentBlockedDeps();
     const order: string[] = [];
@@ -883,7 +883,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(failedApproaches()).toBe(0);
   });
 
-  // s-platform-role-m1 C2: a project with no environment never runs the task on the BaseCell. W6: nothing
+  // A project with no environment never runs the task on the BaseCell. Nothing
   // re-defines main's environment while every environment task is done, so the task is given up for a repair.
   test("no environment defined: given up with an environment_undefined reason, never Failed, no failure router", async () => {
     const detail = "no environment for task t: no environment is defined on main at abc; no agent ran and nothing executed";
@@ -917,7 +917,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   });
 
 
-  // s-team-roster-m1: no default role works an item no roster role owns. W6: no production path appends
+  // No default role works an item no roster role owns. No production path appends
   // a roster revision after the first, so the task is given up and its repair staffs new tasks.
   test("no owner role: given up with a typed owner_unresolved reason, never Failed, no failed approach, no failure router", async () => {
     const detail = "no roster role can work task t: the work item has no owner role; no agent ran and nothing executed";
@@ -1209,7 +1209,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
     return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, edges, routed: () => routed, approaches: () => approaches };
   }
 
-  // ADR-074 addendum 2 d74 D: a merged task's check that blocks the item's merge may be disputed.
+  // A merged task's check that blocks the item's merge may be disputed.
   test("a dispute of a merged task's check reopens that check's own check task, and the item waits on it by a new edge", async () => {
     const { deps, item, check, edges, routed } = buildDisputeDeps(0, "merged");
 
@@ -1247,7 +1247,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
     expect(approaches()).toBe(0);
   });
 
-  // Story s-loop-never-stop-m1 W6 (d76 K = 2): past the bound the item is given up for a plan repair.
+  // Past the bound (K = 2) the item is given up for a plan repair.
   test("the third dispute of a check task: the item given up with check_disputed for a plan repair, the check task left Completed", async () => {
     const { deps, item, check, routed, approaches } = buildDisputeDeps(2);
 
@@ -1261,7 +1261,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
   });
 });
 
-// ADR-074 addendum 2 d66 b: a refused environment
+// A refused environment
 // edit opens an environment task and the item waits, never an operator editing main.
 describe("an environment change requested: an environment task is opened and the item waits on it", () => {
   const ROLE_ID = "55555555-5555-4555-8555-555555555555";
@@ -1629,7 +1629,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
   });
 });
 
-// t-stop-report-from-merge-record: what the client is told was merged comes from the work item's
+// What the client is told was merged comes from the work item's
 // merge record, written before the task is completed.
 describe("a completed dispatch records its merge before the task is Completed", () => {
   type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatchService"]["execute"]>>;
@@ -1736,8 +1736,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(stored().status).toBe("Completed");
   });
 
-  // t-exec-timeout-orphans: a write that throws out of processTask leaves the item InProgress, which
-  // the startup reconciler requeues: merged work dispatched again.
+  // A write that throws out of processTask would leave the item InProgress, which the startup
+  // reconciler requeues, dispatching merged work again; so a failing merge-record write blocks it.
   test("a merge-record write that keeps failing: not Completed, not InProgress, Blocked naming the merge commit", async () => {
     let attempts = 0;
     const { deps, stored, writes } = buildMergeDeps(merged, async () => {
@@ -1814,7 +1814,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(stored().status).toBe("Completed");
   });
 
-  // ADR-074 addendum 2 d67 b: work already on main is closed by its checks, with main's commit as its record.
+  // Work already on main is closed by its checks, with main's commit as its record.
   test("work already delivered records main's commit its checks passed on, then the task is Completed", async () => {
     const mainCommit = "fedcba9876543210fedcba9876543210fedcba98";
     const { deps, stored, writes } = buildMergeDeps({ ...merged, delivered: { kind: "already-delivered", mainCommit } }, async () => {});
@@ -1826,7 +1826,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(stored().status).toBe("Completed");
   });
 
-  // ADR-074 addendum 2 d71 c: a clean review completes, which releases the plan's implementations.
+  // A clean review completes, which releases the plan's implementations.
   test("a clean review of the plan's suites merges nothing and completes the review task", async () => {
     const { deps, stored, writes } = buildMergeDeps(
       { ...merged, outcome: null, delivered: { kind: "suites-reviewed", reviewed: ["check-a", "check-b"] } },
@@ -1841,7 +1841,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
   });
 });
 
-// ADR-074 addendum 2 d71 c: a review reads the stored
+// A review reads the stored
 // checks together before any implementation, so a suite no product can pass never reaches one.
 describe("a review of the plan's suites with problems: the named check tasks are reopened and the review waits", () => {
   const CHECK_A: WorkItemId = createWorkItemId();
@@ -1965,7 +1965,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
     expect(approaches()).toBe(0);
   });
 
-  // Story s-loop-never-stop-m1 W6: past the bound the review is given up and the plan repaired.
+  // Past the bound the review is given up and the plan repaired.
   test("a check task named past the bound: the review given up with suite_review_unresolved, nothing reopened", async () => {
     const { deps, rowOf, routed, approaches } = buildReviewDeps(2);
 

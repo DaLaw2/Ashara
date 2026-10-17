@@ -2,8 +2,8 @@ import { describeErrorChain } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS, WORK_BUDGET_ERROR_CLASS, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { ModelCallFailure, SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
 
-// Delivery's published language for a project halt (O3 c, ADR-080 d3): Delivery owns the halt
-// (an open episode in project_blocks, migration 059); Engagement owns the engagement lifecycle
+// Delivery's published language for a project halt: Delivery owns the halt
+// (an open episode in project_blocks); Engagement owns the engagement lifecycle
 // (projects.lifecycle: active, stopped, accepted). Every context that asks for a halt, and Engagement's
 // reports of one, read the cause in these words. This module imports nothing but the kernel and
 // Finance's spend-cap class names and amounts and its classifier of a failed model call, none of
@@ -11,28 +11,28 @@ import type { ModelCallFailure, SpendAtCap, WorkAtBudget } from "./acl/finance-a
 // time.
 
 /**
- * What kind of cause blocked a project (migration 040): the closed vocabulary the Liaison's plain
+ * What kind of cause blocked a project: the closed vocabulary the Liaison's plain
  * report to the client is chosen by. `budget_cap`: the project's spend cap refused a model call.
  * `configuration`: a model call was refused by anything but a spend cap (an unpriced model, a cost
  * that cannot be estimated). `fault`: one of Ashara's own records or steps for the project failed.
  * `check_dispute`: a task's implementer kept disputing one of its checks past the bound of disputes
- * (migration 039), which nothing in the team settles. `replan_bound`: the client's changes revised the
- * plan as many times as Delivery revises it before the operator reviews the project (migration 042).
+ * which nothing in the team settles. `replan_bound`: the client's changes revised the
+ * plan as many times as Delivery revises it before the operator reviews the project.
  * `suite_review`: the review of a plan revision's check suites kept naming one check task past the
- * bound of reopens (migration 044), which nothing in the team settles; written before migration 048,
- * which gives the review up instead. `check_dispute` likewise. `plan_repair`: tasks were given up and
- * the remaining work re-planned around them as many times as Delivery repairs the plan (migration
- * 045): the project halts as undeliverable. `infrastructure`: the machines a task runs on kept
- * failing past its fault budget (migration 048); the project resumes by itself once the substrate
+ * bound of reopens, which nothing in the team settles; only legacy rows carry it, since past the
+ * bound the review is given up instead. `check_dispute` likewise. `plan_repair`: tasks were given up and
+ * the remaining work re-planned around them as many times as Delivery repairs the plan:
+ * the project halts as undeliverable. `infrastructure`: the machines a task runs on kept
+ * failing past its fault budget; the project resumes by itself once the substrate
  * probe passes. `replan_stopped`: every attempt to revise the plan failed, the last because the
- * planning model's structured output never validated (migrations 060, 062): the model's failure.
+ * planning model's structured output never validated: the model's failure.
  * `replan_provider_failed`: every attempt failed, the last because the planning model's provider
- * failed the request, an HTTP error or no answer, so no answer was read (migration 062). A revision
+ * failed the request, an HTTP error or no answer, so no answer was read. A revision
  * exhausted by any other error is Ashara's own (`fault`). `model_failed`: any other step stopped on
- * the model's failure, its structured answer never validated or unfit to act on (migration 063).
+ * the model's failure, its structured answer never validated or unfit to act on.
  * `provider_failed`: any other step stopped on its model provider failing the request, so no answer
- * was read (migration 063). `work_budget`: the project's model requests are spent (the work
- * ledger, ADR-084 decision 1, migration 067); the owner's grant and then the operator's unblock end it.
+ * was read. `work_budget`: the project's model requests are spent (the work
+ * ledger); the owner's grant and then the operator's unblock end it.
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -50,7 +50,7 @@ type ProjectBlockCategory =
   | "work_budget";
 
 /**
- * Why a project was blocked (migration 025): the cause's category, the error's class and its full
+ * Why a project was blocked: the cause's category, the error's class and its full
  * chain; a budget_cap halt also carries the amounts its cap was judged on, so a report states them
  * rather than a limit "reached" that the recorded spend had not reached; a work_budget halt carries
  * the work ledger as it stood, so a report names the budget, what was drawn and which call sites drew it.
@@ -91,7 +91,7 @@ export function modelCallBlockCategory(failure: ModelCallFailure): "fault" | "mo
 }
 
 /**
- * Whose failure a counted attempt was, as its record keeps it (migration 066): the model's or its
+ * Whose failure a counted attempt was, as its record keeps it: the model's or its
  * provider's when the record names one; Ashara's otherwise. A record that names no party (counted
  * before the column existed) or a value nothing names is Ashara's to look into, never the model's or
  * the provider's.

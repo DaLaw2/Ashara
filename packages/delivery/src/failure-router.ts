@@ -23,7 +23,7 @@ interface FailureRouteCommon {
   readonly failure: RawFailureContext;
   /**
    * How many dispatch attempts have been made for this item so far. The orchestrator
-   * sources this from the WorkItem's dispatch counter (migration 018), which is
+   * sources this from the WorkItem's dispatch counter, which is
    * incremented at the dispatch seam — so by recovery time it already includes the
    * attempt that just failed. The router replans while this is under the bound, so a
    * bound of N caps the item at N dispatches before it must switch or abandon.
@@ -84,7 +84,7 @@ class FailureContextError extends FailureRouterError {
 
 /**
  * Planning-BC service that turns a permanent task failure into a typed recovery
- * decision (ADR-029 / migration Phase 6). Deterministic and rule-based — no LLM,
+ * decision. Deterministic and rule-based — no LLM,
  * no I/O — so the same inputs always yield the same decision and it fails closed:
  * an undecidable input throws rather than silently leaving the item stuck.
  *
@@ -96,7 +96,7 @@ class FailureContextError extends FailureRouterError {
  *      waiting on a task that will not complete. The reason names the verdict's ground.
  *
  * An abandoned task is repaired around by the next plan revision: the
- * plan_repair_on_abandon trigger (migrations 045, 048) records it in plan_repairs.
+ * plan_repair_on_abandon trigger records it in plan_repairs.
  *
  * After `maxReplanAttempts` the router abandons — it can never emit an unbounded
  * run of identical replans.

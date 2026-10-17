@@ -6,7 +6,7 @@ import type { ScopeSide } from "./engagement-vision-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 
 /**
- * Anti-Corruption Layer: Engagement (ADR-044, ADR-075).
+ * Anti-Corruption Layer: Engagement.
  *
  * With engagement-vision-acl.ts (Engagement's vision language alone), the only file in @ashara/delivery that
  * imports from @ashara/engagement.
@@ -17,9 +17,9 @@ import type { VisionItem } from "../decomposition-types.js";
  * Sprint 0 task chose as an assumption in the vision and report it, and to
  * report each project halt and resumption and each delivered project, to warn the client when a
  * project's model requests run ahead of its finished work, and reads back what happened.
- * Delivery reads the client's vision only as Engagement's published VisionVersion (ADR-075 decision
- * 6, S7, S8), and turns it into its own planning input and into the neutral items an Assignment
- * carries, so no other context reads Engagement's vocabulary (O9).
+ * Delivery reads the client's vision only as Engagement's published VisionVersion, and turns it
+ * into its own planning input and into the neutral items an Assignment carries, so no other context
+ * reads Engagement's vocabulary.
  */
 
 export type {
@@ -77,7 +77,7 @@ function northStarOf(vision: VisionVersion): string {
 }
 
 /**
- * Every item of the vision a planned task can trace to (ADR-074 addendum 2 d71 d, d89): each scope
+ * Every item of the vision a planned task can trace to: each scope
  * boundary (S1..), then each assumption work proceeds on, by its key in the vision, a Stated one by
  * the decision the client's answer made, each with its status, standing with the client and kind.
  * The summary is not an item: it restates the whole tender, so a task tracing to it would trace to

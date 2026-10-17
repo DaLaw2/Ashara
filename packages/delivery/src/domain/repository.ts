@@ -8,7 +8,7 @@ import type { WorkItem } from "./work-item.js";
 export interface ActiveProjects {
   listActiveIds(): Promise<ProjectId[]>;
   /**
-   * Blocks an active project and records why (migration 025); a project already
+   * Blocks an active project and records why; a project already
    * blocked keeps its first cause.
    */
   block(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
@@ -16,8 +16,7 @@ export interface ActiveProjects {
 
 /**
  * Reads of work items are per project: a row whose jsonb does not parse throws
- * WorkItemRowCorrupt naming its project, and fails that project's read only
- * (story s-loop-never-stop-m1).
+ * WorkItemRowCorrupt naming its project, and fails that project's read only.
  */
 export interface WorkItemRepository {
   create(item: WorkItem): Promise<WorkItem>;
@@ -35,14 +34,14 @@ export interface WorkItemRepository {
    * the caller believes the row currently holds (typically the status the item was
    * loaded with, before a domain mutation). The physical writer validates the
    * transition against the state machine and against the live row, failing closed
-   * with InvalidStatusTransition (ADR-029). A move out of InProgress is a dispatch ending in
+   * with InvalidStatusTransition. A move out of InProgress is a dispatch ending in
    * the process that started it, so the same write sets the item's count of startups in a row
-   * found InProgress (migration 070) back to 0.
+   * found InProgress back to 0.
    */
   save(item: WorkItem, expectedPreviousStatus: WorkItemStatus): Promise<void>;
   /**
-   * Atomically increments the item's dispatch counter and returns the new value
-   * (migration 018, r9f-t1). A single `dispatch_count = dispatch_count + 1` UPDATE,
+   * Atomically increments the item's dispatch counter and returns the new value.
+   * A single `dispatch_count = dispatch_count + 1` UPDATE,
    * so it is crash-safe at the dispatch seam: it commits before the agent runs and
    * survives an agent crash, a discarded output, or any downstream throw. Distinct
    * from `save` — it does NOT transition status, so it never competes with the
@@ -59,23 +58,23 @@ export interface WorkItemRepository {
    */
   saveRefunded(item: WorkItem, expectedPreviousStatus: WorkItemStatus): Promise<number>;
   /**
-   * Counts one infrastructure fault on the item's dispatches (migration 048) in a single UPDATE and
+   * Counts one infrastructure fault on the item's dispatches in a single UPDATE and
    * returns the count after it: the durable bound of its uncharged requeues. Throws when the item
    * does not exist.
    */
   recordInfrastructureFault(id: WorkItemId): Promise<number>;
   /**
    * Counts one more startup in a row that found the item InProgress, left by a process that died
-   * (migration 070), in a single UPDATE, and returns the count after it: the durable bound of its
+   * in a single UPDATE, and returns the count after it: the durable bound of its
    * re-dispatches after a crash. Throws when the item does not exist.
    */
   recordCrashOrphan(id: WorkItemId): Promise<number>;
   /**
    * {@link saveRefunded}, raising in the same transaction the largest context window an attempt of
-   * the item did not fit to `windowTokens` (migration 076), never lowering it: the item is
-   * dispatched next only on a model whose window is larger. Returns the dispatch count after the
-   * refund. Throws, writing none of the three, when any fails: a requeue never commits without the
-   * window that sends it to a wider model, nor the window without its requeue.
+   * the item did not fit to `windowTokens`, never lowering it: the item is dispatched next only on
+   * a model whose window is larger. Returns the dispatch count after the refund. Throws, writing
+   * none of the three, when any fails: a requeue never commits without the window that sends it to
+   * a wider model, nor the window without its requeue.
    */
   saveRefundedOverflow(item: WorkItem, expectedPreviousStatus: WorkItemStatus, windowTokens: number): Promise<number>;
   /**
@@ -87,11 +86,11 @@ export interface WorkItemRepository {
    */
   saveOrphanExit(item: WorkItem, expectedPreviousStatus: WorkItemStatus, refund: "refund" | "keep-counted"): Promise<void>;
   /**
-   * Records the merge commit Z0's merge step made on the target's main for the task (migration
-   * 041): the one record of what was merged, which reports to the client read. Throws when the
+   * Records the merge commit Z0's merge step made on the target's main for the task:
+   * the one record of what was merged, which reports to the client read. Throws when the
    * item does not exist; the caller writes it before completing the task, so a failed write
-   * leaves the task not Completed. `kind` is how the commit closed it (migration 049); null only
-   * for a merge whose kind was parked before 049 and so never recorded.
+   * leaves the task not Completed. `kind` is how the commit closed it; null only
+   * for a merge parked before its kind was recorded.
    */
   recordMergeCommit(id: WorkItemId, commit: string, kind: MergeKind | null): Promise<void>;
   /** Records that fromId depends on toId — fromId cannot start until toId completes. */
@@ -103,7 +102,7 @@ export interface WorkItemRepository {
   /**
    * Runs `fn` atomically. The repository handed to the callback is
    * transaction-scoped: creating a batch of work items AND their dependency
-   * edges commits or rolls back as one unit (ADR-029). Callers wrap
+   * edges commits or rolls back as one unit. Callers wrap
    * create-then-addDependency loops in this so a mid-loop failure never leaves
    * an item persisted without its declared edges.
    */

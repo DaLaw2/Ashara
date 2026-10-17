@@ -123,7 +123,7 @@ function stored(projectId: ProjectId, version: number, summary: string, scopeBou
 const visionItemsOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vision).items;
 const northStarOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vision).northStar;
 
-describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
+describe("the vision items a plan traces to", () => {
   test("each scope boundary and each assumption is an item; a Stated one by the decision the answer made", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000024", "test");
     const items = visionItemsOf(
@@ -142,7 +142,7 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
     ]);
   });
 
-  // ADR-074 addendum 2 d89: an assumption is cited by its key in the vision, with its kind and standing.
+  // An assumption is cited by its key in the vision, with its kind and standing.
   test("an assumption is the item of its key, with the kind and standing its record holds; a repeated key is refused", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
     const reading = (inferences: unknown) => stored(projectId, 3, "A store.", ["In: put"], inferences);

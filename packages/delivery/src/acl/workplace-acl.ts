@@ -1,5 +1,5 @@
 /**
- * Anti-Corruption Layer: Workplace (ADR-044, ADR-075).
+ * Anti-Corruption Layer: Workplace.
  *
  * Outside dispatch/, the only file in @ashara/delivery that imports from @ashara/workplace. Delivery reads an
  * attempt's Outcome, Workplace's published language, as the claim it is: the verdict on the work

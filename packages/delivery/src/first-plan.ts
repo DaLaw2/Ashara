@@ -22,7 +22,7 @@ import type {
 import { VisionItemsMissing } from "./decomposition-types.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
-// Delivery's first plan of a project (story s-liaison-intake-m1, ADR-075): the
+// Delivery's first plan of a project: the
 // project's current vision, which Engagement owns and Delivery only reads, is
 // decomposed into an Epic -> Task plan written in one transaction. Delivery never
 // writes to the client; the Liaison reports the outcome from what is recorded here.
@@ -77,7 +77,7 @@ export interface FirstPlanStore {
   /** Blocks the project and stamps planning stopped. */
   stopPlanning(projectId: ProjectId): Promise<void>;
   /**
-   * Blocks the project and records why (migration 025), for a project whose own
+   * Blocks the project and records why, for a project whose own
    * record is inconsistent; a project already blocked keeps its first cause.
    */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
@@ -97,8 +97,8 @@ export interface FirstPlanning {
 }
 
 /**
- * A project reached its attempt cap with no error on record. Migration 020's
- * CHECK makes this unrepresentable; meeting it means the store lied.
+ * A project reached its attempt cap with no error on record. A database
+ * CHECK constraint makes this unrepresentable; meeting it means the store lied.
  */
 class PlanFailureUnrecorded extends Error {
   constructor(
@@ -139,7 +139,7 @@ export function planOwners(projectId: ProjectId, rosterRows: unknown): PlanOwner
  * The kind of work a planned task is. Sprint 0 defines the project environment,
  * the environment role's work; every decomposed task is implementation, and its
  * check task is the check author's. The review of the plan's suites is the check
- * author's role too, as a hat (ADR-074 addendum 2 d71 c): a roster holds exactly one
+ * author's role too, as a hat: a roster holds exactly one
  * role with author-checks, so no other role could take it, and the review is a separate
  * dispatch that reads the stored suites and authored none of them.
  */

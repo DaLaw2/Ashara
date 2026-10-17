@@ -514,7 +514,7 @@ describe("CoreLoop spend cap", () => {
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
-  // Story s-loop-never-stop-m1 W6 (design P14): the cap halts every active project with one report each.
+  // The cap halts every active project with one report each.
   test("at the deployment cap every active project halts at the cap and its report is posted before the loop stops", async () => {
     const order: string[] = [];
     const halted: unknown[] = [];

@@ -138,8 +138,8 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
 }
 
 /**
- * How many times an implementer may dispute the checks of one check task (ADR-074 addendum 2 d65
- * c; K = 2, d76). A dispute past it gives the disputing task up and its plan is repaired: the
+ * How many times an implementer may dispute the checks of one check task
+ * (K = 2). A dispute past it gives the disputing task up and its plan is repaired: the
  * implementer and the check author have disagreed that often and nothing in the team settles it.
  */
 const CHECK_DISPUTE_BOUND = 2;
@@ -244,8 +244,8 @@ function reopenableCheckTask(
 }
 
 /**
- * How many times the review of a plan revision's suites may reopen one check task (ADR-074
- * addendum 2 d71 c; ADR-084 decision 3): once after the first review that acts on it. The count is
+ * How many times the review of a plan revision's suites may reopen one check task:
+ * once after the first review that acts on it. The count is
  * the review's durable record of the check tasks it named (suite_review_findings), never the review's
  * dispatch count, which a reopen refunds. Each check task is reopened at most once, so a revision's
  * review rounds end after at most one per check task plus the first. A review that names one again

@@ -5,7 +5,7 @@ import { projects, visionDocuments, workItems, noOpenAnswer, noOpenStop, project
 import { WorkItemRowRepository } from "./work-item.js";
 import { haltForPlanningStopped } from "./project-halt.js";
 
-// Delivery's first plan of a project (migration 020). A project awaits its first
+// Delivery's first plan of a project. A project awaits its first
 // plan while it is active, has a vision, has no work items and has no planning
 // outcome stamped.
 
@@ -67,7 +67,7 @@ const awaitingPlan = () =>
     isNull(projects.planStoppedAt),
     sql`EXISTS (SELECT 1 FROM vision_documents v WHERE v.project_id = projects.id)`,
     sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id)`,
-    // First planning requires a roster (migration 031): every task gets an owner.
+    // First planning requires a roster: every task gets an owner.
     sql`EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = projects.id)`,
   );
 
@@ -107,7 +107,7 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
   }));
 }
 
-/** A `dependsOn` entry a first plan's decomposition dropped (migration 033). */
+/** A `dependsOn` entry a first plan's decomposition dropped. */
 export interface DroppedPlanDependency {
   readonly dependentTaskTitle: string;
   readonly unresolvedRef: string;

@@ -1,5 +1,5 @@
 /**
- * Anti-Corruption Layer: Organization (ADR-044, ADR-075).
+ * Anti-Corruption Layer: Organization.
  *
  * The ONLY file in @ashara/delivery that imports from @ashara/organization.
  * Organization is upstream of Delivery: the loop asks it to derive a roster for

@@ -7,7 +7,7 @@ type WorkItemJsonbColumn = "task_spec" | "success_criteria" | "blocked_reason";
 /**
  * A work_items row whose jsonb column holds a value its schema rejects. It
  * names the project, so one project's bad row blocks that project instead of
- * failing a read for every project (story s-loop-never-stop-m1). The column
+ * failing a read for every project. The column
  * parser's own error is the cause.
  */
 export class WorkItemRowCorrupt extends Error {

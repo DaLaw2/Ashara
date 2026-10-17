@@ -172,7 +172,7 @@ describe("merge_unrecorded leaves Blocked to Completed once its merge record is 
   });
 });
 
-// Story s-loop-never-stop-m1 W6 (ADR-074 addendum 2 d76): no work item waits on a person.
+// No work item waits on a person.
 describe("no Blocked item is left with an exit only a person takes", () => {
   const MERGE = "0123456789abcdef0123456789abcdef01234567";
   // Keyed by every source: a source added to StoredBlockedReason fails to compile here until it is listed.
@@ -244,7 +244,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     expect([...waiting]).toEqual(["merge_unrecorded", "orphan_unreconciled"]);
   });
 
-  test("an infrastructure block (written before migration 048) goes back to Pending at once, unblocked by its automatic exit", async () => {
+  test("an infrastructure block from a legacy row goes back to Pending at once, unblocked by its automatic exit", async () => {
     const { released, saves, published } = run([blocked(SAMPLE.environment_unavailable)]);
     expect(await released).toBe(1);
     expect(saves).toEqual([expect.objectContaining({ status: "Pending", reason: undefined })]);

@@ -63,10 +63,10 @@ const failureGivenUpSchema = z.object({
  * (no agent ran, nothing executed) or under it (a cell failed mid-attempt).
  * `unavailable` names what was missing (e.g. "container substrate (podman)",
  * "task cell"); `reason` carries the substrate's own diagnostic text for the
- * operator. An infrastructure fault is not the task's (story s-loop-never-stop-m1 W6): the task
+ * operator. An infrastructure fault is not the task's: the task
  * goes back to Pending uncharged, within a fault budget, and this reason is written only on a task
  * given up because its faults went on after the project's infrastructure halt resumed (Abandoned),
- * or on a Blocked row written before migration 048.
+ * or on a legacy Blocked row.
  */
 const environmentUnavailableSchema = z.object({
   source: z.literal("environment_unavailable"),
@@ -78,9 +78,9 @@ const environmentUnavailableSchema = z.object({
 /**
  * The project has no environment a task's cells can be built from: none is defined on the
  * target's main, or the current version's image could not be built. No agent ran, and the task is
- * never run on the BaseCell instead (s-platform-role-m1). `reason` names which. Nothing re-defines
+ * never run on the BaseCell instead. `reason` names which. Nothing re-defines
  * or rebuilds main's environment while every environment task is done, so the task is given up
- * (Abandoned) and its plan repaired, which can plan a new environment (migration 048).
+ * (Abandoned) and its plan repaired, which can plan a new environment.
  */
 const environmentUndefinedSchema = z.object({
   source: z.literal("environment_undefined"),
@@ -106,7 +106,7 @@ const checksStaleSchema = z.object({
 
 /**
  * An implementation task's finished work changed environment recipe files, the platform role's,
- * and no environment task was opened for it (ADR-074 addendum 2 d66 b, d72 B1): the task already had the
+ * and no environment task was opened for it: the task already had the
  * bound of environment tasks opened for it, or none could be opened (no role of the roster does
  * environment work). The task is given up (Abandoned) and its plan repaired. Below the bound, the
  * environment task is opened and the task waits on it at Pending instead. `paths` names the recipe
@@ -135,8 +135,8 @@ const checksRewriteBoundSchema = z.object({
 });
 
 /**
- * The task's implementer disputed one of its stored checks (dispute_check, ADR-074 addendum 2 d65
- * c), and the check task named by `checkTaskId` cannot be reopened to answer the dispute (it is no
+ * The task's implementer disputed one of its stored checks (dispute_check),
+ * and the check task named by `checkTaskId` cannot be reopened to answer the dispute (it is no
  * longer a Completed check task), or the dispute is past the bound of disputes per check task.
  * Written only then, on the task given up for it (Abandoned), whose plan is then repaired; a
  * reopenable check task within the bound is reopened instead and the task waits on it at Pending.
@@ -151,7 +151,7 @@ const checkDisputedSchema = z.object({
 });
 
 /**
- * The review of a plan revision's check suites (ADR-074 addendum 2 d71 c) found problems, and a
+ * The review of a plan revision's check suites found problems, and a
  * check task it named cannot be reopened to answer them (it is not a Completed check task deciding
  * one implementation task), or the review named one past the bound of reviews per check task.
  * Written only on the review task given up for it (Abandoned), whose plan is then repaired;
@@ -169,9 +169,9 @@ const suiteReviewUnresolvedSchema = z.object({
 /**
  * The task cannot be staffed: it has no owner role, or its owner is not a role of the project's
  * latest roster (or that roster cannot be read). No agent ran, and no default role stands in for
- * the owner (s-team-roster-m1). `ownerRoleId` is the stored owner, null when there is none.
+ * the owner. `ownerRoleId` is the stored owner, null when there is none.
  * `rosterRevision` is the latest roster revision the decision was made against, null when the
- * project had none (or, written before migration 040, when it was not recorded). No production
+ * project had none (or, on a legacy row, when it was not recorded). No production
  * path appends a roster revision after the first (db roster.ts recordFirstRoster), so the task is
  * given up (Abandoned) and its plan repaired, which staffs the new tasks from the latest roster.
  */
@@ -184,7 +184,7 @@ const ownerUnresolvedSchema = z.object({
 });
 
 /**
- * The task drew every model request its work budget holds (the work ledger, ADR-084 decision 1):
+ * The task drew every model request its work budget holds (the work ledger):
  * Finance refused its next request before it was sent. No grant raises a task's budget, so the
  * task is given up (Abandoned), never requeued, and its plan repaired. `budgetRequests` is the
  * task's budget and `drawnRequests` the requests drawn against it when the request was refused;
@@ -271,8 +271,8 @@ const mergeUnrecordedSchema = z.object({
   source: z.literal("merge_unrecorded"),
   mergeCommit: z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/),
   /**
-   * How the commit closed the task (migration 049): Z0's own merge, or main's commit its checks
-   * passed on when it changed nothing. Absent on a row written before it: recorded as not known.
+   * How the commit closed the task: Z0's own merge, or main's commit its checks
+   * passed on when it changed nothing. Absent on a legacy row: recorded as not known.
    */
   mergeKind: z.enum(["merged", "already_delivered"]).optional(),
   reason: z.string().min(1),
@@ -282,8 +282,8 @@ const mergeUnrecordedSchema = z.object({
 /**
  * A task a dead process left InProgress that the startup reconciler could not settle within its
  * bound: it could not read the target's main for the task's merge commit, or could not write the
- * requeue (or completion) it found. Ashara's own Z0 machinery failed (fault class `ashara`, ADR-080
- * d3 c), so nothing is charged to the task. Never requeued without main read: its work may be
+ * requeue (or completion) it found. Ashara's own Z0 machinery failed (fault class `ashara`),
+ * so nothing is charged to the task. Never requeued without main read: its work may be
  * merged. Its exit is automatic (orchestrator parked-exits.ts): each cycle the loop reads main
  * again, and the task is Completed with the merge it finds, or back to Pending when main holds
  * none. `step` names what failed, `reason` the last failure's chain.
@@ -298,8 +298,8 @@ const orphanUnreconciledSchema = z.object({
 
 /**
  * The task was open (not started, Blocked or Failed) when a revision of the plan replaced it: the
- * client changed what is built (migration 042), or a task was given up and the remaining work was
- * re-planned around it (a plan repair, migration 045). It is Abandoned and never dispatched. Written
+ * client changed what is built, or a task was given up and the remaining work was
+ * re-planned around it (a plan repair). It is Abandoned and never dispatched. Written
  * only on Abandoned items. `planRevision` is the revision that replaced it; `requestedBy` the client
  * answer that asked for it, null for a plan repair, whose given-up tasks `repairOf` names.
  */
@@ -313,7 +313,7 @@ const supersededSchema = z.object({
 });
 
 /**
- * The acceptance sweep on main HEAD failed (story s-independent-verify-m1 W7, migration 049): once
+ * The acceptance sweep on main HEAD failed: once
  * every task of the plan was settled with a goal task done, Z0 ran the environment's test and the
  * latest checks of every completed implementation task on main, and they did not all pass. Written
  * on the defect item Z0 opens for that sweep, given up (Abandoned) at once, so the plan is repaired
@@ -331,7 +331,7 @@ const acceptanceFailedSchema = z.object({
 
 /**
  * HTTP API (PATCH /work-items/:id/status): a Failed or Abandoned item an operator moved, or a
- * Blocked row written before migration 048 (the route no longer blocks a task). Passthrough
+ * legacy Blocked row (the route never blocks a task). Passthrough
  * preserves caller-supplied fields — the user content is open-world.
  */
 const apiSchema = z
@@ -369,7 +369,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
 export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 
 /**
- * How a task's recorded commit closed it (migration 049): Z0's own merge, or main's commit at which
+ * How a task's recorded commit closed it: Z0's own merge, or main's commit at which
  * the task, having changed nothing, passed its checks and the regression suite (already delivered).
  */
 export type MergeKind = "merged" | "already_delivered";
@@ -456,14 +456,14 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
 
 /**
  * How a Blocked work item leaves Blocked (Discipline B: every state has a way out, and no work item
- * waits on a person: story s-loop-never-stop-m1 W6, ADR-074 addendum 2 d76). Every exit is taken by
+ * waits on a person). Every exit is taken by
  * the loop itself, each cycle (orchestrator parked-exits.ts), and each has a production writer.
  * `merge-recorded`: to Completed (not Pending), once the record of `mergeCommit` is written; the
  * loop itself writes it again each cycle. `read-main`: main is read for the task's merge, then to
  * Completed with the merge found or to Pending when main holds none; main still unreadable stays
  * Blocked for the next cycle. `requeue`: back to Pending at once, uncharged: an
  * infrastructure fault is not the task's. `give-up`: the cause cannot clear by itself, so the task
- * is given up (Abandoned) and its plan repaired (migration 045, widened by 048).
+ * is given up (Abandoned) and its plan repaired.
  */
 type BlockedExit =
   | { readonly kind: "merge-recorded"; readonly mergeCommit: string; readonly mergeKind: MergeKind | null }
@@ -473,7 +473,7 @@ type BlockedExit =
 
 /**
  * The exit of a Blocked item's stored reason. Only merge_unrecorded and orphan_unreconciled are
- * written on Blocked items now; every other source on a Blocked row was written before migration 048 (or is no Blocked
+ * written on Blocked items; every other source on a Blocked row is a legacy row's (or is no Blocked
  * reason at all: task_failed, orchestrator_error, replan, failure_given_up, superseded), as is a
  * Blocked item with no reason. None of those waits: an infrastructure fault is requeued, anything
  * else is given up.

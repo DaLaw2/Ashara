@@ -1,8 +1,8 @@
 import type { ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
 
-// The automatic exit of a project halted on infrastructure (story s-loop-never-stop-m1 W6; design
-// P17, exit X2): the owner fixes the host, and the loop resumes the project by itself. Each cycle,
+// The automatic exit of a project halted on infrastructure:
+// the owner fixes the host, and the loop resumes the project by itself. Each cycle,
 // while any project is halted so, the substrate is probed once (no LLM call); a probe that passes
 // ends each such halt with what it observed, the project returns to work, and the Liaison tells the
 // client once. A probe that fails, or throws, leaves every halt as it is (fail-closed).

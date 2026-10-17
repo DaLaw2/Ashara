@@ -109,7 +109,7 @@ import type { WorkKind } from "../acl/organization-acl.js";
 import { attemptProfileOf } from "../acl/workplace-acl.js";
 import { DispatchRecords } from "./dispatch-records.js";
 
-// Delivery's dispatch of one task (ADR-075): it resolves what decides the work, builds the brief,
+// Delivery's dispatch of one task: it resolves what decides the work, builds the brief,
 // staffs the attempt, runs it in Workplace and hands every verdict to Quality's TaskVerification.
 // What happens to the task afterwards is the core loop's (execution.ts), from the ExecutionResult.
 
@@ -147,7 +147,7 @@ interface Unplannable {
 
 /**
  * No environment the task's cells could be built from: Blocked with `environment_undefined`
- * before anything ran, never a BaseCell fallback (s-platform-role-m1 C2).
+ * before anything ran, never a BaseCell fallback.
  */
 function environmentUndefined(
   task: DispatchRef,
@@ -173,7 +173,7 @@ function environmentUndefined(
 
 /**
  * No roster role can work the task: Blocked with `owner_unresolved` before any worktree or cell
- * exists. No default role is substituted (s-team-roster-m1).
+ * exists. No default role is substituted.
  */
 function ownerUnresolved(
   task: DispatchRef,
@@ -265,7 +265,7 @@ type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | Owner
 
 /**
  * Builds the agent half of a task's Assignment: its owner role and its model, resolved once per
- * attempt and never inside it (ADR-074 d44). The composition root supplies it. A model that
+ * attempt and never inside it. The composition root supplies it. A model that
  * cannot be resolved throws and fails the dispatch.
  */
 export interface AgentStaffing {
@@ -278,7 +278,7 @@ export interface AgentStaffing {
   widerModel(task: TaskDescriptor, windowTokens: number): AgentStaff["model"] | null;
 }
 
-/** The limits of one attempt; the wall clock is the attempt's own (ADR-074 d56, 20 minutes). */
+/** The limits of one attempt; the wall clock is the attempt's own. */
 interface AttemptPolicy {
   readonly maxTurns: number;
   /** Upper bound of one run_command; the model may ask for less. */
@@ -336,7 +336,7 @@ export interface TaskDescriptor {
    */
   readonly successCriteria: readonly string[];
   /**
-   * work_items.overflowed_window_tokens (migration 076): the largest context window an attempt of
+   * work_items.overflowed_window_tokens: the largest context window an attempt of
    * the task did not fit, so its dispatch is staffed with a model whose window is larger; null when
    * no attempt has overflowed one.
    */
@@ -405,7 +405,7 @@ interface DispatchServiceDeps {
   readonly staffing: AgentStaffing;
   readonly attemptPolicy: AttemptPolicy;
   /**
-   * The environment substrate (s-platform-role-m1): builds an environment version's image for
+   * The environment substrate: builds an environment version's image for
    * build_environment, the substrate gate and every later task's cells, and keeps the Sprint 0
    * task's stack statement.
    */
@@ -414,12 +414,12 @@ interface DispatchServiceDeps {
     readonly statements: EnvironmentStatementStore;
   };
   /**
-   * Quality's task checks (s-independent-verify-m1): a check task stores the checks it wrote, and
+   * Quality's task checks: a check task stores the checks it wrote, and
    * an implementation task is decided by them. Required: no task is verified without them.
    */
   readonly checks: TaskCheckStore;
   /**
-   * Quality's review of a plan revision's suites (ADR-074 addendum 2 d71 c): a review task is
+   * Quality's review of a plan revision's suites: a review task is
    * dispatched to it, never to an agent, so it runs no cell. Required: no implementation is released
    * without it.
    */
@@ -477,7 +477,7 @@ export class DispatchService {
       title: task.title,
       // The stored goal or none: a task without one is never given its title as a goal.
       goal: task.taskSpec?.goal,
-      // The stored grade as it is (ADR-074 addendum 2 d70), never a default: staffing refuses a task
+      // The stored grade as it is, never a default: staffing refuses a task
       // without one, and the model it is staffed with is emitted when its attempt starts.
       capability: task.taskSpec?.capability,
     });
@@ -717,7 +717,7 @@ export class DispatchService {
    */
   private async planWork(task: TaskDescriptor, environment: DispatchEnvironment): Promise<WorkPlan | Unplannable> {
     // The product scaffold is decided by the product's build and test from the definition on its
-    // merge: no check can be written for a layout that does not exist yet (ADR-074 addendum 2 d72 B2).
+    // merge: no check can be written for a layout that does not exist yet.
     if (task.taskSpec?.origin === "product-scaffold") {
       if (task.taskSpec.checkedBy !== "substrate" || environment.kind !== "environment") {
         return {
@@ -755,12 +755,12 @@ export class DispatchService {
         };
       }
       // Every authoring, the first and each one after a dispute, a review or staleness, is red-run
-      // on the same fixed commit, never on main as later merges left it (ADR-074 addendum 2 d74 A).
+      // on the same fixed commit, never on main as later merges left it.
       const foundation = await this.deps.checks.foundationOf(task.id);
       if (foundation.kind === "none") {
         return { kind: "unplannable", operation: "resolveCheckFoundation", reason: `no foundation to red-run the checks on: ${foundation.reason}` };
       }
-      // ADR-083: its checks are kept only when they decide every item it cites, so a check task that
+      // Its checks are kept only when they decide every item it cites, so a check task that
       // records none has nothing its checks could be judged complete against.
       // eslint-disable-next-line no-restricted-syntax -- policy default: an absent sources list cites no item, which the unplannable refusal below rejects as an empty one
       const [firstCited, ...restCited] = (task.taskSpec?.sources ?? []).map((source) => source.id);
@@ -822,7 +822,7 @@ export class DispatchService {
       const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
       taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}\n\n${formatFoundationForCheckAuthor(plan.foundation, checkAreaOf(plan.checkedTaskId))}`;
     }
-    // Named before work starts (ADR-074 addendum 2 d66 c, d72): what the ownership gate refuses,
+    // Named before work starts: what the ownership gate refuses,
     // and the inputs whose change rebuilds the environment.
     const protectedPaths: AgentBrief["protectedPaths"] =
       environment.kind === "environment"
@@ -890,8 +890,8 @@ export class DispatchService {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, brief, staff, workDir, targetProjectPath, sessionId } = d;
 
-    // Before every implementation dispatch, before the model is called at all (ADR-074 addendum 2
-    // d74 A): checks red-run on another environment version are trusted only once they hold the
+    // Before every implementation dispatch, before the model is called at all:
+    // checks red-run on another environment version are trusted only once they hold the
     // red-run rule on their baseline in this dispatch's image; then work already on main is closed as
     // delivered, whoever delivered it. In that order: a set that cannot tell the task's work from its
     // absence would pass on main whatever main holds, and close the task on nothing.
@@ -970,7 +970,7 @@ export class DispatchService {
       if (unresolved !== null) return unresolved;
     }
 
-    // "No changes" is judged on the task branch against main (ADR-074 addendum 2 d65 d), not on this
+    // "No changes" is judged on the task branch against main, not on this
     // attempt's own edits: a re-dispatch may find its work already committed there by an earlier
     // dispatch (endWithoutDone's partial-work commit) and rightly finish done without editing.
     let workChanged: readonly string[] = filesChanged;
@@ -978,7 +978,7 @@ export class DispatchService {
       const onBranch = await this.branchWork(d, outcome);
       if (onBranch.kind === "ended") return onBranch.result;
       workChanged = onBranch.paths;
-      // Work already on main (ADR-074 addendum 2 d67 b) is decided by its checks on main, never by the word of an implementer that changed nothing.
+      // Work already on main is decided by its checks on main, never by the word of an implementer that changed nothing.
       if (workChanged.length === 0 && d.work.kind === "stored-checks") return this.verification.deliveredOnMain(d, d.work.stored, { outcome, agentWork: "kept" }, outcome.turnsUsed);
       if (workChanged.length === 0) {
         const reason = NO_CHANGE_REASON;
@@ -1016,7 +1016,7 @@ export class DispatchService {
       };
     } else if (d.work.kind === "scaffold") {
       // No gate ran the scaffold's build and test before its merge: their verdict there is its
-      // own attempt's, never a regression of the tree (ADR-074 addendum 2 d74 D).
+      // own attempt's, never a regression of the tree.
       finalizeDeps = {
         postMergeOperation: "postMergeScaffold",
         postMergeVerify: (path, lease) => this.verification.postMergeScaffold(d, path, lease),
@@ -1395,7 +1395,7 @@ export class DispatchService {
     }
 
     // Workplace offers dispute_check only to implementation work with stored checks, and only for
-    // the names of its own checks or of a merged task's (ADR-074 addendum 2 d74 D); a dispute that
+    // the names of its own checks or of a merged task's; a dispute that
     // names no stored check falls through to failed below.
     const disputed = outcome.kind === "disputed" && d.work.kind === "stored-checks" ? disputedCheckOf(task.id, d.work, outcome.checkName, outcome.ofTask) : null;
     if (outcome.kind === "disputed" && disputed !== null) {

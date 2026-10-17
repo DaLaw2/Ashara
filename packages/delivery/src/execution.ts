@@ -42,8 +42,8 @@ type GiveUpCause = Extract<
 
 /**
  * Infrastructure faults a task's dispatches meet, each requeued uncharged, before its project halts
- * as infrastructure (story s-loop-never-stop-m1 W6). Why 3: it is A, the attempts a task's own work
- * gets (ADR-074 addendum 2 d76), so a fault that is not the task's is retried as often as one that
+ * as infrastructure. Why 3: it equals the attempts a task's own work
+ * gets, so a fault that is not the task's is retried as often as one that
  * is. The fault past it halts the project once with its report; the substrate probe resumes the
  * project, and one more fault on the same task after that gives the task up: the probe passes but
  * this task's machines keep failing, so the fault is not one the halt can wait out.
@@ -192,7 +192,7 @@ async function executeTask(
   if (execResult.status === "environment_change_requested") {
     // Not a failure to retry: only environment work may change the recipe, so a replan would
     // meet the same refusal. An environment task is opened for the platform role and the item
-    // waits on it, within a bound (ADR-074 addendum 2 d66 b); its branch is already deleted, so it
+    // waits on it, within a bound; its branch is already deleted, so it
     // restarts from main once the environment has changed.
     await routeAsEnvironmentChange(deps, task, execResult);
     return {
@@ -216,7 +216,7 @@ async function executeTask(
   }
 
   if (execResult.status === "disputed") {
-    // Not a task failure and no lesson (ADR-074 addendum 2 d65 c): the check is its author's to
+    // Not a task failure and no lesson: the check is its author's to
     // answer, so the check task is reopened with the dispute and the item waits on it, within a
     // bound of disputes per check task; past it the item is given up and its plan repaired.
     await routeAsDisputed(deps, task, execResult);
@@ -229,7 +229,7 @@ async function executeTask(
   }
 
   if (execResult.status === "suite_review_problems") {
-    // Not the review's failure and no lesson (ADR-074 addendum 2 d71 c): the checks are their
+    // Not the review's failure and no lesson: the checks are their
     // authors' to fix, so each named check task is reopened with the findings and the review waits
     // on them to read the new suites, each check task reopened at most once; past that the review
     // is given up and its plan repaired.
@@ -258,7 +258,7 @@ async function executeTask(
   if (execResult.status === "environment_undefined") {
     // Not a task failure, so never Failed: a re-dispatch meets the same main. Nothing re-defines or
     // rebuilds main's environment while every environment task is done, so the task is given up
-    // and its plan repaired, which can plan a new environment (W6: no item waits on a person). No
+    // and its plan repaired, which can plan a new environment (no item waits on a person). No
     // agent ran, so the dispatch is given back: the count is attempts at the task's work.
     await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: execResult.detail }, "refund");
     return {
@@ -305,7 +305,7 @@ async function executeTask(
 
   if (execResult.status === "context_exceeded") {
     // Not a task failure and no lesson: the same model meets the same window again, so the
-    // FailureRouter's replan would only spend the work ledger on it (ADR-084 addendum 1 item 10: a
+    // FailureRouter's replan would only spend the work ledger on it (a
     // bound reached escalates). The task goes on to a model whose window is larger, or is given up.
     await routeAsContextExceeded(deps, task.id, execResult);
     return {
@@ -340,7 +340,7 @@ async function executeTask(
     // fault a re-dispatch would meet again, so the project is blocked until the owner fixes it.
     const refusal: TaskRefusal = deps.spendCap.refusalOf(execResult.refusal) ?? configurationRefusal(task, execResult.refusal);
     if (refusal.kind === "task_work") {
-      // The task's model requests are spent (the work ledger, ADR-084 decision 1): no grant raises a
+      // The task's model requests are spent (the work ledger): no grant raises a
       // task's budget, so a re-dispatch meets the same refusal. Given up, never requeued, and its
       // plan repaired; the dispatch is given back, since its attempt was not found wanting.
       await routeAsGivenUp(deps, task.id, workBudgetGiveUp(refusal), "refund");
@@ -395,7 +395,7 @@ async function executeTask(
       // same): the task is never Completed without it (Discipline A). The merge is on main, so a
       // record that cannot be written parks the item rather than leaving it InProgress, which the
       // startup reconciler would requeue and so re-dispatch merged work. Work already delivered
-      // (ADR-074 addendum 2 d67 b) merged nothing: its record is main's commit its checks passed on.
+      // merged nothing: its record is main's commit its checks passed on.
       const mergeCommit = delivered.kind === "merged" ? delivered.mergeCommit : delivered.mainCommit;
       const mergeKind: MergeKind = delivered.kind === "merged" ? "merged" : "already_delivered";
       const unrecorded = await recordMergeWithRetry(deps, task.id, mergeCommit, mergeKind);
@@ -580,7 +580,7 @@ async function routeAsParked(
 }
 
 /**
- * Gives the item up with the stated cause; its abandonment opens a plan repair (migration 048).
+ * Gives the item up with the stated cause; its abandonment opens a plan repair.
  * An item that is no longer open (moved during the dispatch) is left where it is. `refund` gives
  * the dispatch back in the same write as the give-up, when the attempt did no work the retry bound
  * should charge; `keep` leaves it counted.
@@ -668,7 +668,7 @@ class ProviderFaultBudgetSpent extends Error {
 }
 
 /**
- * A fault under a dispatch that is not the task's work (story s-loop-never-stop-m1 W6; ADR-080 d3 c):
+ * A fault under a dispatch that is not the task's work:
  * the substrate's or Ashara's own Z0 machinery. It is counted on the task, durably, and the attempt
  * is not charged and no lesson is written. Within the budget the item goes back to Pending (its
  * dispatch refunded when the seam `counted` it). The fault past the budget halts the project under
@@ -939,7 +939,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
       return;
     }
     await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsDisputed");
-    // A disputed check of a task already merged (ADR-074 addendum 2 d74 D) may be written by a
+    // A disputed check of a task already merged may be written by a
     // check task of another plan revision, which the item does not depend on: the edge is what
     // holds it at Pending until the check task has written them again.
     if (!(await deps.workItemRepo.getDependencies(item.id)).includes(checkTask.id)) {
@@ -1173,7 +1173,7 @@ async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem, verdic
   // transition is committed first, then events are published best-effort. A
   // publish failure must NOT re-drive the domain fallback (that would call
   // failWorkItem on an already-Failed item and throw Failed->Failed) — the
-  // transition is durable independent of the audit log (ADR-029, mig-phase-5).
+  // transition is durable independent of the audit log.
   const events = await commitFailure(deps.workItemRepo, task.id, verdict);
   await publishBestEffort(deps.eventStore, task.id, events, "execution.routeAsFailure");
 }
@@ -1317,13 +1317,13 @@ export async function processTask(
     }
     targetProjectPath = workspace.path;
 
-    // The check set an implementation is about to be judged by freezes before it is dispatched
-    // (ADR-084 decision 3); a freeze that cannot be written stops the dispatch, uncounted.
+    // The check set an implementation is about to be judged by freezes before it is dispatched;
+    // a freeze that cannot be written stops the dispatch, uncounted.
     for (const reviewTaskId of await deps.checkSetFreeze.freezeFor(task.id)) {
       console.log(`[${task.id}] the check set of review task ${reviewTaskId} is frozen: this is the first task dispatched on it`);
     }
 
-    // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
+    // DISPATCH SEAM. The item is now committed InProgress and
     // is about to be handed to the agent. Bump the dispatch counter with a single
     // atomic UPDATE BEFORE executeTask, so the attempt is recorded even if the agent
     // crashes, its output is discarded, or any downstream step throws: a count taken
@@ -1537,7 +1537,7 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
   // Commit the Failed transition first, then publish best-effort. A publish
   // failure must not re-drive the domain fallback onto an already-Failed item
   // (Failed->Failed) — the transition is durable independent of the audit
-  // publish (ADR-029, mig-phase-5).
+  // publish.
   let events: DomainEvent[];
   try {
     events = await PlanningService.route(deps.workItemRepo, task.id, verdict);
@@ -1560,7 +1560,7 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
 /**
  * Recovers from a THROWN orchestrator error during `processTask` (as opposed to a typed TaskResult,
  * which processTask routes itself, its own throws included): the throw is Ashara's own fault, never
- * the task's work, so no lesson is written for it (ADR-080 d3 c). An item left InProgress is
+ * the task's work, so no lesson is written for it. An item left InProgress is
  * requeued uncharged as Ashara's fault (counted on its fault budget), its dispatch given back with
  * the requeue when the throw came out of a dispatch the seam counted (CountedDispatchThrew): a
  * routing whose write faulted wrote neither its transition nor its refund. An item the

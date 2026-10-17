@@ -10,7 +10,7 @@ import type { DroppedPlanDependency } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 
-// The Liaison's reports on planning outcomes (migration 020). A report is due
+// The Liaison's reports on planning outcomes. A report is due
 // while the outcome is stamped on the project and no report on it exists.
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
@@ -21,11 +21,11 @@ interface TaskCounts {
   readonly decomposition: number;
   /** The Sprint 0 task decomposition adds to every plan: the project environment. */
   readonly sprint0: number;
-  /** The product scaffold decomposition adds after Sprint 0: the product's layout (ADR-074 addendum 2 d72 B2). */
+  /** The product scaffold decomposition adds after Sprint 0: the product's layout. */
   readonly scaffolds: number;
   /** The check task decomposition adds for each task it produced. */
   readonly checks: number;
-  /** The review of every check of the plan, read together before any of its work starts (ADR-074 addendum 2 d71 c). */
+  /** The review of every check of the plan, read together before any of its work starts. */
   readonly reviews: number;
   /** Tasks whose task_spec records no origin (written before origin was recorded). */
   readonly unrecorded: number;
@@ -33,23 +33,23 @@ interface TaskCounts {
   readonly started: number;
 }
 
-/** A revision of the plan written before the first plan was reported (migration 042); `summary` as stored. */
+/** A revision of the plan written before the first plan was reported; `summary` as stored. */
 interface RevisionBeforeReport {
   readonly revisionId: string;
   readonly revision: number;
   readonly summary: unknown;
-  /** The client answers recorded as taken in by it (replan_requests, migration 052). */
+  /** The client answers recorded as taken in by it (replan_requests). */
   readonly answersTaken: number;
 }
 
-/** How many ordering hints the plan dropped; unrecorded on a project planned before migration 033. */
+/** How many ordering hints the plan dropped; unrecorded on a project planned before they were recorded. */
 type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number } | { readonly kind: "unrecorded" };
 
 const DroppedPlanDependenciesSchema: z.ZodType<DroppedPlanDependency[]> = z.array(
   z.object({ dependentTaskTitle: z.string(), unresolvedRef: z.string() }),
 );
 
-/** projects.plan_dropped_dependencies holds something other than migration 033's list. */
+/** projects.plan_dropped_dependencies holds something other than a list of dropped dependencies. */
 class PlanDroppedDependenciesCorrupt extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -100,11 +100,11 @@ const unreported = (subject: PlanReportSubject) =>
  * is due, and none while the project awaits a revision: the client is
  * not told of a plan already known to be changing. Planning that
  * stopped is due only while the project is blocked: a project the client has
- * stopped (migration 028), or has a stop awaiting the Liaison, gets the stop
+ * stopped, or has a stop awaiting the Liaison, gets the stop
  * report and nothing more. A work item
  * whose jsonb does not parse is that one project's bad record, so it is
  * returned as that project's row instead of failing the listing for every
- * project (story s-loop-never-stop-m1); any other planned project whose rows do
+ * project; any other planned project whose rows do
  * not read is its UnreadSubject (readEach).
  */
 export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanReportRow | UnreadSubject>> {

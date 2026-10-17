@@ -19,7 +19,7 @@ const A1: VisionItem = {
 
 // A1 is checked by work already done unless a test says otherwise, so the tests of other rules plan
 // lines citing S1 alone (S1 is in scope, so a plan must cite it); the tests of the coverage rule
-// (d89 E, ADR-083) clear checkedItems.
+// clear checkedItems.
 const INPUT: DecompositionInput = {
     epicTitle: "Studio bookings",
     epicNorthStar: "Members can book a seat in a class.",
@@ -136,7 +136,7 @@ describe("DecompositionEngine", () => {
         expect(result.tasks.every((t) => !("checks" in t.taskSpec))).toBe(true);
     });
 
-    // ADR-074 addendum 2 d72 B2: the product's layout is set by an implementer before any check names it.
+    // The product's layout is set by an implementer before any check names it.
     test("a first plan sets up the product's layout after Sprint 0 and before every check, traced to the items it enables", async () => {
         const llm = scriptedLlm(
             { tasks: [task("t1", {}, ["S1"]), task("t2", { dependsOn: ["t1"] }, ["A1"])] },
@@ -322,8 +322,8 @@ describe("DecompositionEngine", () => {
         const llm = scriptedLlm({ tasks: [task("t1", { [field]: undefined })] }, seen);
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toThrow(field);
     });
-    // ADR-074 addendum 2 d71 d: a task must not ask for what the tender never asked for.
-    // d89 A: every deliverable and acceptance line names its own sources.
+    // A task must not ask for what the tender never asked for:
+    // every deliverable and acceptance line names its own sources.
     test.each([
         ["an acceptance line that names no source", { acceptance: [{ text: "keys come back sorted", sources: [] }] }, "names no vision item it serves"],
         ["a deliverable that names no source", { deliverables: [{ text: "sorted listing", sources: [] }] }, "names no vision item it serves"],
@@ -339,7 +339,7 @@ describe("DecompositionEngine", () => {
         expect(errors).toContain(message);
     });
 
-    // d89 E: an internal-design assumption guides the implementer; it is never what a check decides.
+    // An internal-design assumption guides the implementer; it is never what a check decides.
     test("an internal-design assumption cannot be the source of an acceptance line or a deliverable", async () => {
         for (const broken of [
             { acceptance: [{ text: "every booking lands in the ledger", sources: ["S1", "A2"] }] },
@@ -365,7 +365,7 @@ describe("DecompositionEngine", () => {
         expect(prompt).not.toContain('"visionItems"');
     });
 
-    // ADR-083: an assumption whose breach the client could observe gets a check; a plan cannot leave it to chance.
+    // An assumption whose breach the client could observe gets a check; a plan cannot leave it to chance.
     test("a plan in which no task cites a client-visible assumption is rejected through the ladder, never written", async () => {
         const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
 
@@ -375,7 +375,7 @@ describe("DecompositionEngine", () => {
         expect(errors).toContain('No task cites A1 ("A class holds at most twenty members")');
     });
 
-    // ADR-083: citing gives the item a task whose check set must decide it; no line's text is read as checking it.
+    // Citing gives the item a task whose check set must decide it; no line's text is read as checking it.
     test("a deliverable or an acceptance line citing the assumption, by id or exact text, gives it a task", async () => {
         const deliverableOnly = scriptedLlm({ tasks: [task("t1", { deliverables: [{ text: "twenty seats", sources: ["S1", "A1"] }] })] }, seen);
         await new DecompositionEngine(deliverableOnly).decompose({ ...INPUT, checkedItems: [] });
@@ -396,7 +396,7 @@ describe("DecompositionEngine", () => {
         expect(seen.prompts[0]).toContain("a plan that leaves one uncited is rejected: S1, A1.");
     });
 
-    // d89 E: every in-scope line becomes a check; whether one does is not the planner's choice.
+    // Every in-scope line becomes a check; whether one does is not the planner's choice.
     test("an in-scope line, or one of no recorded side, cited by no task is rejected; an out-of-scope one need not be cited", async () => {
         const items: VisionItem[] = [
             ...INPUT.visionItems,
@@ -416,7 +416,7 @@ describe("DecompositionEngine", () => {
         expect(verdicts).toEqual([{ ok: true }]);
     });
 
-    // ADR-083: an assumption of no recorded kind is not evidence that no client could observe it.
+    // An assumption of no recorded kind is not evidence that no client could observe it.
     test("an unclassified assumption is citable and must be checked like a client-visible one", async () => {
         const unclassified: VisionItem = { type: "assumption", id: "A3", text: "Empty names are refused", status: "Inferred", standing: "unrecorded", kind: "unclassified" };
         const input = { ...INPUT, visionItems: [...INPUT.visionItems, unclassified] };
@@ -434,7 +434,7 @@ describe("DecompositionEngine", () => {
         expect(seen.prompts).toEqual([]);
     });
 
-    // d89 A: the traced items are exactly the union of the lines' sources, never chosen beside them.
+    // The traced items are exactly the union of the lines' sources, never chosen beside them.
     test("a task's traced items are exactly the union of its lines' sources, by id or exact text; its check task carries them", async () => {
         const llm = scriptedLlm(
             {
@@ -472,7 +472,7 @@ describe("DecompositionEngine", () => {
         expect(check?.taskSpec.goal).not.toContain("Bookings are recorded in one ledger");
     });
 
-    // ADR-074 addendum 2 d71 c: stored checks can together ask for what no product can pass.
+    // Stored checks can together ask for what no product can pass.
     test.each([
         ["a first plan", { kind: "new" } as const],
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
@@ -497,7 +497,7 @@ describe("DecompositionEngine", () => {
         expect(review?.taskSpec).toMatchObject({ visionItems: INPUT.visionItems.map((item) => item.text), sources: INPUT.visionItems });
     });
 
-    // ADR-074 addendum 2 d70: the planner grades each task; the plan's own tasks keep a fixed level.
+    // The planner grades each task; the plan's own tasks keep a fixed level.
     test("each decomposed task keeps its grade and reason; checks never fall below Strong; the plan's own tasks are Strong", async () => {
         const llm = scriptedLlm(
             {

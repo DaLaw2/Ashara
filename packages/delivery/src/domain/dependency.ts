@@ -4,7 +4,7 @@ import type { WorkItemRepository } from "./repository.js";
 import { CycleDetected } from "./errors.js";
 
 /**
- * How a work item's dependencies resolve (migration Phase 6, ADR-029):
+ * How a work item's dependencies resolve:
  *  - `met`     — every dependency is Completed or has a Completed equivalent.
  *  - `waiting` — at least one dependency is still in flight (Pending/InProgress/Failed);
  *                a Failed dependency counts as waiting because recovery may replan it.
@@ -13,7 +13,7 @@ import { CycleDetected } from "./errors.js";
  *                item can never become dispatchable and must be routed as
  *                blocked-with-reason rather than waiting forever.
  * A check task orders every implementation of its plan revision but gates only the task it checks
- * (ADR-074 addendum 2 d68 c): to any other dependent it is satisfied once terminal, Abandoned too.
+ * to any other dependent it is satisfied once terminal, Abandoned too.
  */
 type DependencyResolution = "met" | "waiting" | "blocked";
 

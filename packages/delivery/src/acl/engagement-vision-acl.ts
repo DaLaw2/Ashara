@@ -1,5 +1,5 @@
 /**
- * Anti-Corruption Layer: Engagement's vision language (ADR-075).
+ * Anti-Corruption Layer: Engagement's vision language.
  *
  * The vision items a task cites, as Engagement publishes them, read from its published-language
  * entry alone (never its index): Delivery's own work-item language, which Engagement reads back,

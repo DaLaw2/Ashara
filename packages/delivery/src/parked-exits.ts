@@ -10,12 +10,12 @@ import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./
 import { mergeOnMainOf, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 
-// The exits of Blocked work items (story s-loop-never-stop-m1, Discipline B; W6: no work item waits
-// on a person), each taken by the loop every cycle: a merged task whose merge record was not written
-// has the record written again, then Completed; a crash orphan the startup reconciler could not
-// settle has main read again, then Completed with its merge or back to Pending; an infrastructure block (written before migration
-// 048) goes back to Pending at once; any other block (written before migration 048, or with no
-// reason) has no cause that clears by itself, so the task is given up and its plan repaired.
+// The exits of Blocked work items (no work item waits on a person), each taken by the loop every
+// cycle: a merged task whose merge record was not written has the record written again, then
+// Completed; a crash orphan the startup reconciler could not settle has main read again, then
+// Completed with its merge or back to Pending; an infrastructure block from a legacy row goes back
+// to Pending at once; any other block (from a legacy row, or with no reason) has no cause that
+// clears by itself, so the task is given up and its plan repaired.
 // Shared blockedExitOf decides which is which.
 
 interface ParkedExitDeps {
@@ -139,7 +139,7 @@ async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: 
 /**
  * A block with no exit that clears by itself: the task is given up with the cause it was blocked
  * for (a Blocked item with none is recorded as an orchestrator error, the state no writer should
- * have left), and its abandonment opens a plan repair (migration 048).
+ * have left), and its abandonment opens a plan repair.
  */
 async function giveUp(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   const reason = item.blockedReason;

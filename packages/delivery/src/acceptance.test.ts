@@ -129,7 +129,7 @@ function sweepFault(): Extract<Sweep, { readonly kind: "faulted" }>["error"] {
   });
 }
 
-// Story s-independent-verify-m1 W7 (design P11): Delivering -> Accepted only on a passing sweep.
+// Delivering -> Accepted only on a passing sweep.
 describe("the acceptance sweep", () => {
   test("a sweep that passes on main makes the project accepted, nothing else", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -171,7 +171,7 @@ describe("the acceptance sweep", () => {
     expect(await runAcceptanceSweeps(deps)).toBe(0);
     expect(accepted).toEqual([]);
     expect(blocks).toEqual([]);
-    // Written Pending, then given up: the abandonment is the update migration 048's repair trigger reads.
+    // Written Pending, then given up: the abandonment is the update the plan-repair trigger reads.
     expect(defects).toEqual([
       {
         details,

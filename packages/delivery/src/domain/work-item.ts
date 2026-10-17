@@ -8,9 +8,9 @@ import { canTransitionTo, InvalidStatusTransition } from "../work-item-language/
 import type { FailureVerdict } from "../acl/quality-acl.js";
 
 /**
- * Quality's verdict on a Failed item's last attempt as its row holds it (migration 058), read only
+ * Quality's verdict on a Failed item's last attempt as its row holds it, read only
  * while the item is Failed. `none`: no verdict is stored, which on a Failed row means it failed
- * before migration 058. `unreadable`: the stored value does not parse; it is never read as either
+ * before verdicts were stored. `unreadable`: the stored value does not parse; it is never read as either
  * verdict.
  */
 export type StoredFailureVerdict =
@@ -29,35 +29,35 @@ export interface WorkItem {
   northStar?: string;
   successCriteria?: StoredSuccessCriteria;
   blockedReason?: StoredBlockedReason;
-  /** Quality's verdict on the last attempt, stored with the Failed transition (migration 058). */
+  /** Quality's verdict on the last attempt, stored with the Failed transition. */
   failureVerdict: StoredFailureVerdict;
   /** The project (projects.id) this item belongs to. Required: no item exists outside a project. */
   projectId: ProjectId;
   /**
-   * Number of times this item has been dispatched for execution (migration 018,
-   * r9f-t1). Incremented UNCONDITIONALLY at the dispatch seam (CoreLoop.processTask)
+   * Number of times this item has been dispatched for execution.
+   * Incremented UNCONDITIONALLY at the dispatch seam (CoreLoop.processTask)
    * so it counts real dispatches even when the agent crashes or its output is lost.
    * The FailureRouter reads this as the retry-bound signal — decoupled from billing.
    */
   dispatchCount: number;
   /**
-   * The kind of work a Task is (migration 031), set with its owner when the plan is
+   * The kind of work a Task is, set with its owner when the plan is
    * written. null on an Epic and on a task planned before owners were assigned.
    */
   workKind: WorkKind | null;
   /**
-   * The roster role that owns a Task (migration 031), as stored; undefined when the row has none.
+   * The roster role that owns a Task, as stored; undefined when the row has none.
    * Written on create only for a task created with its owner (requestEnvironmentChange): a
    * planned task's owner is assigned after its creation by the plan store.
    */
   ownerRoleId?: string;
   /**
-   * The largest context window an attempt of the item did not fit (migration 076), written only by
+   * The largest context window an attempt of the item did not fit, written only by
    * WorkItemRepository.saveRefundedOverflow; null when no attempt has overflowed one.
    */
   overflowedWindowTokens: number | null;
   /**
-   * On an environment-change task, the task it was opened for (migration 077), set when it is
+   * On an environment-change task, the task it was opened for, set when it is
    * created (requestEnvironmentChange); null on every other item.
    */
   repairsTaskId: WorkItemId | null;
@@ -194,7 +194,7 @@ export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void
 
 /**
  * Returns a Blocked item to Pending once its automatic exit has cleared (orchestrator
- * parked-exits.ts); no person unblocks a task (story s-loop-never-stop-m1 W6). Pins its
+ * parked-exits.ts); no person unblocks a task. Pins its
  * from-status to `Blocked` EXPLICITLY: several statuses share the `-> Pending` graph edge
  * (Blocked, Failed, InProgress), but each is owned by a distinct method with its own domain event
  * and intent. canTransitionTo is only the edge-level guard (enforced again at save()); the method
@@ -226,10 +226,10 @@ export function unblockWorkItem(item: WorkItem): void {
 type GiveUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded" }>;
 
 /**
- * Gives an item up (ADR-074 addendum 2 d76 b; story s-loop-never-stop-m1 W6): its work cannot be
+ * Gives an item up: its work cannot be
  * done as planned, and no person decides what happens next. The item goes to the terminal
  * Abandoned with the cause, and the abandonment itself records the plan repair the project then
- * awaits (migration 045's trigger, widened by 048): the remaining work is planned again around it,
+ * awaits (the plan-repair trigger): the remaining work is planned again around it,
  * at most R times before the project halts as undeliverable (Replanner). Pinned to the open
  * statuses a give-up is decided in: an InProgress item whose attempt ended with the cause, a
  * Pending item the gate finds can never be dispatched, a Blocked item whose block has no exit that
@@ -257,7 +257,7 @@ type ReplanContext = Extract<StoredBlockedReason, { source: "replan" }>["replanC
 
 /**
  * Recovers a Failed item back to Pending so it re-enters planning (FailureRouter's
- * "replan" decision, ADR-029). Replaces the prior failure reason with `replanContext`, the
+ * "replan" decision). Replaces the prior failure reason with `replanContext`, the
  * failure the next attempt is told about, or with none when a person replans by hand
  * (`null`): no stale blockedReason lingers on the row. Pins its from-status to
  * `Failed` EXPLICITLY (the `-> Pending` edge is shared with Blocked/InProgress, each
@@ -284,7 +284,7 @@ export function replanWorkItem(item: WorkItem, replanContext: ReplanContext | nu
  * Abandoned is governed solely by `canTransitionTo` and the transition table
  * in `work-item-language/transitions.ts` — this function delegates to it and
  * adds no further guard. Callers include the FailureRouter (Failed →
- * Abandoned, ADR-029) and the HTTP PATCH /work-items/:id/status route, which
+ * Abandoned) and the HTTP PATCH /work-items/:id/status route, which
  * is the only caller that takes Blocked, Pending or InProgress to Abandoned.
  */
 export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): void {
@@ -303,7 +303,7 @@ export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): vo
 }
 
 /**
- * Supersedes open work a revision of the plan replaced (migration 042): a Pending, Blocked or
+ * Supersedes open work a revision of the plan replaced: a Pending, Blocked or
  * Failed item goes to the terminal Abandoned with a `superseded` reason. Pinned to those
  * from-statuses: an InProgress task has a live attempt the revision waits for, and a Completed
  * item is merged work the revision keeps. An InProgress Epic is open too: it has no attempt of

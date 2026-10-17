@@ -41,10 +41,10 @@ export class GateKeeper {
    * A Pending task whose dependencies can never be met (an Abandoned item, directly or
    * transitively, or a cycle; an Abandoned check task only for the task it checks) is given up here
    * with a dependency_unsatisfiable reason, and its work_item.given_up event published: left Pending
-   * it would stall with no record, and no person releases it (story s-loop-never-stop-m1 W6). Its
-   * abandonment opens a plan repair (migrations 045, 048). A task given up elsewhere rarely leads
+   * it would stall with no record, and no person releases it. Its
+   * abandonment opens a plan repair. A task given up elsewhere rarely leads
    * here: its project awaits a plan repair, listActiveIds omits it until the repair is written, and
-   * the repair supersedes the task's dependents (Replanner, ADR-074 addendum 2 d74 D).
+   * the repair supersedes the task's dependents (Replanner).
    */
   static async filterAvailable(
     repo: WorkItemRepository,

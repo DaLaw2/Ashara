@@ -20,7 +20,7 @@ type TargetWorkspace =
   | { readonly kind: "rejected"; readonly reason: string };
 
 /**
- * The project's target workspace (migration 024): the stored path, or one minted
+ * The project's target workspace: the stored path, or one minted
  * under `workdirBase`, validated and recorded before it is returned. Any failure
  * other than a missing record or a refused path (a database error) is thrown.
  */

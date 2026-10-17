@@ -184,8 +184,8 @@ export class CoreLoop {
     // revision below replans it in this cycle, and the gate never dispatches the plan it replaces.
     const afterPlan = await this.readAnswers();
     if (afterPlan !== null) return this.haltAtCap(afterPlan);
-    // Then a revision of each flagged plan, and a repair of each plan a given-up task stopped (ADR-074
-    // addendum 2 d74 D, d76; the gate dispatches neither project's tasks meanwhile, so no dependent of a
+    // Then a revision of each flagged plan, and a repair of each plan a given-up task stopped (the
+    // gate dispatches neither project's tasks meanwhile, so no dependent of a
     // given-up task waits on anyone), whose project has no task in progress: the previous
     // cycle awaited every task it dispatched, so in-flight work has finished before its plan is
     // revised. Only Tasks count: the plan's Epic stays InProgress while any child is open, and the
@@ -350,9 +350,9 @@ export class CoreLoop {
   }
 
   /**
-   * The deployment's spend cap was reached (design P14): every active project halts at the cap,
+   * The deployment's spend cap was reached: every active project halts at the cap,
    * each with its one report posted now, before the loop stops, since no later cycle of this run
-   * posts it. A project's exit is the owner's raise of the cap (X1). The loop stops with the cap's
+   * posts it. A project's exit is the owner's raise of the cap. The loop stops with the cap's
    * own reason.
    */
   private async haltAtCap(stop: LoopStop): Promise<CycleResult> {

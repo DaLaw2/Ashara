@@ -39,7 +39,7 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
-// Story s-loop-never-stop-m1 W6 (design P17, exit X2): an infrastructure halt resumes by itself.
+// An infrastructure halt resumes by itself.
 describe("resumeInfrastructureHalts", () => {
   test("no project halted: the substrate is not probed", async () => {
     const probe = probeOf({ passed: true, evidence: "ok" });

@@ -5,7 +5,7 @@ import type { WorkItemRepository } from "./domain/index.js";
 import { PlanningService, createPendingWorkItem } from "./domain/index.js";
 
 /**
- * Bulk plan creation (mig9-t5, ADR-029). A project's first plan or revision (through the
+ * Bulk plan creation. A project's first plan or revision (through the
  * server's first-plan and replan stores) is a whole hierarchy (epic/task + edges), written
  * through a work-item repository bound to the caller's transaction. Fail-closed: any DB failure
  * or unresolved reference rolls the whole batch back, so no partial hierarchy is left.

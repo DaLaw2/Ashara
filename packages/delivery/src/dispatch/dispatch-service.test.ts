@@ -562,7 +562,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(await readdir(root)).toEqual(["work"]);
   });
 
-  // s-platform-role-m1 C2: a task after Sprint 0 never falls back to the BaseCell.
+  // A task after Sprint 0 never falls back to the BaseCell.
   test("no environment on main: environment_undefined; no build, no cell, no model, no session, no worktree", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noenv-")));
@@ -598,7 +598,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     vi.restoreAllMocks();
   });
 
-  // s-team-roster-m1: no default role stands in for a missing or unknown owner.
+  // No default role stands in for a missing or unknown owner.
   test("no roster role owns the task: owner_unresolved; no worktree, no cell, no model, no session", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noowner-")));
@@ -677,7 +677,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
   });
 });
 
-// s-independent-verify-m1: no task is verified from nothing, and a check task decides exactly one task.
+// No task is verified from nothing, and a check task decides exactly one task.
 describe("a task nothing could decide ends before the agent", () => {
   const scratch: string[] = [];
   afterEach(async () => {
@@ -732,7 +732,7 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(await readdir(workdirBase)).toEqual(["projects"]);
   });
 
-  // ADR-080 d3 c (development #1): a store that throws is Ashara's own fault, never the task's work.
+  // A store that throws is Ashara's own fault, never the task's work.
   test("a check store that throws: blocked under class ashara, never failed; no lesson, no model, no worktree", async () => {
     const throwing: TaskCheckStore = {
       ...checkStore(null),
@@ -774,7 +774,7 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(probe.modelCalls).toBe(0);
   });
 
-  // ADR-083: a check set is kept only when it decides every item its task cites; none on record is no set to judge.
+  // A check set is kept only when it decides every item its task cites; none on record is no set to judge.
   test("a check task that records no vision item it cites: failed before the agent", async () => {
     const store: TaskCheckStore = {
       ...checkStore(null, [createWorkItemId()]),
@@ -843,7 +843,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly checkWork?: boolean;
     /** Product files the definition names as inputs of the image build, on main with their content. */
     readonly inputs?: Readonly<Record<string, string>>;
-    /** The task is the product scaffold (ADR-074 addendum 2 d72 B2), decided by the definition's build and test. */
+    /** The task is the product scaffold, decided by the definition's build and test. */
     readonly scaffold?: boolean;
     /** A verifier cell's run of exactly this command exits 1. */
     readonly verifierFailsCommand?: string;
@@ -852,8 +852,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     /** The agent finishes done at once, writing nothing: its branch holds no change against main. */
     readonly agentWritesNothing?: boolean;
     /**
-     * The exit code of every stored check in the delivered sweep's cell on main (ADR-074 addendum 2
-     * d74 A); 1 when absent: the task's work is not on main yet, so it is dispatched.
+     * The exit code of every stored check in the delivered sweep's cell on main;
+     * 1 when absent: the task's work is not on main yet, so it is dispatched.
      */
     readonly sweepExit?: number;
     /** The exit code of every check red-run on the stored baseline (a revalidation); ciExit when absent. */
@@ -1069,11 +1069,11 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(system).toContain(STATEMENT);
     expect(system).toContain(`version ${String(version)}`);
 
-    // s-team-roster-m1: the attempt runs as the work item's owner role, never a literal role.
+    // The attempt runs as the work item's owner role, never a literal role.
     expect(first).toMatchObject({ role: OWNER_ROLE });
     expect(runs[0]).toContain(`ashara.role=${OWNER_ROLE.id}`);
     expect(events.find((e) => e.event === "agent_launched")).toMatchObject({ roleId: OWNER_ROLE.id, role: OWNER_ROLE.name });
-    // ADR-074 addendum 2 d73: every cell (the task's, and the verifier's, made like the probe's
+    // Every cell (the task's, and the verifier's, made like the probe's
     // and every check's) sees a throwaway repository of its own in place of the worktree's gitlink,
     // and runs as the same non-root user with the same writable home. No volume source is a .git.
     expect(runs).toHaveLength(2);
@@ -1156,7 +1156,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(branchKept).toBe(true);
   });
 
-  // t-context-overflow-routing: an overflow is deterministic, so it is never the agent's failure nor
+  // An overflow is deterministic, so it is never the agent's failure nor
   // retried on the model whose window it did not fit.
   const overflowOf = (breach: ConstructorParameters<typeof ContextBudgetExceeded>[0]["breach"]) =>
     new ContextBudgetExceeded({ provider: "none", model: "unused-model", windowTokens: 32_000, outputReserveTokens: 16_384, breach });
@@ -1215,7 +1215,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(branchKept).toBe(true);
   });
 
-  // ADR-074 addendum 2 d74 A: the delivered sweep runs before every implementation dispatch.
+  // The delivered sweep runs before every implementation dispatch.
   test("Z0 cannot make the delivered sweep's checkout: blocked under deliveredCheckRun before the model, never a failure", async () => {
     const { result, probe, events, sweepRuns } = await dispatch({ checkoutsBlocked: true });
 
@@ -1271,8 +1271,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.errorEnvelope?.chain.operation).toBe("revalidateTaskChecks");
   });
 
-  // t-checks-before-work review: an over-delivering task that moved the environment version sent the
-  // next task's passing checks to checks_stale, whose check task's red run could never accept a check.
+  // Checks that pass on main after an over-delivering task moved the environment version are not
+  // stale: their check task's red run could never accept a check, so the work is already delivered.
   test("checks from another environment version that hold on their baseline and all pass on main: already delivered before the model, nothing merged", async () => {
     const { result, probe, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: CHECK_MISSING_EXIT, sweepExit: 0, ciExit: 0 });
 
@@ -1289,7 +1289,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(branchKept).toBe(false);
   });
 
-  // t-delivered-paths-exits (ADR-074 addendum 2 d68 a): main's own regression failed the task before any model ran.
+  // Main's own regression is not the task's failure: the task still reaches the implementer.
   test("checks from another environment version that all pass on main while main's environment test fails: dispatched to the implementer, never failed before the model", async () => {
     const { result, probe, events } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: CHECK_MISSING_EXIT, sweepExit: 0, ciExit: 0, ciFailsCommand: "true" });
 
@@ -1402,7 +1402,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(branchKept).toBe(true);
   });
 
-  // The review of t-shutdown-cancel-not-failure: the summary claimed a check task's work was kept.
+  // A stopped check task's summary never claims its partial work was kept.
   test.each([
     ["the shutdown signal", { shutdownDuringSecondTurn: new AbortController() }, "interrupted"],
     ["a refused turn", { refusesSecondTurn: new PreCallRefusal("budget_cap: refused") }, "refused"],
@@ -1438,7 +1438,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_interrupted")).toBe(false);
   });
 
-  // ADR-074 addendum 2 d67 b: work an earlier task over-delivered has an exit other than the operator.
+  // Work an earlier task over-delivered has an exit other than the operator.
   test("no change against main and the checks, the environment's test and the regression suite pass on main: already delivered at main, nothing merged", async () => {
     const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ agentWritesNothing: true, ciExit: 0 });
 
@@ -1514,7 +1514,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(branchKept).toBe(false);
     });
 
-    // ADR-074 addendum 2 d72 B1, B3: an input the recipe reads is the product's, versioned, not fenced,
+    // An input the recipe reads is the product's, versioned, not fenced,
     // wherever it lives.
     test.each([
       ["outside environment/", "manifest.txt"],
@@ -1597,7 +1597,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(existsSync(join(workdirBase, `task-${taskId}`))).toBe(false);
     });
 
-    // ADR-074 addendum 2 d72 B2: the scaffold is decided by the product's build and test, never by stored checks.
+    // The scaffold is decided by the product's build and test, never by stored checks.
     test("the product scaffold: no stored check is read; the definition's build and test pass on its merge and it merges", async () => {
       const { result, events, started, mainBefore, mainAfter } = await dispatch({ scaffold: true, agentAlsoWrites: { "manifest.txt": "module greeter\n" } });
 
@@ -1626,7 +1626,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(mainAfter).toBe(mainBefore);
     });
 
-    // ADR-074 addendum 2 d66 c, d72: the brief names what the gate refuses before work starts.
+    // The brief names what the gate refuses before work starts.
     test("the implementer's brief names the recipe, the stored check files and the inputs it may change", async () => {
       const { result, workdirBase, taskId } = await dispatch({ inputs: { "manifest.txt": "dependencies: none\n" }, checkFiles: [CHECK_FILE] });
 

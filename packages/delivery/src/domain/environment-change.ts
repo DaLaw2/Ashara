@@ -4,8 +4,8 @@ import type { WorkItem } from "./work-item.js";
 import { createPendingWorkItem, giveUpWorkItem } from "./work-item.js";
 
 /**
- * How many environment tasks Z0 opens for one implementation task (ADR-074 addendum 2 d66 b;
- * design call, overrulable). A request past it gives the implementation up and its plan is
+ * How many environment tasks Z0 opens for one implementation task
+ * (a design call, overrulable). A request past it gives the implementation up and its plan is
  * repaired: the implementer and the platform role have gone round that often and nothing in the
  * team settles it.
  */
@@ -30,7 +30,7 @@ interface EnvironmentChangeContext {
   /** The roster role doing the project's environment work, or why there is none. */
   readonly owner: { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };
   /**
-   * Whether the project's product scaffold has completed (d72 B2). Required: an environment task
+   * Whether the project's product scaffold has completed. Required: an environment task
    * opened before it (the scaffold itself asking) lands on a main with no product to build or test.
    */
   readonly product: "present" | "absent";
@@ -67,7 +67,7 @@ function environmentTaskSpec(
       `Its diff of the recipe (${request.paths.join(", ")}):\n${request.diff.trim() === "" ? "(empty)" : request.diff}`,
     ].join("\n\n"),
     deliverables: [`the recipe changed as the request needs, with build_environment reporting PASSED`],
-    // A fixed level, Sprint 0's (ADR-074 addendum 2 d70): no planner sees this task, and changing the
+    // A fixed level, Sprint 0's: no planner sees this task, and changing the
     // recipe every later task builds on is environment work of the same kind.
     capability: "Strong",
     origin: "environment-change",
@@ -78,7 +78,7 @@ function environmentTaskSpec(
 
 /**
  * The exit of an InProgress implementation task whose finished work changed environment recipe
- * files (ADR-074 addendum 2 d66 b, d72 B1). Not the task's failure: within the bound a new
+ * files. Not the task's failure: within the bound a new
  * environment task, owned by the role doing environment work, is opened with the implementer's
  * need and diff, and the implementation returns to Pending waiting on it; the caller persists the
  * new task, the implementation's dependency on it and the implementation in one transaction. Past

@@ -66,7 +66,7 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Runs `fn` inside a single database transaction (ADR-029). The callback
+   * Runs `fn` inside a single database transaction. The callback
    * receives a transaction-scoped repository whose every write participates in
    * the same atomic unit — the batch of work items AND their dependency edges
    * commits or rolls back together, so a mid-loop crash cannot leave orphan
@@ -82,7 +82,7 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Records who owns a task (migration 031): its kind of work and the owning
+   * Records who owns a task: its kind of work and the owning
    * role. Only an item with no owner yet takes one; an owner is never replaced.
    */
   async assignOwner(id: string, workKind: string, ownerRoleId: string): Promise<void> {
@@ -95,10 +95,9 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Keeps a statement of the stack (migration 033) with the environment version it holds for
-   * (migration 037): an environment task's own, with the version its substrate gate tested; or
-   * (migration 043) on an implementation whose verified merge changed the environment's build
-   * context (an input, ADR-074 addendum 2 d72 B3), the statement of the version it ran on, with the version its merge produced. Only
+   * Keeps a statement of the stack with the environment version it holds for: an environment
+   * task's own, with the version its substrate gate tested; or on an implementation whose verified
+   * merge changed the environment's build context (an input), the statement of the version it ran on, with the version its merge produced. Only
    * environment and implementation work take one; a later attempt's statement replaces it.
    */
   async recordEnvironmentStatement(id: string, statement: string, version: string): Promise<void> {
@@ -111,11 +110,11 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Records the merge commit Z0 made on the target's main for the task (migration 041), the one
+   * Records the merge commit Z0 made on the target's main for the task, the one
    * record of what was merged. Written before the task is moved to Completed, so a failed write
    * leaves it not Completed. A later merge of the same task (re-opened and merged again)
    * replaces it: the newer commit is on main after the older one. `kind` is how the commit closed
-   * the task (migration 049), null only when it was never recorded.
+   * the task, null only when it was never recorded.
    */
   async recordMergeCommit(id: string, commit: string, kind: "merged" | "already_delivered" | null): Promise<void> {
     const [row] = await this.db
@@ -160,7 +159,7 @@ export class WorkItemRowRepository {
 
   /**
    * One project's items in `status`. Reads are per project so a corrupt row
-   * fails only its own project's read (story s-loop-never-stop-m1).
+   * fails only its own project's read.
    */
   async findByProjectAndStatus(projectId: string, status: string) {
     const rows = await this.db
@@ -202,18 +201,18 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Physical writer for the WorkItem state machine (ADR-029). `expectedPreviousStatus`
+   * Physical writer for the WorkItem state machine. `expectedPreviousStatus`
    * is the pre-image the caller believes the row holds; callers read it from the domain
    * object before mutating it. The write fails closed with InvalidStatusTransition when:
    *   - the requested transition is not permitted by canTransitionTo (the single guard),
    *     unless it is a same-status metadata write (from === to), which stays legal; or
    *   - the live row no longer holds the claimed pre-image (concurrent modification),
    *     detected by a conditional UPDATE that must affect exactly the targeted row.
-   * Quality's verdict on the attempt (migration 058) is written with every move into Failed, which
+   * Quality's verdict on the attempt is written with every move into Failed, which
    * fails closed with FailedWithoutVerdict when none is given, and cleared with every move out of
    * Failed; a write that keeps the status leaves it as it is.
    * A move out of InProgress is a dispatch of the item ending in the process that started it, so
-   * the same UPDATE sets its startups in a row found InProgress (migration 070) back to 0: the
+   * the same UPDATE sets its startups in a row found InProgress back to 0: the
    * crash-loop bound never reads a count a separate write failed to clear. The startup
    * reconciler's exits of a crash orphan, whose dispatch did not end, keep it (saveOrphanExit).
    */
@@ -275,7 +274,7 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Atomically bumps the dispatch counter (migration 018, r9f-t1). A single
+   * Atomically bumps the dispatch counter. A single
    * `dispatch_count = dispatch_count + 1` UPDATE, independent of the status
    * pre-image guard in `save`, so it commits at the dispatch seam and survives a
    * crashed agent or discarded output. Returns the post-increment value.
@@ -359,7 +358,7 @@ export class WorkItemRowRepository {
     throw new DispatchRefundWithoutDispatch(id);
   }
 
-  /** Counts one infrastructure fault on the item (migration 048); returns the count after it. */
+  /** Counts one infrastructure fault on the item; returns the count after it. */
   async recordInfrastructureFault(id: string): Promise<number> {
     const [row] = await this.db
       .update(workItems)
@@ -370,7 +369,7 @@ export class WorkItemRowRepository {
     return row.infrastructureFaults;
   }
 
-  /** Counts one more startup in a row that found the item InProgress (migration 070); returns the count after it. */
+  /** Counts one more startup in a row that found the item InProgress; returns the count after it. */
   async recordCrashOrphan(id: string): Promise<number> {
     const [row] = await this.db
       .update(workItems)

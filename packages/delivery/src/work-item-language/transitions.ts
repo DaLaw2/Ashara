@@ -4,7 +4,6 @@ import type { WorkItemStatus } from "./work-item-status.js";
  * Published Language: the WorkItem state-machine contract.
  * Both the domain layer (planning BC) and the persistence layer (db)
  * validate against this single source of truth — neither imports the other.
- * ADR-044: Anti-Corruption Layer.
  */
 
 /**
@@ -27,8 +26,7 @@ import type { WorkItemStatus } from "./work-item-status.js";
  *
  * `Completed -> Pending` has one traverser: planning's exitStaleChecks reopens a
  * Completed check task whose stored checks went stale, pinned to work kind
- * "check" (unblock/replan/requeue each pin a different from-status). Reopening
- * other items is story c-change-handling.
+ * "check" (unblock/replan/requeue each pin a different from-status).
  *
  * `Blocked -> Completed` has one traverser: planning's completeRecordedMerge, pinned to a
  * `merge_unrecorded` block, or an `orphan_unreconciled` one whose merge the loop found on main, for

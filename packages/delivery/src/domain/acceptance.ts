@@ -3,11 +3,11 @@ import { createDomainEvent } from "@ashara/shared";
 import { createPendingWorkItem, giveUpWorkItem } from "./work-item.js";
 import type { WorkItem } from "./work-item.js";
 
-// The defect a failed acceptance sweep opens (story s-independent-verify-m1 W7, design P11): every
+// The defect a failed acceptance sweep opens: every
 // task of the plan was settled with its goal tasks done, and the environment's test and the checks
 // of every completed task did not all pass on main HEAD. That is not acceptance; it is work the
 // plan still owes, so it goes where every given-up task goes: the plan is repaired around it
-// (migration 048's plan_repair_on_abandon). The defect is never dispatched.
+// (the plan_repair_on_abandon trigger). The defect is never dispatched.
 
 /**
  * The failed sweep the defect records: the commit it ran on (null when the sweep faulted before

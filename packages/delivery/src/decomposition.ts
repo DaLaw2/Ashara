@@ -87,7 +87,7 @@ export class DecompositionEngine {
         // decomposeEpicIntoTasks never returns an empty list (TaskOutputSchema
         // requires one task), so every plan carries its Sprint 0, or depends on the
         // one already done. A plan with no product layout yet then sets it up before
-        // any check is written (ADR-074 addendum 2 d72 B2); one whose layout a
+        // any check is written; one whose layout a
         // completed scaffold set up builds on it.
         const environmentId =
             input.environment.kind === "new"
@@ -119,7 +119,7 @@ export class DecompositionEngine {
     }
 
     /**
-     * Adds the plan's one Sprint 0 task (ADR-074 addendum 2 d62-d63, d72 S): the
+     * Adds the plan's one Sprint 0 task: the
      * environment role writes the recipe of the project environment, choosing the
      * stack, before any other task runs, so every other task depends on it. Its text
      * names no stack: choosing one is the task's own work. It carries no checks of
@@ -375,7 +375,7 @@ export class DecompositionEngine {
             `Description: ${description}`,
         ];
 
-        // Carries any answers/assumptions captured during alignment (ADR-019)
+        // Carries any answers/assumptions captured during alignment
         // into the decomposition prompt itself, not just onto the output
         // epic's `northStar` field.
         if (northStar && northStar.trim().length > 0) {
@@ -460,7 +460,7 @@ const DECOMPOSITION_EXAMPLES: ContextExamples = {
 };
 
 /**
- * How the planner grades a task (ADR-074 addendum 2 d70): by the difficulty of the work alone, never
+ * How the planner grades a task: by the difficulty of the work alone, never
  * by its language, stack or kind of product, since the same grade must mean the same thing for every
  * project. The grade picks the cheapest model at or above it; the escalation on failed attempts
  * stays the safety net for a task graded too low.
@@ -476,14 +476,14 @@ const CAPABILITY_GRADING: readonly string[] = [
 
 /**
  * The level of every task the plan adds itself (Sprint 0, the product scaffold, the suite review):
- * a planner policy, not a grade (ADR-074 addendum 2 d70). Sprint 0 chooses the stack for the whole
+ * a planner policy, not a grade. Sprint 0 chooses the stack for the whole
  * product and the scaffold lays out its structure, both before any behaviour exists to judge
  * difficulty by; the review's own call routes at its own level, so this level only labels it.
  */
 const PLANNER_SET_LEVEL: CapabilityLevel = "Strong";
 
 /**
- * A check task's level (ADR-074 addendum 2 d70): its checks are the verdict on the task they decide,
+ * A check task's level: its checks are the verdict on the task they decide,
  * so they are written at no lower level than that task's grade, and never below Strong, since a weak
  * suite passes weak work whatever the implementation's level.
  */
@@ -525,7 +525,7 @@ const SCAFFOLD_DESCRIPTION =
 type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
 
 /**
- * Adds the product scaffold after Sprint 0 (ADR-074 addendum 2 d72 B2): the implementer role sets up
+ * Adds the product scaffold after Sprint 0: the implementer role sets up
  * the product's module root, manifests and entry point, so that the layout every check names is the
  * product's, never one the environment role supplied. It depends on Sprint 0; the check tasks, the
  * review and every decomposed task depend on it. It traces to the vision items of every decomposed
@@ -588,10 +588,10 @@ function bulleted(lines: readonly string[]): string {
 }
 
 /**
- * The check task of one decomposed task (ADR-074 addendum 2 d63): the check author
+ * The check task of one decomposed task: the check author
  * writes the checks that decide whether it is done, after the plan's foundation (the
- * product scaffold, or a revision's latest merged layout or new environment, d72 B2) and before any
- * implementation task of the plan starts (d67 a). Its text names no stack: the checks
+ * product scaffold, or a revision's latest merged layout or new environment) and before any
+ * implementation task of the plan starts. Its text names no stack: the checks
  * are commands of the project environment. `checksFor` names the task its checks decide,
  * since every implementation task depends on every check task and the edges cannot say.
  */
@@ -648,7 +648,7 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
 }
 
 /**
- * The plan revision's review task (ADR-074 addendum 2 d71 c): after the last of its check tasks
+ * The plan revision's review task: after the last of its check tasks
  * completes and before any of its decomposed tasks is dispatched, a reviewer who wrote none of the
  * checks reads every stored suite together with the vision and names the checks no product can pass
  * together and the checks that test what no vision item asks for. It depends on every check task and
@@ -695,7 +695,7 @@ function reviewTaskFor(
 /**
  * Adds the review task after every task of the plan: it depends on the plan's foundation (the product
  * scaffold, or a revision's latest merged layout or new environment task) and on every check task, and every decomposed task
- * depends on it (beside its edges to every check task, d67 a).
+ * depends on it (beside its edges to every check task).
  */
 function addReviewTask(
     epicId: string,
@@ -736,7 +736,7 @@ function alreadyChecked(item: VisionItem, checkedItems: readonly VisionItem[]): 
 }
 
 /**
- * The items a check must decide (d89 E, ADR-083) that no task of the plan cites and no completed
+ * The items a check must decide that no task of the plan cites and no completed
  * task's stored checks already decide, as the error that re-asks or rejects the plan; null when none. A task cites an
  * item by naming its id or its exact text in a deliverable's or an acceptance line's sources, as
  * traceToVision reads them. Citing gives an item a check task; whether a check decides it is the
@@ -758,9 +758,9 @@ function uncitedItems(
 }
 
 /**
- * The vision items a raw task's deliverables and acceptance lines cite (ADR-074 addendum 2 d89 A), each
+ * The vision items a raw task's deliverables and acceptance lines cite, each
  * by its id or its exact text. Untraceable when a line cites none, cites anything that is no item of
- * the vision, or cites an item no line may cite (d89 E): an internal-design assumption. The task's
+ * the vision, or cites an item no line may cite: an internal-design assumption. The task's
  * traced items are then exactly the union of what its lines cite.
  */
 function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentId: string): VisionTrace {
@@ -808,10 +808,10 @@ function dependOnEnvironment(
 
 /**
  * Gives every decomposed task its check task, each depending on the plan's foundation (the product
- * scaffold of a new project, d72 B2, or a revision's latest merged layout or new environment task), and makes every
- * decomposed task depend on every check task of the plan (ADR-074 addendum 2 d67 a): all checks
+ * scaffold of a new project, or a revision's latest merged layout or new environment task), and makes every
+ * decomposed task depend on every check task of the plan: all checks
  * are authored before any implementation starts, as a QA team writes a sprint's acceptance tests up
- * front, and every authoring is red-run against the foundation's recorded merge (d74 A). Each check task is placed
+ * front, and every authoring is red-run against the foundation's recorded merge. Each check task is placed
  * right after the task it decides, so the plan's writer meets that task before the reference to it.
  */
 function addCheckTasks(

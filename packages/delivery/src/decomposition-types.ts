@@ -22,14 +22,14 @@ interface TaskSpecCore {
     /** Observable outcomes, never file paths: the stack is not chosen until Sprint 0. */
     readonly deliverables: string[];
     /**
-     * The level the task's agent is dispatched at (ADR-074 addendum 2 d70): the planner's grade of a
+     * The level the task's agent is dispatched at: the planner's grade of a
      * decomposed task, a fixed level for every task the plan adds itself.
      */
     readonly capability: CapabilityLevel;
 }
 
 /**
- * The vision items a task traces to (ADR-074 addendum 2 d71 d), as the vision states them: never
+ * The vision items a task traces to, as the vision states them: never
  * empty, since a task that delivers no item of the vision is not planned.
  */
 interface Traced {
@@ -37,14 +37,14 @@ interface Traced {
 }
 
 /**
- * The traced items of a task whose checks are judged item by item (d89): each with its id, status,
+ * The traced items of a task whose checks are judged item by item: each with its id, status,
  * standing with the client and kind, in the vision's order; their texts are `visionItems`.
  */
 interface Sourced extends Traced {
     readonly sources: VisionItem[];
 }
 
-/** An acceptance line with the ids of the vision items it serves (d89 A). */
+/** An acceptance line with the ids of the vision items it serves. */
 export interface TracedLine {
     readonly line: string;
     readonly sources: string[];
@@ -53,7 +53,7 @@ export interface TracedLine {
 /**
  * A decomposed task's specification: what the client asked for that it delivers, and how it is seen
  * done. Its traced items are exactly the union of the items its deliverables and acceptance lines
- * cite (d89 A), never chosen apart from them.
+ * cite, never chosen apart from them.
  */
 export type DecomposedTaskSpec = TaskSpecCore &
     Sourced & {
@@ -64,21 +64,21 @@ export type DecomposedTaskSpec = TaskSpecCore &
 
 /**
  * A planned task's specification. It carries no checks: the decomposer does not
- * author them (ADR-074 addendum 2 d63). Each decomposed task has a check task in
+ * author them. Each decomposed task has a check task in
  * which the check author writes them; Sprint 0 is checked by the environment substrate.
- * The product scaffold (d72 B2) sets up the product's layout after Sprint 0 and before
+ * The product scaffold sets up the product's layout after Sprint 0 and before
  * the check tasks, and is checked by the substrate too: the definition's build and test
  * on its merge. Its vision items are those of every decomposed task, whose work it enables.
  * The plan's review task reads every check task's suite together before any decomposed
- * task starts (d71 c); its vision items are every item of the vision.
+ * task starts; its vision items are every item of the vision.
  */
 export type TaskSpec =
     | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
     | (TaskSpecCore & Traced & { readonly origin: "product-scaffold"; readonly checkedBy: "substrate" })
     | DecomposedTaskSpec
     /**
-     * `checksFor`: the id of the decomposed task whose checks it writes (ADR-074 addendum 2 d67 a);
-     * its sources and acceptance lines are that task's (d89).
+     * `checksFor`: the id of the decomposed task whose checks it writes;
+     * its sources and acceptance lines are that task's.
      */
     | (TaskSpecCore & Sourced & { readonly origin: "check"; readonly checksFor: string; readonly acceptance: TracedLine[] })
     | (TaskSpecCore & Sourced & { readonly origin: "review" });
@@ -86,19 +86,19 @@ export type TaskSpec =
 /**
  * One item of the vision a plan is decomposed from: a scope boundary (S1..) or an assumption work
  * proceeds on, by its key in the vision. A scope line and every assumption not classed internal
- * design may be cited by a deliverable or an acceptance line (ADR-074 addendum 2 d89 E, ADR-083);
+ * design may be cited by a deliverable or an acceptance line;
  * every one a check decides (checkDecides) must be; an internal-design one is guidance for the
  * implementer.
  */
 export type VisionItem = VisionSource;
 
-/** Whether a deliverable or an acceptance line may cite the item (d89 E): any scope line, and an assumption a check decides. */
+/** Whether a deliverable or an acceptance line may cite the item: any scope line, and an assumption a check decides. */
 export function citable(item: VisionItem): boolean {
     return item.type === "scope" || checkDecides(item);
 }
 
 /**
- * The items a plan must check (d89 E, ADR-083): every in-scope line and every assumption a check
+ * The items a plan must check: every in-scope line and every assumption a check
  * decides, whether the planner chose to cite it or not. Each is cited by a task of the plan, or by a
  * completed task that cited it as the vision states it now, and is decided by that task's stored checks.
  */
@@ -128,7 +128,7 @@ export type EnvironmentPlanning =
     | { readonly kind: "existing"; readonly taskId: string };
 
 /**
- * The product's layout a plan builds on (ADR-074 addendum 2 d72 B2): set up by a new product
+ * The product's layout a plan builds on: set up by a new product
  * scaffold task in the plan, or already set up by a completed one. `taskId` is then the completed
  * task whose recorded merge is the layout's latest merged state: the scaffold, or a task merged
  * after it. A revision on the existing environment red-runs its checks there, since the environment
@@ -150,7 +150,7 @@ export interface DecompositionInput {
     /**
      * The vision items the stored checks of a completed task decide (task_checks.decides), each as
      * its check task cites it, so an item here whose text is the vision's now needs no new task to
-     * cite it (ADR-083). Never read from what a task cites. Empty for a first plan.
+     * cite it. Never read from what a task cites. Empty for a first plan.
      */
     readonly checkedItems: readonly VisionItem[];
 }
@@ -202,8 +202,8 @@ export class TaskCapExceededError extends Error {
 }
 
 /**
- * A deliverable or an acceptance line with the ids of the vision items it serves (ADR-074 addendum 2
- * d89 A). `sources` may be empty here: a line that cites nothing is the decomposer's semantic
+ * A deliverable or an acceptance line with the ids of the vision items it serves.
+ * `sources` may be empty here: a line that cites nothing is the decomposer's semantic
  * rejection, whose message names the line, not a bare schema failure.
  */
 const TracedLineOutputSchema = z.object({
@@ -231,11 +231,11 @@ export const TaskOutputSchema = z.object({
         // of the model's own.
         endState: z.string().trim().min(1),
         scope: z.string().trim().min(1),
-        // Each deliverable and each acceptance line names the vision items it serves (ADR-074 addendum
-        // 2 d71 d, d89 A); the task's traced items are the union of those, never chosen separately.
+        // Each deliverable and each acceptance line names the vision items it serves;
+        // the task's traced items are the union of those, never chosen separately.
         deliverables: z.array(TracedLineOutputSchema).min(1),
         acceptance: z.array(TracedLineOutputSchema).min(1),
-        // The planner's grade of the work's difficulty (ADR-074 addendum 2 d70) and why. Required: a
+        // The planner's grade of the work's difficulty and why. Required: a
         // task without a grade is a schema failure the ladder re-asks, never a default level.
         capability: CapabilityLevelSchema,
         capabilityReason: z.string().trim().min(1),
@@ -278,7 +278,7 @@ function untracedText(line: UntracedLine): string {
 
 /**
  * A planned task's deliverable or acceptance line cites no vision item, one the vision does not hold,
- * or an assumption that may not be a source (ADR-074 addendum 2 d71 d, d89 A and E): an untraced
+ * or an assumption that may not be a source: an untraced
  * line can ask for behaviour the tender never asked for, or rest on an assumption the task does not
  * name. Checked mechanically, with no model call. Inside the ladder its message is a re-ask;
  * past it the plan is rejected, never written.
@@ -298,7 +298,7 @@ export class UntraceableTaskError extends Error {
 }
 
 /**
- * A plan leaves an item a check must decide (d89 E, ADR-083) cited by no task: neither one it plans
+ * A plan leaves an item a check must decide cited by no task: neither one it plans
  * nor a completed task that cited it as the vision states it now. Only a task that cites an item
  * has a check task whose checks must decide it (Z0 keeps a check set only when every item its task
  * cites is decided by one of its checks), so an item no task cites would be accepted with no check

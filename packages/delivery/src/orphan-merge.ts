@@ -44,7 +44,7 @@ async function targetOf(projects: TargetPathSource, workdirBase: string, item: W
   return project.workspacePath;
 }
 
-/** How a recorded commit settled the task, as its release logs it; a row from before migration 049 records no kind. */
+/** How a recorded commit settled the task, as its release logs it; a legacy row records no kind. */
 function settledOn(kind: MergeKind | null): string {
   if (kind === "merged") return "merged on main";
   if (kind === "already_delivered") return "already delivered on main";
@@ -75,8 +75,8 @@ export async function releaseMergedTask(projects: TargetPathSource, workdirBase:
 }
 
 /**
- * A crash orphan Ashara's own machinery could not settle within its bound (fault class `ashara`,
- * ADR-080 d3 c): the project's cause on record when the task is blocked for it.
+ * A crash orphan Ashara's own machinery could not settle within its bound (fault class `ashara`):
+ * the project's cause on record when the task is blocked for it.
  */
 export class OrphanUnreconciled extends Error {
   constructor(

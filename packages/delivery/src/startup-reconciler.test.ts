@@ -70,8 +70,8 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): { deps: Star
   return { deps };
 }
 
-// The review of t-shutdown-cancel-not-failure: a hard kill left the dispatch counted, so a task
-// the operator's kill stopped was one attempt nearer its abandon bound.
+// A dispatch a dead process counted is given back, so a task the operator's hard kill stopped is
+// no attempt nearer its abandon bound.
 describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", () => {
   const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000aa", "test");
 
@@ -379,7 +379,7 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
   });
 });
 
-// G4 across a restart (c-loop-never-stop criterion 3; ADR-080 d5): a parked Failed item is routed by
+// Across a restart, a parked Failed item is routed by
 // the verdict saved with its Failed transition.
 describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its stored verdict", () => {
   const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000cc", "test");

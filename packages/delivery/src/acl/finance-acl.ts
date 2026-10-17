@@ -1,5 +1,5 @@
 /**
- * Anti-Corruption Layer: Finance (ADR-075).
+ * Anti-Corruption Layer: Finance.
  *
  * Outside dispatch/, Delivery reads Finance only here: the guarded model port its planning calls go
  * through, and the refusals a call can meet before it is sent, a spend cap's among them.

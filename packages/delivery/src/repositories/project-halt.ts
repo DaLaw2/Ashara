@@ -5,7 +5,7 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 
-// Delivery's one guard over the project halt (O3 c, ADR-080 d3; migration 059). A project is halted
+// Delivery's one guard over the project halt. A project is halted
 // while it has an open project_blocks episode; this module is the only writer of that episode and
 // of the halt's cause on the project row (blocked_category, blocked_error_class, blocked_reason). A
 // halt opens an episode on a project at work (Engagement's lifecycle 'active', not halted); a
@@ -105,8 +105,8 @@ export async function haltForPlanningStopped(tx: DbHandle, id: ProjectId, lastEr
  */
 export class ProjectHaltRepository extends ProjectRepository {
   /**
-   * Halts a project at work and records why (migration 025), with the cause's category (migration
-   * 040), opening the episode the Liaison reports to the client once. A project already halted
+   * Halts a project at work and records why, with the cause's category,
+   * opening the episode the Liaison reports to the client once. A project already halted
    * keeps the cause it was first halted with, so the earliest cause stays on record; a stopped or
    * accepted one is not halted. Either is "already-blocked". A project that does not exist throws.
    */
@@ -126,7 +126,7 @@ export class ProjectHaltRepository extends ProjectRepository {
 
   /**
    * Halts every project at work with no stop awaiting the Liaison, with one cause: the
-   * deployment's spend cap, which binds them all (migration 048). Each halt opens its episode.
+   * deployment's spend cap, which binds them all. Each halt opens its episode.
    * Returns the projects halted.
    */
   async blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]> {
@@ -152,7 +152,7 @@ export class ProjectHaltRepository extends ProjectRepository {
   }
 
   /**
-   * The projects halted on infrastructure (migration 048) whose halt the client has been told,
+   * The projects halted on infrastructure whose halt the client has been told,
    * oldest first: what the substrate probe resumes. A halt not yet reported is not listed: the
    * halt report is due only while its episode is open, so ending it first would leave the client
    * told of a resumption it was never told the pause of.
@@ -173,7 +173,7 @@ export class ProjectHaltRepository extends ProjectRepository {
   }
 
   /**
-   * The automatic way out of an infrastructure halt (migration 048): in one transaction with the
+   * The automatic way out of an infrastructure halt: in one transaction with the
    * project row locked, its open episode is ended as 'probe_passed' with what the probe observed,
    * and its cause cleared. The Liaison then tells the client, once, that work resumed. A project no
    * longer halted on infrastructure is left as it is: "moved". A halt whose own report is not yet
@@ -201,11 +201,11 @@ export class ProjectHaltRepository extends ProjectRepository {
   }
 
   /**
-   * The operator's way out of a halt (migration 040), after the cause is cleared: in one
+   * The operator's way out of a halt, after the cause is cleared: in one
    * transaction with the project row locked, the open block episode is ended with who and why,
    * and the cause cleared. A project whose first planning gave up has its planning record reset,
    * so first planning runs again from no attempts; a plan revision's failed attempts are reset
-   * likewise (migration 042). The Liaison then tells the client, once, that work resumed. Only a
+   * likewise. The Liaison then tells the client, once, that work resumed. Only a
    * halted project is unblocked: any other throws ProjectNotBlocked, and nothing is written.
    */
   async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
@@ -222,7 +222,7 @@ export class ProjectHaltRepository extends ProjectRepository {
       if (!episode) throw new BlockEpisodeMissing(id);
 
       const planningReset = locked.planStoppedAt === null ? {} : { planStoppedAt: null, planAttempts: 0, planLastError: null };
-      // A revision that gave up is tried again from no attempts (migration 042).
+      // A revision that gave up is tried again from no attempts.
       await tx
         .update(projects)
         .set({

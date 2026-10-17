@@ -10,10 +10,10 @@ import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { WorkItemRowRepository } from "./work-item.js";
 
-// Delivery's revisions of a plan under way (migration 042). A project awaits a revision while
+// Delivery's revisions of a plan under way. A project awaits a revision while
 // it is active, planned, awaiting the revision for a client answer that changed an assumption
-// (replan_requests, migration 052) or the repair of a task the failure router gave up
-// (plan_repairs, migration 045), has no task in progress, no
+// (replan_requests) or the repair of a task the failure router gave up
+// (plan_repairs), has no task in progress, no
 // unread answer and no stop awaiting the Liaison. Only a Task has a live attempt: an Epic is
 // InProgress from its first started task until every child settles, so a plan under way always
 // has one, and counting it would keep a flagged project from ever being revised. A revision
@@ -130,7 +130,7 @@ async function awaitedAnswers(db: DbHandle, projectId: string): Promise<string[]
   return rows.map((row) => row.id);
 }
 
-/** task_checks.decides (migration 064): the ids of the vision items one stored check decides; null on a row written before it. */
+/** task_checks.decides: the ids of the vision items one stored check decides; null on a legacy row that records none. */
 const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
 
 /** A stored check's decides does not parse, or names an item its check task's task_spec.sources does not hold. */
@@ -147,8 +147,8 @@ class StoredDecisionUnreadable extends Error {
 
 /**
  * The vision items the latest stored check revision of each task of the project decides, keyed by
- * the task's id, each item as its check task cites it (ADR-083). A check that records no items it
- * decides (written before migration 064) decides none, and a task with no stored checks is absent:
+ * the task's id, each item as its check task cites it. A check that records no items it
+ * decides (a legacy row) decides none, and a task with no stored checks is absent:
  * a citation never stands in for a check.
  */
 export async function decidedByLatestChecks(db: DbHandle, projectId: string): Promise<Map<string, VisionItem[]>> {
@@ -182,7 +182,7 @@ export async function decidedByLatestChecks(db: DbHandle, projectId: string): Pr
   return decided;
 }
 
-/** How many client answers the revision took in (replan_requests, migration 052), as a selected column. */
+/** How many client answers the revision took in (replan_requests), as a selected column. */
 export const answersTakenBy = (revisionId: AnyColumn) =>
   sql<unknown>`(SELECT count(*)::int FROM replan_requests rr WHERE rr.plan_revision_id = ${revisionId})`;
 
@@ -378,7 +378,7 @@ export async function withPlanRevisionTransaction(
 
 /**
  * The open tasks lacking a roster owner. Superseded and completed work is history: a task planned
- * before owners were assigned (migration 031) stays as it is.
+ * before owners were assigned stays as it is.
  */
 async function tasksWithoutRosterOwnerAmongOpen(db: DbHandle, projectId: ProjectId): Promise<string[]> {
   const unowned = new Set(await tasksWithoutRosterOwner(db, projectId));

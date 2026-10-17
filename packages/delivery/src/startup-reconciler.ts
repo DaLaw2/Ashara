@@ -27,7 +27,7 @@ import type { SettledTargets } from "./settled-branches.js";
 interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
   /**
-   * Blocks a project one of whose rows does not parse (migration 025), or whose crash orphan could
+   * Blocks a project one of whose rows does not parse, or whose crash orphan could
    * not be settled; `get` names the target whose main an orphan's merge is read from, and
    * `listWithWorkspace` every target whose settled tasks' branches are released.
    */
@@ -173,11 +173,10 @@ const MAX_ORPHAN_REFUNDS = 1;
 const ORPHAN_BACKOFF_MS: readonly number[] = [100, 500];
 
 /**
- * Policy default (Decided: ADR-084 decision 1, an existing bound stays as an early stop inside the
- * work ledger): the startups in a row that may find one task InProgress before it is given up
- * (crash_loop) instead of requeued. A task left InProgress by a dead process twice running, with no
- * dispatch of it ending in between, is taken as the dispatch that kills the process. Loop L7
- * (requeue at every restart) ends here first; the work ledger bounds it too, since a dead process's
+ * Policy default (a bound that stays as an early stop inside the work ledger): the startups in a
+ * row that may find one task InProgress before it is given up (crash_loop) instead of requeued. A task left InProgress by a dead process twice running, with no
+ * dispatch of it ending in between, is taken as the dispatch that kills the process. A requeue at
+ * every restart ends here first; the work ledger bounds it too, since a dead process's
  * requests stay drawn and a task whose budget they spent is given up (work_budget_spent).
  */
 const CRASH_LOOP_BOUND = 2;
