@@ -5,7 +5,8 @@
 # models of the 2026-10-13 price investigation added by 026; the current-models
 # catalog, its levels as Ashara calls each model, and prompt-length tiers set by
 # 047 from docs/investigations/model-catalog-2026-10-14.md, ADR-074 item 83).
-# This file contains only deployment-specific routing profiles.
+# This file contains only deployment-specific configuration: routing profiles,
+# the thinking policy and the context-overflow signatures.
 #
 # To add/update models, create a new migration or use the model_configs DB table.
 
@@ -138,3 +139,34 @@ default = "off"
 "roster" = "on"
 "suite-review" = "off"
 "escalation" = "on"
+
+# =============================================================================
+# Context overflow -- how a provider states that a request was longer than the
+# model's context window (model-access context-window.ts contextOverflowOf).
+#
+# Read by wire data, never by provider name: a provider error whose HTTP status
+# is in `statuses` is an overflow when its body's `error.code` or `error.type` is
+# one of `codes` (read first), or else when its message contains one of
+# `phrases` (case-insensitive). Any other rejection stays the provider failure it
+# is. A provider whose overflow reads otherwise is added here, never in code.
+# The table is required: without it no overflow could be told from another
+# rejection, so the server refuses to start.
+#
+# The entries, by wire format:
+# - OpenAI Chat Completions and Responses, and endpoints compatible with them:
+#   400, error.code "context_length_exceeded", message "This model's maximum
+#   context length is ...".
+# - DeepSeek chat and vLLM: 400, message "This model's maximum context length is ...".
+# - llama.cpp server: 400, error.type "exceed_context_size_error", message
+#   "... exceeds the available context size ...".
+# - Anthropic Messages: 400, error.type "invalid_request_error", message
+#   "prompt is too long: ...".
+# - 413 (Content Too Large): carried over from the recognition the gateway shipped
+#   with (t-context-window-guard); no provider above is observed answering with it
+#   (unverified).
+# =============================================================================
+
+[context_overflow]
+statuses = [400, 413]
+codes = ["context_length_exceeded", "exceed_context_size_error"]
+phrases = ["maximum context length", "prompt is too long", "exceeds the available context size"]

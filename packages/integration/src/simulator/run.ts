@@ -542,6 +542,7 @@ function executionEvidence(snapshot: Snapshot, statuses: readonly string[]): str
     if (source === "suite_review_unresolved") seen.add("suite_review_problems");
     if (source === "environment_change_needed") seen.add("environment_change_requested");
     if (source === "owner_unresolved") seen.add("owner_unresolved");
+    if (source === "context_window_exceeded") seen.add("context_exceeded");
   }
   for (const event of snapshot.events) {
     if (event.eventType === "work_item.awaiting_environment") seen.add("environment_change_requested");

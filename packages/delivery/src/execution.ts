@@ -34,7 +34,8 @@ type GiveUpCause = Extract<
       | "environment_unavailable"
       | "environment_undefined"
       | "owner_unresolved"
-      | "work_budget_spent";
+      | "work_budget_spent"
+      | "context_window_exceeded";
   }
 >;
 
@@ -106,6 +107,16 @@ interface SuiteReviewProblemsResult {
   readonly detail: string;
 }
 
+/** A turn that did not fit its model's context window, as development returned it. */
+interface ContextExceededResult {
+  readonly model: { readonly provider: string; readonly modelId: string };
+  readonly windowTokens: number;
+  readonly outputReserveTokens: number;
+  readonly projectedInputTokens: number | null;
+  readonly wider: { readonly provider: string; readonly modelId: string; readonly windowTokens: number } | null;
+  readonly detail: string;
+}
+
 /** An implementer's finished work that changed environment recipe files, as development returned it. */
 interface EnvironmentChangeResult {
   readonly paths: readonly string[];
@@ -172,6 +183,7 @@ async function executeTask(
     workKind: task.workKind,
     // eslint-disable-next-line no-restricted-syntax -- policy default: a task stored without criteria (epics, HTTP-created tasks; parseStoredSuccessCriteria) gets no acceptance section in its brief; no verdict reads it
     successCriteria: task.successCriteria ?? [],
+    overflowedWindowTokens: task.overflowedWindowTokens,
   };
 
   const execResult = await dispatchService.execute(taskDescriptor, targetProjectPath);
@@ -284,6 +296,19 @@ async function executeTask(
     await requeueAndRefund(deps, task.id, "a shutdown interrupted its attempt", "execution.routeAsInterrupted");
     return {
       result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
+      outcome: execResult.outcome,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "context_exceeded") {
+    // Not a task failure and no lesson: the same model meets the same window again, so the
+    // FailureRouter's replan would only spend the work ledger on it (ADR-084 addendum 1 item 10: a
+    // bound reached escalates). The task goes on to a model whose window is larger, or is given up.
+    await routeAsContextExceeded(deps, task.id, execResult);
+    return {
+      result: blockedResult(task.id, execResult.detail),
       outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
@@ -452,6 +477,39 @@ async function requeueAndRefund(deps: ExecutionRoutingDeps, taskId: WorkItem["id
   const dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
   console.warn(`[${taskId}] back to Pending after ${why}, its dispatch given back (dispatch count ${dispatchCount})`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), site);
+}
+
+/**
+ * A turn that did not fit its model's context window. With a catalog model whose window is larger,
+ * the window is recorded on the item and it goes back to Pending with its dispatch given back, and
+ * staffing dispatches it next on a model whose window is larger than any it overflowed: each
+ * overflow raises the recorded window, so these requeues end within the catalog. With none, the task
+ * is given up naming the window and the estimate, and its plan repaired, which can cut it smaller.
+ */
+async function routeAsContextExceeded(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], exceeded: ContextExceededResult): Promise<void> {
+  const { model, windowTokens, wider } = exceeded;
+  if (wider === null) {
+    await routeAsGivenUp(
+      deps,
+      taskId,
+      {
+        source: "context_window_exceeded",
+        provider: model.provider,
+        model: model.modelId,
+        windowTokens,
+        outputReserveTokens: exceeded.outputReserveTokens,
+        projectedInputTokens: exceeded.projectedInputTokens,
+        reason: exceeded.detail,
+      },
+      "keep",
+    );
+    return;
+  }
+  await deps.workItemRepo.recordOverflowedWindow(taskId, windowTokens);
+  const why =
+    `a turn that did not fit the ${windowTokens}-token window of ${model.provider}/${model.modelId}; ` +
+    `dispatched next on a model whose window is larger (${wider.provider}/${wider.modelId}, ${wider.windowTokens} tokens)`;
+  await requeueAndRefund(deps, taskId, why, "execution.routeAsContextExceeded");
 }
 
 /**

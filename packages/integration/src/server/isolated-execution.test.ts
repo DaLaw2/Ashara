@@ -154,6 +154,7 @@ describe("a task runs on cells end to end", () => {
           { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
         ],
         defaultProvider: "anthropic",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       },
       checkedSources: ["test"],
       clock: () => new Date(),
@@ -187,7 +188,7 @@ describe("a task runs on cells end to end", () => {
       intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", assumptions: [] }) },
       cells: { substrate, baseCell: base, instance },
       llm: gateway,
-      staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
+      staffing: { widerModel: () => null, staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: {
@@ -215,6 +216,7 @@ describe("a task runs on cells end to end", () => {
           title: "Write hello.txt",
           taskSpec: { goal: "Write hello.txt", endState: "hello.txt holds a greeting", scope: "hello.txt", deliverables: ["hello.txt"] },
           epicId: null,
+          overflowedWindowTokens: null,
           dispatchCount: 0,
           attempt: 1,
           workKind: "implementation",

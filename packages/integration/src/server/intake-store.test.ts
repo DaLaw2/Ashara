@@ -121,6 +121,7 @@ function gatewayWithLedger(spendCap: {
         },
       ],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -198,6 +199,7 @@ beforeAll(async () => {
       },
     ],
     defaultProvider: "deepseek",
+    contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
   };
   gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,

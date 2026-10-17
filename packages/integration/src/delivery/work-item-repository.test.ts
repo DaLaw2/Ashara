@@ -109,3 +109,25 @@ describe("WorkItemRowRepository: the startups in a row that found a task InProgr
   });
 });
 
+// t-context-overflow-routing: the largest window a task overflowed is what its next dispatch must
+// exceed, so a later, smaller record never lowers it, and it survives every routing of the task.
+describe("WorkItemRowRepository: the largest context window an attempt of a task did not fit", () => {
+  test("is null until recorded, rises to the largest recorded, never falls, and is read back with the item", async () => {
+    const repo = new WorkItemRowRepository(db);
+    const id = randomUUID();
+    taskIds.push(id);
+    await repo.create({ id, level: "Task", status: "InProgress", parentId: null, title: "overflowed window", blockedReason: null, projectId });
+    expect((await repo.findById(id))?.overflowedWindowTokens).toBeNull();
+
+    await repo.recordOverflowedWindow(id, 64_000);
+    await repo.recordOverflowedWindow(id, 32_000);
+    expect((await repo.findById(id))?.overflowedWindowTokens).toBe(64_000);
+
+    await repo.save(movedTo(id, "Pending"), "InProgress");
+    expect((await repo.findById(id))?.overflowedWindowTokens).toBe(64_000);
+  });
+
+  test("of an item that does not exist is refused", async () => {
+    await expect(new WorkItemRowRepository(db).recordOverflowedWindow(randomUUID(), 64_000)).rejects.toThrow(/not found/i);
+  });
+});

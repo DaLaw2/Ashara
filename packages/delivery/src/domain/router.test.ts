@@ -26,6 +26,7 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: async () => 1,
+    recordOverflowedWindow: async () => undefined,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");
@@ -48,6 +49,7 @@ function makeItem(overrides: Partial<WorkItem> & { id: WorkItemId; status: WorkI
     projectId: TEST_PROJECT_ID,
     failureVerdict: { kind: "none" },
     dispatchCount: 0,
+    overflowedWindowTokens: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     events: [],

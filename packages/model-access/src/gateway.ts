@@ -13,7 +13,7 @@ import { z } from "zod";
 import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
-import { contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
+import { TURN_MAX_OUTPUT_TOKENS, contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
 import {
   ContextBudgetExceeded,
   ProviderConfigurationRejected,
@@ -36,6 +36,7 @@ import { SdkFinishReasonSchema, assistantMessageOf, cachedTurnPrompt, mapFinishR
 import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
 import type {
   ExtractedUsage,
+  ContextOverflowSignatures,
   GatewayConfig,
   KnownLLMSite,
   LlmCallOperation,
@@ -94,14 +95,6 @@ interface RequestSize {
   readonly requestBytes: number;
   readonly maxOutputTokens: number;
 }
-
-/**
- * The output bound of one agent turn. A turn request carries none of its own,
- * and an unbounded request has no worst-case cost to check against the cap. 16k
- * holds one tool call that writes a file of about 50 KB; a turn that needs more
- * stops at `length`, which the attempt loop reads as a truncated turn.
- */
-const TURN_MAX_OUTPUT_TOKENS = 16_384;
 
 function utf8Bytes(...parts: readonly (string | undefined)[]): number {
   return parts.reduce((total, part) => total + (part === undefined ? 0 : Buffer.byteLength(part, "utf8")), 0);
@@ -165,11 +158,13 @@ export class LLMGateway {
   /** Read once per provider request, before it is sent: that instant prices the call. */
   private readonly clock: () => Date;
   private readonly thinking: ThinkingPolicy | undefined;
+  private readonly contextOverflow: ContextOverflowSignatures;
 
   constructor(config: GatewayConfig, clock: () => Date, models: LanguageModelFactory) {
     this.registry = new ProviderRegistry(config, models);
     this.clock = clock;
     this.thinking = config.thinking;
+    this.contextOverflow = config.contextOverflow;
   }
 
   /**
@@ -339,7 +334,7 @@ export class LLMGateway {
     const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, () => generateText(params)).catch(
       (error: unknown) => {
         if (error instanceof GateThrew) throw error;
-        const overflow = contextOverflowOf(error);
+        const overflow = contextOverflowOf(error, this.contextOverflow);
         if (overflow !== null) {
           throw new ContextBudgetExceeded(
             {
@@ -665,15 +660,31 @@ export class LLMGateway {
   }
 
   resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
-    const resolved = this.registry.resolve(capability, [], site);
-    return {
-      model: resolved.provider,
-      modelId: resolved.modelConfig.id,
-      provider: resolved.providerName,
-      modelConfig: resolved.modelConfig,
-      effectiveCapability: resolved.modelConfig.capabilityLevel,
-    };
+    return resolvedModelOf(this.registry.resolve(capability, [], site));
   }
+
+  /**
+   * The model `resolveModel` gives `capability` at `site` when its context window is larger than
+   * `windowTokens`, else the cheapest enabled model graded at or above `capability` whose window
+   * is; null when the catalog offers none. What a task whose attempt overflowed a window of
+   * `windowTokens` is dispatched on next: never that model again, nor one no larger.
+   */
+  resolveModelWithWindowAbove(capability: CapabilityLevel, site: KnownLLMSite, windowTokens: number): ResolvedModel | null {
+    const routed = this.registry.resolve(capability, [], site);
+    if (routed.modelConfig.maxContextTokens > windowTokens) return resolvedModelOf(routed);
+    const wider = this.registry.resolveWithWindowAbove(capability, windowTokens);
+    return wider === null ? null : resolvedModelOf(wider);
+  }
+}
+
+function resolvedModelOf(resolved: ResolvedProvider): ResolvedModel {
+  return {
+    model: resolved.provider,
+    modelId: resolved.modelConfig.id,
+    provider: resolved.providerName,
+    modelConfig: resolved.modelConfig,
+    effectiveCapability: resolved.modelConfig.capabilityLevel,
+  };
 }
 
 /**

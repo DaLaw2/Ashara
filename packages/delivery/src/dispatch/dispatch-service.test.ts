@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { EnvironmentBuildFailed, PodmanSubstrate, ensureTargetGitInit, environmentVersion } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/finance";
+import { ContextBudgetExceeded, PreCallRefusal } from "@ashara/finance";
 import type { CostedTurnResult } from "@ashara/finance";
 import type { AgentBrief } from "@ashara/workplace";
 import { createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
@@ -177,6 +177,23 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       attempt: 1,
     };
   }
+  if (status === "context_exceeded") {
+    const error = new ContextBudgetExceeded({ provider: "p", model: "m", windowTokens: 32_000, outputReserveTokens: 16_384, breach: { source: "provider", providerMessage: "too long" } });
+    return {
+      status,
+      model: { provider: "p", modelId: "m" },
+      windowTokens: 32_000,
+      outputReserveTokens: 16_384,
+      projectedInputTokens: null,
+      providerMessage: "too long",
+      wider: null,
+      detail: `${status} detail`,
+      outcome: { ...base, kind: "context_budget_exceeded", turn: 1, source: "provider", error },
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "context", chain: wrapError("development", "agentAttempt", error) },
+    };
+  }
   if (status === "interrupted") {
     return {
       status,
@@ -207,7 +224,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_requested", "interrupted"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_requested", "interrupted", "context_exceeded"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -322,6 +339,8 @@ interface Probe {
   readonly requests: unknown[];
   /** The version each environment image prune was asked to keep. */
   readonly prunes: string[];
+  /** Every window a model larger than which was asked of staffing. */
+  readonly widerAsked: number[];
 }
 
 /** The roster role the test's tasks are owned by: a UUID id, as roster_roles stores it, and a name. */
@@ -368,9 +387,11 @@ function serviceOn(
   checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
   shutdownSignal: AbortSignal = new AbortController().signal,
   staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string } = "owned",
+  wider: AssignmentStaff["model"] | null = null,
 ): { service: DispatchService; probe: Probe; events: Array<Record<string, unknown>> } {
   const probe: Probe = {
     sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [], recorded: [], rebuildFails: false, prunes: [],
+    widerAsked: [],
   };
   const events: Array<Record<string, unknown>> = [];
   const service = new DispatchService({
@@ -395,6 +416,10 @@ function serviceOn(
       }),
     },
     staffing: {
+      widerModel: (_task, windowTokens) => {
+        probe.widerAsked.push(windowTokens);
+        return wider;
+      },
       staff: async () => {
         probe.staffed++;
         return staffing === "owned" ? { kind: "staffed", staff: { role: OWNER_ROLE, model: unusedModel } } : staffing;
@@ -485,6 +510,7 @@ const someTask = () => ({
   successCriteria: [],
   workKind: "implementation" as const,
   epicId: null,
+  overflowedWindowTokens: null,
   taskSpec: { goal: "t", endState: "t is done", scope: "t", deliverables: [] as string[] },
 });
 
@@ -733,6 +759,10 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly agentRunsCommand?: boolean;
     /** The recorder refuses the second turn's call before it is sent, after the first wrote greet.txt. */
     readonly refusesSecondTurn?: PreCallRefusal;
+    /** The second turn does not fit its model's window, after the first wrote greet.txt. */
+    readonly overflowsSecondTurn?: ContextBudgetExceeded;
+    /** The model staffing offers with a window larger than the one overflowed; none when absent. */
+    readonly widerModel?: AssignmentStaff["model"];
     /** The environment version the stored checks were red-run on; the dispatch's own when absent. */
     readonly storedVersion?: string;
     /** The stored checks' files. */
@@ -937,6 +967,11 @@ describe("a substrate failure at any stage blocks the task on the environment", 
         writeFileSync(join(workDir, "greet.txt"), "hello\n");
         return turn("run_command", { command: "true" });
       }
+      if (faults.overflowsSecondTurn !== undefined) {
+        if (probe.modelCalls === 2) throw faults.overflowsSecondTurn;
+        writeFileSync(join(workDir, "greet.txt"), "hello\n");
+        return turn("run_command", { command: "true" });
+      }
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
       if (probe.modelCalls === 1 && faults.agentWritesNothing !== true) {
         writeFileSync(join(workDir, "greet.txt"), "hello\n");
@@ -946,7 +981,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
         }
       }
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
-    }, stored, shutdown?.signal);
+    }, stored, shutdown?.signal, "owned", faults.widerModel ?? null);
     probe.rebuildFails = faults.rebuildFails === true;
 
     const result = await service.execute(task, target);
@@ -1067,6 +1102,50 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_failed" || e.event === "task_blocked" || e.event === "task_completed")).toBe(false);
     expect(mainAfter).toBe(mainBefore);
     expect(branchKept).toBe(true);
+  });
+
+  // t-context-overflow-routing: an overflow is deterministic, so it is never the agent's failure nor
+  // retried on the model whose window it did not fit.
+  const overflowOf = (breach: ConstructorParameters<typeof ContextBudgetExceeded>[0]["breach"]) =>
+    new ContextBudgetExceeded({ provider: "none", model: "unused-model", windowTokens: 32_000, outputReserveTokens: 16_384, breach });
+  const WIDE: AssignmentStaff["model"] = {
+    ...unusedModel,
+    modelId: "wide-model",
+    provider: "wide",
+    modelConfig: { ...unusedModel.modelConfig, id: "wide-model", provider: "wide", maxContextTokens: 200_000 },
+  };
+
+  test("a turn that does not fit its window: context_exceeded naming a larger-window model, never failed; no lesson; partial work kept", async () => {
+    const overflow = overflowOf({ source: "preflight", projectedInputTokens: 20_000, basis: "estimated" });
+    const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({ overflowsSecondTurn: overflow, widerModel: WIDE });
+
+    expect(result.status, result.detail).toBe("context_exceeded");
+    if (result.status !== "context_exceeded") return;
+    expect(result).not.toHaveProperty("verdict");
+    expect(result.model).toEqual({ provider: "none", modelId: "unused-model" });
+    expect(result.windowTokens).toBe(32_000);
+    expect(result.projectedInputTokens).toBe(20_000);
+    expect(result.wider).toEqual({ provider: "wide", modelId: "wide-model", windowTokens: 200_000 });
+    expect(probe.widerAsked).toEqual([32_000]);
+    expect(probe.findings).toBe(0);
+    expect(result.detail).toContain("its next dispatch is on wide/wide-model");
+    expect(events.filter((e) => e.event === "context_exceeded")).toEqual([expect.objectContaining({ windowTokens: 32_000, wider: "wide/wide-model" })]);
+    expect(events.some((e) => e.event === "task_failed" || e.event === "task_blocked" || e.event === "task_completed")).toBe(false);
+    expect(mainAfter).toBe(mainBefore);
+    expect(branchKept).toBe(true);
+  });
+
+  test("a provider's overflow with no larger-window model in the catalog: context_exceeded with none to escalate to, the provider's words kept", async () => {
+    const overflow = overflowOf({ source: "provider", providerMessage: "exceeds the maximum number of tokens allowed" });
+    const { result, probe } = await dispatch({ overflowsSecondTurn: overflow });
+
+    expect(result.status, result.detail).toBe("context_exceeded");
+    if (result.status !== "context_exceeded") return;
+    expect(result.wider).toBeNull();
+    expect(result.projectedInputTokens).toBeNull();
+    expect(result.providerMessage).toBe("exceeds the maximum number of tokens allowed");
+    expect(result.detail).toContain("no catalog model graded for the task has a window larger than 32000 tokens");
+    expect(probe.findings).toBe(0);
   });
 
   // A git step of Z0's around the stored checks that fails never blames the task as a verification gap.

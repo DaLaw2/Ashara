@@ -69,6 +69,7 @@ import type { EnvironmentImages, GitRunner, ProcessRunner } from "@ashara/execut
 import {
   buildGateway,
   buildGatewayConfig,
+  loadContextOverflowFromToml,
   loadRoutingProfilesFromToml,
   loadThinkingPolicyFromToml,
   resolveModelsConfigPath,
@@ -256,7 +257,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const dbProviderRows = await configRepo.listProviderConfigs();
   const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
   const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
-  const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
+  const gwConfig = buildGatewayConfig(models, routingProfiles, credentials, loadContextOverflowFromToml(resolveModelsConfigPath()));
   gwConfig.thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
   // Single composition-root call for the LLM gateway (ADR-030). There is no
   // silent fallback here: zero providers -> NoLLMProvidersConfigured
@@ -317,6 +318,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     latestRosterRows: (projectId) => latestRosterRoles(db, projectId),
     latestRosterRevision: (projectId) => latestRosterRevision(db, projectId),
     resolveModel: (task) => modelCalls.resolveModel(gradedCapability(task), "agent-runner"),
+    resolveWiderModel: (task, windowTokens) => modelCalls.resolveModelWithWindowAbove(gradedCapability(task), "agent-runner", windowTokens),
   });
 
   const knowledgeSource: KnowledgeSource = {

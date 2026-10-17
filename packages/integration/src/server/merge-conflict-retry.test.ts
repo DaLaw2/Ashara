@@ -103,7 +103,7 @@ async function checkedTask(title: string, check: { readonly name: string; readon
     checks: [{ ...check, decides: ["S1"] }],
     files: [],
   });
-  return { id, projectId, title, taskSpec: { goal: title, endState: `${title} is done`, scope: title, deliverables: [], capability: "Strong" }, epicId: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] };
+  return { id, projectId, title, taskSpec: { goal: title, endState: `${title} is done`, scope: title, deliverables: [], capability: "Strong" }, epicId: null, overflowedWindowTokens: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] };
 }
 
 interface TaskRun {
@@ -128,6 +128,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
         { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
       ],
       defaultProvider: "anthropic",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -146,6 +147,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
+      widerModel: () => null,
       staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }),
     },
     attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 60, toolTimeoutSeconds: 30 },

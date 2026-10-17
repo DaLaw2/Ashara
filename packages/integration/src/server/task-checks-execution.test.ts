@@ -136,6 +136,7 @@ async function plannedPair(
     attempt: 1,
     workKind,
     successCriteria: [],
+    overflowedWindowTokens: null,
   });
   return {
     implementation: descriptor(implementationId, title, "implementation", { goal: title, endState: `${title} is done`, scope: title, deliverables: [] }),
@@ -165,6 +166,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
         { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
       ],
       defaultProvider: "anthropic",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -183,6 +185,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
+      widerModel: () => null,
       staff: async (staffed) => ({
         kind: "staffed",
         staff: {
@@ -866,7 +869,7 @@ describe("post-merge regression suite", () => {
     const mainBefore = await git("rev-parse", "main");
 
     const { result } = await runTask(
-      { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, epicId: null, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
+      { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, epicId: null, overflowedWindowTokens: null, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
       [
         toolCallTurn("write_file", { path: "BROKEN", content: "a layout whose test fails\n" }),
         toolCallTurn("finish", { status: "done", summary: "Layout set up." }),

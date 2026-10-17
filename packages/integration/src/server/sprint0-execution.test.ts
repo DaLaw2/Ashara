@@ -120,6 +120,7 @@ async function sprint0Task(): Promise<TaskDescriptor> {
     title: "Define and commit the project environment",
     taskSpec: { ...taskSpec, deliverables: [...taskSpec.deliverables] },
     epicId: null,
+    overflowedWindowTokens: null,
     dispatchCount: 0,
     attempt: 1,
     workKind: "environment",
@@ -144,7 +145,7 @@ async function environmentChangeTask(product: "present" | "absent"): Promise<Tas
     INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${id}, 'Task', 'InProgress', ${title}, ${JSON.stringify(taskSpec)}::jsonb,
             ${projectId}, 'environment', ${randomUUID()})`);
-  return { id, projectId, title, taskSpec, epicId: null, dispatchCount: 0, attempt: 1, workKind: "environment", successCriteria: [] };
+  return { id, projectId, title, taskSpec, epicId: null, overflowedWindowTokens: null, dispatchCount: 0, attempt: 1, workKind: "environment", successCriteria: [] };
 }
 
 /**
@@ -173,6 +174,7 @@ async function implementationTask(check: string, environmentVersion: string, bas
     title: "Write hello.txt",
     taskSpec: { goal: "Write hello.txt", endState: "hello.txt holds a greeting", scope: "hello.txt", deliverables: ["hello.txt"] },
     epicId: null,
+    overflowedWindowTokens: null,
     dispatchCount: 0,
     attempt: 1,
     workKind: "implementation",
@@ -215,6 +217,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
         { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
       ],
       defaultProvider: "anthropic",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -235,6 +238,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
+      widerModel: () => null,
       staff: async (staffed) => ({
         kind: "staffed",
         staff: {

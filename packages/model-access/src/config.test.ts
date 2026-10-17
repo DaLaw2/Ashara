@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { buildGatewayConfig, toModelConfig } from "./config.js";
+import { TURN_MAX_OUTPUT_TOKENS } from "./context-window.js";
 import { InvalidGatewayCatalog } from "./errors.js";
 
 function validCatalog() {
@@ -72,6 +73,22 @@ describe("toModelConfig: the context window has no default", () => {
         expect(() => toModelConfig("model_configs", model)).toThrow(/test-model: maxContextTokens .* is not a positive integer/);
     });
 
+    test.each([TURN_MAX_OUTPUT_TOKENS, TURN_MAX_OUTPUT_TOKENS - 1, 8_192])(
+        "refuses window %s at boot, naming the model: no larger than every turn's output reserve, no turn's input would fit",
+        (maxContextTokens) => {
+            const model = { ...validCatalog().models[0]!, maxContextTokens };
+            expect(() => toModelConfig("model_configs", model)).toThrow(InvalidGatewayCatalog);
+            expect(() => toModelConfig("model_configs", model)).toThrow(
+                new RegExp(`test-model: maxContextTokens ${maxContextTokens} is not larger than the ${TURN_MAX_OUTPUT_TOKENS} output tokens`),
+            );
+        },
+    );
+
+    test("loads a window one token larger than the output reserve", () => {
+        const model = { ...validCatalog().models[0]!, maxContextTokens: TURN_MAX_OUTPUT_TOKENS + 1 };
+        expect(toModelConfig("model_configs", model).maxContextTokens).toBe(TURN_MAX_OUTPUT_TOKENS + 1);
+    });
+
     test("refuses a row that carries no window at all", () => {
         const { maxContextTokens: _dropped, ...withoutWindow } = validCatalog().models[0]!;
         const row: Parameters<typeof toModelConfig>[1] = Object.assign(withoutWindow, { maxContextTokens: undefined as unknown as number });
@@ -80,16 +97,17 @@ describe("toModelConfig: the context window has no default", () => {
 });
 
 describe("buildGatewayConfig reads the provider type, not the name", () => {
+    const OVERFLOW = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
     const model = toModelConfig("model_configs", { ...validCatalog().models[0]!, providerName: "ollama" });
 
     test("a local-type row of any name needs no key; an unknown type refuses to build", () => {
         const local = buildGatewayConfig({ m: model }, {}, [
             { name: "ollama", providerType: "local", apiKey: null, baseUrl: "http://localhost:11434/v1" },
-        ]);
+        ], OVERFLOW);
         expect(local.providers.map((p) => [p.name, p.providerType])).toEqual([["ollama", "local"]]);
 
         expect(() =>
-            buildGatewayConfig({ m: model }, {}, [{ name: "ollama", providerType: "vllm", apiKey: "k", baseUrl: null }]),
+            buildGatewayConfig({ m: model }, {}, [{ name: "ollama", providerType: "vllm", apiKey: "k", baseUrl: null }], OVERFLOW),
         ).toThrow(/provider "ollama": provider_type "vllm"/);
     });
 });

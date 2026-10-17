@@ -72,13 +72,18 @@ export interface ContextualTurnLlm {
  */
 export class GuardedModelAccess implements ContextualLlm, ContextualTurnLlm {
   constructor(
-    private readonly gateway: Pick<LLMGateway, "gated" | "resolveModel">,
+    private readonly gateway: Pick<LLMGateway, "gated" | "resolveModel" | "resolveModelWithWindowAbove">,
     private readonly recorder: LlmCallRecorder,
   ) {}
 
   /** The model a capability resolves to at a site. Resolution sends no request, so nothing is admitted or recorded. */
   resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
     return this.gateway.resolveModel(capability, site);
+  }
+
+  /** A model for `capability` at `site` whose context window is larger than `windowTokens`; null when none is. Sends no request. */
+  resolveModelWithWindowAbove(capability: CapabilityLevel, site: KnownLLMSite, windowTokens: number): ResolvedModel | null {
+    return this.gateway.resolveModelWithWindowAbove(capability, site, windowTokens);
   }
 
   forCall(context: LlmCallContext): StructuredProvider & CostedTurnLlm {

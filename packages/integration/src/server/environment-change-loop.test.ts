@@ -137,6 +137,7 @@ async function harness(name: string): Promise<Harness> {
     config: {
       providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true }],
       defaultProvider: "anthropic",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -159,6 +160,7 @@ async function harness(name: string): Promise<Harness> {
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
+      widerModel: () => null,
       staff: async (staffed) => ({
         kind: "staffed",
         staff: {

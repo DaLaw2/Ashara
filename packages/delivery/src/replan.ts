@@ -379,6 +379,12 @@ function givenUpEvidence(reason: GivenUpReason): string {
       return `Ashara's own machinery could not settle it after a restart (${reason.step}): ${reason.reason}`;
     case "work_budget_spent":
       return `It drew every model request its work budget holds (${reason.drawnRequests} of ${reason.budgetRequests}): ${reason.reason}`;
+    case "context_window_exceeded":
+      return (
+        `A turn of its work did not fit the ${reason.windowTokens}-token context window of ${reason.provider}/${reason.model}` +
+        `${reason.projectedInputTokens === null ? "" : ` (a projected input of ${reason.projectedInputTokens} tokens)`}, ` +
+        `and no model graded for it has a larger one: ${reason.reason}`
+      );
     case "crash_loop":
       return `Ashara's process died while it was in progress at ${reason.boots} startups in a row, so it is not dispatched again: ${reason.reason}`;
     case "task_failed":

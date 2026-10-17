@@ -23,6 +23,7 @@ function makeConfig(routingProfiles: RoutingProfiles): GatewayConfig {
   return {
     providers: [{ name: "deepseek", providerType: "deepseek", apiKey: "test-key", models: [MODEL], enabled: true }],
     defaultProvider: "deepseek",
+    contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     routingProfiles,
   };
 }

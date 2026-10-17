@@ -95,6 +95,7 @@ describe("server startup secrets", () => {
       { m: model, o: { ...model, id: "o", provider: "openai" } },
       {},
       credentials,
+      { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     );
     expect(config.providers.map((p) => [p.name, p.apiKey])).toEqual([["deepseek", "store-value"]]);
   });

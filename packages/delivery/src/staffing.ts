@@ -24,6 +24,25 @@ class TaskCapabilityUngraded extends Error {
   }
 }
 
+/**
+ * A task an attempt of which overflowed a context window is dispatched only on a model whose window
+ * is larger (work_items.overflowed_window_tokens), and the catalog offers none: the overflow found
+ * one when it routed the task, so the catalog has changed since. Dispatch fails rather than run the
+ * task on a model whose window it is known not to fit.
+ */
+class NoModelWiderThanOverflow extends Error {
+  constructor(
+    readonly taskId: WorkItemId,
+    readonly overflowedWindowTokens: number,
+  ) {
+    super(
+      `task ${taskId} overflowed a context window of ${overflowedWindowTokens} tokens, and no catalog model graded for it ` +
+        `has a larger one: it is not dispatched on a window it is known not to fit`,
+    );
+    this.name = "NoModelWiderThanOverflow";
+  }
+}
+
 /** The capability an attempt is dispatched at: the task's stored grade, on every attempt. */
 export function gradedCapability(task: TaskDescriptor): CapabilityLevel {
   const graded = task.taskSpec?.capability;
@@ -42,15 +61,28 @@ interface StaffingDeps {
   readonly latestRosterRevision: (projectId: ProjectId) => Promise<number | null>;
   /** The attempt's model; throws when none can be resolved, which fails the dispatch. */
   readonly resolveModel: (task: TaskDescriptor) => ResolvedModel;
+  /** A model for the task whose context window is larger than `windowTokens`; null when the catalog offers none. */
+  readonly resolveWiderModel: (task: TaskDescriptor, windowTokens: number) => ResolvedModel | null;
+}
+
+/** The task's model: one whose window is larger than any an attempt of it overflowed. */
+function modelFor(deps: StaffingDeps, task: TaskDescriptor): ResolvedModel {
+  const overflowed = task.overflowedWindowTokens;
+  if (overflowed === null) return deps.resolveModel(task);
+  const wider = deps.resolveWiderModel(task, overflowed);
+  if (wider === null) throw new NoModelWiderThanOverflow(task.id, overflowed);
+  return wider;
 }
 
 /**
  * Staffs each attempt with the work item's owner role, read from Organization's latest stored
  * roster (s-team-roster-m1): an item without an owner, or whose owner the roster does not hold
- * (or whose roster cannot be read), is owner-unresolved and blocks. No default role exists.
+ * (or whose roster cannot be read), is owner-unresolved and blocks. No default role exists. Its
+ * model is one whose window is larger than any an attempt of the task overflowed.
  */
 export function createAgentStaffing(deps: StaffingDeps): AgentStaffing {
   return {
+    widerModel: (task, windowTokens) => deps.resolveWiderModel(task, windowTokens),
     async staff(task): Promise<Staffing> {
       // Read before the rows, so the revision recorded is never newer than the roster judged.
       const rosterRevision = await deps.latestRosterRevision(task.projectId);
@@ -65,7 +97,7 @@ export function createAgentStaffing(deps: StaffingDeps): AgentStaffing {
       const rows = await deps.latestRosterRows(task.projectId);
       try {
         const role = roleInRoster(parseStoredRoster(task.projectId, rows), ownerRoleId);
-        return { kind: "staffed", staff: { role: { id: role.id, name: role.name }, model: deps.resolveModel(task) } };
+        return { kind: "staffed", staff: { role: { id: role.id, name: role.name }, model: modelFor(deps, task) } };
       } catch (err) {
         if (!(err instanceof RosterUnreadable || err instanceof RoleNotInRoster)) throw err;
         return { kind: "owner-unresolved", ownerRoleId, rosterRevision, reason: err.message };

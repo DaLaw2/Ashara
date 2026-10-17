@@ -199,6 +199,26 @@ const workBudgetSpentSchema = z.object({
 });
 
 /**
+ * A turn of the task's attempt did not fit its model's context window, and no catalog model graded
+ * for the task has a larger one. The same window would be met on every re-dispatch, so the task is
+ * given up (Abandoned) and its plan repaired, which can cut the work smaller. `provider` and `model`
+ * name the model whose `windowTokens` it overflowed, with `outputReserveTokens` reserved in it for
+ * the turn's output; `projectedInputTokens` is the turn's projected input when the gateway refused
+ * it before sending, null when the provider rejected it (which states no count). `reason` carries
+ * the full statement.
+ */
+const contextWindowExceededSchema = z.object({
+  source: z.literal("context_window_exceeded"),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  windowTokens: z.number().int().min(1),
+  outputReserveTokens: z.number().int().min(0),
+  projectedInputTokens: z.number().int().min(0).nullable(),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * The task was InProgress at `boots` startups in a row, each time left by a process that died
  * while it ran, and `boots` reached the bound of re-dispatches after a crash (`bound`, the startup
  * reconciler's): its dispatch may be what kills the process, so the reconciler gives it up
@@ -321,6 +341,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   checkDisputedSchema,
   suiteReviewUnresolvedSchema,
   workBudgetSpentSchema,
+  contextWindowExceededSchema,
   crashLoopSchema,
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
@@ -357,6 +378,7 @@ export const BLOCKED_REASON_SOURCES = [
   "check_disputed",
   "suite_review_unresolved",
   "work_budget_spent",
+  "context_window_exceeded",
   "crash_loop",
   "dependency_unsatisfiable",
   "merge_unrecorded",
@@ -401,6 +423,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "check_disputed":
     case "suite_review_unresolved":
     case "work_budget_spent":
+    case "context_window_exceeded":
     case "crash_loop":
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
@@ -455,6 +478,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "check_disputed":
     case "suite_review_unresolved":
     case "work_budget_spent":
+    case "context_window_exceeded":
     case "crash_loop":
     case "dependency_unsatisfiable":
     case "api":

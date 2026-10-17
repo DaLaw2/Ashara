@@ -48,6 +48,9 @@ export const workItems = pgTable("work_items", {
   // Migration 070: the startups in a row that found the item InProgress, left by a process that
   // died; the bound of its re-dispatches after a crash (startup reconciler).
   crashOrphans: integer("crash_orphans").notNull().default(0),
+  // Migration 076: the largest context window an attempt of the item did not fit; its next
+  // dispatch is on a model whose window is larger. NULL when no attempt has overflowed one.
+  overflowedWindowTokens: integer("overflowed_window_tokens"),
   // Migration 041: the merge commit Z0's merge step made on the target's main for this task;
   // the only record of what was merged. NULL when nothing of the task was merged.
   mergeCommit: text("merge_commit"),

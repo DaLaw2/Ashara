@@ -51,6 +51,11 @@ export interface WorkItem {
    * planned task's owner is assigned after its creation by the plan store.
    */
   ownerRoleId?: string;
+  /**
+   * The largest context window an attempt of the item did not fit (migration 076), written only by
+   * WorkItemRepository.recordOverflowedWindow; null when no attempt has overflowed one.
+   */
+  overflowedWindowTokens: number | null;
   createdAt: Date;
   updatedAt: Date;
   events: DomainEvent[];
@@ -81,6 +86,7 @@ export function createPendingWorkItem(
     failureVerdict: { kind: "none" },
     dispatchCount: 0,
     workKind: null,
+    overflowedWindowTokens: null,
     createdAt: now,
     updatedAt: now,
     events: [],

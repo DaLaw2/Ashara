@@ -129,6 +129,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       config: {
         providers: [{ name: "deepseek", providerType: "deepseek", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [deepseek], enabled: true }],
         defaultProvider: "deepseek",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       },
       checkedSources: ["test"],
       clock: () => new Date(),

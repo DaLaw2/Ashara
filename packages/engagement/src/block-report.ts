@@ -366,6 +366,8 @@ function givenUpCategory(cause: StoredBlockedReason): string {
       return "the review of the plan's checks found problems that could not be settled";
     case "work_budget_spent":
       return "it used every model request the budget of one task allows";
+    case "context_window_exceeded":
+      return "the work it was given was more than any model available to the team can hold in view at once";
     case "crash_loop":
       return "Ashara's own process stopped while working on it, each time it was tried";
     case "owner_unresolved":

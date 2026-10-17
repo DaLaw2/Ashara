@@ -303,6 +303,7 @@ beforeAll(async () => {
         },
       ],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -936,10 +937,11 @@ describe("a task no roster role can work is planned around, never left waiting",
       },
       latestRosterRows: (id) => latestRosterRoles(db, id),
       latestRosterRevision: (id) => latestRosterRevision(db, id),
+      resolveWiderModel: () => null,
       resolveModel: () => gateway.resolveModel("Strong", "agent-runner"),
     });
     const staffOf = (id: string) =>
-      staffing.staff({ id: parseWorkItemId(id, "test"), projectId, title: "t", epicId: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] });
+      staffing.staff({ id: parseWorkItemId(id, "test"), projectId, title: "t", epicId: null, overflowedWindowTokens: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] });
     const unresolved = await staffOf(harbour.id);
     if (unresolved.kind !== "owner-unresolved") throw new Error(`expected owner-unresolved, got ${unresolved.kind}`);
 

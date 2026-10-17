@@ -363,6 +363,19 @@ export class WorkItemRowRepository {
     return row.crashOrphans;
   }
 
+  /**
+   * Raises the largest context window an attempt of the item did not fit to `windowTokens`
+   * (migration 076), never lowering it, in a single UPDATE.
+   */
+  async recordOverflowedWindow(id: string, windowTokens: number): Promise<void> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ overflowedWindowTokens: sql`GREATEST(COALESCE(${workItems.overflowedWindowTokens}, 0), ${windowTokens})` })
+      .where(eq(workItems.id, id))
+      .returning({ id: workItems.id });
+    if (!row) throw new WorkItemNotFound(id);
+  }
+
   async addDependency(fromId: string, toId: string) {
     await this.db
       .insert(dependencies)

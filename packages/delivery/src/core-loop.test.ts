@@ -62,6 +62,7 @@ function pendingTask(id: WorkItemId, title: string): WorkItem {
     status: "Pending",
     title,
     projectId: TEST_PROJECT_ID,
+    overflowedWindowTokens: null,
     failureVerdict: { kind: "none" },
     dispatchCount: 0,
     workKind: "implementation",
@@ -98,6 +99,7 @@ function buildDeps(
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+    recordOverflowedWindow: async () => undefined,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");

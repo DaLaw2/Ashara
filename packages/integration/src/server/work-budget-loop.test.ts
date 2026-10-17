@@ -150,6 +150,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     config: {
       providers: [{ name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [MODEL], enabled: true }],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),
@@ -165,7 +166,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
       instance: testCellInstance(),
     },
     llm: gateway,
-    staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
+    staffing: { widerModel: () => null, staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
     attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
     environment: {
       images: { build: notExercised("build"), prune: notExercised("prune") },

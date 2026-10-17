@@ -49,6 +49,7 @@ describe("Anthropic prompt caching on agent turns", () => {
       {
         providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "k", models: [SONNET], enabled: true }],
         defaultProvider: "anthropic",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       },
       () => new Date("2026-10-14T12:00:00Z"),
       (provider, modelConfig) => createAnthropic({ apiKey: provider.apiKey, fetch: fetchStub })(modelConfig.apiModelId),

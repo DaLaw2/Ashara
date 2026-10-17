@@ -96,15 +96,12 @@ function findBestModel(
   capability: CapabilityLevel,
 ): ModelConfig | undefined {
   const targetRank = CAPABILITY_RANK[capability];
-  const eligible = models
-    .filter((m) => CAPABILITY_RANK[m.capabilityLevel] >= targetRank)
-    .sort(
-      (a, b) =>
-        a.inputCostPer1M - b.inputCostPer1M ||
-        a.outputCostPer1M - b.outputCostPer1M ||
-        a.id.localeCompare(b.id),
-    );
-  return eligible[0];
+  return models.filter((m) => CAPABILITY_RANK[m.capabilityLevel] >= targetRank).sort(cheaperFirst)[0];
+}
+
+/** Base input rate, then base output rate, then id: an order that never depends on catalog order. */
+function cheaperFirst(a: ModelConfig, b: ModelConfig): number {
+  return a.inputCostPer1M - b.inputCostPer1M || a.outputCostPer1M - b.outputCostPer1M || a.id.localeCompare(b.id);
 }
 
 export class ProviderRegistry {
@@ -210,6 +207,27 @@ export class ProviderRegistry {
       modelConfig,
       providerName: same.name,
       providerType: same.providerType,
+    };
+  }
+
+  /**
+   * The cheapest model of an enabled provider graded at or above `capability` whose context window
+   * is larger than `windowTokens`, by capability logic alone (a routing profile pins one model per
+   * site, which is the one whose window was too small); null when the catalog offers none.
+   */
+  resolveWithWindowAbove(capability: CapabilityLevel, windowTokens: number): ResolvedProvider | null {
+    const targetRank = CAPABILITY_RANK[capability];
+    const [best] = this.config.providers
+      .filter((p) => p.enabled)
+      .flatMap((provider) => provider.models.map((model) => ({ provider, model })))
+      .filter(({ model }) => model.maxContextTokens > windowTokens && CAPABILITY_RANK[model.capabilityLevel] >= targetRank)
+      .sort((a, b) => cheaperFirst(a.model, b.model));
+    if (best === undefined) return null;
+    return {
+      provider: this.createLanguageModel(best.provider, best.model),
+      modelConfig: best.model,
+      providerName: best.provider.name,
+      providerType: best.provider.providerType,
     };
   }
 

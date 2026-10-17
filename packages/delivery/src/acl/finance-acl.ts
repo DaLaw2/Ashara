@@ -24,5 +24,7 @@ export type {
   StructuredProvider,
   StructuredValidation,
 } from "@ashara/finance";
+/** @testseam an execution test ends an attempt on it, to route a turn that did not fit its window; Workplace's attempt reads it */
+export { ContextBudgetExceeded } from "@ashara/finance";
 /** @testseam a scripted model in a planning test fails a ladder attempt with it, to count the planner's attempts */
 export { SchemaValidationError } from "@ashara/finance";

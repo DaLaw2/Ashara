@@ -386,6 +386,7 @@ export const AttemptEventNameSchema = z.enum([
   "check_red_run",
   "check_run_product_changed",
   "checks_revalidated",
+  "context_exceeded",
   "delivered_on_main_verify",
   "delivered_sweep",
   "environment_change_requested",
@@ -536,6 +537,37 @@ interface InterruptedResult {
 }
 
 /**
+ * A turn of the attempt did not fit its model's context window (the attempt's
+ * `context_budget_exceeded`): the gateway's projection exceeded the window less the output reserve,
+ * or the provider rejected the request as longer than it. Deterministic, so the same model would
+ * overflow again. Not the task's failure and no lesson: the orchestrator dispatches the task next
+ * on `wider`, a catalog model whose window is larger, or, with none, gives it up naming the window
+ * and the estimate; never through the FailureRouter, whose replan would run the same model into the
+ * same window (ADR-084 addendum 1 item 10: reaching a bound escalates). The partial work is committed on the task branch for the next dispatch,
+ * or for a check task discarded, and `detail` says which.
+ */
+interface ContextExceededResult {
+  readonly status: "context_exceeded";
+  /** The model whose window the turn did not fit. */
+  readonly model: { readonly provider: string; readonly modelId: string };
+  /** That model's catalogued window. */
+  readonly windowTokens: number;
+  /** The output the turn reserved in it. */
+  readonly outputReserveTokens: number;
+  /** The turn's projected input when the preflight refused it; null when the provider rejected it, which states no count. */
+  readonly projectedInputTokens: number | null;
+  /** The provider's own wording when it rejected the turn; null when the preflight refused it. */
+  readonly providerMessage: string | null;
+  /** A catalog model, for the task's next dispatch, whose window is larger than `windowTokens`; null when there is none. */
+  readonly wider: { readonly provider: string; readonly modelId: string; readonly windowTokens: number } | null;
+  readonly detail: string;
+  readonly outcome: Outcome;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
  * The task's stored checks were red-run on another environment version and on the dispatch's no
  * longer all fail on main, nor all pass there (that is work already delivered, d67 b): they cannot
  * decide its work. Not the implementer's failure (no model ran)
@@ -666,6 +698,7 @@ export const EXECUTION_STATUSES = [
   "environment_change_requested",
   "owner_unresolved",
   "interrupted",
+  "context_exceeded",
 ] as const satisfies readonly ExecutionResult["status"][];
 
 export type ExecutionResult =
@@ -679,7 +712,8 @@ export type ExecutionResult =
   | DisputedResult
   | EnvironmentChangeRequestedResult
   | OwnerUnresolvedResult
-  | InterruptedResult;
+  | InterruptedResult
+  | ContextExceededResult;
 
 interface AgentExecutionResult {
   readonly status: "failed" | "blocked";

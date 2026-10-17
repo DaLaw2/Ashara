@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { parseCapabilityLevel } from "./capability-level.js";
+import { TURN_MAX_OUTPUT_TOKENS } from "./context-window.js";
 import { InvalidGatewayCatalog } from "./errors.js";
 import { PROVIDER_TYPES } from "./types.js";
 import type {
+  ContextOverflowSignatures,
   GatewayConfig,
   ModelConfig,
   ProviderConfig,
@@ -54,6 +56,7 @@ export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
   routingProfiles: RoutingProfiles,
   credentials: readonly ProviderCredential[],
+  contextOverflow: ContextOverflowSignatures,
 ): GatewayConfig {
   const modelsByProvider: Record<string, Record<string, ModelConfig>> = {};
   for (const [id, model] of Object.entries(allModels)) {
@@ -97,6 +100,7 @@ export function buildGatewayConfig(
     providers,
     defaultProvider: providers.length > 0 ? providers[0].name : null,
     routingProfiles,
+    contextOverflow,
   };
 }
 
@@ -196,14 +200,24 @@ function priceTierIssues(model: CatalogModel): string[] {
 }
 
 /**
- * Why a model's context window cannot be used: it is not a positive integer. The window has no
+ * Why a model's context window cannot be used: it is not a positive integer, or it is no larger
+ * than the output every agent turn reserves in it (TURN_MAX_OUTPUT_TOKENS). The window has no
  * default anywhere (migration 054): a model whose window is unknown cannot have its turns guarded
- * (context-window.ts), so it fails the catalog at boot rather than run unguarded.
+ * (context-window.ts), and one that holds no input beside the reserve would refuse every turn, so
+ * either fails the catalog at boot rather than at the first attempt.
  */
 function windowIssues(model: CatalogModel): string[] {
   const window: unknown = model.maxContextTokens;
-  if (typeof window === "number" && Number.isInteger(window) && window > 0) return [];
-  return [`${model.modelId}: maxContextTokens ${String(window)} is not a positive integer; the model's context window must be catalogued`];
+  if (typeof window !== "number" || !Number.isInteger(window) || window <= 0) {
+    return [`${model.modelId}: maxContextTokens ${String(window)} is not a positive integer; the model's context window must be catalogued`];
+  }
+  if (window <= TURN_MAX_OUTPUT_TOKENS) {
+    return [
+      `${model.modelId}: maxContextTokens ${window} is not larger than the ${TURN_MAX_OUTPUT_TOKENS} output tokens every agent turn ` +
+        `reserves in it, so no turn's input would fit`,
+    ];
+  }
+  return [];
 }
 
 function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogModel): TokenRates {

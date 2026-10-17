@@ -21,6 +21,7 @@ function blocked(reason: StoredBlockedReason | undefined): WorkItem {
     status: "Blocked",
     title: "t",
     projectId: PROJECT,
+    overflowedWindowTokens: null,
     failureVerdict: { kind: "none" },
     dispatchCount: 1,
     workKind: "implementation",
@@ -58,6 +59,7 @@ function run(
     },
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
+    recordOverflowedWindow: async () => undefined,
     recordCrashOrphan: async () => 1,
     saveOrphanExit: async () => {
       throw new Error("saveOrphanExit is not exercised by this test");
@@ -187,6 +189,9 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     check_disputed: { source: "check_disputed", checkTaskId: "c", checkName: "n", reason: "disputed" },
     suite_review_unresolved: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "problems" },
     work_budget_spent: { source: "work_budget_spent", budgetRequests: 60, drawnRequests: 60, reason: "spent" },
+    context_window_exceeded: {
+      source: "context_window_exceeded", provider: "p", model: "m", windowTokens: 32_000, outputReserveTokens: 16_384, projectedInputTokens: null, reason: "no larger window",
+    },
     crash_loop: { source: "crash_loop", boots: 2, bound: 2, reason: "died twice" },
     dependency_unsatisfiable: { source: "dependency_unsatisfiable", blockedBy: ["x"], reason: "abandoned" },
     merge_unrecorded: { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" },

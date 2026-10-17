@@ -220,6 +220,7 @@ beforeAll(async () => {
         },
       ],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),

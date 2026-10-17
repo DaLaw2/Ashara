@@ -1,10 +1,14 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { APICallError } from "ai";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, test } from "vitest";
-import { contextOverflowOf, contextPreflight, projectTurnInput } from "./context-window.js";
-import { ContextBudgetExceeded, ProviderError } from "./errors.js";
+import { contextOverflowOf, contextPreflight, loadContextOverflowFromToml, projectTurnInput } from "./context-window.js";
+import { ContextBudgetExceeded, InvalidContextOverflowSignatures, ModelsConfigUnreadable, ProviderError } from "./errors.js";
 import { LLMGateway } from "./gateway.js";
+import { resolveModelsConfigPath } from "./paths.js";
 import type { ModelConfig, ProviderRequest } from "./types.js";
 
 /** Two bytes a token, the estimate context-window.ts makes of unmeasured input. */
@@ -61,21 +65,66 @@ function httpError(statusCode: number, body: unknown): APICallError {
   });
 }
 
-describe("contextOverflowOf: the provider's error data, never its name", () => {
+/** The deployment's own signatures, as config/models.toml states them. */
+const DEPLOYED = loadContextOverflowFromToml(resolveModelsConfigPath());
+
+/** A provider wording no deployed signature lists. */
+const UNLISTED_WORDING = "Input of 70000 tokens exceeds the maximum number of tokens allowed (65536) for this model.";
+
+describe("contextOverflowOf: the provider's error data, as the deployment's signatures describe it, never its name", () => {
   test.each([
     ["an error code", { error: { code: "context_length_exceeded", message: "Input too long." } }],
     ["a maximum-context message", { error: { message: "This model's maximum context length is 65536 tokens. However, you requested 70000 tokens." } }],
     ["a prompt-too-long message", { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 210000 tokens > 200000 maximum" } }],
     ["an error type", { error: { type: "exceed_context_size_error", message: "request too large" } }],
-  ])("reads a 400 whose body states the overflow by %s", (_how, body) => {
-    expect(contextOverflowOf(new Error("wrapped", { cause: httpError(400, body) }))).not.toBeNull();
+  ])("the deployed signatures read a 400 whose body states the overflow by %s", (_how, body) => {
+    expect(contextOverflowOf(new Error("wrapped", { cause: httpError(400, body) }), DEPLOYED)).not.toBeNull();
   });
 
-  test("another 400, a 5xx with the same words, and an error with no provider response are not overflow", () => {
-    expect(contextOverflowOf(httpError(400, { error: { message: "temperature must be at most 2" } }))).toBeNull();
-    expect(contextOverflowOf(httpError(500, { error: { message: "maximum context length" } }))).toBeNull();
-    expect(contextOverflowOf(httpError(400, "not json"))).toBeNull();
-    expect(contextOverflowOf(new Error("socket hang up"))).toBeNull();
+  test("another provider's wording is overflow once the signatures list it, with no code change", () => {
+    const body = { error: { type: "invalid_request_error", message: UNLISTED_WORDING } };
+    expect(contextOverflowOf(httpError(400, body), DEPLOYED)).toBeNull();
+    const listed = { ...DEPLOYED, phrases: [...DEPLOYED.phrases, "exceeds the maximum number of tokens allowed"] };
+    expect(contextOverflowOf(httpError(400, body), listed)).toBe(UNLISTED_WORDING);
+  });
+
+  test("a structured code the signatures list is read before any wording", () => {
+    const body = { error: { code: "input_too_large", message: "rejected" } };
+    expect(contextOverflowOf(httpError(400, body), DEPLOYED)).toBeNull();
+    expect(contextOverflowOf(httpError(400, body), { statuses: [400], codes: ["input_too_large"], phrases: [] })).toBe("input_too_large: rejected");
+  });
+
+  test("an unrecognised 4xx, a status not listed, a body that is not JSON and an error with no provider response stay fail-closed", () => {
+    expect(contextOverflowOf(httpError(400, { error: { message: "temperature must be at most 2" } }), DEPLOYED)).toBeNull();
+    expect(contextOverflowOf(httpError(422, { error: { message: "maximum context length" } }), DEPLOYED)).toBeNull();
+    expect(contextOverflowOf(httpError(500, { error: { message: "maximum context length" } }), DEPLOYED)).toBeNull();
+    expect(contextOverflowOf(httpError(400, "not json"), DEPLOYED)).toBeNull();
+    expect(contextOverflowOf(new Error("socket hang up"), DEPLOYED)).toBeNull();
+  });
+});
+
+function writeToml(body: string): string {
+  const path = join(mkdtempSync(join(tmpdir(), "ashara-overflow-")), "models.toml");
+  writeFileSync(path, body, "utf-8");
+  return path;
+}
+
+describe("loadContextOverflowFromToml", () => {
+  test("reads the statuses, codes and phrases", () => {
+    const path = writeToml(`[context_overflow]\nstatuses = [400]\ncodes = []\nphrases = ["too many tokens"]\n`);
+    expect(loadContextOverflowFromToml(path)).toEqual({ statuses: [400], codes: [], phrases: ["too many tokens"] });
+  });
+
+  test("no table, a table naming no code and no phrase, or a status outside 4xx fails boot: never read as no provider ever overflowing", () => {
+    for (const body of [
+      `[thinking]\ndefault = "off"\n`,
+      `[context_overflow]\nstatuses = [400]\ncodes = []\nphrases = []\n`,
+      `[context_overflow]\nstatuses = [500]\ncodes = ["x"]\nphrases = []\n`,
+      `[context_overflow]\nstatuses = []\ncodes = ["x"]\nphrases = []\n`,
+    ]) {
+      expect(() => loadContextOverflowFromToml(writeToml(body))).toThrow(InvalidContextOverflowSignatures);
+    }
+    expect(() => loadContextOverflowFromToml(join(tmpdir(), "ashara-absent-overflow.toml"))).toThrow(ModelsConfigUnreadable);
   });
 });
 
@@ -96,7 +145,7 @@ describe("an agent turn that does not fit its window", () => {
 
   function gatewayWith(model: MockLanguageModelV4) {
     const gateway = new LLMGateway(
-      { providers: [{ name: "any", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://provider.invalid/v1", models: [MODEL], enabled: true }], defaultProvider: "any" },
+      { providers: [{ name: "any", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://provider.invalid/v1", models: [MODEL], enabled: true }], defaultProvider: "any", contextOverflow: { statuses: [400], codes: [], phrases: ["exceeds the maximum number of tokens allowed"] } },
       () => new Date("2026-10-17T00:00:00Z"),
       () => model,
     );
@@ -129,10 +178,10 @@ describe("an agent turn that does not fit its window", () => {
     expect(model.doGenerateCalls).toHaveLength(0);
   });
 
-  test("a provider's overflow rejection ends it as the same typed error, not a provider failure", async () => {
+  test("a provider's overflow rejection, in a wording only the gateway's signatures list, ends it as the same typed error, not a provider failure", async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => {
-        throw httpError(400, { error: { code: "context_length_exceeded", message: "Input exceeds the context window." } });
+        throw httpError(400, { error: { type: "invalid_request_error", message: UNLISTED_WORDING } });
       },
     });
     const { gateway, port, admitted } = gatewayWith(model);

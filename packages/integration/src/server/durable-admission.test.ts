@@ -48,6 +48,7 @@ function serverProcess(perProjectUsd: number): { readonly gateway: GuardedModelA
         { name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [MODEL], enabled: true },
       ],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     },
     checkedSources: ["test"],
     clock: () => new Date(),

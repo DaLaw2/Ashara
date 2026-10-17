@@ -109,6 +109,7 @@ describe("a project whose workspace path is refused", () => {
           },
         ],
         defaultProvider: "deepseek",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       },
       checkedSources: ["test"],
       clock: () => new Date(),
@@ -125,7 +126,7 @@ describe("a project whose workspace path is refused", () => {
         instance: testCellInstance(),
       },
       llm: gateway,
-      staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
+      staffing: { widerModel: () => null, staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: { build: notExercised("build"), prune: notExercised("prune") },

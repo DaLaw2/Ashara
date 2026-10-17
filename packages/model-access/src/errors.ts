@@ -239,6 +239,26 @@ export class InvalidThinkingPolicy extends GatewayError {
 }
 
 /**
+ * Thrown by `loadContextOverflowFromToml` when the `[context_overflow]` table is absent or fails
+ * validation: without it a provider's overflow could not be told from any other rejection.
+ */
+export class InvalidContextOverflowSignatures extends GatewayError {
+  readonly configPath: string;
+  readonly issues: readonly string[];
+
+  constructor(configPath: string, issues: readonly string[]) {
+    super(
+      `Invalid [context_overflow] table in ${configPath}: ${issues.join("; ")}. ` +
+        `Expected statuses (HTTP 4xx codes, at least one), codes (error.code or error.type values) and phrases ` +
+        `(error message wordings), with at least one code or phrase.`,
+    );
+    this.name = "InvalidContextOverflowSignatures";
+    this.configPath = configPath;
+    this.issues = issues;
+  }
+}
+
+/**
  * Thrown by `buildGateway` when zero LLM providers are configured.
  *
  * Per ADR-030 (docs/decisions/ADR-030-llm-boundary-reliability.md), this is the structural fix for the

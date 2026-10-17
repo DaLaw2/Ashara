@@ -1,6 +1,7 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, test } from "vitest";
 import { NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
+import { LLMGateway } from "./gateway.js";
 import { ProviderRegistry, sdkLanguageModels } from "./provider-registry.js";
 import type { GatewayConfig, ModelConfig } from "./types.js";
 
@@ -35,6 +36,7 @@ describe("ProviderRegistry base_url guard", () => {
         },
       ],
       defaultProvider: "mistral",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     };
 
     const registry = registryOf(config);
@@ -70,6 +72,7 @@ describe("ProviderRegistry base_url guard", () => {
         },
       ],
       defaultProvider: "local",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     };
 
     const registry = registryOf(config);
@@ -99,6 +102,7 @@ describe("ProviderRegistry base_url guard", () => {
         },
       ],
       defaultProvider: "mistral",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     };
 
     const registry = registryOf(config);
@@ -111,6 +115,7 @@ describe("ProviderRegistry base_url guard", () => {
     const config: GatewayConfig = {
       providers: [{ name: "mistral", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://x.invalid/v1", models: [MODEL], enabled: true }],
       defaultProvider: "mistral",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     };
     const made: string[] = [];
     const scripted = new MockLanguageModelV4();
@@ -137,6 +142,7 @@ describe("ProviderRegistry base_url guard", () => {
         },
       ],
       defaultProvider: "my-ds",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     });
     const resolved = registry.resolve("Strong");
     if (typeof resolved.provider === "string") throw new Error("expected a model instance, got a gateway id");
@@ -158,6 +164,7 @@ describe("ProviderRegistry base_url guard", () => {
         },
       ],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     });
     const { provider } = registry.resolve("Strong");
     if (typeof provider === "string") throw new Error("expected a model instance, got a gateway id");
@@ -171,6 +178,7 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
       { name: "mistral", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
     ],
     defaultProvider: "mistral",
+    contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     routingProfiles,
   });
 
@@ -188,6 +196,7 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
         ],
       }],
       defaultProvider: "deepseek",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     });
     expect(registry.resolve("Light").modelConfig.id).toBe("cheap-strong");
     expect(registry.resolve("Medium").modelConfig.id).toBe("cheap-strong");
@@ -216,6 +225,7 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
         { name: "other", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [{ ...MODEL, id: "other-large" }], enabled: true },
       ],
       defaultProvider: "mistral",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       routingProfiles: { "mistral+other": { "agent-runner": "mistral-large" } },
     });
     expect(registry.resolveFallback("Strong", ["mistral"], "agent-runner")?.modelConfig.id).toBe("other-large");
@@ -235,6 +245,7 @@ describe("ProviderRegistry.resolveSecondOpinion", () => {
     registryOf({
       providers: providers.map(([name, models]) => ({ name, providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [...models], enabled: true })),
       defaultProvider: providers[0]?.[0] ?? "none",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     });
   const avoid = { provider: "alpha", model: "alpha-strong" };
   const chosen = (registry: ProviderRegistry, strength: "other-family" | "same-family-other-model" | "same-model", capability: ModelConfig["capabilityLevel"] = "Strong") => {
@@ -265,5 +276,34 @@ describe("ProviderRegistry.resolveSecondOpinion", () => {
     expect(chosen(registry, "same-model")).toBe("alpha/alpha-strong");
     // Graded below the capability asked, the model is not substituted.
     expect(chosen(registry, "same-model", "Frontier")).toBeNull();
+  });
+});
+
+// t-context-overflow-routing: a task whose attempt overflowed a window goes on to one larger.
+describe("a model whose context window is larger than one overflowed", () => {
+  const OVERFLOW = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
+  const small: ModelConfig = { ...MODEL, id: "small", inputCostPer1M: 0.5, maxContextTokens: 32_000 };
+  const wideDear: ModelConfig = { ...MODEL, id: "wide-dear", inputCostPer1M: 9, maxContextTokens: 1_000_000 };
+  const wideCheap: ModelConfig = { ...MODEL, id: "wide-cheap", inputCostPer1M: 3, maxContextTokens: 200_000 };
+  const wideWeak: ModelConfig = { ...MODEL, id: "wide-weak", capabilityLevel: "Light", inputCostPer1M: 0.1, maxContextTokens: 400_000 };
+  const config = (models: ModelConfig[], routingProfiles?: GatewayConfig["routingProfiles"]): GatewayConfig => ({
+    providers: [{ name: "mistral", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models, enabled: true }],
+    defaultProvider: "mistral",
+    contextOverflow: OVERFLOW,
+    ...(routingProfiles === undefined ? {} : { routingProfiles }),
+  });
+
+  test("the registry: the cheapest model graded for the capability whose window is larger; none, null", () => {
+    const registry = registryOf(config([small, wideDear, wideCheap, wideWeak]));
+    expect(registry.resolveWithWindowAbove("Strong", 32_000)?.modelConfig.id).toBe("wide-cheap");
+    expect(registry.resolveWithWindowAbove("Strong", 200_000)?.modelConfig.id).toBe("wide-dear");
+    expect(registry.resolveWithWindowAbove("Strong", 1_000_000)).toBeNull();
+  });
+
+  test("the gateway: the routed model when its window is larger, else a larger one, never the routed one again", () => {
+    const pinned = (id: string) => new LLMGateway(config([small, wideCheap], { mistral: { "agent-runner": id } }), () => new Date(), () => new MockLanguageModelV4());
+    expect(pinned("small").resolveModelWithWindowAbove("Strong", "agent-runner", 32_000)?.modelId).toBe("wide-cheap");
+    expect(pinned("wide-cheap").resolveModelWithWindowAbove("Strong", "agent-runner", 32_000)?.modelId).toBe("wide-cheap");
+    expect(pinned("small").resolveModelWithWindowAbove("Strong", "agent-runner", 200_000)).toBeNull();
   });
 });

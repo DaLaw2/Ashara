@@ -58,6 +58,22 @@ export interface GatewayConfig {
    * thinking off at every site: the decided default (ADR-074 D13), not a guess.
    */
   thinking?: ThinkingPolicy;
+  /** How each provider states a context overflow (config/models.toml `[context_overflow]`). */
+  contextOverflow: ContextOverflowSignatures;
+}
+
+/**
+ * How a provider states that a request was longer than the model's context, as deployment data
+ * (config/models.toml `[context_overflow]`), never as code: a provider whose wording or code is not
+ * listed is added there, with no code change.
+ */
+export interface ContextOverflowSignatures {
+  /** HTTP statuses a provider answers an over-long request with; any other status is never overflow. */
+  readonly statuses: readonly number[];
+  /** Values of the error body's `error.code` or `error.type` that name the overflow: the structured fields, read first. */
+  readonly codes: readonly string[];
+  /** Wordings of the error message that state the overflow, matched case-insensitively within it. */
+  readonly phrases: readonly string[];
 }
 
 /** Whether a reasoning model thinks before it answers (ADR-074 D13: per role tier, default off). */

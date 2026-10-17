@@ -67,6 +67,7 @@ function gateway(
       },
     ],
     defaultProvider: providerName,
+    contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     thinking,
   };
   return new GuardedModelAccess(buildGateway({
@@ -410,7 +411,7 @@ describe("one llm_calls row per provider call", () => {
     const models: Parameters<typeof buildGateway>[0]["models"] = (provider) =>
       new MockLanguageModelV4({ doGenerate: () => answers[provider.name === "anthropic" ? "anthropic" : "deepseek"]() });
     return new GuardedModelAccess(
-      buildGateway({ models, config: { providers, defaultProvider: "anthropic" }, checkedSources: ["test"], clock: () => PEAK }),
+      buildGateway({ models, config: { providers, defaultProvider: "anthropic", contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] } }, checkedSources: ["test"], clock: () => PEAK }),
       new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
     );
   }
@@ -462,6 +463,7 @@ describe("one llm_calls row per provider call", () => {
           config: {
             providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [model({ id: "only-strong" }), ...extra], enabled: true }],
             defaultProvider: "anthropic",
+            contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
           },
           checkedSources: ["test"],
           clock: () => PEAK,
@@ -828,6 +830,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
             { name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [deepseek], enabled: true },
           ],
           defaultProvider: "deepseek",
+          contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
           thinking: { default: thinking, sites: {} },
         },
         checkedSources: ["test"],

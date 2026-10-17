@@ -230,6 +230,12 @@ type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | Owner
  */
 export interface AgentStaffing {
   staff(task: TaskDescriptor): Promise<Staffing>;
+  /**
+   * The model the task is dispatched on next after an attempt's turn did not fit a window of
+   * `windowTokens`: one whose window is larger, so the overflow is not met again on the same model
+   * nor on one no larger; null when the catalog offers none.
+   */
+  widerModel(task: TaskDescriptor, windowTokens: number): AgentStaff["model"] | null;
 }
 
 /** The limits of one attempt; the wall clock is the attempt's own (ADR-074 d56, 20 minutes). */
@@ -289,6 +295,12 @@ export interface TaskDescriptor {
    * on every new construction site.
    */
   readonly successCriteria: readonly string[];
+  /**
+   * work_items.overflowed_window_tokens (migration 076): the largest context window an attempt of
+   * the task did not fit, so its dispatch is staffed with a model whose window is larger; null when
+   * no attempt has overflowed one.
+   */
+  readonly overflowedWindowTokens: number | null;
 }
 
 /** Everything one dispatch holds once its cell is up. */
@@ -1156,7 +1168,9 @@ export class DispatchService {
   /**
    * Every terminal except finished(done): finished(blocked) is `blocked`; a cell that failed under
    * the attempt is environment-blocked (the operator's to fix), and so is a model call that failed
-   * (transport_exhausted), under the provider's or Ashara's class; every other terminal is `failed`
+   * (transport_exhausted), under the provider's or Ashara's class; a turn that did not fit its
+   * model's window (context_budget_exceeded) is `context_exceeded`, with the catalog model of a
+   * larger window the task is dispatched on next, or none; every other terminal is `failed`
    * with the terminal named. None of them is read as completed on the agent's word: only a check
    * author's `blocked` whose checked task Z0 finds delivered on main completes (checkedTaskOnMain).
    */
@@ -1242,6 +1256,59 @@ export class DispatchService {
         },
         this.deps.eventSink,
       );
+    }
+
+    if (outcome.kind === "context_budget_exceeded") {
+      // Deterministic: the same model meets the same window, so it is never the agent's failure nor
+      // retried on that model. The next dispatch is on a model whose window is larger, or none is.
+      const { windowTokens, outputReserveTokens, breach } = outcome.error.context;
+      const widerModel = this.deps.staffing.widerModel(task, windowTokens);
+      const wider =
+        widerModel === null
+          ? null
+          : { provider: widerModel.provider, modelId: widerModel.modelId, windowTokens: widerModel.modelConfig.maxContextTokens };
+      const estimate =
+        breach.source === "preflight"
+          ? `its projected input of ${breach.projectedInputTokens} tokens (${breach.basis}) exceeds the window less the output reserve`
+          : `the provider rejected it as longer than the window: ${breach.providerMessage}`;
+      const next =
+        wider === null
+          ? `no catalog model graded for the task has a window larger than ${windowTokens} tokens`
+          : `its next dispatch is on ${wider.provider}/${wider.modelId}, window ${wider.windowTokens} tokens`;
+      const summary =
+        `turn ${outcome.turn} did not fit the ${windowTokens}-token window of ${staff.model.provider}/${staff.model.modelId} ` +
+        `(output reserve ${outputReserveTokens}) after ${outcome.turnsUsed} turn(s): ${estimate}; ${next}; ${describeAgentWork(agentWork)}`;
+      console.warn(`[${task.id}] ${summary}`);
+      this.deps.eventSink?.emit({
+        event: "context_exceeded",
+        taskId: task.id,
+        attempt: task.attempt,
+        provider: staff.model.provider,
+        model: staff.model.modelId,
+        windowTokens,
+        outputReserveTokens,
+        source: breach.source,
+        wider: wider === null ? null : `${wider.provider}/${wider.modelId}`,
+      });
+      return {
+        status: "context_exceeded",
+        model: { provider: staff.model.provider, modelId: staff.model.modelId },
+        windowTokens,
+        outputReserveTokens,
+        projectedInputTokens: breach.source === "preflight" ? breach.projectedInputTokens : null,
+        providerMessage: breach.source === "provider" ? breach.providerMessage : null,
+        wider,
+        detail: summary,
+        outcome,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: {
+          outcome: "blocked",
+          summary,
+          chain: wrapError("development", "agentAttempt", outcome.error, { ...context, errorClass: outcome.error.name, windowTokens }),
+          agentOutput: outcomeRecord(outcome),
+        },
+      };
     }
 
     if (outcome.kind === "refused") {

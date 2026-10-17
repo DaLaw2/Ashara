@@ -10,6 +10,7 @@ export type { ProviderCredential } from "./config.js";
 export { resolveModelsConfigPath } from "./paths.js";
 export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { loadThinkingPolicyFromToml } from "./thinking.js";
+export { loadContextOverflowFromToml } from "./context-window.js";
 export { buildGateway } from "./build-gateway.js";
 export { sdkLanguageModels } from "./provider-registry.js";
 export type { LanguageModelFactory } from "./provider-registry.js";

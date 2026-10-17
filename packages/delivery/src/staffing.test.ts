@@ -30,7 +30,7 @@ const model: ResolvedModel = {
 };
 
 const task = (): TaskDescriptor => ({
-  id: createWorkItemId(), projectId, title: "t", dispatchCount: 0, attempt: 1, successCriteria: [], workKind: "implementation", epicId: null,
+  id: createWorkItemId(), projectId, title: "t", overflowedWindowTokens: null, dispatchCount: 0, attempt: 1, successCriteria: [], workKind: "implementation", epicId: null,
 });
 
 function staffingWith(ownerRoleId: string | null | "absent", rows: unknown = LATEST_ROSTER) {
@@ -38,6 +38,7 @@ function staffingWith(ownerRoleId: string | null | "absent", rows: unknown = LAT
     ownerOf: async () => (ownerRoleId === "absent" ? { kind: "absent" } : { kind: "found", ownerRoleId }),
     latestRosterRows: async () => rows,
     latestRosterRevision: async () => (Array.isArray(rows) && rows.length > 0 ? 2 : null),
+    resolveWiderModel: () => null,
     resolveModel: () => model,
   });
 }
@@ -62,5 +63,43 @@ describe("dispatch staffs the work item's owner from the latest stored roster", 
     expect(staffed.ownerRoleId).toBe(owner === "absent" ? null : owner);
     expect(staffed.rosterRevision).toBe(rows.length > 0 ? 2 : null);
     expect(staffed.reason).toContain(reason);
+  });
+});
+
+// t-context-overflow-routing: a task an attempt of which overflowed a window is never staffed on
+// that model again, nor on one no larger.
+describe("a task whose attempt overflowed a context window is staffed on a model whose window is larger", () => {
+  const wide: ResolvedModel = { ...model, modelId: "wide-model", modelConfig: { ...model.modelConfig, id: "wide-model", maxContextTokens: 200_000 } };
+
+  function staffingOffering(wider: ResolvedModel | null, asked: number[]) {
+    return createAgentStaffing({
+      ownerOf: async () => ({ kind: "found", ownerRoleId: DEVELOPER }),
+      latestRosterRows: async () => LATEST_ROSTER,
+      latestRosterRevision: async () => 2,
+      resolveWiderModel: (_task, windowTokens) => {
+        asked.push(windowTokens);
+        return wider;
+      },
+      resolveModel: () => model,
+    });
+  }
+
+  test("the overflowed window recorded on the task: the larger-window model, never the routed one", async () => {
+    const asked: number[] = [];
+    const staffed = await staffingOffering(wide, asked).staff({ ...task(), overflowedWindowTokens: 32_000 });
+    expect(staffed).toMatchObject({ kind: "staffed", staff: { model: { modelId: "wide-model" } } });
+    expect(asked).toEqual([32_000]);
+  });
+
+  test("none larger in the catalog: the dispatch fails rather than run on a window the task is known not to fit", async () => {
+    await expect(staffingOffering(null, []).staff({ ...task(), overflowedWindowTokens: 32_000 })).rejects.toThrow(
+      /overflowed a context window of 32000 tokens, and no catalog model graded for it has a larger one/,
+    );
+  });
+
+  test("no overflow recorded: the routed model, and no larger one is asked for", async () => {
+    const asked: number[] = [];
+    expect(await staffingOffering(wide, asked).staff(task())).toMatchObject({ kind: "staffed", staff: { model: { modelId: "unused-model" } } });
+    expect(asked).toEqual([]);
   });
 });

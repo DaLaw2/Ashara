@@ -83,8 +83,9 @@ export type Outcome =
   | (OutcomeBase & {
       /**
        * A turn's input would not fit its model's context window (`preflight`: the request was not
-       * sent), or the provider rejected it as longer than the window (`provider`). A failure of the
-       * attempt, routed as any other; there is no reduction and retry within the attempt.
+       * sent), or the provider rejected it as longer than the window (`provider`). Not the agent's
+       * failure: the same model meets the same window, so the dispatch routes it on its own, to a
+       * model whose window is larger or to none; there is no reduction and retry within the attempt.
        */
       readonly kind: "context_budget_exceeded";
       readonly turn: number;

@@ -88,6 +88,7 @@ describe("the model catalog", () => {
       {
         providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "unused", models, enabled: true }],
         defaultProvider: "anthropic",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       },
       () => new Date(),
       sdkLanguageModels,
@@ -220,6 +221,7 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
           enabled: true,
         })),
         defaultProvider: providerNames.length > 0 ? providerNames[0] : null,
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
         routingProfiles: withProfiles ? loadRoutingProfilesFromToml(resolveModelsConfigPath()) : {},
       },
       checkedSources: ["test"],

@@ -92,6 +92,7 @@ describe("runAttempt on a real cell", () => {
           { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
         ],
         defaultProvider: "anthropic",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
       },
       checkedSources: ["test"],
       clock: () => new Date(),

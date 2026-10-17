@@ -71,6 +71,12 @@ export interface WorkItemRepository {
    */
   recordCrashOrphan(id: WorkItemId): Promise<number>;
   /**
+   * Raises the largest context window an attempt of the item did not fit to `windowTokens`
+   * (migration 076), never lowering it, in a single UPDATE: the item is dispatched next only on a
+   * model whose window is larger. Throws when the item does not exist.
+   */
+  recordOverflowedWindow(id: WorkItemId, windowTokens: number): Promise<void>;
+  /**
    * The startup reconciler's move of a crash orphan out of InProgress: written as `save` writes it,
    * except that its count of startups in a row found InProgress is kept, since its dispatch did not
    * end in the process that started it (every other move out of InProgress sets the count back to
