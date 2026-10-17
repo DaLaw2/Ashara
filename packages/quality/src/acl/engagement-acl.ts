@@ -1,5 +1,5 @@
 /**
- * Anti-Corruption Layer: Engagement's vision language (ADR-075).
+ * Anti-Corruption Layer: Engagement's vision language.
  *
  * The suite review judges checks against the vision items their tasks cite, as Engagement
  * publishes them, read here from its published-language entry alone.

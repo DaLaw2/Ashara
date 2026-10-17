@@ -6,14 +6,14 @@ import type { ProjectId } from "@ashara/shared";
 
 /**
  * Every state the client is shown a project in: its Engagement lifecycle (PROJECT_LIFECYCLES,
- * projects_lifecycle_known, migration 059), or 'blocked' while Delivery's halt is open.
+ * projects_lifecycle_known), or 'blocked' while Delivery's halt is open.
  */
 export const PROJECT_STATUSES = ["active", "blocked", "stopped", "accepted"] as const;
 
 type ProjectLifecycle = (typeof PROJECT_LIFECYCLES)[number];
 
 /**
- * Engagement's one guard over projects.lifecycle (O3 c, ADR-080 d3; migration 059), the column's
+ * Engagement's one guard over projects.lifecycle, the column's
  * only writer. A project is active from its tender; the client's stop ends work on it from active
  * (halted or not) or accepted; a passed acceptance sweep accepts an active project Delivery has not
  * halted. The halt itself is Delivery's (its project-halt repository), read here only through db's
@@ -43,7 +43,7 @@ class ProjectLifecycleRefused extends Error {
 type StopOutcome = { readonly kind: "stopped"; readonly wasHalted: boolean } | { readonly kind: "already-stopped" };
 
 /**
- * Moves the project to 'stopped' (migration 028), inside the caller's transaction, with the project
+ * Moves the project to 'stopped', inside the caller's transaction, with the project
  * row locked. A halt it finds is ended as 'client_stop' by the projects_stop_ends_halt trigger. A
  * project already stopped is left as it is; any other refusal throws ProjectLifecycleRefused.
  */
@@ -62,7 +62,7 @@ export async function stopProject(tx: DbHandle, projectId: ProjectId): Promise<S
 }
 
 /**
- * Moves the project to 'accepted' (migration 049), inside the caller's transaction, which holds the
+ * Moves the project to 'accepted', inside the caller's transaction, which holds the
  * project row locked and records the passed sweep the projects_acceptance_guard trigger requires.
  */
 export async function acceptProject(tx: DbHandle, projectId: ProjectId): Promise<void> {

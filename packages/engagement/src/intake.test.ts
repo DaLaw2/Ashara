@@ -525,7 +525,7 @@ describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
   });
 });
 
-// ADR-083: an assumption whose breach a client could observe gets a check, and doubt classifies
+// An assumption whose breach a client could observe gets a check, and doubt classifies
 // toward one. Which kind a real model picks is not testable offline: these tests fix what Ashara
 // does with each answer and what every classifying prompt tells the model, never the model's choice.
 describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
@@ -595,13 +595,13 @@ describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
     for (const line of ASSUMPTION_KIND_RULE) expect(prompt).toContain(line);
     expect(prompt).toContain("in its exit status, or in the data the client stores with it");
     expect(prompt).toContain('"undecided": you cannot tell whether a client could observe a breach');
-    // A17 of the M2.5 exit run sits beside another recovery assumption; the rule gives no reason to class it internal.
+    // An assumption beside another recovery assumption is no internal design for that reason alone.
     expect(prompt).toContain("is not internal design even when another assumption states something close to it");
     expect(prompt).not.toContain("through another assumption");
   });
 });
 
-// ADR-084 addenda 2 and 3 applied to intake: a reading that asks the client nothing is a claim that the
+// A reading that asks the client nothing is a claim that the
 // tender leaves nothing open worth asking. It is put to a second reading at the strongest independence
 // the catalog offers; the second reading's questions are the ones the client is sent; a reading no
 // second reading answered is recorded unconfirmed and the client is told, never held.

@@ -10,8 +10,7 @@ import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-l
 import { Vision, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 
-// The client's answers to the Liaison's questions (story s-liaison-intake-m1, task
-// t-vision-answers-reach-plan). Each question names the assumption work proceeds on
+// The client's answers to the Liaison's questions. Each question names the assumption work proceeds on
 // until it is answered (intake.ts). The Liaison reads each answer once: one that
 // confirms or changes that assumption appends a vision version (versions are
 // append-only) in which the assumption is Stated and carries the answer, the client
@@ -35,7 +34,7 @@ interface OpenAnswer {
   readonly questionId: string;
   readonly intakeAttempts: number;
   readonly intakeLastError: string | null;
-  /** Whose failure the last counted attempt was, as stored (migration 066); read by recordedFailureOf. */
+  /** Whose failure the last counted attempt was, as stored; read by recordedFailureOf. */
   readonly intakeLastFailure: string | null;
   /** Whether the project's first plan had been written when the answer was read. */
   readonly planned: boolean;
@@ -137,7 +136,7 @@ class AnswerReadingExhausted extends Error {
 }
 
 /**
- * An answer at its attempt cap with no error on record. Migration 019's
+ * An answer at its attempt cap with no error on record. A store
  * CHECK makes this unrepresentable; meeting it means the store lied, and no error is
  * invented to stand in for the missing one.
  */
@@ -296,7 +295,7 @@ export class ClientAnswers implements LiaisonAnswers {
       const recorded = await this.deps.store.recordAnswer(write);
       if (recorded.kind === "already-consumed") return { kind: recorded.kind, ...base };
       if (recorded.kind === "recorded") return recordedOutcome(context, reading.reading, write);
-      // Past MAX_ANSWER_WRITES the answer is read again next cycle, uncounted (loop L19): the work
+      // Past MAX_ANSWER_WRITES the answer is read again next cycle, uncounted: the work
       // ledger bounds it, since every reading draws from the project's budget, which halts the
       // project as work_budget when spent.
       if (written >= MAX_ANSWER_WRITES) {

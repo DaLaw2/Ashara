@@ -5,7 +5,7 @@ import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
-// Quality's record of the reviews of plan revisions' check suites (migration 044): each review
+// Quality's record of the reviews of plan revisions' check suites: each review
 // that found problems is one row per check task it named.
 
 const ReviewProblemSchema = z.strictObject({
@@ -95,7 +95,7 @@ export class SuiteReviewFindingRepository {
 
 const StoredConflictSideSchema = z.strictObject({ checkTask: z.string().min(1), check: z.string().min(1), requires: z.string().min(1) });
 
-/** A contradiction's two sides, named; a row written before migration 071 holds them as a pair, read as the same two. */
+/** A contradiction's two sides, named; an older row holds them as a pair, read as the same two. */
 const StoredConflictSchema = z.union([
   z.strictObject({ first: StoredConflictSideSchema, second: StoredConflictSideSchema }),
   z.tuple([StoredConflictSideSchema, StoredConflictSideSchema]).transform(([first, second]) => ({ first, second })),
@@ -105,7 +105,7 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("contradiction"),
     checkTasks: z.array(z.string().min(1)).min(1),
-    // A second review's contradiction recorded before migration 069 quotes no conflict.
+    // An older second review's contradiction quotes no conflict.
     conflict: StoredConflictSchema.optional(),
     problem: z.string().min(1),
     evidence: z.string().min(1),
@@ -128,7 +128,7 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-/** A strength of second opinion a review got no answer at (migration 073). */
+/** A strength of second opinion a review got no answer at. */
 const PassedOverSchema = z.strictObject({ strength: z.enum(SECOND_OPINION_STRENGTHS), outcome: z.enum(["unavailable", "failed"]), reason: z.string().min(1) });
 
 const StoredJudgementSchema = z
@@ -137,7 +137,7 @@ const StoredJudgementSchema = z
     checkTaskId: z.string().min(1),
     checkName: z.string().min(1).nullable(),
     outcome: z.enum(["routed", "released", "advisory"]),
-    // no-other-family: a same-provider answer that confirmed nothing, on rows written before migration 073.
+    // no-other-family: a same-provider answer that confirmed nothing, on rows written before strengths were recorded.
     basis: z.enum(["two-reviews", "second-opinion-agreed", "second-opinion-disagreed", "no-other-family", "second-review-failed", "frozen", "reopened-once"]),
     firstFinding: StoredFindingSchema,
     secondFindings: z.array(StoredFindingSchema),
@@ -185,8 +185,8 @@ class SuiteReviewClaimUnreturned extends Error {
 }
 
 /**
- * Quality's record of a suite review's judgements on its findings (migrations 063, 069, 071, 073),
- * of its claim when it routed nothing (migrations 072, 073), and of the cited items either leaves undecided,
+ * Quality's record of a suite review's judgements on its findings,
+ * of its claim when it routed nothing, and of the cited items either leaves undecided,
  * in one transaction: an item is never kept undecided without the judgement or claim that left it
  * so, nor a judgement or claim without its items.
  */
@@ -309,7 +309,7 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
   });
 }
 
-/** A stored second review's strength (migration 073); null where none answered. */
+/** A stored second review's strength; null where none answered. */
 const StoredStrengthSchema = z.enum(SECOND_OPINION_STRENGTHS).nullable();
 
 /**
@@ -340,7 +340,7 @@ class SuiteReviewClaimCorrupt extends Error {
 const StoredClaimSchema = z
   .strictObject({
     reviewTaskId: z.string().min(1),
-    // no-other-family: a same-provider answer that confirmed nothing, on rows written before migration 073.
+    // no-other-family: a same-provider answer that confirmed nothing, on rows written before strengths were recorded.
     basis: z.enum(["second-opinion-clean", "second-opinion-found", "no-other-family", "second-review-failed"]),
     covered: z.array(z.string().min(1)).min(1),
     firstModel: z.string().min(1),
@@ -384,7 +384,7 @@ export function storedClaimOf(id: string, row: Record<string, unknown> & { reado
 
 /**
  * Every claim the suite reviews of a project recorded when they routed nothing, oldest first, each
- * with the covered items it leaves unverified (migrations 072, 073): what the owner's run report states of them.
+ * with the covered items it leaves unverified: what the owner's run report states of them.
  */
 export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Promise<StoredClaim[]> {
   const rows = await db

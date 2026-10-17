@@ -2,7 +2,7 @@ import { count, eq } from "drizzle-orm";
 import { checkDisputes } from "@ashara/db";
 import type { Database } from "@ashara/db";
 
-// Quality's record of an implementer's disputes of its task's checks (migration 039).
+// Quality's record of an implementer's disputes of its task's checks.
 
 /** One dispute, as the implementer's attempt ended with it. */
 interface NewCheckDispute {

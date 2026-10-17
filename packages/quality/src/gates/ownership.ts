@@ -1,8 +1,7 @@
 import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { StoredCheckFile } from "../task-checks.js";
 
-// Separation of duties held by Z0, not by the model (story s-platform-role-m1;
-// ADR-074 addendum 2 d72 B1): an implementation task's branch may not change what another role
+// Separation of duties held by Z0, not by the model: an implementation task's branch may not change what another role
 // writes. Two kinds of path are protected: the environment recipe (the definition, its
 // containerfile and the recipe files it names), the platform role's, because checks run in the
 // image it builds; and every stored check file, the check author's who wrote it. Nothing else is

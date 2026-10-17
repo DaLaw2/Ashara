@@ -25,7 +25,7 @@ import type { CheckCells, TaskChecks } from "./task-checks.js";
 
 const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "c", command: "make check", exitCode, timedOut, output: "x" });
 
-// ADR-074 addendum 2 d74 A: one rule for every authoring, on the plan's foundation; a check that
+// One rule for every authoring, on the plan's foundation; a check that
 // timed out is never kept as one that fails.
 describe("the red-run rule", () => {
   // Any non-zero exit counted as decisive would read "nothing builds"
@@ -73,7 +73,7 @@ describe("define_check's record", () => {
     ]);
   });
 
-  // ADR-083: which items are checked is what the stored checks decide, never what a line cites.
+  // Which items are checked is what the stored checks decide, never what a line cites.
   test("a check set that leaves one cited item decided by no check is incomplete, and no check may decide an uncited item", () => {
     const recorder = new CheckRecorder(["S1", "S3", "A1"]);
     recorder.record({ name: "a", command: "test -f out", decides: ["S1", "A1"] });

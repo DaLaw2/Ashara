@@ -30,7 +30,7 @@ export function taskBranchName(taskId: string): string {
 /**
  * Deletes the task's branch whatever it holds (`-D`): a discarded branch holds commits main never
  * took. Taken when the ownership gate finds the branch changed the environment recipe (an
- * environment task is requested for it, ADR-074 addendum 2 d66 b, d72 B1), so the next attempt
+ * environment task is requested for it), so the next attempt
  * starts a fresh branch from main (createWorkdir), and when the task is settled
  * (deleteSettledTaskBranch). No branch is nothing to do; a branch git refuses to delete (a worktree
  * still holds it) throws.
@@ -153,7 +153,7 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
   }
 }
 
-/** A git object id as `rev-parse` prints it: SHA-1 or SHA-256, lowercase hex (migration 041's CHECK). */
+/** A git object id as `rev-parse` prints it: SHA-1 or SHA-256, lowercase hex (the merge record's CHECK). */
 const CommitIdSchema = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
 
 /** `git rev-parse HEAD` after the merge commit printed something that is not one object id. */
@@ -170,7 +170,7 @@ class MergeCommitUnreadable extends Error {
 
 /**
  * Commits the staged merge on main and returns the merge commit, read back from git: the task's
- * merge record (migration 041). A commit id that cannot be read throws, so the task is never
+ * merge record. A commit id that cannot be read throws, so the task is never
  * completed without its record.
  */
 export async function commitMerge(targetPath: string, taskId: string): Promise<string> {

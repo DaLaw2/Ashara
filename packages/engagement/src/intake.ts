@@ -17,20 +17,20 @@ import type { AssumptionKind, ScopeLine } from "./vision-language/vision-assumpt
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 
-// The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
-// Proceed on silence at once (story s-liaison-intake-m1): the questions
+// The Liaison's intake of a tender.
+// Proceed on silence at once: the questions
 // go out, the assumptions work proceeds on are recorded as Inferred, and vision v1
 // is written in the same intake. A later answer is a change request, not a rewrite.
 // The assumptions no question carries are reported to the client in one message of the
-// same intake, without waiting (ADR-073 Q8, ADR-074 addendum 2 d89 C), so every Inferred
+// same intake, without waiting, so every Inferred
 // assumption intake writes is one the client was asked about or told of.
 // A reading that asks the client nothing is a claim that the tender leaves nothing open worth asking,
-// as a clean suite review is a claim about its checks (ADR-084 addenda 2 and 3, decisions 11 and 12):
+// as a clean suite review is a claim about its checks:
 // it is put to a second reading at the strongest independence the catalog offers. The questions a
 // second reading asks are the ones the client is sent, so Ashara writes none of its own. The strength
-// that confirmed the reading, or that none answered, is recorded (migration 074) and told to the client.
+// that confirmed the reading, or that none answered, is recorded and told to the client.
 
-/** At most this many questions per tender (story s-liaison-intake-m1). */
+/** At most this many questions per tender. */
 const MAX_QUESTIONS_PER_TENDER = 5;
 
 /**
@@ -59,7 +59,7 @@ function withoutLabelLeadIn(statement: string): string {
 // A statement that is nothing but the lead-in is rejected (and re-asked), never stored empty.
 const AssumptionStatementSchema = z.string().min(1).transform(withoutLabelLeadIn).pipe(z.string().min(1));
 
-// "kind" (d89 E, ADR-083): behaviour the client could observe, or the team's own design choice no
+// "kind": behaviour the client could observe, or the team's own design choice no
 // client could observe. The Liaison classifies each assumption when it writes it; "undecided" is
 // recorded as client-visible, and only a client-visible one may become the source of an acceptance line.
 const AssumptionSchema = z.strictObject({
@@ -122,7 +122,7 @@ interface SecondReading {
 }
 
 /**
- * How the tender's first reading stands (intake_readings.confirmation, migration 074): it asked the
+ * How the tender's first reading stands (intake_readings.confirmation): it asked the
  * client questions, so there is no claim to confirm; or it asked none, and a second reading asked none
  * either, or asked the questions the client is sent; or no second reading answered at any strength.
  */
@@ -176,7 +176,7 @@ export interface IntakeStore {
   /** Posts the report and consumes the tender together. */
   closeFailedTender(tender: OpenTender, report: string): Promise<void>;
   /**
-   * Blocks the project and records why (migration 025); a project already
+   * Blocks the project and records why; a project already
    * blocked keeps its first cause. A blocked project's tenders are not open.
    */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
@@ -203,7 +203,7 @@ export interface LiaisonIntake {
 }
 
 /**
- * A tender reached its attempt cap with no error on record. Migration 019's
+ * A tender reached its attempt cap with no error on record. A store
  * CHECK makes this unrepresentable; meeting it means the store lied.
  */
 class IntakeFailureUnrecorded extends Error {
@@ -342,7 +342,7 @@ function buildIntakePrompt(tender: string): string {
 /**
  * How a second reading reads the tender: `direct` as the first reading does, when another model family
  * answers; `ambiguities` within the first's family, which shares more of its blind spots and so starts
- * from what the tender leaves ambiguous or assumed (ADR-084 addendum 3 decision 12).
+ * from what the tender leaves ambiguous or assumed.
  */
 type ReadingAngle = "direct" | "ambiguities";
 
@@ -442,9 +442,9 @@ function inferencesOf(questions: readonly IntakeQuestion[], response: IntakeResp
 }
 
 /**
- * What the client reads of the assumptions no question asked about (ADR-074 addendum 2 d89 C): the
+ * What the client reads of the assumptions no question asked about: the
  * decisions work proceeds on unless they object, behaviour first, then the team's design choices.
- * Nothing waits on a reply (ADR-073 Q8). Null when there are none.
+ * Nothing waits on a reply. Null when there are none.
  */
 function assumptionsReport(inferences: readonly InferredAssumption[]): string | null {
   const reported = inferences.filter((a) => a.disclosed === "reported");
@@ -624,7 +624,7 @@ export class TenderIntake implements LiaisonIntake {
 
   /**
    * The second reading of a first reading that asked nothing, at the strongest independence that
-   * answers (ADR-084 addendum 3 decision 12), the strengths asked in order: one the catalog does not
+   * answers, the strengths asked in order: one the catalog does not
    * serve (SecondOpinionUnavailable) or whose model gave no fit answer (SecondOpinionUnanswered,
    * StructuredOutputExhausted) is passed over, recorded and logged, and the next is asked. When none
    * answers, the reading is unconfirmed: work proceeds on it and the client is told, so the bound is

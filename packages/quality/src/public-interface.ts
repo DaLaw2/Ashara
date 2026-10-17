@@ -7,7 +7,7 @@ import { runHostGit, targetRepo } from "@ashara/execution-infra";
  */
 export const PUBLIC_INTERFACE_FILE = "PUBLIC_INTERFACE.md";
 
-/** A Completed product scaffold of a project, with the merge on main its completion recorded (migration 041). */
+/** A Completed product scaffold of a project, with the merge on main its completion recorded. */
 export interface ScaffoldMerge {
   readonly taskId: string;
   readonly mergeCommit: string;

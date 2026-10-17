@@ -4,8 +4,7 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 
-// The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
-// s-independent-verify-m1 W7): the client hears, once, that a project is paused, the cause as it
+// The Liaison's reports on project halts: the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
 // as observed fact, since a fixed sentence can name a cause nobody observed: a halt recorded
 // with an error chain is told as Ashara's record of its kind, in the client's words, naming the
@@ -14,7 +13,7 @@ import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 // in the client's words, naming the task's record, which holds the stored text (stored reasons are
 // Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
-// each at most once. No task is reported on its own: no task waits on a person (W6).
+// each at most once. No task is reported on its own: no task waits on a person.
 
 /** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
 type ProjectBlockKind =
@@ -42,7 +41,7 @@ interface RecordedCause {
   readonly work: WorkAtBudget | null;
 }
 
-/** The dispute that passed its bound, as recorded when the project was blocked on it (before migration 048). */
+/** The dispute that passed its bound, as recorded when the project was blocked on it; only older records hold this halt kind. */
 interface BlockingDispute {
   readonly taskTitle: string;
   readonly checkName: string;
@@ -51,7 +50,7 @@ interface BlockingDispute {
   readonly disputes: number;
 }
 
-/** The review that passed its bound, as recorded when the project was blocked on it (before migration 048). */
+/** The review that passed its bound, as recorded when the project was blocked on it; only older records hold this halt kind. */
 interface BlockingReview {
   /** How many reviews had named the check task past the bound when the project was blocked. */
   readonly times: number;
@@ -311,7 +310,7 @@ function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: 
   return [opening, recordedCause(episodeId, halt, cause), nextStep(halt)].join("\n\n");
 }
 
-/** Plain words: what stopped, why, and what the client can do (a halt recorded before migration 048). */
+/** Plain words: what stopped, why, and what the client can do (a halt kind only older records hold). */
 function disputeBoundReport(dispute: BlockingDispute): string {
   return [
     `Work on this project is paused. While building "${dispute.taskTitle}", the developer found that one of the checks ` +
@@ -323,7 +322,7 @@ function disputeBoundReport(dispute: BlockingDispute): string {
   ].join("\n\n");
 }
 
-/** Plain words: what stopped, what the review found, and what the client can do (a halt recorded before migration 048). */
+/** Plain words: what stopped, what the review found, and what the client can do (a halt kind only older records hold). */
 function suiteReviewBoundReport(review: BlockingReview): string {
   return [
     `Work on this project is paused. Before building starts, the team reviews all the checks written to confirm the ` +

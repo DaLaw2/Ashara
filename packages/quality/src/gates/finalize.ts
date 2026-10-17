@@ -84,7 +84,7 @@ export interface PostMergeVerdict {
  * - "postMergeTaskChecks": the stored checks are the task's first and only verdict; nothing ran
  *   them on the task's own work before, so a failure is the task's work failing its checks.
  * - "postMergeScaffold": the product scaffold's build and test on its merge are its first and only
- *   verdict (no gate ran them before the merge, ADR-074 addendum 2 d74 D): a failure is the
+ *   verdict (no gate ran them before the merge): a failure is the
  *   scaffold's own attempt failing, retried like any other, never a regression of the tree.
  */
 type PostMergeOperation = "postMergeVerify" | "postMergeTaskChecks" | "postMergeScaffold";
@@ -222,7 +222,7 @@ async function abortAndFail(
 /**
  * Merges the task branch, which the caller has already committed the agent's work to (a commit
  * that failed ended the dispatch before this point), and checks the merge. One finalize at a time
- * per target (ADR-074 d82 W3): from the orphan recovery through the commit or the abort, the
+ * per target: from the orphan recovery through the commit or the abort, the
  * checkout's lock is held, so a batch's other task neither aborts this one's tentative merge nor
  * merges against a main this one is about to move; it waits and merges against the main it lands on.
  */

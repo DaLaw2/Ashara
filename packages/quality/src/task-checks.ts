@@ -18,10 +18,10 @@ import type { CheckDefinition, CheckRedRunPreview, CheckRun, DefinedCheck, Found
 import { describeProductChange } from "./check-verdict.js";
 import type { CheckRunReport, ProductChangedReport } from "./check-verdict.js";
 
-// Independent verification (story s-independent-verify-m1, ADR-074 addendum 2 d63): the check
+// Independent verification: the check
 // author writes an implementation task's checks in its check task, before the implementation
 // starts. Z0 keeps a set of checks only if it fails on the plan revision's foundation (the red-run
-// rule, d74 A: a fixed commit, never today's main), stores it in Quality's task_checks, and decides
+// rule: a fixed commit, never today's main), stores it in Quality's task_checks, and decides
 // the implementation task by running the stored checks, with their stored files written over
 // whatever the implementer left at those paths, on a throwaway checkout of its tentative merge.
 // Nothing a check runs is on the host: every command runs in a cell.
@@ -48,7 +48,7 @@ export interface TaskChecks {
   readonly environmentVersion: string;
   /**
    * The commit the revision was red-run on, its plan revision's foundation; null for a revision
-   * stored before baselines were recorded (migration 045), which cannot be red-run again.
+   * stored before baselines were recorded, which cannot be red-run again.
    */
   readonly baselineCommit: string | null;
   readonly checks: readonly StoredCheck[];
@@ -56,7 +56,7 @@ export interface TaskChecks {
 }
 
 /**
- * One stored check with the ids of the vision items it decides (migration 064); null for a check
+ * One stored check with the ids of the vision items it decides; null for a check
  * stored before they were recorded, which is not evidence that it decides any item.
  */
 interface StoredCheck extends CheckDefinition {
@@ -95,7 +95,7 @@ interface CompletedTasksChecks {
   readonly unchecked: readonly string[];
 }
 
-/** Quality's task_checks (migration 036); the composition root supplies it. */
+/** Quality's task_checks; the composition root supplies it. */
 export interface TaskCheckStore {
   /**
    * The files of the latest checks of every task of the project, whatever its status: the paths
@@ -107,7 +107,7 @@ export interface TaskCheckStore {
   /** The implementation tasks that depend on the check task: the tasks its checks decide. */
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
   /**
-   * The check task's foundation (ADR-074 addendum 2 d74 A): the recorded merge of the product
+   * The check task's foundation: the recorded merge of the product
    * scaffold it depends on, or of its one dependency merged after the scaffold for a plan revision
    * with no scaffold of its own; none for a dependency merged before it.
    */
@@ -192,11 +192,11 @@ export class CheckRecorder {
 export type CitedItemIds = readonly [string, ...string[]];
 
 /**
- * The cited items no check of `checks` decides (ADR-083): a check stored with no record of what it
+ * The cited items no check of `checks` decides: a check stored with no record of what it
  * decides decides nothing. Empty only when every cited item has a check whose stored verdict is on it.
  */
 function undecidedItems(cited: readonly string[], checks: ReadonlyArray<{ readonly decides: readonly string[] | null }>): string[] {
-  // eslint-disable-next-line no-restricted-syntax -- policy default: a check with no record of what it decides decides nothing (ADR-083), so its cited items stay undecided
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a check with no record of what it decides decides nothing, so its cited items stay undecided
   const decided = new Set(checks.flatMap((check) => check.decides ?? []));
   return cited.filter((id) => !decided.has(id));
 }
@@ -640,7 +640,7 @@ export async function runChecksOnCheckout(
 }
 
 /**
- * The red-run rule on one check's run on the foundation (ADR-074 addendum 2 d74 A): it must run to
+ * The red-run rule on one check's run on the foundation: it must run to
  * a verdict there, an exit within its time limit by a command the environment can run, and either
  * pass or fail with the check's own verdict that the behaviour is missing (CHECK_MISSING_EXIT). Any
  * other failure is the check's build, setup or harness failing before its verdict: counting it as

@@ -139,9 +139,9 @@ describe("a retry of a branch that conflicts with main", () => {
   });
 });
 
-// The fault-class soak (t-ddd-fix-own-faults): a cleanup whose git failed left a worktree registered
-// with its directory gone, or a crash left the directory too; every later `worktree add` there, and
-// the deletion of a check branch it held, refused, and the task could never be dispatched again.
+// A cleanup whose git failed leaves a worktree registered with its directory gone, or a crash
+// leaves the directory too; unless the slot is cleared, every later `worktree add` there, and the
+// deletion of a check branch it holds, refuses, and the task can never be dispatched again.
 describe("a worktree slot left by a crash or a faulted cleanup", () => {
   test("a registration whose directory is gone, or a directory left whole, never stops the next worktree", async () => {
     const { target, workdirBase } = await sameBaseConflict();

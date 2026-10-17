@@ -6,7 +6,7 @@ import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 
-// The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one
+// The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
 // infrastructure halt). Each is due while its episode (a project_blocks row) has no report, and
 // posting one records it against that episode in the same transaction, so a retried or concurrent
@@ -59,7 +59,7 @@ class BlockingRepairMissing extends Error {
   }
 }
 
-/** The given-up tasks whose awaited repair the plan_repair block stopped (migration 045), oldest first. */
+/** The given-up tasks whose awaited repair the plan_repair block stopped, oldest first. */
 async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonmentRow[]> {
   const rows = await db
     .select({ id: workItems.id, title: workItems.title, attempts: workItems.dispatchCount, reason: workItems.blockedReason })
@@ -72,9 +72,9 @@ async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: 
 }
 
 /**
- * The cause recorded on a block episode (migration 040): the error's class, its described chain, on
- * a budget_cap halt the amounts its cap was judged on (migration 060), and on a work_budget halt the
- * work ledger as it stood (migration 067), its verification reserve with it (migration 068).
+ * The cause recorded on a block episode: the error's class, its described chain, on
+ * a budget_cap halt the amounts its cap was judged on, and on a work_budget halt the
+ * work ledger as it stood, its verification reserve with it.
  */
 interface RecordedCauseRow {
   readonly errorClass: string | null;
@@ -203,7 +203,7 @@ type DueBlockReportRow =
 
 const ResumeKindSchema = z.enum(["unblocked", "probe_passed"]);
 
-/** A project_blocks row holds a kind outside migration 040's vocabulary. */
+/** A project_blocks row holds a kind outside the vocabulary its CHECK admits. */
 class ProjectBlockKindUnknown extends Error {
   constructor(
     readonly episodeId: string,

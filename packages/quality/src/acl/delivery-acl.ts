@@ -1,5 +1,5 @@
 /**
- * Anti-Corruption Layer: Delivery's work-item language (ADR-075).
+ * Anti-Corruption Layer: Delivery's work-item language.
  *
  * Quality decides the work Delivery hands it and reads the task specification Delivery wrote:
  * what a check task checks, the vision items it traces to, where a task came from. It reads them

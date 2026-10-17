@@ -11,24 +11,24 @@ import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
 
-// The Liaison's delivered report (migration 049; story s-independent-verify-m1 W7): due while a
+// The Liaison's delivered report: due while a
 // passed acceptance sweep has none, rendered only from what is recorded: how each goal task closed,
 // which tasks' checks the sweep ran and the commands of those that passed, the tasks given up, and every item of the reviewed vision with
 // whether a check covers it and where each assumption stood with the client at acceptance.
 
-/** How a goal task's recorded commit closed it (migration 049). */
+/** How a goal task's recorded commit closed it. */
 type GoalClose =
   | { readonly kind: "merged"; readonly commit: string }
   /** `by` is the task whose merge made that commit, null when no task records it as its merge. */
   | { readonly kind: "already-delivered"; readonly commit: string; readonly by: string | null }
-  /** A commit is recorded, but not how it closed the task (a record from before migration 049). */
+  /** A commit is recorded, but not how it closed the task (a record from before merge kinds were recorded). */
   | { readonly kind: "unrecorded-kind"; readonly commit: string }
   /** Completed with no commit recorded at all. */
   | { readonly kind: "no-record" };
 
 /**
  * An item of the vision as the delivered report names it: a scope line as the plan's review recorded
- * it, or an assumption with where it stands with the client at acceptance (d95 a).
+ * it, or an assumption with where it stands with the client at acceptance.
  */
 type AcceptedVisionItem =
   | Extract<VisionSource, { readonly type: "scope" }>
@@ -54,11 +54,11 @@ type VisionCoverage =
 
 interface DueDeliveredReportRow {
   readonly kind: "due";
-  /** Failed attempts at the report so far (migration 062). */
+  /** Failed attempts at the report so far. */
   readonly failures: number;
-  /** Failed reads of the public interface file so far (migration 062). */
+  /** Failed reads of the public interface file so far. */
   readonly interfaceReadFailures: number;
-  /** Failed attempts whose records did not make a report so far (migration 063). */
+  /** Failed attempts whose records did not make a report so far. */
   readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
@@ -77,7 +77,7 @@ interface DueDeliveredReportRow {
   readonly reading: ReadingTold;
 }
 
-/** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before migration 065. */
+/** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before executed checks were recorded. */
 type ExecutedChecks =
   | { readonly kind: "recorded"; readonly checks: ReadonlyArray<{ readonly task: string; readonly name: string; readonly command: string }> }
   | { readonly kind: "unrecorded" };
@@ -160,7 +160,7 @@ async function sweepTaskTitles(db: DbHandle, sweepId: string, column: "checked_t
   });
 }
 
-/** acceptance_sweeps.executed_checks (migration 065): the stored checks a passed sweep ran and saw pass; null on a row written before it. */
+/** acceptance_sweeps.executed_checks: the stored checks a passed sweep ran and saw pass; null on a row written before it. */
 const ExecutedChecksSchema = z.array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1) })).nullable();
 
 /** A passed sweep's stored executed_checks is neither null nor a list of executed checks. */
@@ -174,7 +174,7 @@ class SweepExecutedChecksUnreadable extends ReportRecordUnreadable {
   }
 }
 
-/** The stored checks the sweep records it ran and saw pass, each with its task's title; unrecorded on a sweep from before migration 065. */
+/** The stored checks the sweep records it ran and saw pass, each with its task's title; unrecorded on a sweep from before executed checks were recorded. */
 async function executedChecksOf(db: DbHandle, sweepId: string, raw: unknown): Promise<ExecutedChecks> {
   const parsed = ExecutedChecksSchema.safeParse(raw);
   if (!parsed.success) throw new SweepExecutedChecksUnreadable(sweepId, z.prettifyError(parsed.error));
@@ -230,12 +230,12 @@ function sourceIdentity(source: VisionSource): string {
   return JSON.stringify([source.type, source.id, source.text]);
 }
 
-/** task_checks.decides (migration 064): the ids of the vision items one stored check decides; null on a row written before it. */
+/** task_checks.decides: the ids of the vision items one stored check decides; null on a row written before it. */
 const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
 
 /**
  * The items one stored check decides, by identity, each read as its check task cites it; null when
- * the check records no items it decides (written before migration 064) or its check task records no
+ * the check records no items it decides (written before decides was recorded) or its check task records no
  * cited items, so what it covers is not on record.
  */
 function decidedBy(check: { readonly checkTaskId: string; readonly name: string; readonly decides: unknown; readonly taskSpec: unknown }): Set<string> | null {
@@ -328,7 +328,7 @@ function visionAtAcceptance(sweep: { readonly id: string; readonly projectId: st
 
 /**
  * Each assumption of the vision version current at acceptance, by id, with where it then stood with
- * the client (d95 a): a confirming answer asks for no replan, so the plan's own copy of the vision
+ * the client: a confirming answer asks for no replan, so the plan's own copy of the vision
  * can predate it. A reply counts only if it was sent by acceptance, and as read only if
  * it was read by then. Throws AcceptedStandingUnreadable when any of it cannot be read.
  */
@@ -388,11 +388,11 @@ async function assumptionsAtAcceptance(
 /**
  * Every item of the vision as the plan's latest completed review recorded it (every item of the
  * vision its revision was decomposed from), each checked exactly when a check of a goal task's
- * latest stored revision (the sets the sweep ran) records that it decides it (ADR-083): a line
+ * latest stored revision (the sets the sweep ran) records that it decides it: a line
  * citing an item is no check of it; each also undecided when a suite review left it so on one of
  * those goal tasks' check tasks. Unrecorded when the review holds no traced items, or one of
  * those checks records no items it decides. Where each assumption stands with the client comes from
- * the vision at acceptance (d95 a), and an assumption whose text there is not the one reviewed is
+ * the vision at acceptance, and an assumption whose text there is not the one reviewed is
  * refused, never reported on the plan's copy.
  */
 async function visionCoverage(
@@ -473,7 +473,7 @@ class UndecidedItemUnsourced extends ReportRecordUnreadable {
   }
 }
 
-/** The strength of a second review as stored (migration 073); null where none answered. */
+/** The strength of a second review as stored; null where none answered. */
 const StoredStrengthSchema = z.enum(SECOND_OPINION_STRENGTHS).nullable();
 
 /** A stored second review's strength does not parse, or a confirmed claim records none. */
@@ -505,7 +505,7 @@ function undecidedReason(row: { readonly id: string; readonly judgementBasis: st
   if (row.judgementBasis !== null) return row.judgementBasis === "second-review-failed" ? "review-failed" : "unsettled";
   if (row.claimBasis === null) throw new UndecidedItemUnsourced(row.id, "it is tied to neither a judgement nor a claim");
   if (row.claimBasis === "second-opinion-found") return "clean-contradicted";
-  // no-other-family: a same-provider answer that confirmed nothing, on a claim written before migration 073.
+  // no-other-family: a same-provider answer that confirmed nothing, on a claim written before strengths were recorded.
   if (row.claimBasis === "no-other-family" || row.claimBasis === "second-review-failed") return "clean-unconfirmed";
   throw new UndecidedItemUnsourced(row.id, `its claim's basis ${JSON.stringify(row.claimBasis)} confirms the item it leaves undecided`);
 }
@@ -520,7 +520,7 @@ const REASON_RANK: Readonly<Record<Exclude<UndecidedBy, false>, number>> = {
 
 /**
  * The items a suite review left undecided on a check task of one of the goal tasks the sweep ran
- * (migrations 069, 071, 072, 073), by id and cited text, so the report never counts them as covered:
+ * by id and cited text, so the report never counts them as covered:
  * a review found no check really deciding them and nothing settled it, or the review that found no
  * problem in their checks was not confirmed. Each says why, the reason of its rows that ranks first
  * in REASON_RANK, with the strength of that row's second review.
@@ -570,7 +570,7 @@ class ClaimCoveredUnreadable extends ReportRecordUnreadable {
 type ClaimConfirmation = { readonly kind: "confirmed"; readonly strength: ReviewStrength } | { readonly kind: "unconfirmed" };
 
 /**
- * Per check task, how the latest claim covering it stands (migrations 072, 073): confirmed at the
+ * Per check task, how the latest claim covering it stands: confirmed at the
  * strength of the second review that answered, whether it named nothing or something about other
  * items; unconfirmed when it failed or was answered by its first's provider before 073. A check task
  * no claim covers has no entry.
@@ -612,7 +612,7 @@ function weakestConfirmation(strengths: ReadonlyArray<ReviewStrength | null>): R
   return weakest;
 }
 
-/** intake_readings (migration 074) as the report reads it; its CHECKs hold the second reading to its confirmation. */
+/** intake_readings as the report reads it; its CHECKs hold the second reading to its confirmation. */
 const IntakeReadingRowSchema = z.discriminatedUnion("confirmation", [
   z.object({ confirmation: z.literal("not-needed") }),
   z.object({ confirmation: z.literal("confirmed"), secondStrength: StoredStrengthSchema.unwrap() }),
@@ -631,7 +631,7 @@ class IntakeReadingUnreadable extends ReportRecordUnreadable {
   }
 }
 
-/** How the project's tender was read (migration 074); unrecorded for a project taken in before it. */
+/** How the project's tender was read; unrecorded for a project taken in before it. */
 async function readingOf(db: DbHandle, projectId: string): Promise<ReadingTold> {
   const [row] = await db
     .select({ confirmation: intakeReadings.confirmation, secondStrength: intakeReadings.secondStrength, secondQuestions: intakeReadings.secondQuestions })
@@ -712,7 +712,7 @@ async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredRep
 
 /**
  * Every passed sweep whose delivered report is not yet posted and is not waiting out the backoff of
- * a failed attempt (migration 062), oldest first, with what the report is rendered from. A sweep
+ * a failed attempt, oldest first, with what the report is rendered from. A sweep
  * whose records cannot be read is listed with why, so one project's records never stop another's
  * report. A project the client stopped, or has a stop awaiting the Liaison, is not reported on: its
  * stop report is what it is told.
@@ -771,7 +771,7 @@ class DeliveredReportFailureUnrecorded extends Error {
 
 /**
  * Records a failure at a sweep's delivered report: its error; a failed read of the public interface
- * file, and records that did not read as a report (migration 063), each counted apart; and, for an attempt that failed, one more failure and when to try again.
+ * file, and records that did not read as a report, each counted apart; and, for an attempt that failed, one more failure and when to try again.
  */
 export async function recordDeliveredReportFailure(db: DbHandle, sweepId: string, failure: DeliveredReportFailureRecord): Promise<void> {
   const { retryAfterSeconds } = failure;

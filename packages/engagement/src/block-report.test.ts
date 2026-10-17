@@ -81,7 +81,7 @@ describe("project block reports", () => {
     expect(posted[0].body).not.toContain("was reached");
   });
 
-  // ADR-084 decision 1: the report names the budget, what was drawn against it and which call sites drew it.
+  // The report names the budget, what was drawn against it and which call sites drew it.
   test("a work_budget halt names the request budget, what was drawn and the call sites that drew it, and that a grant is awaited", async () => {
     const work = {
       scope: "project" as const,
@@ -106,7 +106,7 @@ describe("project block reports", () => {
     expect(posted[0].body).not.toContain("WorkBudgetSpent");
   });
 
-  // ADR-084 addendum 1 decision 6: a halt that kept the verification reserve says so, and names what spent the rest.
+  // A halt that kept the verification reserve says so, and names what spent the rest.
   test("a work_budget halt that protected the verification reserve says the reserve is kept, and names the call sites that drew the rest", async () => {
     const work = {
       scope: "project" as const,
@@ -165,7 +165,7 @@ describe("project block reports", () => {
   });
 });
 
-// Story s-independent-verify-m1 W7: the cause told is the one observed, never a
+// The cause told is the one observed, never a
 // sentence fixed per kind of halt.
 describe("halt reports state the observed cause", () => {
   test("an infrastructure halt quotes the recorded fault chain, says it is not charged and resumes by itself", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { CheckSuite, SuiteRun } from "./task-checks.js";
 import { suitesVerdict } from "./verification.js";
 
-// c-independent-verify C2: missing evidence is failure. A stored check that reported no run, or a
+// Missing evidence is failure. A stored check that reported no run, or a
 // suite with no run at all, never reads as a pass, though every check that did run passed.
 describe("suitesVerdict: a check that did not run fails the merge", () => {
   const passing = (name: string) => ({ name, command: `sh ${name}.sh`, exitCode: 0, timedOut: false, output: "ok" });

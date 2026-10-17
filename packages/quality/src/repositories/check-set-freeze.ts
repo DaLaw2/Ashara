@@ -3,7 +3,7 @@ import { z } from "zod";
 import { checkSetFreezes } from "@ashara/db";
 import type { Database } from "@ashara/db";
 
-// Quality's freeze of a plan revision's check set (migration 069, ADR-084 decision 3): written when
+// Quality's freeze of a plan revision's check set: written when
 // the first task depending on the revision's review task is dispatched, with the check set the
 // review read as it then stood. After it, a review of that set reopens nothing.
 

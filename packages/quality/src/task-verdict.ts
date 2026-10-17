@@ -1,8 +1,7 @@
 import { z } from "zod";
 
 /**
- * Quality's verdict on an attempt that did not pass, as Delivery routes it (G4; c-loop-never-stop
- * criterion 3): whether another attempt can succeed, set where the failure is decided, never read
+ * Quality's verdict on an attempt that did not pass, as Delivery routes it: whether another attempt can succeed, set where the failure is decided, never read
  * back out of its text. A retryable failure is retried within the task's attempts; a non-retryable
  * block is given up at once and spends no retry.
  * - `work`: the attempt's own work failed what judges it (its checks, its gate, a run that gave no

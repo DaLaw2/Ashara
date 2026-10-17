@@ -5,12 +5,12 @@ import type { Database } from "@ashara/db";
 import { parseWorkItemJsonb } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
 
-// Quality's task checks (migration 036): the checks that decide an implementation
+// Quality's task checks: the checks that decide an implementation
 // task, written by the check author in its check task. Append-only by revision.
 
 const TaskCheckFilesSchema = z.array(z.object({ path: z.string().min(1), content: z.string() }).strict());
 
-/** task_checks.decides (migration 064): the ids of the vision items a check decides; null on a row written before it. */
+/** task_checks.decides: the ids of the vision items a check decides; null on a row written before it. */
 const TaskCheckDecidesSchema = z.tuple([z.string().min(1)], z.string().min(1)).nullable();
 
 type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
@@ -28,7 +28,7 @@ interface DefinedTaskCheck extends TaskCheckDefinition {
   readonly decides: readonly [string, ...string[]];
 }
 
-/** A stored check: the items it decides, or null when its row records none (written before migration 064). */
+/** A stored check: the items it decides, or null when its row records none (written before decides was recorded). */
 interface StoredTaskCheck extends TaskCheckDefinition {
   readonly decides: DefinedTaskCheck["decides"] | null;
 }
@@ -39,7 +39,7 @@ interface NewTaskChecks {
   readonly taskId: string;
   readonly checkTaskId: string;
   readonly environmentVersion: string;
-  /** The commit the checks were red-run on: their plan revision's foundation (migration 045). */
+  /** The commit the checks were red-run on: their plan revision's foundation. */
   readonly baselineCommit: string;
   readonly checks: readonly DefinedTaskCheck[];
   readonly files: readonly TaskCheckFile[];
@@ -50,15 +50,15 @@ interface TaskChecksRecord {
   readonly checkTaskId: string;
   readonly revision: number;
   readonly environmentVersion: string;
-  /** null for a revision written before migration 045, whose red run's commit nothing recorded. */
+  /** null for a revision written before baselines were recorded, whose red run's commit nothing recorded. */
   readonly baselineCommit: string | null;
   readonly checks: readonly StoredTaskCheck[];
   readonly files: readonly TaskCheckFile[];
 }
 
 /**
- * A check task's foundation: the merged task its checks are red-run against (ADR-074 addendum 2
- * d74 A), or why there is none to red-run against.
+ * A check task's foundation: the merged task its checks are red-run against,
+ * or why there is none to red-run against.
  */
 type CheckFoundation =
   | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
@@ -126,7 +126,7 @@ export class TaskCheckRepository {
   /**
    * The implementation task the check task's `task_spec.checksFor` names, when one exists: the task
    * its checks decide. Not read from the dependency edges: every implementation task of a plan
-   * revision depends on every check task of it (ADR-074 addendum 2 d67 a).
+   * revision depends on every check task of it.
    */
   async checkedTasksOf(checkTaskId: string): Promise<string[]> {
     const rows = await this.db
@@ -143,8 +143,8 @@ export class TaskCheckRepository {
   }
 
   /**
-   * The check task's foundation (ADR-074 addendum 2 d74 A): the task it depends on whose recorded
-   * merge commit (migration 041) its checks are red-run on. That is the product scaffold when it
+   * The check task's foundation: the task it depends on whose recorded
+   * merge commit its checks are red-run on. That is the product scaffold when it
    * depends on one; otherwise its one dependency: a revision's latest merged state of the layout,
    * or the revision's new environment task. A foundation other than a scaffold must have completed
    * after a Completed product scaffold of the project: a commit merged before the product's layout
@@ -204,7 +204,7 @@ export class TaskCheckRepository {
   }
 
   /**
-   * The check tasks a review task depends on (ADR-074 addendum 2 d71 c): its plan revision's, each
+   * The check tasks a review task depends on: its plan revision's, each
    * with its status, its task_spec as stored (parsed with the row) and the title of the task its
    * checks decide (null when task_spec.checksFor names no work item). Oldest first.
    */

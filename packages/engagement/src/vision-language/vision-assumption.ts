@@ -1,20 +1,20 @@
 import { z } from "zod";
 
-// The vocabulary of the vision's assumptions every context words them in (ADR-074 addendum 2 d89).
+// The vocabulary of the vision's assumptions every context words them in.
 // Reading the stored records is Engagement's alone: its published reader is readVisionVersion.
 
 /**
- * What an assumption is about (d89 E), as the vision records it: behaviour the client could observe
+ * What an assumption is about, as the vision records it: behaviour the client could observe
  * (an output, an error, an exit status, the data the client stores), or a choice of how the team
  * builds it whose breach no client could observe. Only a client-visible one may be cited by a task,
- * and every one is, and is decided by a stored check (ADR-083).
+ * and every one is, and is decided by a stored check.
  */
 export const AssumptionKindSchema = z.enum(["client-visible", "internal-design"]);
 
 export type AssumptionKind = z.infer<typeof AssumptionKindSchema>;
 
 /**
- * An assumption's kind as a model classifies it (ADR-083): "undecided" is a value the model may
+ * An assumption's kind as a model classifies it: "undecided" is a value the model may
  * give, and it is recorded as client-visible, so doubt always lands on the side that gets a check.
  * Every model-facing schema that classifies an assumption uses this one.
  */
@@ -24,7 +24,7 @@ export const ClassifiedAssumptionKindSchema = z
 
 /**
  * The classification rule every prompt that asks a model for an assumption's kind states, worded
- * once (ADR-083): a breach the client could observe makes it client-visible, doubt is "undecided"
+ * once: a breach the client could observe makes it client-visible, doubt is "undecided"
  * and gets a check, and internal design is left only for what no client could observe. It names
  * kinds of observation, never a technology, a file type or a keyword.
  */
@@ -46,7 +46,7 @@ export const ASSUMPTION_KIND_RULE: readonly string[] = [
 ];
 
 /**
- * How the client learned of an Inferred assumption (d89 C): asked about it in an intake question,
+ * How the client learned of an Inferred assumption: asked about it in an intake question,
  * or told of it in a report that work proceeds on it unless they object.
  */
 const AssumptionDisclosureSchema = z.enum(["asked", "reported"]);
@@ -63,7 +63,7 @@ export type AssumptionDisclosure = z.infer<typeof AssumptionDisclosureSchema>;
 export type AssumptionStanding = "stated" | "asked" | "reported" | "unrecorded";
 
 /**
- * Where an assumption stands with the client when the project is accepted (ADR-074 d95 a), read from
+ * Where an assumption stands with the client when the project is accepted, read from
  * the vision version current at acceptance and the client's replies, never from a plan's copy of the
  * vision: Stated by an answer that confirmed it, or changed it, or one whose effect was not recorded
  * ("stated"); Inferred and asked, with a reply read that settled nothing ("answered"), a reply not

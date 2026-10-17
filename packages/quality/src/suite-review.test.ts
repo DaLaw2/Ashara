@@ -171,7 +171,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     }
   });
 
-  // ADR-084 addendum 2 decision 11: an empty problem list is a claim about the checks, as a finding
+  // An empty problem list is a claim about the checks, as a finding
   // is; the items it covers read as verified only when an independent second review is clean too.
   describe("a review that finds nothing is a claim", () => {
     test("it is confirmed by a second review asked of another model family first, recorded whole with its strength", async () => {
@@ -276,7 +276,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     });
   });
 
-  // ADR-084 addendum 3 decision 12: the second opinion goes to another family, else another model of
+  // The second opinion goes to another family, else another model of
   // the family, else (in a one-model deployment) the same model; the last two from another angle.
   describe("the second opinion's strength", () => {
     test("a deployment with one provider key and two models confirms with the other model, asked to look for what the checks cannot observe", async () => {
@@ -340,7 +340,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     });
   });
 
-  // ADR-084 decision 2: a contradiction quotes what each of its two checks requires; Z0 holds each
+  // A contradiction quotes what each of its two checks requires; Z0 holds each
   // quote to its check, and an independent second review must reach the same pair before anything reopens.
   const conflict = {
     checkTasks: [CHECK_A, CHECK_B],
@@ -402,7 +402,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompts[1]).toContain(`gives one check, "prints-count" of ${CHECK_A}, as both sides of its conflict`);
   });
 
-  // ADR-083: a check's stored decides is its author's claim; the reviewer judges whether any check really decides the item.
+  // A check's stored decides is its author's claim; the reviewer judges whether any check really decides the item.
   const undecided = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
 
   test("an undecided item another model family agrees on is routed to its check task; one its task does not cite is re-asked", async () => {
@@ -449,7 +449,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     ]);
   });
 
-  // D5: a second review that failed is recorded and reported as failed, never as a disagreement.
+  // A second review that failed is recorded and reported as failed, never as a disagreement.
   test("a second review no model answered leaves every finding advisory, recorded as failed with why, and the item undecided", async () => {
     const recorded: Recorded[] = [];
     const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, { cause: new Error("400 Invalid schema") });
@@ -484,7 +484,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", undecided: [{ itemId: SCOPE.id }], advisory: [{ why: expect.stringContaining("the second review did not reach it") }] });
   });
 
-  // ADR-084 decision 3: the rounds of a revision's review are bounded by its durable record, and a frozen check set reopens nothing.
+  // The rounds of a revision's review are bounded by its durable record, and a frozen check set reopens nothing.
   test("an undecided item on a check task the review already reopened once is kept undecided whatever the second review says", async () => {
     const prompts: string[] = [];
     const recorded: Recorded[] = [];
@@ -605,7 +605,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompts).toEqual([]);
   });
 
-  // ADR-074 addendum 2 d89 B: a reviewer that sees neither the cited Inferred assumptions nor the public
+  // A reviewer that sees neither the cited Inferred assumptions nor the public
   // interface calls checks of those assumptions "outside the vision" and rejects names the interface fixed.
   test("each suite is judged against its own task's cited items, with their status, and the interface its checks were written against", async () => {
     const prompts: string[] = [];

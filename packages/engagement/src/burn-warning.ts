@@ -3,7 +3,7 @@ import type { BurnZone, WorkBudgets } from "@ashara/finance";
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 
-// The Liaison's early warning on a project's work ledger (ADR-084 addendum 1 decision 7): when the
+// The Liaison's early warning on a project's work ledger: when the
 // model requests a project has drawn run ahead of the implementation of its current plan revision,
 // the client is told once per zone and revision what was spent, what is done and what Ashara does
 // next; in the red zone the operator is told too, before the budget runs out. The zone is decided

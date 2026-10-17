@@ -16,7 +16,7 @@ import type { CheckRecorder, CitedItemIds, CompletedTaskChecks, TaskChecks } fro
 import { WORK_FAILED } from "./task-verdict.js";
 import type { FailureVerdict } from "./task-verdict.js";
 
-// The result of a dispatch as Quality decides it (ADR-075 §5): every status the dispatcher routes,
+// The result of a dispatch as Quality decides it: every status the dispatcher routes,
 // what a completed task delivered, and the blocks a substrate or Z0 failure ends a dispatch with.
 // Delivery owns the dispatch itself; the task and the dispatch are read here only structurally.
 
@@ -145,7 +145,7 @@ interface EnvironmentBlock extends AgentPart {
  * cannot start or be mounted, an exec the substrate could not run), or Ashara's own Z0 machinery
  * failed under it (a store, git on the host, a bug): Blocked under its fault class with the stage
  * and error class named, never a host fallback, never a failure for the classifier and never a
- * lesson (s-isolated-worker-m1 C2, at every stage; ADR-080 d3 c).
+ * lesson, at every stage.
  */
 export function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined): ExecutionResult {
   const { task, stage, errorClass } = block;
@@ -317,9 +317,8 @@ export function cellImageOf(environment: DispatchEnvironment): string {
 
 /**
  * What decides a task's work: the environment substrate (Sprint 0 and every environment task), the
- * product's own build and test from the definition (the product scaffold, ADR-074 addendum 2 d72
- * B2), the checks the check author stored for it (every other implementation task), or, for a check
- * task, Z0's red run of the checks it defines (story s-independent-verify-m1). Resolved before the
+ * product's own build and test from the definition (the product scaffold), the checks the check author stored for it (every other implementation task), or, for a check
+ * task, Z0's red run of the checks it defines. Resolved before the
  * brief and the worktree.
  */
 export type WorkPlan =
@@ -330,7 +329,7 @@ export type WorkPlan =
       readonly stored: TaskChecks;
       /**
        * The latest checks of every task of the project already merged: the regression suite the
-       * merge must pass, any check of which the implementer may dispute (ADR-074 addendum 2 d74 D).
+       * merge must pass, any check of which the implementer may dispute.
        */
       readonly merged: readonly CompletedTaskChecks[];
     }
@@ -340,9 +339,9 @@ export type WorkPlan =
       readonly environment: CurrentEnvironment<EnvironmentDefinition>;
       /** The checked task's latest stored revision, when its checks are being written again. */
       readonly prior: TaskChecks | null;
-      /** The commit every authoring of these checks is red-run on (ADR-074 addendum 2 d74 A). */
+      /** The commit every authoring of these checks is red-run on. */
       readonly foundation: CheckFoundation;
-      /** The ids of the vision items the check task cites: each must be decided by one of its checks (ADR-083). */
+      /** The ids of the vision items the check task cites: each must be decided by one of its checks. */
       readonly citedItems: CitedItemIds;
     };
 
@@ -543,7 +542,7 @@ interface InterruptedResult {
  * overflow again. Not the task's failure and no lesson: the orchestrator dispatches the task next
  * on `wider`, a catalog model whose window is larger, or, with none, gives it up naming the window
  * and the estimate; never through the FailureRouter, whose replan would run the same model into the
- * same window (ADR-084 addendum 1 item 10: reaching a bound escalates). The partial work is committed on the task branch for the next dispatch,
+ * same window (reaching a bound escalates). The partial work is committed on the task branch for the next dispatch,
  * or for a check task discarded, and `detail` says which.
  */
 interface ContextExceededResult {
@@ -569,7 +568,7 @@ interface ContextExceededResult {
 
 /**
  * The task's stored checks were red-run on another environment version and on the dispatch's no
- * longer all fail on main, nor all pass there (that is work already delivered, d67 b): they cannot
+ * longer all fail on main, nor all pass there (that is work already delivered): they cannot
  * decide its work. Not the implementer's failure (no model ran)
  * and no lesson: the orchestrator reopens the check task that must write them again and the item
  * waits on it (planning's exitStaleChecks, bounded by `revision`), never routes it through the
@@ -588,8 +587,7 @@ interface ChecksStaleResult {
 }
 
 /**
- * The implementer disputed one of the task's stored checks with dispute_check (ADR-074 addendum 2
- * d65 c): it holds that the check cannot pass on correct work. Not the task's failure and no
+ * The implementer disputed one of the task's stored checks with dispute_check: it holds that the check cannot pass on correct work. Not the task's failure and no
  * lesson: the orchestrator reopens the check task that wrote it, with the dispute in its brief, and
  * the item waits on it (bounded per check task), never routing it through the FailureRouter. The
  * partial work is committed on the task branch for the next dispatch.
@@ -598,7 +596,7 @@ interface DisputedResult {
   readonly status: "disputed";
   /**
    * The task whose stored checks hold the disputed check: the dispatched task itself, or a task
-   * already merged whose check blocks its merge (ADR-074 addendum 2 d74 D).
+   * already merged whose check blocks its merge.
    */
   readonly checksOf: string;
   /** The check task that wrote the disputed check: the one to reopen. */
@@ -619,8 +617,8 @@ interface DisputedResult {
 
 /**
  * The implementer's finished work changed recipe files and nothing else the ownership gate
- * refuses: it needs an environment change, which only the platform role makes (ADR-074
- * addendum 2 d66 b, d72 B1). Nothing was merged, and the task branch is deleted, so the task's next
+ * refuses: it needs an environment change, which only the platform role makes.
+ * Nothing was merged, and the task branch is deleted, so the task's next
  * dispatch starts a fresh branch from main once the environment has changed. Not the task's
  * failure and no lesson: the orchestrator opens an environment task carrying `need` and `diff`
  * and the item waits on it (bounded per implementation task), never routing it through the
@@ -675,7 +673,7 @@ interface NoWiderModelResult {
 }
 
 /**
- * The review of a plan revision's suites (ADR-074 addendum 2 d71 c) found problems: checks no
+ * The review of a plan revision's suites found problems: checks no
  * product can pass together, or checks of behaviour no vision item asks for. Its schema validated
  * and every check task it names is one whose suite it read. Not the review's failure and no lesson:
  * the orchestrator records the findings, reopens each named check task with them (bounded per check
@@ -757,14 +755,14 @@ type Delivery =
   | { readonly kind: "merged"; readonly mergeCommit: string }
   /**
    * An implementation that changed nothing whose checks and the regression suite already pass on
-   * main (ADR-074 addendum 2 d67 b): `mainCommit` is main when they ran, the delivering commit.
+   * main: `mainCommit` is main when they ran, the delivering commit.
    */
   | { readonly kind: "already-delivered"; readonly mainCommit: string }
   | { readonly kind: "checks-recorded"; readonly revision: number }
   /**
    * A check task whose author finished blocked, and whose checked task's stored checks (`revision`),
-   * the environment's test and the regression suite all pass on main at `mainCommit` (ADR-074
-   * addendum 2 d74 A): no new revision; the checked task's delivered sweep closes it.
+   * the environment's test and the regression suite all pass on main at `mainCommit`:
+   * no new revision; the checked task's delivered sweep closes it.
    */
   | { readonly kind: "checked-task-delivered"; readonly checkedTaskId: string; readonly mainCommit: string; readonly revision: number }
   /** A review of the plan's suites that found no problem in the suites of `reviewed` check tasks. */

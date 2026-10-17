@@ -6,16 +6,16 @@ import type { AcceptedAssumptionStanding } from "./vision-language/vision-assump
 import { checkDecides } from "./vision-language/vision-source.js";
 import type { VisionSource } from "./vision-language/vision-source.js";
 
-// The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8):
+// The Liaison's delivered report:
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
 // each goal task and how its record says it closed, and which items of what they asked for no
 // stored check covers. Every sentence is rendered from a record: a close
 // whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
 // folded into "delivered" or into what passed: the opening claims only the run that happened. Every
-// assumption classed internal design is named as not verified by Ashara (ADR-083): no check decides it.
-// So is every item a review of the checks left undecided (ADR-084): never counted as covered. Every
+// assumption classed internal design is named as not verified by Ashara: no check decides it.
+// So is every item a review of the checks left undecided: never counted as covered. Every
 // item counted as covered was confirmed by a second review of its checks, and the report names how
-// independent that review was (ADR-084 addendum 3 decision 12). A tender whose first reading asked the
+// independent that review was. A tender whose first reading asked the
 // client nothing is told with the strength of the second reading behind that, or that none answered.
 // The only ways of running the product presented as verified are the commands acceptance ran and saw
 // pass; the public interface file, none of whose entries acceptance runs, is quoted as unverified.
@@ -30,7 +30,7 @@ type GoalClose =
 
 /**
  * An item of the vision the plan was reviewed against: a scope line, or an assumption with where it
- * stood with the client at acceptance (d95 a), never as the plan's copy of the vision recorded it.
+ * stood with the client at acceptance, never as the plan's copy of the vision recorded it.
  */
 type AcceptedVisionItem =
   | Extract<VisionSource, { readonly type: "scope" }>
@@ -44,24 +44,23 @@ type AcceptedVisionItem =
 
 /**
  * Whether a review of the checks left an item undecided, and why. A finding that no check really
- * decides it did not act (ADR-084 decision 2): "unsettled" when no second review confirmed or
+ * decides it did not act: "unsettled" when no second review confirmed or
  * settled it, "review-failed" when the second review that could have was asked and failed. A review
- * that found no problem in its checks was not confirmed (addendum 2 decision 11): "clean-contradicted"
+ * that found no problem in its checks was not confirmed: "clean-contradicted"
  * when a second review found one there, "clean-unconfirmed" when no second review answered. False
  * when no review left it so.
  */
 export type UndecidedBy = false | "unsettled" | "review-failed" | "clean-contradicted" | "clean-unconfirmed";
 
 /**
- * How independent of the first review the second review of an item's checks was (ADR-084 addendum
- * 3 decision 12): another model family, another model of the same family, or the same model asked
+ * How independent of the first review the second review of an item's checks was: another model family, another model of the same family, or the same model asked
  * again from another angle.
  */
 export type ReviewStrength = SecondOpinionStrength;
 
 /**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
- * ran records that it decides it (ADR-083), whether a review of those checks left it undecided, and
+ * ran records that it decides it, whether a review of those checks left it undecided, and
  * the strength of the second review behind that: the one that confirmed a decided item, or the one
  * that left it undecided; null where none answered. Or none recorded.
  */
@@ -73,7 +72,7 @@ type VisionCoverage =
   | { readonly kind: "unrecorded" };
 
 /**
- * How the tender's reading stood (intake_readings, migration 074): its first reading asked the client
+ * How the tender's reading stood (intake_readings): its first reading asked the client
  * questions; or it asked none, and a second reading of the strength named asked none either or raised
  * the questions the client was sent; or no second reading answered. Or none is recorded.
  */
@@ -344,7 +343,7 @@ function askedFor(source: AcceptedVisionItem): boolean {
 
 /**
  * The assumptions recorded as the team's own design choices, by id and text: no check decides one,
- * so the client is told Ashara did not verify them (ADR-083). Empty when there are none.
+ * so the client is told Ashara did not verify them. Empty when there are none.
  */
 function unverifiedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
@@ -367,8 +366,7 @@ const READ_BY: Readonly<Record<ReviewStrength, string>> = {
 };
 
 /**
- * How the tender was read, where its first reading asked the client nothing (ADR-084 addenda 2 and 3
- * applied to intake): the strength of the second reading that confirmed it or raised the questions the
+ * How the tender was read, where its first reading asked the client nothing: the strength of the second reading that confirmed it or raised the questions the
  * client was sent, or that none answered, so that the tender left nothing to ask is not verified by
  * Ashara. Not on record is said so. Empty when the first reading asked questions.
  */
@@ -514,9 +512,8 @@ function unsettledBecause(why: Exclude<UndecidedBy, false>, strength: ReviewStre
 
 /**
  * The items of what the client asked for that a stored check claims to decide but no confirmed
- * review of the checks holds as decided: a review found none really does with nothing to settle it
- * (ADR-084 decision 2), or the review that found no problem was not confirmed (addendum 2 decision
- * 11). They are unverified, never covered, grouped by why and by the strength of the second review
+ * review of the checks holds as decided: a review found none really does with nothing to settle it,
+ * or the review that found no problem was not confirmed. They are unverified, never covered, grouped by why and by the strength of the second review
  * behind it, so a failed review never reads as a disagreement. Empty when there are none.
  */
 function undecidedSection(vision: VisionCoverage): string[] {

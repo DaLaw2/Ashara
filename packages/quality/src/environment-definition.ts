@@ -2,7 +2,7 @@ import { z } from "zod";
 import { buildContextFields, parseEnvironmentFile, readEnvironmentFile, refineBuildContext } from "@ashara/execution-infra";
 import type { EnvironmentDefinitionField } from "@ashara/workplace";
 
-// The platform role's environment definition (ADR-074 addendum 2 d72) as Quality reads it: the
+// The platform role's environment definition as Quality reads it: the
 // build context Execution Infrastructure builds the image from, and the product's commands Quality
 // runs (`probe` on environment work, `build` and `test` on every merge). One parse of the whole file.
 

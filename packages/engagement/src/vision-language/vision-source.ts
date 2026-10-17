@@ -3,7 +3,7 @@ import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, ScopeSideSchema } fro
 import type { ScopeSide } from "./vision-assumption.js";
 
 /**
- * One item of the vision a plan derives from, as a task cites it (ADR-074 addendum 2 d71 d, d89): a
+ * One item of the vision a plan derives from, as a task cites it: a
  * scope line (S1..) with its side, or an assumption, by its key, with its status, what the client has
  * seen of it and its kind. `id` is the item's id in the vision version the plan was decomposed from.
  * A scope source stored before sides were recorded reads as "unclassified".
@@ -58,7 +58,7 @@ type AssumptionSourceKind = Extract<VisionSource, { readonly type: "assumption" 
 type CheckedFields = { readonly type: "scope"; readonly side: ScopeSide } | { readonly type: "assumption"; readonly kind: AssumptionSourceKind };
 
 /**
- * Whether a check must decide the item before the project is accepted (d89 E, ADR-083): every scope
+ * Whether a check must decide the item before the project is accepted: every scope
  * line not recorded as out of scope, and every assumption not recorded as internal design. An
  * unclassified side or kind is not evidence that the client did not ask for it or could not observe
  * a breach of it, so doubt lands on the side that gets a check. The one statement of this rule: the

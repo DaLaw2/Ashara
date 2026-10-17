@@ -2,7 +2,7 @@ import { CellExecFailed, CellStartFailed, CellToolFailed, MountPathRejected, Pod
 import { describeErrorChain } from "@ashara/shared";
 
 /**
- * Whose a failure is (ADR-080 d3 c), the one classification every failure of a dispatch is routed by:
+ * Whose a failure is, the one classification every failure of a dispatch is routed by:
  * - `agent_work`: the implementer's or author's own product failed its verdict (a check, a gate, a
  *   conflict left in it, an attempt that ended without done). Only this is charged to the task's
  *   attempts and recorded as a lesson.

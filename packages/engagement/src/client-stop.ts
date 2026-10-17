@@ -1,10 +1,10 @@
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 
-// The client's stop (story s-client-channel-m1, ADR-075 Engagement). The web
+// The client's stop. The web
 // client's Stop promises a halt; the Liaison, the only writer to the client,
 // keeps it: each cycle, before any intake, planning or dispatch, it consumes the
-// open stops, moves each project to 'stopped' (migration 028) and tells the
+// open stops, moves each project to 'stopped' and tells the
 // client once what is on record as merged.
 //
 // A stop sent mid-cycle, after this step, is honoured by the rest of that cycle
@@ -35,8 +35,8 @@ type ClientStopCommit =
   | { readonly kind: "already-stopped" };
 
 /**
- * A task with a commit on record (migration 041) and how that commit closed it (migration 049):
- * null when the record predates 049 and does not say.
+ * A task with a commit on record and how that commit closed it:
+ * null when the record predates merge kinds and does not say.
  */
 interface MergedTask {
   readonly title: string;
@@ -106,7 +106,7 @@ export class ClientStops implements LiaisonClientStops {
   /**
    * A second stop on a stopped project is consumed and not answered: the client
    * already holds the stop report, a second one would say nothing new, and the
-   * one-report-per-project index (migration 020) would refuse it anyway. A stop whose
+   * one-report-per-project index would refuse it anyway. A stop whose
    * recording fails is contained to it (containEach) and stays unconsumed, so its
    * project is still held from all work (noOpenStop) while the other stops are taken.
    */

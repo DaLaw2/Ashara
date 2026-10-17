@@ -105,7 +105,7 @@ describe("how to run the product", () => {
     expect(body).not.toContain("How to run it");
   });
 
-  // ADR-080 d9b: the client is never told a stale way to run the product as verified.
+  // The client is never told a stale way to run the product as verified.
   test("the CLI changed and the interface file did not: only what acceptance ran is verified, and the stale entry is quoted as unverified", async () => {
     const stale = "Run: kv put <key> <value>\n";
     const executed = { kind: "recorded" as const, checks: [{ task: "Store keys", name: "set then get", command: "./kv set a 1 && ./kv get a | grep -qx 1" }] };
@@ -159,7 +159,7 @@ describe("how to run the product", () => {
   });
 });
 
-// Story s-independent-verify-m1 W7: the delivered report, every line from a record.
+// The delivered report, every line from a record.
 describe("the delivered report", () => {
   test("names each goal task with how its record says it closed, and each vision item no check covers as not checked", async () => {
     const body = await render({
@@ -227,7 +227,7 @@ describe("the delivered report", () => {
     expect(body).not.toContain("not checked");
   });
 
-  // ADR-084 addendum 3 decision 12: every confirmed or unverified item is named with how independent
+  // Every confirmed or unverified item is named with how independent
   // its second review was; agreement within one family is said to share blind spots.
   test("each confirmed item is grouped by the strength of the review that confirmed it, a weaker one saying what it shares", async () => {
     const body = await render({
@@ -260,7 +260,7 @@ describe("the delivered report", () => {
     expect(body).toContain("but no second review of those checks is on record as confirming that: they are not verified by Ashara.\n- Keys can be renamed");
   });
 
-  // D4: the coverage sentence counts only items decided and confirmed, so it never contradicts a list of unverified items.
+  // The coverage sentence counts only items decided and confirmed, so it never contradicts a list of unverified items.
   test("when every item is unverified, the coverage sentence says none is confirmed, above the list that names them", async () => {
     const body = await render({
       ...BASE,
@@ -285,7 +285,7 @@ describe("the delivered report", () => {
     expect(body).toContain("so nothing confirms them either way:\n- Keys can be listed\n\nNone of the 3 items");
   });
 
-  // ADR-084 decision 2: an item a review of the checks left undecided is unverified, never covered,
+  // An item a review of the checks left undecided is unverified, never covered,
   // even though a stored check that passed records that it decides it.
   test("an item a review left undecided is named as not verified, and never counted among the covered", async () => {
     const body = await render({
@@ -311,7 +311,7 @@ describe("the delivered report", () => {
     expect(unverified).not.toContain("Keys can be stored");
   });
 
-  // D5: the client can tell a second review that failed from one that disagreed.
+  // The client can tell a second review that failed from one that disagreed.
   test("an item left undecided because the second review failed says the review failed, apart from one no review settled", async () => {
     const body = await render({
       sweepId: "s3d",
@@ -337,7 +337,7 @@ describe("the delivered report", () => {
     expect(failedSection.split("\n\n")[0]).not.toContain("A stored key survives a power loss");
   });
 
-  // ADR-084 addendum 2 decision 11: a review that found nothing is a claim; an item it covers that
+  // A review that found nothing is a claim; an item it covers that
   // no second opinion confirmed is unverified, never "decided by a stored check".
   test("an item whose clean review was not confirmed is named unverified with why, apart from one the second review contradicted", async () => {
     const body = await render({
@@ -386,8 +386,8 @@ describe("the delivered report", () => {
   });
 
   // Exclusions and internal-design assumptions are never unchecked items of what the client asked
-  // for; every internal-design assumption is named apart, by id and text, as not verified by Ashara
-  // (ADR-083). The vision below has scope lines on both sides and assumptions of every kind.
+  // for; every internal-design assumption is named apart, by id and text, as not verified by Ashara.
+  // The vision below has scope lines on both sides and assumptions of every kind.
   test("a vision with exclusions and design choices: exclusions are never listed, design choices are listed as not verified by Ashara; an uncited assumption is Ashara's, as the client saw it", async () => {
     const body = await render({
       sweepId: "s6",
@@ -449,7 +449,7 @@ describe("the delivered report", () => {
     expect(await render({ ...fields, vision: { kind: "unrecorded" } })).not.toContain("not verified by Ashara");
   });
 
-  // d95 a: each uncited assumption is worded by where it stood at acceptance, an answer included.
+  // Each uncited assumption is worded by where it stood at acceptance, an answer included.
   test("an answered assumption is never said to be unanswered: each standing at acceptance has its own words", async () => {
     const body = await render({
       sweepId: "s8",
@@ -531,7 +531,7 @@ describe("the delivered report", () => {
   });
 });
 
-// ADR-084 addenda 2 and 3 applied to intake: a tender's first reading that asked the client nothing is
+// The second-opinion rule applied to intake: a tender's first reading that asked the client nothing is
 // told with the strength of the second reading behind it, and one no second reading confirmed is
 // named not verified; a reading that asked questions adds nothing, and one not on record says so.
 describe("how the tender was read", () => {

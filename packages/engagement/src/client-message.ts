@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-// The client channel's language (architecture K1, ADR-075 Engagement). The client
+// The client channel's language. The client
 // says tender, answer, change, stop; the Liaison says question, report. The same
-// pairing is a CHECK on client_messages (migration 016).
+// pairing is a CHECK on client_messages.
 
 const MessageBodySchema = z.string().min(1);
 const MessageIdSchema = z.uuid();

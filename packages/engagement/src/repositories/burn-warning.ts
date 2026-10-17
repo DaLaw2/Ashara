@@ -5,7 +5,7 @@ import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type UnreadSubject } from "@ashara/shared";
 import type { BurnWarning, ProjectBurn } from "../burn-warning.js";
 
-// The work ledger's early warnings (migration 068): each project at work, read with its current plan
+// The work ledger's early warnings: each project at work, read with its current plan
 // revision, the requests it drew, its grants, its revision's implementation tasks and the zones
 // already reported for that revision; and the one transaction that records a zone with its report.
 

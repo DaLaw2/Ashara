@@ -12,7 +12,7 @@ import { VerificationInfrastructureFault, finalizeSuccess } from "./finalize.js"
 import type { FinalizeDeps, PostMergeVerdict } from "./finalize.js";
 
 // ---------------------------------------------------------------------------
-// ADR-074 d82 W3: a batch runs two tasks at once, and each finalize resets,
+// A batch runs two tasks at once, and each finalize resets,
 // merges into, checks and commits the one main checkout of the target. Real
 // git throughout: the hazard is what git does to a staged merge.
 // ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ describe("a conflicted merge", () => {
   });
 });
 
-// ADR-080 d3 c (development #25, #27, #28; t-classifier-dirty-tree): a merge git refuses without a
+// A merge git refuses without a
 // conflict, and a target checkout changed outside the merge, are Z0's own faults, never the task's.
 describe("Z0's faults in the merge are blocked under class ashara", () => {
   test("a merge git refuses without a conflict: class ashara under postMergeCheckRun; no check runs", async () => {

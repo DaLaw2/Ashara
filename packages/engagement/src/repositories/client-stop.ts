@@ -6,13 +6,13 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { stopProject } from "../project-lifecycle.js";
 import { ClientMessageRepository } from "./client-message.js";
 
-// The client's stop (migration 028). The Liaison consumes each inbound 'stop',
+// The client's stop. The Liaison consumes each inbound 'stop',
 // moves the project to 'stopped' and posts one report on it, together.
 
-/** work_items.merge_kind (migration 049); NULL on a record from before it. */
+/** work_items.merge_kind; NULL on a record from before merge kinds were recorded. */
 const MergeKindSchema = z.enum(["merged", "already_delivered"]).nullable();
 
-/** A work item's stored merge_kind is none the migration 049 CHECK admits: the stop report cannot state how it closed. */
+/** A work item's stored merge_kind is none its CHECK admits: the stop report cannot state how it closed. */
 class MergeKindUnreadable extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -76,12 +76,12 @@ export async function recordClientStop(
   return db.transaction(async (tx) => {
     await new ClientMessageRepository(tx).markConsumed(stop.id);
 
-    // An accepted project (migration 049) waits for exactly this.
+    // An accepted project waits for exactly this.
     const moved = await stopProject(tx, stop.projectId);
     if (moved.kind === "already-stopped") return moved;
 
     // A Task is merged when its merge record holds the commit Z0's merge step made
-    // on main (migration 041), written before the Task is completed. Neither task
+    // on main, written before the Task is completed. Neither task
     // status nor the dev_sessions attempt log is the evidence: an operator can set
     // a Task Completed over the HTTP API with nothing merged, a Task preempted to
     // Abandoned may have merged before the preemption, and a session's terminal

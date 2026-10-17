@@ -5,7 +5,7 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { VisionRepository } from "./vision.js";
 
-// The stack Sprint 0 chose, told to the client once (migration 034): a completed environment task
+// The stack Sprint 0 chose, told to the client once: a completed environment task
 // with a statement is due while its project has no 'stack-choice' report.
 
 const SUBJECT = "stack-choice";
@@ -49,7 +49,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
           eq(workItems.status, "Completed"),
           isNotNull(workItems.environmentStatement),
           // The report tells the client the environment is set up: only a task whose merge is
-          // on record (migration 041) did that, not one an operator marked Completed.
+          // on record did that, not one an operator marked Completed.
           isNotNull(workItems.mergeCommit),
         ),
       )

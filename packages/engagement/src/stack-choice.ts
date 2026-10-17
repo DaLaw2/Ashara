@@ -5,7 +5,7 @@ import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend } from "./vision.js";
 
-// The stack the team chose in Sprint 0, made visible to the client (story s-platform-role-m1).
+// The stack the team chose in Sprint 0, made visible to the client.
 // Engagement owns the vision: the environment role's statement becomes an Inferred assumption in a
 // new vision version (versions are append-only), and the Liaison, the only writer to the client,
 // reports the choice once. Due choices are read from recorded outcomes, so one made before a
@@ -62,7 +62,7 @@ class StackChoiceVisionUnusable extends Error {
 
 /**
  * Plain words: what the team chose and why, in its own statement; what the environment's test covers,
- * stated here rather than trusted to the statement (t-env-test-scope); and how to say it does not fit.
+ * stated here rather than trusted to the statement; and how to say it does not fit.
  */
 function stackChoiceReport(statement: string): string {
   return [
@@ -108,7 +108,7 @@ export class StackChoiceReports implements LiaisonStackChoices {
       const vision = Vision.read(due.vision).appendInferred({
         statement: due.statement,
         rationale: `The team chose this when it set up the project environment (Sprint 0 task ${due.taskId}); the client has not confirmed it.`,
-        // How the product is built, not what it does for the client (ADR-074 addendum 2 d89 E); this
+        // How the product is built, not what it does for the client; this
         // choice's own report tells the client of it.
         kind: "internal-design",
         disclosed: "reported",

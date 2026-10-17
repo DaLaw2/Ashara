@@ -1,7 +1,7 @@
 import { containEach, createDomainEvent, type DomainEvent, type ProjectId, type StepContainment, type StepFaulted } from "@ashara/shared";
 
-// The client's change of direction (ADR-075 Engagement, ADR-082 d5). Applying a change to a
-// project under way is not built (M3 X5). Until it is, the Liaison does not leave a change unread:
+// The client's change of direction. Applying a change to a
+// project under way is not built. Until it is, the Liaison does not leave a change unread:
 // each cycle it consumes every open change and tells the client plainly, once, that it was received
 // and kept but not applied, and that it can be sent as a new request. No LLM call: the reply is a
 // fixed text.

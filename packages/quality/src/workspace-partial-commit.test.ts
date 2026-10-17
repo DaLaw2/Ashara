@@ -35,7 +35,7 @@ afterAll(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// ADR-036 point 6: partial work committed before worktree cleanup survives
+// Partial work committed before worktree cleanup survives
 // into the retry's worktree. The mechanism under test is commitPartialWork +
 // createWorkdirForRetry; these tests use real git (no mocks) because the
 // claim is about what git does with a branch, not about a function's return.
@@ -172,7 +172,7 @@ describe("commitAllChanges fails closed", () => {
     if (!(thrown instanceof WorktreeCommitFailed)) return;
     expect(thrown.step).toBe("add");
     expect(thrown.detail).toContain("index.lock");
-    // Z0's own git on the host (ADR-080 d3 c): class ashara, never the substrate's.
+    // Z0's own git on the host: class ashara, never the substrate's.
     expect(thrownFaultOf(thrown).class).toBe("ashara");
     expect(await git(workDir, "rev-parse", "HEAD")).toBe(before);
 

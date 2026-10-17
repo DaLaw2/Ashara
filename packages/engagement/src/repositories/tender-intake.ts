@@ -30,13 +30,13 @@ interface TenderIntakeWrite {
   readonly assumptionsReport: string | null;
   /** The report of how a reading that asked nothing was confirmed, posted after the assumptions report; null when there is none. */
   readonly readingReport: string | null;
-  /** The tender's reading, recorded in intake_readings (migration 074). */
+  /** The tender's reading, recorded in intake_readings. */
   readonly reading: IntakeReading;
   /** The vision v1 document, given the ids of the posted questions in the same order. */
   readonly vision: (questionIds: readonly string[]) => FirstVision;
 }
 
-/** One intake_readings row, written with vision v1; migration 074's CHECKs hold it consistent. */
+/** One intake_readings row, written with vision v1; its CHECKs hold it consistent. */
 async function insertIntakeReading(db: DbHandle, write: TenderIntakeWrite): Promise<void> {
   const { reading } = write;
   const { confirmation } = reading;

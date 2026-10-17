@@ -18,28 +18,28 @@ import { visionSourceCitation } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { TaskChecks } from "./task-checks.js";
 
-// Quality's review of a plan revision's check suites (ADR-074 addendum 2 d71 c): checks written by
+// Quality's review of a plan revision's check suites: checks written by
 // independent authors can together ask for what no product can pass. After the last check task of a revision completes and
 // before any implementation starts, every stored suite is read together with the vision, in one
 // structured call of its own: a separate dispatch of the check author's role that wrote none of the
 // checks it reads. Each check is judged against the vision items its own task cites, with their
 // status, and against the product's public interface as it stood on the commit the checks were
-// written against (d89 B): a reviewer that reads neither rejects checks their brief required.
+// written against: a reviewer that reads neither rejects checks their brief required.
 // What it finds is routed by the orchestrator (planning's exitSuiteReview), and only a finding with
-// a witness, or with another model family's agreement where no witness can exist, reopens anything
-// (ADR-084 decision 2). A model can misread an item it was shown whole. Z0 can disprove an
+// a witness, or with another model family's agreement where no witness can exist, reopens anything.
+// A model can misread an item it was shown whole. Z0 can disprove an
 // outside-vision rejection only one way: the clause it quotes as missing appears word for word (case
 // and punctuation aside) in the text of an item the check's task cites. Such a rejection is
 // discarded and the review asked again within the ladder's bound. Z0 cannot tell that a paraphrased
 // clause is absent, so a rejection it cannot disprove is the reviewer's judgement, not a verified
 // fact: it is acted on only when a second review, a fresh call on the same inputs that never sees
 // the first verdict, rejects the same check as outside the vision too. The second review is an
-// independent opinion (ADR-084 addendum 3 decision 12), asked in order of strength from what the
+// independent opinion, asked in order of strength from what the
 // catalog offers at the capability: another model family, whose failover never returns to the
 // first's; else another model of the first's family; else, only in a deployment with no other model,
 // the first's model again. The last two are asked from another angle: to look for what each check
 // cannot observe. A strength the catalog does not serve, or whose answer never validates, is passed
-// over explicitly and recorded; agreement at any strength acts as decisions 2 and 11 say, and every
+// over explicitly and recorded; agreement at any strength counts as agreement, and every
 // text and record that names the second review names its strength. When the second does not reject
 // that check, the check is released as passing review. A second review that fails at every strength
 // confirms and releases nothing: every finding it was asked for is kept as advisory, recorded as
@@ -48,18 +48,18 @@ import type { TaskChecks } from "./task-checks.js";
 // holds each quote to the check it names. Whether two shell commands can pass together is not
 // decidable from their text without reading them as some stack's language, which Ashara never does,
 // so a grounded contradiction still needs agreement. An undecided item ("no check decides A22")
-// overrules the stored record that some check decides it (ADR-083), and no run can witness an
+// overrules the stored record that some check decides it, and no run can witness an
 // absence. Either acts only when the second review reaches the same finding; otherwise it is kept
 // as advisory, and an undecided item stays undecided (undecided_items) and is reported unverified,
 // never covered.
-// A review that routes nothing is a claim about the checks too (ADR-084 addendum 2 decision 11):
+// A review that routes nothing is a claim about the checks too:
 // that they decide the items their tasks cite. An empty problem list is the identity element of a
 // verdict and no evidence of one, so the second review is asked on every review, clean or not, and
 // a covered item reads as verified only when that second review answered and named nothing about
 // it. An item it named, or every covered item when it failed, is stored undecided and reported
 // unverified, with why; nothing reopens on the second review's own findings, which no first finding
 // raised.
-// Two ratchets bound the rounds (ADR-084 decision 3): a check task the review already reopened once
+// Two ratchets bound the rounds: a check task the review already reopened once
 // is not reopened for an undecided item again (the item stays undecided), and once the check set is
 // frozen, at the first implementation dispatched on it, no finding acts. Every judgement, and the
 // claim of a review that routes nothing, is recorded whole (suite_review_judgements,
@@ -513,7 +513,7 @@ function interfaceSection(readings: readonly InterfaceReading[]): string[] {
 /**
  * How a review reads the checks: `direct` as the first review and an other-family second one do;
  * `blind-spots` as a second opinion within the first's family does, which shares more of its blind
- * spots and so starts from what each check cannot observe (ADR-084 addendum 3 decision 12).
+ * spots and so starts from what each check cannot observe.
  */
 type ReviewAngle = "direct" | "blind-spots";
 
@@ -857,7 +857,7 @@ function undecidedItemOf(reviewTaskId: WorkItemId, finding: UndecidedItemFinding
 /**
  * Why a finding cannot act whatever a second review says, or null when the second review decides:
  * nothing acts on a frozen check set, and an undecided item does not reopen a check task this review
- * already reopened once (ADR-084 decision 3).
+ * already reopened once.
  */
 function ratchetOf(finding: ReviewFinding, frozen: boolean, suite: ReviewedSuite): Extract<JudgementBasis, "frozen" | "reopened-once"> | null {
   if (frozen) return "frozen";
@@ -895,8 +895,7 @@ type SecondVerdict =
   | { readonly kind: "failed"; readonly reason: string; readonly passedOver: readonly PassedOver[] };
 
 /**
- * The claim of a review that routed nothing (ADR-084 addendum 2 decision 11, addendum 3 decision
- * 12): it covers every item a reviewed suite cites and one of its checks records that it decides, but
+ * The claim of a review that routed nothing: it covers every item a reviewed suite cites and one of its checks records that it decides, but
  * those its findings already left undecided; an item no check claims is reported as decided by none.
  * A covered item reads as verified only when the second review answered and named nothing about it,
  * at the strength the claim records; the second review's findings act on nothing, the first having
@@ -1060,8 +1059,8 @@ export class SuiteReviewer implements SuiteReviewing {
   }
 
   /**
-   * The second review's verdict at the strongest independence that answers, or why none did
-   * (ADR-084 addendum 3 decision 12). Each strength is asked in order: one the catalog does not
+   * The second review's verdict at the strongest independence that answers, or why none did.
+   * Each strength is asked in order: one the catalog does not
    * serve at the capability (SecondOpinionUnavailable) or whose model gave no fit answer
    * (SecondOpinionUnanswered, StructuredOutputExhausted, SuiteVerdictUnfit) is passed over, recorded
    * and logged, and the next is asked. Any other throw (a spend-cap refusal, a schema Ashara must not

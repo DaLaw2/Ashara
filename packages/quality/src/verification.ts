@@ -99,13 +99,13 @@ import {
 import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import { WORK_FAILED } from "./task-verdict.js";
 
-// Quality's verification of a dispatch's work (ADR-075 §5): the checks a task is decided by, the
+// Quality's verification of a dispatch's work: the checks a task is decided by, the
 // gates before a merge, the post-merge run and the acceptance sweep. Delivery's dispatcher calls it
 // at each stage; nothing here decides what happens to the task next.
 
 /**
  * The environment a tentative merge is verified in: the dispatch's own version, unchanged; a new
- * version the merge produced by changing the build context (an input, ADR-074 addendum 2 d72 B3),
+ * version the merge produced by changing the build context (an input),
  * rebuilt and the product's build and test passed on it (`details` says so); or none the merge can
  * be verified in, which refuses it (`details` says why).
  */
@@ -130,7 +130,7 @@ interface MergedImage {
  * The details open with each failure, naming its suite and check. Only on a merge is an earlier
  * task's failing check this task's regression; on main the task changed nothing to cause it.
  *
- * @testseam verification.test.ts shows a check that never ran fails the verdict (c-independent-verify C2)
+ * @testseam verification.test.ts shows a check that never ran fails the verdict
  */
 export function suitesVerdict(
   suites: readonly CheckSuite[],
@@ -287,7 +287,7 @@ interface TaskVerificationDeps {
   readonly cells: VerificationCells;
   readonly attemptPolicy: { readonly perCommandTimeoutSeconds: number };
   /**
-   * The environment substrate (s-platform-role-m1): builds an environment version's image for the
+   * The environment substrate: builds an environment version's image for the
    * substrate gate and a merge that changes the build context, and keeps the stack statements.
    */
   readonly environment: {
@@ -295,12 +295,12 @@ interface TaskVerificationDeps {
     readonly statements: EnvironmentStatementStore;
   };
   /**
-   * Quality's task checks (s-independent-verify-m1): a check task stores the checks it wrote, and
+   * Quality's task checks: a check task stores the checks it wrote, and
    * an implementation task is decided by them. Required: no task is verified without them.
    */
   readonly checks: TaskCheckStore;
   /**
-   * Quality's review of a plan revision's suites (ADR-074 addendum 2 d71 c): a review task is
+   * Quality's review of a plan revision's suites: a review task is
    * dispatched to it, never to an agent, so it runs no cell. Required: no implementation is released
    * without it.
    */
@@ -317,7 +317,7 @@ export class TaskVerification {
   }
 
   /**
-   * The review of the plan revision's suites (ADR-074 addendum 2 d71 c). Clean only once the model's
+   * The review of the plan revision's suites. Clean only once the model's
    * verdict validated against its schema and names only suites it read: the plan's implementations
    * are released by completing it. Problems are returned for the orchestrator to route. A refused
    * model call is a refusal like an agent's; a verdict that never validated or is unfit to act on
@@ -387,7 +387,7 @@ export class TaskVerification {
             .join("\n");
     const releasedChecks = outcome.released.map((r) => `${r.checkTaskId}: ${r.check}`);
     // A finding with neither a witness nor another family's agreement reopens nothing; it is kept
-    // as advisory, and an item it leaves undecided is reported unverified (ADR-084 decision 2).
+    // as advisory, and an item it leaves undecided is reported unverified.
     const advisory =
       (outcome.advisory.length === 0
         ? ""
@@ -396,8 +396,8 @@ export class TaskVerification {
         ? ""
         : `\nLeft undecided, to be reported unverified: ${outcome.undecided.map((u) => `${u.itemId} of ${u.checkTaskId}`).join(", ")}`);
     if (outcome.kind === "clean") {
-      // A review that routes nothing is a claim a second opinion confirms or not (ADR-084 addendum 2
-      // decision 11, addendum 3 decision 12): the items it leaves unconfirmed are reported unverified.
+      // A review that routes nothing is a claim a second opinion confirms or not:
+      // the items it leaves unconfirmed are reported unverified.
       const { claim } = outcome;
       const claimed =
         claim.unconfirmed.length === 0
@@ -480,7 +480,7 @@ export class TaskVerification {
   }
 
   /**
-   * An implementer that finished done with no change against main (ADR-074 addendum 2 d67 b): an
+   * An implementer that finished done with no change against main: an
    * earlier task may have delivered this one's work already. Z0 decides that by the checks, never by
    * the implementer's word: it runs them on main (mainSuitesRun). All pass: completed as already
    * delivered, with main's commit at that time as the delivering commit, the task branch deleted and
@@ -518,7 +518,7 @@ export class TaskVerification {
    * Before any model is called, sweepDelivered found every stored check passing on main: an
    * earlier task may have delivered this one's work. All suites pass on main: completed as already
    * delivered. The task's own checks pass but main's environment test or an earlier task's check
-   * fails there (ADR-074 addendum 2 d68 a): nothing was delivered and no model ran, so this is not
+   * fails there: nothing was delivered and no model ran, so this is not
    * the task's failure: null, and the task goes to its implementer as usual, the post-merge
    * regression suite judging the result. Its own checks failing in this run, after passing in the
    * red run just before, fails the task as before: they do not decide its work either way.
@@ -658,7 +658,7 @@ export class TaskVerification {
   }
 
   /**
-   * The acceptance sweep (story s-independent-verify-m1 W7, design P11): once every task of a
+   * The acceptance sweep: once every task of a
    * project's plan is settled with its goal tasks done, Z0 runs, on main HEAD in one CI cell from
    * main's environment image, the environment's test and the latest checks of every Completed
    * implementation task (the regression suite), each suite's files written over the checkout, with
@@ -821,7 +821,7 @@ export class TaskVerification {
   }
 
   /**
-   * Separation of duties (s-platform-role-m1; ADR-074 addendum 2 d72 B1), before
+   * Separation of duties, before
    * the tentative merge: the task branch's changes since it left main may not touch the recipe of
    * main's environment (the platform role's) nor any stored check file of the project (the check
    * author's). Every other file is the product's, inputs the image build reads included: the
@@ -953,7 +953,7 @@ export class TaskVerification {
   /**
    * An environment task's post-merge check: the gate's run again, the definition's `probe` from the
    * gate's image, on a throwaway checkout of the tentative merge. Sprint 0's merge holds no product,
-   * so it runs nothing else (ADR-074 addendum 2 d72 S), nor does an environment change opened with
+   * so it runs nothing else, nor does an environment change opened with
    * product "absent" (the product scaffold asked before any scaffold completed; its own merge runs
    * them). Any other environment change lands on a product: after the probe, the product's `build`
    * then `test` run on the merge from the same image and must leave the checkout clean.
@@ -978,7 +978,7 @@ export class TaskVerification {
   }
 
   /**
-   * The product scaffold's post-merge check (ADR-074 addendum 2 d72 B2): the environment of the
+   * The product scaffold's post-merge check: the environment of the
    * tentative merge (mergedEnvironment: rebuilt when the scaffold wrote an input the recipe reads),
    * then the definition's `build` then `test` on a throwaway checkout of the merge in a verifier
    * cell from that image, which must pass and leave the checkout clean. A rebuilt version passing
@@ -1030,7 +1030,7 @@ export class TaskVerification {
   }
 
   /**
-   * Every other task's post-merge check (s-independent-verify-m1, ADR-074 addendum 2 d64 d, d72 B3).
+   * Every other task's post-merge check.
    * First the merge's own environment (mergedEnvironment): when the work changed an input the
    * recipe reads, the merge's version is rebuilt and the product's build and test must pass on it,
    * and that version's image and test replace the dispatch's below; the merge passing records the
@@ -1088,7 +1088,7 @@ export class TaskVerification {
         this.checkoutDir(d, "post-merge-checks"),
         suites,
       );
-      // A run that changed the merge's tracked files is no verdict on the merge (L9): unrunnable,
+      // A run that changed the merge's tracked files is no verdict on the merge: unrunnable,
       // carried out typed in the fault's cause, neither a pass nor the task's failure.
       const changed = productChangeOf(task.id, runs);
       if (changed !== null) {
@@ -1136,7 +1136,7 @@ export class TaskVerification {
   }
 
   /**
-   * The environment of the tentative merge `commit` (ADR-074 addendum 2 d72 B3): its definition and
+   * The environment of the tentative merge `commit`: its definition and
    * version read from the merge's committed objects, the version being the digest of the build
    * context (environmentVersion, the same function the image build uses). The same version as the
    * dispatch's: its image. Another one (the work changed an input the recipe reads): its image is
@@ -1331,10 +1331,10 @@ export class TaskVerification {
   }
 
   /**
-   * define_check's port (ADR-074 addendum 2 d65 a): records the definition, the last of a name
+   * define_check's port: records the definition, the last of a name
    * winning, then red-runs that one check at once by the harvest's own machinery: the files the
    * attempt has changed so far (a snapshot of its throwaway worktree, by the harvest's rules) are
-   * written over a fresh checkout of the plan's foundation (ADR-074 addendum 2 d74 A), and the check
+   * written over a fresh checkout of the plan's foundation, and the check
    * runs in a CI cell from the environment image. The author is shown its exit code and output and
    * whether the red run at finish would reject it; that red run still decides, unchanged. A
    * substrate failure throws as it is; a failure of Z0's own machinery throws as a
@@ -1420,10 +1420,10 @@ export class TaskVerification {
 
   /**
    * The delivered sweep, before every dispatch of an implementation task and before any model is
-   * called (ADR-074 addendum 2 d74 A), once revalidateOnBaseline has trusted them: the task's stored
+   * called, once revalidateOnBaseline has trusted them: the task's stored
    * checks run on main in a CI cell from this dispatch's image. Every one passing: the task's work may be on main already, whoever delivered
    * it, and deliveredBeforeModel decides it by the environment's test, the regression suite and those
-   * checks on main (d67 b, d68 a). Any failing: null, and the dispatch goes on; partial progress is
+   * checks on main. Any failing: null, and the dispatch goes on; partial progress is
    * not staleness. A run that could not run at all is environment-blocked.
    */
   async sweepDelivered(d: VerifiedDispatch, stored: TaskChecks): Promise<ExecutionResult | null> {
@@ -1468,9 +1468,9 @@ export class TaskVerification {
   /**
    * Stored checks were red-run on their baseline in their check task's environment version. On a
    * dispatch from another version they are red-run again on that baseline in a CI cell from this
-   * dispatch's image, by the same set rule (ADR-074 addendum 2 d74 A): every check runs to a verdict
+   * dispatch's image, by the same set rule: every check runs to a verdict
    * and at least one fails decisively. Holding: trusted, null. Not holding, or no baseline on record
-   * (a revision stored before migration 045): checks_stale before the model is called, naming both
+   * (a revision stored before baselines were recorded): checks_stale before the model is called, naming both
    * versions and the check task, since such a set cannot tell the task's work from its absence and
    * the implementer could not answer for it. A red run that could not run at all is environment-blocked.
    */
@@ -1604,11 +1604,11 @@ export class TaskVerification {
   /**
    * Harvests a finished check attempt: its defined checks and the files it added or changed, then
    * the red run on a fresh checkout of the plan's foundation in a CI cell from the environment
-   * image (ADR-074 addendum 2 d74 A), whatever authoring this is: the first, or one after a dispute,
+   * image, whatever authoring this is: the first, or one after a dispute,
    * a review or staleness. A check that times out or whose command cannot run rejects the whole
    * set; a check that passes there is kept as a guard of behaviour that already holds; the set is
    * kept only when at least one of its checks fails there decisively, and only when every vision item
-   * the check task cites is decided by at least one of its checks (ADR-083). The kept revision is appended
+   * the check task cites is decided by at least one of its checks. The kept revision is appended
    * to Quality's task_checks for the implementation task with the foundation as its baseline; the
    * throwaway branch is discarded either way.
    */
@@ -1619,7 +1619,7 @@ export class TaskVerification {
     try {
       const defined = work.recorder.checks();
       if (defined.length === 0) return this.checksRejected(d, outcome, "no check was defined with define_check", {});
-      // ADR-083: which items are checked is what the stored checks decide, never what a line cites.
+      // Which items are checked is what the stored checks decide, never what a line cites.
       const undecided = work.recorder.undecided();
       if (undecided.length > 0) {
         return this.checksRejected(
@@ -1729,7 +1729,7 @@ export class TaskVerification {
   }
 
   /**
-   * A check author that finished `blocked` (ADR-074 addendum 2 d74 A): its reason may be that the
+   * A check author that finished `blocked`: its reason may be that the
    * task its checks decide is already on main. Z0 does not take that word for it: when the checked
    * task has stored checks, they run on main with the environment's test and the regression suite
    * (mainSuitesRun), the evaluation that closes delivered work. Every suite passing: the check task is

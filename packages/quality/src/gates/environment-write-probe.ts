@@ -38,7 +38,7 @@ interface EnvironmentWriteProbeRequest {
 }
 
 /**
- * Roadmap M2 exit 6, the environment-file write without the grant. A task that is not environment
+ * The environment-file write without the grant. A task that is not environment
  * work (the grant) changes the recipe from inside its cell, as an agent's tool call would; Z0
  * commits the tree to the task branch as after every attempt, and the ownership gate runs as
  * before every merge. The write itself lands in the cell's tree: the protection is that nothing of

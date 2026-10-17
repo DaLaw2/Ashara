@@ -6,7 +6,7 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { VisionRepository } from "./vision.js";
 
-// The client's answers to the Liaison's questions (migration 038): each inbound
+// The client's answers to the Liaison's questions: each inbound
 // 'answer' is consumed once, together with what it changes.
 
 const questions = alias(clientMessages, "question");
@@ -18,7 +18,7 @@ interface OpenAnswerRow {
   readonly questionId: string;
   readonly intakeAttempts: number;
   readonly intakeLastError: string | null;
-  /** Whose failure the last counted reading attempt was, as stored (migration 066). */
+  /** Whose failure the last counted reading attempt was, as stored. */
   readonly intakeLastFailure: string | null;
   /** Whether the project's first plan was written when this answer was read. */
   readonly planned: boolean;

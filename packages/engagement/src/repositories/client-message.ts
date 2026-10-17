@@ -42,7 +42,7 @@ class TenderNotOpen extends Error {
 }
 
 /**
- * The client channel's rows (architecture K1, migration 016). No HTTP route
+ * The client channel's rows. No HTTP route
  * creates an outbound one.
  */
 export class ClientMessageRepository {
@@ -67,7 +67,7 @@ export class ClientMessageRepository {
 
   /**
    * Questions posted together in reply to one message, in the order given: each
-   * row records its 1-based position (migration 022), since rows written in one
+   * row records its 1-based position, since rows written in one
    * transaction share a created_at.
    */
   async insertQuestions(
@@ -88,7 +88,7 @@ export class ClientMessageRepository {
 
   /**
    * Both directions, oldest first, questions posted together in their recorded
-   * position (migration 022); `since` keeps only rows created strictly after
+   * position; `since` keeps only rows created strictly after
    * it. created_at is compared at millisecond precision, the precision of a
    * returned createdAt, so passing back the last row's createdAt excludes that row.
    */

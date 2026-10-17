@@ -4,8 +4,8 @@ import type { Database } from "@ashara/db";
 import { parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import { ClientMessageRepository } from "./client-message.js";
 
-// The client's change of direction (migration 016 kind 'change'). Until a change is applied to a
-// project under way (M3 X5), the Liaison consumes each one with a plain reply that says so, and a
+// The client's change of direction (client_messages kind 'change'). Until a change is applied to a
+// project under way, the Liaison consumes each one with a plain reply that says so, and a
 // domain event, together: a change is never left unread and never answered twice.
 
 interface OpenChangeRow {

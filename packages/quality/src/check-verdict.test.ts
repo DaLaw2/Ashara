@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import type { CheckRun } from "@ashara/workplace";
 import { checkPassed, checkRunVerdict, checkVerdict } from "./check-verdict.js";
 
-// c-independent-verify C2: missing evidence is failure. Only exit 0, within its time, with output, passes.
+// Missing evidence is failure. Only exit 0, within its time, with output, passes.
 describe("checkPassed", () => {
   const run = (overrides: Partial<CheckRun>): CheckRun => ({ name: "c", command: "sh c.sh", exitCode: 0, timedOut: false, output: "ok", ...overrides });
 

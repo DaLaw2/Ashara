@@ -4,7 +4,7 @@ import type { ProjectId } from "@ashara/shared";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-language/vision-assumption.js";
 
-// The Vision (ADR-075 Engagement): a project's vision, versioned and
+// The Vision: a project's vision, versioned and
 // append-only. Engagement alone writes it: intake writes v1, a client's answer and the team's stack
 // choice each append the next version. Every other context reads a version only through
 // readVisionVersion, the published reader, never the stored jsonb.
@@ -34,15 +34,15 @@ export class VisionUnreadable extends Error {
 }
 
 /**
- * How the client learned of an Inferred assumption (d89 C): asked about it in an intake question,
+ * How the client learned of an Inferred assumption: asked about it in an intake question,
  * or told of it in a report that work proceeds on it unless they object.
  */
 const AssumptionDisclosureSchema = z.enum(["asked", "reported"]);
 
-/** What the client's answer did to the assumption it made Stated (d95 a). */
+/** What the client's answer did to the assumption it made Stated. */
 const ClientAnswerVerdictSchema = z.enum(["confirms", "changes"]);
 
-/** The client's answer a Stated assumption carries (migration 038), the answer's message id its provenance. */
+/** The client's answer a Stated assumption carries, the answer's message id its provenance. */
 const ClientAnswerRecordSchema = z.looseObject({
   messageId: z.string().min(1),
   question: z.string().min(1),
@@ -54,7 +54,7 @@ const ClientAnswerRecordSchema = z.looseObject({
 /**
  * One assumption as vision_documents.inferences stores it. A record written before keys, kinds or
  * disclosures were recorded holds none of them: it is keyed by its place, its kind reads
- * "unclassified" (not evidence that no client could observe it, so a check decides it: ADR-083)
+ * "unclassified" (not evidence that no client could observe it, so a check decides it)
  * and, Inferred, its standing reads "unrecorded". A Stated record carries the client's answer that
  * stated it. Fields this schema does not name (a rationale, the answered question's id) are kept
  * as stored.
@@ -332,7 +332,7 @@ export class Vision {
         questionMessageId: answer.questionMessageId,
         question: answer.question,
         answer: answer.answer,
-        // The delivered report says from it whether the client confirmed or changed the assumption (d95 a).
+        // The delivered report says from it whether the client confirmed or changed the assumption.
         verdict: answer.verdict,
       },
     };

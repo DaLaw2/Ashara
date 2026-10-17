@@ -29,12 +29,12 @@ import type { EnvironmentDefinition } from "./environment-definition.js";
 import { environmentBuildPassed, environmentCheckVerdict } from "./environment-verdict.js";
 import type { EnvironmentCommandsRun } from "./environment-verdict.js";
 
-// Z0's half of the environment substrate (s-platform-role-m1): build_environment for the
+// Z0's half of the environment substrate: build_environment for the
 // environment role during its attempt, and the substrate gate that checks environment work in
 // place of per-task verify. The image build and every command in a cell are execution-infra's
 // (checkout-cell.ts); what is checked here is the gate's: the definition read through the safe
-// tree reader, the recipe-only scope, and the product's commands on the merge. ADR-074 addendum 2
-// d72: environment work may touch recipe files only, and its gate is the image build and the
+// tree reader, the recipe-only scope, and the product's commands on the merge.
+// Environment work may touch recipe files only, and its gate is the image build and the
 // toolchain probe, never the product's build or test on a tree that holds no product.
 
 const MAX_DEFINITION_BYTES = 64 * 1024;
@@ -45,7 +45,7 @@ const MAIN_BRANCH = "main";
  * The team's statement of the stack (chosen and why), kept on a work item with the version it holds
  * for: an environment task's own statement with the version its gate tested, or, for an
  * implementation whose verified merge changed the environment's build context, the statement of the
- * version it ran on with the version the merge produced (ADR-074 addendum 2 d72 B3).
+ * version it ran on with the version the merge produced.
  */
 export interface EnvironmentStatementStore extends EnvironmentStatementSource {
   record(taskId: WorkItemId, statement: string, version: string): Promise<void>;
@@ -70,7 +70,7 @@ async function leftOverPaths(repo: HostRepo): Promise<string[]> {
 
 /**
  * The paths the work up to `commit` added, changed or deleted since it left main (the merge base),
- * that are no recipe file (ADR-074 addendum 2 d72 B1): environment work may touch the recipe only.
+ * that are no recipe file: environment work may touch the recipe only.
  * The recipe is the one `definition` (the work's) names, and the one main's definition at the merge
  * base names, so a recipe file the work stops naming may still be deleted. A merge base with no
  * readable definition (Sprint 0) adds nothing.
@@ -199,8 +199,8 @@ export function runFoundationBuild(
 /**
  * The product's `build` then `test` from `tested`'s image on a fresh checkout of `commit` (the
  * tentative merge), and what the checkout holds afterwards that the commit does not: the scaffold's
- * gate, and the check of an environment rebuilt from a merge that changed its build context
- * (ADR-074 addendum 2 d72 B2, B3). They are one run: a `test` that reads what `build` produced
+ * gate, and the check of an environment rebuilt from a merge that changed its build context.
+ * They are one run: a `test` that reads what `build` produced
  * passes only after it. The cell has no network; a substrate failure throws.
  */
 export function runPostMergeEnvironmentCommands(

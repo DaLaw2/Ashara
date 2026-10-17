@@ -4,13 +4,12 @@ import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@as
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 
-// The Liaison's report on a project's first plan (story s-liaison-intake-m1,
-// ADR-075): Delivery records the planning outcome on the project, and the
+// The Liaison's report on a project's first plan: Delivery records the planning outcome on the project, and the
 // Liaison, the only writer to the client, tells the client about it. Reports are
 // read from recorded outcomes, not handed over in memory, so one written before a
 // crash is still reported after the restart; the store posts each at most once. A revision
-// of the plan for a client's change (migration 042) is reported the same way, once each, naming
-// every answer it took in (migration 052): each of them was promised the client would
+// of the plan for a client's change is reported the same way, once each, naming
+// every answer it took in: each of them was promised the client would
 // be told what changed.
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
@@ -87,7 +86,7 @@ export interface PlanReportStore {
   /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
   postRevisionReport(revisionId: string, body: string): Promise<"posted" | "already-posted">;
   /**
-   * Blocks the project and records why (migration 025); a project already
+   * Blocks the project and records why; a project already
    * blocked keeps its first cause. A blocked project's first plan is not due.
    */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
@@ -149,7 +148,7 @@ const revisionWorkFields = {
 };
 
 // A revision for the client's changes carries every change it took in, each with their words and
-// the decision (migration 052); a plan repair (migration 045), the titles of the tasks the team gave up.
+// the decision; a plan repair, the titles of the tasks the team gave up.
 const RevisionChangeSchema = z.object({ answer: z.string().min(1), decision: z.string().min(1) });
 const PlanRevisionSummarySchema = z.union([
   z.object({ changes: z.array(RevisionChangeSchema).min(1), ...revisionWorkFields }),

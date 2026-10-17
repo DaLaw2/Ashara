@@ -4,8 +4,7 @@ import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { ExecutedCheck } from "../verification.js";
 
-// A delivered project is accepted on one sweep of main HEAD (migration 049; story
-// s-independent-verify-m1 W7, design P11). A project is ready for it once its first plan exists,
+// A delivered project is accepted on one sweep of main HEAD. A project is ready for it once its first plan exists,
 // no task of it is open (Pending, InProgress, Blocked, Failed), at least one goal task is Completed,
 // no repair or revision is awaited, and no stop or answer awaits the Liaison. A passed sweep is
 // recorded with the project's move to 'accepted' in one transaction, the project row locked and
@@ -40,7 +39,7 @@ interface ReadyProjectRow {
   readonly scaffoldMerges: readonly RecordedScaffold[];
 }
 
-/** The project's Completed product scaffolds, each with the merge its completion recorded (migration 041). */
+/** The project's Completed product scaffolds, each with the merge its completion recorded. */
 async function completedScaffolds(db: DbHandle, projectId: string): Promise<RecordedScaffold[]> {
   const rows = await db
     .select({ taskId: workItems.id, mergeCommit: workItems.mergeCommit })
@@ -98,8 +97,8 @@ class AcceptanceFaultProjectMissing extends Error {
 }
 
 /**
- * Counts one acceptance sweep that could not run on the project (projects.acceptance_faults,
- * migration 049), durably, and returns the count with it: the bound outlives a restart.
+ * Counts one acceptance sweep that could not run on the project (projects.acceptance_faults),
+ * durably, and returns the count with it: the bound outlives a restart.
  */
 export async function recordAcceptanceSweepFault(db: DbHandle, projectId: ProjectId): Promise<number> {
   const [row] = await db
@@ -119,7 +118,7 @@ async function lockReady(tx: DbHandle, projectId: ProjectId): Promise<boolean> {
 }
 
 /**
- * A sweep that passed: recorded with the stored checks it ran and saw pass (migration 065), and the project moved to 'accepted' by `accept` (Engagement's
+ * A sweep that passed: recorded with the stored checks it ran and saw pass, and the project moved to 'accepted' by `accept` (Engagement's
  * lifecycle guard, which the composition root supplies), in one transaction (the
  * projects_acceptance_guard trigger refuses the move without the row). "moved" when the project is
  * no longer ready; nothing is written.
@@ -148,7 +147,7 @@ export async function recordAcceptance(
 
 /**
  * A sweep that failed: `writeDefect` writes the defect item in the transaction and gives it up (so
- * migration 048's trigger opens its repair) and returns its id; the sweep is recorded with it, in one transaction.
+ * the abandonment trigger opens its repair) and returns its id; the sweep is recorded with it, in one transaction.
  * "moved" when the project is no longer ready; nothing is written.
  */
 export async function recordAcceptanceDefect(

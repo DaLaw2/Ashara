@@ -4,7 +4,7 @@ import type { ElidedText } from "@ashara/shared";
 import type { VerdictReport } from "@ashara/workplace";
 
 /**
- * The product's `build` then `test` (ADR-074 addendum 2 d72), run in one cell from the built image on a
+ * The product's `build` then `test`, run in one cell from the built image on a
  * fresh checkout of a merge, and what that checkout held afterwards that the commit does not. Never
  * run on a tree with no product: the scaffold's gate and every merge after it run them.
  */
