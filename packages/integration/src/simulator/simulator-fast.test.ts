@@ -18,8 +18,8 @@ useSimulatorDatabase();
 
 describe("lifecycle simulator, fast tier", () => {
   for (const seed of FAST_SEEDS) {
-    it(`seed ${seed} fails exactly its listed violations`, async () => {
-      const result = await seeded(seed);
+    it(`seed ${seed} fails exactly its listed violations`, async (ctx) => {
+      const result = await seeded(ctx, seed);
       expect(diffExpected(result, {}), statements(result)).toEqual({ unexpected: [], missing: [] });
       // Production's log port reaches the run: each completed cycle is a record the reader keys by event.
       expect(result.records.filter((record) => record.event === "delivery.cycle-complete").length).toBeGreaterThan(0);

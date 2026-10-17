@@ -1,4 +1,5 @@
 import { afterAll, beforeAll } from "vitest";
+import type { TestContext } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { dropStaleRunDatabases, prepareTemplate } from "./database.js";
 import type { FaultKind, SeamKind } from "./faults.js";
@@ -34,9 +35,35 @@ export function useSimulatorDatabase(): void {
   });
 }
 
+/**
+ * What a run needs of the test that starts it: the test's signal, aborted if it times out, and its end.
+ * @testseam the simulator's test files pass their test context as it
+ */
+export type TestScope = Pick<TestContext, "signal" | "onTestFinished">;
+
+/** The test that started a run ended, so the run, if it still runs, is stopped. */
+class TestEnded extends Error {
+  constructor() {
+    super("the test that started the run ended");
+    this.name = "TestEnded";
+  }
+}
+
+/**
+ * The signal a test's run is stopped by: aborted when the test times out or ends, so no run
+ * outlives the test that started it.
+ * @testseam the simulator's test files that call runSeed themselves stop their runs with it
+ */
+export function runSignal(test: TestScope): AbortSignal {
+  const ended = new AbortController();
+  test.onTestFinished(() => ended.abort(new TestEnded()));
+  return AbortSignal.any([test.signal, ended.signal]);
+}
+
 /** @testseam the fast tier's test files run a seed under its own profile through it */
-export function seeded(seed: number, scenario: Pick<RunOptions, "projects" | "capUsd"> = {}): Promise<RunResult> {
+export function seeded(test: TestScope, seed: number, scenario: Pick<RunOptions, "projects" | "capUsd"> = {}): Promise<RunResult> {
   return runSeed({
+    signal: runSignal(test),
     seed,
     profile: profileOfSeed(seed),
     tape: { kind: "seeded", seed },
@@ -52,8 +79,9 @@ export function seeded(seed: number, scenario: Pick<RunOptions, "projects" | "ca
  * A replay of a seed's recorded decisions, under the seed's own profile.
  * @testseam simulator-determinism.test.ts replays a seeded run through it
  */
-export function replayed(seed: number, decisions: RunResult["decisions"]): Promise<RunResult> {
+export function replayed(test: TestScope, seed: number, decisions: RunResult["decisions"]): Promise<RunResult> {
   return runSeed({
+    signal: runSignal(test),
     seed,
     profile: profileOfSeed(seed),
     tape: { kind: "replay", decisions },
@@ -64,7 +92,8 @@ export function replayed(seed: number, decisions: RunResult["decisions"]): Promi
   });
 }
 
-type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject"> & { readonly profile?: Profile };
+/** A directed run's shape; its `signal` stops the run before its test ends, as the test's own signal does at the end. */
+type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject" | "signal"> & { readonly profile?: Profile };
 
 /**
  * The directed tier: each fault, plant and misbehaviour a test judges
@@ -75,7 +104,8 @@ type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutag
  * as a seeded one: the same seams, stand-ins and interleaver; only the choice is named.
  * @testseam the directed tier's test files run each directed tape through it
  */
-export function directed(directions: readonly Direction[], scenario: Scenario = {}): Promise<RunResult> {
+export function directed(test: TestScope, directions: readonly Direction[], scenario: Scenario = {}): Promise<RunResult> {
+  const { signal, ...shape } = scenario;
   return runSeed({
     seed: 1,
     profile: "typical",
@@ -84,7 +114,8 @@ export function directed(directions: readonly Direction[], scenario: Scenario = 
     template,
     maxCycles: MAX_CYCLES,
     timeoutMs: SEED_TIMEOUT_MS,
-    ...scenario,
+    ...shape,
+    signal: signal === undefined ? runSignal(test) : AbortSignal.any([runSignal(test), signal]),
   });
 }
 

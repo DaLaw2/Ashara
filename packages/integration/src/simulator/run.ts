@@ -15,6 +15,8 @@ import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
 import type { LogRecord, LogSink } from "@ashara/shared";
 import { AdmissionLedger } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
+import { capturingConsole } from "./console-capture.js";
+import type { ConsoleSink } from "./console-capture.js";
 import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
 import { FakePodman } from "./fake-podman.js";
@@ -71,6 +73,12 @@ export interface RunOptions {
    * scenario, run with `projects: 2`, in which the first project must still progress (I8).
    */
   readonly corruptSecondProject?: boolean;
+  /**
+   * Ends the run at its next step once aborted: the run rejects with RunAborted after its cleanup,
+   * so nothing of it outlives whatever started it (a test that timed out). Policy default: with none,
+   * the run ends only on its own terms or its wall clock.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** The run's shape apart from its seed: how many projects share the deployment, and its cap. */
@@ -172,6 +180,23 @@ class DirectionsNotTaken extends Error {
   }
 }
 
+/**
+ * The run's signal was aborted: it stopped at its next step and cleaned up, with no result to judge.
+ * @testseam the simulator's abort test tells an aborted run's rejection by it
+ */
+export class RunAborted extends Error {
+  constructor(
+    readonly seed: number,
+    readonly cycle: number,
+    readonly reason: unknown,
+    /** The run's last log lines: what it was doing when it was stopped. */
+    readonly log: readonly string[],
+  ) {
+    super(`seed ${seed}: the run was aborted at cycle ${cycle}: ${describeErrorChain(reason)}`, { cause: reason });
+    this.name = "RunAborted";
+  }
+}
+
 /** How long a restart waits for a dead instance's database sessions to end. */
 const BACKEND_EXIT_POLLS = 100;
 const BACKEND_EXIT_POLL_MS = 50;
@@ -254,24 +279,13 @@ function capturingSink(records: LogRecord[], judge: (record: LogRecord) => void)
 }
 
 /** Production's console output goes into the run's log, not the terminal; the last lines are kept. */
-function capturedConsole(log: string[]): () => void {
-  const saved = { log: console.log, warn: console.warn, error: console.error, info: console.info };
-  const keep = (level: string) => (...args: unknown[]): void => {
+function logSink(log: string[]): ConsoleSink {
+  return (level, args) => {
     const line = `${level} ${args.map((a) => (a instanceof Error ? describeErrorChain(a) : String(a))).join(" ")}`;
     // Every stand-in call is unpriced and unrouted by design: those two lines would bury the rest.
     if (UNPRICED_NOISE.some((noise) => line.includes(noise))) return;
     log.push(line.slice(0, 600));
     if (log.length > LOG_LINES) log.splice(0, log.length - LOG_LINES);
-  };
-  console.log = keep("log");
-  console.info = keep("info");
-  console.warn = keep("warn");
-  console.error = keep("error");
-  return () => {
-    console.log = saved.log;
-    console.warn = saved.warn;
-    console.error = saved.error;
-    console.info = saved.info;
   };
 }
 
@@ -569,12 +583,33 @@ function standing(snapshot: Snapshot): string {
   return `${snapshot.project.status}(${snapshot.project.blockedCategory ?? ""})#${snapshot.episodes.length}`;
 }
 
+/** The settling of the run started last in this module instance; the next one waits on it. */
+let lastRun: Promise<void> = Promise.resolve();
+
 /**
  * One seed, start to end: the real system composed over a private scratch
  * database, real git, the fake container runtime and the scripted models; the invariants judged
  * after every cycle; crashes and SIGTERMs answered by composing a new instance on the same workdir.
+ *
+ * A run sets process-wide state (the environment, the id source, production's code plants) and puts
+ * it back as it ends, so it starts only once the run before it has settled: a run its caller gave
+ * up on, still stopping, never has its state restored over the next one's. Its console output is
+ * captured by async context, so even a run that outlives its caller writes only into its own log.
  */
 export async function runSeed(options: RunOptions): Promise<RunResult> {
+  const prior = lastRun;
+  const releases: Array<() => void> = [];
+  lastRun = new Promise<void>((resolve) => releases.push(resolve));
+  try {
+    await prior;
+    const log: string[] = [];
+    return await capturingConsole(logSink(log), () => runAlone(options, log));
+  } finally {
+    for (const release of releases) release();
+  }
+}
+
+async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> {
   const started = Date.now();
   const tape = new Tape(options.tape);
   const rates = drawRates(options.profile, tape);
@@ -592,7 +627,6 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     `universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`,
     personas.describe(),
   ];
-  const log: string[] = [];
   const records: LogRecord[] = [];
   /** Set while a cycle (full or halted) of the live instance runs: L1 asks every record logged meanwhile for the cycle. */
   let cycleRunning = false;
@@ -660,7 +694,6 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
 
   const workdir = await realpath(await mkdtemp(join(tmpdir(), "ashara-sim-")));
   const restoreIds = seededIds(options.seed);
-  const restoreConsole = capturedConsole(log);
   const restoreEnv = simulatedEnvironment(workdir, capUsd);
   const restoreWaits = observeContendedWaits(interleaver.contended);
   const restoreCode = planted?.code?.() ?? null;
@@ -674,7 +707,16 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   /** The instance whose runner a cycle stopped: it runs only halted cycles until a restart replaces it. */
   let haltedLive: Live | null = null;
   const gitBroker = new GitBroker();
+  const signal = options.signal;
+  /** Each step of the run begins here: an aborted run goes no further than the step it is in. */
+  const stopIfAborted = (): void => {
+    if (signal?.aborted === true) throw new RunAborted(options.seed, cycles, signal.reason, log);
+  };
+  // An abort also stops the live instance, so a cycle in flight ends at its next await, not its end.
+  const abortInstance = (): void => instance?.ashara.abort();
+  signal?.addEventListener("abort", abortInstance, { once: true });
   try {
+    stopIfAborted();
     database = await createRunDatabase(options.databaseUrl, options.template, options.seed);
     const db = database;
     const observing = createDb(db.url, (config) => new pg.Pool({ ...config, application_name: "ashara-sim-observer", max: 2 }));
@@ -795,6 +837,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     let generation = 0;
     const compose = async (): Promise<Live> => {
       for (;;) {
+        stopIfAborted();
         generation += 1;
         const faultsBefore = scheduler.faults().length;
         const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map(), pools: [] };
@@ -921,6 +964,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         await recover(current);
       };
       for (let request = 1; request <= MAX_CLIENT_REQUESTS; request++) {
+        stopIfAborted();
         const current = instance;
         if (current === null) throw new ClientRequestsExhausted(options.seed, action, "no instance is composed");
         if (unsure && landed !== null) {
@@ -981,6 +1025,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     let settleLeft: number | null = null;
     let settledOn = "";
     while (cycles < options.maxCycles) {
+      stopIfAborted();
       if (Date.now() - started > options.timeoutMs) {
         const violation: Violation = { invariant: "I1", step: cycles, statement: `the seed ran past its ${options.timeoutMs} ms wall clock`, key: "I1:timeout" };
         violations.set(violation.key, violation);
@@ -1050,6 +1095,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         }
         crashed = current.handle.dead || current.handle.sigtermed;
       }
+      stopIfAborted();
       // The runner's own wait between cycles (orchestrator runner.ts defaults), on the simulated clock.
       clock.jump(processed > 0 ? POLL_INTERVAL_MS : IDLE_INTERVAL_MS);
       await recover(current);
@@ -1204,6 +1250,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     log.push(`harness error: ${describeErrorChain(err)}`);
     throw err;
   } finally {
+    signal?.removeEventListener("abort", abortInstance);
     const live: Live | null = instance;
     if (live !== null) {
       live.handle.dead = true;
@@ -1218,7 +1265,6 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     restoreSweeps();
     restoreWaits();
     restoreEnv();
-    restoreConsole();
     restoreIds();
     await rm(workdir, { recursive: true, force: true });
   }
