@@ -150,12 +150,233 @@ function tieLines(task: RunEvidence["tasks"][number]): { readonly lines: string[
   return { lines, untied: untied.length > 0 };
 }
 
+type WorkItem = RunEvidence["workItems"][number];
+
+/** Measured spend over a set of llm_calls rows; an unmeasured row is counted, never read as $0. */
+interface Spend {
+  usd: number;
+  calls: number;
+  unmeasured: number;
+}
+
+function noSpend(): Spend {
+  return { usd: 0, calls: 0, unmeasured: 0 };
+}
+
+function addSpend(sum: Spend, calls: readonly TaskCall[]): void {
+  for (const c of calls) {
+    sum.calls += 1;
+    if (c.costUsd === null) sum.unmeasured += 1;
+    else sum.usd += c.costUsd;
+  }
+}
+
+function spendText(s: Spend): string {
+  return `${usd(s.usd)}${s.unmeasured > 0 ? ` (${s.unmeasured} of ${s.calls} call(s) unmeasured, not in this figure)` : ""}`;
+}
+
+/**
+ * The goal task an item's spend serves, or why none. A goal task (an implementation task the
+ * decomposition wrote: work_items.work_kind 'implementation', task_spec.origin 'decomposition')
+ * serves itself; a check task serves the task its task_spec.checksFor names; an environment change
+ * serves the one goal task that depends on it (dependencies.from_id), the implementation it was
+ * opened for. Anything else serves no goal task.
+ */
+type Served = { readonly kind: "goal"; readonly goal: WorkItem; readonly as: "own" | "check" | "repair" } | { readonly kind: "none"; readonly why: string };
+
+function isGoal(item: WorkItem): boolean {
+  return item.workKind === "implementation" && item.origin === "decomposition";
+}
+
+function servedBy(item: WorkItem, items: ReadonlyMap<string, WorkItem>): Served {
+  if (isGoal(item)) return { kind: "goal", goal: item, as: "own" };
+  if (item.workKind === "check" && item.origin === "check") {
+    if (item.checksFor === null) return { kind: "none", why: "check task with no task_spec.checksFor" };
+    const checked = items.get(item.checksFor);
+    if (checked === undefined || !isGoal(checked)) return { kind: "none", why: `check task whose checksFor ${item.checksFor} is no goal task of the project` };
+    return { kind: "goal", goal: checked, as: "check" };
+  }
+  if (item.origin === "environment-change") {
+    const goals = item.dependents.flatMap((id) => {
+      const dependent = items.get(id);
+      return dependent !== undefined && isGoal(dependent) ? [dependent] : [];
+    });
+    const [only] = goals;
+    if (only === undefined || goals.length > 1) return { kind: "none", why: `environment change depended on by ${goals.length} goal task(s), not one` };
+    return { kind: "goal", goal: only, as: "repair" };
+  }
+  if (item.workKind === "implementation" && item.origin === null) return { kind: "none", why: "implementation task with no recorded task_spec.origin" };
+  return { kind: "none", why: `${item.workKind ?? "no work kind"}${item.origin === null ? "" : ` (${item.origin})`}` };
+}
+
+/** The Epic an item sits under by its work_items.parent_id chain, or null when the chain reaches none. */
+function epicOf(item: WorkItem, items: ReadonlyMap<string, WorkItem>): WorkItem | null {
+  const seen = new Set<string>();
+  let at: WorkItem | undefined = item;
+  while (at !== undefined && !seen.has(at.id)) {
+    if (at.level === "Epic") return at;
+    seen.add(at.id);
+    at = at.parentId === null ? undefined : items.get(at.parentId);
+  }
+  return null;
+}
+
+interface GoalSpend {
+  readonly goal: WorkItem;
+  readonly first: Spend;
+  readonly rework: Spend;
+  readonly checks: Spend;
+  readonly repairs: Spend;
+}
+
+interface EpicSpend {
+  readonly epic: WorkItem | null;
+  readonly goals: GoalSpend[];
+  readonly unattributed: { readonly item: WorkItem; readonly why: string; readonly spend: Spend }[];
+  agentCalls: number;
+  agentCallsWithInput: number;
+  agentInputTokens: number;
+}
+
+function total(...parts: readonly Spend[]): Spend {
+  return parts.reduce((sum, p) => ({ usd: sum.usd + p.usd, calls: sum.calls + p.calls, unmeasured: sum.unmeasured + p.unmeasured }), noSpend());
+}
+
+function epicTotal(e: EpicSpend): Spend {
+  return total(...e.goals.flatMap((g) => [g.first, g.rework, g.checks, g.repairs]), ...e.unattributed.map((u) => u.spend));
+}
+
+function perGoal(spend: Spend, goals: number): string {
+  return goals === 0 ? "per goal task undefined (no goal task)" : `${usd(spend.usd / goals)} per goal task`;
+}
+
+/**
+ * Spend per Epic and per goal task (m3-scope C4) and mean input tokens per agent call per Epic
+ * (C5). Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
+ * Epic; a goal task's calls from its second dev session on are its rework. Spend that serves no
+ * goal task is printed on an unattributed line, never dropped or spread; the attributed and
+ * unattributed figures are checked to add up to every measured llm_calls row of the project.
+ */
+function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: string[]; readonly violation: boolean } {
+  const items = new Map(evidence.workItems.map((w) => [w.id, w]));
+  const epics = new Map<string | null, EpicSpend>();
+  const epicFor = (epic: WorkItem | null): EpicSpend => {
+    const key = epic === null ? null : epic.id;
+    const known = epics.get(key);
+    if (known !== undefined) return known;
+    const created: EpicSpend = { epic, goals: [], unattributed: [], agentCalls: 0, agentCallsWithInput: 0, agentInputTokens: 0 };
+    epics.set(key, created);
+    return created;
+  };
+  for (const w of evidence.workItems) if (w.level === "Epic") epicFor(w);
+  const goals = new Map<string, GoalSpend>();
+  for (const w of evidence.workItems) {
+    if (!isGoal(w)) continue;
+    const g: GoalSpend = { goal: w, first: noSpend(), rework: noSpend(), checks: noSpend(), repairs: noSpend() };
+    goals.set(w.id, g);
+    epicFor(epicOf(w, items)).goals.push(g);
+  }
+
+  const lines: string[] = [];
+  const orphanTasks: string[] = [];
+  for (const task of evidence.tasks) {
+    const item = items.get(task.taskId);
+    if (item === undefined) {
+      orphanTasks.push(task.taskId);
+      continue;
+    }
+    const served = servedBy(item, items);
+    const goal = served.kind === "goal" ? goals.get(served.goal.id) : undefined;
+    const bucket = epicFor(epicOf(goal === undefined ? item : goal.goal, items));
+    for (const c of task.calls) {
+      if (!c.agentTurn) continue;
+      bucket.agentCalls += 1;
+      if (c.inputTokens !== null) {
+        bucket.agentCallsWithInput += 1;
+        bucket.agentInputTokens += c.inputTokens;
+      }
+    }
+    if (served.kind === "none" || goal === undefined) {
+      if (task.calls.length === 0) continue;
+      const spend = noSpend();
+      addSpend(spend, task.calls);
+      bucket.unattributed.push({ item, why: served.kind === "none" ? served.why : "goal task not on record", spend });
+      continue;
+    }
+    if (served.as === "check") addSpend(goal.checks, task.calls);
+    else if (served.as === "repair") addSpend(goal.repairs, task.calls);
+    else {
+      const [, second] = task.sessions;
+      const reworkFrom = second === undefined ? null : second.createdAt.getTime();
+      addSpend(goal.first, task.calls.filter((c) => reworkFrom === null || c.createdAt.getTime() < reworkFrom));
+      addSpend(goal.rework, task.calls.filter((c) => reworkFrom !== null && c.createdAt.getTime() >= reworkFrom));
+    }
+  }
+
+  lines.push(
+    "",
+    "cost per Epic and goal task (measured cost_usd; a goal task is a task with work_items.work_kind 'implementation' and " +
+      "task_spec.origin 'decomposition'; its check tasks by task_spec.checksFor, its environment changes by dependencies.from_id, " +
+      "its rework as its calls from its second dev session on; Epic by the work_items.parent_id chain):",
+  );
+  let attributed = noSpend();
+  let unattributed = noSpend();
+  let goalCount = 0;
+  for (const e of epics.values()) {
+    if (e.epic === null && e.goals.length === 0 && e.unattributed.length === 0 && e.agentCalls === 0) continue;
+    const spend = epicTotal(e);
+    const input =
+      e.agentCallsWithInput === 0
+        ? `mean input tokens per agent call unknown (no agent call of ${e.agentCalls} reported input tokens)`
+        : `mean input tokens per agent call ${Math.round(e.agentInputTokens / e.agentCallsWithInput)} (${e.agentInputTokens} over ${e.agentCallsWithInput} call(s)` +
+          `${e.agentCalls > e.agentCallsWithInput ? `; ${e.agentCalls - e.agentCallsWithInput} without input tokens excluded` : ""})`;
+    const name = e.epic === null ? "(no Epic: the parent_id chain reaches none)" : `${e.epic.id} ${e.epic.title}`;
+    lines.push(`  Epic ${name}: spend ${spendText(spend)} over ${e.goals.length} goal task(s), ${perGoal(spend, e.goals.length)}; ${input}`);
+    goalCount += e.goals.length;
+    for (const g of e.goals) {
+      const own = total(g.first, g.rework);
+      const charged = total(g.checks, g.repairs);
+      attributed = total(attributed, own, charged);
+      lines.push(
+        `    goal task ${g.goal.id} [${g.goal.status}] ${g.goal.title}: own ${spendText(own)} (first session ${usd(g.first.usd)}, rework ${usd(g.rework.usd)}); ` +
+          `charged ${spendText(charged)} (checks ${usd(g.checks.usd)}, repairs ${usd(g.repairs.usd)}); total ${usd(own.usd + charged.usd)}`,
+      );
+    }
+    if (e.unattributed.length > 0) {
+      const sum = total(...e.unattributed.map((u) => u.spend));
+      unattributed = total(unattributed, sum);
+      lines.push(
+        `    unattributed: ${spendText(sum)}, serving no goal task: ` + e.unattributed.map((u) => `${u.item.id} ${u.why} ${usd(u.spend.usd)}`).join("; "),
+      );
+    }
+  }
+  const projectCalls = evidence.calls.filter((row) => row.taskId === null);
+  const projectSpend = projectCalls.reduce((sum, row) => sum + row.measuredUsd, 0);
+  const projectCallCount = projectCalls.reduce((sum, row) => sum + row.calls, 0);
+  const projectUnmeasured = projectCalls.reduce((sum, row) => sum + row.calls - row.measuredCalls, 0);
+  unattributed = total(unattributed, { usd: projectSpend, calls: projectCallCount, unmeasured: projectUnmeasured });
+  if (projectCallCount > 0) lines.push(`  unattributed: project calls (no task): ${spendText({ usd: projectSpend, calls: projectCallCount, unmeasured: projectUnmeasured })}`);
+  lines.push(
+    `  run: spend ${spendText({ usd: overall.measuredUsd, calls: overall.calls, unmeasured: overall.calls - overall.measuredCalls })} over ${goalCount} goal task(s), ${perGoal({ usd: overall.measuredUsd, calls: 0, unmeasured: 0 }, goalCount)}; ` +
+      `charged to goal tasks ${usd(attributed.usd)}, unattributed ${usd(unattributed.usd)}`,
+  );
+  const accounted = attributed.calls + unattributed.calls;
+  const violation = orphanTasks.length > 0 || accounted !== overall.calls || Math.abs(attributed.usd + unattributed.usd - overall.measuredUsd) > 1e-9;
+  if (violation) {
+    lines.push(
+      `  VIOLATION: the attribution accounts for ${accounted} of ${overall.calls} llm_calls row(s) and ${usd(attributed.usd + unattributed.usd)} of ${usd(overall.measuredUsd)}` +
+        `${orphanTasks.length > 0 ? `; task(s) ${orphanTasks.join(", ")} are no work item of the project` : ""}`,
+    );
+  }
+  return { lines, violation };
+}
+
 function callLines(rows: readonly CallTotals[]): string[] {
   if (rows.length === 0) return ["    (no llm_calls rows)"];
   return rows.map((row) => `    ${row.provider}: ${costLine(row)}; ${cacheShare(row)}`);
 }
 
-export function formatRunReport(evidence: RunEvidence): { readonly text: string; readonly zeroCostCalls: number } {
+export function formatRunReport(evidence: RunEvidence): { readonly text: string; readonly zeroCostCalls: number; readonly attributionViolation: boolean } {
   const { project, tasks, calls } = evidence;
   const lines: string[] = [`run-report: project ${project.name} (${project.id}), status ${project.status}`];
   const overall = emptyTotals();
@@ -191,10 +412,12 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
   for (const [provider, sum] of [...byProvider.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     lines.push(`  ${provider}: ${cacheShare(sum)}`);
   }
+  const cost = costLines(evidence, overall);
+  lines.push(...cost.lines);
   if (overall.zeroCostCalls > 0) {
     lines.push("", `VIOLATION: ${overall.zeroCostCalls} llm_calls row(s) priced at exactly $0; an unknown cost must be NULL, never $0`);
   }
-  return { text: lines.join("\n"), zeroCostCalls: overall.zeroCostCalls };
+  return { text: lines.join("\n"), zeroCostCalls: overall.zeroCostCalls, attributionViolation: cost.violation };
 }
 
 /** One finding of a suite review, as the report states it. */

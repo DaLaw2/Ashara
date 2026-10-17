@@ -77,7 +77,25 @@ const CallTotalsRowSchema = z.object({
   cacheReadTokens: count,
 });
 
-const TaskCallRowSchema = z.object({ taskId: z.guid(), callSite: z.string().min(1), createdAt: z.coerce.date() });
+const TaskCallRowSchema = z.object({
+  taskId: z.guid(),
+  callSite: z.string().min(1),
+  createdAt: z.coerce.date(),
+  costUsd: usd.nullable(),
+  inputTokens: count.nullable(),
+});
+
+const WorkItemRowSchema = z.object({
+  id: z.guid(),
+  level: z.string().min(1),
+  parentId: z.guid().nullable(),
+  title: z.string(),
+  status: z.string(),
+  workKind: z.string().nullable(),
+  origin: z.string().nullable(),
+  checksFor: z.string().nullable(),
+  dependents: z.array(z.guid()),
+});
 
 /**
  * What a session's row says about its attempt. Absent attempt columns never mean "no model call":
@@ -113,13 +131,24 @@ interface SessionEvidence {
 /**
  * One llm_calls row of a task, when it was admitted and by which site. `agentTurn`: its site is
  * AGENT_CALL_SITE, the only site an attempt calls as, so it belongs to one of the task's dev
- * sessions; a call of any other site is no attempt's turn.
+ * sessions; a call of any other site is no attempt's turn. `costUsd` is NULL when no cost was
+ * measured, `inputTokens` when the provider reported none.
  */
 interface TaskCall {
   readonly callSite: string;
   readonly createdAt: Date;
   readonly agentTurn: boolean;
+  readonly costUsd: number | null;
+  readonly inputTokens: number | null;
 }
+
+/**
+ * One work item of the project, whatever it spent: its level, its parent (work_items.parent_id),
+ * its work kind (work_items.work_kind), the producer that wrote it and, for a check task, the task
+ * its checks decide (task_spec.origin, task_spec.checksFor; NULL when the row records none), and the
+ * items that depend on it (dependencies.from_id where to_id is this item).
+ */
+type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
 
 /**
  * One task's (or, with taskId null, the project's own) llm_calls of one provider. An unmeasured
@@ -143,6 +172,7 @@ interface RunEvidence {
   readonly project: z.infer<typeof ProjectRowSchema>;
   readonly tasks: readonly TaskEvidence[];
   readonly calls: readonly CallTotals[];
+  readonly workItems: readonly WorkItemEvidence[];
 }
 
 function attemptRecord(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: Date): AttemptRecord {
@@ -182,8 +212,8 @@ function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: D
 /**
  * The evidence of one project's run (roadmap M2 exit 7): every task that had a dev session or an
  * llm_calls row, with each session's attempt record and each of its calls (when, by which site),
- * and the project's llm_calls totals per task
- * and provider. Every row is validated on the way out of Postgres.
+ * the project's llm_calls totals per task and provider, and every work item of the project with
+ * the columns its spend is attributed by. Every row is validated on the way out of Postgres.
  */
 export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promise<RunEvidence> {
   const projectRows = await db.execute(
@@ -238,11 +268,21 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
   const calls = z.array(CallTotalsRowSchema).parse(callRows.rows);
 
   const taskCallRows = await db.execute(sql`
-    SELECT task_id AS "taskId", call_site AS "callSite", created_at AS "createdAt"
+    SELECT task_id AS "taskId", call_site AS "callSite", created_at AS "createdAt",
+           cost_usd::float8 AS "costUsd", input_tokens AS "inputTokens"
     FROM llm_calls
     WHERE project_id = ${projectId} AND task_id IS NOT NULL
     ORDER BY created_at, id`);
   const taskCalls = z.array(TaskCallRowSchema).parse(taskCallRows.rows);
+
+  const workItemRows = await db.execute(sql`
+    SELECT w.id, w.level, w.parent_id AS "parentId", w.title, w.status, w.work_kind AS "workKind",
+           w.task_spec->>'origin' AS origin, w.task_spec->>'checksFor' AS "checksFor",
+           COALESCE((SELECT json_agg(d.from_id ORDER BY d.from_id) FROM dependencies d WHERE d.to_id = w.id), '[]'::json) AS dependents
+    FROM work_items w
+    WHERE w.project_id = ${projectId}
+    ORDER BY w.created_at, w.id`);
+  const workItems = z.array(WorkItemRowSchema).parse(workItemRows.rows);
 
   return {
     project,
@@ -251,8 +291,9 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
       sessions: sessions.filter((s) => s.taskId === task.taskId).map((s) => toSession(s, attemptColumnsSince)),
       calls: taskCalls
         .filter((c) => c.taskId === task.taskId)
-        .map((c) => ({ callSite: c.callSite, createdAt: c.createdAt, agentTurn: c.callSite === AGENT_CALL_SITE })),
+        .map((c) => ({ callSite: c.callSite, createdAt: c.createdAt, agentTurn: c.callSite === AGENT_CALL_SITE, costUsd: c.costUsd, inputTokens: c.inputTokens })),
     })),
     calls,
+    workItems,
   };
 }

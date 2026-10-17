@@ -13,8 +13,11 @@
  * agent-runner, such as a review of the plan's suites, is no attempt's turn and is listed by its site). Its
  * llm_calls per provider with the measured coverage of their cost and the cache-hit share
  * (cache-read over input tokens, over the calls that reported both). Then the run's totals, and the suite
- * reviews' judgements on the rejections they routed or released. Exits 1 when an llm_calls row is priced at
- * exactly $0, which the ledger must never write (an unknown cost is NULL).
+ * reviews' judgements on the rejections they routed or released. Spend per Epic and per goal task, with
+ * each check task's and environment change's spend charged to the goal task it serves, and mean input tokens
+ * per agent call per Epic; spend that serves no goal task is printed as unattributed. Exits 1 when an
+ * llm_calls row is priced at exactly $0, which the ledger must never write (an unknown cost is NULL), or
+ * when the attributed and unattributed spend do not add up to every llm_calls row.
  */
 
 import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
@@ -41,7 +44,7 @@ async function main(): Promise<void> {
     const report = formatRunReport(await readRunEvidence(db, projectId));
     console.log(report.text);
     console.log(formatSuiteReviewJudgements(await suiteReviewJudgementsOf(db, projectId)));
-    if (report.zeroCostCalls > 0) process.exitCode = 1;
+    if (report.zeroCostCalls > 0 || report.attributionViolation) process.exitCode = 1;
   } finally {
     await db.$client.end();
   }
