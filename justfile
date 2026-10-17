@@ -13,9 +13,9 @@ db-reset:
 migrate:
     npx tsx scripts/migrate.ts
 
-# Every gate, in order, aborting on the first failure (ADR-048 decision 6).
+# Every gate, in order, aborting on the first failure.
 #
-# tsc is invoked by EXPLICIT PATH, never `npx tsc` (ADR-056). Two TypeScripts are
+# tsc is invoked by EXPLICIT PATH, never `npx tsc`. Two TypeScripts are
 # installed: `typescript` 6.0.3 holds the peer slot every tool expects, and
 # `typescript-7` is an npm alias for 7.0.2. Both link a `tsc` bin, so
 # `node_modules/.bin/tsc` is whichever npm linked last — `npx tsc` names no
@@ -104,14 +104,11 @@ simulate *ARGS:
 # GITGUARDIAN_API_KEY is absent. This recipe is for scanning on demand, e.g. before
 # a force-push or after a history rewrite.
 #
-# Known limitation, measured 2026-07-27 rather than assumed: the hook caught a
-# short lowercase password in a POSTGRES_PASSWORD field and a `ghp_` token, and did
-# NOT catch an invented password of similar shape in that same field. It is a net
-# with holes, not a proof of absence.
+# Known limitation: the scanner recognises known secret shapes and can miss an
+# invented password of ordinary shape. It is a net with holes, not a proof of absence.
 #
-# Second lesson from the same run: writing the offending value into a comment to
-# document the incident re-creates the secret. Both this file and the CI workflow
-# tripped the scanner that way. Describe the shape, never quote the value.
+# Writing a secret's value into a comment to document it re-creates the secret.
+# Describe the shape, never quote the value.
 secrets:
     ggshield secret scan repo .
 

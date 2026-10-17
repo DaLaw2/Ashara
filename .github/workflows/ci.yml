@@ -71,7 +71,7 @@ jobs:
   test:
     name: Test suite (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
-    # One shard runs a third of a suite that took ~8 min whole, after ~1.5 min of setup; 20 minutes
+    # A cap, not a budget: one shard runs a third of the suite after its setup, and 20 minutes
     # leaves room for the suite to grow before this cap, rather than the suite, ends the run.
     timeout-minutes: 20
     strategy:
@@ -88,9 +88,9 @@ jobs:
           POSTGRES_DB: ashara_ci
           # No password, deliberately. This service lives inside the job's
           # network and is destroyed when the job ends, so a credential would
-          # guard nothing. An earlier revision hardcoded one and triggered a
-          # real GitGuardian incident. Do not add a password or a secret here:
-          # the correct state is that there is nothing to leak.
+          # guard nothing, and a hardcoded one is a secret the scanner reports.
+          # Do not add a password or a secret here: the correct state is that
+          # there is nothing to leak.
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
@@ -119,8 +119,8 @@ jobs:
       - name: Install headless Chromium
         run: npx playwright install --with-deps --only-shell chromium
 
-      # packages/integration/src/execution-infra/cell.podman.test.ts runs real cells, never skipped. ubuntu-latest
-      # (24.04) lists Podman 4.9.3 in its runner image; catatonit backs `podman run --init` and is
+      # packages/integration/src/execution-infra/cell.podman.test.ts runs real cells, never skipped.
+      # Podman comes from the runner's own packages; catatonit backs `podman run --init` and is
       # installed explicitly rather than assumed. Cells run with --pull=never, so the pinned BaseCell
       # image is pulled here, by the reference config/base-cell.toml names.
       - name: Prepare podman and the BaseCell image

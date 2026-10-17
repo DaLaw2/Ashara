@@ -387,7 +387,7 @@ export function discoverDocuments(root: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Retention (docs/README.md sections 4 and 7)
+// Retention
 // ---------------------------------------------------------------------------
 
 interface RetentionFailure {

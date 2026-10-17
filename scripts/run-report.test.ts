@@ -211,7 +211,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
 
     // NULL attempt columns are not "no model call": a session still open, a crash orphan the
     // reconciler closed (on the task with calls, as a crashed dispatch would leave it) and a row
-    // from before migration 046 all read NULL, and the report must say which.
+    // from before the attempt columns existed all read NULL, and the report must say which.
     const openSession = createSessionId();
     await repo.insert(openSession, idleTaskId, brief, null, "test-trace");
     const orphanSession = createSessionId();

@@ -132,12 +132,15 @@ Model choices are in `config/models.toml`.
 - Absorbing a change of direction mid-project, with a report of what it affects and costs.
 - Lower cost per piece of work, so larger projects stay affordable.
 
-## For contributors
+## Contributing
+
+A change is ready when both gates pass. Judge each by its exit code, not by a count of what it ran.
 
 ```bash
-just check      # type check, package boundaries, unused code, lint
+just check      # type check, package boundaries, unused code, lint; stops at the first failure
 just test       # test suite
 just simulate   # deterministic lifecycle simulator: crashes, races and misbehaving models, no model cost
 ```
 
-The engineering rules are in `CLAUDE.md`.
+`just test` runs against the database `just dev` starts, migrated with `just migrate` (or the one
+`DATABASE_URL` names), and needs podman: the container tests run real containers and are never skipped.

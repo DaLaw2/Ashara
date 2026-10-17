@@ -1,7 +1,7 @@
 /**
  * Finds a column default on a price or cost column of the Drizzle schema. Such a default is an
- * evidence default: an insert that forgets the rate writes a model the spend cap reads as free
- * (db review #1, migration 054). Run by check-boundaries.ts inside `just check`.
+ * evidence default: an insert that forgets the rate writes a model the spend cap reads as free.
+ * Run by check-boundaries.ts inside `just check`.
  *
  * A column is one `key: builder("sql_name")` entry plus its `.chain()` continuation lines; it is a
  * price column when its key or SQL name mentions cost or price, and any `.default(` on it is reported.

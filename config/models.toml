@@ -1,22 +1,19 @@
 # Ashara Model Configuration
 #
-# The model catalog is DB-authoritative (seeded by migration 002_seed_models.sql;
-# prices, cache rates and time-of-day windows refreshed by 021; the verified
-# models of the 2026-10-13 price investigation added by 026; the current-models
-# catalog, its levels as Ashara calls each model, and prompt-length tiers set by
-# 047 from docs/investigations/model-catalog-2026-10-14.md, ADR-074 item 83).
-# This file contains only deployment-specific configuration: routing profiles,
+# The model catalog is DB-authoritative: the migrations seed and refresh the
+# model_configs table (prices, cache rates, time-of-day windows, each model's
+# level as Ashara calls it, and prompt-length tiers). This file contains only deployment-specific configuration: routing profiles,
 # the thinking policy and the context-overflow signatures.
 #
 # To add/update models, create a new migration or use the model_configs DB table.
 
 # =============================================================================
-# Routing profiles (routing-profiles story) -- static per-site model playbooks.
+# Routing profiles -- static per-site model playbooks.
 #
 # Combo key = the deployment's ENABLED provider names, sorted and joined by
 # "+" (e.g. adding ANTHROPIC_API_KEY on top of DEEPSEEK_API_KEY makes the
-# combo "anthropic+deepseek"). Not a learned/scored mechanism -- DA-09 stays
-# on its own data-gated track; this is a hand-authored template per combo.
+# combo "anthropic+deepseek"). Not a learned or scored mechanism: this is a
+# hand-authored template per combo.
 #
 # Site keys reuse the EXACT string each call site already tags its request
 # with (model-access KNOWN_LLM_SITES). That list is the single registry: a key
@@ -31,10 +28,10 @@
 # A site's value is either a bare model id (applied regardless of the
 # requested capability) or a per-capability table `{ <Capability> = "...",
 # default = "..." }` for a site whose requests legitimately vary in
-# capability across calls. agent-runner is the one such site today: it tags
+# capability across calls. agent-runner is such a site: it tags
 # every request "agent-runner" but the per-task capability ranges over
 # Light/Medium/Strong/Frontier: the planner's grade of each task's difficulty
-# (ADR-074 addendum 2 d70), or Frontier when a failed attempt escalates it
+# or Frontier when a failed attempt escalates it
 # (server task-capability.ts) -- a flat model here would silently send a
 # Frontier task to whatever the flat entry names. A table maps only the
 # levels it names; every other level takes its "default".
@@ -42,8 +39,8 @@
 # A combo with no table below, or an explicitly EMPTY table, is not an error:
 # every site falls through to capability-level logic. A NON-EMPTY table is a
 # curated allocation and must map every known site -- a hole in it would
-# silently escape to capability routing, which is how the since-deleted stack
-# derivation site once reached Anthropic despite the reserve below.
+# silently escape to capability routing and could reach a provider the table
+# reserves for other sites.
 #
 # Within a table, a request whose capability has no entry AND no "default"
 # fails the call (RoutingProfileUnresolved). Boot-enforced for the deployment's
@@ -55,7 +52,7 @@
 
 [routing.profiles."deepseek"]
 # Intentionally empty: a deepseek-only deployment gets pure capability-level
-# routing. Since 047 its one model is deepseek-flash, graded Strong with thinking
+# routing. Its one model is deepseek-flash, graded Strong with thinking
 # on (below): Light, Medium and Strong requests resolve to it. Nothing lower is
 # substituted for Frontier: a task the planner grades Frontier fails with
 # NoProviderAvailableError, and a Strong structured call whose attempts all
@@ -64,11 +61,10 @@
 # failure its caller blocks on.
 
 [routing.profiles."anthropic"]
-# Pins what capability routing resolved to before migration 026 added
-# claude-haiku-5-5, claude-opus-5-5 and claude-fable-5-1. Changing an
-# Anthropic-only allocation is an owner decision, not a side effect of a catalog
-# refresh. Frontier moved from claude-opus-4-8, removed by 047 as legacy, to its
-# successor claude-opus-5-5 (Frontier as called).
+# Pins the Anthropic-only allocation, so that adding a model to the catalog does
+# not change it: changing it is an owner decision, not a side effect of a catalog
+# refresh. Frontier requests go to claude-opus-5-5 (Frontier as called), every
+# other level to claude-sonnet-5-5.
 "agent-runner" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
 "decomposition" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
 "liaison-intake" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
@@ -77,51 +73,43 @@
 "escalation" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
 
 [routing.profiles."anthropic+deepseek"]
-# DeepSeek serves planning and intake; since 047 Claude serves every agent-runner task
+# DeepSeek serves planning and intake; Claude serves every agent-runner task
 # (below) and every ladder escalation.
-# agent-runner named deepseek-v4-pro at every level until 047 removed it
-# (ADR-074 item 83 b: it grades below deepseek-flash at 3.3x the price). Each
-# level now goes to the Claude model graded at that level as called (047):
+# Each agent-runner level goes to the Claude model graded at that level as called:
 # Frontier claude-opus-5-5, Strong claude-sonnet-5-5, Medium claude-haiku-5-5.
 # No Claude model is graded Light; a Light task takes claude-haiku-5-5, the
-# cheapest Claude model above it. So every agent-runner task in this combo now
+# cheapest Claude model above it. So every agent-runner task in this combo
 # spends Anthropic credit.
 "agent-runner" = { Frontier = "claude-opus-5-5", Strong = "claude-sonnet-5-5", Medium = "claude-haiku-5-5", Light = "claude-haiku-5-5" }
 "decomposition" = "deepseek-flash"
-# The Liaison's tender intake (s-liaison-intake-m1): the server-side successor of
-# the deleted CLI alignment call.
+# The Liaison's tender intake.
 "liaison-intake" = "deepseek-flash"
-# Roster derivation (s-team-roster-m1): one structured call per tender, the
+# Roster derivation: one structured call per tender, the
 # same shape and size as decomposition's.
 "roster" = "deepseek-flash"
-# The review of a plan revision's check suites (ADR-074 addendum 2 d71 c): one structured
+# The review of a plan revision's check suites: one structured
 # call per review, reading every stored suite with the vision.
 "suite-review" = "deepseek-flash"
 # An escalation goes up a level: the base sites run deepseek-flash (Strong as called), so the
-# escalation is the Frontier Claude model, never a lateral Strong one (ADR-074 item 83 b).
+# escalation is the Frontier Claude model, never a lateral Strong one.
 "escalation" = "claude-opus-5-5"
 
 # =============================================================================
-# Thinking mode per call site (ADR-074 D13: per role tier, default off, turned
-# on only after an A/B). Read by the gateway and sent as a provider option to a
-# provider_type that takes one: today only "deepseek" (thinking.type). Every
-# other provider type gets no option, whatever this table says.
+# Thinking mode per call site, default off. Read by the gateway and
+# sent as a provider option to a provider_type that takes one ("deepseek",
+# thinking.type). Every other provider type gets no option, whatever this
+# table says.
 #
-# On at every routing site but suite-review (Decided: owner 2026-10-14, ADR-074
-# item 83 a; suite-review off by ADR-074 d95 b, 2026-10-15): a
-# model's level is graded as Ashara calls it, and deepseek-flash is Strong only
-# with thinking on (model-catalog record 2026-10-14 §4.4). The D13 A/B is
-# recorded with the W11 rehearsal. The risk this reopens: deepseek-flash's
-# reasoning tokens count against maxTokens, and in transcript 3 (2026-10-13),
-# with thinking on, 19 of 23 structured requests spent all 4,096 tokens
-# reasoning and returned no text (StructuredOutputTruncated); the W5 trial
-# (2026-10-14) repeated it in 7 of 12 calls. Since then the gateway sends a
-# request with thinking on with a reasoning allowance added to its bound
-# (model-access thinking.ts outputBudget), priced into its worst-case cost. A
-# site-less call keeps the default, off. suite-review is off because all three
-# of its DeepSeek calls on record (W11c twice, smoke2 once) spent their whole
-# output bound on reasoning and returned no answer, smoke2's at the 32,768-token
-# minimum allowance (ADR-074 d95 b).
+# On at every routing site but suite-review: a model's level is graded as
+# Ashara calls it, and deepseek-flash is Strong only with thinking on. The
+# risk: deepseek-flash's reasoning tokens count against maxTokens, so a
+# structured request can spend its whole bound reasoning and return no text
+# (StructuredOutputTruncated). The gateway therefore sends a request with
+# thinking on with a reasoning allowance added to its bound (model-access
+# thinking.ts outputBudget), priced into its worst-case cost. A site-less call
+# keeps the default, off. suite-review is off because its DeepSeek calls with
+# thinking on spend their whole output bound on reasoning and return no answer,
+# even at the minimum reasoning allowance.
 #
 # `default` is required when this table is present; [thinking.sites] keys are
 # the routing sites ("escalation" covers every escalated ladder attempt). A site
@@ -161,9 +149,9 @@ default = "off"
 #   "... exceeds the available context size ...".
 # - Anthropic Messages: 400, error.type "invalid_request_error", message
 #   "prompt is too long: ...".
-# - 413 (Content Too Large): carried over from the recognition the gateway shipped
-#   with (t-context-window-guard); no provider above is observed answering with it
-#   (unverified).
+# - 413 (Content Too Large): no provider above is observed answering an overflow
+#   with it (unverified); it is listed so an endpoint that does, with one of the
+#   codes or phrases above, is read as an overflow.
 # =============================================================================
 
 [context_overflow]
