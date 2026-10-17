@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PreCallRefusal } from "@ashara/finance";
+import { ContextBudgetExceeded, PreCallRefusal } from "@ashara/finance";
 import type { Outcome } from "./outcome.js";
 import { attemptSummary, outcomeRecord } from "./session-attempt.js";
 
@@ -17,6 +17,14 @@ function terminal(kind: FailedKind): Outcome {
   switch (kind) {
     case "turn_cap":
       return { ...base, kind, maxTurns: 3 };
+    case "context_budget_exceeded":
+      return {
+        ...base,
+        kind,
+        turn: 3,
+        source: "provider",
+        error: new ContextBudgetExceeded({ provider: "fake", model: "m", windowTokens: 1000, outputReserveTokens: 100, breach: { source: "provider", providerMessage: "prompt is too long" } }),
+      };
     case "wall_clock":
       return { ...base, kind, wallClockMs: 1000, elapsedMs: 1001 };
     case "model_stopped_without_finish":
@@ -45,7 +53,7 @@ describe("attemptSummary and outcomeRecord", () => {
     );
   });
 
-  test.each(["turn_cap", "wall_clock", "model_stopped_without_finish", "output_truncated", "transport_exhausted", "cancelled", "environment_failure", "refused", "disputed"] as const)(
+  test.each(["turn_cap", "context_budget_exceeded", "wall_clock", "model_stopped_without_finish", "output_truncated", "transport_exhausted", "cancelled", "environment_failure", "refused", "disputed"] as const)(
     "%s is named with its detail, never worded as a finish",
     (kind) => {
       expect(attemptSummary(terminal(kind))).toBe(`attempt ended as ${kind}: why it ended`);

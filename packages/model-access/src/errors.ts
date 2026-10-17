@@ -485,6 +485,50 @@ export class TurnResponseInvalid extends GatewayError {
 }
 
 /**
+ * Why an agent turn's input does not fit its model's context window:
+ * - `preflight`: the gateway's projection of the request (context-window.ts), made before the
+ *   request is admitted, exceeds the window less the output reserve; nothing was sent or spent.
+ * - `provider`: the provider rejected the request it was sent as longer than the model's context,
+ *   as its error data states (contextOverflowOf); `providerMessage` is the provider's own wording.
+ */
+type ContextBudgetBreach =
+  | { readonly source: "preflight"; readonly projectedInputTokens: number; readonly basis: string }
+  | { readonly source: "provider"; readonly providerMessage: string };
+
+interface ContextBudgetExceededContext {
+  readonly provider: string;
+  readonly model: string;
+  /** The model's catalogued context window (model_configs.max_context_tokens). */
+  readonly windowTokens: number;
+  /** Output tokens the request asks the window to hold besides its input. */
+  readonly outputReserveTokens: number;
+  readonly breach: ContextBudgetBreach;
+}
+
+/**
+ * An agent turn whose input would not fit, or did not fit, its model's context window. The attempt
+ * ends on it as `context_budget_exceeded`: there is no reduction and retry while compaction is
+ * deferred (architecture §13.6).
+ */
+export class ContextBudgetExceeded extends GatewayError {
+  readonly context: ContextBudgetExceededContext;
+
+  constructor(context: ContextBudgetExceededContext, options?: ErrorOptions) {
+    const where = `${context.provider}/${context.model} (window ${context.windowTokens} tokens, output reserve ${context.outputReserveTokens})`;
+    const breach = context.breach;
+    super(
+      breach.source === "preflight"
+        ? `context_budget_exceeded: the turn's projected input of ${breach.projectedInputTokens} tokens (${breach.basis}) exceeds ` +
+            `${context.windowTokens - context.outputReserveTokens} tokens, the window of ${where} less its output reserve; the request was not sent`
+        : `context_budget_exceeded: ${where} rejected the turn as longer than its context: ${breach.providerMessage}`,
+      options,
+    );
+    this.name = "ContextBudgetExceeded";
+    this.context = context;
+  }
+}
+
+/**
  * A second opinion (StructuredRequest.secondOpinion) of one strength got no answer: the model the
  * catalog offered for it failed, and so did every failover an other-family opinion may take, none of
  * which is of the avoided provider. Never answered by a model of another strength instead.

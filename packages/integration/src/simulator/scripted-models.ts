@@ -1,3 +1,4 @@
+import { APICallError } from "@ai-sdk/provider";
 import type {
   LanguageModelV4,
   LanguageModelV4CallOptions,
@@ -161,6 +162,23 @@ function reasoningOnly(bound: number): LanguageModelV4GenerateResult {
   };
 }
 
+/**
+ * A provider's rejection of a request longer than the model's context window, as an adapter throws
+ * it: HTTP 400 with the provider's error body. The body is the OpenAI-compatible wire format's, the
+ * error data the gateway reads it by (model-access context-window.ts), never a provider name.
+ */
+function contextOverflow(modelId: string): APICallError {
+  const message = `This model's maximum context length is 131072 tokens. However, you requested 140000 tokens (simulated).`;
+  return new APICallError({
+    message,
+    url: `simulated://${modelId}`,
+    requestBodyValues: {},
+    statusCode: 400,
+    responseBody: JSON.stringify({ error: { message, type: "invalid_request_error", code: "context_length_exceeded" } }),
+    isRetryable: false,
+  });
+}
+
 /** The first half of a JSON text: never valid JSON itself, as an answer cut mid-object is not. */
 function firstHalf(json: string): string {
   return json.slice(0, Math.max(1, Math.floor(json.length / 2)));
@@ -261,9 +279,10 @@ type StickyKind = (typeof STICKY_KINDS)[number];
  * - stall-mid-edit: the same, after only some of its edits (the trace tells the two apart);
  * - truncated: the turn is cut at the output limit while writing its next tool call;
  * - empty: the turn has no content at all;
- * - reasoning-exhausted: the turn's whole output bound goes to reasoning, no content.
+ * - reasoning-exhausted: the turn's whole output bound goes to reasoning, no content;
+ * - context-overflow: the provider rejects the turn as longer than the model's context window.
  */
-type AttemptEnd = "complete" | "refusal" | "stall" | "stall-mid-edit" | "truncated" | "empty" | "reasoning-exhausted";
+type AttemptEnd = "complete" | "refusal" | "stall" | "stall-mid-edit" | "truncated" | "empty" | "reasoning-exhausted" | "context-overflow";
 
 /** What an attempt is for, as its tools and its task's origin show: the scope of its draws (Tape Direction). */
 type WorkKind = "environment" | "checks" | "scaffold" | "implementation";
@@ -923,6 +942,9 @@ export class StandIns {
       case "reasoning-exhausted":
         onModelCall({ site: "agent-runner", action: "reasoning-exhausted" });
         return reasoningOnly(outputBoundOf(options));
+      case "context-overflow":
+        onModelCall({ site: "agent-runner", action: "context-overflow" });
+        throw contextOverflow(task.id);
       case "refusal":
       case "complete":
         onModelCall({ site: "agent-runner", action: script.end === "refusal" ? "refusal" : "no-more-steps" });
@@ -963,8 +985,8 @@ export class StandIns {
    * The attempt as the profile's response-level misbehaviour leaves it, or as scripted. The last
    * step ends the attempt (finish, dispute), so every cut lands before it:
    * - the turn cap after some of the steps and before the rest (work left uncommitted);
-   * - one turn cut at the output limit mid tool call, empty, or all reasoning, where the attempt's
-   *   steps would have gone on.
+   * - one turn cut at the output limit mid tool call, empty, all reasoning, or rejected as longer than
+   *   the model's context window, where the attempt's steps would have gone on.
    */
   private misbehaved(steps: ToolStep[], work: WorkKind): AttemptScript {
     const { tape, rates } = this.context;
@@ -978,7 +1000,9 @@ export class StandIns {
         ? "empty"
         : tape.chance("agent.reasoning-exhausted", rates.reasoningExhausted, work)
           ? "reasoning-exhausted"
-          : null;
+          : tape.chance("agent.context-overflow", rates.contextOverflow, work)
+            ? "context-overflow"
+            : null;
     if (end === null) return { steps, end: "complete", cut: null };
     const at = tape.pick("agent.misbehaving-turn", steps.length, work);
     return { steps: steps.slice(0, at), end, cut: end === "truncated" ? (steps[at] ?? null) : null };

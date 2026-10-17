@@ -13,7 +13,9 @@ import { z } from "zod";
 import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
+import { contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
 import {
+  ContextBudgetExceeded,
   ProviderConfigurationRejected,
   ProviderError,
   SchemaValidationError,
@@ -304,6 +306,19 @@ export class LLMGateway {
     }
     const tools = toSdkTools(request.tools);
     const { providerOptions, budget } = this.thinkingFor(target, site, TURN_MAX_OUTPUT_TOKENS, 0);
+    const window = target.modelConfig.maxContextTokens;
+    const projection = projectTurnInput(request.priorInputTokens, request);
+    const preflight = contextPreflight(projection, window, budget.maxOutputTokens);
+    if (preflight.kind === "context_budget_exceeded") {
+      // Judged before the gate admits the turn: a request that cannot fit is never sent or spent on.
+      throw new ContextBudgetExceeded({
+        provider: target.providerName,
+        model: target.modelConfig.id,
+        windowTokens: window,
+        outputReserveTokens: budget.maxOutputTokens,
+        breach: { source: "preflight", projectedInputTokens: preflight.projectedInputTokens, basis: describeProjection(projection) },
+      });
+    }
     const prompt = cachedTurnPrompt(target.providerType, request.system, request.messages);
 
     const params: Parameters<typeof generateText>[0] = {
@@ -324,6 +339,19 @@ export class LLMGateway {
     const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, () => generateText(params)).catch(
       (error: unknown) => {
         if (error instanceof GateThrew) throw error;
+        const overflow = contextOverflowOf(error);
+        if (overflow !== null) {
+          throw new ContextBudgetExceeded(
+            {
+              provider: target.providerName,
+              model: target.modelConfig.id,
+              windowTokens: window,
+              outputReserveTokens: budget.maxOutputTokens,
+              breach: { source: "provider", providerMessage: overflow },
+            },
+            { cause: error },
+          );
+        }
         // Whose failure it was travels with it, as for a structured request: no turn has a fallback.
         throw new ProviderError(
           target.providerName,
@@ -370,6 +398,7 @@ export class LLMGateway {
       rawFinishReason,
       usage: extraction.usage,
       reportedOutputTokens: extraction.reported.outputTokens,
+      reportedInputTokens: extraction.reported.inputTokens,
       provider: target.providerName,
       model: target.modelConfig.id,
     };

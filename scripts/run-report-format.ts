@@ -150,6 +150,61 @@ function tieLines(task: RunEvidence["tasks"][number]): { readonly lines: string[
   return { lines, untied: untied.length > 0 };
 }
 
+/**
+ * A call's context utilisation, its input tokens over its model's window (m3-scope C5). Never 0%
+ * read off a missing count: a call whose provider reported no input tokens, or whose row records no
+ * window, is unknown, with why.
+ */
+type Utilisation = { readonly kind: "known"; readonly share: number; readonly input: number; readonly window: number } | { readonly kind: "unknown"; readonly why: string };
+
+function utilisationOf(call: TaskCall): Utilisation {
+  if (call.inputTokens === null) return { kind: "unknown", why: "no input tokens reported" };
+  if (call.contextWindowTokens === null) return { kind: "unknown", why: "no window recorded (a row recorded before migration 074, or not recorded yet)" };
+  return { kind: "known", share: call.inputTokens / call.contextWindowTokens, input: call.inputTokens, window: call.contextWindowTokens };
+}
+
+function percent(share: number): string {
+  return `${(100 * share).toFixed(1)}%`;
+}
+
+function utilisationText(u: Utilisation): string {
+  return u.kind === "known" ? `${percent(u.share)} (${u.input} of ${u.window} tokens)` : `unknown (${u.why})`;
+}
+
+/** Each of the task's calls with its context utilisation, in the order they were admitted. */
+function utilisationLines(task: RunEvidence["tasks"][number]): string[] {
+  if (task.calls.length === 0) return [];
+  return [
+    "  context utilisation per call (input tokens over the model's window):",
+    ...task.calls.map((c) => `    ${c.createdAt.toISOString()} ${c.callSite}: ${utilisationText(utilisationOf(c))}`),
+  ];
+}
+
+/** The highest utilisation of an Epic's calls, and how many were known and unknown. */
+interface PeakUtilisation {
+  peak: { readonly share: number; readonly at: string } | null;
+  known: number;
+  unknown: number;
+}
+
+function addUtilisation(sum: PeakUtilisation, calls: readonly TaskCall[]): void {
+  for (const c of calls) {
+    const u = utilisationOf(c);
+    if (u.kind === "unknown") {
+      sum.unknown += 1;
+      continue;
+    }
+    sum.known += 1;
+    if (sum.peak === null || u.share > sum.peak.share) sum.peak = { share: u.share, at: `${c.createdAt.toISOString()} ${c.callSite}` };
+  }
+}
+
+function peakText(p: PeakUtilisation): string {
+  if (p.peak === null) return `peak context utilisation unknown (no call of ${p.unknown} has a known utilisation)`;
+  const unknown = p.unknown > 0 ? `; ${p.unknown} call(s) of unknown utilisation excluded` : "";
+  return `peak context utilisation ${percent(p.peak.share)} (call ${p.peak.at}) over ${p.known} call(s)${unknown}`;
+}
+
 type WorkItem = RunEvidence["workItems"][number];
 
 /** Measured spend over a set of llm_calls rows; an unmeasured row is counted, never read as $0. */
@@ -236,6 +291,7 @@ interface EpicSpend {
   agentCalls: number;
   agentCallsWithInput: number;
   agentInputTokens: number;
+  readonly utilisation: PeakUtilisation;
 }
 
 function total(...parts: readonly Spend[]): Spend {
@@ -251,8 +307,8 @@ function perGoal(spend: Spend, goals: number): string {
 }
 
 /**
- * Spend per Epic and per goal task (m3-scope C4) and mean input tokens per agent call per Epic
- * (C5). Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
+ * Spend per Epic and per goal task (m3-scope C4), and mean input tokens per agent call and the peak
+ * context utilisation of any call per Epic (C5). Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
  * Epic; a goal task's calls from its second dev session on are its rework. Spend that serves no
  * goal task is printed on an unattributed line, never dropped or spread; the attributed and
  * unattributed figures are checked to add up to every measured llm_calls row of the project.
@@ -264,7 +320,7 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
     const key = epic === null ? null : epic.id;
     const known = epics.get(key);
     if (known !== undefined) return known;
-    const created: EpicSpend = { epic, goals: [], unattributed: [], agentCalls: 0, agentCallsWithInput: 0, agentInputTokens: 0 };
+    const created: EpicSpend = { epic, goals: [], unattributed: [], agentCalls: 0, agentCallsWithInput: 0, agentInputTokens: 0, utilisation: { peak: null, known: 0, unknown: 0 } };
     epics.set(key, created);
     return created;
   };
@@ -288,6 +344,7 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
     const served = servedBy(item, items);
     const goal = served.kind === "goal" ? goals.get(served.goal.id) : undefined;
     const bucket = epicFor(epicOf(goal === undefined ? item : goal.goal, items));
+    addUtilisation(bucket.utilisation, task.calls);
     for (const c of task.calls) {
       if (!c.agentTurn) continue;
       bucket.agentCalls += 1;
@@ -331,7 +388,7 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
         : `mean input tokens per agent call ${Math.round(e.agentInputTokens / e.agentCallsWithInput)} (${e.agentInputTokens} over ${e.agentCallsWithInput} call(s)` +
           `${e.agentCalls > e.agentCallsWithInput ? `; ${e.agentCalls - e.agentCallsWithInput} without input tokens excluded` : ""})`;
     const name = e.epic === null ? "(no Epic: the parent_id chain reaches none)" : `${e.epic.id} ${e.epic.title}`;
-    lines.push(`  Epic ${name}: spend ${spendText(spend)} over ${e.goals.length} goal task(s), ${perGoal(spend, e.goals.length)}; ${input}`);
+    lines.push(`  Epic ${name}: spend ${spendText(spend)} over ${e.goals.length} goal task(s), ${perGoal(spend, e.goals.length)}; ${input}; ${peakText(e.utilisation)}`);
     goalCount += e.goals.length;
     for (const g of e.goals) {
       const own = total(g.first, g.rework);
@@ -404,6 +461,7 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
     const tie = tieLines(task);
     if (tie.untied) untiedTasks += 1;
     lines.push(...tie.lines);
+    lines.push(...utilisationLines(task));
   }
   const projectCalls = calls.filter((row) => row.taskId === null);
   if (projectCalls.length > 0) lines.push("", "project calls (no task):", ...callLines(projectCalls));

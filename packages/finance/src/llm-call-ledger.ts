@@ -62,6 +62,7 @@ function measurementOf(call: LlmProviderCall, cost: CostMeasurement): LlmCallMea
     cacheReadTokens: call.usage?.reported.cacheReadTokens ?? null,
     cacheWriteTokens: call.usage?.reported.cacheWriteTokens ?? null,
     reasoningTokens: call.usage?.reasoningTokens ?? null,
+    contextWindowTokens: call.model.maxContextTokens,
     costUsd: cost.measured ? cost.totalCost : null,
     finishReason: call.finishReason,
     createdAt: call.requestedAt,

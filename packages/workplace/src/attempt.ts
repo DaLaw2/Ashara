@@ -1,6 +1,6 @@
 import type { ModelMessage, ToolResultPart } from "ai";
 import type { CellBackend } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/finance";
+import { ContextBudgetExceeded, PreCallRefusal } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult } from "@ashara/finance";
 import { describeErrorChain, serializeError } from "@ashara/shared";
 import type { Clock } from "@ashara/shared";
@@ -57,6 +57,14 @@ function preCallRefusalOf(error: unknown): PreCallRefusal | null {
   return null;
 }
 
+/** The context budget breach `error` is, or carries as a cause; null for any other failure. */
+function contextBudgetBreachOf(error: unknown): ContextBudgetExceeded | null {
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (current instanceof ContextBudgetExceeded) return current;
+  }
+  return null;
+}
+
 class RecordWriteFailed extends Error {
   constructor(record: AttemptRecord["kind"], options: ErrorOptions) {
     super(`Writing the "${record}" attempt record failed: ${describeErrorChain(options.cause)}`, options);
@@ -106,6 +114,8 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
   const costs = new CostTally();
   let turnsUsed = 0;
   let lastToolCall: LastToolCall | null = null;
+  /** The input the provider reported for the previous turn: the window guard projects the next turn from it. */
+  let priorInputTokens: number | null = null;
   /** A dispute's evidence: what the checks printed the last time the implementer ran them. */
   let lastCheckRun: string | null = null;
 
@@ -193,14 +203,20 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         messages,
         tools,
         abortSignal: AbortSignal.any([signal, wallClock.signal]),
+        priorInputTokens,
       });
     } catch (error) {
       const refusal = preCallRefusalOf(error);
-      // A refused request was never sent, so it cost nothing: it is not an unmeasured turn.
+      const overflow = contextBudgetBreachOf(error);
+      // A refused request, or one the window guard stopped, was never sent, so it cost nothing: it is not an unmeasured turn.
+      const unsent = refusal !== null || overflow?.context.breach.source === "preflight";
       const serialized = serializeError(error);
-      if (refusal === null) costs.addUnknown(turn, `the call failed before returning a cost (${serialized.name})`);
+      if (!unsent) costs.addUnknown(turn, `the call failed before returning a cost (${serialized.name})`);
       const failed = await record({ kind: "turn_failed", at: clock.now(), turn, error: serialized });
       if (failed !== null) return recordsFailed(failed);
+      if (overflow !== null) {
+        return conclude({ kind: "context_budget_exceeded", turn, source: overflow.context.breach.source, error: overflow, detail: `turn ${turn}: ${overflow.message}` });
+      }
       if (refusal !== null) {
         return conclude({
           kind: "refused",
@@ -229,6 +245,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     }
 
     costs.add(turn, result.cost);
+    priorInputTokens = result.reportedInputTokens;
     const turnRecorded = await record({
       kind: "turn",
       at: clock.now(),

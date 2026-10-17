@@ -82,7 +82,7 @@ export interface AttemptRecordSink {
 
 export function toRecordedOutcome(outcome: Outcome): RecordedOutcome {
   const { kind } = outcome;
-  if (kind === "transport_exhausted" || kind === "environment_failure" || kind === "refused") {
+  if (kind === "transport_exhausted" || kind === "environment_failure" || kind === "refused" || kind === "context_budget_exceeded") {
     const { error, ...rest } = outcome;
     return { ...rest, error: serializeError(error) };
   }

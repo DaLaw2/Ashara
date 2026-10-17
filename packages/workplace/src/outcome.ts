@@ -1,4 +1,4 @@
-import type { CostMeasurement, PreCallRefusal } from "@ashara/finance";
+import type { ContextBudgetExceeded, CostMeasurement, PreCallRefusal } from "@ashara/finance";
 
 /** A turn whose cost is not known, and why. */
 interface UnmeasuredTurn {
@@ -79,6 +79,17 @@ export type Outcome =
       readonly outputTokens: number | null;
       /** The tool calls the cut turn carried, none of them executed. */
       readonly droppedToolCalls: number;
+    })
+  | (OutcomeBase & {
+      /**
+       * A turn's input would not fit its model's context window (`preflight`: the request was not
+       * sent), or the provider rejected it as longer than the window (`provider`). A failure of the
+       * attempt, routed as any other; there is no reduction and retry within the attempt.
+       */
+      readonly kind: "context_budget_exceeded";
+      readonly turn: number;
+      readonly source: "preflight" | "provider";
+      readonly error: ContextBudgetExceeded;
     })
   | (OutcomeBase & { readonly kind: "turn_cap"; readonly maxTurns: number })
   | (OutcomeBase & { readonly kind: "wall_clock"; readonly wallClockMs: number; readonly elapsedMs: number })

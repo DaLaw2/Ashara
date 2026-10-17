@@ -69,6 +69,7 @@ describe("Anthropic prompt caching on agent turns", () => {
         ],
         tools: { read_file: { description: "Read a file", inputSchema: { type: "object", properties: { path: { type: "string" } } } } },
         abortSignal: new AbortController().signal,
+        priorInputTokens: 1200,
       });
 
     const body = BodySchema.parse(bodies[0]);

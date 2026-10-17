@@ -176,6 +176,15 @@ describe("lifecycle simulator, directed", () => {
     expect(result.outcome, JSON.stringify(result.outcome)).toMatchObject({ kind: "accepted" });
   }, 90_000);
 
+  // The window guard (m3-scope X3): the provider rejects the first implementation attempt's turn as
+  // longer than the model's context window. The gateway reads that from the error data, the attempt
+  // ends typed context_budget_exceeded, the failure router retries it, and the task still completes.
+  it("ends an attempt whose turn the provider rejects as over its context window as context_budget_exceeded", async () => {
+    const result = await adversarial([implementation("agent.context-overflow", 1)]);
+    expectReached(result, ["agent-runner context-overflow"], [], ["context_budget_exceeded"]);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
   // (e) The turn cap ends an attempt after its first edit; the task still completes.
   it("ends an attempt at its turn cap in the middle of its edits", async () => {
     const result = await adversarial([implementation("agent.turn-cap-mid-edit", 1)]);

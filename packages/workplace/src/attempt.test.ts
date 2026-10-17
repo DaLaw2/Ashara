@@ -4,7 +4,7 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
-import { PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
+import { ContextBudgetExceeded, PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult, CostMeasurement } from "@ashara/finance";
 import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
@@ -50,6 +50,7 @@ function turn(calls: readonly Call[], options: { text?: string; finishReason?: C
     rawFinishReason: null,
     usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
     reportedOutputTokens: 10,
+    reportedInputTokens: 100,
     cost: options.cost ?? MEASURED,
     provider: "fake",
     model: "fake-model",
@@ -409,6 +410,49 @@ describe("runAttempt", () => {
     // The refused request was never sent: the attempt's cost stays measured.
     expect(outcome.cost).toEqual({ measured: true, totalUsd: MEASURED.totalCost, turns: 1 });
     expect(outcome.detail).toContain("refused before it was sent");
+  });
+
+  // The window guard: each turn is sent the input the provider reported for the one before it, and a
+  // turn that does not fit its window ends the attempt typed, never as a transport failure.
+  it("ends as context_budget_exceeded when the window guard stops a turn, which was never sent", async () => {
+    const breach = new ContextBudgetExceeded({
+      provider: "fake",
+      model: "fake-model",
+      windowTokens: 100_000,
+      outputReserveTokens: 16_384,
+      breach: { source: "preflight", projectedInputTokens: 90_000, basis: "100 reported for the previous request plus a tail" },
+    });
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "list_directory", input: {} }]),
+      () => {
+        throw breach;
+      },
+    ]);
+
+    const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+
+    expect(requests.map((r) => r.priorInputTokens)).toEqual([null, 100]);
+    expect(outcome).toMatchObject({ kind: "context_budget_exceeded", turn: 2, source: "preflight", error: breach, turnsUsed: 2 });
+    expect(outcome.detail).toContain("context_budget_exceeded");
+    // Never sent: the attempt's cost stays measured.
+    expect(outcome.cost).toEqual({ measured: true, totalUsd: MEASURED.totalCost, turns: 1 });
+  });
+
+  it("ends as context_budget_exceeded when the provider rejects a turn as longer than its window", async () => {
+    const breach = new ContextBudgetExceeded(
+      { provider: "fake", model: "fake-model", windowTokens: 100_000, outputReserveTokens: 16_384, breach: { source: "provider", providerMessage: "prompt is too long" } },
+      { cause: new Error("HTTP 400") },
+    );
+    const { llm } = scriptedLlm([
+      () => {
+        throw breach;
+      },
+    ]);
+
+    const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+
+    expect(outcome).toMatchObject({ kind: "context_budget_exceeded", turn: 1, source: "provider", error: breach });
+    expect(outcome.cost).toMatchObject({ measured: false, unmeasuredTurns: [{ turn: 1 }] });
   });
 
   it("marks the attempt unmeasured when the gateway could not price a turn", async () => {

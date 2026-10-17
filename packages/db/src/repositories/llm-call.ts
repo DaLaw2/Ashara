@@ -30,6 +30,8 @@ export type LlmCallMeasurement = {
   readonly cacheWriteTokens: number | null;
   /** Output tokens the provider reported as reasoning; `null` when it reported no such count. */
   readonly reasoningTokens: number | null;
+  /** The context window of the model the call was sent to (model_configs.max_context_tokens), migration 074. */
+  readonly contextWindowTokens: number;
   readonly costUsd: number | null;
   /** Why the provider stopped (`no-response` when the request threw before one arrived). */
   readonly finishReason: string;
@@ -178,6 +180,7 @@ export class LlmCallRepository {
         cacheReadTokens: measured.cacheReadTokens,
         cacheWriteTokens: measured.cacheWriteTokens,
         reasoningTokens: measured.reasoningTokens,
+        contextWindowTokens: measured.contextWindowTokens,
         costUsd: measured.costUsd,
         finishReason: measured.finishReason,
         outcome: measured.outcome,

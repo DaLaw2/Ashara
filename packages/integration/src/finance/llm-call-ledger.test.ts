@@ -599,6 +599,7 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
       messages: [{ role: "user", content: "Read a.txt" }],
       tools: { read_file: READ_FILE },
       abortSignal: new AbortController().signal,
+      priorInputTokens: null,
     });
   }
 
@@ -756,6 +757,7 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
       // @ts-expect-error TurnToolSchema types `execute` as never: the gateway never runs a tool
       tools: { read_file: executable },
       abortSignal: new AbortController().signal,
+      priorInputTokens: null,
     });
 
     await expect(call).rejects.toThrow(/execute function/);

@@ -61,6 +61,24 @@ describe("toModelConfig", () => {
     });
 });
 
+describe("toModelConfig: the context window has no default", () => {
+    test("loads the catalogued window as it is", () => {
+        expect(toModelConfig("model_configs", validCatalog().models[0]!).maxContextTokens).toBe(200000);
+    });
+
+    test.each([0, -1, 1.5, Number.NaN])("refuses window %s at boot, naming the model", (maxContextTokens) => {
+        const model = { ...validCatalog().models[0]!, maxContextTokens };
+        expect(() => toModelConfig("model_configs", model)).toThrow(InvalidGatewayCatalog);
+        expect(() => toModelConfig("model_configs", model)).toThrow(/test-model: maxContextTokens .* is not a positive integer/);
+    });
+
+    test("refuses a row that carries no window at all", () => {
+        const { maxContextTokens: _dropped, ...withoutWindow } = validCatalog().models[0]!;
+        const row: Parameters<typeof toModelConfig>[1] = Object.assign(withoutWindow, { maxContextTokens: undefined as unknown as number });
+        expect(() => toModelConfig("model_configs", row)).toThrow(/test-model: maxContextTokens undefined is not a positive integer/);
+    });
+});
+
 describe("buildGatewayConfig reads the provider type, not the name", () => {
     const model = toModelConfig("model_configs", { ...validCatalog().models[0]!, providerName: "ollama" });
 

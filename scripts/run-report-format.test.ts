@@ -17,7 +17,7 @@ function session(id: number, attempt: Session["attempt"], phase: string, created
 }
 
 function agentCalls(...at: readonly string[]): TaskCall[] {
-  return at.map((t) => ({ callSite: "agent-runner", createdAt: new Date(t), agentTurn: true, costUsd: 0.01, inputTokens: null }));
+  return at.map((t) => ({ callSite: "agent-runner", createdAt: new Date(t), agentTurn: true, costUsd: 0.01, inputTokens: null, contextWindowTokens: 200_000 }));
 }
 
 function evidence(tasks: readonly Omit<Task, "title" | "status">[]): Evidence {
@@ -62,7 +62,7 @@ describe("formatRunReport UNTIED: only an agent call that matches no attempt", (
   });
 
   test("a review of the plan's suites, with no dev session, is listed by its site and is not untied", () => {
-    const text = formatRunReport(evidence([{ taskId: TASK, sessions: [], calls: [{ callSite: "suite-review", createdAt: new Date("2026-10-16T03:18:46.109Z"), agentTurn: false, costUsd: 0.01, inputTokens: null }] }])).text;
+    const text = formatRunReport(evidence([{ taskId: TASK, sessions: [], calls: [{ callSite: "suite-review", createdAt: new Date("2026-10-16T03:18:46.109Z"), agentTurn: false, costUsd: 0.01, inputTokens: null, contextWindowTokens: 200_000 }] }])).text;
     expect(text).not.toContain("UNTIED:");
     expect(text).toContain("1 call(s) by suite-review: not an attempt's turn");
     expect(text).toContain("0 task(s) UNTIED");
@@ -114,7 +114,14 @@ describe("formatRunReport cost per Epic and goal task", () => {
   const goal = (n: number, epic: number) => item(n, epic, { workKind: "implementation", origin: "decomposition", title: `goal ${n}` });
   const check = (n: number, epic: number, of: number) => item(n, epic, { workKind: "check", origin: "check", checksFor: id(of) });
   const repair = (n: number, epic: number, of: number) => item(n, epic, { workKind: "environment", origin: "environment-change", dependents: [id(of)] });
-  const call = (minute: number, costUsd: number | null, inputTokens: number | null): TaskCall => ({ callSite: "agent-runner", createdAt: T(minute, 30), agentTurn: true, costUsd, inputTokens });
+  const call = (minute: number, costUsd: number | null, inputTokens: number | null, contextWindowTokens: number | null = 100_000): TaskCall => ({
+    callSite: "agent-runner",
+    createdAt: T(minute, 30),
+    agentTurn: true,
+    costUsd,
+    inputTokens,
+    contextWindowTokens,
+  });
 
   // A goal task's first session runs from minute m, its rework session from minute m + 2.
   function goalSessions(m: number): Session[] {
@@ -184,10 +191,12 @@ describe("formatRunReport cost per Epic and goal task", () => {
     expect(report.attributionViolation).toBe(false);
     expect(lineOf(text, `Epic ${id(0xe1)} Epic A:`)).toBe(
       `  Epic ${id(0xe1)} Epic A: spend $0.420000 over 1 goal task(s), $0.420000 per goal task; ` +
-        `mean input tokens per agent call 1650 (6600 over 4 call(s); 1 without input tokens excluded)`,
+        `mean input tokens per agent call 1650 (6600 over 4 call(s); 1 without input tokens excluded); ` +
+        `peak context utilisation 3.0% (call 2026-10-16T03:12:30.000Z agent-runner) over 4 call(s); 1 call(s) of unknown utilisation excluded`,
     );
     expect(lineOf(text, `Epic ${id(0xe2)} Epic B:`)).toBe(
-      `  Epic ${id(0xe2)} Epic B: spend $0.320000 over 2 goal task(s), $0.160000 per goal task; mean input tokens per agent call 2875 (23000 over 8 call(s))`,
+      `  Epic ${id(0xe2)} Epic B: spend $0.320000 over 2 goal task(s), $0.160000 per goal task; mean input tokens per agent call 2875 (23000 over 8 call(s)); ` +
+        `peak context utilisation 9.0% (call 2026-10-16T03:06:30.000Z agent-runner) over 8 call(s)`,
     );
     expect(lineOf(text, `goal task ${id(0x11)}`)).toBe(
       `    goal task ${id(0x11)} [Completed] goal 17: own $0.150000 (first session $0.100000, rework $0.050000); ` +
@@ -219,6 +228,31 @@ describe("formatRunReport cost per Epic and goal task", () => {
     const report = formatRunReport(costEvidence(workItems.filter((w) => w.id !== id(0x50)), taskCalls));
     expect(report.attributionViolation).toBe(true);
     expect(report.text).toContain(`VIOLATION: the attribution accounts for 13 of 14 llm_calls row(s) and $0.717000 of $0.747000; task(s) ${id(0x50)} are no work item of the project`);
+  });
+
+  // m3-scope C5: each call's input over its model's window, and each Epic's peak. A call with no
+  // input tokens reported, or no window recorded, is unknown, never 0%.
+  test("prints each call's context utilisation, unknown (never 0%) when its input tokens or window are not on record", () => {
+    const calls = [call(10, 0.1, 30_000, 200_000), call(11, 0.1, null, 200_000), call(12, 0.1, 5000, null)];
+    const report = formatRunReport(costEvidence(workItems, new Map([...taskCalls, [0x11, { sessions: goalSessions(10), calls }]])));
+    const lines = report.text.split("\n");
+    const at = lines.findIndex((l) => l === `task ${id(0x11)} [Completed] item 17`);
+    const heading = lines.indexOf("  context utilisation per call (input tokens over the model's window):", at);
+    expect(lines.slice(heading + 1, heading + 4)).toEqual([
+      "    2026-10-16T03:10:30.000Z agent-runner: 15.0% (30000 of 200000 tokens)",
+      "    2026-10-16T03:11:30.000Z agent-runner: unknown (no input tokens reported)",
+      "    2026-10-16T03:12:30.000Z agent-runner: unknown (no window recorded (a row recorded before migration 074, or not recorded yet))",
+    ]);
+    expect(report.text).not.toMatch(/agent-runner: 0\.0%/);
+    expect(lineOf(report.text, `Epic ${id(0xe1)} Epic A:`)).toContain(
+      "peak context utilisation 15.0% (call 2026-10-16T03:10:30.000Z agent-runner) over 3 call(s); 3 call(s) of unknown utilisation excluded",
+    );
+  });
+
+  test("an Epic none of whose calls has a known utilisation prints it unknown, never 0%", () => {
+    const unmeasured = new Map([...taskCalls].map(([n, t]) => [n, { sessions: t.sessions, calls: t.calls.map((c) => ({ ...c, inputTokens: null })) }]));
+    const report = formatRunReport(costEvidence(workItems, unmeasured));
+    expect(lineOf(report.text, `Epic ${id(0xe2)} Epic B:`)).toContain("peak context utilisation unknown (no call of 8 has a known utilisation)");
   });
 
   test("an unmeasured call is counted apart, never read as $0 spend", () => {

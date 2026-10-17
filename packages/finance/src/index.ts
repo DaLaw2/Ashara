@@ -42,6 +42,8 @@ export type {
 // A provider's failure, naming the party at fault, as modelCallFailureOf reads it: a caller's own class
 // for a provider failure it detects in an answer extends it (Workplace's ProviderErrorFinish).
 export { ProviderError } from "@ashara/model-access";
+// An agent turn that would not fit, or did not fit, its model's context window: its attempt ends on it.
+export { ContextBudgetExceeded } from "@ashara/model-access";
 // A second opinion the catalog cannot serve at a strength, or that got no answer at it: its caller
 // moves to the next strength or reports it as failed.
 export { SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/model-access";

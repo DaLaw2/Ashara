@@ -21,6 +21,7 @@ const STOPPED: CostedTurnResult = {
   rawFinishReason: null,
   usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
   reportedOutputTokens: 1,
+  reportedInputTokens: 1,
   cost: { measured: true, inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0 },
   provider: "fake",
   model: "fake-model",

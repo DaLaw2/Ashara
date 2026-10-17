@@ -24,6 +24,12 @@ export interface TurnRequest {
   readonly messages: readonly ModelMessage[];
   readonly tools: Readonly<Record<string, TurnToolSchema>>;
   readonly abortSignal: AbortSignal;
+  /**
+   * The input tokens the provider reported for the attempt's previous turn (TurnResult
+   * reportedInputTokens); null on the first turn, or when the provider reported none. The window
+   * guard projects this turn's input from it (context-window.ts).
+   */
+  readonly priorInputTokens: number | null;
 }
 
 /**
@@ -56,6 +62,8 @@ export interface TurnResult {
   readonly usage: TokenUsage;
   /** The output token count the provider reported, `null` when it reported none. */
   readonly reportedOutputTokens: number | null;
+  /** The input token count the provider reported, `null` when it reported none: the next turn's `priorInputTokens`. */
+  readonly reportedInputTokens: number | null;
   readonly provider: string;
   readonly model: string;
 }

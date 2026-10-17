@@ -575,12 +575,14 @@ describe("a turn refused at the project's spend cap", () => {
       projectId,
     });
 
-    // Turn 1 is admitted and records $10 of spend; turn 2 then cannot fit under the $5 project cap.
+    // The cap is $0.20. Turn 1's worst case (16,384 output tokens at $10/1M, about $0.164, plus its
+    // input) fits and it records about $0.05 of spend; turn 2's worst case on top of that cannot fit.
+    // Turn 1's input stays inside the model's window, so the window guard never decides this turn.
     const mock = new MockLanguageModelV4({
       doGenerate: async () => ({
         content: [{ type: "tool-call" as const, toolCallId: `tc-${randomUUID()}`, toolName: "run_command", input: JSON.stringify({ command: "true" }) }],
         usage: {
-          inputTokens: { total: 10_000_000, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+          inputTokens: { total: 50_000, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
           outputTokens: { total: 50, text: 50, reasoning: undefined },
         },
         finishReason: { unified: "tool-calls" as const, raw: "tool_calls" },
@@ -588,7 +590,7 @@ describe("a turn refused at the project's spend cap", () => {
       }),
     });
     stub.model = mock;
-    const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 5 } });
+    const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 0.2 } });
     const gateway = gatewayOn(spendCap, calls);
     const dispatchService = new DispatchService({
       config: { workdirBase },

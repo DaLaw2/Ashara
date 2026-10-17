@@ -195,6 +195,17 @@ function priceTierIssues(model: CatalogModel): string[] {
   return issues;
 }
 
+/**
+ * Why a model's context window cannot be used: it is not a positive integer. The window has no
+ * default anywhere (migration 054): a model whose window is unknown cannot have its turns guarded
+ * (context-window.ts), so it fails the catalog at boot rather than run unguarded.
+ */
+function windowIssues(model: CatalogModel): string[] {
+  const window: unknown = model.maxContextTokens;
+  if (typeof window === "number" && Number.isInteger(window) && window > 0) return [];
+  return [`${model.modelId}: maxContextTokens ${String(window)} is not a positive integer; the model's context window must be catalogued`];
+}
+
 function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogModel): TokenRates {
   return {
     inputCostPer1M: rates.inputCostPer1m,
@@ -207,11 +218,12 @@ function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogMode
 /**
  * One catalog model (a model_configs row with its model_price_windows and
  * model_price_tiers) as the gateway's {@link ModelConfig}. Throws
- * {@link InvalidGatewayCatalog} naming `source` when its price windows or tiers
- * cannot be applied unambiguously.
+ * {@link InvalidGatewayCatalog} naming `source` and the model when its context
+ * window is not a positive integer, or its price windows or tiers cannot be
+ * applied unambiguously.
  */
 export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
-  const issues = [...priceWindowIssues(m), ...priceTierIssues(m)];
+  const issues = [...windowIssues(m), ...priceWindowIssues(m), ...priceTierIssues(m)];
   if (issues.length > 0) throw new InvalidGatewayCatalog(source, issues);
   return {
     id: m.modelId,

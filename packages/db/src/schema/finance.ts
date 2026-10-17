@@ -39,6 +39,9 @@ export const llmCalls = pgTable(
     // Migration 053: 'pending' from admission to record, 'recorded' after it, 'unmeasured_after_crash'
     // when a later process's startup found it pending. A row in every state counts against the cap.
     state: text().notNull(),
+    // Migration 075: the window of the model the call was sent to, written with its record; its
+    // utilisation is inputTokens over it. NULL on rows recorded before it and on rows not recorded yet.
+    contextWindowTokens: integer("context_window_tokens"),
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),

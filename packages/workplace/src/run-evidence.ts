@@ -83,6 +83,7 @@ const TaskCallRowSchema = z.object({
   createdAt: z.coerce.date(),
   costUsd: usd.nullable(),
   inputTokens: count.nullable(),
+  contextWindowTokens: z.number().int().positive().nullable(),
 });
 
 const WorkItemRowSchema = z.object({
@@ -132,7 +133,8 @@ interface SessionEvidence {
  * One llm_calls row of a task, when it was admitted and by which site. `agentTurn`: its site is
  * AGENT_CALL_SITE, the only site an attempt calls as, so it belongs to one of the task's dev
  * sessions; a call of any other site is no attempt's turn. `costUsd` is NULL when no cost was
- * measured, `inputTokens` when the provider reported none.
+ * measured, `inputTokens` when the provider reported none, `contextWindowTokens` (the window of the
+ * model it was sent to, migration 074) on a row recorded before that migration or not recorded yet.
  */
 interface TaskCall {
   readonly callSite: string;
@@ -140,6 +142,7 @@ interface TaskCall {
   readonly agentTurn: boolean;
   readonly costUsd: number | null;
   readonly inputTokens: number | null;
+  readonly contextWindowTokens: number | null;
 }
 
 /**
@@ -269,7 +272,7 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
 
   const taskCallRows = await db.execute(sql`
     SELECT task_id AS "taskId", call_site AS "callSite", created_at AS "createdAt",
-           cost_usd::float8 AS "costUsd", input_tokens AS "inputTokens"
+           cost_usd::float8 AS "costUsd", input_tokens AS "inputTokens", context_window_tokens AS "contextWindowTokens"
     FROM llm_calls
     WHERE project_id = ${projectId} AND task_id IS NOT NULL
     ORDER BY created_at, id`);
@@ -291,7 +294,7 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
       sessions: sessions.filter((s) => s.taskId === task.taskId).map((s) => toSession(s, attemptColumnsSince)),
       calls: taskCalls
         .filter((c) => c.taskId === task.taskId)
-        .map((c) => ({ callSite: c.callSite, createdAt: c.createdAt, agentTurn: c.callSite === AGENT_CALL_SITE, costUsd: c.costUsd, inputTokens: c.inputTokens })),
+        .map((c) => ({ callSite: c.callSite, createdAt: c.createdAt, agentTurn: c.callSite === AGENT_CALL_SITE, costUsd: c.costUsd, inputTokens: c.inputTokens, contextWindowTokens: c.contextWindowTokens })),
     })),
     calls,
     workItems,

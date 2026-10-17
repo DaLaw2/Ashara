@@ -77,6 +77,8 @@ export interface AdversaryRates {
   readonly emptyTurn: number;
   /** A call spends its whole output bound on reasoning and returns no answer. */
   readonly reasoningExhausted: number;
+  /** The provider rejects an agent turn as longer than the model's context window (HTTP 400, its error data says so). */
+  readonly contextOverflow: number;
   /** The attempt runs out of turns after some of its edits and before the rest, leaving that work uncommitted. */
   readonly turnCapMidEdit: number;
   /** A structured answer is cut at the output limit in the middle of its object. */
@@ -94,7 +96,7 @@ export interface FaultRates {
 
 /** No response-level misbehaviour: the profiles the stand-ins cooperate under at the response level. */
 const COOPERATIVE_RESPONSES = {
-  sharedFileEdit: 0, conflictMarkersLeft: 0, truncatedTurn: 0, emptyTurn: 0, reasoningExhausted: 0, turnCapMidEdit: 0,
+  sharedFileEdit: 0, conflictMarkersLeft: 0, truncatedTurn: 0, emptyTurn: 0, reasoningExhausted: 0, contextOverflow: 0, turnCapMidEdit: 0,
   truncatedStructured: 0, emptyStructured: 0,
 } as const;
 
@@ -116,7 +118,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     allGuardSet: 0.1, outOfVisionCheck: 0.2, flakyCheck: 0.1, unrunnableCheck: 0.1, authorWritesProduct: 0.4, refusal: 0.05,
     timeout: 0.1, invalidOutput: 0.2, disputeRight: 0.9, disputeWrong: 0.2, reviewCatch: 0.7, reviewMisread: 0.1, unaskedReading: 0.2, recipeDefect: 0.15,
     interfaceLeftStale: 0.5, lateChange: 0.2, clientStop: 0.05, lowBudget: 0.1,
-    sharedFileEdit: 0.15, conflictMarkersLeft: 0.2, truncatedTurn: 0.02, emptyTurn: 0.02, reasoningExhausted: 0.02, turnCapMidEdit: 0.05,
+    sharedFileEdit: 0.15, conflictMarkersLeft: 0.2, truncatedTurn: 0.02, emptyTurn: 0.02, reasoningExhausted: 0.02, contextOverflow: 0, turnCapMidEdit: 0.05,
     truncatedStructured: 0.02, emptyStructured: 0.02,
   },
   chaos: {
@@ -124,7 +126,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     allGuardSet: 0.2, outOfVisionCheck: 0.3, flakyCheck: 0.2, unrunnableCheck: 0.2, authorWritesProduct: 0.6, refusal: 0.1,
     timeout: 0.2, invalidOutput: 0.3, disputeRight: 0.9, disputeWrong: 0.4, reviewCatch: 0.5, reviewMisread: 0.2, unaskedReading: 0.3, recipeDefect: 0.3,
     interfaceLeftStale: 0.6, lateChange: 0.3, clientStop: 0.1, lowBudget: 0.2,
-    sharedFileEdit: 0.3, conflictMarkersLeft: 0.3, truncatedTurn: 0.04, emptyTurn: 0.04, reasoningExhausted: 0.04, turnCapMidEdit: 0.1,
+    sharedFileEdit: 0.3, conflictMarkersLeft: 0.3, truncatedTurn: 0.04, emptyTurn: 0.04, reasoningExhausted: 0.04, contextOverflow: 0, turnCapMidEdit: 0.1,
     truncatedStructured: 0.04, emptyStructured: 0.04,
   },
   adversarial: {
@@ -133,7 +135,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     timeout: 0.02, invalidOutput: 0.05, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, reviewMisread: 0.3, unaskedReading: 0.2, recipeDefect: 0.05,
     interfaceLeftStale: 0.3, lateChange: 0.1, clientStop: 0.02, lowBudget: 0,
     // A stalled attempt spends its whole turn cap; each unpriced stand-in call counts at its worst-case estimate.
-    sharedFileEdit: 0.7, conflictMarkersLeft: 0.3, truncatedTurn: 0.06, emptyTurn: 0.06, reasoningExhausted: 0.05, turnCapMidEdit: 0.08,
+    // A context overflow is drawn under this profile only: the one that exists to draw response-level misbehaviour.
+    sharedFileEdit: 0.7, conflictMarkersLeft: 0.3, truncatedTurn: 0.06, emptyTurn: 0.06, reasoningExhausted: 0.05, contextOverflow: 0.04, turnCapMidEdit: 0.08,
     truncatedStructured: 0.05, emptyStructured: 0.05,
   },
   // The personas are the adversary: the rest is typical's, with no client stop and no low budget,
