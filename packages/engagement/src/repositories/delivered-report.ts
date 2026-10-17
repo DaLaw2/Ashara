@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, goalTaskSql, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, goalTaskSql, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItemClaims, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
@@ -462,13 +462,13 @@ function undecidedIdentity(item: { readonly id: string; readonly text: string })
   return JSON.stringify([item.id, item.text]);
 }
 
-/** An undecided_items row ties its item to neither a judgement nor a claim, or to both, which undecided_items_one_source forbids. */
+/** An undecided_items row ties its item to neither a judgement nor a claim, which undecided_items_one_source and undecided_items_claim_linked forbid. */
 class UndecidedItemUnsourced extends ReportRecordUnreadable {
   constructor(
     readonly itemId: string,
     readonly detail: string,
   ) {
-    super(`undecided item ${itemId}: ${detail} (undecided_items_one_source should forbid it)`);
+    super(`undecided item ${itemId}: ${detail} (undecided_items_one_source and undecided_items_claim_linked should forbid it)`);
     this.name = "UndecidedItemUnsourced";
   }
 }
@@ -499,15 +499,17 @@ interface UndecidedRecord {
   readonly strength: ReviewStrength | null;
 }
 
-/** Why one undecided_items row leaves its item undecided, from the judgement or the claim it is tied to. */
-function undecidedReason(row: { readonly id: string; readonly judgementBasis: string | null; readonly claimBasis: string | null }): Exclude<UndecidedBy, false> {
-  if (row.judgementBasis !== null && row.claimBasis !== null) throw new UndecidedItemUnsourced(row.id, "it is tied to both a judgement and a claim");
-  if (row.judgementBasis !== null) return row.judgementBasis === "second-review-failed" ? "review-failed" : "unsettled";
-  if (row.claimBasis === null) throw new UndecidedItemUnsourced(row.id, "it is tied to neither a judgement nor a claim");
-  if (row.claimBasis === "second-opinion-found") return "clean-contradicted";
+/** Why a judgement on a finding leaves its item undecided. */
+function judgementReason(basis: string): Exclude<UndecidedBy, false> {
+  return basis === "second-review-failed" ? "review-failed" : "unsettled";
+}
+
+/** Why a claim leaves an item it covers undecided. */
+function claimReason(itemId: string, basis: string): Exclude<UndecidedBy, false> {
+  if (basis === "second-opinion-found") return "clean-contradicted";
   // no-other-family: a same-provider answer that confirmed nothing, on a claim written before strengths were recorded.
-  if (row.claimBasis === "no-other-family" || row.claimBasis === "second-review-failed") return "clean-unconfirmed";
-  throw new UndecidedItemUnsourced(row.id, `its claim's basis ${JSON.stringify(row.claimBasis)} confirms the item it leaves undecided`);
+  if (basis === "no-other-family" || basis === "second-review-failed") return "clean-unconfirmed";
+  throw new UndecidedItemUnsourced(itemId, `its claim's basis ${JSON.stringify(basis)} confirms the item it leaves undecided`);
 }
 
 /** Which reason an item undecided on several check tasks is reported under: the failure first, so a failed review never reads as a disagreement. */
@@ -522,8 +524,9 @@ const REASON_RANK: Readonly<Record<Exclude<UndecidedBy, false>, number>> = {
  * The items a suite review left undecided on a check task of one of the goal tasks the sweep ran
  * by id and cited text, so the report never counts them as covered:
  * a review found no check really deciding them and nothing settled it, or the review that found no
- * problem in their checks was not confirmed. Each says why, the reason of its rows that ranks first
- * in REASON_RANK, with the strength of that row's second review.
+ * problem in their checks was not confirmed. Each says why: of the judgement that kept it and every
+ * claim tied to it (undecided_item_claims), the reason that ranks first in REASON_RANK, with the
+ * strength of that source's second review.
  */
 async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Map<string, UndecidedRecord>> {
   const rows = await db
@@ -538,16 +541,22 @@ async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly st
     .from(undecidedItems)
     .innerJoin(workItems, eq(workItems.id, undecidedItems.checkTaskId))
     .leftJoin(suiteReviewJudgements, eq(suiteReviewJudgements.id, undecidedItems.judgementId))
-    .leftJoin(suiteReviewClaims, eq(suiteReviewClaims.id, undecidedItems.claimId))
+    // Every claim tied to the item, not undecided_items.claim_id, which names only the first claim that kept it.
+    .leftJoin(undecidedItemClaims, and(eq(undecidedItemClaims.checkTaskId, undecidedItems.checkTaskId), eq(undecidedItemClaims.itemId, undecidedItems.itemId)))
+    .leftJoin(suiteReviewClaims, eq(suiteReviewClaims.id, undecidedItemClaims.claimId))
     .where(and(eq(undecidedItems.projectId, projectId), inArray(sql`${workItems.taskSpec}->>'checksFor'`, [...goalIds])));
   const undecided = new Map<string, UndecidedRecord>();
   for (const row of rows) {
     const identity = undecidedIdentity(row);
-    const reason = undecidedReason(row);
-    const strength =
-      row.judgementBasis !== null ? storedStrength("suite_review_judgements", row.judgementStrength) : storedStrength("suite_review_claims", row.claimStrength);
-    const kept = undecided.get(identity);
-    if (kept === undefined || REASON_RANK[reason] < REASON_RANK[kept.reason]) undecided.set(identity, { reason, strength });
+    const sources: UndecidedRecord[] = [
+      ...(row.judgementBasis === null ? [] : [{ reason: judgementReason(row.judgementBasis), strength: storedStrength("suite_review_judgements", row.judgementStrength) }]),
+      ...(row.claimBasis === null ? [] : [{ reason: claimReason(row.id, row.claimBasis), strength: storedStrength("suite_review_claims", row.claimStrength) }]),
+    ];
+    if (sources.length === 0) throw new UndecidedItemUnsourced(row.id, "it is tied to neither a judgement nor a claim");
+    for (const source of sources) {
+      const kept = undecided.get(identity);
+      if (kept === undefined || REASON_RANK[source.reason] < REASON_RANK[kept.reason]) undecided.set(identity, source);
+    }
   }
   return undecided;
 }

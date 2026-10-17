@@ -85,11 +85,18 @@ function firstReason(a: UndecidedReason, b: UndecidedReason): UndecidedReason {
   return UNDECIDED_REASONS.indexOf(a) <= UNDECIDED_REASONS.indexOf(b) ? a : b;
 }
 
-/** An undecided_items row's reason, from the judgement or the claim it is tied to. */
+/**
+ * An undecided_items row's reason, joined with one claim tied to it (undecided_item_claims): the earlier in UNDECIDED_REASONS of its judgement's reason and that claim's.
+ */
 const UNDECIDED_REASON_SQL = sql.raw(`CASE WHEN j.basis = 'second-review-failed' THEN 'review-failed'
-              WHEN j.id IS NOT NULL THEN 'unsettled'
               WHEN c.basis = 'second-opinion-found' THEN 'clean-contradicted'
+              WHEN c.id IS NOT NULL THEN 'clean-unconfirmed'
+              WHEN j.id IS NOT NULL THEN 'unsettled'
               ELSE 'clean-unconfirmed' END`);
+
+/** Every claim tied to an undecided_items row u, as c, not only the first that kept it. */
+const UNDECIDED_CLAIMS_SQL = sql.raw(`LEFT JOIN undecided_item_claims l ON l.check_task_id = u.check_task_id AND l.item_id = u.item_id
+          LEFT JOIN suite_review_claims c ON c.id = l.claim_id`);
 
 /**
  * A cited item a suite review left undecided (undecided_items, migrations 069, 072): its id, the
@@ -197,7 +204,7 @@ export async function readReportRecords(db: Database, projectId: string): Promis
       sql`SELECT u.item_id AS id, u.item_text AS text, ${UNDECIDED_REASON_SQL} AS reason
           FROM undecided_items u
           LEFT JOIN suite_review_judgements j ON j.id = u.judgement_id
-          LEFT JOIN suite_review_claims c ON c.id = u.claim_id
+          ${UNDECIDED_CLAIMS_SQL}
           JOIN work_items a ON a.id = u.check_task_id
           JOIN work_items g ON g.id::text = a.task_spec->>'checksFor'
           WHERE u.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
@@ -239,7 +246,7 @@ async function passedSweepsOf(
         JOIN work_items a ON a.task_spec->>'checksFor' = t.task_id
         JOIN undecided_items u ON u.check_task_id = a.id AND u.created_at <= s.created_at
         LEFT JOIN suite_review_judgements j ON j.id = u.judgement_id
-        LEFT JOIN suite_review_claims c ON c.id = u.claim_id
+        ${UNDECIDED_CLAIMS_SQL}
         WHERE s.project_id = ${projectId} AND s.passed
         ORDER BY s.id, u.item_id`,
   );

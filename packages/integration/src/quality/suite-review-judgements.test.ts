@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
+import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
 import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
@@ -356,6 +357,78 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     await claim("second-opinion-clean", "p/m", "same-model", null);
     await claim("second-review-failed", null, null, "no second opinion answered");
     await expect(db.execute(sql`UPDATE suite_review_claims SET basis = 'second-opinion-clean' WHERE review_task_id = ${reviewTask}`)).rejects.toThrow();
+  });
+
+  test("a no-other-family claim, whose second opinion came from the first's provider, reads back as no-other-family, its item unverified", async () => {
+    const reviewTask = await workItem("Review with a same-provider second opinion");
+    const checkTask = await workItem("Checks with a same-provider second opinion");
+    const inserted = await db.execute(sql`
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings)
+      VALUES (${projectId}, ${reviewTask}, 'no-other-family', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'p/n', 'same-family-other-model', '[]'::jsonb, '[]'::jsonb)
+      RETURNING id`);
+    const claimId = z.array(z.object({ id: z.string() })).parse(inserted.rows)[0]?.id;
+    await db.execute(sql`
+      WITH tie AS (INSERT INTO undecided_item_claims (claim_id, check_task_id, item_id) VALUES (${claimId}, ${checkTask}, 'S1'))
+      INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, claim_id)
+      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'S1', 'Keys can be stored', ${claimId})`);
+    const read = (await suiteReviewClaimsOf(db, projectId)).filter((claim) => claim.reviewTaskId === reviewTask);
+    expect(read).toEqual([
+      {
+        reviewTaskId: reviewTask,
+        basis: "no-other-family",
+        covered: [checkTask],
+        firstModel: "p/m",
+        passedOver: [],
+        unverified: [{ checkTaskId: checkTask, itemId: "S1", itemText: "Keys can be stored" }],
+        second: { kind: "answered", model: "p/n", strength: "same-family-other-model", findings: [] },
+      },
+    ]);
+  });
+
+  test("an undecided item tied to a claim is refused without that claim's tie in undecided_item_claims", async () => {
+    const reviewTask = await workItem("Review with an untied claim item");
+    const checkTask = await workItem("Checks with an untied claim item");
+    const inserted = await db.execute(sql`
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, passed_over, second_findings, second_failure)
+      VALUES (${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([checkTask])}::jsonb, 'p/m', '[]'::jsonb, '[]'::jsonb, 'no second opinion answered')
+      RETURNING id`);
+    const claimId = z.array(z.object({ id: z.string() })).parse(inserted.rows)[0]?.id;
+    await expect(
+      db.execute(sql`
+        INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, claim_id)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'S1', 'Keys can be stored', ${claimId})`),
+    ).rejects.toThrow();
+    await db.execute(sql`DELETE FROM suite_review_claims WHERE id = ${claimId}`);
+  });
+
+  test("an item two claims on one check task leave undecided is kept once and listed under both claims", async () => {
+    const impl = await task("Durable put", { origin: "decomposition" }, "implementation");
+    const check = await task("Checks of Durable put", { origin: "check", checksFor: impl }, "check");
+    const repository = new SuiteReviewJudgementRepository(db);
+    const item = { checkTaskId: check, itemId: "S9", itemText: "put survives a power loss" };
+    const found = { checkTasks: [check], kind: "undecided-item" as const, item: "S9", problem: "no check distinguishes fsynced from written data", evidence: "sh put.sh" };
+    const first = parseWorkItemId(await workItem("First review of Durable put"), "test review task");
+    await repository.record({
+      projectId,
+      reviewTaskId: first,
+      judgements: [],
+      claim: { basis: "second-opinion-found", covered: [check], firstModel: FIRST, secondReview: { first: FIRST, second: { provider: "second", model: "strong-b" }, strength: "other-family" }, passedOver: [], second: [found], secondFailure: null, unconfirmed: [item] },
+    });
+    const later = parseWorkItemId(await workItem("Later review of Durable put"), "test review task");
+    await repository.record({
+      projectId,
+      reviewTaskId: later,
+      judgements: [],
+      claim: { basis: "second-review-failed", covered: [check], firstModel: FIRST, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item] },
+    });
+
+    const kept = await db.execute(sql`SELECT review_task_id AS "reviewTaskId" FROM undecided_items WHERE check_task_id = ${check}`);
+    expect(kept.rows).toEqual([{ reviewTaskId: first }]);
+    const read = (await suiteReviewClaimsOf(db, projectId)).filter((claim) => claim.covered.includes(check));
+    expect(read.map((claim) => [claim.reviewTaskId, claim.basis, claim.unverified])).toEqual([
+      [first, "second-opinion-found", [item]],
+      [later, "second-review-failed", [item]],
+    ]);
   });
 
   test("the first task dispatched on a review's check set freezes it once, with the set as it stood; the freeze is never updated", async () => {

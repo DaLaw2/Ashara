@@ -24,10 +24,8 @@
  */
 
 import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
-import { suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import { describeErrorChain, parseProjectId } from "@ashara/shared";
-import { readRunEvidence } from "@ashara/workplace";
-import { formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
+import { runReport } from "./run-report-body.js";
 
 class RunReportUsageError extends Error {
   constructor(detail: string) {
@@ -44,11 +42,9 @@ async function main(): Promise<void> {
 
   const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   try {
-    const report = formatRunReport(await readRunEvidence(db, projectId));
+    const report = await runReport(db, projectId);
     console.log(report.text);
-    console.log(formatSuiteReviewJudgements(await suiteReviewJudgementsOf(db, projectId)));
-    console.log(formatSuiteReviewClaims(await suiteReviewClaimsOf(db, projectId)));
-    if (report.zeroCostCalls > 0 || report.attributionViolation) process.exitCode = 1;
+    if (report.failed) process.exitCode = 1;
   } finally {
     await db.$client.end();
   }

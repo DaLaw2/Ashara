@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItems } from "@ashara/db";
+import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItemClaims, undecidedItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
@@ -267,13 +267,22 @@ interface UndecidedRow {
   readonly claimId: string | null;
 }
 
+/**
+ * Keeps each item undecided and ties it to every claim that leaves it so. One
+ * undecided_items row per check task and item: an item an earlier round, or this round's judgement,
+ * kept is not written again, but a claim leaving it undecided is still tied to it, so the item reads
+ * back under every claim that keeps it, never under the first alone.
+ */
 async function keepUndecided(tx: DbTransaction, projectId: string, reviewTaskId: string, rows: readonly UndecidedRow[]): Promise<void> {
   if (rows.length === 0) return;
-  // One row per check task and item: an item a later round, or this round's judgement, leaves undecided is already kept.
   await tx
     .insert(undecidedItems)
     .values(rows.map((item) => ({ projectId, reviewTaskId, ...item })))
     .onConflictDoNothing({ target: [undecidedItems.checkTaskId, undecidedItems.itemId] });
+  const claimed = rows.flatMap(({ claimId, checkTaskId, itemId }) => (claimId === null ? [] : [{ claimId, checkTaskId, itemId }]));
+  if (claimed.length === 0) return;
+  // A claim that names one item twice is tied to it once.
+  await tx.insert(undecidedItemClaims).values(claimed).onConflictDoNothing();
 }
 
 function modelText(model: { readonly provider: string; readonly model: string }): string {
@@ -366,7 +375,7 @@ const StoredClaimSchema = z
 export type StoredClaim = z.infer<typeof StoredClaimSchema>;
 
 /**
- * One suite_review_claims row with the undecided_items tied to it, parsed whole. The strength is read
+ * One suite_review_claims row with the undecided items tied to it (undecided_item_claims), parsed whole. The strength is read
  * first: one that is no strength of second opinion, or a confirmed claim with none, throws
  * SuiteReviewStrengthUnreadable, so no claim reads as verified at a strength the record does not hold.
  * @testseam exported for suite-review.test.ts; suiteReviewClaimsOf is its production caller
@@ -404,15 +413,23 @@ export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Prom
     .where(eq(suiteReviewClaims.projectId, projectId))
     .orderBy(asc(suiteReviewClaims.createdAt), asc(suiteReviewClaims.id));
   if (rows.length === 0) return [];
+  // Through every claim's tie, not undecided_items.claim_id, which names only the first claim that kept the item.
   const items = await db
-    .select({ claimId: undecidedItems.claimId, checkTaskId: undecidedItems.checkTaskId, itemId: undecidedItems.itemId, itemText: undecidedItems.itemText })
-    .from(undecidedItems)
-    .where(inArray(undecidedItems.claimId, rows.map((row) => row.id)))
-    .orderBy(asc(undecidedItems.checkTaskId), asc(undecidedItems.itemId));
+    .select({ claimId: undecidedItemClaims.claimId, checkTaskId: undecidedItemClaims.checkTaskId, itemId: undecidedItemClaims.itemId, itemText: undecidedItems.itemText })
+    .from(undecidedItemClaims)
+    .leftJoin(undecidedItems, and(eq(undecidedItems.checkTaskId, undecidedItemClaims.checkTaskId), eq(undecidedItems.itemId, undecidedItemClaims.itemId)))
+    .where(inArray(undecidedItemClaims.claimId, rows.map((row) => row.id)))
+    .orderBy(asc(undecidedItemClaims.checkTaskId), asc(undecidedItemClaims.itemId));
   return rows.map(({ id, ...row }) =>
     storedClaimOf(id, {
       ...row,
-      unverified: items.filter((item) => item.claimId === id).map(({ checkTaskId, itemId, itemText }) => ({ checkTaskId, itemId, itemText })),
+      unverified: items
+        .filter((item) => item.claimId === id)
+        .map(({ checkTaskId, itemId, itemText }) => {
+          // A tie with no kept item would read as an item left unverified with no text: never listed as one.
+          if (itemText === null) throw new SuiteReviewClaimCorrupt(id, `it is tied to item ${itemId} of check task ${checkTaskId}, which no undecided_items row keeps`);
+          return { checkTaskId, itemId, itemText };
+        }),
     }),
   );
 }

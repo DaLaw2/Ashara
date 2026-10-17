@@ -1,4 +1,4 @@
-import { pgTable, uuid, boolean, text, jsonb, integer, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, boolean, text, jsonb, integer, primaryKey, unique } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
 import { workItems } from "./delivery.js";
@@ -150,8 +150,9 @@ export const suiteReviewClaims = pgTable("suite_review_claims", {
 // ---------------------------------------------------------------------------
 // undecided_items (migrations 069, 072, Quality): one row per cited item a suite review left
 // undecided: a finding on it that did not act (judgement_id), or a claim covering it that no second
-// review confirmed (claim_id), exactly one; the item is reported unverified.
-// Append-only, one row per check task and item.
+// review confirmed (claim_id), exactly one: the source that kept the row first. Every claim that
+// leaves the item undecided, that first one included, is tied to it in undecided_item_claims, which
+// the readers go through; the item is reported unverified. Append-only, one row per check task and item.
 // ---------------------------------------------------------------------------
 
 export const undecidedItems = pgTable(
@@ -175,6 +176,29 @@ export const undecidedItems = pgTable(
   },
   (t) => ({
     onePerCheckTask: unique("undecided_items_one_per_check_task").on(t.checkTaskId, t.itemId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// undecided_item_claims (Quality): one row per claim and item it leaves undecided,
+// so an item several claims leave undecided reads back under each of them. undecided_items.claim_id
+// is held to a row here by a deferred foreign key the migration declares. Append-only.
+// ---------------------------------------------------------------------------
+
+export const undecidedItemClaims = pgTable(
+  "undecided_item_claims",
+  {
+    claimId: uuid("claim_id")
+      .notNull()
+      .references(() => suiteReviewClaims.id, { onDelete: "cascade" }),
+    checkTaskId: uuid("check_task_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "cascade" }),
+    itemId: text("item_id").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.claimId, t.checkTaskId, t.itemId] }),
   }),
 );
 

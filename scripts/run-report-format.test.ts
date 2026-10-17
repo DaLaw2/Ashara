@@ -415,6 +415,23 @@ describe("formatSuiteReviewClaims", () => {
     expect(text).toContain('    unverified S7 of task c4 "a full disk is reported": no second opinion answered: SecondOpinionUnanswered: no answer at any strength');
   });
 
+  test("states a no-other-family claim, whose second opinion came from the first's provider, as unconfirmed, with its items unverified", () => {
+    const sameProvider: Claim = {
+      reviewTaskId: "r5",
+      basis: "no-other-family",
+      covered: ["c5"],
+      firstModel: "a/m",
+      passedOver: [],
+      unverified: [{ checkTaskId: "c5", itemId: "S9", itemText: "put survives a power loss" }],
+      second: answered("same-family-other-model", "a/n"),
+    };
+    const text = formatSuiteReviewClaims([sameProvider]);
+    expect(text).toContain(
+      "  review r5, covering check task(s) c5: no-other-family (unconfirmed: the second opinion came from the first review's provider (recorded before migration 073)); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
+    );
+    expect(text).toContain('    unverified S9 of task c5 "put survives a power loss": no second opinion of another provider confirmed it (another model of the family)');
+  });
+
   test("states that no claim is recorded, apart from the judgements", () => {
     expect(formatSuiteReviewClaims([])).toBe("Suite review claims: none recorded");
   });

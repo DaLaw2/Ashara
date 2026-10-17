@@ -10,8 +10,10 @@ import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
+import { SuiteReviewJudgementRepository } from "@ashara/quality";
 import { parseWorkItemId, recordingLogger, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { runReport } from "./run-report-body.js";
 import { formatRunReport } from "./run-report-format.js";
 
 // The trace contract of roadmap M2 exit 7, on a scripted run: the real gateway, the Finance ledger
@@ -100,6 +102,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (SELECT id FROM work_items WHERE project_id = ${projectId})`);
+  await db.execute(sql`DELETE FROM undecided_items WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM suite_review_claims WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM suite_review_judgements WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${projectId}`);
   await db.execute(sql`DELETE FROM clients WHERE name = ${NAME}`);
@@ -307,5 +312,70 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     expect(formatRunReport(evidence).text).toContain(
       "1 admitted and not yet recorded, 1 admitted by a process that ended before recording them, 1 recorded with no cost measured)",
     );
+  });
+});
+
+// The body main() prints, read from this project end to end: every suite review judgement and claim
+// through their readers. A body that left either reader out would print "none recorded" here.
+describe("runReport, the body run-report prints", () => {
+  async function completedTask(title: string): Promise<string> {
+    const id = randomUUID();
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, project_id)
+      VALUES (${id}, 'Task', 'Completed', ${title}, ${projectId})`);
+    return id;
+  }
+
+  test("prints each suite review judgement, and each claim with its basis and the item it leaves unverified", async () => {
+    const check = await completedTask("Checks of Durable put");
+    const judged = parseWorkItemId(await completedTask("Review with a finding"), "test review task");
+    const claimed = parseWorkItemId(await completedTask("Review that routed nothing"), "test review task");
+    const finding = { checkTasks: [check], kind: "undecided-item" as const, item: "S8", problem: "no check reads the value back", evidence: "sh put.sh" };
+    const first = { provider: "p", model: "m" };
+    const judgements = new SuiteReviewJudgementRepository(db);
+    await judgements.record({
+      projectId,
+      reviewTaskId: judged,
+      judgements: [
+        {
+          checkTaskId: check,
+          check: null,
+          outcome: "advisory",
+          basis: "second-opinion-disagreed",
+          first: finding,
+          second: [],
+          firstModel: first,
+          secondReview: { first, second: first, strength: "same-model" },
+          passedOver: [],
+          secondFailure: null,
+          undecided: null,
+        },
+      ],
+      claim: null,
+    });
+    await judgements.record({
+      projectId,
+      reviewTaskId: claimed,
+      judgements: [],
+      claim: {
+        basis: "second-review-failed",
+        covered: [check],
+        firstModel: first,
+        secondReview: null,
+        passedOver: [],
+        second: [],
+        secondFailure: "no second opinion answered",
+        unconfirmed: [{ checkTaskId: check, itemId: "S9", itemText: "put survives a power loss" }],
+      },
+    });
+
+    const { text } = await runReport(db, projectId);
+
+    expect(text).toContain(`run-report: project ${NAME} (${projectId})`);
+    expect(text).toContain(`Suite review judgements (1):\n  review ${judged}, its undecided-item finding of task ${check}: advisory (second-opinion-disagreed); second review same-model (first p/m, second p/m)`);
+    expect(text).toContain(
+      `Suite review claims (1):\n  review ${claimed}, covering check task(s) ${check}: second-review-failed (unconfirmed: the second opinion failed at every strength); second opinion: none (first p/m): no second opinion answered`,
+    );
+    expect(text).toContain(`    unverified S9 of task ${check} "put survives a power loss": no second opinion answered: no second opinion answered`);
   });
 });

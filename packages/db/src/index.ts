@@ -29,6 +29,7 @@ export {
   suiteReviewFindings,
   suiteReviewJudgements,
   taskChecks,
+  undecidedItemClaims,
   undecidedItems,
   visionDocuments,
   workBurnWarnings,

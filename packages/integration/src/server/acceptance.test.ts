@@ -16,8 +16,9 @@ import {
 import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
+import { SuiteReviewJudgementRepository } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment } from "@ashara/shared";
+import { memoryStepContainment, parseWorkItemId } from "@ashara/shared";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
@@ -363,6 +364,7 @@ describe("acceptance on main", () => {
       RETURNING id`);
     const [claim] = z.array(z.object({ id: z.string() })).parse(claimed.rows);
     await db.execute(sql`
+      WITH tie AS (INSERT INTO undecided_item_claims (claim_id, check_task_id, item_id) VALUES (${claim?.id}, ${checksOfStore}, 'S1'))
       INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, claim_id)
       VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, 'S1', ${VISION.stored.text}, ${claim?.id})`);
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
@@ -374,6 +376,38 @@ describe("acceptance on main", () => {
     const [body = ""] = await reportsOf(projectId);
     expect(body).toContain("the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored and read\n\n");
     expect(body).not.toContain("Every item of what you asked for is decided");
+  });
+
+  // An item a later claim leaves undecided again is read under that claim too, never
+  // under the first claim alone, so a later failed second review is reported as the reason.
+  test("an item two claims leave undecided is read under both, and reported under the reason that ranks first", async () => {
+    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
+    const judgements = new SuiteReviewJudgementRepository(db);
+    const item = { checkTaskId: checksOfStore, itemId: "S1", itemText: VISION.stored.text };
+    const first = { provider: "p", model: "m" };
+    const reviewTaskId = parseWorkItemId(checksOfStore, "test review task");
+    const doubt = { checkTasks: [checksOfStore], kind: "undecided-item" as const, item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" };
+    await judgements.record({
+      projectId,
+      reviewTaskId,
+      judgements: [],
+      claim: { basis: "second-opinion-found", covered: [checksOfStore], firstModel: first, secondReview: { first, second: { provider: "q", model: "n" }, strength: "other-family" }, passedOver: [], second: [doubt], secondFailure: null, unconfirmed: [item] },
+    });
+    await judgements.record({
+      projectId,
+      reviewTaskId,
+      judgements: [],
+      claim: { basis: "second-review-failed", covered: [checksOfStore], firstModel: first, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item] },
+    });
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+
+    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
+    // The first claim alone reads clean-contradicted; the later failed one ranks first.
+    expect(items.filter((entry) => entry.undecided).map((entry) => [entry.source.id, entry.undecided])).toEqual([["S1", "clean-unconfirmed"]]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    const [body = ""] = await reportsOf(projectId);
+    expect(body).toContain("the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored and read\n\n");
   });
 
   // A goal task a plan revision replaced while it was open is set aside, never given up.
