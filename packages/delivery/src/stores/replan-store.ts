@@ -1,6 +1,6 @@
 import { latestRosterRoles } from "@ashara/db";
 import type { createDb } from "@ashara/db";
-import { parseWorkItemId, readEach, type ProjectId } from "@ashara/shared";
+import { parseWorkItemId, readEach, type Logger, type ProjectId } from "@ashara/shared";
 import { createBulkPlan } from "../bulk-plan.js";
 import { PlanningService } from "../domain/index.js";
 import type { ReplanStore } from "../replan.js";
@@ -22,7 +22,7 @@ class RevisionItemNotPlanned extends Error {
 }
 
 /** Delivery's plan revision store over projects, vision_documents, roster_roles, work_items, task_checks and plan_revisions. */
-export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore {
+export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logger): ReplanStore {
   const projects = new ProjectHaltRepository(db);
   const workItems = new WorkItemRowRepository(db);
   return {
@@ -96,6 +96,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
             await workItemRepo.assignOwner(id, owner.workKind, owner.ownerRoleId);
           }
         },
+        logger,
       );
     },
     recordFailedAttempt: (projectId, error, failure) => recordReplanFailure(db, projectId, error, failure),

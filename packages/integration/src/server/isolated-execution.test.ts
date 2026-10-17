@@ -181,6 +181,7 @@ describe("a task runs on cells end to end", () => {
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();
     const service = new DispatchService({
+      logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: sessions,
       knowledgeSink: { storeFinding: async () => {} },

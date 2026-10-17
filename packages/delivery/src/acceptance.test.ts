@@ -1,6 +1,6 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import type { AcceptanceStore } from "./acceptance.js";
@@ -85,7 +85,9 @@ function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: 
   };
   const sweeps: Array<readonly string[]> = [];
   const scaffoldsSwept: unknown[] = [];
+  const logger = recordingLogger();
   const deps: AcceptanceDeps = {
+    logger,
     acceptance,
     containment: memoryStepContainment(() => true),
     acceptanceSweeper: {
@@ -108,7 +110,7 @@ function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: 
   const resume = (): void => {
     if (blocks.at(-1)?.cause.category === "infrastructure") blocked = false;
   };
-  return { deps, accepted, executed, defects, created, blocks, sweeps, scaffoldsSwept, resume, faults: () => faults };
+  return { deps, logger, accepted, executed, defects, created, blocks, sweeps, scaffoldsSwept, resume, faults: () => faults };
 }
 
 /** An EnvironmentError as the substrate throws it (structurally: execution-infra is not this package's to import). */
@@ -132,8 +134,7 @@ function sweepFault(): Extract<Sweep, { readonly kind: "faulted" }>["error"] {
 // Delivering -> Accepted only on a passing sweep.
 describe("the acceptance sweep", () => {
   test("a sweep that passes on main makes the project accepted, nothing else", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const { deps, accepted, executed, defects, blocks, sweeps, scaffoldsSwept } = harness({
+    const { deps, logger, accepted, executed, defects, blocks, sweeps, scaffoldsSwept } = harness({
       kind: "ran",
       passed: true,
       mainCommit: MAIN,
@@ -152,10 +153,10 @@ describe("the acceptance sweep", () => {
     expect(executed).toEqual([EXECUTED]);
     expect(defects).toEqual([]);
     expect(blocks).toEqual([]);
+    expect(logger.records.map((r) => [r.level, r.event, r.fields?.["projectId"]])).toEqual([["info", "delivery.acceptance-passed", projectId]]);
   });
 
   test("a sweep that fails is a defect given up for a repair, never acceptance", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const details = `1 failure(s) on main:\n- task g2's checks: check "delete" exited 1`;
     const { deps, accepted, defects, created, blocks } = harness({
       kind: "ran",
@@ -185,7 +186,6 @@ describe("the acceptance sweep", () => {
   });
 
   test("a main whose public interface file is the scaffold's is a defect asking for that file, given up for a repair", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const details = `PUBLIC_INTERFACE.md on main is byte-identical to the one the product scaffold wrote (task s1, merged as ${SCAFFOLD_MERGE})`;
     const { deps, accepted, defects, created } = harness({
       kind: "ran",
@@ -208,7 +208,6 @@ describe("the acceptance sweep", () => {
   });
 
   test("a main with no public interface file is a defect asking to restore it, given up for a repair", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const details = "PUBLIC_INTERFACE.md is missing from main: no file states the delivered product's public interface.";
     const { deps, accepted, defects, created } = harness({
       kind: "ran",
@@ -231,7 +230,6 @@ describe("the acceptance sweep", () => {
   });
 
   test("a Completed scaffold with no recorded merge halts the project once, as a fault the operator ends, and is never swept", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const { deps, sweeps, defects, blocks, resume, faults } = harness(
       { kind: "faulted", mainCommit: MAIN, error: sweepFault() },
       [...SCAFFOLDS, { taskId: "s2", mergeCommit: null }],
@@ -251,7 +249,6 @@ describe("the acceptance sweep", () => {
   });
 
   test("a sweep the substrate could not run halts the project on infrastructure with the observed error", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const { deps, accepted, defects, blocks } = harness({ kind: "unrunnable", error: substrateUnavailable() });
     await runAcceptanceSweeps(deps);
     expect(accepted).toEqual([]);
@@ -260,8 +257,23 @@ describe("the acceptance sweep", () => {
     expect(blocks[0].cause.reason).toContain("cannot connect to the socket");
   });
 
+  test("the infrastructure halt of a sweep is logged at warn with the substrate error's cause chain", async () => {
+    const error = Object.assign(substrateUnavailable(), { cause: new Error("connect ENOENT /run/podman/podman.sock") });
+    const { deps, logger } = harness({ kind: "unrunnable", error });
+    await runAcceptanceSweeps(deps);
+    const halts = logger.records.filter((r) => r.event === "delivery.project-halted" && r.fields?.["category"] === "infrastructure");
+    expect(halts).toHaveLength(1);
+    expect(["warn", "error"]).toContain(halts[0].level);
+    expect(halts[0].error).toMatchObject({
+      chain: {
+        name: "SubstrateUnavailable",
+        message: expect.stringContaining("cannot connect to the socket"),
+        cause: { message: "connect ENOENT /run/podman/podman.sock" },
+      },
+    });
+  });
+
   test("a sweep fault that is not the substrate's is a defect given up with the recorded fault, never an infrastructure halt", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const { deps, defects, blocks } = harness({ kind: "faulted", mainCommit: null, error: sweepFault() });
     await runAcceptanceSweeps(deps);
     expect(blocks).toEqual([]);
@@ -277,8 +289,7 @@ describe("the acceptance sweep", () => {
     ["a fault that is not the substrate's", { kind: "faulted", mainCommit: MAIN, error: sweepFault() }],
     ["a substrate failure", { kind: "unrunnable", error: substrateUnavailable() }],
   ] as const)("a sweep that keeps failing for %s halts the project as undeliverable past the budget, with the recorded cause", async (_label, sweep: Extract<Sweep, { readonly kind: "faulted" | "unrunnable" }>) => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { deps, blocks, sweeps, resume, faults } = harness(sweep);
+    const { deps, logger, blocks, sweeps, resume, faults } = harness(sweep);
     for (let round = 0; round < 10; round++) {
       await runAcceptanceSweeps(deps);
       resume();
@@ -291,6 +302,7 @@ describe("the acceptance sweep", () => {
     expect(last?.cause.errorClass).toBe("AcceptanceFaultBudgetSpent");
     expect(last?.cause.reason).toContain("could not run 4 time(s), past the budget of 3");
     expect(last?.cause.reason).toContain(sweep.error.message);
+    expect(logger.records.filter((r) => r.level === "error").map((r) => r.event)).toEqual(["delivery.project-halted"]);
     // Only a substrate failure is ever an infrastructure halt.
     const infrastructure = blocks.filter((block) => block.cause.category === "infrastructure");
     expect(infrastructure).toHaveLength(sweep.kind === "unrunnable" ? 3 : 0);

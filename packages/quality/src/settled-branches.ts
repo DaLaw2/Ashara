@@ -1,5 +1,5 @@
-import { describeErrorChain } from "@ashara/shared";
 import { clearWorktreeSlot, removeThrowawayCheckouts, runHostGit, targetRepo, treeHasEntry } from "@ashara/execution-infra";
+import type { Logger } from "@ashara/shared";
 import { taskBranchName } from "./merge.js";
 import { checkBranchName } from "./task-checks.js";
 
@@ -29,6 +29,7 @@ export async function releaseSettledBranches(
   workdirBase: string,
   targetPath: string,
   settled: ReadonlySet<string>,
+  logger: Logger,
 ): Promise<SettledBranchRelease> {
   if (!(await treeHasEntry(targetPath, ".git"))) return { released: 0, left: 0, checkouts: 0 };
   const checkouts = await removeThrowawayCheckouts(workdirBase, targetPath);
@@ -47,7 +48,12 @@ export async function releaseSettledBranches(
     } catch (e) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: branch release is cleanup of a settled task: counted in left and retried by the next release
       left += 1;
-      console.warn(`[settled-branches] the branch ${branch} of a settled task could not be released and is left in ${targetPath}; the next release retries it: ${describeErrorChain(e)}`);
+      logger.warn(
+        "quality.settled-branch-left",
+        `the branch ${branch} of a settled task could not be released and is left in ${targetPath}; the next release retries it`,
+        { branch, targetPath },
+        e,
+      );
     }
   }
   return { released, left, checkouts: checkouts.removed };

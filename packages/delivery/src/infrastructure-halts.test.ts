@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { describe, expect, test } from "vitest";
+import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
@@ -34,16 +34,11 @@ function probeOf(...results: Scripted[]): InfrastructureProbe & { readonly calls
   };
 }
 
-beforeEach(() => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-});
-
 // An infrastructure halt resumes by itself.
 describe("resumeInfrastructureHalts", () => {
   test("no project halted: the substrate is not probed", async () => {
     const probe = probeOf({ passed: true, evidence: "ok" });
-    expect(await resumeInfrastructureHalts(haltsOf([]).halts, probe, memoryStepContainment(() => true))).toBe(0);
+    expect(await resumeInfrastructureHalts(haltsOf([]).halts, probe, memoryStepContainment(() => true), recordingLogger())).toBe(0);
     expect(probe.calls()).toBe(0);
   });
 
@@ -51,24 +46,24 @@ describe("resumeInfrastructureHalts", () => {
     const { halts, resumed } = haltsOf([A, B]);
     const probe = probeOf({ passed: false, evidence: "podman info exited 125" }, new Error("spawn ENOENT"), { passed: true, evidence: "version 5.4" });
 
-    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true))).toBe(0);
-    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true))).toBe(0);
+    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true), recordingLogger())).toBe(0);
+    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true), recordingLogger())).toBe(0);
     expect(resumed).toEqual([]);
 
-    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true))).toBe(2);
+    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true), recordingLogger())).toBe(2);
     expect(resumed).toEqual([
       { projectId: A, evidence: "version 5.4" },
       { projectId: B, evidence: "version 5.4" },
     ]);
 
     // Nothing halted any more: no further probe.
-    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true))).toBe(0);
+    expect(await resumeInfrastructureHalts(halts, probe, memoryStepContainment(() => true), recordingLogger())).toBe(0);
     expect(probe.calls()).toBe(3);
   });
 
   test("one probe per cycle, however many projects are halted", async () => {
     const probe = probeOf({ passed: false, evidence: "down" });
-    await resumeInfrastructureHalts(haltsOf([A, B]).halts, probe, memoryStepContainment(() => true));
+    await resumeInfrastructureHalts(haltsOf([A, B]).halts, probe, memoryStepContainment(() => true), recordingLogger());
     expect(probe.calls()).toBe(1);
   });
 });

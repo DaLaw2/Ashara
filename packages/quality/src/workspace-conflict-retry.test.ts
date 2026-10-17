@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupWorkdir, commitAllChanges, commitPartialWork, createWorkdir, createWorkdirForRetry, ensureTargetGitInit } from "@ashara/execution-infra";
 import type { WorkdirInfo } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared";
 import { ConflictRetryUnprepared, conflictWithMain, mainMergedForRetry, stagedConflictMarkers, taskBranchName, tentativeMerge } from "./merge.js";
 import type { MainConflict } from "./merge.js";
 
@@ -23,7 +24,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 
 /** A retry's worktree of `taskId`'s branch, made ready as a dispatch makes it (mainMergedForRetry). */
 function retryWorkdir(workdirBase: string, target: string, taskId: string, conflict: MainConflict | null): Promise<WorkdirInfo> {
-  return createWorkdirForRetry(workdirBase, target, taskBranchName(taskId), mainMergedForRetry(taskId, conflict));
+  return createWorkdirForRetry(workdirBase, target, taskBranchName(taskId), mainMergedForRetry(taskId, conflict, recordingLogger()));
 }
 
 afterAll(async () => {
@@ -54,7 +55,7 @@ async function sameBaseConflict(): Promise<{ readonly target: string; readonly w
 describe("a retry of a branch that conflicts with main", () => {
   test("starts with main merged in and the conflict in front of the implementer; resolved, it merges", async () => {
     const { target, workdirBase } = await sameBaseConflict();
-    expect((await tentativeMerge(target, taskBranchName("second"))).status).toBe("conflict");
+    expect((await tentativeMerge(target, taskBranchName("second"), recordingLogger())).status).toBe("conflict");
     await git(target, "merge", "--abort");
 
     const conflict = await conflictWithMain(target, "second");
@@ -74,7 +75,7 @@ describe("a retry of a branch that conflicts with main", () => {
     await cleanupWorkdir(retry.workDir, target);
 
     expect(await conflictWithMain(target, "second")).toBeNull();
-    expect((await tentativeMerge(target, taskBranchName("second"))).status).toBe("clean");
+    expect((await tentativeMerge(target, taskBranchName("second"), recordingLogger())).status).toBe("clean");
     await git(target, "commit", "-q", "-m", "merge second");
     expect(await readFile(join(target, "shared.txt"), "utf8")).toBe("first\nsecond\n");
   });
@@ -116,12 +117,11 @@ describe("a retry of a branch that conflicts with main", () => {
     // git's index lock refuses the merge before it stages anything: no MERGE_HEAD, nothing to abort.
     const lock = join(await git(held.workDir, "rev-parse", "--absolute-git-dir"), "index.lock");
     await writeFile(lock, "");
-    const warn = vi.spyOn(console, "warn");
+    const logger = recordingLogger();
     try {
-      await expect(mainMergedForRetry("third", null)(held.repo)).rejects.toBeInstanceOf(ConflictRetryUnprepared);
-      expect(warn.mock.calls).toEqual([]);
+      await expect(mainMergedForRetry("third", null, logger)(held.repo)).rejects.toBeInstanceOf(ConflictRetryUnprepared);
+      expect(logger.records).toEqual([]);
     } finally {
-      warn.mockRestore();
       await rm(lock);
     }
     await cleanupWorkdir(held.workDir, target);

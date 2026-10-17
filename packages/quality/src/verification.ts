@@ -24,7 +24,7 @@ import {
   targetRepo,
 } from "@ashara/execution-infra";
 import { PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
-import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId, renderElided, wrapError } from "@ashara/shared";
 import { createSessionId } from "@ashara/workplace";
 import { attemptSummary, outcomeRecord } from "@ashara/workplace";
@@ -306,6 +306,7 @@ interface TaskVerificationDeps {
    */
   readonly suiteReview: SuiteReviewing;
   readonly eventSink?: ExecutionEventSink;
+  readonly logger: Logger;
 }
 
 /** Quality's verification of one project's dispatches: every verdict a dispatch is decided by. */
@@ -367,9 +368,10 @@ export class TaskVerification {
             ...NO_AGENT,
           },
           eventSink,
+          this.deps.logger,
         );
       }
-      return thrownBlocked(task, sessionId, "reviewSuites", e, { step: "review the plan's checks", cell: "no cell" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "reviewSuites", e, { step: "review the plan's checks", cell: "no cell" }, NO_AGENT, eventSink, this.deps.logger);
     }
     const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
     // A rejection the second review did not reach is released; both judgements are recorded whole
@@ -404,8 +406,17 @@ export class TaskVerification {
           ? `\nEvery item the suites cite and no finding left undecided reads as verified: ${claim.why}`
           : `\nNot verified, to be reported unverified (${claim.why}): ${claim.unconfirmed.map((u) => `${u.itemId} of ${u.checkTaskId}`).join(", ")}`;
       const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem that acts${setAside}${released}${advisory}${claimed}`;
-      if (released !== "" || advisory !== "" || claim.unconfirmed.length > 0) console.warn(`[${task.id}] ${detail}`);
-      else console.log(`[${task.id}] ${detail}`);
+      this.deps.logger.info("quality.suites-reviewed", detail, {
+        taskId: task.id,
+        attempt: task.attempt,
+        reviewed: outcome.reviewed,
+        setAside: outcome.setAside,
+        released: releasedChecks,
+        advisory: outcome.advisory.length,
+        undecided: outcome.undecided.length,
+        claim: claim.unconfirmed.length === 0 ? "verified" : "unverified",
+        claimWhy: claim.why,
+      });
       eventSink?.emit({ event: "suites_reviewed", taskId: task.id, attempt: task.attempt, reviewed: outcome.reviewed, setAside: outcome.setAside, released: releasedChecks });
       return {
         status: "completed",
@@ -423,7 +434,7 @@ export class TaskVerification {
       outcome.problems.map((p) => `- [${p.kind}; ${p.checkTaskIds.join(", ")}] ${p.problem}`).join("\n") +
       released +
       advisory;
-    console.warn(`[${task.id}] ${summary}`);
+    this.deps.logger.info("quality.suite-review-problems", summary, { taskId: task.id, attempt: task.attempt, checkTasks: named, problems: outcome.problems.length });
     eventSink?.emit({ event: "suite_review_problems", taskId: task.id, attempt: task.attempt, checkTasks: named, problems: outcome.problems.length, released: releasedChecks });
     return {
       status: "suite_review_problems",
@@ -443,7 +454,12 @@ export class TaskVerification {
     } catch (e) {
       if (!(e instanceof CellTeardownFailed)) throw e;
       const owner = "projectId" in subject ? `acceptance-${subject.projectId}` : `${subject.taskId} attempt ${subject.attempt}`;
-      console.warn(`[${owner}] cell teardown failed; the next cycle's release of held cells removes it (teardownAll at shutdown and reconcileOrphans at startup if the process ends first):`, e);
+      this.deps.logger.warn(
+        "quality.cell-teardown-failed",
+        `[${owner}] cell teardown failed; the next cycle's release of held cells removes it (teardownAll at shutdown and reconcileOrphans at startup if the process ends first)`,
+        { ...subject, cellId: e.cellId },
+        e,
+      );
       this.deps.eventSink?.emit({ event: "cell_teardown_failed", ...subject, cellId: e.cellId, exitCode: e.exitCode, stderr: e.stderr });
     }
   }
@@ -530,9 +546,11 @@ export class TaskVerification {
     if (onMain.kind === "blocked") return onMain.result;
     if (onMain.verdict.passed) return this.alreadyDelivered(d, onMain.main, stored, NO_AGENT);
     if (onMain.ownPassed) {
-      console.log(
-        `[${task.id}] its stored checks pass on main ${onMain.main}, but main's environment test or an earlier task's ` +
+      this.deps.logger.info(
+        "quality.not-already-delivered",
+        `its stored checks pass on main ${onMain.main}, but main's environment test or an earlier task's ` +
           `check fails there, so nothing is already delivered: dispatched to its implementer as usual\n${onMain.verdict.details}`,
+        { taskId: task.id, attempt: task.attempt, mainCommit: onMain.main },
       );
       return null;
     }
@@ -610,7 +628,7 @@ export class TaskVerification {
       }
     } catch (e) {
       if (subject.cleanWorkdir) await cleanupWorkdir(workDir, targetProjectPath);
-      return { kind: "blocked", result: mainRunBlocked(task, sessionId, e, agent, eventSink, "deliveredCheckRun", "checks run on main") };
+      return { kind: "blocked", result: mainRunBlocked(task, sessionId, e, agent, eventSink, this.deps.logger, "deliveredCheckRun", "checks run on main") };
     }
     const ran = suitesVerdict(suites, runs, earlier.length, "main");
     const verdict: PostMergeVerdict =
@@ -644,8 +662,12 @@ export class TaskVerification {
     const { eventSink } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
     await cleanupWorkdir(workDir, targetProjectPath);
-    await deleteSettledTaskBranch(targetProjectPath, task.id, "completed as already delivered");
-    console.log(`[${task.id}] already delivered: its checks, the environment's test and the regression suite pass on main ${main}; nothing merged`);
+    await deleteSettledTaskBranch(targetProjectPath, task.id, "completed as already delivered", this.deps.logger);
+    this.deps.logger.info("quality.already-delivered", `already delivered: its checks, the environment's test and the regression suite pass on main ${main}; nothing merged`, {
+      taskId: task.id,
+      attempt: task.attempt,
+      mainCommit: main,
+    });
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "already_delivered" });
     return {
       status: "completed",
@@ -836,11 +858,11 @@ export class TaskVerification {
     const blockOn = (e: unknown, step: string): ExecutionResult => {
       const environmentFailure = environmentErrorOf(e);
       if (environmentFailure !== null) {
-        return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { outcome, agentWork: "kept" }, eventSink);
+        return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { outcome, agentWork: "kept" }, eventSink, this.deps.logger);
       }
       const fault = new VerificationInfrastructureFault(task.id, step, { cause: e });
       const chain = wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name });
-      return asharaBlocked(task, sessionId, "ownershipGate", fault, { outcome, agentWork: "kept" }, eventSink, chain);
+      return asharaBlocked(task, sessionId, "ownershipGate", fault, { outcome, agentWork: "kept" }, eventSink, this.deps.logger, chain);
     };
     let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
     try {
@@ -868,7 +890,7 @@ export class TaskVerification {
       }
       const need = attemptSummary(outcome).trim() === "" ? "(the implementer's finish summary is empty: it stated no need)" : attemptSummary(outcome);
       const chain = wrapError("development", "ownershipGate", verdict.reason, { taskId: task.id, environmentPaths: verdict.paths });
-      console.warn(`[${task.id}] ${summary}`);
+      this.deps.logger.info("quality.environment-change-requested", summary, { taskId: task.id, attempt: task.attempt, paths: verdict.paths });
       eventSink?.emit({ event: "environment_change_requested", taskId: task.id, attempt: task.attempt, paths: verdict.paths, reason: summary });
       return {
         status: "environment_change_requested",
@@ -927,7 +949,7 @@ export class TaskVerification {
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
       const fault = environmentErrorOf(e) ?? new VerificationInfrastructureFault(task.id, "substrate gate run", { cause: e });
-      return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { outcome, agentWork: "kept" }, eventSink) };
+      return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { outcome, agentWork: "kept" }, eventSink, this.deps.logger) };
     }
 
     const passed = environmentCheckPassed(run.report);
@@ -945,7 +967,7 @@ export class TaskVerification {
       // The gate passed; only Z0's store failed to keep its statement, as recordRebuiltStatement's write.
       await cleanupWorkdir(workDir, targetProjectPath);
       const fault = new VerificationInfrastructureFault(task.id, `record the environment statement for version ${run.tested.version}`, { cause: e });
-      return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { outcome, agentWork: "kept" }, eventSink) };
+      return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { outcome, agentWork: "kept" }, eventSink, this.deps.logger) };
     }
     return { kind: "passed", tested: run.tested };
   }
@@ -1116,7 +1138,7 @@ export class TaskVerification {
             details: `${suitesRun.details}\nNot re-run, no check is stored for them (completed before checks existed): ${unchecked.join(", ")}`,
           };
     if (unchecked.length > 0) {
-      console.warn(`[${task.id}] post-merge regression suite skips Completed task(s) with no stored check: ${unchecked.join(", ")}`);
+      this.deps.logger.info("quality.regression-unchecked", "post-merge regression suite skips Completed task(s) with no stored check", { taskId: task.id, unchecked });
     }
     this.deps.eventSink?.emit({
       event: "post_merge_verify",
@@ -1286,8 +1308,8 @@ export class TaskVerification {
         this.deps.attemptPolicy.perCommandTimeoutSeconds,
       );
     } catch (e) {
-      await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
-      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "build on the foundation");
+      await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch, this.deps.logger);
+      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "checkRedRun", "build on the foundation");
     }
     const passed = environmentBuildPassed(build);
     eventSink?.emit({
@@ -1304,10 +1326,10 @@ export class TaskVerification {
     });
     if (passed) return null;
 
-    await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
+    await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch, this.deps.logger);
     const unbuildable = new FoundationUnbuildable(task.id, work.foundation.taskId, work.environment.version, build);
     const summary = `no check of task ${task.id} can be red-run: ${unbuildable.message}; no agent ran`;
-    console.warn(`[${task.id}] ${summary}`);
+    this.deps.logger.info("quality.foundation-unbuildable", summary, { taskId: task.id, attempt: task.attempt, foundationTaskId: work.foundation.taskId });
     eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: task.attempt, stage: "foundationBuild", errorClass: unbuildable.name, reason: summary });
     return {
       status: "environment_undefined",
@@ -1359,6 +1381,7 @@ export class TaskVerification {
           buildContextPaths(work.environment.definition),
           work.recorder.writtenFiles(),
           checkAreaOf(work.checkedTaskId),
+          this.deps.logger,
         );
         if (harvest.kind === "rejected") return { report: { kind: "files_refused", detail: harvest.reason }, dir, discarded: [] };
         const report = await runChecksOnCheckout(
@@ -1444,7 +1467,7 @@ export class TaskVerification {
       );
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "deliveredCheckRun", "delivered sweep on main");
+      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "deliveredCheckRun", "delivered sweep on main");
     }
     const passed = onMain.kind === "ran" ? onMain.runs.filter(checkPassed).map((run) => run.name) : [];
     const allPass = onMain.kind === "ran" && onMain.runs.length === stored.checks.length && passed.length === stored.checks.length;
@@ -1460,7 +1483,11 @@ export class TaskVerification {
       ...(onMain.kind === "product_changed" ? { productChanged: describeProductChange(onMain) } : {}),
     });
     if (onMain.kind === "product_changed") {
-      console.warn(`[${task.id}] the delivered sweep on main ${main} reached no verdict: ${describeProductChange(onMain)}`);
+      this.deps.logger.warn("quality.delivered-sweep-undecided", `the delivered sweep on main ${main} reached no verdict: ${describeProductChange(onMain)}`, {
+        taskId: task.id,
+        attempt: task.attempt,
+        mainCommit: main,
+      });
     }
     return allPass ? this.deliveredBeforeModel(d, stored) : null;
   }
@@ -1500,7 +1527,7 @@ export class TaskVerification {
           );
         } catch (e) {
           await cleanupWorkdir(workDir, targetProjectPath);
-          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "build on the baseline");
+          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "checkRedRun", "build on the baseline");
         }
       }
       let redRun: CheckRunReport | { readonly kind: "unbuilt"; readonly build: EnvironmentTestRun };
@@ -1519,7 +1546,7 @@ export class TaskVerification {
           );
         } catch (e) {
           await cleanupWorkdir(workDir, targetProjectPath);
-          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on the baseline");
+          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "checkRedRun", "red run on the baseline");
         }
       }
       if (redRun.kind === "unbuilt") {
@@ -1550,7 +1577,7 @@ export class TaskVerification {
 
     await cleanupWorkdir(workDir, targetProjectPath);
     const stale = new StoredChecksStale(task.id, stored, current, problem);
-    console.warn(`[${task.id}] ${stale.message}`);
+    this.deps.logger.info("quality.checks-stale", stale.message, { taskId: task.id, attempt: task.attempt });
     eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: task.attempt, stage: "revalidateTaskChecks", errorClass: stale.name, reason: stale.message });
     return {
       status: "checks_stale",
@@ -1637,6 +1664,7 @@ export class TaskVerification {
         buildContextPaths(work.environment.definition),
         work.recorder.writtenFiles(),
         checkAreaOf(work.checkedTaskId),
+        this.deps.logger,
       );
       if (harvest.kind === "rejected") return this.checksRejected(d, outcome, harvest.reason, {});
       if (harvest.discarded.length > 0) {
@@ -1655,7 +1683,7 @@ export class TaskVerification {
           harvest.files,
         );
       } catch (e) {
-        return mainRunBlocked(task, sessionId, e, { outcome, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on the foundation");
+        return mainRunBlocked(task, sessionId, e, { outcome, agentWork: "discarded" }, eventSink, this.deps.logger, "checkRedRun", "red run on the foundation");
       }
       const atFoundation = { baselineCommit: foundation.commit, foundationTaskId: foundation.taskId };
       if (redRun.kind === "files_refused") {
@@ -1724,7 +1752,7 @@ export class TaskVerification {
         attempt: task.attempt,
       };
     } finally {
-      await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
+      await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch, this.deps.logger);
     }
   }
 
@@ -1751,7 +1779,11 @@ export class TaskVerification {
         why: `task ${work.checkedTaskId}'s checks revision ${work.prior.revision} and every suite do not all pass on main:\n${onMain.verdict.details}`,
       };
     }
-    console.log(`[${task.id}] the check author finished blocked and task ${work.checkedTaskId} is delivered on main ${onMain.main}: its checks and every suite pass there`);
+    this.deps.logger.info(
+      "quality.checked-task-delivered",
+      `the check author finished blocked and task ${work.checkedTaskId} is delivered on main ${onMain.main}: its checks and every suite pass there`,
+      { taskId: task.id, attempt: task.attempt, checkedTaskId: work.checkedTaskId, mainCommit: onMain.main },
+    );
     this.deps.eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "checked_task_delivered" });
     return {
       status: "completed",

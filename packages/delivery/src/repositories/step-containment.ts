@@ -20,7 +20,11 @@ export function stepContainment(db: DbHandle, clock: Clock, escapes: (error: unk
     halt: async (projectId, fault) => {
       const cause = projectBlockCause(fault);
       const result = await halts.block(projectId, cause);
-      console.warn(`[step-faults] project ${projectId} ${result} (${cause.category}): ${fault.message}`);
+      logger.error("delivery.step-fault-halt", `project ${projectId} ${result} (${cause.category}): ${fault.message}`, {
+        projectId,
+        category: cause.category,
+        result,
+      }, fault);
       return result;
     },
   };

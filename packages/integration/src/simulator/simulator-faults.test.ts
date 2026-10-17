@@ -40,7 +40,9 @@ describe("lifecycle simulator, directed", () => {
     const result = await directed(ctx, conflicts);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(conflicts.map(() => "db:db-query-failed"));
     expect(result.log.filter((line) => line.includes("met a concurrent-update conflict (SQLSTATE 40001)"))).toHaveLength(conflicts.length);
-    expect(result.log.filter((line) => line.includes("stage assignAgent") || line.includes("infrastructure fault") || line.includes("AsharaFaultBudgetSpent"))).toEqual([]);
+    const faulted = (text: string): boolean => text.includes("stage assignAgent") || text.includes("infrastructure fault") || text.includes("AsharaFaultBudgetSpent");
+    expect(result.log.filter(faulted)).toEqual([]);
+    expect(result.records.map((r) => JSON.stringify(r)).filter(faulted)).toEqual([]);
     expect(result.asharaHalts).toEqual([]);
     expect(result.outcome.kind).toBe("accepted");
     expect(keys(result), statements(result)).toEqual([]);
@@ -58,7 +60,11 @@ describe("lifecycle simulator, directed", () => {
     const conflicts = Array.from({ length: CONFLICT_ATTEMPTS }, (_, index) => ({ kind: "fault", seam: "db", label: devSessionsCount, nth: index + 2, fault: "db-query-failed" }) as const);
     const result = await directed(ctx, [CRASH_IN_DISPATCH, ...conflicts]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", ...conflicts.map(() => "db:db-query-failed")]);
-    expect(result.log.some((line) => line.includes("requeue the task failed on attempt 1 of 3; retrying"))).toBe(true);
+    expect(
+      result.records.some(
+        (r) => r.event === "delivery.orphan-settle-failed" && r.level === "warn" && r.fields?.["step"] === "requeue the task" && r.fields["attempt"] === 1,
+      ),
+    ).toBe(true);
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
@@ -71,7 +77,7 @@ describe("lifecycle simulator, directed", () => {
       { kind: "fault", seam: "db", label: /^update "work_items" set "status" = \$1, "blocked_reason" = \$2/, nth: 5, fault: "crash-after" },
     ]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:crash-after"]);
-    expect(result.log.some((line) => line.includes("given up (crash_loop), never re-dispatched"))).toBe(true);
+    expect(result.records.some((r) => r.event === "delivery.task-given-up" && r.fields?.["source"] === "crash_loop")).toBe(true);
     expect(keys(result), statements(result)).toEqual([]);
   }, 90_000);
 
@@ -83,7 +89,7 @@ describe("lifecycle simulator, directed", () => {
   it("records a merge on main whose record a crash lost, never re-dispatching it", async (ctx) => {
     const result = await directed(ctx, [{ kind: "fault", seam: "db", label: /^update "work_items" set "merge_commit" = \$1/, nth: 1, fault: "crash-before" }]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["db:crash-before"]);
-    expect(result.log.some((line) => line.includes("was merged on main as") && line.includes("merge recorded, Completed, not re-dispatched"))).toBe(true);
+    expect(result.records.some((r) => r.event === "delivery.orphan-merged" && typeof r.fields?.["mergeCommit"] === "string")).toBe(true);
     expect(keys(result)).toEqual([]);
   }, 90_000);
 

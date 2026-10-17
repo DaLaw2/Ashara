@@ -42,9 +42,6 @@ const idle = (): CycleResult => ({ tasksProcessed: 0, results: [], stop: null })
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -78,7 +75,8 @@ describe("ContinuousRunner wakePending", () => {
       (runner) => { runner.wake(); throw new Error("cycle failed"); },
       idle,
     ]);
-    const runner = new ContinuousRunner(cycles.loop, recordingLogger(), {
+    const logger = recordingLogger();
+    const runner = new ContinuousRunner(cycles.loop, logger, {
       databaseUrl: null,
       idleIntervalMs: IDLE_MS,
       pollIntervalMs: IDLE_MS,
@@ -94,6 +92,10 @@ describe("ContinuousRunner wakePending", () => {
     // maxConsecutiveErrors 1 → backoff 2^1 s.
     await vi.advanceTimersByTimeAsync(2_000);
     expect(cycles.calls()).toBe(2);
+    expect(logger.records.filter((r) => r.level === "error" || r.level === "warn").map((r) => [r.level, r.event, r.fields?.["consecutiveErrors"]])).toEqual([
+      ["error", "delivery.cycle-error", 1],
+      ["warn", "delivery.backing-off", 1],
+    ]);
 
     abort.abort();
     await running;
@@ -105,7 +107,8 @@ describe("ContinuousRunner stop", () => {
   test("a cycle that reports a stop halts the work for good; from then on only the client's stops are taken in, until shutdown", async () => {
     const stop = { reason: "budget_cap: deployment cap reached", spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } };
     const cycles = scriptedCycles([() => ({ tasksProcessed: 0, results: [], stop }), idle]);
-    const runner = new ContinuousRunner(cycles.loop, recordingLogger(), { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
+    const logger = recordingLogger();
+    const runner = new ContinuousRunner(cycles.loop, logger, { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);
     const halts: string[] = [];
     const abort = new AbortController();
@@ -127,6 +130,7 @@ describe("ContinuousRunner stop", () => {
     // No full cycle after the one that stopped: nothing is planned or dispatched past the cap.
     expect(cycles.calls()).toBe(1);
     expect(halts).toHaveLength(1);
+    expect(logger.records.filter((r) => r.event === "delivery.runner-halted").map((r) => [r.level, r.fields?.["reason"]])).toEqual([["error", stop.reason]]);
   });
 });
 

@@ -401,9 +401,11 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       publicInterface: gitPublicInterface,
       judgements: new SuiteReviewJudgementRepository(db),
       onAttempt: ladderAttemptSink,
+      logger,
     }),
     shutdownSignal: abortController.signal,
     clock: ports.clock,
+    logger,
   });
 
   // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
@@ -451,12 +453,14 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       store: createFirstPlanStore(db),
       containment,
       onAttempt: ladderAttemptSink,
+      logger,
     }),
     replanning: new Replanner({
       llm: modelCalls,
-      store: createReplanStore(db),
+      store: createReplanStore(db, logger),
       containment,
       onAttempt: ladderAttemptSink,
+      logger,
     }),
     planReports: new PlanReports(createPlanReportStore(db), containment),
     stackChoices: new StackChoiceReports(createStackChoiceStore(db), containment),
@@ -563,6 +567,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
             failureRouter,
             devSessionStore: devSessionRepo,
             workdirBase: config.coreLoop.workdirBase,
+            logger,
           }),
         `work items in ${redactedDatabaseUrl(databaseUrl)}, workdir ${config.coreLoop.workdirBase}`,
       );

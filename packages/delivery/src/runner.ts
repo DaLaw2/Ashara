@@ -74,7 +74,7 @@ export class ContinuousRunner implements CycleRunner {
    * none did.
    */
   async run(signal: AbortSignal, onHalt: (stop: LoopStop) => Promise<void>): Promise<LoopStop | null> {
-    console.log("Continuous runner starting");
+    this.logger.info("delivery.runner-starting", "Continuous runner starting");
 
     let pgListener: PgListener | null = null;
     if (this.config.databaseUrl !== null) {
@@ -82,19 +82,21 @@ export class ContinuousRunner implements CycleRunner {
         this.wake();
       });
       const pid = pgListener.backendPid();
-      console.log(
-        pid === null
-          ? "PG listener not connected; reconnecting in the background, polling meanwhile"
-          : `PG listener connected (backend pid ${pid})`,
-      );
+      if (pid === null) {
+        this.logger.warn("delivery.listener-disconnected", "PG listener not connected; reconnecting in the background, polling meanwhile");
+      } else {
+        this.logger.info("delivery.listener-connected", `PG listener connected (backend pid ${pid})`, { pid });
+      }
     }
 
     let stop: LoopStop | null = null;
     try {
       stop = await this.cycleUntilStop(signal);
       if (stop !== null) {
-        console.error(
+        this.logger.error(
+          "delivery.runner-halted",
           `Continuous runner halted: ${stop.reason}. Until the process restarts, only the client's stops are taken in and answered.`,
+          { reason: stop.reason },
         );
         await onHalt(stop);
         await this.answerStopsUntilAborted(signal);
@@ -105,7 +107,7 @@ export class ContinuousRunner implements CycleRunner {
       }
     }
 
-    console.log("Continuous runner stopped");
+    this.logger.info("delivery.runner-stopped", "Continuous runner stopped");
     return stop;
   }
 
@@ -120,7 +122,7 @@ export class ContinuousRunner implements CycleRunner {
       try {
         const result: CycleResult = await this.runCycle();
         consecutiveErrors = 0;
-        console.log(`Cycle complete: ${result.tasksProcessed} tasks processed`);
+        this.logger.info("delivery.cycle-ended", `Cycle complete: ${result.tasksProcessed} tasks processed`, { tasksProcessed: result.tasksProcessed });
 
         if (result.stop) return result.stop;
 
@@ -129,7 +131,7 @@ export class ContinuousRunner implements CycleRunner {
         // wait below must not, or a throwing cycle that published an event would
         // re-run with no backoff.
         if (this.wakePending) {
-          console.log("Wake received during the cycle; re-cycling without waiting");
+          this.logger.debug("delivery.wake-pending", "Wake received during the cycle; re-cycling without waiting");
           continue;
         }
 
@@ -141,7 +143,7 @@ export class ContinuousRunner implements CycleRunner {
       } catch (e) {
         // eslint-disable-next-line ashara/catch-continue -- best effort: the supervisor loop: a failed cycle is counted in consecutiveErrors, backs off, and the next cycle re-reads every item from the store
         consecutiveErrors += 1;
-        console.error(`Cycle error (consecutive: ${consecutiveErrors}):`, e);
+        this.logger.error("delivery.cycle-error", `Cycle error (consecutive: ${consecutiveErrors})`, { consecutiveErrors }, e);
         await this.backOff(consecutiveErrors, mergedSignal);
       }
     }
@@ -161,7 +163,12 @@ export class ContinuousRunner implements CycleRunner {
       } catch (e) {
         // eslint-disable-next-line ashara/catch-continue -- best effort: the supervisor loop: a failed halted cycle is counted in consecutiveErrors, backs off, and the next one re-reads the client's stops
         consecutiveErrors += 1;
-        console.error(`Halted cycle error (consecutive: ${consecutiveErrors}): the client's stops are not taken in this time:`, e);
+        this.logger.error(
+          "delivery.halted-cycle-error",
+          `Halted cycle error (consecutive: ${consecutiveErrors}): the client's stops are not taken in this time`,
+          { consecutiveErrors },
+          e,
+        );
         await this.backOff(consecutiveErrors, signal);
       }
     }
@@ -172,7 +179,7 @@ export class ContinuousRunner implements CycleRunner {
     if (consecutiveErrors < this.config.maxConsecutiveErrors) return;
     const exponent = Math.min(consecutiveErrors, 6);
     const backoffMs = Math.pow(2, exponent) * 1000;
-    console.warn(`Backing off for ${backoffMs / 1000}s after ${consecutiveErrors} consecutive errors`);
+    this.logger.warn("delivery.backing-off", `Backing off for ${backoffMs / 1000}s after ${consecutiveErrors} consecutive errors`, { backoffMs, consecutiveErrors });
     await this.waitForWakeOrTimeout(backoffMs, signal);
   }
 

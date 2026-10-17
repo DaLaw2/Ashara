@@ -3,8 +3,9 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, test } from "vitest";
 import { ensureTargetGitInit } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared";
 import { commitMerge, deleteSettledTaskBranch, releaseMergedTaskCheckout, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
 
 // ---------------------------------------------------------------------------
@@ -70,7 +71,7 @@ describe("the merge record", () => {
   test("commitMerge returns the merge commit now at main, whose second parent is the task branch", async () => {
     await commitOnTaskBranch("task/one", { "a.txt": "a\n" });
     const branchTip = await git(target, "rev-parse", "task/one");
-    await tentativeMerge(target, "task/one");
+    await tentativeMerge(target, "task/one", recordingLogger());
 
     const mergeCommit = await commitMerge(target, "one");
 
@@ -80,7 +81,7 @@ describe("the merge record", () => {
 
   test("taskMergeOnMain finds the merge commitMerge made, and none of another task", async () => {
     await commitOnTaskBranch("task/one", { "a.txt": "a\n" });
-    await tentativeMerge(target, "task/one");
+    await tentativeMerge(target, "task/one", recordingLogger());
     const mergeCommit = await commitMerge(target, "one");
 
     expect(await taskMergeOnMain(target, "one")).toBe(mergeCommit);
@@ -104,7 +105,7 @@ describe("the merge record", () => {
 describe("merge queue vs. build residue in the main checkout", () => {
   test("a tracked build artifact rebuilt by post-merge verify blocks the next merge", async () => {
     await commitOnTaskBranch("task/one", { "main.go": "package main\n", jot: "binary-v1" });
-    expect((await tentativeMerge(target, "task/one")).status).toBe("clean");
+    expect((await tentativeMerge(target, "task/one", recordingLogger())).status).toBe("clean");
     await commitMerge(target, "one");
 
     // Post-merge verify: `go build ./...` regenerates the tracked binary here.
@@ -112,7 +113,7 @@ describe("merge queue vs. build residue in the main checkout", () => {
 
     await commitOnTaskBranch("task/two", { "main.go": "package main\n\nfunc main() {}\n", jot: "binary-v2" });
 
-    const refused = await tentativeMerge(target, "task/two");
+    const refused = await tentativeMerge(target, "task/two", recordingLogger());
     // Not "conflict": git refuses before the merge starts, so nothing is
     // unmerged and the refusal lands in the error branch. The artifact git
     // names is the only locale-independent part of its message.
@@ -124,7 +125,7 @@ describe("merge queue vs. build residue in the main checkout", () => {
 
   test("resetCheckoutToHead makes that same merge succeed", async () => {
     await commitOnTaskBranch("task/one", { "main.go": "package main\n", jot: "binary-v1" });
-    await tentativeMerge(target, "task/one");
+    await tentativeMerge(target, "task/one", recordingLogger());
     await commitMerge(target, "one");
 
     await writeFile(join(target, "jot"), "binary-v1-rebuilt", "utf-8");
@@ -134,7 +135,7 @@ describe("merge queue vs. build residue in the main checkout", () => {
 
     expect((await resetCheckoutToHead(target)).status).toBe("clean");
     expect(await git(target, "status", "--porcelain")).toBe("");
-    expect((await tentativeMerge(target, "task/two")).status).toBe("clean");
+    expect((await tentativeMerge(target, "task/two", recordingLogger())).status).toBe("clean");
   });
 
   test("a genuine content conflict is still reported as a conflict", async () => {
@@ -142,11 +143,11 @@ describe("merge queue vs. build residue in the main checkout", () => {
     await commitOnTaskBranch("task/one", { "main.go": "package main // one\n" });
     await commitOnTaskBranch("task/two", { "main.go": "package main // two\n" });
 
-    await tentativeMerge(target, "task/one");
+    await tentativeMerge(target, "task/one", recordingLogger());
     await commitMerge(target, "one");
 
     await resetCheckoutToHead(target);
-    const result = await tentativeMerge(target, "task/two");
+    const result = await tentativeMerge(target, "task/two", recordingLogger());
     expect(result.status).toBe("conflict");
     if (result.status === "conflict") {
       expect(result.files).toContain("main.go");
@@ -167,12 +168,12 @@ describe("a settled task's branch", () => {
   test("is deleted when its work was merged, and when it was discarded with commits main never took", async () => {
     await commitOnTaskBranch("task/merged", { "a.txt": "a\n" });
     await commitOnTaskBranch("task/discarded", { "a.txt": "other\n" });
-    await tentativeMerge(target, "task/merged");
+    await tentativeMerge(target, "task/merged", recordingLogger());
     await commitMerge(target, "merged");
 
-    await deleteSettledTaskBranch(target, "merged", "merged into main");
+    await deleteSettledTaskBranch(target, "merged", "merged into main", recordingLogger());
     // The conflicting branch of a task completed as already delivered: none of its commits is on main.
-    await deleteSettledTaskBranch(target, "discarded", "completed as already delivered");
+    await deleteSettledTaskBranch(target, "discarded", "completed as already delivered", recordingLogger());
 
     expect(await git(target, "branch", "--list", "task/*")).toBe("");
   });
@@ -180,31 +181,23 @@ describe("a settled task's branch", () => {
   test("a branch a worktree still holds is left, with git's cause at warn", async () => {
     await commitOnTaskBranch("task/held", { "a.txt": "a\n" });
     await git(target, "worktree", "add", join(await makeDir("ashara-merge-held-"), "wt"), "task/held");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      await deleteSettledTaskBranch(target, "held", "completed as already delivered");
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]?.[0])).toMatch(/the branch task\/held of a task completed as already delivered could not be deleted.*branch -D task\/held/s);
-    } finally {
-      warn.mockRestore();
-    }
+    const logger = recordingLogger();
+    await deleteSettledTaskBranch(target, "held", "completed as already delivered", logger);
+    expect(logger.records.map((r) => [r.level, r.event, r.fields?.["branch"]])).toEqual([["warn", "quality.settled-branch-left", "task/held"]]);
+    expect(JSON.stringify(logger.records[0]?.error)).toMatch(/branch -D task\/held/);
     expect(await git(target, "branch", "--list", "task/held")).not.toBe("");
   });
 
   test("of a task found merged on main after its dispatch died, is deleted with the worktree that dispatch left", async () => {
     const workdirBase = dirname(target);
     await commitOnTaskBranch("task/orphan", { "a.txt": "a\n" });
-    await tentativeMerge(target, "task/orphan");
+    await tentativeMerge(target, "task/orphan", recordingLogger());
     await commitMerge(target, "orphan");
     const slot = join(workdirBase, "task-orphan");
     await git(target, "worktree", "add", slot, "task/orphan");
-    const warn = vi.spyOn(console, "warn");
-    try {
-      await releaseMergedTaskCheckout(workdirBase, target, "orphan", "merged on main");
-      expect(warn.mock.calls).toEqual([]);
-    } finally {
-      warn.mockRestore();
-    }
+    const logger = recordingLogger();
+    await releaseMergedTaskCheckout(workdirBase, target, "orphan", "merged on main", logger);
+    expect(logger.records).toEqual([]);
     expect(await git(target, "branch", "--list", "task/*")).toBe("");
     expect(await git(target, "worktree", "list", "--porcelain")).not.toContain(slot);
     await expect(access(slot)).rejects.toThrow();

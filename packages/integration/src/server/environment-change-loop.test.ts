@@ -148,6 +148,7 @@ async function harness(name: string): Promise<Harness> {
   const sessions = new DevSessionRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const dispatchService = new DispatchService({
+    logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: {
       insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version, "test-trace"),

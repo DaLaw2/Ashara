@@ -150,7 +150,7 @@ function roster(): RosterDerivation {
 function planner(): FirstPlanner {
   const store = createFirstPlanStore(db);
   const narrowed: FirstPlanStore = { ...store, projectsAwaitingPlan: ours(() => store.projectsAwaitingPlan()) };
-  return new FirstPlanner({ containment: containment(), llm: gateway, store: narrowed });
+  return new FirstPlanner({ logger: recordingLogger(), containment: containment(), llm: gateway, store: narrowed });
 }
 
 /** A tender taken in: vision v1 with A1 and A2 adopted by the two questions, A3 unasked. */

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ProjectId } from "@ashara/shared";
+import type { Logger, ProjectId } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { PlanningService } from "./domain/index.js";
 import { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./acl/execution-infra-acl.js";
@@ -28,6 +28,7 @@ export async function resolveTargetProjectPath(
   store: WorkspacePathStore,
   projectId: ProjectId,
   workdirBase: string,
+  logger: Logger,
 ): Promise<TargetWorkspace> {
   const project = await store.get(projectId);
   if (!project) {
@@ -50,7 +51,7 @@ export async function resolveTargetProjectPath(
     // dispatch that recorded first wins.
     const stored = await store.recordWorkspacePath(projectId, minted);
     if (stored !== minted) await assertValidTargetProjectPath(stored, workdirBase);
-    console.log(`[project ${projectId}] target workspace path: ${stored}`);
+    logger.info("delivery.workspace-recorded", `target workspace path: ${stored}`, { projectId, workspacePath: stored });
     return { kind: "resolved", path: stored };
   } catch (e) {
     if (!(e instanceof InvalidTargetProjectPath)) throw e;

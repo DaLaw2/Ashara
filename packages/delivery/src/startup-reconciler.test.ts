@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { FailureRouter } from "./failure-router.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
@@ -64,6 +64,7 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): { deps: Star
     },
     // Every target here is made under the temporary directory.
     workdirBase: tmpdir(),
+    logger: recordingLogger(),
     ...overrides,
   };
 
@@ -76,8 +77,6 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
   const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000aa", "test");
 
   function orphanDeps(evidence: { readonly latestPhase: string | null; readonly orphanedBefore: number }) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     const now = new Date();
     let row: WorkItem = {
       id: createWorkItemId(),
@@ -108,8 +107,10 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
         row = { ...item, dispatchCount: refund === "refund" ? row.dispatchCount - 1 : row.dispatchCount, events: [] };
       },
     };
+    const logger = recordingLogger();
     const { deps } = buildDeps({
       workItemRepo: repo,
+      logger,
       devSessionStore: {
         dispatchEvidence: async (_taskId, resolvedBy) => {
           evidenceAsked.push(resolvedBy);
@@ -117,7 +118,7 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
         },
       },
     });
-    return { deps, row: () => row, evidenceAsked };
+    return { deps, logger, row: () => row, evidenceAsked };
   }
 
   afterEach(() => {
@@ -125,12 +126,13 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
   });
 
   test("its latest session never got a terminal write: requeued and the dispatch given back", async () => {
-    const { deps, row, evidenceAsked } = orphanDeps({ latestPhase: "Preparing", orphanedBefore: 0 });
+    const { deps, logger, row, evidenceAsked } = orphanDeps({ latestPhase: "Preparing", orphanedBefore: 0 });
 
     const summary = await reconcileWorkItemsOnStartup(deps);
 
     expect(summary.orphansRequeued).toBe(1);
     expect(row()).toMatchObject({ status: "Pending", dispatchCount: 1 });
+    expect(logger.records.filter((r) => r.event === "delivery.orphan-requeued").map((r) => [r.level, r.fields?.["refunded"]])).toEqual([["info", true]]);
     // Counted by the very name Workplace's session reconcile records, read before it closes this start's sessions.
     expect(evidenceAsked).toEqual(["startup-reconciler"]);
   });
@@ -194,8 +196,6 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     workspacePath: string | null,
     saveFails: (status: WorkItem["status"]) => boolean = () => false,
   ) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     const now = new Date();
     let row: WorkItem = {
       id,
@@ -389,8 +389,6 @@ describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its 
   });
 
   function parkedWorld(failureVerdict: WorkItem["failureVerdict"]) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     const now = new Date();
     let row: WorkItem = {
       id: createWorkItemId(),

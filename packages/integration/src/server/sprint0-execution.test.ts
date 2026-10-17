@@ -230,6 +230,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
   const workItems = new WorkItemRowRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DispatchService({
+    logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: sessions,
     knowledgeSink: { storeFinding: async () => {} },

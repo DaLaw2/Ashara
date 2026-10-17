@@ -9,7 +9,7 @@ import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
 import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, failWorkItem, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { WorkItemRepository as WorkItemPort } from "@ashara/delivery";
-import { memoryStepContainment, parseWorkItemId } from "@ashara/shared";
+import { memoryStepContainment, parseWorkItemId, recordingLogger } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
@@ -108,7 +108,7 @@ function reports(handle: Handle): PlanReports {
 }
 
 async function gate(handle: Handle) {
-  return (await PlanningService.gate(adaptWorkItemRepo(new WorkItemRowRepository(handle)), ourActiveProjects(handle), { publish: async () => {} }, memoryStepContainment(() => true))).available;
+  return (await PlanningService.gate(adaptWorkItemRepo(new WorkItemRowRepository(handle)), ourActiveProjects(handle), { publish: async () => {} }, memoryStepContainment(() => true), recordingLogger())).available;
 }
 
 /** Rolls the probe transaction back once its assertions have run. */
@@ -241,6 +241,7 @@ describe("one project's bad record at startup", () => {
       };
 
       const summary = await reconcileWorkItemsOnStartup({
+        logger: recordingLogger(),
         workItemRepo: ours,
         projects: new ProjectHaltRepository(tx),
         eventStore: { publish: async () => undefined },
@@ -299,6 +300,7 @@ describe("a parked Failed item at startup is routed by the verdict saved with it
 
       const repo = adaptWorkItemRepo(new WorkItemRowRepository(tx));
       const summary = await reconcileWorkItemsOnStartup({
+        logger: recordingLogger(),
         workItemRepo: { ...repo, projectIdsWithStatus: async (status) => (await repo.projectIdsWithStatus(status)).filter((id) => ourProjects.has(id)) },
         projects: new ProjectHaltRepository(tx),
         eventStore: { publish: async () => undefined },

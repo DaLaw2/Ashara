@@ -1,4 +1,4 @@
-import type { ProjectId } from "@ashara/shared";
+import type { Logger, ProjectId } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { WorkItem } from "./domain/index.js";
 import type { MergeKind } from "./work-item-language/blocked-reason.js";
@@ -58,20 +58,26 @@ function settledOn(kind: MergeKind | null): string {
  * meets next: the worktree and branch are released as soon as the record holds. A failure is a
  * leftover in the target, logged at warn with its cause, never a verdict.
  */
-export async function releaseMergedTask(projects: TargetPathSource, workdirBase: string, item: WorkItem, kind: MergeKind | null): Promise<void> {
+export async function releaseMergedTask(
+  projects: TargetPathSource,
+  workdirBase: string,
+  item: WorkItem,
+  kind: MergeKind | null,
+  logger: Logger,
+): Promise<void> {
   const settled = settledOn(kind);
   let target: string | null;
   try {
     target = await targetOf(projects, workdirBase, item);
   } catch (e) {
-    console.warn(`[${item.id}] ${settled}, but its target could not be read, so its worktree and branch are left: ${describeErrorChain(e)}`);
+    logger.warn("delivery.merged-checkout-left", `${settled}, but its target could not be read, so its worktree and branch are left`, { taskId: item.id }, e);
     return;
   }
   if (target === null) {
-    console.warn(`[${item.id}] ${settled}, but its project now records no target, so its worktree and branch are left`);
+    logger.warn("delivery.merged-checkout-left", `${settled}, but its project now records no target, so its worktree and branch are left`, { taskId: item.id });
     return;
   }
-  await releaseMergedTaskCheckout(workdirBase, target, item.id, settled);
+  await releaseMergedTaskCheckout(workdirBase, target, item.id, settled, logger);
 }
 
 /**

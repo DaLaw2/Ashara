@@ -76,7 +76,7 @@ import type {
   VerificationCells,
   WorkPlan,
 } from "@ashara/quality";
-import type { Clock, ProjectId, WorkItemId } from "@ashara/shared";
+import type { Clock, Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import type { AgentBrief, ErrorEnvelope } from "@ashara/workplace";
 import { describeErrorChain, parseWorkItemId, wrapError } from "@ashara/shared";
 import { createAgentBrief, createSessionId, turnFailureOf } from "@ashara/workplace";
@@ -154,11 +154,12 @@ function environmentUndefined(
   sessionId: string,
   reason: string,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
 ): ExecutionResult {
   const taskId = task.id;
   const chain = wrapError("development", "resolveCurrentEnvironment", reason, { taskId });
   const summary = `no environment for task ${taskId}: ${reason}; no agent ran and nothing executed`;
-  console.warn(`[${taskId}] ${summary}`);
+  logger.info("delivery.environment-undefined", summary, { taskId, attempt: task.attempt });
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage: "resolveCurrentEnvironment", reason: summary });
   return {
     status: "environment_undefined",
@@ -180,11 +181,12 @@ function ownerUnresolved(
   sessionId: string,
   unresolved: OwnerUnresolved,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
 ): ExecutionResult {
   const taskId = task.id;
   const chain = wrapError("development", "assignAgent", unresolved.reason, { taskId, ownerRoleId: unresolved.ownerRoleId });
   const summary = `no roster role can work task ${taskId}: ${unresolved.reason}; no agent ran and nothing executed`;
-  console.warn(`[${taskId}] ${summary}`);
+  logger.info("delivery.owner-unresolved", summary, { taskId, attempt: task.attempt, ownerRoleId: unresolved.ownerRoleId });
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage: "assignAgent", reason: summary });
   return {
     status: "owner_unresolved",
@@ -208,6 +210,7 @@ function noWiderModel(
   sessionId: string,
   unfit: NoWiderModel,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
 ): ExecutionResult {
   const taskId = task.id;
   const reason =
@@ -215,7 +218,7 @@ function noWiderModel(
     `graded for it has a larger one`;
   const chain = wrapError("development", "assignAgent", reason, { taskId, overflowedWindowTokens: unfit.overflowedWindowTokens });
   const summary = `${reason}; no agent ran and nothing executed`;
-  console.warn(`[${taskId}] ${summary}`);
+  logger.warn("delivery.no-wider-model", summary, { taskId, attempt: task.attempt, overflowedWindowTokens: unfit.overflowedWindowTokens });
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage: "assignAgent", reason: summary });
   return {
     status: "no_wider_model",
@@ -428,6 +431,7 @@ interface DispatchServiceDeps {
   readonly shutdownSignal: AbortSignal;
   /** What an attempt's wall clock reads. */
   readonly clock: Clock;
+  readonly logger: Logger;
 }
 
 export class DispatchService {
@@ -445,6 +449,7 @@ export class DispatchService {
       checks: deps.checks,
       suiteReview: deps.suiteReview,
       ...(deps.eventSink === undefined ? {} : { eventSink: deps.eventSink }),
+      logger: deps.logger,
     });
   }
 
@@ -496,7 +501,7 @@ export class DispatchService {
     try {
       await cells.substrate.probeSubstrate();
     } catch (e) {
-      return thrownBlocked(task, sessionId, "probeSubstrate", e, { step: "probe the container substrate", cell: "container substrate" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "probeSubstrate", e, { step: "probe the container substrate", cell: "container substrate" }, NO_AGENT, eventSink, this.deps.logger);
     }
 
     // Only the environment role's work and the product scaffold are checked by the substrate: any
@@ -529,11 +534,11 @@ export class DispatchService {
           readEnvironmentDefinition,
         );
         // No lesson: nothing of the agent's ran (fault-class.ts), the plan's repair answers it.
-        if (resolution.kind === "undefined") return environmentUndefined(task, sessionId, resolution.reason, eventSink);
+        if (resolution.kind === "undefined") return environmentUndefined(task, sessionId, resolution.reason, eventSink, this.deps.logger);
         environment = { kind: "environment", ...resolution.environment };
       } catch (e) {
         const where = { step: "resolve the current environment", cell: "environment image build" };
-        return thrownBlocked(task, sessionId, "resolveEnvironment", e, where, NO_AGENT, eventSink);
+        return thrownBlocked(task, sessionId, "resolveEnvironment", e, where, NO_AGENT, eventSink, this.deps.logger);
       }
       eventSink?.emit({
         event: "environment_resolved",
@@ -565,7 +570,7 @@ export class DispatchService {
       if (planned.kind === "unplannable") return await unplannable(planned);
       plan = planned;
     } catch (e) {
-      return thrownBlocked(task, sessionId, "planWork", e, { step: "read the checks that decide the work", cell: "CI cell" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "planWork", e, { step: "read the checks that decide the work", cell: "CI cell" }, NO_AGENT, eventSink, this.deps.logger);
     }
 
     // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
@@ -583,7 +588,7 @@ export class DispatchService {
         resumesBranch = await branchExists(targetProjectPath, taskBranchName(task.id));
       }
     } catch (e) {
-      return thrownBlocked(task, sessionId, "resumeBranch", e, { step: "read whether the task branch exists", cell: "host git" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "resumeBranch", e, { step: "read whether the task branch exists", cell: "host git" }, NO_AGENT, eventSink, this.deps.logger);
     }
     let conflict: MainConflict | null = null;
     if (resumesBranch) {
@@ -604,7 +609,7 @@ export class DispatchService {
       // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
       // other throw building the brief: never the agent's work, so blocked under class ashara.
       const step = e instanceof ProjectIntentUnavailable ? "load the project's intent" : "build the brief";
-      return thrownBlocked(task, sessionId, "buildBrief", e, { step, cell: "brief" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "buildBrief", e, { step, cell: "brief" }, NO_AGENT, eventSink, this.deps.logger);
     }
 
     // The Assignment's agent half, once per attempt: a model that cannot be
@@ -613,13 +618,13 @@ export class DispatchService {
     let records: DispatchRecords;
     try {
       const staffing = await this.deps.staffing.staff(task);
-      if (staffing.kind === "owner-unresolved") return ownerUnresolved(task, sessionId, staffing, eventSink);
-      if (staffing.kind === "no-wider-model") return noWiderModel(task, sessionId, staffing, eventSink);
+      if (staffing.kind === "owner-unresolved") return ownerUnresolved(task, sessionId, staffing, eventSink, this.deps.logger);
+      if (staffing.kind === "no-wider-model") return noWiderModel(task, sessionId, staffing, eventSink, this.deps.logger);
       staff = staffing.staff;
       records = new DispatchRecords(base, task.id, sessionId);
       await records.writeBrief(brief);
     } catch (e) {
-      return thrownBlocked(task, sessionId, "assignAgent", e, { step: "staff the attempt and write its brief", cell: "attempt records" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "assignAgent", e, { step: "staff the attempt and write its brief", cell: "attempt records" }, NO_AGENT, eventSink, this.deps.logger);
     }
 
     // A check task works on a throwaway branch fresh from main, never on a task branch: nothing of
@@ -636,18 +641,18 @@ export class DispatchService {
         try {
           work = { ...plan, branch, startCommit: await headCommit(workdir.repo, task.id), recorder: new CheckRecorder(plan.citedItems) };
         } catch (e) {
-          await discardCheckWorkdir(workdir.workDir, targetProjectPath, branch);
+          await discardCheckWorkdir(workdir.workDir, targetProjectPath, branch, this.deps.logger);
           throw e;
         }
       } else {
         workdir = resumesBranch
-          ? await createWorkdirForRetry(base, targetProjectPath, taskBranchName(task.id), mainMergedForRetry(task.id, conflict))
+          ? await createWorkdirForRetry(base, targetProjectPath, taskBranchName(task.id), mainMergedForRetry(task.id, conflict, this.deps.logger))
           : await createWorkdir(base, targetProjectPath, taskBranchName(task.id));
         work = plan;
       }
     } catch (e) {
       if (e instanceof ConflictRetryUnprepared) return this.conflictUnprepared(task, sessionId, e);
-      return thrownBlocked(task, sessionId, "createWorkdir", e, { step: "create the task worktree", cell: "host git" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "createWorkdir", e, { step: "create the task worktree", cell: "host git" }, NO_AGENT, eventSink, this.deps.logger);
     }
     const { workDir, repo } = workdir;
 
@@ -667,7 +672,7 @@ export class DispatchService {
       });
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return thrownBlocked(task, sessionId, "createCell", e, { step: "create the task cell", cell: "task cell" }, NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "createCell", e, { step: "create the task cell", cell: "task cell" }, NO_AGENT, eventSink, this.deps.logger);
     }
     eventSink?.emit({ event: "cell_created", taskId: task.id, attempt: task.attempt, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
 
@@ -703,7 +708,7 @@ export class DispatchService {
       // A throw no stage caught: never the agent's work, so blocked under its class, no lesson.
       eventSink?.emit({ event: "error", location: "DispatchService:execute", taskId: task.id, attempt: task.attempt, error: describeErrorChain(e) });
       await cleanupWorkdir(workDir, targetProjectPath);
-      return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink);
+      return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink, this.deps.logger);
     } finally {
       await this.verification.teardownCell({ taskId: task.id, attempt: task.attempt }, cell);
     }
@@ -869,7 +874,7 @@ export class DispatchService {
       });
     } catch (e: unknown) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the findings section is left out of the brief, never rendered as none, and the attempt is judged by its checks, not by what context it was given
-      console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${describeErrorChain(e)}`);
+      this.deps.logger.warn("delivery.findings-unread", "the recent findings could not be read; the brief leaves them out", {}, e);
     }
 
     try {
@@ -880,7 +885,7 @@ export class DispatchService {
       });
     } catch (e: unknown) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the failed-approaches section is left out of the brief, never rendered as none, and the attempt is judged by its checks, not by what context it was given
-      console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${describeErrorChain(e)}`);
+      this.deps.logger.warn("delivery.failed-approaches-unread", "the failed approaches could not be read; the brief leaves them out", {}, e);
     }
 
     return renderKnowledgeContext(sections);
@@ -1006,7 +1011,7 @@ export class DispatchService {
       if (refused !== null) return refused;
     }
 
-    let finalizeDeps: Omit<FinalizeDeps, "presentedConflict" | "workdirBase">;
+    let finalizeDeps: Omit<FinalizeDeps, "presentedConflict" | "workdirBase" | "logger">;
     if (d.work.kind === "substrate") {
       const gate = await this.verification.substrateGate(d, outcome.statement, outcome);
       if (gate.kind === "ended") return gate.result;
@@ -1030,7 +1035,7 @@ export class DispatchService {
     }
 
     const finalizeResult = await finalizeSuccess(
-      { ...finalizeDeps, presentedConflict: d.conflict, workdirBase: this.deps.config.workdirBase },
+      { ...finalizeDeps, presentedConflict: d.conflict, workdirBase: this.deps.config.workdirBase, logger: this.deps.logger },
       task,
       targetProjectPath,
       task.attempt,
@@ -1049,6 +1054,7 @@ export class DispatchService {
           "verifier cell",
           { outcome, agentWork: "kept" },
           eventSink,
+          this.deps.logger,
           finalizeResult.errorLayer,
         );
       }
@@ -1056,7 +1062,7 @@ export class DispatchService {
         // No verdict was reached, so nothing is known of the task's work: blocked for the operator,
         // the merge aborted and the branch kept, never a failure the task is replanned against.
         await cleanupWorkdir(workDir, targetProjectPath);
-        return asharaBlocked(task, sessionId, "postMergeCheckRun", fault.error, { outcome, agentWork: "kept" }, eventSink, finalizeResult.errorLayer);
+        return asharaBlocked(task, sessionId, "postMergeCheckRun", fault.error, { outcome, agentWork: "kept" }, eventSink, this.deps.logger, finalizeResult.errorLayer);
       }
       const { verdict } = fault;
       const gateChain = finalizeResult.errorLayer;
@@ -1086,13 +1092,13 @@ export class DispatchService {
     }
 
     await cleanupWorkdir(workDir, targetProjectPath);
-    await deleteSettledTaskBranch(targetProjectPath, task.id, "merged into main");
+    await deleteSettledTaskBranch(targetProjectPath, task.id, "merged into main", this.deps.logger);
     // Stated from the disk, not assumed: cleanupWorkdir's own fallbacks are best-effort.
     const left = await worktreeLeft(workDir);
     if (left !== null) {
-      console.warn(`[${task.id}] task completed — but worktree ${workDir} ${left}`);
+      this.deps.logger.warn("delivery.worktree-left", `task completed — but worktree ${workDir} ${left}`, { taskId: task.id, attempt: task.attempt, workDir });
     } else {
-      console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
+      this.deps.logger.info("delivery.task-merged", `task completed — worktree ${workDir} removed after the merge`, { taskId: task.id, attempt: task.attempt, workDir });
     }
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
     return {
@@ -1113,7 +1119,7 @@ export class DispatchService {
    */
   private conflictUnprepared(task: TaskDescriptor, sessionId: string, e: unknown): ExecutionResult {
     const where = { step: "prepare the task's conflict with main for its next attempt", cell: "host git" };
-    return thrownBlocked(task, sessionId, "prepareConflictRetry", e, where, NO_AGENT, this.deps.eventSink);
+    return thrownBlocked(task, sessionId, "prepareConflictRetry", e, where, NO_AGENT, this.deps.eventSink, this.deps.logger);
   }
 
   /**
@@ -1131,7 +1137,7 @@ export class DispatchService {
       await cleanupWorkdir(workDir, targetProjectPath);
       const fault = new VerificationInfrastructureFault(task.id, "conflict marker read of the task worktree", { cause: e });
       const chain = wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name });
-      return asharaBlocked(task, sessionId, "conflictResolution", fault, { outcome, agentWork: "merge-discarded" }, this.deps.eventSink, chain);
+      return asharaBlocked(task, sessionId, "conflictResolution", fault, { outcome, agentWork: "merge-discarded" }, this.deps.eventSink, this.deps.logger, chain);
     }
     this.deps.eventSink?.emit({ event: "merge_conflict_resolution", taskId: task.id, attempt: task.attempt, files: conflict.files, markersLeft: left });
     if (left.length === 0) return null;
@@ -1165,7 +1171,7 @@ export class DispatchService {
       await cleanupWorkdir(workDir, targetProjectPath);
       if (!(e instanceof WorktreeCommitIncomplete)) {
         // Z0's git refused to record the work (WorktreeCommitFailed), or anything else failed: never the agent's.
-        return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { outcome, agentWork: "kept" }, this.deps.eventSink);
+        return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { outcome, agentWork: "kept" }, this.deps.eventSink, this.deps.logger);
       }
       const chain = wrapError("development", "commitWork", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
@@ -1197,12 +1203,12 @@ export class DispatchService {
       if (environmentFailure !== null) {
         return {
           kind: "ended",
-          result: substrateBlocked(task, sessionId, "branchWork", environmentFailure, "host git", { outcome, agentWork: "kept" }, this.deps.eventSink),
+          result: substrateBlocked(task, sessionId, "branchWork", environmentFailure, "host git", { outcome, agentWork: "kept" }, this.deps.eventSink, this.deps.logger),
         };
       }
       const fault = new VerificationInfrastructureFault(task.id, "task branch diff against main", { cause: e });
       const chain = wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name });
-      return { kind: "ended", result: asharaBlocked(task, sessionId, "branchWork", fault, { outcome, agentWork: "kept" }, this.deps.eventSink, chain) };
+      return { kind: "ended", result: asharaBlocked(task, sessionId, "branchWork", fault, { outcome, agentWork: "kept" }, this.deps.eventSink, this.deps.logger, chain) };
     }
   }
 
@@ -1220,7 +1226,7 @@ export class DispatchService {
     let agentWork: Exclude<AgentWork, "none">;
     if (d.work.kind === "check-authoring") {
       // Nothing of a check task is kept for a retry: the next attempt starts again from main.
-      await discardCheckWorkdir(workDir, targetProjectPath, d.work.branch);
+      await discardCheckWorkdir(workDir, targetProjectPath, d.work.branch, this.deps.logger);
       agentWork = "discarded";
     } else {
       agentWork = agentWorkOf(
@@ -1273,6 +1279,7 @@ export class DispatchService {
           agentWork,
         },
         this.deps.eventSink,
+        this.deps.logger,
       );
     }
 
@@ -1296,6 +1303,7 @@ export class DispatchService {
           agentWork,
         },
         this.deps.eventSink,
+        this.deps.logger,
       );
     }
 
@@ -1319,7 +1327,7 @@ export class DispatchService {
       const summary =
         `turn ${outcome.turn} did not fit the ${windowTokens}-token window of ${staff.model.provider}/${staff.model.modelId} ` +
         `(output reserve ${outputReserveTokens}) after ${outcome.turnsUsed} turn(s): ${estimate}; ${next}; ${describeAgentWork(agentWork)}`;
-      console.warn(`[${task.id}] ${summary}`);
+      this.deps.logger.info("delivery.context-exceeded", summary, { taskId: task.id, attempt: task.attempt, windowTokens, outputReserveTokens });
       this.deps.eventSink?.emit({
         event: "context_exceeded",
         taskId: task.id,
@@ -1354,7 +1362,7 @@ export class DispatchService {
 
     if (outcome.kind === "refused") {
       const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; ${describeAgentWork(agentWork)}`;
-      console.warn(`[${task.id}] ${summary}`);
+      this.deps.logger.info("delivery.attempt-refused", summary, { taskId: task.id, attempt: task.attempt, errorClass: outcome.error.name });
       this.deps.eventSink?.emit({ event: "task_refused", taskId: task.id, attempt: task.attempt, errorClass: outcome.error.name, reason: summary });
       return {
         status: "refused",
@@ -1377,7 +1385,7 @@ export class DispatchService {
     const shutdown = this.deps.shutdownSignal;
     if (outcome.kind === "cancelled" && shutdown.aborted && outcome.reason === shutdown.reason) {
       const summary = `attempt interrupted by shutdown after ${outcome.turnsUsed} turn(s); ${describeAgentWork(agentWork)}`;
-      console.warn(`[${task.id}] ${summary}`);
+      this.deps.logger.info("delivery.attempt-interrupted", summary, { taskId: task.id, attempt: task.attempt, turns: outcome.turnsUsed });
       this.deps.eventSink?.emit({ event: "task_interrupted", taskId: task.id, attempt: task.attempt, turns: outcome.turnsUsed });
       return {
         status: "interrupted",
@@ -1404,7 +1412,7 @@ export class DispatchService {
       const summary =
         `check ${JSON.stringify(check.name)}${whose} (revision ${stored.revision}, check task ${stored.checkTaskId}) disputed ` +
         `after ${outcome.turnsUsed} turn(s): ${outcome.reason}; ${describeAgentWork(agentWork)}`;
-      console.warn(`[${task.id}] ${summary}`);
+      this.deps.logger.info("delivery.check-disputed", summary, { taskId: task.id, attempt: task.attempt, check: check.name, checkTaskId: stored.checkTaskId });
       this.deps.eventSink?.emit({
         event: "check_disputed",
         taskId: task.id,

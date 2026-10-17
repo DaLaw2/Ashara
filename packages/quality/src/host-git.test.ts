@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { commitPartialWork, createWorkdir, ensureTargetGitInit, getChangedFiles } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared";
 import { commitMerge, tentativeMerge } from "./merge.js";
 
 const run = promisify(execFile);
@@ -67,7 +68,7 @@ describe("Z0's git never runs code a cell planted", () => {
     const hook = join(target, ".git", "hooks", "pre-commit");
     await writeFile(hook, `#!/bin/sh\ntouch ${marker("hook")}\n`);
     await chmod(hook, 0o755);
-    expect((await tentativeMerge(target, "task/hooked")).status).toBe("clean");
+    expect((await tentativeMerge(target, "task/hooked", recordingLogger())).status).toBe("clean");
     await commitMerge(target, "hooked");
 
     expect(await pwned(root)).toEqual([]);

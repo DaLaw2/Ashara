@@ -1,4 +1,4 @@
-import type { ProjectId, StepContainment } from "@ashara/shared";
+import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
 
 // The automatic exit of a project halted on infrastructure:
@@ -27,7 +27,12 @@ export interface InfrastructureHalts {
 }
 
 /** Returns how many projects resumed this cycle; a project whose resumption fails is contained to it (containEach). */
-export async function resumeInfrastructureHalts(halts: InfrastructureHalts, probe: InfrastructureProbe, containment: StepContainment): Promise<number> {
+export async function resumeInfrastructureHalts(
+  halts: InfrastructureHalts,
+  probe: InfrastructureProbe,
+  containment: StepContainment,
+  logger: Logger,
+): Promise<number> {
   const halted = await halts.listInfrastructureHalted();
   if (halted.length === 0) return 0;
   let result: InfrastructureProbeResult;
@@ -38,18 +43,21 @@ export async function resumeInfrastructureHalts(halts: InfrastructureHalts, prob
     result = { passed: false, evidence: `the probe itself threw: ${describeErrorChain(err)}` };
   }
   if (!result.passed) {
-    console.warn(`[infrastructure] ${halted.length} project(s) stay halted, the substrate probe failed: ${result.evidence}`);
+    logger.info("delivery.infrastructure-still-down", `${halted.length} project(s) stay halted, the substrate probe failed: ${result.evidence}`, { projects: halted });
     return 0;
   }
   const evidence = result.evidence;
   const outcomes = await containEach(containment, "infrastructure-resume", halted, (projectId) => ({ id: projectId, projectId }), async (projectId) => {
     const outcome = await halts.resumeFromInfrastructureHalt(projectId, evidence);
     if (outcome === "resumed") {
-      console.log(`[infrastructure] project ${projectId} resumed, the substrate probe passed: ${evidence}`);
+      logger.info("delivery.infrastructure-resumed", `project ${projectId} resumed, the substrate probe passed: ${evidence}`, { projectId, outcome });
     } else if (outcome === "unreported") {
-      console.warn(`[infrastructure] project ${projectId} not resumed yet: its halt report is not posted, so it stays halted until the client is told`);
+      logger.info("delivery.infrastructure-resume-deferred", `project ${projectId} not resumed yet: its halt report is not posted, so it stays halted until the client is told`, {
+        projectId,
+        outcome,
+      });
     } else {
-      console.warn(`[infrastructure] project ${projectId} not resumed: it is no longer halted on infrastructure`);
+      logger.info("delivery.infrastructure-resume-deferred", `project ${projectId} not resumed: it is no longer halted on infrastructure`, { projectId, outcome });
     }
     return outcome;
   });

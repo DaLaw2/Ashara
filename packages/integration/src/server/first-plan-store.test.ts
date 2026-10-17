@@ -103,7 +103,7 @@ function planner(): FirstPlanner {
     ...store,
     projectsAwaitingPlan: async () => (await store.projectsAwaitingPlan()).filter((p) => ourProjects.has(p.projectId)),
   };
-  return new FirstPlanner({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
+  return new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 function intake(): TenderIntake {

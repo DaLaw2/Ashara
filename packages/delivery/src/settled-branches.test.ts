@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 
@@ -58,6 +58,7 @@ describe("releaseBranchesOfSettledTasks: branch release follows the settled stat
       workItemRepo: board,
       projects: { listWithWorkspace: async () => [{ id: PROJECT, workspacePath: fixture.target }] },
       workdirBase: fixture.base,
+      logger: recordingLogger(),
     });
 
     expect(summary).toEqual({ released: 3, left: 0, checkouts: 0, targetsFailed: 0 });
@@ -77,6 +78,7 @@ describe("releaseBranchesOfSettledTasks: branch release follows the settled stat
       workItemRepo: boardOf(new Map<WorkItemId, WorkItemStatus>([[completed, "Completed"], [pending, "Pending"]])),
       projects: { listWithWorkspace: async () => [{ id: PROJECT, workspacePath: fixture.target }] },
       workdirBase: fixture.base,
+      logger: recordingLogger(),
     });
 
     expect(summary).toEqual({ released: 0, left: 0, checkouts: 2, targetsFailed: 0 });
@@ -100,6 +102,7 @@ describe("releaseBranchesOfSettledTasks: branch release follows the settled stat
         ],
       },
       workdirBase: fixture.base,
+      logger: recordingLogger(),
     });
     expect(summary).toEqual({ released: 0, left: 0, checkouts: 0, targetsFailed: 1 });
   });

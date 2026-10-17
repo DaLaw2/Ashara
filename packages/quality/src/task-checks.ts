@@ -12,7 +12,7 @@ import {
   writeTreeFile,
 } from "@ashara/execution-infra";
 import { joinElided, keepEnds, renderElided } from "@ashara/shared";
-import type { ElidedText, ProjectId, WorkItemId } from "@ashara/shared";
+import type { ElidedText, Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER } from "@ashara/workplace";
 import type { CheckDefinition, CheckRedRunPreview, CheckRun, DefinedCheck, FoundationProbe } from "@ashara/workplace";
 import { describeProductChange } from "./check-verdict.js";
@@ -316,15 +316,17 @@ export async function dropCheckBranch(targetProjectPath: string, branch: string)
 }
 
 /** Removes a check attempt's worktree and its branch: nothing of a check task is merged. */
-export async function discardCheckWorkdir(workDir: string, targetProjectPath: string, branch: string): Promise<void> {
+export async function discardCheckWorkdir(workDir: string, targetProjectPath: string, branch: string, logger: Logger): Promise<void> {
   await cleanupWorkdir(workDir, targetProjectPath);
   try {
     await dropCheckBranch(targetProjectPath, branch);
   } catch (err) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: a check task's throwaway branch is never merged; the next attempt deletes it before it starts, or the settled-branch release
-    console.warn(
-      `[checks] the throwaway branch ${branch} could not be deleted and is left in ${targetProjectPath}; the task's next ` +
-        `attempt deletes it before it starts, or the settled-branch release once the task is Completed or Abandoned:`,
+    logger.warn(
+      "quality.check-branch-left",
+      `the throwaway branch ${branch} could not be deleted and is left in ${targetProjectPath}; the task's next ` +
+        `attempt deletes it before it starts, or the settled-branch release once the task is Completed or Abandoned`,
+      { branch, targetPath: targetProjectPath },
       err,
     );
   }
@@ -396,10 +398,11 @@ export async function harvestCheckFiles(
   buildContext: readonly string[],
   written: ReadonlySet<string>,
   area: string,
+  logger: Logger,
 ): Promise<CheckHarvest> {
   await runHostGit(repo, ["add", "-A"]);
   await runHostGit(repo, ["commit", "--allow-empty", "-q", "-m", `ashara: checks of task ${taskId}`]);
-  return collectCheckFiles(repo, taskId, startCommit, "HEAD", buildContext, written, area);
+  return collectCheckFiles(repo, taskId, startCommit, "HEAD", buildContext, written, area, logger);
 }
 
 /**
@@ -414,9 +417,10 @@ export async function previewCheckFiles(
   buildContext: readonly string[],
   written: ReadonlySet<string>,
   area: string,
+  logger: Logger,
 ): Promise<CheckHarvest> {
   const snapshot = await worktreeSnapshotCommit(repo, taskId, "define_check");
-  return collectCheckFiles(repo, taskId, startCommit, snapshot, buildContext, written, area);
+  return collectCheckFiles(repo, taskId, startCommit, snapshot, buildContext, written, area, logger);
 }
 
 /** The harvest's rules on the diff from `startCommit` to `endCommit`, each file read from the worktree. */
@@ -428,6 +432,7 @@ async function collectCheckFiles(
   buildContext: readonly string[],
   written: ReadonlySet<string>,
   area: string,
+  logger: Logger,
 ): Promise<CheckHarvest> {
   const rejected = (reason: string): CheckHarvest => ({ kind: "rejected", reason });
   const { stdout } = await runHostGit(repo, ["diff", "--name-status", "-z", "--no-renames", startCommit, endCommit]);
@@ -441,7 +446,11 @@ async function collectCheckFiles(
     else discarded.push(path);
   }
   if (discarded.length > 0) {
-    console.warn(`[checks] check task ${taskId}: discarded ${discarded.length} file(s) written outside its checks area ${area}: ${discarded.join(", ")}`);
+    logger.info("quality.check-files-discarded", `check task ${taskId}: discarded ${discarded.length} file(s) written outside its checks area ${area}`, {
+      taskId,
+      area,
+      discarded,
+    });
   }
 
   const deleted = changed.filter((c) => c.status !== "A" && c.status !== "M");

@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent } from "@ashara/shared";
+import type { DomainEvent, Logger } from "@ashara/shared";
 import { describeErrorChain, InvalidId, parseWorkItemId } from "@ashara/shared";
 import type { MergeKind, StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { ErrorEnvelope } from "./acl/workplace-acl.js";
@@ -62,15 +62,17 @@ async function recordMergeWithRetry(deps: ExecutionRoutingDeps, taskId: WorkItem
   for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1; attempt++) {
     try {
       await deps.workItemRepo.recordMergeCommit(taskId, mergeCommit, kind);
-      if (attempt > 1) console.warn(`[${taskId}] merge record for ${mergeCommit} written on attempt ${attempt}`);
+      if (attempt > 1) deps.logger.info("delivery.merge-recorded-late", `merge record for ${mergeCommit} written on attempt ${attempt}`, { taskId, mergeCommit, attempt });
       return null;
     } catch (e) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last attempt's error is kept and returned below, where the caller parks the task merge_unrecorded
       last = describeErrorChain(e);
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
-      console.warn(
-        `[${taskId}] merge record for ${mergeCommit} failed on attempt ${attempt} of ${MERGE_RECORD_BACKOFF_MS.length + 1}` +
-          `${wait === undefined ? "; giving up" : `; retrying in ${wait}ms`}:`,
+      deps.logger.warn(
+        "delivery.merge-record-failed",
+        `merge record for ${mergeCommit} failed on attempt ${attempt} of ${MERGE_RECORD_BACKOFF_MS.length + 1}` +
+          `${wait === undefined ? "; giving up" : `; retrying in ${wait}ms`}`,
+        { taskId, mergeCommit, attempt },
         e,
       );
       if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
@@ -140,6 +142,7 @@ interface ExecutionRoutingDeps {
   readonly environmentOwner: CoreLoopDeps["environmentOwner"];
   /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
   readonly workdirBase: string;
+  readonly logger: Logger;
 }
 
 async function executeTask(
@@ -357,15 +360,30 @@ async function executeTask(
         errorClass: refusal.errorClass,
         reason: refusal.reason,
       });
-      console.warn(`[${task.id}] project ${task.projectId} ${blocked} on a configuration fault (${refusal.errorClass}): ${refusal.reason}`);
+      deps.logger.info("delivery.project-blocked", `project ${task.projectId} ${blocked} on a configuration fault (${refusal.errorClass}): ${refusal.reason}`, {
+        taskId: task.id,
+        projectId: task.projectId,
+        category: "configuration",
+        result: blocked,
+      });
     } else if (refusal.kind === "project") {
       // Finance refuses the call; the project's halt at its cap is Delivery's (O3 c).
       const blocked = await deps.projects.block(task.projectId, projectCapCause(refusal));
-      console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
+      deps.logger.info("delivery.project-blocked", `project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`, {
+        taskId: task.id,
+        projectId: task.projectId,
+        category: "budget_cap",
+        result: blocked,
+      });
     } else if (refusal.kind === "project_work") {
       // The work ledger refuses the request; the project's halt on its spent budget is Delivery's.
       const blocked = await deps.projects.block(task.projectId, projectWorkCause(refusal));
-      console.warn(`[${task.id}] project ${task.projectId} ${blocked} on its spent work budget: ${refusal.reason}`);
+      deps.logger.info("delivery.project-blocked", `project ${task.projectId} ${blocked} on its spent work budget: ${refusal.reason}`, {
+        taskId: task.id,
+        projectId: task.projectId,
+        category: "work_budget",
+        result: blocked,
+      });
     }
     const cap =
       refusal.kind === "project"
@@ -423,10 +441,11 @@ async function executeTask(
         await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: onMain.mergeCommit, mergeKind: onMain.mergeKind, reason: detail });
         return { result: blockedResult(task.id, detail), outcome: execResult.outcome, routedHere: true };
       }
-      console.warn(
-        `[${task.id}] completion route rejected (${e.from} -> Completed); ` +
-        `agent succeeded, processTask will handle salvage`,
-      );
+      deps.logger.warn("delivery.transition-rejected", `completion route rejected (${e.from} -> Completed); agent succeeded, processTask will handle salvage`, {
+        taskId: task.id,
+        from: e.from,
+        to: "Completed",
+      });
     }
     return {
       result: completedResult(task.id, execResult.detail),
@@ -496,7 +515,7 @@ async function requeueWith(
 ): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
-    console.warn(`[${taskId}] work item vanished before it could be returned to Pending after ${why}`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before it could be returned to Pending after ${why}`, { taskId });
     return;
   }
   const previousStatus = item.status;
@@ -504,12 +523,16 @@ async function requeueWith(
     requeueWorkItem(item);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`);
+    deps.logger.warn("delivery.transition-rejected", `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, { taskId, from: e.from, to: "Pending" });
     return;
   }
   const dispatchCount = await write(item, previousStatus);
-  console.warn(`[${taskId}] back to Pending after ${why}, its dispatch given back (dispatch count ${dispatchCount})`);
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), site);
+  deps.logger.info("delivery.task-requeued", `back to Pending after ${why}, its dispatch given back (dispatch count ${dispatchCount})`, {
+    taskId,
+    dispatchCount,
+    refunded: true,
+  });
+  await publishBestEffort(deps, taskId, takeEvents(item), site);
 }
 
 /**
@@ -559,7 +582,7 @@ async function routeAsParked(
 ): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
-    console.warn(`[${taskId}] work item vanished before it could be blocked (${reason.reason})`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before it could be blocked (${reason.reason})`, { taskId });
     return;
   }
   const previousStatus = item.status;
@@ -567,16 +590,23 @@ async function routeAsParked(
     blockWorkItem(item, reason);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] ${reason.source} block rejected (${e.from} -> Blocked); item left at ${e.from} (${reason.reason})`);
+    deps.logger.warn("delivery.transition-rejected", `${reason.source} block rejected (${e.from} -> Blocked); item left at ${e.from} (${reason.reason})`, {
+      taskId,
+      from: e.from,
+      to: "Blocked",
+      source: reason.source,
+    });
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  console.warn(
+  deps.logger.info(
+    "delivery.task-parked",
     reason.source === "merge_unrecorded"
-      ? `[${taskId}] blocked, merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle: ${reason.reason}`
-      : `[${taskId}] blocked, main unread for its merge (${reason.step}), the loop reads it again each cycle: ${reason.reason}`,
+      ? `blocked, merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle: ${reason.reason}`
+      : `blocked, main unread for its merge (${reason.step}), the loop reads it again each cycle: ${reason.reason}`,
+    { taskId, source: reason.source },
   );
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsParked");
+  await publishBestEffort(deps, taskId, takeEvents(item), "execution.routeAsParked");
 }
 
 /**
@@ -588,7 +618,7 @@ async function routeAsParked(
 async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: GiveUpCause, dispatch: "refund" | "keep"): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
-    console.warn(`[${taskId}] work item vanished before it could be given up (${reason.reason})`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before it could be given up (${reason.reason})`, { taskId });
     return;
   }
   const previousStatus = item.status;
@@ -596,17 +626,27 @@ async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
     giveUpWorkItem(item, reason);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] ${reason.source} give-up rejected (${e.from} -> Abandoned); item left at ${e.from} (${reason.reason})`);
+    deps.logger.warn("delivery.transition-rejected", `${reason.source} give-up rejected (${e.from} -> Abandoned); item left at ${e.from} (${reason.reason})`, {
+      taskId,
+      from: e.from,
+      to: "Abandoned",
+      source: reason.source,
+    });
     return;
   }
   if (dispatch === "refund") {
     const dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
-    console.warn(`[${taskId}] given up (${reason.source}), its dispatch given back (dispatch count ${dispatchCount}); its plan is repaired: ${reason.reason}`);
+    deps.logger.info("delivery.task-given-up", `given up (${reason.source}), its dispatch given back (dispatch count ${dispatchCount}); its plan is repaired: ${reason.reason}`, {
+      taskId,
+      source: reason.source,
+      dispatchCount,
+      refunded: true,
+    });
   } else {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-    console.warn(`[${taskId}] given up (${reason.source}); its plan is repaired: ${reason.reason}`);
+    deps.logger.info("delivery.task-given-up", `given up (${reason.source}); its plan is repaired: ${reason.reason}`, { taskId, source: reason.source, refunded: false });
   }
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsGivenUp");
+  await publishBestEffort(deps, taskId, takeEvents(item), "execution.routeAsGivenUp");
 }
 
 /**
@@ -704,14 +744,22 @@ async function routeAsInfrastructureFault(
     if (fault.class === "substrate") {
       const err = new InfrastructureFaultBudgetSpent(task.id, faults, fault);
       const halted = await deps.projects.block(task.projectId, { ...projectBlockCause(err), category: "infrastructure" });
-      console.warn(`[${task.id}] project ${task.projectId} ${halted} on infrastructure: ${err.message}`);
+      deps.logger.info("delivery.project-halted", `project ${task.projectId} ${halted} on infrastructure: ${err.message}`, {
+        taskId: task.id,
+        projectId: task.projectId,
+        faultClass: fault.class,
+        result: halted,
+      });
     } else {
       // The fault's class was read by the one classifier when the task was blocked under it
       // (modelCallFailureOf, through environmentBlocked's fault): the halt is blamed the same way.
       const err = fault.class === "provider" ? new ProviderFaultBudgetSpent(task.id, faults, fault) : new AsharaFaultBudgetSpent(task.id, faults, fault);
       const cause = { ...projectBlockCause(err), category: modelCallBlockCategory(fault.class) };
       const halted = await deps.projects.block(task.projectId, cause);
-      console.warn(`[${task.id}] project ${task.projectId} ${halted} on a fault that was not its work (${fault.class}): ${err.message}`);
+      const message = `project ${task.projectId} ${halted} on a fault that was not its work (${fault.class}): ${err.message}`;
+      const fields = { taskId: task.id, projectId: task.projectId, faultClass: fault.class, result: halted };
+      if (fault.class === "ashara") deps.logger.error("delivery.project-halted", message, fields, err);
+      else deps.logger.info("delivery.project-halted", message, fields);
     }
   }
 }
@@ -735,7 +783,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
       // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept, and main still unread after it parks the task orphan_unreconciled with the project blocked, below
       last = e;
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
-      console.warn(`[${task.id}] main could not be read for its merge after a fault, attempt ${attempt}:`, e);
+      deps.logger.warn("delivery.main-unread", `main could not be read for its merge after a fault, attempt ${attempt}`, { taskId: task.id, attempt }, e);
       if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
@@ -745,21 +793,33 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
     const unread = new OrphanUnreconciled(task.id, step, MERGE_RECORD_BACKOFF_MS.length + 1, { cause: last });
     await routeAsParked(deps, task.id, { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(last) });
     const halted = await deps.projects.block(task.projectId, projectBlockCause(unread));
-    console.warn(`[${task.id}] project ${task.projectId} ${halted} on Ashara's own fault: ${unread.message}`);
+    deps.logger.error("delivery.project-halted", `project ${task.projectId} ${halted} on Ashara's own fault: ${unread.message}`, {
+      taskId: task.id,
+      projectId: task.projectId,
+      faultClass: "ashara",
+      result: halted,
+    }, unread);
     return true;
   }
-  console.warn(`[${task.id}] its dispatch faulted after merging it on main as ${merge}: recorded and Completed, never requeued`);
+  deps.logger.info("delivery.merged-before-fault", `its dispatch faulted after merging it on main as ${merge}: recorded and Completed, never requeued`, {
+    taskId: task.id,
+    mergeCommit: merge,
+  });
   const unrecorded = await recordMergeWithRetry(deps, task.id, merge, "merged");
   if (unrecorded !== null) {
     await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason: `merged on main as ${merge}, but the merge record could not be written: ${unrecorded}` });
     return true;
   }
-  await releaseMergedTask(deps.projects, deps.workdirBase, task, "merged");
+  await releaseMergedTask(deps.projects, deps.workdirBase, task, "merged", deps.logger);
   try {
     await routeAsSuccess(deps, task, MERGE_RECORD_BACKOFF_MS.length + 1);
   } catch (e) {
     if (e instanceof InvalidStatusTransition) {
-      console.warn(`[${task.id}] merged as ${merge} and recorded; its completion was rejected (${e.from} -> Completed), left at ${e.from}`);
+      deps.logger.warn("delivery.transition-rejected", `merged as ${merge} and recorded; its completion was rejected (${e.from} -> Completed), left at ${e.from}`, {
+        taskId: task.id,
+        from: e.from,
+        to: "Completed",
+      });
       return true;
     }
     const reason = `merged on main as ${merge} and recorded, but the task could not be Completed: ${describeErrorChain(e)}`;
@@ -773,14 +833,24 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
  * at its spend cap, or on its spent work budget. Finance refuses, and the halt is Delivery's (O3 c),
  * wherever the refusal surfaces.
  */
-async function haltOnProjectRefusal(deps: Pick<CoreLoopDeps, "spendCap" | "projectRepo">, task: WorkItem, error: unknown): Promise<void> {
+async function haltOnProjectRefusal(deps: Pick<CoreLoopDeps, "spendCap" | "projectRepo" | "logger">, task: WorkItem, error: unknown): Promise<void> {
   const refusal = deps.spendCap.refusalOf(error);
   if (refusal?.kind === "project") {
     const blocked = await deps.projectRepo.block(task.projectId, projectCapCause(refusal));
-    console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
+    deps.logger.info("delivery.project-blocked", `project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`, {
+      taskId: task.id,
+      projectId: task.projectId,
+      category: "budget_cap",
+      result: blocked,
+    });
   } else if (refusal?.kind === "project_work") {
     const blocked = await deps.projectRepo.block(task.projectId, projectWorkCause(refusal));
-    console.warn(`[${task.id}] project ${task.projectId} ${blocked} on its spent work budget: ${refusal.reason}`);
+    deps.logger.info("delivery.project-blocked", `project ${task.projectId} ${blocked} on its spent work budget: ${refusal.reason}`, {
+      taskId: task.id,
+      projectId: task.projectId,
+      category: "work_budget",
+      result: blocked,
+    });
   }
 }
 
@@ -804,7 +874,7 @@ function asharaFaultOf(e: unknown, step: string): InfrastructureFault {
 async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], why: string): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
-    console.warn(`[${taskId}] work item vanished before it could be returned to Pending after ${why}`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before it could be returned to Pending after ${why}`, { taskId });
     return;
   }
   const previousStatus = item.status;
@@ -812,12 +882,12 @@ async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id
     requeueWorkItem(item);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`);
+    deps.logger.warn("delivery.transition-rejected", `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, { taskId, from: e.from, to: "Pending" });
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  console.warn(`[${taskId}] back to Pending after ${why}, no dispatch counted`);
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.requeueUncounted");
+  deps.logger.info("delivery.task-requeued", `back to Pending after ${why}, no dispatch counted`, { taskId, refunded: false });
+  await publishBestEffort(deps, taskId, takeEvents(item), "execution.requeueUncounted");
 }
 
 /**
@@ -830,10 +900,10 @@ async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id
 async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], stale: StaleChecksResult): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
-    console.warn(`[${taskId}] work item vanished before its stale checks could be routed (${stale.detail})`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before its stale checks could be routed (${stale.detail})`, { taskId });
     return;
   }
-  const checkTask = await findCheckTask(deps.workItemRepo, stale.checkTaskId, "stale checks checkTaskId");
+  const checkTask = await findCheckTask(deps, stale.checkTaskId, "stale checks checkTaskId");
   const previousStatus = item.status;
   const checkTaskPrevious = checkTask?.status;
   let exit: ReturnType<typeof exitStaleChecks>;
@@ -841,7 +911,11 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
     exit = exitStaleChecks(item, checkTask, stale);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] stale-checks exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${stale.detail})`);
+    deps.logger.warn("delivery.transition-rejected", `stale-checks exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${stale.detail})`, {
+      taskId,
+      from: e.from,
+      to: e.to,
+    });
     return;
   }
 
@@ -857,7 +931,7 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
       }, "keep");
       return;
     }
-    await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsStaleChecks");
+    await publishBestEffort(deps, checkTask.id, takeEvents(checkTask), "execution.routeAsStaleChecks");
   }
 
   // A rewrite sends the item back to wait with its dispatch given back (no model ran), in one write.
@@ -869,24 +943,38 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
     if (!(e instanceof InvalidStatusTransition)) throw e;
     // An owner moved the item during the dispatch; a reopened check task stays reopened and the
     // item keeps its dependency on it wherever the owner put it.
-    console.warn(`[${taskId}] stale-checks exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`);
+    deps.logger.warn("delivery.transition-rejected", `stale-checks exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`, {
+      taskId,
+      from: e.from,
+      to: item.status,
+    });
     return;
   }
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsStaleChecks");
+  await publishBestEffort(deps, taskId, takeEvents(item), "execution.routeAsStaleChecks");
 
   switch (exit.kind) {
     case "rewrite": {
-      console.warn(
-        `[${taskId}] stored checks revision ${stale.revision} stale; check task ${stale.checkTaskId} reopened to write them ` +
+      deps.logger.info(
+        "delivery.check-task-reopened",
+        `stored checks revision ${stale.revision} stale; check task ${stale.checkTaskId} reopened to write them ` +
           `again, item back at Pending waiting on it (dispatch count ${dispatchCount})`,
+        { taskId, checkTaskId: stale.checkTaskId, revision: stale.revision, dispatchCount },
       );
       return;
     }
     case "bound":
-      console.warn(`[${taskId}] given up, stored checks revision ${stale.revision} stale past the rewrite bound; check task ${stale.checkTaskId} is not reopened`);
+      deps.logger.info(
+        "delivery.task-given-up",
+        `given up, stored checks revision ${stale.revision} stale past the rewrite bound; check task ${stale.checkTaskId} is not reopened`,
+        { taskId, source: "checks_stale", checkTaskId: stale.checkTaskId },
+      );
       return;
     case "unreopenable":
-      console.warn(`[${taskId}] given up, stored checks stale and check task ${stale.checkTaskId} cannot be reopened: ${exit.why}`);
+      deps.logger.info("delivery.task-given-up", `given up, stored checks stale and check task ${stale.checkTaskId} cannot be reopened: ${exit.why}`, {
+        taskId,
+        source: "checks_stale",
+        checkTaskId: stale.checkTaskId,
+      });
       return;
   }
 }
@@ -910,10 +998,10 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
   });
   const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!item) {
-    console.warn(`[${task.id}] work item vanished before its check dispute could be routed (${dispute.detail})`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before its check dispute could be routed (${dispute.detail})`, { taskId: task.id });
     return;
   }
-  const checkTask = await findCheckTask(deps.workItemRepo, dispute.checkTaskId, "check dispute checkTaskId");
+  const checkTask = await findCheckTask(deps, dispute.checkTaskId, "check dispute checkTaskId");
   const previousStatus = item.status;
   const checkTaskPrevious = checkTask?.status;
   let exit: ReturnType<typeof exitDisputedCheck>;
@@ -921,7 +1009,11 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     exit = exitDisputedCheck(item, checkTask, { ...dispute, disputes });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${task.id}] check-dispute exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${dispute.detail})`);
+    deps.logger.warn("delivery.transition-rejected", `check-dispute exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${dispute.detail})`, {
+      taskId: task.id,
+      from: e.from,
+      to: e.to,
+    });
     return;
   }
 
@@ -938,7 +1030,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
       }, "keep");
       return;
     }
-    await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsDisputed");
+    await publishBestEffort(deps, checkTask.id, takeEvents(checkTask), "execution.routeAsDisputed");
     // A disputed check of a task already merged may be written by a
     // check task of another plan revision, which the item does not depend on: the edge is what
     // holds it at Pending until the check task has written them again.
@@ -954,21 +1046,32 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     else await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${task.id}] check-dispute exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`);
+    deps.logger.warn("delivery.transition-rejected", `check-dispute exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`, {
+      taskId: task.id,
+      from: e.from,
+      to: item.status,
+    });
     return;
   }
-  await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsDisputed");
+  await publishBestEffort(deps, task.id, takeEvents(item), "execution.routeAsDisputed");
 
   if (exit.kind === "rewrite") {
     const whose = dispute.checksOf === task.id ? "" : ` of merged task ${dispute.checksOf}`;
-    console.warn(
-      `[${task.id}] check ${JSON.stringify(dispute.check.name)}${whose} disputed (dispute ${disputes} of its check task); check task ` +
+    deps.logger.info(
+      "delivery.check-task-reopened",
+      `check ${JSON.stringify(dispute.check.name)}${whose} disputed (dispute ${disputes} of its check task); check task ` +
         `${dispute.checkTaskId} reopened with the dispute, item back at Pending waiting on it (dispatch count ${dispatchCount})`,
+      { taskId: task.id, checkTaskId: dispute.checkTaskId, check: dispute.check.name, disputes, dispatchCount },
     );
     return;
   }
   const why = exit.kind === "bound" ? `dispute ${disputes} is past the bound of ${exit.bound}` : `the check task cannot be reopened: ${exit.why}`;
-  console.warn(`[${task.id}] given up, check ${JSON.stringify(dispute.check.name)} of check task ${dispute.checkTaskId} disputed and ${why}`);
+  deps.logger.info("delivery.task-given-up", `given up, check ${JSON.stringify(dispute.check.name)} of check task ${dispute.checkTaskId} disputed and ${why}`, {
+    taskId: task.id,
+    source: "check_disputed",
+    checkTaskId: dispute.checkTaskId,
+    check: dispute.check.name,
+  });
 }
 
 /**
@@ -990,19 +1093,23 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
   });
   const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!item) {
-    console.warn(`[${task.id}] review task vanished before its findings could be routed (${review.detail})`);
+    deps.logger.warn("delivery.item-vanished", `review task vanished before its findings could be routed (${review.detail})`, { taskId: task.id });
     return;
   }
   const named = [...new Set(review.problems.flatMap((problem) => problem.checkTaskIds))];
   const checkTasks = new Map<string, WorkItem | null>();
-  for (const checkTaskId of named) checkTasks.set(checkTaskId, await findCheckTask(deps.workItemRepo, checkTaskId, "suite review checkTaskIds"));
+  for (const checkTaskId of named) checkTasks.set(checkTaskId, await findCheckTask(deps, checkTaskId, "suite review checkTaskIds"));
   const previousStatus = item.status;
   let exit: ReturnType<typeof exitSuiteReview>;
   try {
     exit = exitSuiteReview(item, checkTasks, { problems: review.problems, timesNamed });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${task.id}] suite-review exit rejected (${e.from} -> ${e.to}); review left at ${e.from} (${review.detail})`);
+    deps.logger.warn("delivery.transition-rejected", `suite-review exit rejected (${e.from} -> ${e.to}); review left at ${e.from} (${review.detail})`, {
+      taskId: task.id,
+      from: e.from,
+      to: e.to,
+    });
     return;
   }
 
@@ -1013,15 +1120,23 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
         await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
       } catch (e) {
         if (!(e instanceof InvalidStatusTransition)) throw e;
-        console.warn(`[${task.id}] suite-review give-up rejected (${e.from} -> Abandoned); review left at ${e.from}`);
+        deps.logger.warn("delivery.transition-rejected", `suite-review give-up rejected (${e.from} -> Abandoned); review left at ${e.from}`, {
+          taskId: task.id,
+          from: e.from,
+          to: "Abandoned",
+        });
         return;
       }
       const why =
         exit.kind === "bound"
           ? `review ${exit.times} naming check task ${exit.checkTaskId} is past the bound of ${exit.bound}`
           : `no check task can be reopened for its problems: ${exit.why}`;
-      console.warn(`[${task.id}] given up, the suite review found problems and ${why}; its plan is repaired`);
-      await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsSuiteReview");
+      deps.logger.info("delivery.task-given-up", `given up, the suite review found problems and ${why}; its plan is repaired`, {
+        taskId: task.id,
+        source: "suite_review_unresolved",
+        checkTaskIds: named,
+      });
+      await publishBestEffort(deps, task.id, takeEvents(item), "execution.routeAsSuiteReview");
       return;
     }
     case "reopened": {
@@ -1042,12 +1157,14 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
         return;
       }
       for (const checkTask of exit.checkTasks) {
-        await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsSuiteReview");
+        await publishBestEffort(deps, checkTask.id, takeEvents(checkTask), "execution.routeAsSuiteReview");
       }
-      await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsSuiteReview");
-      console.warn(
-        `[${task.id}] suite review found ${review.problems.length} problem(s); check task(s) ${named.join(", ")} reopened ` +
+      await publishBestEffort(deps, task.id, takeEvents(item), "execution.routeAsSuiteReview");
+      deps.logger.info(
+        "delivery.check-tasks-reopened",
+        `suite review found ${review.problems.length} problem(s); check task(s) ${named.join(", ")} reopened ` +
           `with them, review back at Pending waiting on them (dispatch count ${dispatchCount})`,
+        { taskId: task.id, checkTaskIds: named, problems: review.problems.length, dispatchCount },
       );
       return;
     }
@@ -1065,7 +1182,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
 async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkItem, request: EnvironmentChangeResult): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!item) {
-    console.warn(`[${task.id}] work item vanished before its environment change could be routed (${request.detail})`);
+    deps.logger.warn("delivery.item-vanished", `work item vanished before its environment change could be routed (${request.detail})`, { taskId: task.id });
     return;
   }
   let opened = 0;
@@ -1090,7 +1207,11 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
     exit = requestEnvironmentChange(item, request, { opened, owner, product });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${task.id}] environment-change exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${request.detail})`);
+    deps.logger.warn("delivery.transition-rejected", `environment-change exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${request.detail})`, {
+      taskId: task.id,
+      from: e.from,
+      to: e.to,
+    });
     return;
   }
 
@@ -1099,14 +1220,20 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
       await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
     } catch (e) {
       if (!(e instanceof InvalidStatusTransition)) throw e;
-      console.warn(`[${task.id}] environment-change give-up rejected (${e.from} -> Abandoned); item left at ${e.from}`);
+      deps.logger.warn("delivery.transition-rejected", `environment-change give-up rejected (${e.from} -> Abandoned); item left at ${e.from}`, {
+        taskId: task.id,
+        from: e.from,
+        to: "Abandoned",
+      });
       return;
     }
-    console.warn(
-      `[${task.id}] given up, environment change needed for ${request.paths.join(", ")}: ` +
+    deps.logger.info(
+      "delivery.task-given-up",
+      `given up, environment change needed for ${request.paths.join(", ")}: ` +
         (exit.kind === "bound" ? `past the bound of ${exit.bound} environment task(s)` : `no environment task can be opened: ${exit.why}`),
+      { taskId: task.id, source: "environment_change", paths: request.paths },
     );
-    await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
+    await publishBestEffort(deps, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
     return;
   }
 
@@ -1121,28 +1248,38 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
     // An owner moved the item during the dispatch: nothing was written, the environment task included.
-    console.warn(`[${task.id}] environment-change exit rejected (${e.from} -> Pending); item left at ${e.from}, no environment task opened`);
+    deps.logger.warn("delivery.transition-rejected", `environment-change exit rejected (${e.from} -> Pending); item left at ${e.from}, no environment task opened`, {
+      taskId: task.id,
+      from: e.from,
+      to: "Pending",
+    });
     return;
   }
-  await publishBestEffort(deps.eventStore, environment.id, takeEvents(environment), "execution.routeAsEnvironmentChange");
-  await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
-  console.warn(
-    `[${task.id}] needs a change to the environment recipe (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
+  await publishBestEffort(deps, environment.id, takeEvents(environment), "execution.routeAsEnvironmentChange");
+  await publishBestEffort(deps, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
+  deps.logger.info(
+    "delivery.environment-task-opened",
+    `needs a change to the environment recipe (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
       `(${opened + 1} for this task), item back at Pending waiting on it (dispatch count ${dispatchCount})`,
+    { taskId: task.id, environmentTaskId: environment.id, paths: request.paths, opened: opened + 1, dispatchCount },
   );
 }
 
 /** The check task a stale revision names; null when the stored id is no work item's. */
-async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: string, field: string): Promise<WorkItem | null> {
+async function findCheckTask(
+  deps: Pick<ExecutionRoutingDeps, "workItemRepo" | "logger">,
+  checkTaskId: string,
+  field: string,
+): Promise<WorkItem | null> {
   let id: WorkItem["id"];
   try {
     id = parseWorkItemId(checkTaskId, field);
   } catch (e) {
     if (!(e instanceof InvalidId)) throw e;
-    console.warn(`[stale-checks] the stored check task id names no work item: ${e.message}`);
+    deps.logger.error("delivery.check-task-id-invalid", "the stored check task id names no work item", { checkTaskId, field }, e);
     return null;
   }
-  return PlanningService.findWorkItem(workItemRepo, id);
+  return PlanningService.findWorkItem(deps.workItemRepo, id);
 }
 
 /**
@@ -1159,11 +1296,11 @@ async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem, attemp
     } catch (e) {
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
       if (e instanceof InvalidStatusTransition || attempt >= attempts || wait === undefined) throw e;
-      console.warn(`[${task.id}] completion failed on attempt ${attempt} of ${attempts}; retrying in ${wait}ms:`, e);
+      deps.logger.warn("delivery.completion-retry", `completion failed on attempt ${attempt} of ${attempts}; retrying in ${wait}ms`, { taskId: task.id, attempt, attempts }, e);
       await new Promise((resolve) => setTimeout(resolve, wait));
       continue;
     }
-    await publishBestEffort(deps.eventStore, task.id, events, "execution.routeAsSuccess");
+    await publishBestEffort(deps, task.id, events, "execution.routeAsSuccess");
     return;
   }
 }
@@ -1174,8 +1311,8 @@ async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem, verdic
   // publish failure must NOT re-drive the domain fallback (that would call
   // failWorkItem on an already-Failed item and throw Failed->Failed) — the
   // transition is durable independent of the audit log.
-  const events = await commitFailure(deps.workItemRepo, task.id, verdict);
-  await publishBestEffort(deps.eventStore, task.id, events, "execution.routeAsFailure");
+  const events = await commitFailure(deps, task.id, verdict);
+  await publishBestEffort(deps, task.id, events, "execution.routeAsFailure");
 }
 
 /**
@@ -1184,11 +1321,16 @@ async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem, verdic
  * only when the live item can still legally transition to Failed — an item already
  * in Failed (or another terminal state) yields no events rather than crashing.
  */
-async function commitFailure(workItemRepo: WorkItemRepository, taskId: WorkItem["id"], verdict: FailureVerdict): Promise<DomainEvent[]> {
+async function commitFailure(
+  deps: Pick<ExecutionRoutingDeps, "workItemRepo" | "logger">,
+  taskId: WorkItem["id"],
+  verdict: FailureVerdict,
+): Promise<DomainEvent[]> {
+  const { workItemRepo } = deps;
   try {
     return await PlanningService.route(workItemRepo, taskId, verdict);
   } catch (e) {
-    console.warn(`[${taskId}] lifecycle route failed, falling back to domain method:`, e);
+    deps.logger.warn("delivery.route-failed", "lifecycle route failed, falling back to domain method", { taskId }, e);
     const item = await PlanningService.findWorkItem(workItemRepo, taskId);
     if (!item || !canTransitionTo(item.status, "Failed")) {
       return [];
@@ -1201,18 +1343,20 @@ async function commitFailure(workItemRepo: WorkItemRepository, taskId: WorkItem[
 }
 
 async function publishBestEffort(
-  eventStore: Pick<EventStoreRepository, "publish">,
+  deps: { readonly eventStore: Pick<EventStoreRepository, "publish">; readonly logger: Logger },
   workItemId: string,
   events: DomainEvent[],
   site: string,
 ): Promise<void> {
   for (const event of events) {
     try {
-      await eventStore.publish(event);
+      await deps.eventStore.publish(event);
     } catch (publishError) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the status transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
-      console.warn(
-        `[${site}] failed to publish audit event for ${workItemId} (status transition already committed):`,
+      deps.logger.warn(
+        "delivery.event-publish-failed",
+        `failed to publish audit event for ${workItemId} (status transition already committed)`,
+        { taskId: workItemId, site, eventType: event.eventType },
         publishError,
       );
     }
@@ -1230,7 +1374,7 @@ async function publishBestEffort(
  * processTask — the item is already terminal and the agent spend is sunk.
  */
 async function salvagePreemptedResult(
-  workItemRepo: WorkItemRepository,
+  deps: Pick<CoreLoopDeps, "workItemRepo" | "logger">,
   item: WorkItem,
   outcome: "completed" | "failed" | "blocked",
   detail: string,
@@ -1242,9 +1386,10 @@ async function salvagePreemptedResult(
       // result is not discarded. orchestrator_error is truthful: the orchestrator
       // detected the gap, and the reason text states what happened without
       // asserting a cause we do not know.
-      console.warn(
-        `[${item.id}] Abandoned item has no blockedReason; ` +
-        `constructing orchestrator_error to persist salvaged result (outcome: ${outcome})`,
+      deps.logger.error(
+        "delivery.blocked-reason-missing",
+        `Abandoned item has no blockedReason; constructing orchestrator_error to persist salvaged result (outcome: ${outcome})`,
+        { taskId: item.id, outcome },
       );
       item.blockedReason = {
         source: "orchestrator_error",
@@ -1253,19 +1398,20 @@ async function salvagePreemptedResult(
     }
     item.blockedReason = salvagedReason(item.blockedReason, outcome, detail);
     item.updatedAt = new Date();
-    await PlanningService.saveWorkItem(workItemRepo, item, "Abandoned");
-    console.log(
-      `[${item.id}] salvaged preempted result (outcome: ${outcome}) ` +
-      `on Abandoned item; dispatchCount: ${item.dispatchCount}`,
-    );
+    await PlanningService.saveWorkItem(deps.workItemRepo, item, "Abandoned");
+    deps.logger.info("delivery.result-salvaged", `salvaged preempted result (outcome: ${outcome}) on Abandoned item; dispatchCount: ${item.dispatchCount}`, {
+      taskId: item.id,
+      outcome,
+      dispatchCount: item.dispatchCount,
+    });
   } catch (salvageError) {
     // The item is already terminal — a salvage failure does not change its status.
     // Log structured context (Discipline C) so the lost result is visible.
     // eslint-disable-next-line ashara/catch-continue -- best effort: the item is already terminal (Abandoned by the operator's preemption); without the salvaged outcome its parent stays unsettled (isSettled), the fail-closed direction, and its abandonment opens a plan repair
-    console.warn(
-      `[${item.id}] failed to salvage preempted result ` +
-      `(outcome: ${outcome}, detail: ${detail.slice(0, 200)}); ` +
-      `item remains Abandoned, result data lost:`,
+    deps.logger.warn(
+      "delivery.salvage-failed",
+      `failed to salvage preempted result (outcome: ${outcome}, detail: ${detail.slice(0, 200)}); item remains Abandoned, result data lost`,
+      { taskId: item.id, outcome },
       salvageError,
     );
   }
@@ -1296,6 +1442,7 @@ export async function processTask(
     suiteReviewFindings: deps.suiteReviewFindings,
     environmentOwner: deps.environmentOwner,
     workdirBase: deps.config.workdirBase,
+    logger: deps.logger,
   };
 
   // Before the dispatch seam nothing of the task ran: a throw here is Ashara's own (a store, the
@@ -1305,9 +1452,9 @@ export async function processTask(
   try {
     const startEvents = takeEvents(workItem);
     const ancestorEvents = await PlanningService.activateAncestors(deps.workItemRepo, workItem.parentId);
-    await publishBestEffort(deps.eventStore, task.id, [...startEvents, ...ancestorEvents], "execution.processTask");
+    await publishBestEffort(deps, task.id, [...startEvents, ...ancestorEvents], "execution.processTask");
 
-    const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
+    const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase, deps.logger);
     if (workspace.kind === "rejected") {
       // Before the dispatch is counted, any model call or any cell: without a valid target checkout
       // the work has nowhere to be done or merged. Ashara's own record of the project, not the
@@ -1320,7 +1467,10 @@ export async function processTask(
     // The check set an implementation is about to be judged by freezes before it is dispatched;
     // a freeze that cannot be written stops the dispatch, uncounted.
     for (const reviewTaskId of await deps.checkSetFreeze.freezeFor(task.id)) {
-      console.log(`[${task.id}] the check set of review task ${reviewTaskId} is frozen: this is the first task dispatched on it`);
+      deps.logger.info("delivery.check-set-frozen", `the check set of review task ${reviewTaskId} is frozen: this is the first task dispatched on it`, {
+        taskId: task.id,
+        reviewTaskId,
+      });
     }
 
     // DISPATCH SEAM. The item is now committed InProgress and
@@ -1334,7 +1484,7 @@ export async function processTask(
     attempt = await deps.workItemRepo.incrementDispatchCount(task.id);
   } catch (e) {
     const fault = asharaFaultOf(e, "start the dispatch");
-    console.warn(`[${task.id}] the dispatch could not start, Ashara's own fault, routed uncharged: ${fault.reason}`);
+    deps.logger.error("delivery.dispatch-start-failed", "the dispatch could not start, Ashara's own fault, routed uncharged", { taskId: task.id }, e);
     await routeAsInfrastructureFault(routingDeps, workItem, fault, "not-counted");
     return { taskId: task.id, status: "interrupted", detail: fault.reason };
   }
@@ -1388,7 +1538,7 @@ async function runCountedDispatch(
     // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
     // code): never the task's work, so its counted dispatch is refunded and no lesson is written.
     const fault = asharaFaultOf(e, "run or route the dispatch");
-    console.warn(`[${task.id}] the dispatch threw, Ashara's own fault, routed uncharged: ${fault.reason}`);
+    deps.logger.error("delivery.dispatch-threw", "the dispatch threw, Ashara's own fault, routed uncharged", { taskId: task.id, attempt }, e);
     await haltOnProjectRefusal(deps, task, e);
     await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
     return { taskId: task.id, status: "interrupted", detail: fault.reason };
@@ -1407,7 +1557,7 @@ async function runCountedDispatch(
   if (result.status === "completed") {
     const currentForSalvage = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (currentForSalvage && currentForSalvage.status === "Abandoned") {
-      await salvagePreemptedResult(deps.workItemRepo, currentForSalvage, "completed", result.detail);
+      await salvagePreemptedResult(deps, currentForSalvage, "completed", result.detail);
     }
   }
 
@@ -1435,10 +1585,10 @@ async function runCountedDispatch(
     // (abandon) rather than sitting in Failed and deadlocking its
     // dependents.
     if (!current) {
-      console.warn(
-        `[${task.id}] work item vanished after agent returned ` +
-        `(result: ${result.status}); dispatchCount already incremented, ` +
-        `agent spend unrecoverable`,
+      deps.logger.warn(
+        "delivery.item-vanished",
+        `work item vanished after agent returned (result: ${result.status}); dispatchCount already incremented, agent spend unrecoverable`,
+        { taskId: task.id, result: result.status },
       );
     } else {
       switch (current.status) {
@@ -1457,6 +1607,7 @@ async function runCountedDispatch(
               workItemRepo: deps.workItemRepo,
               eventPublisher: deps.eventStore,
               failureRouter: deps.failureRouter,
+              logger: deps.logger,
             },
             current,
             failure,
@@ -1484,10 +1635,11 @@ async function runCountedDispatch(
           // handleTaskError was called but the concurrent pre-image guard
           // rejected the save — another writer moved the item first. The
           // startup reconciler will requeue on next restart.
-          console.warn(
-            `[${task.id}] work item still InProgress after handleTaskError ` +
-            `(expected Failed); agent result (${result.status}) discarded — ` +
-            `startup reconciler will requeue on next restart`,
+          deps.logger.warn(
+            "delivery.result-discarded",
+            `work item still InProgress after handleTaskError (expected Failed); agent result (${result.status}) discarded — ` +
+              `startup reconciler will requeue on next restart`,
+            { taskId: task.id, result: result.status, status: current.status },
           );
           break;
 
@@ -1496,11 +1648,11 @@ async function runCountedDispatch(
         case "Blocked":
           // Preempted to a non-Abandoned, non-Failed status. The agent's
           // result is not routable. dispatchCount was already incremented.
-          console.warn(
-            `[${task.id}] work item preempted: expected Failed, ` +
-            `found "${current.status}" after agent returned ` +
-            `(result: ${result.status}); agent result discarded, ` +
-            `dispatchCount already incremented, agent spend unrecoverable`,
+          deps.logger.warn(
+            "delivery.result-discarded",
+            `work item preempted: expected Failed, found "${current.status}" after agent returned (result: ${result.status}); ` +
+              `agent result discarded, dispatchCount already incremented, agent spend unrecoverable`,
+            { taskId: task.id, result: result.status, status: current.status },
           );
           break;
 
@@ -1510,7 +1662,7 @@ async function runCountedDispatch(
           // blockedReason so cascade-completion can see the work's
           // outcome without reopening the terminal status.
           const outcomeKind = result.status === "blocked" ? "blocked" as const : "failed" as const;
-          await salvagePreemptedResult(deps.workItemRepo, current, outcomeKind, result.detail);
+          await salvagePreemptedResult(deps, current, outcomeKind, result.detail);
           await recordFailedApproach(
             deps.failedApproachRepo,
             current,
@@ -1543,7 +1695,7 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
     events = await PlanningService.route(deps.workItemRepo, task.id, verdict);
   } catch (e) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: a failed route falls back to the domain method below, which commits the Failed transition itself and propagates its own failure
-    console.warn(`[${task.id}] lifecycle route also failed:`, e);
+    deps.logger.warn("delivery.route-failed", "lifecycle route failed, falling back to domain method", { taskId: task.id }, e);
     const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (!item || !canTransitionTo(item.status, "Failed")) {
       events = [];
@@ -1554,7 +1706,7 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
       events = takeEvents(item);
     }
   }
-  await publishBestEffort(deps.eventStore, task.id, events, "execution.handleTaskError");
+  await publishBestEffort(deps, task.id, events, "execution.handleTaskError");
 }
 
 /**
@@ -1575,14 +1727,14 @@ export async function handleProcessingError(
 ): Promise<TaskResult> {
   const dispatch = thrown instanceof CountedDispatchThrew ? "counted" : "not-counted";
   const error = thrown instanceof CountedDispatchThrew ? thrown.thrown : thrown;
-  console.warn(`[${task.id}] task processing failed with orchestrator error (dispatch ${dispatch}):`, error);
+  deps.logger.error("delivery.processing-failed", `task processing failed with orchestrator error (dispatch ${dispatch})`, { taskId: task.id, dispatch }, error);
   const fault = asharaFaultOf(error, "process the task");
 
   try {
     await haltOnProjectRefusal(deps, task, error);
     const current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (!current) {
-      console.warn(`[${task.id}] work item vanished during orchestrator error recovery; item left for startup reconciler`);
+      deps.logger.warn("delivery.item-vanished", "work item vanished during orchestrator error recovery; item left for startup reconciler", { taskId: task.id });
     } else {
       // Exhaustive over WorkItemStatus so a new member is a compile error here, not a silent skip.
       switch (current.status) {
@@ -1596,6 +1748,7 @@ export async function handleProcessingError(
             suiteReviewFindings: deps.suiteReviewFindings,
             environmentOwner: deps.environmentOwner,
             workdirBase: deps.config.workdirBase,
+            logger: deps.logger,
           };
           await routeAsInfrastructureFault(routingDeps, current, fault, dispatch);
           break;
@@ -1609,6 +1762,7 @@ export async function handleProcessingError(
               eventPublisher: deps.eventStore,
               failureRouter: deps.failureRouter,
               projects: deps.projectRepo,
+              logger: deps.logger,
             },
             current,
             { detail: `the routing of this task's failed attempt was interrupted by Ashara's own fault: ${fault.reason}`, raw: {} },
@@ -1619,10 +1773,10 @@ export async function handleProcessingError(
         case "Pending":
         case "Blocked":
         case "Abandoned":
-          console.warn(
-            `[${task.id}] work item at "${current.status}" during error recovery: ` +
-            `nothing to route, recovery skipped`,
-          );
+          deps.logger.info("delivery.recovery-skipped", `work item at "${current.status}" during error recovery: nothing to route, recovery skipped`, {
+            taskId: task.id,
+            status: current.status,
+          });
           break;
 
         default: {
@@ -1633,10 +1787,7 @@ export async function handleProcessingError(
     }
   } catch (recoveryError) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: the recovery of a thrown orchestrator error failed: the item stays InProgress, the crash-orphan state the startup reconciler settles from main, and the result returned is interrupted, never a success
-    console.warn(
-      `[${task.id}] recovery after orchestrator error failed; item left for the startup reconciler:`,
-      recoveryError,
-    );
+    deps.logger.error("delivery.recovery-failed", "recovery after orchestrator error failed; item left for the startup reconciler", { taskId: task.id }, recoveryError);
   }
 
   return { taskId: task.id, status: "interrupted", detail: fault.reason };

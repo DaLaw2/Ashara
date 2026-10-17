@@ -170,22 +170,14 @@ interface PreemptionDepsOptions {
 
 function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   deps: CoreLoopDeps;
-  warns: string[];
-  logs: string[];
+  logger: ReturnType<typeof recordingLogger>;
   savedBlockedReasons: StoredBlockedReason[];
   mergeRecords: Array<{ id: WorkItemId; commit: string }>;
 } {
   const agentOutcome = options?.agentOutcome ?? "failed";
-  const warns: string[] = [];
-  const logs: string[] = [];
+  const logger = recordingLogger();
   const savedBlockedReasons: StoredBlockedReason[] = [];
   const mergeRecords: Array<{ id: WorkItemId; commit: string }> = [];
-  vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
-    warns.push(args.map(String).join(" "));
-  });
-  vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    logs.push(args.map(String).join(" "));
-  });
 
   let findByIdCalls = 0;
   const workItemRepo: WorkItemRepository = {
@@ -223,6 +215,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
 
   const deps = coreLoopDeps({
     workItemRepo,
+    logger,
     dispatchService: {
       execute: async () =>
         agentOutcome === "completed"
@@ -245,7 +238,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     },
   });
 
-  return { deps, warns, logs, savedBlockedReasons, mergeRecords };
+  return { deps, logger, savedBlockedReasons, mergeRecords };
 }
 
 afterEach(() => {
@@ -280,7 +273,7 @@ describe("processTask attempt scope", () => {
 
 describe("processTask post-agent status ladder", () => {
   test("preempted-to-Abandoned item with failed result salvages the result", async () => {
-    const { deps, logs, savedBlockedReasons } = buildPreemptionDeps();
+    const { deps, logger, savedBlockedReasons } = buildPreemptionDeps();
     const task = freshPendingItem();
 
     const result = await processTask(deps, task);
@@ -288,11 +281,9 @@ describe("processTask post-agent status ladder", () => {
     // The function must return the agent's result, not throw
     expect(result.status).toBe("failed");
 
-    // The salvage must produce a structured log (Discipline C)
-    const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
-    expect(salvageLog).toBeDefined();
-    expect(salvageLog).toContain(ITEM_ID);
-    expect(salvageLog).toContain("outcome: failed");
+    // The salvage must produce a structured record (Discipline C)
+    const salvaged = logger.records.find((r) => r.event === "delivery.result-salvaged");
+    expect(salvaged).toMatchObject({ level: "info", fields: { taskId: ITEM_ID, outcome: "failed" } });
 
     // The blockedReason must carry the salvaged fields after save
     expect(savedBlockedReasons.length).toBeGreaterThan(0);
@@ -303,7 +294,7 @@ describe("processTask post-agent status ladder", () => {
   });
 
   test("preempted-to-Abandoned item with completed result salvages the result", async () => {
-    const { deps, logs, savedBlockedReasons, mergeRecords } = buildPreemptionDeps({
+    const { deps, logger, savedBlockedReasons, mergeRecords } = buildPreemptionDeps({
       agentOutcome: "completed",
     });
     const task = freshPendingItem();
@@ -315,11 +306,9 @@ describe("processTask post-agent status ladder", () => {
     // The merge happened on main, so its record is kept although the item was preempted.
     expect(mergeRecords).toEqual([{ id: ITEM_ID, commit: MERGE_COMMIT }]);
 
-    // The salvage must produce a structured log
-    const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
-    expect(salvageLog).toBeDefined();
-    expect(salvageLog).toContain(ITEM_ID);
-    expect(salvageLog).toContain("outcome: completed");
+    // The salvage must produce a structured record
+    const salvaged = logger.records.find((r) => r.event === "delivery.result-salvaged");
+    expect(salvaged).toMatchObject({ level: "info", fields: { taskId: ITEM_ID, outcome: "completed" } });
 
     // The blockedReason must carry the salvaged outcome
     expect(savedBlockedReasons.length).toBeGreaterThan(0);
@@ -329,7 +318,7 @@ describe("processTask post-agent status ladder", () => {
   });
 
   test("Abandoned item with no prior blockedReason still salvages the result", async () => {
-    const { deps, logs, warns, savedBlockedReasons } = buildPreemptionDeps({
+    const { deps, logger, savedBlockedReasons } = buildPreemptionDeps({
       omitBlockedReason: true,
     });
     const task = freshPendingItem();
@@ -338,15 +327,13 @@ describe("processTask post-agent status ladder", () => {
 
     expect(result.status).toBe("failed");
 
-    // A warning about the missing blockedReason must be emitted (Discipline C)
-    const gapWarn = warns.find((w) => w.includes("no blockedReason"));
-    expect(gapWarn).toBeDefined();
-    expect(gapWarn).toContain(ITEM_ID);
+    // The missing blockedReason is a lost invariant, recorded at error (Discipline C)
+    const gap = logger.records.find((r) => r.event === "delivery.blocked-reason-missing");
+    expect(gap).toMatchObject({ level: "error", fields: { taskId: ITEM_ID } });
 
     // The salvage must still succeed — the result must not be lost
-    const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
-    expect(salvageLog).toBeDefined();
-    expect(salvageLog).toContain("outcome: failed");
+    const salvaged = logger.records.find((r) => r.event === "delivery.result-salvaged");
+    expect(salvaged).toMatchObject({ fields: { outcome: "failed" } });
 
     // The constructed reason must parse under storedBlockedReasonSchema
     expect(savedBlockedReasons.length).toBeGreaterThan(0);
@@ -364,7 +351,7 @@ describe("processTask post-agent status ladder", () => {
   });
 
   test("vanished item (null re-read) logs a warning and does not throw", async () => {
-    const { deps, warns } = buildPreemptionDeps();
+    const { deps, logger } = buildPreemptionDeps();
 
     // Override findById to return null after the first call
     let calls = 0;
@@ -379,10 +366,9 @@ describe("processTask post-agent status ladder", () => {
 
     expect(result.status).toBe("failed");
 
-    const vanishedWarn = warns.find((w) => w.includes("vanished"));
-    expect(vanishedWarn).toBeDefined();
-    expect(vanishedWarn).toContain(ITEM_ID);
-    expect(vanishedWarn).toContain("agent spend unrecoverable");
+    const vanished = logger.records.find((r) => r.event === "delivery.item-vanished");
+    expect(vanished).toMatchObject({ level: "warn", fields: { taskId: ITEM_ID, result: "failed" } });
+    expect(vanished?.msg).toContain("agent spend unrecoverable");
   });
 });
 
@@ -412,7 +398,6 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     refunds: () => number;
     halts: ProjectBlockCause[];
   } {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     let row = freshPendingItem();
     const statusesWritten: string[] = [];
     let routed = 0;
@@ -610,7 +595,6 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
   // A fault under the refund itself must not charge the task for Ashara's own fault.
   test("a refund whose write faults leaves the task uncharged: the requeue and its refund fail together and the recovery writes both", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     let row = freshPendingItem();
     // The routing in executeTask and processTask's retry of it both fault: only the cycle's recovery is left to write it.
     let refundFaults = 2;
@@ -962,7 +946,6 @@ describe("stored checks stale: the check task is reopened and the item waits on 
   }
 
   function buildStaleDeps(options: { readonly checkTask: WorkItem | null; readonly revision: number; readonly checkTaskSaveLoses?: boolean }) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const rows = new Map<string, WorkItem>([[ITEM_ID, freshPendingItem()]]);
     if (options.checkTask !== null) rows.set(CHECK_ID, options.checkTask);
     const written: Array<readonly [string, string]> = [];
@@ -1117,7 +1100,6 @@ describe("a disputed check: the check task is reopened with the dispute and the 
 
   /** `merged`: the disputed check is a merged task's, written by a check task the item does not depend on. */
   function buildDisputeDeps(priorDisputes: number, whose: "own" | "merged" = "own") {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const edges: Array<{ readonly from: string; readonly to: string }> = [];
     const mergedTaskId = createWorkItemId();
     const rows = new Map<string, WorkItem>([
@@ -1275,7 +1257,6 @@ describe("an environment change requested: an environment task is opened and the
     requester: Pick<WorkItem, "taskSpec"> = {},
     completed: readonly WorkItem[] = [],
   ) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const rows = new Map<string, WorkItem>([[ITEM_ID, { ...freshPendingItem(), ...requester }]]);
     for (const done of completed) rows.set(done.id, done);
     const edges: Array<{ readonly from: string; readonly to: string }> = [];
@@ -1487,7 +1468,6 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
   }
 
   function buildRefusalDeps(scope: "project" | "deployment" | "configuration" | "shutdown", priorDispatches = 0) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     let row: WorkItem = { ...freshPendingItem(), dispatchCount: priorDispatches };
     const attempts: number[] = [];
     const statusesWritten: string[] = [];
@@ -1851,7 +1831,6 @@ describe("a review of the plan's suites with problems: the named check tasks are
   const problems = [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction" as const, problem, evidence: "a: wc; b: diff" }];
 
   function buildReviewDeps(priorReviews: number) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const check = (id: WorkItemId, checksFor: string): WorkItem => ({
       ...freshPendingItem(),
       id,

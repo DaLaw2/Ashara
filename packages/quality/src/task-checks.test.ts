@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { targetRepo } from "@ashara/execution-infra";
 import type { Cell } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { CheckRun } from "@ashara/workplace";
 import {
@@ -140,7 +141,7 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten(`./${AREA}run.py`);
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA);
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA, recordingLogger());
     expect(harvest).toEqual({ kind: "harvested", files: [{ path: `${AREA}run.py`, content: "print('hi')\n" }], discarded: [] });
   });
 
@@ -157,12 +158,16 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     for (const path of [`${AREA}run.sh`, "README", "src/main.src", "checks/impl-2/other.sh"]) recorder.fileWritten(path);
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA);
+    const logger = recordingLogger();
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA, logger);
     expect(harvest).toEqual({
       kind: "harvested",
       files: [{ path: `${AREA}run.sh`, content: "./tool | grep -q ok\n" }],
       discarded: ["README", "checks/impl-2/other.sh", "src/main.src"],
     });
+    expect(logger.records.map((r) => [r.level, r.event, r.fields?.["discarded"]])).toEqual([
+      ["info", "quality.check-files-discarded", ["README", "checks/impl-2/other.sh", "src/main.src"]],
+    ]);
   });
 
   test("a product file of the environment's build context written outside the area is discarded, not kept", async () => {
@@ -171,7 +176,7 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten("manifest.txt");
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles(), AREA);
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles(), AREA, recordingLogger());
     expect(harvest).toEqual({ kind: "harvested", files: [], discarded: ["manifest.txt"] });
   });
 
@@ -182,7 +187,7 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten(`${AREA}input.txt`);
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", `${AREA}input.txt`], recorder.writtenFiles(), AREA);
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", `${AREA}input.txt`], recorder.writtenFiles(), AREA, recordingLogger());
     expect(harvest).toMatchObject({ kind: "rejected", reason: expect.stringContaining("overlap the environment's recipe and inputs") });
   });
 });

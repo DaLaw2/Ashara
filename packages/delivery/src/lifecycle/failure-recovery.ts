@@ -1,4 +1,5 @@
 import { describeErrorChain } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import type { ActiveProjects, WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
@@ -13,6 +14,7 @@ export interface FailureRecoveryDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventPublisher: EventPublisher;
   readonly failureRouter: Pick<FailureRouter, "route">;
+  readonly logger: Logger;
 }
 
 /** The verdict stored with a Failed item's transition does not parse. */
@@ -56,7 +58,11 @@ export async function recoverParkedFailedItem(
     case "unreadable": {
       const corrupt = new StoredFailureVerdictCorrupt(item.id, item.projectId, stored.detail);
       const result = await deps.projects.block(item.projectId, projectBlockCause(corrupt));
-      console.warn(`[${item.id}] left Failed, not routed; project ${item.projectId} ${result}: ${corrupt.message}`);
+      deps.logger.error("delivery.failure-verdict-corrupt", `left Failed, not routed; project ${item.projectId} ${result}: ${corrupt.message}`, {
+        taskId: item.id,
+        projectId: item.projectId,
+        result,
+      }, corrupt);
       return "held";
     }
   }
@@ -75,7 +81,7 @@ export async function recoverFailedItem(
   const priorAttempts = item.dispatchCount;
 
   try {
-    const decision = routeDecision(deps.failureRouter, item, failure, priorAttempts, verdict);
+    const decision = routeDecision(deps, item, failure, priorAttempts, verdict);
 
     switch (decision.action) {
       case "replan":
@@ -97,19 +103,16 @@ export async function recoverFailedItem(
 }
 
 function routeDecision(
-  failureRouter: Pick<FailureRouter, "route">,
+  deps: Pick<FailureRecoveryDeps, "failureRouter" | "logger">,
   item: WorkItem,
   failure: RawFailureContext,
   priorAttempts: number,
   verdict: FailureVerdict,
 ): FailureDecision {
   try {
-    return failureRouter.route({ item: { id: item.id }, failure, priorAttempts, verdict });
+    return deps.failureRouter.route({ item: { id: item.id }, failure, priorAttempts, verdict });
   } catch (error) {
-    console.warn(
-      `[${item.id}] FailureRouter.route failed; abandoning fail-closed so dependents do not deadlock:`,
-      error,
-    );
+    deps.logger.error("delivery.failure-route-failed", "FailureRouter.route failed; abandoning fail-closed so dependents do not deadlock", { taskId: item.id }, error);
     return { action: "abandon", reason: "routing_fault", attempts: priorAttempts, failure };
   }
 }
@@ -121,8 +124,10 @@ async function abandonFailClosed(
   priorAttempts: number,
   error: unknown,
 ): Promise<FailureDecision["action"]> {
-  console.warn(
-    `[${item.id}] recovery internals failed (route/save); abandoning fail-closed so the item does not strand at Failed:`,
+  deps.logger.error(
+    "delivery.failure-recovery-failed",
+    "recovery internals failed (route/save); abandoning fail-closed so the item does not strand at Failed",
+    { taskId: item.id },
     error,
   );
   const fresh = await deps.workItemRepo.findById(item.id);
@@ -153,7 +158,7 @@ async function applyReplan(
 }
 
 async function applyAbandon(
-  deps: Pick<FailureRecoveryDeps, "workItemRepo" | "eventPublisher">,
+  deps: Pick<FailureRecoveryDeps, "workItemRepo" | "eventPublisher" | "logger">,
   item: WorkItem,
   reason: StoredBlockedReason,
 ): Promise<void> {
@@ -163,15 +168,17 @@ async function applyAbandon(
   await publishEvents(deps, item);
 }
 
-async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, item: WorkItem): Promise<void> {
+async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher" | "logger">, item: WorkItem): Promise<void> {
   const events = takeEvents(item);
   for (const event of events) {
     try {
       await deps.eventPublisher.publish(event);
     } catch (publishError) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the status transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
-      console.warn(
-        `[failure-recovery.publishEvents] failed to publish audit event for ${item.id} (status transition already committed):`,
+      deps.logger.warn(
+        "delivery.event-publish-failed",
+        `failed to publish audit event for ${item.id} (status transition already committed)`,
+        { taskId: item.id, site: "failure-recovery.publishEvents", eventType: event.eventType },
         publishError,
       );
     }

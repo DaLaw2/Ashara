@@ -177,6 +177,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DispatchService({
+    logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },

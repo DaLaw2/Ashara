@@ -241,4 +241,13 @@ export default tseslint.config(
       "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
     },
   },
+  {
+    // Delivery and quality log through their injected Logger, so every line carries an event name,
+    // a level and the correlation scope. A test may print what it inspects, so tests are exempt.
+    files: ["packages/delivery/src/**/*.ts", "packages/quality/src/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
 );

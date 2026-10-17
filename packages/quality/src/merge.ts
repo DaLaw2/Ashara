@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import { clearWorktreeSlot, mergeInProgress, runHostGit, targetRepo, treeHasEntry } from "@ashara/execution-infra";
 import type { HostRepo } from "@ashara/execution-infra";
 
@@ -48,12 +49,17 @@ export async function discardTaskBranch(targetPath: string, taskId: string): Pro
  * task's verdict is reached, so a branch that cannot be deleted is a leftover in the target,
  * logged at warn with git's cause, never a verdict.
  */
-export async function deleteSettledTaskBranch(targetPath: string, taskId: string, settled: string): Promise<void> {
+export async function deleteSettledTaskBranch(targetPath: string, taskId: string, settled: string, logger: Logger): Promise<void> {
   try {
     await discardTaskBranch(targetPath, taskId);
   } catch (e) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: the task's verdict is reached; the branch left in the target is deleted by the settled-branch release
-    console.warn(`[${taskId}] the branch ${taskBranchName(taskId)} of a task ${settled} could not be deleted and is left in ${targetPath}; the settled-branch release deletes it once the task is Completed: ${describeErrorChain(e)}`);
+    logger.warn(
+      "quality.settled-branch-left",
+      `the branch ${taskBranchName(taskId)} of a task ${settled} could not be deleted and is left in ${targetPath}; the settled-branch release deletes it once the task is Completed`,
+      { taskId, branch: taskBranchName(taskId), targetPath, settled },
+      e,
+    );
   }
 }
 
@@ -64,14 +70,25 @@ export async function deleteSettledTaskBranch(targetPath: string, taskId: string
  * to delete a branch a worktree holds), then the branch. Its work is on main, so a failure leaves a
  * leftover, logged at warn with its cause, never a verdict.
  */
-export async function releaseMergedTaskCheckout(workdirBase: string, targetPath: string, taskId: string, settled: string): Promise<void> {
+export async function releaseMergedTaskCheckout(
+  workdirBase: string,
+  targetPath: string,
+  taskId: string,
+  settled: string,
+  logger: Logger,
+): Promise<void> {
   try {
     await clearWorktreeSlot(workdirBase, targetPath, taskBranchName(taskId));
   } catch (e) {
-    console.warn(`[${taskId}] the worktree slot of a task ${settled} could not be cleared, so its branch ${taskBranchName(taskId)} is left in ${targetPath}; the settled-branch release clears both once the task is Completed: ${describeErrorChain(e)}`);
+    logger.warn(
+      "quality.settled-worktree-left",
+      `the worktree slot of a task ${settled} could not be cleared, so its branch ${taskBranchName(taskId)} is left in ${targetPath}; the settled-branch release clears both once the task is Completed`,
+      { taskId, branch: taskBranchName(taskId), targetPath, settled },
+      e,
+    );
     return;
   }
-  await deleteSettledTaskBranch(targetPath, taskId, settled);
+  await deleteSettledTaskBranch(targetPath, taskId, settled, logger);
 }
 
 /**
@@ -131,7 +148,7 @@ export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutR
 }
 
 /** `--no-commit` stages the merge without moving main; gates run before commitMerge or finalize's reset to HEAD decides its fate. */
-export async function tentativeMerge(targetPath: string, branch: string): Promise<MergeResult> {
+export async function tentativeMerge(targetPath: string, branch: string, logger: Logger): Promise<MergeResult> {
   try {
     await runHostGit(targetRepo(targetPath), ["merge", "--no-commit", "--no-ff", branch]);
     return { status: "clean" };
@@ -143,12 +160,12 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
     try {
       files = await getConflictingFiles(targetPath);
     } catch (diffError) {
-      console.warn(`[tentativeMerge] merge of ${branch} failed and its conflicting files could not be listed: ${message} | ${describeErrorChain(diffError)}`);
+      logger.warn("quality.merge-conflicts-unlisted", `merge of ${branch} failed and its conflicting files could not be listed: ${message}`, { branch, targetPath }, diffError);
       return { status: "error", message: `${message}; and the conflicting files could not be listed: ${describeErrorChain(diffError).slice(0, 300)}`, cause: diffError };
     }
     // A conflict is the task's outcome, not a failure of git: finalize logs it with its verdict.
     if (files.length > 0) return { status: "conflict", files };
-    console.warn(`[tentativeMerge] merge of ${branch} failed without a conflict: ${message}`);
+    logger.warn("quality.merge-refused", `merge of ${branch} failed without a conflict: ${message}`, { branch, targetPath }, e);
     return { status: "error", message, cause: e };
   }
 }
@@ -261,13 +278,13 @@ export type HeadReading = "on-main" | "unconfirmed";
  * first read of the branch HEAD names, taken before the checkout is reset so finalize's git calls
  * keep their order (the reset and the clean follow the read, never precede it).
  */
-export async function recoverOrphanedMerge(targetPath: string): Promise<HeadReading> {
+export async function recoverOrphanedMerge(targetPath: string, logger: Logger): Promise<HeadReading> {
   if (await mergeInProgress(targetRepo(targetPath))) {
     try {
       await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
     } catch (e) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: finalize resets the checkout next and refuses to merge while a merge is still staged (unrestoredReason), so the failed abort reaches no verdict
-      console.warn(`[recoverOrphanedMerge] git merge --abort failed in ${targetPath}: ${describeErrorChain(e)}`);
+      logger.warn("quality.orphaned-merge-abort-failed", `git merge --abort failed in ${targetPath}`, { targetPath }, e);
     }
   }
   try {
@@ -275,7 +292,7 @@ export async function recoverOrphanedMerge(targetPath: string): Promise<HeadRead
     return stdout.trim() === "main" ? "on-main" : "unconfirmed";
   } catch (e) {
     // Not the verdict: "unconfirmed" sends the restore through headOnMainReason, which reads HEAD again and refuses when it cannot.
-    console.warn(`[recoverOrphanedMerge] the branch HEAD names in ${targetPath} could not be read before the reset: ${describeErrorChain(e)}`);
+    logger.warn("quality.head-unread", `the branch HEAD names in ${targetPath} could not be read before the reset`, { targetPath }, e);
     return "unconfirmed";
   }
 }
@@ -407,7 +424,7 @@ async function startMainMerge(repo: HostRepo, taskId: string, conflict: MainConf
  * holds main. Any git failure, a conflict included (main moved since conflictWithMain), aborts the
  * merge and throws ConflictRetryUnprepared: the branch is never dispatched without main.
  */
-async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"merged" | "already"> {
+async function mergeMainIntoBranch(repo: HostRepo, taskId: string, logger: Logger): Promise<"merged" | "already"> {
   try {
     await runHostGit(repo, ["merge-base", "--is-ancestor", "refs/heads/main", "HEAD"]);
     return "already";
@@ -422,7 +439,7 @@ async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"mer
       if (await mergeInProgress(repo)) await runHostGit(repo, ["merge", "--abort"]);
     } catch (abortError) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the failed merge is thrown as ConflictRetryUnprepared below, so the branch is never dispatched without main
-      console.warn(`[mergeMainIntoBranch] the failed merge of main into task ${taskId}'s branch could not be aborted: ${describeErrorChain(abortError)}`);
+      logger.warn("quality.retry-merge-abort-failed", `the failed merge of main into task ${taskId}'s branch could not be aborted`, { taskId }, abortError);
     }
     throw new ConflictRetryUnprepared(taskId, "merge", describeErrorChain(e), { cause: e });
   }
@@ -437,8 +454,8 @@ async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"mer
  * works on the tree its merge will be verified as. Either throws ConflictRetryUnprepared when the
  * merge cannot be prepared.
  */
-export function mainMergedForRetry(taskId: string, conflict: MainConflict | null): (repo: HostRepo) => Promise<unknown> {
-  return (repo) => (conflict !== null ? startMainMerge(repo, taskId, conflict) : mergeMainIntoBranch(repo, taskId));
+export function mainMergedForRetry(taskId: string, conflict: MainConflict | null, logger: Logger): (repo: HostRepo) => Promise<unknown> {
+  return (repo) => (conflict !== null ? startMainMerge(repo, taskId, conflict) : mergeMainIntoBranch(repo, taskId, logger));
 }
 
 /** A conflict marker line as git writes one; its length is the conflict-marker-size attribute, 7 by default. */

@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { ProjectId, StepContainment } from "@ashara/shared";
+import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
@@ -65,6 +65,7 @@ interface AcceptanceDeps {
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   /** Each project's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
+  readonly logger: Logger;
 }
 
 /** A ready project has no workspace: its completed tasks merged nowhere this process can sweep. */
@@ -121,10 +122,12 @@ async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, interface
     await PlanningService.saveWorkItem(workItems, defect, "Pending");
     return defect.id;
   });
-  console.warn(
-    `[acceptance] project ${record.projectId}: sweep on main ${record.mainCommit ?? "(unread)"} failed; ` +
+  deps.logger.info(
+    "delivery.acceptance-failed",
+    `sweep on main ${record.mainCommit ?? "(unread)"} failed; ` +
       (outcome === "recorded" ? `defect ${defect.id} given up, the plan is repaired around it` : "the project moved, nothing recorded") +
       `:\n${record.details}`,
+    { projectId: record.projectId, mainCommit: record.mainCommit, defectId: defect.id, outcome },
   );
   if (outcome !== "recorded") return;
   for (const event of takeEvents(defect)) {
@@ -132,7 +135,11 @@ async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, interface
       await deps.eventStore.publish(event);
     } catch (err) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the defect is recorded before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
-      console.warn(`[acceptance] defect ${defect.id}: an audit event could not be published (the defect is already recorded):`, err);
+      deps.logger.warn("delivery.event-publish-failed", `defect ${defect.id}: an audit event could not be published (the defect is already recorded)`, {
+        taskId: defect.id,
+        site: "acceptance",
+        eventType: event.eventType,
+      }, err);
     }
   }
 }
@@ -147,14 +154,19 @@ async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep
   if (faults > INFRASTRUCTURE_FAULT_BUDGET) {
     const err = new AcceptanceFaultBudgetSpent(projectId, faults, sweep.error);
     const blocked = await deps.projectRepo.block(projectId, projectBlockCause(err));
-    console.warn(`[acceptance] project ${projectId} ${blocked} as undeliverable: ${err.message}`);
+    deps.logger.error("delivery.project-halted", `project ${projectId} ${blocked} as undeliverable: ${err.message}`, { projectId, faults, result: blocked }, err);
     return;
   }
   const why = `sweep fault ${faults} of ${INFRASTRUCTURE_FAULT_BUDGET}`;
   if (sweep.kind === "unrunnable") {
     const cause: ProjectBlockCause = { ...projectBlockCause(sweep.error), category: "infrastructure" };
     const blocked = await deps.projectRepo.block(projectId, cause);
-    console.warn(`[acceptance] project ${projectId} ${blocked} on infrastructure (${why}): the substrate failed under its acceptance sweep: ${describeErrorChain(sweep.error)}`);
+    deps.logger.warn(
+      "delivery.project-halted",
+      `project ${projectId} ${blocked} on infrastructure (${why}): the substrate failed under its acceptance sweep`,
+      { projectId, faults, category: "infrastructure", result: blocked },
+      sweep.error,
+    );
     return;
   }
   await recordDefect(deps, {
@@ -182,7 +194,11 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
   if (ready.workspacePath === null) {
     const cause = projectBlockCause(new AcceptanceWorkspaceMissing(ready.projectId));
     const blocked = await deps.projectRepo.block(ready.projectId, cause);
-    console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
+    deps.logger.error("delivery.project-halted", `project ${ready.projectId} ${blocked}: ${cause.reason}`, {
+      projectId: ready.projectId,
+      errorClass: cause.errorClass,
+      result: blocked,
+    });
     return "not-accepted";
   }
   // A Completed scaffold with no merge on record is a gap in the record that no repair task and no
@@ -192,7 +208,11 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
   if (unrecorded.length > 0) {
     const cause = projectBlockCause(new ScaffoldMergeUnrecorded(ready.projectId, unrecorded));
     const blocked = await deps.projectRepo.block(ready.projectId, cause);
-    console.warn(`[acceptance] project ${ready.projectId} ${blocked}: ${cause.reason}`);
+    deps.logger.error("delivery.project-halted", `project ${ready.projectId} ${blocked}: ${cause.reason}`, {
+      projectId: ready.projectId,
+      errorClass: cause.errorClass,
+      result: blocked,
+    });
     return "not-accepted";
   }
   const scaffolds = ready.scaffoldMerges.flatMap((scaffold) => (scaffold.mergeCommit === null ? [] : [{ taskId: scaffold.taskId, mergeCommit: scaffold.mergeCommit }]));
@@ -211,7 +231,11 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
   };
   if (sweep.passed) {
     const outcome = await deps.acceptance.recordAccepted({ ...record, executedChecks: sweep.executedChecks });
-    console.log(`[acceptance] project ${ready.projectId}: sweep on main ${sweep.mainCommit} passed; ${outcome}`);
+    deps.logger.info("delivery.acceptance-passed", `sweep on main ${sweep.mainCommit} passed; ${outcome}`, {
+      projectId: ready.projectId,
+      mainCommit: sweep.mainCommit,
+      outcome,
+    });
     return outcome === "accepted" ? "accepted" : "not-accepted";
   }
   const standing = sweep.publicInterface;

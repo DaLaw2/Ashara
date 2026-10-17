@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { z } from "zod";
-import { parseProjectId, readEach, type DomainEvent, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
 import type { VisionItem } from "../decomposition-types.js";
@@ -274,6 +274,7 @@ export async function withPlanRevisionTransaction(
   db: Database,
   record: PlanRevisionRecord,
   fn: (workItemRepo: WorkItemRowRepository) => Promise<void>,
+  logger: Logger,
 ): Promise<"written" | "moved"> {
   const { projectId } = record;
   if (record.answers.length === 0 && record.repaired.length === 0) throw new RevisionCauseMissing(projectId, record.revision);
@@ -370,7 +371,7 @@ export async function withPlanRevisionTransaction(
     });
   } catch (err) {
     if (!(err instanceof RevisionReadMoved) && !(err instanceof InvalidStatusTransition)) throw err;
-    console.warn(`[replan] project ${projectId}: revision ${record.revision} not written, retried next cycle: ${err.message}`);
+    logger.info("delivery.revision-moved", `revision ${record.revision} not written, retried next cycle: ${err.message}`, { projectId, revision: record.revision });
     return "moved";
   }
   return "written";

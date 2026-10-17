@@ -1,4 +1,4 @@
-import type { DomainEvent, ProjectId } from "@ashara/shared";
+import type { DomainEvent, Logger, ProjectId } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { EventStoreRepository } from "@ashara/db";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
@@ -41,6 +41,7 @@ interface StartupReconcilerDeps {
   readonly devSessionStore: Pick<DevSessionRepository, "dispatchEvidence">;
   /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
   readonly workdirBase: string;
+  readonly logger: Logger;
 }
 
 interface ReconcileSummary {
@@ -80,9 +81,11 @@ async function* itemsByProject(
       blocked.add(projectId);
       const cause = projectBlockCause(err);
       const result = await deps.projects.block(projectId, cause);
-      console.warn(
-        `[startup-reconciler] project ${projectId}: ${cause.errorClass} (item ${err.itemId}, ${err.column}); ` +
-          `its ${status} items are not reconciled; project ${result}: ${cause.reason}`,
+      deps.logger.error(
+        "delivery.row-corrupt",
+        `${cause.errorClass} (item ${err.itemId}, ${err.column}); its ${status} items are not reconciled; project ${projectId} ${result}: ${cause.reason}`,
+        { projectId, itemId: err.itemId, column: err.column, status, result },
+        err,
       );
     }
   }
@@ -115,6 +118,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     eventPublisher: deps.eventStore,
     failureRouter: deps.failureRouter,
     projects: deps.projects,
+    logger: deps.logger,
   };
 
   for await (const parkedFailed of itemsByProject(deps, "Failed", blockedProjects)) {
@@ -128,16 +132,13 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
       } catch (error) {
         // eslint-disable-next-line ashara/catch-continue -- best effort: the item is counted in failedErrored and left Failed, its recovery retried at the next reconcile
         failedErrored += 1;
-        console.warn(
-          `[startup-reconciler] failed to route parked Failed item ${failed.id}; left Failed for the next reconcile:`,
-          error,
-        );
+        deps.logger.warn("delivery.parked-failed-unrouted", "failed to route parked Failed item; left Failed for the next reconcile", { taskId: failed.id }, error);
       }
     }
   }
 
   // Last, so a task this pass settled (an orphan Completed, a parked Failed item abandoned) is covered.
-  await releaseBranchesOfSettledTasks({ workItemRepo: deps.workItemRepo, projects: deps.projects, workdirBase: deps.workdirBase });
+  await releaseBranchesOfSettledTasks({ workItemRepo: deps.workItemRepo, projects: deps.projects, workdirBase: deps.workdirBase, logger: deps.logger });
 
   const summary: ReconcileSummary = {
     orphansRequeued,
@@ -150,11 +151,13 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     failedErrored,
     projectsBlocked: blockedProjects.size,
   };
-  console.log(
-    `[startup-reconciler] orphans requeued=${orphansRequeued} given-up=${orphansGivenUp} completed=${orphansCompleted} blocked=${orphansBlocked}; ` +
+  deps.logger.info(
+    "delivery.startup-reconciled",
+    `orphans requeued=${orphansRequeued} given-up=${orphansGivenUp} completed=${orphansCompleted} blocked=${orphansBlocked}; ` +
       `parked Failed routed=${failedRouted} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
       `held=${failedHeld} errored=${failedErrored}); ` +
       `projects blocked on a corrupt row=${blockedProjects.size}`,
+    { ...summary, failedRouted },
   );
   return summary;
 }
@@ -207,7 +210,10 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       step = "re-read the item";
       const item = attempt === 1 ? orphan : await deps.workItemRepo.findById(orphan.id);
       if (item === null || item.status !== "InProgress") {
-        console.warn(`[startup-reconciler] orphan ${orphan.id} is ${item?.status ?? "gone"} now; left as it is`);
+        deps.logger.info("delivery.orphan-moved", `orphan ${orphan.id} is ${item?.status ?? "gone"} now; left as it is`, {
+          taskId: orphan.id,
+          status: item?.status ?? "gone",
+        });
         return "moved";
       }
       step = "read main for the task's merge";
@@ -226,19 +232,24 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       }
       step = `record the merge ${merge}`;
       await deps.workItemRepo.recordMergeCommit(item.id, merge, "merged");
-      await releaseMergedTask(deps.projects, deps.workdirBase, item, "merged");
+      await releaseMergedTask(deps.projects, deps.workdirBase, item, "merged", deps.logger);
       step = `complete the task merged as ${merge}`;
       const events = await PlanningService.route(deps.workItemRepo, item.id, "passed");
-      await publishBestEffort(deps.eventStore, events, item.id);
-      console.warn(`[startup-reconciler] ${item.id} was merged on main as ${merge} by a dead process; merge recorded, Completed, not re-dispatched`);
+      await publishBestEffort(deps, events, item.id);
+      deps.logger.info("delivery.orphan-merged", `${item.id} was merged on main as ${merge} by a dead process; merge recorded, Completed, not re-dispatched`, {
+        taskId: item.id,
+        mergeCommit: merge,
+      });
       return "completed";
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept, and an orphan still unsettled after it is blocked under OrphanUnreconciled, below
       last = error;
       const wait = ORPHAN_BACKOFF_MS[attempt - 1];
-      console.warn(
-        `[startup-reconciler] orphan ${orphan.id}: ${step} failed on attempt ${attempt} of ${ORPHAN_BACKOFF_MS.length + 1}` +
-          `${wait === undefined ? "; blocking it" : `; retrying in ${wait}ms`}:`,
+      deps.logger.warn(
+        "delivery.orphan-settle-failed",
+        `orphan ${orphan.id}: ${step} failed on attempt ${attempt} of ${ORPHAN_BACKOFF_MS.length + 1}` +
+          `${wait === undefined ? "; blocking it" : `; retrying in ${wait}ms`}`,
+        { taskId: orphan.id, step, attempt },
         error,
       );
       if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
@@ -254,10 +265,18 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
   if (reason.source === "orphan_unreconciled") {
     try {
       const result = await deps.projects.block(orphan.projectId, projectBlockCause(unsettled));
-      console.warn(`[startup-reconciler] project ${orphan.projectId} ${result} on Ashara's own fault: ${unsettled.message}`);
+      deps.logger.error("delivery.project-halted", `project ${orphan.projectId} ${result} on Ashara's own fault: ${unsettled.message}`, {
+        taskId: orphan.id,
+        projectId: orphan.projectId,
+        faultClass: "ashara",
+        result,
+      }, unsettled);
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the orphan is already Blocked with its own exit, which the loop takes each cycle while the project runs
-      console.warn(`[startup-reconciler] project ${orphan.projectId} could not be blocked on ${unsettled.message}:`, error);
+      deps.logger.error("delivery.project-block-failed", `project ${orphan.projectId} could not be blocked on ${unsettled.message}`, {
+        taskId: orphan.id,
+        projectId: orphan.projectId,
+      }, error);
     }
   }
   return "blocked";
@@ -277,14 +296,14 @@ async function blockUnsettled(
       if (item === null || item.status !== "InProgress") return "moved";
       blockWorkItem(item, reason);
       await deps.workItemRepo.saveOrphanExit(item, "InProgress", "keep-counted");
-      await publishBestEffort(deps.eventStore, takeEvents(item), item.id);
-      console.warn(`[startup-reconciler] orphan ${orphan.id} blocked (${reason.source}): ${unsettled.message}`);
+      await publishBestEffort(deps, takeEvents(item), item.id);
+      deps.logger.info("delivery.task-parked", `orphan ${orphan.id} blocked (${reason.source}): ${unsettled.message}`, { taskId: orphan.id, source: reason.source });
       return "blocked";
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept and thrown as OrphanUnreconciled below, which refuses the start
       last = error;
       const wait = ORPHAN_BACKOFF_MS[attempt - 1];
-      console.warn(`[startup-reconciler] orphan ${orphan.id}: its block failed on attempt ${attempt}:`, error);
+      deps.logger.warn("delivery.orphan-block-failed", `orphan ${orphan.id}: its block failed on attempt ${attempt}`, { taskId: orphan.id, attempt }, error);
       if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
@@ -301,8 +320,12 @@ async function giveUpCrashLoop(deps: StartupReconcilerDeps, orphan: WorkItem, bo
   const previousStatus = orphan.status;
   giveUpWorkItem(orphan, { source: "crash_loop", boots, bound: CRASH_LOOP_BOUND, reason });
   await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
-  await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
-  console.warn(`[startup-reconciler] ${orphan.id} given up (crash_loop), never re-dispatched; its plan is repaired: ${reason}`);
+  await publishBestEffort(deps, takeEvents(orphan), orphan.id);
+  deps.logger.info("delivery.task-given-up", `${orphan.id} given up (crash_loop), never re-dispatched; its plan is repaired: ${reason}`, {
+    taskId: orphan.id,
+    source: "crash_loop",
+    boots,
+  });
 }
 
 /**
@@ -322,23 +345,30 @@ async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Pro
   requeueWorkItem(orphan);
   if (!unfinished) {
     await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
-    console.warn(
-      `[startup-reconciler] requeued ${orphan.id}; its dispatch stays counted (latest session ${evidence.latestPhase ?? "none"}, ` +
+    deps.logger.info(
+      "delivery.orphan-requeued",
+      `requeued ${orphan.id}; its dispatch stays counted (latest session ${evidence.latestPhase ?? "none"}, ` +
         `so no record shows a dispatch that never finished)`,
+      { taskId: orphan.id, refunded: false },
     );
   } else if (evidence.orphanedBefore >= MAX_ORPHAN_REFUNDS) {
     await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
-    console.warn(
-      `[startup-reconciler] requeued ${orphan.id}; its unfinished dispatch stays counted: ${evidence.orphanedBefore} earlier ` +
+    deps.logger.info(
+      "delivery.orphan-requeued",
+      `requeued ${orphan.id}; its unfinished dispatch stays counted: ${evidence.orphanedBefore} earlier ` +
         `dispatch(es) of it were already orphaned by a dead process (bound ${MAX_ORPHAN_REFUNDS})`,
+      { taskId: orphan.id, refunded: false, orphanedBefore: evidence.orphanedBefore },
     );
   } else {
     // The requeue and its refund are one write: a fault under either leaves the item InProgress for
     // the next attempt of the settlement, never requeued with its unfinished dispatch charged.
     await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "refund");
-    console.warn(`[startup-reconciler] requeued ${orphan.id}; its dispatch never finished (session non-terminal), refunded`);
+    deps.logger.info("delivery.orphan-requeued", `requeued ${orphan.id}; its dispatch never finished (session non-terminal), refunded`, {
+      taskId: orphan.id,
+      refunded: true,
+    });
   }
-  await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
+  await publishBestEffort(deps, takeEvents(orphan), orphan.id);
 }
 
 function isTerminalSessionPhase(phase: string): boolean {
@@ -360,17 +390,19 @@ function reconstructFailure(item: WorkItem): RawFailureContext {
 }
 
 async function publishBestEffort(
-  eventStore: Pick<EventStoreRepository, "publish">,
+  deps: Pick<StartupReconcilerDeps, "eventStore" | "logger">,
   events: DomainEvent[],
   itemId: string,
 ): Promise<void> {
   for (const event of events) {
     try {
-      await eventStore.publish(event);
+      await deps.eventStore.publish(event);
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
-      console.warn(
-        `[startup-reconciler] failed to publish audit event for ${itemId} (transition already committed):`,
+      deps.logger.warn(
+        "delivery.event-publish-failed",
+        `failed to publish audit event for ${itemId} (transition already committed)`,
+        { taskId: itemId, site: "startup-reconciler", eventType: event.eventType },
         error,
       );
     }

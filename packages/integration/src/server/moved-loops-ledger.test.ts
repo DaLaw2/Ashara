@@ -187,7 +187,7 @@ async function plannedProject(): Promise<{ projectId: ProjectId; questionId: str
   expect((await new RosterDerivation({ containment, llm: setupGateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ containment, llm: setupGateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  expect((await new FirstPlanner({ logger: recordingLogger(), containment, llm: setupGateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   const [question] = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
   if (question === undefined) throw new Error("intake posted no question");
   return { projectId, questionId: question.id };
@@ -350,7 +350,7 @@ describe("a plan revision whose write finds the project moved every cycle", () =
 
     const { spendCap, budget } = await tightLedger(projectId);
     const containment = memoryStepContainment((error) => spendCap.refusalOf(error) !== null);
-    const replanStore = createReplanStore(db);
+    const replanStore = createReplanStore(db, recordingLogger());
     let moved = 0;
     const alwaysMoved: ReplanStore = {
       ...replanStore,
@@ -362,7 +362,7 @@ describe("a plan revision whose write finds the project moved every cycle", () =
     };
     const loop = loopWith(spendCap, {
       containment,
-      replanning: new Replanner({ containment, llm: gateway(spendCap), store: alwaysMoved }),
+      replanning: new Replanner({ logger: recordingLogger(), containment, llm: gateway(spendCap), store: alwaysMoved }),
       liaisonAnswers: { runPending: async () => [] },
     });
 

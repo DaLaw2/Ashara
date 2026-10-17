@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { CheckoutHolderOverran, ensureTargetGitInit, mergeInProgress, targetRepo, withTargetCheckout } from "@ashara/execution-infra";
-import { createWorkItemId, observeContendedWaits } from "@ashara/shared";
+import { createWorkItemId, observeContendedWaits, recordingLogger } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import type { DispatchRef } from "../dispatch-result.js";
 import { recoverOrphanedMerge, resetCheckoutToHead, taskBranchName, tentativeMerge } from "../merge.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./finalize.js";
@@ -60,8 +61,8 @@ async function targetWithBranches(tasks: readonly DispatchRef[], shared?: string
   return target;
 }
 
-function deps(postMergeVerify: FinalizeDeps["postMergeVerify"]): FinalizeDeps {
-  return { postMergeOperation: "postMergeTaskChecks", postMergeVerify, presentedConflict: null, workdirBase: WORKDIR_BASE };
+function deps(postMergeVerify: FinalizeDeps["postMergeVerify"], logger: Logger = recordingLogger()): FinalizeDeps {
+  return { postMergeOperation: "postMergeTaskChecks", postMergeVerify, presentedConflict: null, workdirBase: WORKDIR_BASE, logger };
 }
 
 afterAll(async () => {
@@ -72,11 +73,11 @@ describe("finalize serialises per target checkout", () => {
   test("without the lock, a second finalize's opening steps destroy the first's tentative merge", async () => {
     const [a, b] = [task(), task()];
     const target = await targetWithBranches([a, b]);
-    expect((await tentativeMerge(target, taskBranchName(a.id))).status).toBe("clean");
+    expect((await tentativeMerge(target, taskBranchName(a.id), recordingLogger())).status).toBe("clean");
     expect(await hasMergeHead(target)).toBe(true);
 
     // What finalizeSuccess does first, run while the first task's checks would be running.
-    await recoverOrphanedMerge(target);
+    await recoverOrphanedMerge(target, recordingLogger());
     await resetCheckoutToHead(target);
 
     expect(await hasMergeHead(target)).toBe(false);
@@ -280,15 +281,11 @@ describe("a conflicted merge", () => {
       verified = true;
       return { passed: true, details: "ok" };
     };
-    // Undoing a conflicted merge is the normal path: nothing fails, so nothing is logged at warn.
-    const warn = vi.spyOn(console, "warn");
-    let stale: Awaited<ReturnType<typeof finalizeSuccess>>;
-    try {
-      stale = await finalizeSuccess(deps(verify), b, target, 1);
-      expect(warn.mock.calls).toEqual([]);
-    } finally {
-      warn.mockRestore();
-    }
+    // Undoing a conflicted merge is the normal path: nothing fails, so nothing is logged at warn or error.
+    const logger = recordingLogger();
+    const stale = await finalizeSuccess(deps(verify, logger), b, target, 1);
+    expect(logger.records.filter((r) => r.level === "warn" || r.level === "error")).toEqual([]);
+    expect(logger.records.map((r) => [r.level, r.event])).toContainEqual(["info", "quality.merge-conflict"]);
     expect(await git(target, "status", "--porcelain")).toBe("");
     if (stale.success) throw new Error("expected a conflict");
     expect(stale).toMatchObject({ failedStep: "merge", fault: { class: "agent_work" } });

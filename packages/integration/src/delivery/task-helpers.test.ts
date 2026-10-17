@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
 import { resolveTargetProjectPath } from "@ashara/delivery";
-import { parseProjectId } from "@ashara/shared";
+import { parseProjectId, recordingLogger } from "@ashara/shared";
 
 // Against the shared dev database: every row here is created under a unique name
 // and deleted in afterAll.
@@ -40,17 +40,17 @@ describe("resolveTargetProjectPath", () => {
   test("mints a path under workdirBase, records it on the project, and reuses it", async () => {
     const p = await projects.create(`${PREFIX}-mint`, clientId);
     const minted = join(workdirBase, "projects", p.id);
-    expect(await resolveTargetProjectPath(projects, p.id, workdirBase)).toEqual({ kind: "resolved", path: minted });
+    expect(await resolveTargetProjectPath(projects, p.id, workdirBase, recordingLogger())).toEqual({ kind: "resolved", path: minted });
     expect((await projects.get(p.id))?.workspacePath).toBe(minted);
-    expect(await resolveTargetProjectPath(projects, p.id, workdirBase)).toEqual({ kind: "resolved", path: minted });
+    expect(await resolveTargetProjectPath(projects, p.id, workdirBase, recordingLogger())).toEqual({ kind: "resolved", path: minted });
   });
 
   test("after workdirBase moves, the stored path outside it is refused, never re-minted or overwritten", async () => {
     const p = await projects.create(`${PREFIX}-moved`, clientId);
     const minted = join(workdirBase, "projects", p.id);
-    await resolveTargetProjectPath(projects, p.id, workdirBase);
+    await resolveTargetProjectPath(projects, p.id, workdirBase, recordingLogger());
 
-    const resolved = await resolveTargetProjectPath(projects, p.id, join(workdirBase, "moved"));
+    const resolved = await resolveTargetProjectPath(projects, p.id, join(workdirBase, "moved"), recordingLogger());
 
     expect(resolved).toMatchObject({ kind: "rejected", reason: expect.stringContaining("not inside the workdir base") });
     expect((await projects.get(p.id))?.workspacePath).toBe(minted);
@@ -59,13 +59,13 @@ describe("resolveTargetProjectPath", () => {
   test("a stored path outside the workdir base, the Ashara repository's included, is refused, never reused", async () => {
     const p = await projects.create(`${PREFIX}-poisoned`, clientId);
     await projects.recordWorkspacePath(p.id, join(process.cwd(), "poisoned-target"));
-    const resolved = await resolveTargetProjectPath(projects, p.id, workdirBase);
+    const resolved = await resolveTargetProjectPath(projects, p.id, workdirBase, recordingLogger());
     expect(resolved).toMatchObject({ kind: "rejected", reason: expect.stringContaining("not inside the workdir base") });
   });
 
   test("an unknown project is rejected and records nothing", async () => {
     const missing = parseProjectId(randomUUID(), "test");
-    expect(await resolveTargetProjectPath(projects, missing, workdirBase)).toMatchObject({ kind: "rejected" });
+    expect(await resolveTargetProjectPath(projects, missing, workdirBase, recordingLogger())).toMatchObject({ kind: "rejected" });
     expect(await projects.get(missing)).toBeNull();
   });
 });

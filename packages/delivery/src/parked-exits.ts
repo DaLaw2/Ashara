@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent, ProjectId, StepContainment } from "@ashara/shared";
-import { containEach, describeErrorChain } from "@ashara/shared";
+import type { DomainEvent, Logger, ProjectId, StepContainment } from "@ashara/shared";
+import { containEach } from "@ashara/shared";
 import type { MergeKind } from "./work-item-language/blocked-reason.js";
 import { blockedExitOf } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
@@ -27,6 +27,7 @@ interface ParkedExitDeps {
   readonly workdirBase: string;
   /** Each project's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
+  readonly logger: Logger;
 }
 
 /**
@@ -51,8 +52,8 @@ async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promi
     blocked = await deps.workItemRepo.findByProjectAndStatus(projectId, "Blocked");
   } catch (err) {
     if (!(err instanceof WorkItemRowCorrupt)) throw err;
-    console.warn(`[parked-exits] project ${projectId}: ${describeErrorChain(err)}; its Blocked tasks are not re-checked`);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: the pass released no task, which is what it returns; the warn above names why
+    deps.logger.warn("delivery.blocked-rows-corrupt", `project ${projectId}: its Blocked tasks are not re-checked`, { projectId }, err);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: the pass released no task, which is what it returns; the record above names why
     return 0;
   }
   let released = 0;
@@ -87,21 +88,25 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
   try {
     await deps.workItemRepo.recordMergeCommit(item.id, mergeCommit, mergeKind);
   } catch (err) {
-    console.warn(`[parked-exits] task ${item.id}: the record of merge ${mergeCommit} still cannot be written; it stays Blocked:`, err);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the warn above names why
+    deps.logger.warn("delivery.merge-record-failed", `the record of merge ${mergeCommit} still cannot be written; it stays Blocked`, { taskId: item.id, mergeCommit }, err);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the record above names why
     return false;
   }
-  await releaseMergedTask(deps.projects, deps.workdirBase, item, mergeKind);
+  await releaseMergedTask(deps.projects, deps.workdirBase, item, mergeKind, deps.logger);
   let events: DomainEvent[];
   try {
     events = await PlanningService.completeRecordedMerge(deps.workItemRepo, item);
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    console.warn(`[parked-exits] task ${item.id}: merge ${mergeCommit} recorded, but not completed: it changed concurrently (${err.from} -> ${err.to})`);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not completed; the warn above names why
+    deps.logger.warn("delivery.transition-rejected", `merge ${mergeCommit} recorded, but not completed: it changed concurrently (${err.from} -> ${err.to})`, {
+      taskId: item.id,
+      from: err.from,
+      to: err.to,
+    });
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not completed; the record above names why
     return false;
   }
-  console.log(`[parked-exits] task ${item.id}: merge ${mergeCommit} recorded; Completed`);
+  deps.logger.info("delivery.parked-merge-completed", `merge ${mergeCommit} recorded; Completed`, { taskId: item.id, mergeCommit });
   await publishAll(deps, item.id, events);
   return true;
 }
@@ -117,8 +122,8 @@ async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boole
   try {
     merge = await mergeOnMainOf(deps.projects, deps.workdirBase, item);
   } catch (err) {
-    console.warn(`[parked-exits] task ${item.id}: main still cannot be read for its merge; it stays Blocked:`, err);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the warn above names why
+    deps.logger.warn("delivery.main-unread", "main still cannot be read for its merge; it stays Blocked", { taskId: item.id }, err);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the record above names why
     return false;
   }
   if (merge !== null) return completeRecordedMerge(deps, item, merge, "merged");
@@ -131,7 +136,11 @@ async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: 
       await deps.eventStore.publish(event);
     } catch (err) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
-      console.warn(`[parked-exits] task ${taskId}: failed to publish ${event.eventType} (the transition is committed):`, err);
+      deps.logger.warn("delivery.event-publish-failed", `failed to publish ${event.eventType} (the transition is committed)`, {
+        taskId,
+        site: "parked-exits",
+        eventType: event.eventType,
+      }, err);
     }
   }
 }
@@ -152,11 +161,14 @@ async function giveUp(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    console.warn(`[parked-exits] task ${item.id}: not given up, it changed concurrently (${err.from} -> ${err.to})`);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not given up this pass; the warn above names why
+    deps.logger.warn("delivery.transition-rejected", `not given up, it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to });
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not given up this pass; the record above names why
     return false;
   }
-  console.warn(`[parked-exits] task ${item.id}: its ${cause.source} block has no exit that clears by itself; given up, its plan is repaired`);
+  deps.logger.info("delivery.task-given-up", `its ${cause.source} block has no exit that clears by itself; given up, its plan is repaired`, {
+    taskId: item.id,
+    source: cause.source,
+  });
   await publishAll(deps, item.id, takeEvents(item));
   return true;
 }
@@ -168,11 +180,11 @@ async function release(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    console.warn(`[parked-exits] task ${item.id}: not released, it changed concurrently (${err.from} -> ${err.to})`);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not released; the warn above names why
+    deps.logger.warn("delivery.transition-rejected", `not released, it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to });
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not released; the record above names why
     return false;
   }
-  console.log(`[parked-exits] task ${item.id}: its ${source} block cleared; back to Pending`);
+  deps.logger.info("delivery.block-cleared", `its ${source} block cleared; back to Pending`, { taskId: item.id, source });
   await publishAll(deps, item.id, takeEvents(item));
   return true;
 }

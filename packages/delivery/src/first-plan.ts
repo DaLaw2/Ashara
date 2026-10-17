@@ -1,5 +1,5 @@
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import type { Logger, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import type { WorkItemLevel } from "./work-item-language/work-item-status.js";
 import type { WorkKind } from "./acl/organization-acl.js";
@@ -195,6 +195,7 @@ interface FirstPlannerDeps {
   /** Each project's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  readonly logger: Logger;
 }
 
 /**
@@ -234,7 +235,13 @@ export class FirstPlanner implements FirstPlanning {
 
   private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<FirstPlanOutcome> {
     const result = await this.deps.store.blockProject(projectId, cause);
-    console.warn(`[first-plan] project ${projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
+    this.deps.logger.info("delivery.project-blocked", `${cause.errorClass}; project ${projectId} ${result}: ${cause.reason}`, {
+      projectId,
+      step: "first-plan",
+      category: cause.category,
+      errorClass: cause.errorClass,
+      result,
+    });
     return { kind: "project-blocked", projectId, cause };
   }
 
@@ -269,9 +276,10 @@ export class FirstPlanner implements FirstPlanning {
     }
     if (commit.kind === "already-planned") return { kind: "already-planned", projectId };
     for (const dropped of write.droppedDependencies) {
-      console.warn(
-        `[first-plan] project ${projectId}: ordering hint dropped: "${dropped.dependentTaskTitle}" named ` +
-          `"${dropped.unresolvedRef}", which is no task of the plan; no edge was written for it`,
+      this.deps.logger.info(
+        "delivery.ordering-hint-dropped",
+        `ordering hint dropped: "${dropped.dependentTaskTitle}" named "${dropped.unresolvedRef}", which is no task of the plan; no edge was written for it`,
+        { projectId, dependentTaskTitle: dropped.dependentTaskTitle, unresolvedRef: dropped.unresolvedRef },
       );
     }
     const epics = write.items.filter((item) => item.level === "Epic").length;
@@ -299,13 +307,15 @@ export class FirstPlanner implements FirstPlanning {
     const { projectId } = project;
     const error = describeErrorChain(err);
     const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
-    console.warn(
-      `[first-plan] project ${projectId} (vision v${project.vision.version}): attempt ${attempt}/${MAX_PLAN_ATTEMPTS} failed: ${error}`,
-    );
+    this.deps.logger.warn("delivery.plan-attempt-failed", `(vision v${project.vision.version}): attempt ${attempt}/${MAX_PLAN_ATTEMPTS} failed`, {
+      projectId,
+      attempt,
+      visionVersion: project.vision.version,
+    }, err);
     if (attempt < MAX_PLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
 
     await this.deps.store.stopPlanning(projectId);
-    console.warn(`[first-plan] project ${projectId}: planning stopped after ${attempt} attempts; project blocked`);
+    this.deps.logger.info("delivery.planning-stopped", `planning stopped after ${attempt} attempts; project blocked`, { projectId, attempts: attempt });
     return { kind: "stopped", projectId, attempts: attempt };
   }
 }

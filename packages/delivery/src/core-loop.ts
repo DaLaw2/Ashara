@@ -1,5 +1,5 @@
 import { parseProjectId } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import type { Logger, ProjectId } from "@ashara/shared";
 import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";
@@ -16,53 +16,68 @@ import { releaseClearedBlocks } from "./parked-exits.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 
 /** Failures are logged at warn by the Liaison itself, with their attempt count. */
-function logIntake(outcome: IntakeOutcome): void {
+function logIntake(logger: Logger, outcome: IntakeOutcome): void {
   if (outcome.kind === "recorded") {
-    console.log(
-      `[liaison-intake] tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
+    logger.info(
+      "delivery.intake-recorded",
+      `tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
         `${outcome.questions} question(s) posted; reading confirmation: ${outcome.confirmation}`,
+      { projectId: outcome.projectId, tenderId: outcome.tenderId, questions: outcome.questions },
     );
   }
 }
 
 /** Failures, a blocked project and an answer that answers nothing are logged at warn by the Liaison itself. */
-function logAnswer(outcome: AnswerOutcome): void {
+function logAnswer(logger: Logger, outcome: AnswerOutcome): void {
   if (outcome.kind === "stated") {
     const replan = outcome.replanRequested
       ? "; the plan relied on it, so the project is not dispatched until its plan is revised"
       : "";
-    console.log(
-      `[liaison-answer] answer ${outcome.answerId}: ${outcome.verdict} assumption ${outcome.assumptionKey} of project ` +
+    logger.info(
+      "delivery.answer-stated",
+      `answer ${outcome.answerId}: ${outcome.verdict} assumption ${outcome.assumptionKey} of project ` +
         `${outcome.projectId}, now Stated in vision v${outcome.visionVersion}${replan}`,
+      {
+        projectId: outcome.projectId,
+        answerId: outcome.answerId,
+        assumptionKey: outcome.assumptionKey,
+        visionVersion: outcome.visionVersion,
+        replanRequested: outcome.replanRequested,
+      },
     );
   }
 }
 
 /** A refused roster is logged at warn by the roster step itself, with the violations, and halts its project here. */
-function logRoster(outcome: RosterOutcome): void {
+function logRoster(logger: Logger, outcome: RosterOutcome): void {
   if (outcome.kind === "recorded") {
-    console.log(
-      `[roster] project ${outcome.projectId}: roster revision ${outcome.revision} recorded, ` +
-        `${outcome.roles.length} role(s): ${outcome.roles.join(", ")}`,
+    logger.info(
+      "delivery.roster-recorded",
+      `roster revision ${outcome.revision} recorded, ${outcome.roles.length} role(s): ${outcome.roles.join(", ")}`,
+      { projectId: outcome.projectId, revision: outcome.revision, roles: outcome.roles },
     );
   }
 }
 
 /** Failures are logged at warn by the planner itself, with their attempt count. */
-function logFirstPlan(outcome: FirstPlanOutcome): void {
+function logFirstPlan(logger: Logger, outcome: FirstPlanOutcome): void {
   if (outcome.kind === "planned") {
-    console.log(
-      `[first-plan] project ${outcome.projectId}: first plan written, ${outcome.epics} epic(s), ${outcome.tasks} task(s)`,
-    );
+    logger.info("delivery.first-plan-written", `first plan written, ${outcome.epics} epic(s), ${outcome.tasks} task(s)`, {
+      projectId: outcome.projectId,
+      epics: outcome.epics,
+      tasks: outcome.tasks,
+    });
   }
 }
 
 /** A revision is logged by the replanner; failures and blocks at warn there, with their attempt count. */
-function logReplan(outcome: ReplanOutcome): void {
+function logReplan(logger: Logger, outcome: ReplanOutcome): void {
   if (outcome.kind === "revised") {
-    console.log(
-      `[replan] project ${outcome.projectId}: plan revision ${outcome.revision} (${outcome.cause}), ${outcome.tasks} new task(s), ` +
+    logger.info(
+      "delivery.plan-revised",
+      `plan revision ${outcome.revision} (${outcome.cause}), ${outcome.tasks} new task(s), ` +
         `${outcome.superseded} superseded${outcome.newEnvironment ? ", environment set up again" : ""}`,
+      { projectId: outcome.projectId, revision: outcome.revision, cause: outcome.cause, tasks: outcome.tasks, superseded: outcome.superseded },
     );
   }
 }
@@ -105,7 +120,7 @@ export class CoreLoop {
     for (const choice of choices.kind === "ran" ? choices.value : []) {
       if (choice.kind !== "project-blocked" && choice.kind !== "step-faulted") {
         const version = choice.kind === "recorded" ? ` as vision v${choice.visionVersion}` : "";
-        console.log(`[liaison-stack-choice] project ${choice.projectId}: ${choice.kind}${version}`);
+        deps.logger.info("delivery.stack-choice", `${choice.kind}${version}`, { projectId: choice.projectId, outcome: choice.kind });
       }
     }
 
@@ -113,7 +128,7 @@ export class CoreLoop {
     // probe per cycle while any is halted, no LLM call), before the reports, so its resumption is
     // told this cycle. Only a halt already told is resumed: one written late in the previous cycle
     // is reported below first, and resumes from the next cycle on.
-    const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe, deps.containment));
+    const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe, deps.containment, deps.logger));
     if (resumed.kind === "stop") return this.haltAtCap(resumed.stop);
 
     // Halts recorded in an earlier cycle (or before a restart) and a project's return to work: one
@@ -127,7 +142,9 @@ export class CoreLoop {
     const warnings = await this.step("burn-warning", () => deps.burnWarnings.runPending());
     if (warnings.kind === "stop") return this.haltAtCap(warnings.stop);
     for (const warning of warnings.kind === "ran" ? warnings.value : []) {
-      if (warning.kind !== "step-faulted") console.log(`[liaison-burn-warning] project ${warning.projectId}: ${warning.zone} warning ${warning.kind}`);
+      if (warning.kind !== "step-faulted") {
+        deps.logger.info("delivery.burn-warning", `${warning.zone} warning ${warning.kind}`, { projectId: warning.projectId, zone: warning.zone, outcome: warning.kind });
+      }
     }
     // An acceptance recorded before a restart, or before the cap stopped the loop, is told here.
     const delivered = await this.postDeliveredReports();
@@ -143,7 +160,7 @@ export class CoreLoop {
     // Tenders first: a project's intake comes before any work on it.
     const intake = await this.stepThenCap("liaison-intake", () => deps.liaisonIntake.runPending());
     if (intake.kind === "stop") return this.haltAtCap(intake.stop);
-    for (const outcome of intake.outcomes) logIntake(outcome);
+    for (const outcome of intake.outcomes) logIntake(deps.logger, outcome);
 
     // Then the client's answers, before planning: one read now appends the vision version
     // the first plan is made from. One that changes an assumption an existing plan was
@@ -162,7 +179,7 @@ export class CoreLoop {
       // blamed by the refusal's cause chain: a ladder run out is the model's failure, an unreadable
       // vision Ashara's own.
       if (outcome.kind === "refused") await this.halt(outcome.projectId, projectBlockCause(outcome.refusal.error), "roster");
-      logRoster(outcome);
+      logRoster(deps.logger, outcome);
     }
 
     // Answers posted while the roster was derived are read before the first plan, so it is made
@@ -178,7 +195,7 @@ export class CoreLoop {
     // warn there, and skipped; any other failure of one project is contained to it (containEach).
     const plans = await this.stepThenCap("first-plan", () => deps.firstPlanning.runPending());
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
-    for (const outcome of plans.outcomes) logFirstPlan(outcome);
+    for (const outcome of plans.outcomes) logFirstPlan(deps.logger, outcome);
     // Answers posted while the first plan was being written are read before any of its tasks is
     // dispatched: one that changes an assumption the plan relied on flags the project, the
     // revision below replans it in this cycle, and the gate never dispatches the plan it replaces.
@@ -192,7 +209,7 @@ export class CoreLoop {
     // revision supersedes it with the open tasks. The Liaison's report on the revision follows with the other planning reports.
     const replans = await this.stepThenCap("replan", () => deps.replanning.runPending());
     if (replans.kind === "stop") return this.haltAtCap(replans.stop);
-    for (const outcome of replans.outcomes) logReplan(outcome);
+    for (const outcome of replans.outcomes) logReplan(deps.logger, outcome);
     const planReports = await this.postPlanReports();
     if (planReports !== null) return this.haltAtCap(planReports);
 
@@ -204,6 +221,7 @@ export class CoreLoop {
         projects: deps.projectRepo,
         workdirBase: deps.config.workdirBase,
         containment: deps.containment,
+        logger: deps.logger,
       }),
     );
     if (released.kind === "stop") return this.haltAtCap(released.stop);
@@ -215,7 +233,7 @@ export class CoreLoop {
     const deliveredAfterSweep = await this.postDeliveredReports();
     if (deliveredAfterSweep !== null) return this.haltAtCap(deliveredAfterSweep);
 
-    const gated = await this.step("gate", () => PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore, deps.containment));
+    const gated = await this.step("gate", () => PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore, deps.containment, deps.logger));
     if (gated.kind === "stop") return this.haltAtCap(gated.stop);
     if (gated.kind === "refused" || gated.value.available.length === 0) return { tasksProcessed: 0, results: [], stop: null };
 
@@ -279,7 +297,12 @@ export class CoreLoop {
   private async releaseHeld(): Promise<StepEnd<unknown>> {
     await this.deps.heldCells.release();
     return this.step("settled-branches", () =>
-      releaseBranchesOfSettledTasks({ workItemRepo: this.deps.workItemRepo, projects: this.deps.projectRepo, workdirBase: this.deps.config.workdirBase }),
+      releaseBranchesOfSettledTasks({
+        workItemRepo: this.deps.workItemRepo,
+        projects: this.deps.projectRepo,
+        workdirBase: this.deps.config.workdirBase,
+        logger: this.deps.logger,
+      }),
     );
   }
 
@@ -288,7 +311,7 @@ export class CoreLoop {
     const stops = await this.step("client-stop", () => this.deps.clientStops.runPending());
     if (stops.kind === "stop") return stops.stop;
     for (const stop of stops.kind === "ran" ? stops.value : []) {
-      if (stop.kind !== "step-faulted") console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
+      if (stop.kind !== "step-faulted") this.deps.logger.info("delivery.client-stop", `stop ${stop.stopId}: ${stop.kind}`, { projectId: stop.projectId, stopId: stop.stopId, outcome: stop.kind });
     }
     return null;
   }
@@ -298,7 +321,13 @@ export class CoreLoop {
     const changes = await this.step("client-change", () => this.deps.clientChanges.runPending());
     if (changes.kind === "stop") return changes.stop;
     for (const change of changes.kind === "ran" ? changes.value : []) {
-      if (change.kind === "deferred") console.log(`[liaison-change] change ${change.changeId}: project ${change.projectId} told not applied, reply ${change.replyId}`);
+      if (change.kind === "deferred") {
+        this.deps.logger.info("delivery.client-change-deferred", `change ${change.changeId}: told not applied, reply ${change.replyId}`, {
+          projectId: change.projectId,
+          changeId: change.changeId,
+          replyId: change.replyId,
+        });
+      }
     }
     return null;
   }
@@ -307,7 +336,7 @@ export class CoreLoop {
   private async readAnswers(): Promise<LoopStop | null> {
     const answers = await this.stepThenCap("liaison-answers", () => this.deps.liaisonAnswers.runPending());
     if (answers.kind === "stop") return answers.stop;
-    for (const outcome of answers.outcomes) logAnswer(outcome);
+    for (const outcome of answers.outcomes) logAnswer(this.deps.logger, outcome);
     return null;
   }
 
@@ -319,7 +348,7 @@ export class CoreLoop {
     const reports = await this.step("delivered-report", () => this.deps.deliveredReports.runPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
-      if (report.kind !== "failed") console.log(`[liaison-delivered-report] project ${report.projectId}: delivered report ${report.kind}`);
+      if (report.kind !== "failed") this.deps.logger.info("delivery.delivered-report", `delivered report ${report.kind}`, { projectId: report.projectId, outcome: report.kind });
     }
     return null;
   }
@@ -333,7 +362,7 @@ export class CoreLoop {
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
       if (report.kind !== "project-blocked" && report.kind !== "step-faulted") {
-        console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+        this.deps.logger.info("delivery.plan-report", `${report.subject} report ${report.kind}`, { projectId: report.projectId, subject: report.subject, outcome: report.kind });
       }
     }
     return null;
@@ -344,7 +373,9 @@ export class CoreLoop {
     const reports = await this.step("block-report", () => this.deps.blockReports.runPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
-      if (report.kind !== "step-faulted") console.log(`[liaison-block-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+      if (report.kind !== "step-faulted") {
+        this.deps.logger.info("delivery.block-report", `${report.subject} report ${report.kind}`, { projectId: report.projectId, subject: report.subject, outcome: report.kind });
+      }
     }
     return null;
   }
@@ -360,7 +391,9 @@ export class CoreLoop {
     // loop stops on `stop`, so a stop the release returns is the cap's too.
     await this.releaseHeld();
     const halted = await this.deps.projectRepo.blockAllActive(deploymentCapCause(stop));
-    if (halted.length > 0) console.warn(`[budget_cap] ${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`);
+    if (halted.length > 0) {
+      this.deps.logger.info("delivery.deployment-cap-halt", `${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`, { projects: halted });
+    }
     // The loop stops here on `stop`: a stop the reports' step returns is the cap's too.
     await this.postBlockReports();
     return stopped(stop);
@@ -369,7 +402,13 @@ export class CoreLoop {
   /** Halts the project under `cause` through Delivery's guard, the one writer of a project halt (O3 c). */
   private async halt(projectId: ProjectId, cause: ProjectBlockCause, step: string): Promise<void> {
     const result = await this.deps.projectRepo.block(projectId, cause);
-    console.warn(`[${step}] project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`);
+    this.deps.logger.info("delivery.project-blocked", `project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`, {
+      projectId,
+      step,
+      category: cause.category,
+      errorClass: cause.errorClass,
+      result,
+    });
   }
 
   /**
@@ -392,11 +431,11 @@ export class CoreLoop {
       const projectId = parseProjectId(refusal.projectId, "spend refusal projectId");
       if (refusal.kind === "project_work") {
         await this.halt(projectId, projectWorkCause(refusal), `work_budget ${name}`);
-        console.warn(`[work_budget] ${name}: the step's other projects run next cycle`);
+        this.deps.logger.info("delivery.step-refused", `${name}: the step's other projects run next cycle`, { step: name, projectId, category: "work_budget" });
         return { kind: "refused" };
       }
       await this.halt(projectId, projectCapCause(refusal), `budget_cap ${name}`);
-      console.warn(`[budget_cap] ${name}: the step's other projects run next cycle`);
+      this.deps.logger.info("delivery.step-refused", `${name}: the step's other projects run next cycle`, { step: name, projectId, category: "budget_cap" });
       return { kind: "refused" };
     }
   }

@@ -13,6 +13,7 @@ import {
   ensureTargetGitInit,
   WorktreeCommitFailed,
 } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared";
 import { thrownFaultOf } from "./fault-class.js";
 import { mainMergedForRetry } from "./merge.js";
 
@@ -69,7 +70,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     await cleanupWorkdir(workDir, target);
 
     // Retry: new worktree from the same branch
-    const retry = await createWorkdirForRetry(workdirBase, target, branch, mainMergedForRetry(branch.slice("task/".length), null));
+    const retry = await createWorkdirForRetry(workdirBase, target, branch, mainMergedForRetry(branch.slice("task/".length), null, recordingLogger()));
 
     // The agent's files survive the worktree destruction
     const handler = await readFile(join(retry.workDir, "handler.ts"), "utf-8");
@@ -119,7 +120,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     await cleanupWorkdir(w1, target);
 
     // Second dispatch (retry): agent adds more work, then finalizeSuccess commits
-    const { workDir: w2, repo: r2 } = await createWorkdirForRetry(workdirBase, target, branch, mainMergedForRetry(branch.slice("task/".length), null));
+    const { workDir: w2, repo: r2 } = await createWorkdirForRetry(workdirBase, target, branch, mainMergedForRetry(branch.slice("task/".length), null, recordingLogger()));
     await writeFile(join(w2, "v2.ts"), "export const v = 2;", "utf-8");
     // This is what finalizeSuccess calls
     await commitAllChanges(r2, "ashara: agent output for task x");

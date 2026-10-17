@@ -1,6 +1,6 @@
 import { CheckoutHolderOverran, ensureTargetGitInit, mergeInProgress, runHostGit, targetRepo, withTargetCheckout } from "@ashara/execution-infra";
 import type { CheckoutLease } from "@ashara/execution-infra";
-import type { ErrorLayer } from "@ashara/shared";
+import type { ErrorLayer, Logger } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
 import { environmentErrorOf } from "../fault-class.js";
 import type { EnvironmentError } from "../fault-class.js";
@@ -113,6 +113,7 @@ export interface FinalizeDeps {
   readonly presentedConflict: MainConflict | null;
   /** The workdir base: the target checkout is never initialised outside it (assertValidTargetProjectPath). */
   readonly workdirBase: string;
+  readonly logger: Logger;
 }
 
 /**
@@ -170,11 +171,16 @@ async function unrestoredReason(targetProjectPath: string, head: HeadReading): P
  * failure is logged at warn with its cause and returned typed for the caller to block on, never
  * swallowed: a merge verdict built on top of the residue would be untrustworthy (Discipline A).
  */
-async function undoTentativeMerge(taskId: string, targetProjectPath: string, after: string): Promise<VerificationInfrastructureFault | null> {
+async function undoTentativeMerge(
+  logger: Logger,
+  taskId: string,
+  targetProjectPath: string,
+  after: string,
+): Promise<VerificationInfrastructureFault | null> {
   const reason = await unrestoredReason(targetProjectPath, "on-main");
   if (reason === null) return null;
   const unrestored = new TargetCheckoutUnrestored(taskId, targetProjectPath, after, reason);
-  console.warn(`[${taskId}] ${unrestored.message}`);
+  logger.error("quality.checkout-unrestored", unrestored.message, { taskId, targetPath: targetProjectPath, after }, unrestored);
   return new VerificationInfrastructureFault(taskId, `restoring the target checkout after ${after}`, { cause: unrestored });
 }
 
@@ -200,6 +206,7 @@ function unrestoredFailure(
 }
 
 async function abortAndFail(
+  logger: Logger,
   taskId: string,
   targetProjectPath: string,
   failedLogMessage: string,
@@ -208,11 +215,11 @@ async function abortAndFail(
   errorLayerInfo: { operation: string; gateOutput: string | Error; gateContext?: Record<string, unknown> },
   fault: FinalizeFault,
 ): Promise<FinalizeResult> {
-  console.log(`[${taskId}] ${failedLogMessage}`);
+  logger.info("quality.merge-aborted", failedLogMessage, { taskId, operation: errorLayerInfo.operation });
 
-  const unrestored = await undoTentativeMerge(taskId, targetProjectPath, errorLayerInfo.operation);
+  const unrestored = await undoTentativeMerge(logger, taskId, targetProjectPath, errorLayerInfo.operation);
   if (unrestored !== null) return unrestoredFailure(unrestored, "verification", gateFailureContext, errorLayerInfo);
-  console.log(`[${taskId}] tentative merge undone by a reset to HEAD — main restored, task branch preserved for retry`);
+  logger.info("quality.merge-undone", "tentative merge undone by a reset to HEAD — main restored, task branch preserved for retry", { taskId });
 
   const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, errorLayerInfo.gateContext);
 
@@ -238,7 +245,7 @@ export async function finalizeSuccess(
   } catch (e) {
     if (!(e instanceof CheckoutHolderOverran) || e.waiter !== holder) throw e;
     // Nothing was merged and no check ran: the stuck holder is the operator's, never the task's failure.
-    console.warn(`[${task.id}] ${e.message}`);
+    deps.logger.error("quality.checkout-holder-overran", e.message, { taskId: task.id, attempt, holder: e.holder }, e);
     const fault = new VerificationInfrastructureFault(task.id, "waiting for the target checkout", { cause: e });
     return {
       success: false,
@@ -268,7 +275,7 @@ async function finalizeHeld(
   attempt: number,
   lease: CheckoutLease,
 ): Promise<FinalizeResult> {
-  const head = await recoverOrphanedMerge(targetProjectPath);
+  const head = await recoverOrphanedMerge(targetProjectPath, deps.logger);
   await ensureTargetGitInit(targetProjectPath, deps.workdirBase);
 
   // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and before the tentative merge.
@@ -280,7 +287,11 @@ async function finalizeHeld(
     // untrustworthy, so refuse rather than merge onto unknown residue. Nothing is known of the
     // task's work, so it is blocked for the operator, never failed against the task.
     const fault = new VerificationInfrastructureFault(task.id, "restoring the target checkout to HEAD before the merge", { cause: unrestored });
-    console.warn(`[${task.id}] target checkout could not be restored — refusing to merge: ${unrestored}`);
+    deps.logger.error("quality.checkout-unrestored", `target checkout could not be restored — refusing to merge: ${unrestored}`, {
+      taskId: task.id,
+      attempt,
+      targetPath: targetProjectPath,
+    });
     return {
       success: false,
       failedStep: "merge",
@@ -294,18 +305,22 @@ async function finalizeHeld(
     };
   }
 
-  const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id));
+  const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id), deps.logger);
 
   if (mergeResult.status === "conflict") {
     // Handed a conflict with main and still conflicting: main moved again under the resolution.
     const operation = deps.presentedConflict === null ? "tentativeMerge" : "tentativeMergeAfterConflict";
     const mergeContext = conflictContext(task.id, mergeResult.files, deps.presentedConflict);
     const gateContext = { taskId: task.id, attempt, conflictFiles: mergeResult.files };
-    const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a merge conflict");
+    const unrestored = await undoTentativeMerge(deps.logger, task.id, targetProjectPath, "a merge conflict");
     if (unrestored !== null) {
       return unrestoredFailure(unrestored, "merge", mergeContext, { operation, gateOutput: "merge conflict", gateContext });
     }
-    console.log(`[${task.id}] tentative merge CONFLICT in ${mergeResult.files.join(", ")} — undone by a reset to HEAD, branch preserved for retry`);
+    deps.logger.info("quality.merge-conflict", "tentative merge CONFLICT — undone by a reset to HEAD, branch preserved for retry", {
+      taskId: task.id,
+      attempt,
+      conflictFiles: mergeResult.files,
+    });
     return {
       success: false,
       failedStep: "merge",
@@ -320,7 +335,7 @@ async function finalizeHeld(
     // branch was never weighed against main, so this is Ashara's fault, never the task's.
     const fault = new VerificationInfrastructureFault(task.id, "tentative merge of the task branch into main", { cause: mergeResult.cause });
     const gateContext = { taskId: task.id, attempt, errorClass: fault.name, step: fault.step };
-    const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a failed tentative merge");
+    const unrestored = await undoTentativeMerge(deps.logger, task.id, targetProjectPath, "a failed tentative merge");
     if (unrestored !== null) {
       return unrestoredFailure(unrestored, "merge", `Tentative merge failed: ${mergeResult.message}`, {
         operation: POST_MERGE_CHECK_RUN,
@@ -328,7 +343,7 @@ async function finalizeHeld(
         gateContext,
       });
     }
-    console.warn(`[${task.id}] tentative merge FAILED without a conflict — undone by a reset to HEAD: ${fault.message}`);
+    deps.logger.error("quality.tentative-merge-failed", "tentative merge FAILED without a conflict — undone by a reset to HEAD", { taskId: task.id, attempt }, fault);
     return {
       success: false,
       failedStep: "merge",
@@ -351,6 +366,7 @@ async function finalizeHeld(
     const environmentFailure = environmentErrorOf(e);
     if (environmentFailure !== null) {
       return abortAndFail(
+        deps.logger,
         task.id,
         targetProjectPath,
         `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`,
@@ -362,6 +378,7 @@ async function finalizeHeld(
     }
     const fault = e instanceof VerificationInfrastructureFault ? e : new VerificationInfrastructureFault(task.id, "post-merge verification", { cause: e });
     return abortAndFail(
+      deps.logger,
       task.id,
       targetProjectPath,
       `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
@@ -373,6 +390,7 @@ async function finalizeHeld(
 
   if (!postMergeVerify.passed) {
     return abortAndFail(
+      deps.logger,
       task.id,
       targetProjectPath,
       "post-merge verification FAILED — aborting tentative merge",
@@ -396,6 +414,7 @@ async function finalizeHeld(
   } catch (e) {
     const fault = new VerificationInfrastructureFault(task.id, "dirty-tree check of the target checkout (git diff)", { cause: e });
     return abortAndFail(
+      deps.logger,
       task.id,
       targetProjectPath,
       "post-merge dirty-tree check could not run, git diff failed — aborting tentative merge",
@@ -410,6 +429,7 @@ async function finalizeHeld(
       cause: new TargetCheckoutDirty(task.id, targetProjectPath, dirtyFiles),
     });
     return abortAndFail(
+      deps.logger,
       task.id,
       targetProjectPath,
       "post-merge dirty-tree check FAILED — tracked files changed outside the merge — aborting tentative merge",
@@ -420,7 +440,7 @@ async function finalizeHeld(
   }
 
   const mergeCommit = await commitMerge(targetProjectPath, task.id);
-  console.log(`[${task.id}] merge committed to main as ${mergeCommit}`);
+  deps.logger.info("quality.merge-committed", `merge committed to main as ${mergeCommit}`, { taskId: task.id, attempt, mergeCommit });
 
   // The dev_sessions terminal write is not made here: it lives in the dispatch's
   // withSessionLifecycle, the one seam every outcome passes through, so no return path

@@ -139,6 +139,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DispatchService({
+    logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
@@ -187,7 +188,7 @@ async function routeFailure(taskId: WorkItemId, result: TaskRun["result"]): Prom
   failWorkItem(item, { source: "task_failed", reason: result.detail }, result.verdict);
   await PlanningService.saveWorkItem(repo, item, "InProgress");
   return recoverFailedItem(
-    { workItemRepo: repo, eventPublisher: { publish: async () => {} }, failureRouter: new FailureRouter(3) },
+    { logger: recordingLogger(), workItemRepo: repo, eventPublisher: { publish: async () => {} }, failureRouter: new FailureRouter(3) },
     item,
     { detail: result.detail, raw: result.errorEnvelope === undefined ? {} : { ...result.errorEnvelope } },
     result.verdict,

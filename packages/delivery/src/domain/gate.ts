@@ -1,5 +1,5 @@
 import { containEach } from "@ashara/shared";
-import type { ProjectId, StepContainment } from "@ashara/shared";
+import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
@@ -51,13 +51,14 @@ export class GateKeeper {
     projects: ActiveProjects,
     events: EventPublisher,
     containment: StepContainment,
+    logger: Logger,
   ): Promise<GatedWork> {
     const gated = await containEach(
       containment,
       "gate",
       await projects.listActiveIds(),
       (projectId) => ({ id: projectId, projectId }),
-      (projectId) => gateProject(repo, projects, events, projectId),
+      (projectId) => gateProject(repo, projects, events, logger, projectId),
     );
     const available: WorkItem[] = [];
     const unlockWeights = new Map<string, number>();
@@ -75,6 +76,7 @@ async function gateProject(
   repo: WorkItemRepository,
   projects: ActiveProjects,
   events: EventPublisher,
+  logger: Logger,
   projectId: ProjectId,
 ): Promise<AdmittedProject | { readonly kind: "blocked" }> {
   let items: WorkItem[];
@@ -84,24 +86,27 @@ async function gateProject(
     if (!(err instanceof WorkItemRowCorrupt)) throw err;
     const cause = projectBlockCause(err);
     const result = await projects.block(projectId, cause);
-    console.warn(
-      `[gate] project ${projectId}: ${cause.errorClass} (item ${err.itemId}, ${err.column}); ` +
-        `none of its tasks dispatched; project ${result}: ${cause.reason}`,
+    logger.error(
+      "delivery.row-corrupt",
+      `${cause.errorClass} (item ${err.itemId}, ${err.column}); none of its tasks dispatched; project ${projectId} ${result}: ${cause.reason}`,
+      { projectId, itemId: err.itemId, column: err.column, result },
+      err,
     );
     return { kind: "blocked" };
   }
-  return admitProject(repo, events, projectId, items);
+  return admitProject(repo, events, logger, projectId, items);
 }
 
 async function admitProject(
   repo: WorkItemRepository,
   events: EventPublisher,
+  logger: Logger,
   projectId: ProjectId,
   items: WorkItem[],
 ): Promise<AdmittedProject> {
   const graph = await DependencyGraph.load(repo, projectId);
   for (const cycle of graph.cycles) {
-    console.warn(`[gate] project ${projectId}: ${cycle.message}; the tasks on it and waiting on it are given up`);
+    logger.info("delivery.dependency-cycle", `${cycle.message}; the tasks on it and waiting on it are given up`, { projectId });
   }
   const resolution = graph.resolveDependencies(buildDependencyContext(items));
 
@@ -109,7 +114,7 @@ async function admitProject(
   const statusById = new Map(items.map((item) => [item.id, item.status] as const));
   for (const item of pending) {
     const result = resolution.get(item.id);
-    if (result?.resolution === "blocked") await giveUpUnsatisfiable(repo, events, item, result.blockedBy, statusById);
+    if (result?.resolution === "blocked") await giveUpUnsatisfiable(repo, events, logger, item, result.blockedBy, statusById);
   }
   return { kind: "admitted", items: pending.filter((item) => isMet(resolution, item.id)), weights: graph.computeUnlockWeights() };
 }
@@ -122,6 +127,7 @@ async function admitProject(
 async function giveUpUnsatisfiable(
   repo: WorkItemRepository,
   events: EventPublisher,
+  logger: Logger,
   item: WorkItem,
   blockedBy: readonly string[],
   statusById: ReadonlyMap<string, WorkItemStatus>,
@@ -141,16 +147,20 @@ async function giveUpUnsatisfiable(
     await repo.save(item, "Pending");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    console.warn(`[gate] task ${item.id}: not given up for unsatisfiable dependencies, it changed concurrently:`, err);
+    logger.warn("delivery.transition-rejected", "not given up for unsatisfiable dependencies, it changed concurrently", { taskId: item.id, from: err.from, to: err.to });
     return;
   }
-  console.warn(`[gate] task ${item.id}: given up, it waits on ${causes}; its plan is repaired`);
+  logger.info("delivery.task-given-up", `given up, it waits on ${causes}; its plan is repaired`, {
+    taskId: item.id,
+    source: "dependency_unsatisfiable",
+    blockedBy: [...blockedBy],
+  });
   for (const event of takeEvents(item)) {
     try {
       await events.publish(event);
     } catch (err) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the give-up is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
-      console.warn(`[gate] task ${item.id}: failed to publish ${event.eventType} (the give-up is committed):`, err);
+      logger.warn("delivery.event-publish-failed", `failed to publish ${event.eventType} (the give-up is committed)`, { taskId: item.id, site: "gate", eventType: event.eventType }, err);
     }
   }
 }

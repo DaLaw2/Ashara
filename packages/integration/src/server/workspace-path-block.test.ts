@@ -116,6 +116,7 @@ describe("a project whose workspace path is refused", () => {
     }), new LlmCallLedger(calls, spendCap), recordingLogger());
     const workdirBase = join(root, "work");
     const dispatchService = new DispatchService({
+      logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: { insert: notExercised("insert"), complete: notExercised("complete"), fail: notExercised("fail") },
       knowledgeSink: { storeFinding: notExercised("storeFinding") },

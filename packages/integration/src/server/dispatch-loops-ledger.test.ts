@@ -208,6 +208,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets, shutdown: AbortControl
     clock: () => new Date(),
   }), new LlmCallLedger(calls, spendCap), recordingLogger());
   const dispatchService = new DispatchService({
+    logger: recordingLogger(),
     config: { workdirBase: at.workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
@@ -287,6 +288,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets, shutdown: AbortControl
 /** A startup of a new process over the fixture: Delivery's reconcile of the work items a dead process left. */
 async function startup(at: Fixture) {
   return reconcileWorkItemsOnStartup({
+    logger: recordingLogger(),
     workItemRepo: ourItems(at),
     projects: new ProjectHaltRepository(db),
     eventStore: new EventStoreRepository(db),

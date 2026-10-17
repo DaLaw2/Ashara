@@ -10,7 +10,7 @@ import {
   withStructuredLadder,
 } from "@ashara/finance";
 import type { LadderAttemptEvent, SecondOpinion, SecondOpinionStrength, StructuredValidation } from "@ashara/finance";
-import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
 import type { StoredTaskSpec } from "./acl/delivery-acl.js";
 import type { VisionSource } from "./acl/engagement-acl.js";
@@ -955,6 +955,7 @@ interface SuiteReviewerDeps {
   readonly publicInterface: PublicInterfaceReader;
   readonly judgements: SuiteReviewJudgementStore;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  readonly logger: Logger;
 }
 
 export class SuiteReviewer implements SuiteReviewing {
@@ -1085,11 +1086,20 @@ export class SuiteReviewer implements SuiteReviewing {
         if (!(unavailable || err instanceof SecondOpinionUnanswered || err instanceof StructuredOutputExhausted || err instanceof SuiteVerdictUnfit)) throw err;
         const reason = describeErrorChain(err);
         passedOver.push({ strength, outcome: unavailable ? "unavailable" : "failed", reason });
-        console.warn(`[suite-review] review task ${reviewTaskId}: no ${strength} second opinion (${unavailable ? "the catalog offers none" : "it failed"}); the next strength is asked: ${reason}`);
+        this.deps.logger.warn(
+          "quality.second-opinion-passed-over",
+          `review task ${reviewTaskId}: no ${strength} second opinion (${unavailable ? "the catalog offers none" : "it failed"}); the next strength is asked`,
+          { taskId: reviewTaskId, strength, outcome: unavailable ? "unavailable" : "failed" },
+          err,
+        );
       }
     }
     const reason = passedOver.map((over) => `${over.strength} ${over.outcome}: ${over.reason}`).join("; ");
-    console.warn(`[suite-review] review task ${reviewTaskId}: the second review failed at every strength, so no finding it was asked for acts and no item reads as verified on it: ${reason}`);
+    this.deps.logger.warn(
+      "quality.second-review-failed",
+      `review task ${reviewTaskId}: the second review failed at every strength, so no finding it was asked for acts and no item reads as verified on it: ${reason}`,
+      { taskId: reviewTaskId, passedOver: passedOver.map((over) => ({ strength: over.strength, outcome: over.outcome, reason: over.reason })) },
+    );
     return { kind: "failed", reason, passedOver };
   }
 

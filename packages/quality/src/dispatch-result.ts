@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Cell, CellSpec, CurrentEnvironment, PartialCommitOutcome, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
 import { WorktreeCommitFailed } from "@ashara/execution-infra";
 import type { PreCallRefusal } from "@ashara/finance";
-import type { ErrorLayer, ProjectId, WorkItemId } from "@ashara/shared";
+import type { ErrorLayer, Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/workplace";
 import { wrapError } from "@ashara/shared";
 import { outcomeRecord } from "@ashara/workplace";
@@ -147,7 +147,7 @@ interface EnvironmentBlock extends AgentPart {
  * and error class named, never a host fallback, never a failure for the classifier and never a
  * lesson, at every stage.
  */
-export function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined): ExecutionResult {
+export function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined, logger: Logger): ExecutionResult {
   const { task, stage, errorClass } = block;
   const taskId = task.id;
   const kept = describeAgentWork(block.agentWork);
@@ -158,7 +158,14 @@ export function environmentBlocked(block: EnvironmentBlock, eventSink: Execution
     chain: block.chain,
     ...(block.outcome !== null ? { agentOutput: outcomeRecord(block.outcome) } : {}),
   };
-  console.warn(`[${taskId}] ${envelope.summary}`);
+  logger.error("quality.task-blocked", envelope.summary, {
+    taskId,
+    attempt: task.attempt,
+    stage,
+    fault: block.fault,
+    errorClass,
+    unavailable: block.unavailable,
+  });
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage, errorClass, reason: envelope.summary });
   return {
     status: "environment_blocked",
@@ -181,6 +188,7 @@ export function substrateBlocked(
   cell: string,
   agent: AgentPart,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
   chain?: ErrorLayer,
 ): ExecutionResult {
   const unavailable = unavailableOf(e, cell);
@@ -197,6 +205,7 @@ export function substrateBlocked(
       ...agent,
     },
     eventSink,
+    logger,
   );
 }
 
@@ -215,6 +224,7 @@ export function asharaBlocked(
   fault: VerificationInfrastructureFault | DispatchFault,
   agent: AgentPart,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
   chain?: ErrorLayer,
 ): ExecutionResult {
   const unavailable = asharaUnavailableOf(fault);
@@ -231,6 +241,7 @@ export function asharaBlocked(
       ...agent,
     },
     eventSink,
+    logger,
   );
 }
 
@@ -247,14 +258,15 @@ export function thrownBlocked(
   where: { readonly step: string; readonly cell: string },
   agent: AgentPart,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
 ): ExecutionResult {
   const fault = thrownFaultOf(e);
-  if (fault.class === "substrate") return substrateBlocked(task, sessionId, stage, fault.error, where.cell, agent, eventSink);
+  if (fault.class === "substrate") return substrateBlocked(task, sessionId, stage, fault.error, where.cell, agent, eventSink, logger);
   const asharaFault =
     fault.error instanceof VerificationInfrastructureFault || fault.error instanceof DispatchFault
       ? fault.error
       : new DispatchFault(task.id, where.step, { cause: fault.error });
-  return asharaBlocked(task, sessionId, stage, asharaFault, agent, eventSink);
+  return asharaBlocked(task, sessionId, stage, asharaFault, agent, eventSink, logger);
 }
 
 /**
@@ -270,12 +282,13 @@ export function mainRunBlocked(
   e: unknown,
   agent: AgentPart,
   eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
   stage: Extract<EnvironmentStage, "checkRedRun" | "deliveredCheckRun">,
   step: string,
 ): ExecutionResult {
   const environmentFailure = environmentErrorOf(e);
-  if (environmentFailure !== null) return substrateBlocked(task, sessionId, stage, environmentFailure, "CI cell", agent, eventSink);
-  return asharaBlocked(task, sessionId, stage, new VerificationInfrastructureFault(task.id, step, { cause: e }), agent, eventSink);
+  if (environmentFailure !== null) return substrateBlocked(task, sessionId, stage, environmentFailure, "CI cell", agent, eventSink, logger);
+  return asharaBlocked(task, sessionId, stage, new VerificationInfrastructureFault(task.id, step, { cause: e }), agent, eventSink, logger);
 }
 
 /**

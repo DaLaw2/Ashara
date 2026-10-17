@@ -169,8 +169,6 @@ const cycleTallies: Array<Parameters<CoreLoopDeps["cycleLog"]["emit"]>[0]> = [];
 
 beforeEach(() => {
   cycleTallies.length = 0;
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {

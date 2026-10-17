@@ -18,7 +18,7 @@ import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
 import { SuiteReviewJudgementRepository } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, parseWorkItemId } from "@ashara/shared";
+import { memoryStepContainment, parseWorkItemId, recordingLogger } from "@ashara/shared";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
@@ -214,6 +214,7 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
     },
     projectRepo: { block: projects.block.bind(projects) },
     eventStore: new EventStoreRepository(db),
+    logger: recordingLogger(),
   };
 }
 

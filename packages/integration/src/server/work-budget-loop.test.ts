@@ -156,6 +156,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     clock: () => new Date(),
   }), new LlmCallLedger(calls, spendCap), recordingLogger());
   const dispatchService = new DispatchService({
+    logger: recordingLogger(),
     config: { workdirBase: at.workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: notExercised("storeFinding") },

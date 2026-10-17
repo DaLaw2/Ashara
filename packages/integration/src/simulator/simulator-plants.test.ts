@@ -107,7 +107,7 @@ describe("lifecycle simulator, directed", () => {
   it("releases the branch of a task settled in the cycle that reached the deployment cap", async (ctx) => {
     const result = await directed(ctx, [...BATCH_OF_TWO, { kind: "fault", seam: "git", label: "branch", nth: 4, fault: "git-failed" }], { capUsd: 4 });
     expect(result.outcome).toMatchObject({ kind: "halted", cause: "spend_cap" });
-    expect(result.log.some((line) => line.includes("the throwaway branch check/") && line.includes("could not be deleted"))).toBe(true);
+    expect(result.records.some((r) => r.event === "quality.check-branch-left" && `${r.fields?.["branch"] ?? ""}`.startsWith("check/"))).toBe(true);
     expect(keys(result), statements(result)).toEqual([]);
   }, 90_000);
 
@@ -160,8 +160,9 @@ describe("lifecycle simulator, directed", () => {
     const clean = await directed(ctx, []);
     expect(clean.outcome.kind, statements(clean)).toBe("accepted");
     expect(keys(clean), statements(clean)).toEqual([]);
-    expect(clean.log.some((line) => line.includes("Every item the suites cite and no finding left undecided reads as verified"))).toBe(true);
-    expect(clean.log.some((line) => line.includes("Not verified, to be reported unverified"))).toBe(false);
+    const reviewed = clean.records.filter((r) => r.event === "quality.suites-reviewed");
+    expect(reviewed.some((r) => r.fields?.["claim"] === "verified")).toBe(true);
+    expect(reviewed.some((r) => r.fields?.["claim"] === "unverified")).toBe(false);
   }, 90_000);
 
   // Here the second opinion never answers whole (each of its ladder's attempts is invalid output), so
@@ -175,8 +176,12 @@ describe("lifecycle simulator, directed", () => {
     const clean = await directed(ctx, CONFIRMATION_FAILS);
     expect(clean.outcome.kind, statements(clean)).toBe("accepted");
     expect(keys(clean), statements(clean)).toEqual([]);
-    expect(clean.log.some((line) => line.includes("the second review failed at every strength, so no finding it was asked for acts and no item reads as verified on it"))).toBe(true);
-    expect(clean.log.some((line) => line.includes("Not verified, to be reported unverified (the review that found no problem in them was not confirmed"))).toBe(true);
+    expect(clean.records.some((r) => r.event === "quality.second-review-failed" && r.level === "warn")).toBe(true);
+    expect(
+      clean.records.some(
+        (r) => r.event === "quality.suites-reviewed" && r.fields?.["claim"] === "unverified" && `${r.fields["claimWhy"] ?? ""}`.includes("the review that found no problem in them was not confirmed"),
+      ),
+    ).toBe(true);
   }, 90_000);
 
   it("catches a report that calls decided the items an unconfirmed clean review covered", async (ctx) => {

@@ -10,7 +10,7 @@ import { EnvironmentBuildFailed, PodmanSubstrate, ensureTargetGitInit, environme
 import { ContextBudgetExceeded, PreCallRefusal } from "@ashara/finance";
 import type { CostedTurnResult } from "@ashara/finance";
 import type { AgentBrief } from "@ashara/workplace";
-import { createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, recordingLogger, wrapError, systemClock } from "@ashara/shared";
 import { createAgentBrief } from "@ashara/workplace";
 import { checkBranchName, taskBranchName } from "@ashara/quality";
 import type { ExecutionResult, TaskCheckStore, TaskChecks } from "@ashara/quality";
@@ -402,13 +402,15 @@ function serviceOn(
     | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string }
     | { readonly kind: "no-wider-model"; readonly overflowedWindowTokens: number } = "owned",
   wider: AssignmentStaff["model"] | null = null,
-): { service: DispatchService; probe: Probe; events: Array<Record<string, unknown>> } {
+): { service: DispatchService; probe: Probe; events: Array<Record<string, unknown>>; logger: ReturnType<typeof recordingLogger> } {
   const probe: Probe = {
     sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [], recorded: [], rebuildFails: false, prunes: [],
     widerAsked: [],
   };
   const events: Array<Record<string, unknown>> = [];
+  const logger = recordingLogger();
   const service = new DispatchService({
+    logger,
     config: { workdirBase },
     sessionStore: probe.sessions,
     knowledgeSink: { storeFinding: async () => void probe.findings++ },
@@ -480,7 +482,7 @@ function serviceOn(
     shutdownSignal,
     clock: systemClock,
   });
-  return { service, probe, events };
+  return { service, probe, events, logger };
 }
 
 const ENV_IMAGE_ID = `sha256:${"c".repeat(64)}`;
@@ -564,7 +566,6 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
 
   // A task after Sprint 0 never falls back to the BaseCell.
   test("no environment on main: environment_undefined; no build, no cell, no model, no session, no worktree", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noenv-")));
     scratch.push(root);
     const workdirBase = join(root, "work");
@@ -600,7 +601,6 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
 
   // No default role stands in for a missing or unknown owner.
   test("no roster role owns the task: owner_unresolved; no worktree, no cell, no model, no session", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noowner-")));
     scratch.push(root);
     const workdirBase = join(root, "work");
@@ -686,7 +686,6 @@ describe("a task nothing could decide ends before the agent", () => {
   });
 
   async function dispatchWith(checks: TaskCheckStore, workKind: "implementation" | "check" | "environment", taskSpec: TaskDescriptor["taskSpec"] = someTask().taskSpec) {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nochecks-")));
     scratch.push(root);
     const workdirBase = join(root, "work");
@@ -753,7 +752,6 @@ describe("a task nothing could decide ends before the agent", () => {
   });
 
   test("an environment task's images are pruned when it ends, however it ends, keeping main's version", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
     const { result, probe } = await dispatchWith(checkStore(null), "environment");
 
     expect(result.status).toBe("failed");
@@ -897,9 +895,6 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   }
 
   async function dispatch(faults: Faults) {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const warns: string[] = [];
-    vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => void warns.push(args.map(String).join(" ")));
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-stage-")));
     scratch.push(root);
     const mountRoot = join(root, faults.mountRoot ?? ".");
@@ -987,7 +982,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       foundationOf: async () => ({ kind: "found", taskId: createWorkItemId(), commit: mainBefore }),
       latest: async () => ({ ...STORED_CHECKS, environmentVersion: faults.storedVersion ?? probe.version ?? "", baselineCommit: mainBefore, files: faults.storedFiles ?? [] }),
     });
-    const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
+    const { service, events, probe, logger } = serviceOn(substrate, workdirBase, (probe) => {
       if (faults.checkoutsBlockedAfterSweep === true && probe.modelCalls === 1) {
         rmSync(join(workdirBase, "checkouts"), { recursive: true, force: true });
         writeFileSync(join(workdirBase, "checkouts"), "not a directory\n");
@@ -1039,7 +1034,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
     return {
-      result, events, warns, target, started, runs, sweepRuns, foundationBuilds, probe, workdirBase, taskId: task.id,
+      result, events, logger, target, started, runs, sweepRuns, foundationBuilds, probe, workdirBase, taskId: task.id,
       mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "",
     };
   }
@@ -1129,13 +1124,14 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // Teardown never ends a stage: the cell is left to teardownAll and reconcileOrphans.
   test("a failed teardown of every cell: the task still completes, the failures logged and emitted", async () => {
-    const { result, events, warns, mainBefore, mainAfter } = await dispatch({ teardownFails: true });
+    const { result, events, logger, mainBefore, mainAfter } = await dispatch({ teardownFails: true });
 
     expect(result.status).toBe("completed");
     expect(mainAfter).not.toBe(mainBefore);
     // The task's, the delivered sweep's and the verifier's.
     expect(events.filter((e) => e.event === "cell_teardown_failed")).toHaveLength(3);
-    expect(warns.some((w) => w.includes("still on disk"))).toBe(false);
+    expect(logger.records.filter((r) => r.event === "quality.cell-teardown-failed").map((r) => r.level)).toEqual(["warn", "warn", "warn"]);
+    expect(logger.records.some((r) => r.event === "delivery.worktree-left")).toBe(false);
   });
 
   // A turn refused before it was sent is neither transport_exhausted nor a failure for the FailureRouter.

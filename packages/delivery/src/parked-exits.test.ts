@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { DomainEvent } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { BLOCKED_REASON_SOURCES, blockedExitOf } from "./work-item-language/blocked-reason.js";
@@ -79,6 +79,7 @@ function run(
     projects: { listActiveIds: async () => [PROJECT], get: async () => ({ workspacePath }) },
     workdirBase: tmpdir(),
     containment: memoryStepContainment(() => true),
+    logger: recordingLogger(),
   });
   return { released, saves, published };
 }
@@ -111,11 +112,6 @@ function heldCheckout(target: string, taskId: string): () => { readonly branch: 
   gitIn(workDir, "commit", "-q", "--allow-empty", "-m", "the agent's work");
   return () => ({ branch: gitIn(target, "branch", "--list", "--format=%(refname:short)", `task/${taskId}`), worktree: existsSync(workDir) });
 }
-
-beforeEach(() => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-});
 
 // An owner_unresolved block cannot wait on a newer roster revision, which no production path
 // writes (db roster.ts recordFirstRoster refuses any revision but 1).

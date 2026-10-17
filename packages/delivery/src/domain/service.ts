@@ -1,4 +1,4 @@
-import type { WorkItemId, DomainEvent, StepContainment } from "@ashara/shared";
+import type { WorkItemId, DomainEvent, Logger, StepContainment } from "@ashara/shared";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
@@ -14,8 +14,14 @@ export class PlanningService {
    * The tasks admitted this cycle, each with how many tasks its completion unlocks, from its own
    * project's dependency graph (a cycle in one project leaves only that project's weights at zero).
    */
-  static async gate(repo: WorkItemRepository, projects: ActiveProjects, events: EventPublisher, containment: StepContainment): Promise<GatedWork> {
-    return GateKeeper.filterAvailable(repo, projects, events, containment);
+  static async gate(
+    repo: WorkItemRepository,
+    projects: ActiveProjects,
+    events: EventPublisher,
+    containment: StepContainment,
+    logger: Logger,
+  ): Promise<GatedWork> {
+    return GateKeeper.filterAvailable(repo, projects, events, containment, logger);
   }
 
   static select(

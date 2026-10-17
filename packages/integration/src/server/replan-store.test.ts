@@ -169,9 +169,9 @@ function ours<T extends { readonly projectId: string }>(list: () => Promise<read
 }
 
 function replanner(containment: StepContainment = memoryStepContainment(() => true)): Replanner {
-  const store = createReplanStore(db);
+  const store = createReplanStore(db, recordingLogger());
   const narrowed: ReplanStore = { ...store, projectsAwaitingReplan: ours(() => store.projectsAwaitingReplan()) };
-  return new Replanner({ containment, llm: gateway, store: narrowed });
+  return new Replanner({ logger: recordingLogger(), containment, llm: gateway, store: narrowed });
 }
 
 function planReports(): PlanReports {
@@ -206,7 +206,7 @@ async function plannedProject(
   expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  expect((await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   if (options.reported) expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
   const questions = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
   const [question] = questions;
@@ -706,7 +706,7 @@ describe("a late client change is planned", () => {
     await contradict(counted.projectId, counted.questionId);
     const legacy = await plannedProject();
     await contradict(legacy.projectId, legacy.questionId);
-    const store = createReplanStore(db);
+    const store = createReplanStore(db, recordingLogger());
     for (let attempt = 0; attempt < 3; attempt += 1) await store.recordFailedAttempt(counted.projectId, "stub provider unavailable", "provider");
     // A row counted before failures named their party names no party.
     await db.execute(sql`UPDATE projects SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed' WHERE id = ${legacy.projectId}`);
@@ -774,6 +774,7 @@ async function giveUp(id: string, attempts: number): Promise<void> {
   const failure = { detail: "red run on the foundation: REJECTED, the set: no check of the set fails on the foundation", raw: {} };
   const decision = await recoverFailedItem(
     {
+      logger: recordingLogger(),
       workItemRepo: repo,
       eventPublisher: { publish: async () => {} },
       failureRouter: { route: () => ({ action: "abandon", reason: `the task failed ${attempts} time(s)`, attempts, failure }) },
@@ -793,6 +794,7 @@ async function gateOurs(): Promise<void> {
     { listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)), block: (id, cause) => projects.block(id, cause) },
     { publish: async () => {} },
     memoryStepContainment(() => true),
+    recordingLogger(),
   );
 }
 
@@ -953,6 +955,7 @@ describe("a task no roster role can work is planned around, never left waiting",
 
     const published: DomainEvent[] = [];
     const left = await releaseClearedBlocks({
+      logger: recordingLogger(),
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
       projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectHaltRepository(db).get(id) },

@@ -65,6 +65,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.projectRepo.blockAllActive": { kind: "not-per-project", reason: "the deployment's halt at its cap, one write for every project" },
   "deps.projectRepo.block": { kind: "not-per-project", reason: "the halt of one project, which is how a step's own failure is contained" },
   "deps.cycleLog.emit": { kind: "not-per-project", reason: "the cycle's own log line" },
+  "deps.logger.info": { kind: "not-per-project", reason: "a log record; the Logger never throws and never stops the path that logs" },
   parseProjectId: { kind: "not-per-project", reason: "a pure parse" },
   projectCapCause: { kind: "not-per-project", reason: "a pure constructor" },
   projectWorkCause: { kind: "not-per-project", reason: "a pure constructor" },

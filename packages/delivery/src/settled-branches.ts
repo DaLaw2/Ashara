@@ -1,5 +1,4 @@
-import type { ProjectId } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import type { Logger, ProjectId } from "@ashara/shared";
 import type { WorkItemRepository } from "./domain/index.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { assertValidTargetProjectPath } from "./acl/execution-infra-acl.js";
@@ -25,6 +24,7 @@ interface SettledBranchDeps {
   readonly projects: SettledTargets;
   /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
   readonly workdirBase: string;
+  readonly logger: Logger;
 }
 
 interface SettledBranchSummary {
@@ -53,7 +53,7 @@ export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Pr
     settled = new Set(await deps.workItemRepo.listIdsByStatus(SETTLED_STATUSES));
     targets = await deps.projects.listWithWorkspace();
   } catch (err) {
-    console.warn(`[settled-branches] the settled tasks or the targets could not be read; no branch is released this pass: ${describeErrorChain(err)}`);
+    deps.logger.warn("delivery.settled-branches-unread", "the settled tasks or the targets could not be read; no branch is released this pass", {}, err);
     return { released: 0, left: 0, checkouts: 0, targetsFailed: 0 };
   }
   let released = 0;
@@ -63,20 +63,27 @@ export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Pr
   for (const target of targets) {
     try {
       await assertValidTargetProjectPath(target.workspacePath, deps.workdirBase);
-      const result = await releaseSettledBranches(deps.workdirBase, target.workspacePath, settled);
+      const result = await releaseSettledBranches(deps.workdirBase, target.workspacePath, settled, deps.logger);
       released += result.released;
       left += result.left;
       checkouts += result.checkouts;
     } catch (err) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: branch release is cleanup of settled tasks: the target is counted in targetsFailed and the next pass retries it
       targetsFailed += 1;
-      console.warn(`[settled-branches] project ${target.id}: the branches of ${target.workspacePath} could not be listed; none is released this pass: ${describeErrorChain(err)}`);
+      deps.logger.warn(
+        "delivery.settled-branches-unlisted",
+        `the branches of ${target.workspacePath} could not be listed; none is released this pass`,
+        { projectId: target.id, targetPath: target.workspacePath },
+        err,
+      );
     }
   }
   if (released > 0 || left > 0 || checkouts > 0 || targetsFailed > 0) {
-    console.log(
-      `[settled-branches] released ${released} branch(es) of settled tasks and ${checkouts} throwaway checkout(s) a cut-short check left; ` +
+    deps.logger.info(
+      "delivery.settled-branches-released",
+      `released ${released} branch(es) of settled tasks and ${checkouts} throwaway checkout(s) a cut-short check left; ` +
         `${left} left, ${targetsFailed} target(s) not read`,
+      { released, checkouts, left, targetsFailed },
     );
   }
   return { released, left, checkouts, targetsFailed };

@@ -1,6 +1,6 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect } from "vitest";
 import type { DomainEvent, ProjectId, WorkItemId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
@@ -53,7 +53,7 @@ const projects = activeProjects(PROJECT_ID);
 
 /** The tasks the gate admits, each project contained by a ledger in memory that lets nothing escape. */
 async function admitted(repo: WorkItemRepository, active: ActiveProjects, events: EventPublisher): Promise<WorkItem[]> {
-  return (await GateKeeper.filterAvailable(repo, active, events, memoryStepContainment(() => false))).available;
+  return (await GateKeeper.filterAvailable(repo, active, events, memoryStepContainment(() => false), recordingLogger())).available;
 }
 
 function publisher() {
@@ -79,9 +79,6 @@ function task(status: WorkItemStatus, title: string, projectId: ProjectId = PROJ
   };
 }
 
-beforeEach(() => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-});
 
 describe("GateKeeper.filterAvailable", () => {
   test("a Pending task waiting on an Abandoned check task is given up naming it, and the give-up is published", async () => {
@@ -254,7 +251,7 @@ describe("GateKeeper.filterAvailable", () => {
     };
     const containment = memoryStepContainment(() => false);
 
-    const gated = await GateKeeper.filterAvailable(failing, activeProjects(PROJECT_ID, OTHER_PROJECT_ID), publisher().events, containment);
+    const gated = await GateKeeper.filterAvailable(failing, activeProjects(PROJECT_ID, OTHER_PROJECT_ID), publisher().events, containment, recordingLogger());
 
     expect(gated.available.map((i) => i.id)).toEqual([other.id]);
     expect(containment.recorded.get(`gate/${PROJECT_ID}`)).toMatchObject({ faults: 1, error: expect.stringContaining("TypeError") });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isGoalTask } from "@ashara/db";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { DomainEvent, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import type { DomainEvent, Logger, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { withStructuredLadder } from "./acl/finance-acl.js";
 import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
@@ -598,6 +598,7 @@ interface ReplannerDeps {
   /** Each project's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  readonly logger: Logger;
 }
 
 /**
@@ -637,7 +638,13 @@ export class Replanner implements Replanning {
 
   private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<ReplanOutcome> {
     const result = await this.deps.store.blockProject(projectId, cause);
-    console.warn(`[replan] project ${projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
+    this.deps.logger.info("delivery.project-blocked", `${cause.errorClass}; project ${projectId} ${result}: ${cause.reason}`, {
+      projectId,
+      step: "replan",
+      category: cause.category,
+      errorClass: cause.errorClass,
+      result,
+    });
     return { kind: "project-blocked", projectId, cause };
   }
 
@@ -693,7 +700,7 @@ export class Replanner implements Replanning {
       cause.kind === "client-change"
         ? `answer(s) ${cause.changes.map((change) => change.answerId).join(", ")}`
         : `given-up task(s) ${cause.abandoned.map((task) => task.id).join(", ")}`;
-    console.log(`[replan] project ${projectId}: revision ${write.revision} written for ${why}`);
+    this.deps.logger.info("delivery.revision-written", `revision ${write.revision} written for ${why}`, { projectId, revision: write.revision, cause: cause.kind });
     return {
       kind: "revised",
       projectId,
@@ -727,9 +734,10 @@ export class Replanner implements Replanning {
       schema: EnvironmentJudgmentSchema,
       maxTokens: 512,
     });
-    console.log(
-      `[replan] project ${project.projectId}: environment change ${response.data.environmentChange}: ${response.data.reason}`,
-    );
+    this.deps.logger.info("delivery.environment-judged", `environment change ${response.data.environmentChange}: ${response.data.reason}`, {
+      projectId: project.projectId,
+      environmentChange: response.data.environmentChange,
+    });
     return response.data.environmentChange ? { kind: "new" } : { kind: "existing", taskId: current.item.id };
   }
 
@@ -847,7 +855,11 @@ export class Replanner implements Replanning {
     const attempt = await this.deps.store.recordFailedAttempt(projectId, error, failure);
     const asked =
       project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
-    console.warn(`[replan] project ${projectId} (vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
+    this.deps.logger.warn("delivery.replan-attempt-failed", `(vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed`, {
+      projectId,
+      attempt,
+      visionVersion: project.vision.version,
+    }, err);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
     return this.block(projectId, exhaustedRevisionCause(projectId, attempt, error, failure));
   }
