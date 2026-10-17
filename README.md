@@ -78,8 +78,8 @@ after the money is gone.
 
 ## Getting started
 
-You need: Node.js with npm, [just](https://github.com/casey/just), podman 5.x, and an API key for Anthropic (Claude)
-and/or DeepSeek.
+You need: Node.js with npm, [just](https://github.com/casey/just), podman, and an API key for Anthropic (Claude)
+and/or DeepSeek. The full test suite, real containers included, passes on podman 4.9.3 and podman 5.8.2.
 
 ```bash
 just install                  # install dependencies
@@ -117,8 +117,6 @@ Model choices are in `config/models.toml`.
 
 ## Limitations
 
-- **Podman 5.x is required.** On podman 4.x every command in the sealed container is refused, so nothing gets built.
-  A fix is in progress.
 - **Projects are planned as a single stage.** Ashara does not yet grow a project in phases, so larger products need
   several requests.
 - **It does not yet act on a change of direction mid-project.** A change request you send while it is working is
@@ -144,3 +142,26 @@ just simulate   # deterministic lifecycle simulator: crashes, races and misbehav
 
 `just test` runs against the database `just dev` starts, migrated with `just migrate` (or the one
 `DATABASE_URL` names), and needs podman: the container tests run real containers and are never skipped.
+`just simulate` needs the database.
+
+### Packages
+
+Each package under `packages/` is one bounded context or one piece of shared infrastructure. Which package may
+import which is declared in `boundary-rules.toml` and enforced by `just check`.
+
+| Package | Purpose |
+|---|---|
+| `shared` | The shared kernel: identifiers and the vocabulary every other package uses. Imports nothing. |
+| `db` | Generic persistence: the database connection, migrations, the event store and each context's schema. |
+| `model-access` | Model providers, the model catalog and structured output from models. |
+| `finance` | Prices and records every model call and enforces the spending limits before each one. |
+| `security` | The encrypted secret store and the master key that protects it. |
+| `execution-infra` | Sealed containers ("cells") on podman, where every agent command runs. |
+| `knowledge` | Findings and failed approaches, kept so later work can learn from them. |
+| `workplace` | An agent's attempt at a piece of work: its model turns and the tools it uses inside a cell. |
+| `engagement` | The client relationship: intake, questions and assumptions, and the reports sent to the client. |
+| `organization` | The project team: its roster, roles and what each role may do. |
+| `quality` | Independent checks: tests and gates, merging and its verification, suite review and acceptance. |
+| `delivery` | The board: planning, breaking work down, assigning it and driving the project to delivery. |
+| `server` | The composition root and the web client, the only interface a client uses. |
+| `integration` | Cross-package integration tests and the lifecycle simulator; nothing imports it. |

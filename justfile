@@ -101,7 +101,8 @@ simulate *ARGS:
 #
 # Enforcement is automatic in two other places — the `.git/hooks/pre-commit` hook
 # (`ggshield install --mode local`) and the CI workflow, which fails closed when
-# GITGUARDIAN_API_KEY is absent. This recipe is for scanning on demand, e.g. before
+# GITGUARDIAN_API_KEY is absent on a push or a same-repository pull request (a fork's pull
+# request gets no secrets, so there it skips with a notice). This recipe is for scanning on demand, e.g. before
 # a force-push or after a history rewrite.
 #
 # Known limitation: the scanner recognises known secret shapes and can miss an

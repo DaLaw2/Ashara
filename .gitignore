@@ -4,6 +4,23 @@ dist/
 node_modules/
 .env
 .env.*
+
+# Private keys, keystores and database dumps: credentials and client data never enter the repository
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ecdsa*
+id_ed25519*
+*.dump
+*.pgdump
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+*.sql.zst
 *.log
 .ashara/worktrees/
 .ashara/

@@ -7,7 +7,8 @@
     ".": {
       "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts", "scripts/client.ts", "scripts/project.ts", "scripts/probes.ts", "scripts/run-report.ts", "scripts/simulate.ts", "scripts/replay-run-state.ts", "scripts/affected-tests.ts", "scripts/hidden-suite.ts"],
       "project": ["scripts/**/*.ts", "!scripts/**/*.test.ts"],
-      "vitest": false
+      "vitest": false,
+      "ignoreDependencies": ["yaml"]
     },
     "packages/*": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
