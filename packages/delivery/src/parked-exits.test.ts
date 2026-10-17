@@ -25,6 +25,7 @@ function blocked(reason: StoredBlockedReason | undefined): WorkItem {
     failureVerdict: { kind: "none" },
     dispatchCount: 1,
     workKind: "implementation",
+    repairsTaskId: null,
     blockedReason: reason,
     createdAt: new Date(),
     updatedAt: new Date(),

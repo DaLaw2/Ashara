@@ -95,7 +95,7 @@ const WorkItemRowSchema = z.object({
   workKind: z.string().nullable(),
   origin: z.string().nullable(),
   checksFor: z.string().nullable(),
-  dependents: z.array(z.guid()),
+  repairsTaskId: z.guid().nullable(),
 });
 
 /**
@@ -148,8 +148,9 @@ interface TaskCall {
 /**
  * One work item of the project, whatever it spent: its level, its parent (work_items.parent_id),
  * its work kind (work_items.work_kind), the producer that wrote it and, for a check task, the task
- * its checks decide (task_spec.origin, task_spec.checksFor; NULL when the row records none), and the
- * items that depend on it (dependencies.from_id where to_id is this item).
+ * its checks decide (task_spec.origin, task_spec.checksFor; NULL when the row records none), and, on
+ * an environment-change task, the task it was opened for (work_items.repairs_task_id, migration 077;
+ * NULL when the row records none).
  */
 type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
 
@@ -280,8 +281,7 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
 
   const workItemRows = await db.execute(sql`
     SELECT w.id, w.level, w.parent_id AS "parentId", w.title, w.status, w.work_kind AS "workKind",
-           w.task_spec->>'origin' AS origin, w.task_spec->>'checksFor' AS "checksFor",
-           COALESCE((SELECT json_agg(d.from_id ORDER BY d.from_id) FROM dependencies d WHERE d.to_id = w.id), '[]'::json) AS dependents
+           w.task_spec->>'origin' AS origin, w.task_spec->>'checksFor' AS "checksFor", w.repairs_task_id AS "repairsTaskId"
     FROM work_items w
     WHERE w.project_id = ${projectId}
     ORDER BY w.created_at, w.id`);

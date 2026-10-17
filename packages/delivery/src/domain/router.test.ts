@@ -55,6 +55,7 @@ function makeItem(overrides: Partial<WorkItem> & { id: WorkItemId; status: WorkI
     events: [],
     ...overrides,
     workKind: overrides.workKind ?? null,
+    repairsTaskId: overrides.repairsTaskId ?? null,
   };
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { isGoalTask } from "@ashara/db";
 import { formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
 
 type Evidence = Parameters<typeof formatRunReport>[0];
@@ -24,7 +25,7 @@ function evidence(tasks: readonly Omit<Task, "title" | "status">[]): Evidence {
   return {
     project: { id: "00000000-0000-4000-8000-0000000000a1", name: "p", status: "active" },
     tasks: tasks.map((t) => ({ ...t, title: "t", status: "Completed" })),
-    workItems: tasks.map((t) => ({ id: t.taskId, level: "Task", parentId: null, title: "t", status: "Completed", workKind: "implementation", origin: "decomposition", checksFor: null, dependents: [] })),
+    workItems: tasks.map((t) => ({ id: t.taskId, level: "Task", parentId: null, title: "t", status: "Completed", workKind: "implementation", origin: "decomposition", checksFor: null, repairsTaskId: null })),
     calls: tasks.map((t) => ({
       taskId: t.taskId,
       provider: "anthropic",
@@ -109,11 +110,11 @@ describe("formatRunReport cost per Epic and goal task", () => {
   const T = (minute: number, second = 0) => new Date(Date.UTC(2026, 9, 16, 3, minute, second));
 
   function item(n: number, parent: number | null, fields: Partial<WorkItem>): WorkItem {
-    return { id: id(n), level: "Task", parentId: parent === null ? null : id(parent), title: `item ${n}`, status: "Completed", workKind: null, origin: null, checksFor: null, dependents: [], ...fields };
+    return { id: id(n), level: "Task", parentId: parent === null ? null : id(parent), title: `item ${n}`, status: "Completed", workKind: null, origin: null, checksFor: null, repairsTaskId: null, ...fields };
   }
   const goal = (n: number, epic: number) => item(n, epic, { workKind: "implementation", origin: "decomposition", title: `goal ${n}` });
   const check = (n: number, epic: number, of: number) => item(n, epic, { workKind: "check", origin: "check", checksFor: id(of) });
-  const repair = (n: number, epic: number, of: number) => item(n, epic, { workKind: "environment", origin: "environment-change", dependents: [id(of)] });
+  const repair = (n: number, epic: number, of: number) => item(n, epic, { workKind: "environment", origin: "environment-change", repairsTaskId: id(of) });
   const call = (minute: number, costUsd: number | null, inputTokens: number | null, contextWindowTokens: number | null = 100_000): TaskCall => ({
     callSite: "agent-runner",
     createdAt: T(minute, 30),
@@ -205,29 +206,82 @@ describe("formatRunReport cost per Epic and goal task", () => {
     expect(lineOf(text, `goal task ${id(0x12)}`)).toContain("own $0.080000 (first session $0.060000, rework $0.020000); charged $0.130000 (checks $0.120000, repairs $0.010000); total $0.210000");
     expect(lineOf(text, `goal task ${id(0x13)}`)).toContain("own $0.040000 (first session $0.030000, rework $0.010000); charged $0.070000 (checks $0.050000, repairs $0.020000); total $0.110000");
     expect(lineOf(text, "unattributed: $")).toBe(`    unattributed: $0.030000, serving no goal task: ${id(0x50)} environment (sprint0) $0.030000`);
-    expect(lineOf(text, "unattributed: project calls")).toBe("  unattributed: project calls (no task): $0.007000");
-    expect(lineOf(text, "run:")).toBe("  run: spend $0.747000 over 3 goal task(s), $0.249000 per goal task; charged to goal tasks $0.710000, unattributed $0.037000");
+    expect(lineOf(text, "project-level")).toBe("  project-level (llm_calls with no task, in no Epic): spend $0.007000 over 1 call(s)");
+    expect(lineOf(text, "run:")).toBe(
+      "  run: spend $0.747000 over 3 goal task(s), $0.249000 per goal task; in Epics $0.740000 (charged to goal tasks $0.710000, unattributed $0.030000), project-level $0.007000",
+    );
 
-    // Nothing dropped or spread: what is charged plus what is unattributed is every llm_calls row's cost.
+    // Nothing dropped or spread: what is charged plus what is unattributed plus project-level is every llm_calls row's cost.
     const run = lineOf(text, "run:");
     const figure = (label: string) => Number(new RegExp(`${label} \\$([0-9.]+)`).exec(run)?.[1]);
     const overall = costEvidence(workItems, taskCalls).calls.reduce((sum, row) => sum + row.measuredUsd, 0);
-    expect(figure("charged to goal tasks") + figure("unattributed")).toBeCloseTo(overall, 9);
+    expect(figure("charged to goal tasks") + figure("unattributed") + figure("project-level")).toBeCloseTo(overall, 9);
     expect(figure("spend")).toBeCloseTo(overall, 9);
+  });
+
+  // One definition of a goal task (isGoalTask): level 'Task' and origin 'decomposition', whatever
+  // its work kind. Built on the two items where a work-kind reading and a level reading disagree.
+  test("classifies a goal task by the one definition, the same way completedGoalTasks does, whatever its work kind", () => {
+    const unkinded = item(0x14, 0xe1, { workKind: null, origin: "decomposition", title: "goal 20" });
+    const storyLevel = item(0x15, 0xe1, { level: "Story", workKind: "implementation", origin: "decomposition", title: "story 21" });
+    expect(isGoalTask(unkinded)).toBe(true);
+    expect(isGoalTask(storyLevel)).toBe(false);
+    const report = formatRunReport(
+      costEvidence([...workItems, unkinded, storyLevel], new Map([...taskCalls, [0x14, { sessions: [], calls: [call(40, 0.4, 100)] }], [0x15, { sessions: [], calls: [call(41, 0.3, 100)] }]])),
+    );
+    expect(lineOf(report.text, `goal task ${id(0x14)}`)).toContain("own $0.400000");
+    expect(report.text).not.toContain(`goal task ${id(0x15)}`);
+    expect(lineOf(report.text, "unattributed: $")).toContain(`${id(0x15)} implementation (decomposition) $0.300000`);
+    expect(lineOf(report.text, `Epic ${id(0xe1)} Epic A:`)).toContain("over 2 goal task(s)");
+    expect(report.attributionViolation).toBe(false);
+  });
+
+  // A repair's spend follows the link its row records (work_items.repairs_task_id), even to a goal
+  // task in another Epic; without the link it is named unattributed, never charged by guess or dropped.
+  test("charges an environment change to the goal task its recorded link names, and names it unattributed without one", () => {
+    const crossEpic = item(0x34, 0xe1, { workKind: "environment", origin: "environment-change", repairsTaskId: id(0x12) });
+    const unlinked = item(0x35, 0xe2, { workKind: "environment", origin: "environment-change", repairsTaskId: null });
+    const calls = new Map([...taskCalls, [0x34, { sessions: [], calls: [call(42, 0.25, 100)] }], [0x35, { sessions: [], calls: [call(43, 0.15, 100)] }]]);
+    const report = formatRunReport(costEvidence([...workItems, crossEpic, unlinked], calls));
+    expect(lineOf(report.text, `goal task ${id(0x12)}`)).toContain("charged $0.380000 (checks $0.120000, repairs $0.260000)");
+    expect(lineOf(report.text, `Epic ${id(0xe2)} Epic B:`)).toContain("spend $0.720000 over 2 goal task(s)");
+    expect(lineOf(report.text, `Epic ${id(0xe1)} Epic A:`)).toContain("spend $0.420000 over 1 goal task(s)");
+    expect(lineOf(report.text, "unattributed: $0.150000")).toContain(`${id(0x35)} environment change with no work_items.repairs_task_id on record (created before migration 077) $0.150000`);
+    expect(report.attributionViolation).toBe(false);
+  });
+
+  // Project-level spend (llm_calls with no task) belongs to no Epic: it is its own line, and the
+  // Epics' totals plus that line are the run's total.
+  test("prints llm_calls with no task as a project-level line, and the Epics plus that line are the run total", () => {
+    const base = costEvidence(workItems, taskCalls);
+    const [projectRow, ...taskRows] = base.calls;
+    if (projectRow === undefined) throw new Error("fixture has no project-level row");
+    const second = { ...projectRow, provider: "deepseek", calls: 2, measuredCalls: 2, measuredUsd: 0.013 };
+    const report = formatRunReport({ ...base, calls: [projectRow, second, ...taskRows] });
+    expect(lineOf(report.text, "project-level")).toBe("  project-level (llm_calls with no task, in no Epic): spend $0.020000 over 3 call(s)");
+    const epics = report.text
+      .split("\n")
+      .filter((l) => l.startsWith("  Epic "))
+      .map((l) => Number(/: spend \$([0-9.]+)/.exec(l)?.[1]));
+    const overall = [projectRow, second, ...taskRows].reduce((sum, row) => sum + row.measuredUsd, 0);
+    expect(epics.reduce((sum, x) => sum + x, 0) + 0.02).toBeCloseTo(overall, 9);
+    expect(lineOf(report.text, "run:")).toContain(`spend $${overall.toFixed(6)} `);
+    expect(lineOf(report.text, "run:")).toContain("project-level $0.020000");
+    expect(report.attributionViolation).toBe(false);
   });
 
   test("a check task naming no goal task is unattributed, never charged to one", () => {
     const stray = item(0x24, 0xe1, { workKind: "check", origin: "check", checksFor: id(0x99) });
     const report = formatRunReport(costEvidence([...workItems, stray], new Map([...taskCalls, [0x24, { sessions: [], calls: [call(8, 0.5, 100)] }]])));
     expect(lineOf(report.text, "unattributed: $")).toContain(`${id(0x24)} check task whose checksFor ${id(0x99)} is no goal task of the project $0.500000`);
-    expect(lineOf(report.text, "run:")).toContain("charged to goal tasks $0.710000, unattributed $0.537000");
+    expect(lineOf(report.text, "run:")).toContain("charged to goal tasks $0.710000, unattributed $0.530000), project-level $0.007000");
     expect(report.attributionViolation).toBe(false);
   });
 
   test("a task's calls that no work item of the project accounts for are a VIOLATION, not dropped", () => {
     const report = formatRunReport(costEvidence(workItems.filter((w) => w.id !== id(0x50)), taskCalls));
     expect(report.attributionViolation).toBe(true);
-    expect(report.text).toContain(`VIOLATION: the attribution accounts for 13 of 14 llm_calls row(s) and $0.717000 of $0.747000; task(s) ${id(0x50)} are no work item of the project`);
+    expect(report.text).toContain(`VIOLATION: the Epics and the project-level line account for 13 of 14 llm_calls row(s) and $0.717000 of $0.747000; task(s) ${id(0x50)} are no work item of the project`);
   });
 
   // m3-scope C5: each call's input over its model's window, and each Epic's peak. A call with no

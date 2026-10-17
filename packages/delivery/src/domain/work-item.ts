@@ -56,6 +56,11 @@ export interface WorkItem {
    * WorkItemRepository.recordOverflowedWindow; null when no attempt has overflowed one.
    */
   overflowedWindowTokens: number | null;
+  /**
+   * On an environment-change task, the task it was opened for (migration 077), set when it is
+   * created (requestEnvironmentChange); null on every other item.
+   */
+  repairsTaskId: WorkItemId | null;
   createdAt: Date;
   updatedAt: Date;
   events: DomainEvent[];
@@ -87,6 +92,7 @@ export function createPendingWorkItem(
     dispatchCount: 0,
     workKind: null,
     overflowedWindowTokens: null,
+    repairsTaskId: null,
     createdAt: now,
     updatedAt: now,
     events: [],

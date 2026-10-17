@@ -66,6 +66,7 @@ function pendingTask(id: WorkItemId, title: string): WorkItem {
     failureVerdict: { kind: "none" },
     dispatchCount: 0,
     workKind: "implementation",
+    repairsTaskId: null,
     createdAt: now,
     updatedAt: now,
     events: [],

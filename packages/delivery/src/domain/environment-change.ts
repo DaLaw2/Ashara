@@ -123,6 +123,7 @@ export function requestEnvironmentChange(
   );
   environment.workKind = "environment";
   environment.ownerRoleId = context.owner.roleId;
+  environment.repairsTaskId = task.id;
   environment.events.push(
     createDomainEvent("work_item.created", "delivery", {
       work_item_id: environment.id,

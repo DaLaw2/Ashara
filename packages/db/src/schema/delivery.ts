@@ -60,6 +60,11 @@ export const workItems = pgTable("work_items", {
   // Migration 058: Quality's verdict on the last attempt, written with every entry into Failed and
   // cleared on every exit from it. NULL on a Failed row that failed before 058.
   failureVerdict: jsonb("failure_verdict"),
+  // Migration 077: on an environment-change task, the task it was opened for (the task whose
+  // implementer needed the change), written when it is created; NULL on every other task and on an
+  // environment-change task created before 077. Its spend is charged by this link, never by reading
+  // the dependency graph.
+  repairsTaskId: uuid("repairs_task_id"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });

@@ -23,6 +23,7 @@ function row(overrides: Partial<Row>): Row {
     dispatchCount: 0,
     workKind: null,
     ownerRoleId: null,
+    repairsTaskId: null,
     environmentStatement: null,
     environmentStatementVersion: null,
     infrastructureFaults: 0,

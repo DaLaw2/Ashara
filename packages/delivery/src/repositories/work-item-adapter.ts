@@ -60,6 +60,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
     ...(row.ownerRoleId !== null ? { ownerRoleId: row.ownerRoleId } : {}),
     overflowedWindowTokens: row.overflowedWindowTokens,
+    repairsTaskId: row.repairsTaskId === null ? null : parseWorkItemId(row.repairsTaskId, "work_items.repairs_task_id"),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     events: [],
@@ -88,6 +89,7 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
         // Both or neither (work_items_owner_whole): a task created with its owner carries both.
         workKind: item.workKind,
         ownerRoleId: item.ownerRoleId ?? null,
+        repairsTaskId: item.repairsTaskId,
       });
       return rowToWorkItem(row);
     },
