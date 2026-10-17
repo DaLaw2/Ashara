@@ -9,7 +9,7 @@ import type {
   TurnRequest,
   TurnResult,
 } from "@ashara/model-access";
-import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/model-access";
 import type { CostMeasurement } from "./cost.js";
 import { LlmCallCostMissing, LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
@@ -22,9 +22,10 @@ interface LlmCallContext {
   readonly callSite: KnownLLMSite;
 }
 
-/** One provider request about to be sent, charged to `context`. */
+/** One provider request about to be sent, charged to `context`, admitted in the log trace `traceId`. */
 export interface PendingLlmCall extends ProviderRequest {
   readonly context: LlmCallContext;
+  readonly traceId: string;
 }
 
 /** One provider request as the gateway saw it, charged to `context`. */
@@ -68,12 +69,14 @@ export interface ContextualTurnLlm {
  * Finance in front of Model Access: every model call goes through here, so
  * every provider request is checked before it is sent (price, spend caps) and
  * recorded after it, charged to the call's project. The recorder measures each
- * request's cost once; a turn returns that same measurement.
+ * request's cost once; a turn returns that same measurement. Its admission and its record are each
+ * logged in a scope naming the call (`callSite`, `callId`), so an llm_calls row leads to its records.
  */
 export class GuardedModelAccess implements ContextualLlm, ContextualTurnLlm {
   constructor(
     private readonly gateway: Pick<LLMGateway, "gated" | "resolveModel" | "resolveModelWithWindowAbove">,
     private readonly recorder: LlmCallRecorder,
+    private readonly logger: Logger,
   ) {}
 
   /** The model a capability resolves to at a site. Resolution sends no request, so nothing is admitted or recorded. */
@@ -117,31 +120,48 @@ export class GuardedModelAccess implements ContextualLlm, ContextualTurnLlm {
       model: request.model.id,
       operation: request.operation,
     });
+    const fields = (request: ProviderRequest) => ({
+      projectId: context.projectId,
+      taskId: context.taskId,
+      provider: request.provider,
+      model: request.model.id,
+      operation: request.operation,
+    });
+    const inCall = <T>(request: ProviderRequest, work: () => Promise<T>): Promise<T> =>
+      this.logger.scope({ callSite: context.callSite, callId: request.callId }, work);
     return {
-      admit: async (request) => {
-        try {
-          await this.recorder.admit({ ...request, context });
-        } catch (error) {
-          if (error instanceof PreCallRefusal) throw error;
-          throw new LlmCallNotAdmitted(where(request), { cause: error });
-        }
-      },
-      settle: async (request) => {
-        let cost: CostMeasurement;
-        try {
-          cost = await this.recorder.record({ ...request, context });
-        } catch (writeError) {
-          throw new LlmCallNotRecorded(
-            {
-              ...where(request),
-              callOutcome: request.outcome.kind === "ok" ? "ok" : `error (${request.outcome.errorKind})`,
-              providerError: request.providerError,
-            },
-            { cause: writeError },
-          );
-        }
-        onRecorded(cost);
-      },
+      admit: (request) =>
+        inCall(request, async () => {
+          try {
+            await this.recorder.admit({ ...request, context, traceId: this.logger.trace() });
+          } catch (error) {
+            if (error instanceof PreCallRefusal) throw error;
+            throw new LlmCallNotAdmitted(where(request), { cause: error });
+          }
+          this.logger.info("finance.call-admitted", `model call ${request.callId} admitted at ${context.callSite}`, fields(request));
+        }),
+      settle: (request) =>
+        inCall(request, async () => {
+          let cost: CostMeasurement;
+          try {
+            cost = await this.recorder.record({ ...request, context });
+          } catch (writeError) {
+            throw new LlmCallNotRecorded(
+              {
+                ...where(request),
+                callOutcome: request.outcome.kind === "ok" ? "ok" : `error (${request.outcome.errorKind})`,
+                providerError: request.providerError,
+              },
+              { cause: writeError },
+            );
+          }
+          this.logger.info("finance.call-recorded", `model call ${request.callId} recorded`, {
+            ...fields(request),
+            outcome: request.outcome.kind === "ok" ? "ok" : `error (${request.outcome.errorKind})`,
+            costMeasured: cost.measured,
+          });
+          onRecorded(cost);
+        }),
     };
   }
 }

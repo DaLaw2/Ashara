@@ -52,7 +52,7 @@ async function plan(projectId: ProjectId): Promise<void> {
 async function draw(projectId: ProjectId, requests: number): Promise<void> {
   const calls = new LlmCallRepository(db);
   for (let i = 0; i < requests; i++) {
-    await calls.admit({ id: randomUUID(), projectId, taskId: null, callSite: "agent-runner", provider: "stub", model: "m", estimatedCostUsd: 0.01 });
+    await calls.admit({ id: randomUUID(), projectId, taskId: null, callSite: "agent-runner", provider: "stub", model: "m", estimatedCostUsd: 0.01, traceId: "test-trace" });
   }
 }
 

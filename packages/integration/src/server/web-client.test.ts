@@ -18,7 +18,7 @@ import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository
 import { DevSessionRepository } from "@ashara/workplace";
 import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import { buildApp } from "@ashara/server/app";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -95,7 +95,7 @@ function webClientDeps(overrides: Partial<WebClientDeps> = {}): WebClientDeps {
 }
 
 function build(overrides: Partial<WebClientDeps> = {}): Hono {
-  return buildApp(API_TOKEN, appDeps(), webClientDeps(overrides));
+  return buildApp(API_TOKEN, appDeps(), webClientDeps(overrides), recordingLogger());
 }
 
 async function newClient(label: string, storeCode = true): Promise<TestClient> {
@@ -655,9 +655,30 @@ class RefusingWorkItemRepository extends WorkItemRowRepository {
   }
 }
 
+describe("request trace", () => {
+  test("every response, a page, a refusal and an unhandled error alike, names the new trace its request ran in", async () => {
+    const logger = recordingLogger();
+    const traced = buildApp(API_TOKEN, { ...appDeps(), workItemRepo: new RefusingWorkItemRepository(db) }, webClientDeps(), logger);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const responses: Response[] = [];
+    try {
+      responses.push(await traced.request("/client"));
+      responses.push(await traced.request("/client/api/projects"));
+      responses.push(await traced.request(`/projects/${randomUUID()}/work-items`, { headers: { Authorization: `Bearer ${API_TOKEN}` } }));
+    } finally {
+      logged.mockRestore();
+    }
+    expect(responses.map((response) => response.status)).toEqual([200, 401, 500]);
+    const traces = responses.map((response) => response.headers.get("x-ashara-trace"));
+    for (const trace of traces) expect(trace).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(new Set(traces).size).toBe(3);
+    expect(traces).not.toContain(logger.trace());
+  });
+});
+
 describe("unhandled route error", () => {
   test("is logged with its operation and chain, and answered with a typed 500 that carries no detail", async () => {
-    const failing = buildApp(API_TOKEN, { ...appDeps(), workItemRepo: new RefusingWorkItemRepository(db) }, webClientDeps());
+    const failing = buildApp(API_TOKEN, { ...appDeps(), workItemRepo: new RefusingWorkItemRepository(db) }, webClientDeps(), recordingLogger());
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const route = `/projects/${randomUUID()}/work-items`;

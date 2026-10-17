@@ -1,5 +1,6 @@
 import { listenForEvents } from "@ashara/db";
 import type { PgListener } from "@ashara/db";
+import type { Logger } from "@ashara/shared";
 import type { CycleResult, LoopStop } from "./types.js";
 
 /** What the runner drives — CoreLoop satisfies it; tests supply a double. */
@@ -27,18 +28,42 @@ const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "databaseUrl"> = {
   maxConsecutiveErrors: 3,
 };
 
-export class ContinuousRunner {
+/**
+ * Drives the core loop's cycles. Every cycle, full or halted, runs through `runCycle` or
+ * `runHaltedCycle` here, whoever calls it (its own loop, or a harness stepping it): each is numbered
+ * by this runner's per-boot counter and runs in a new log trace carrying that number as `cycle`.
+ */
+export class ContinuousRunner implements CycleRunner {
   private readonly coreLoop: CycleRunner;
+  private readonly logger: Logger;
   private readonly config: RunnerConfig;
+  /** Cycles begun by this runner, full and halted alike; a restarted process counts from zero again. */
+  private cyclesBegun = 0;
   private wakeResolve: (() => void) | null = null;
   // Set by wake() on any NOTIFY, armed to false at the top of each cycle. A NOTIFY
   // that lands while a cycle is running has no wait to resolve; without this flag
   // the work it announced would sit until the idle timeout.
   private wakePending = false;
 
-  constructor(coreLoop: CycleRunner, config: Pick<RunnerConfig, "databaseUrl"> & Partial<RunnerConfig>) {
+  constructor(coreLoop: CycleRunner, logger: Logger, config: Pick<RunnerConfig, "databaseUrl"> & Partial<RunnerConfig>) {
     this.coreLoop = coreLoop;
+    this.logger = logger;
     this.config = { ...DEFAULT_RUNNER_CONFIG, ...config };
+  }
+
+  /** One full cycle, the next number, in its own trace. */
+  runCycle(): Promise<CycleResult> {
+    return this.inCycleScope(() => this.coreLoop.runCycle());
+  }
+
+  /** One halted cycle, the next number, in its own trace. */
+  runHaltedCycle(): Promise<void> {
+    return this.inCycleScope(() => this.coreLoop.runHaltedCycle());
+  }
+
+  private inCycleScope<T>(work: () => Promise<T>): Promise<T> {
+    this.cyclesBegun += 1;
+    return this.logger.scope({ cycle: this.cyclesBegun, trace: "new" }, work);
   }
 
   /**
@@ -93,7 +118,7 @@ export class ContinuousRunner {
       this.wakePending = false;
 
       try {
-        const result: CycleResult = await this.coreLoop.runCycle();
+        const result: CycleResult = await this.runCycle();
         consecutiveErrors = 0;
         console.log(`Cycle complete: ${result.tasksProcessed} tasks processed`);
 
@@ -129,7 +154,7 @@ export class ContinuousRunner {
     while (!signal.aborted) {
       this.wakePending = false;
       try {
-        await this.coreLoop.runHaltedCycle();
+        await this.runHaltedCycle();
         consecutiveErrors = 0;
         if (this.wakePending) continue;
         await this.waitForWakeOrTimeout(this.config.idleIntervalMs, signal);

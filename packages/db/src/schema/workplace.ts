@@ -28,6 +28,8 @@ export const devSessions = pgTable("dev_sessions", {
   attemptProvider: text("attempt_provider"),
   attemptModel: text("attempt_model"),
   attemptCell: text("attempt_cell"),
+  // Migration 078: the trace of the dispatched attempt the session was opened in; NULL only on rows written before it.
+  traceId: text("trace_id"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });

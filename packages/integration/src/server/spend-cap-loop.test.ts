@@ -19,7 +19,7 @@ import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { CoreLoopDeps } from "@ashara/delivery";
-import { createWorkItemId, memoryStepContainment, parseProjectId, systemClock, UnreadSubject } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger, systemClock, UnreadSubject } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
@@ -74,7 +74,7 @@ function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): GuardedModelAc
     },
     checkedSources: ["test"],
     clock: () => new Date(),
-  }), new LlmCallLedger(calls, spendCap));
+  }), new LlmCallLedger(calls, spendCap), recordingLogger());
 }
 
 /**
@@ -85,6 +85,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: join(root, "unused") },
     cycleLog: { emit: () => {} },
+    logger: recordingLogger(),
     containment: memoryStepContainment((error) => parts.spendCap.refusalOf(error) !== null),
     workItemRepo: {
       create: notExercised("create"),
@@ -214,7 +215,7 @@ describe("the deployment spend cap stops the loop", () => {
 
     // The halt ends the work; the test then ends the halted runner, as SIGTERM does.
     const abort = new AbortController();
-    const stop = await new ContinuousRunner(new CoreLoop(deps), { databaseUrl: null }).run(abort.signal, async () => abort.abort());
+    const stop = await new ContinuousRunner(new CoreLoop(deps), recordingLogger(), { databaseUrl: null }).run(abort.signal, async () => abort.abort());
 
     expect(intake).toHaveBeenCalledTimes(1);
     expect(roster).not.toHaveBeenCalled();
@@ -254,7 +255,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
     });
     let stopId = "";
 
-    const ended = await new ContinuousRunner(new CoreLoop(deps), { databaseUrl: null, idleIntervalMs: 60_000 }).run(abort.signal, async () => {
+    const ended = await new ContinuousRunner(new CoreLoop(deps), recordingLogger(), { databaseUrl: null, idleIntervalMs: 60_000 }).run(abort.signal, async () => {
       // The halt is recorded as the deployment's cap before the client sends its stop.
       const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
       expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
@@ -527,7 +528,7 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
     exitCode: 0, signal: null, stdout, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null,
     statusReport: null,
   });
-  return new PodmanSubstrate({
+  return new PodmanSubstrate({ trace: () => "test-trace", 
     podmanPath: "podman",
     mountRoot,
     runner: async ({ args }) => {

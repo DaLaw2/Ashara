@@ -27,7 +27,7 @@ import {
 import type { CoreLoopDeps, FirstPlanStore, ReplanStore } from "@ashara/delivery";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { memoryStepContainment } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
@@ -169,7 +169,7 @@ function gateway(spendCap: SpendCap): GuardedModelAccess {
     },
     checkedSources: ["test"],
     clock: () => new Date(),
-  }), new LlmCallLedger(new LlmCallRepository(db), spendCap));
+  }), new LlmCallLedger(new LlmCallRepository(db), spendCap), recordingLogger());
 }
 
 /** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */
@@ -219,6 +219,7 @@ function loopWith(
   const deps: CoreLoopDeps = {
     config: { ...DEFAULT_CONFIG, workdirBase: "/nonexistent-moved-loops" },
     cycleLog: { emit: () => {} },
+    logger: recordingLogger(),
     containment: steps.containment,
     workItemRepo: adaptWorkItemRepo(new WorkItemRowRepository(db)),
     eventStore: new EventStoreRepository(db),

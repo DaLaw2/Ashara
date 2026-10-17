@@ -1,5 +1,8 @@
+import { systemClock } from "./clock.js";
 import { describeErrorChain } from "./error-chain.js";
 import type { ProjectId } from "./ids.js";
+import { createLogger } from "./log.js";
+import type { Logger } from "./log.js";
 
 // One subject's failure in a step of the contractor loop's cycle is that subject's: recorded on it,
 // tried again after a backoff, and logged at warn, while the step goes on with every other subject.
@@ -68,6 +71,8 @@ export interface StepContainment extends StepFaultLedger {
    * or accepted is not halted: either is "already-blocked".
    */
   halt(projectId: ProjectId, fault: StepFaultsExhausted): Promise<"blocked" | "already-blocked">;
+  /** The logger each subject's run is scoped on (its project and subject), so every record of the run names them. */
+  readonly logger: Logger;
 }
 
 /** Faults in a row after which a subject's project is halted: with the backoff below, about an hour of failing. */
@@ -193,38 +198,53 @@ export async function containEach<T, O>(
     const subject = item instanceof UnreadSubject ? item : subjectOf(item);
     const prior = standing.get(subject.id);
     if (prior !== undefined && !prior.due) continue;
-    const result = await runSubject(item, run);
-    if (result.ran) {
-      // A run that completes clears the faults "in a row" (loop L21), so a subject whose runs
-      // alternate fault and success never halts here. That is a deliberate wait, not a work loop:
-      // containEach sends no model request of its own and backs every fault off, a minute doubling
-      // to an hour; every model request a subject's run sends draws from the work ledger, which
-      // ends the subject's paid work when its project's budget is spent.
-      if (prior !== undefined) await containment.clear(step, subject.id);
-      outcomes.push(result.outcome);
-      continue;
-    }
-    if (containment.escapes(result.error)) throw result.error;
-    const error = describeErrorChain(result.error);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: no standing on the ledger is a subject with no fault in a row, so this fault is its first
-    const retryAfterSeconds = faultBackoffSeconds((prior?.faults ?? 0) + 1);
-    const faults = await containment.record({ step, subjectId: subject.id, projectId: subject.projectId, error, retryAfterSeconds });
-    const where = `[${step}] ${subject.id} (project ${subject.projectId}): fault ${faults} in a row`;
-    if (faults >= MAX_SUBJECT_FAULTS) {
-      const halted = await containment.halt(subject.projectId, new StepFaultsExhausted(step, subject.id, faults, error, { cause: result.error }));
-      await containment.park(step, subject.id);
-      const project =
-        halted === "blocked" ? "its project is now halted, under whose failure this last fault was" : "its project was already halted, stopped or accepted, and keeps its first cause";
-      console.error(
-        `${where}; ${project}; the subject is parked in step_faults and not tried again until its project is back at work ` +
-          `(npx tsx scripts/project.ts unblock ${subject.projectId} --reason <what was repaired>); the step goes on with its other subjects: ${error}`,
-      );
-    } else {
-      console.warn(`${where}, tried again in ${retryAfterSeconds}s; the step goes on with its other subjects: ${error}`);
-    }
-    outcomes.push({ kind: "step-faulted", step, subjectId: subject.id, projectId: subject.projectId, faults, retryAfterSeconds, error });
+    outcomes.push(
+      await containment.logger.scope({ projectId: subject.projectId, subject: subject.id }, () =>
+        containSubject(containment, step, item, subject, prior, run),
+      ),
+    );
   }
   return outcomes;
+}
+
+/** One subject's run, contained to it: its outcome, or its recorded fault. Only an escaping error, or a ledger's failure, throws. */
+async function containSubject<T, O>(
+  containment: StepContainment,
+  step: CycleStep,
+  item: T | UnreadSubject,
+  subject: StepSubject,
+  prior: StepFaultStanding | undefined,
+  run: (item: T) => Promise<O>,
+): Promise<O | StepFaulted> {
+  const result = await runSubject(item, run);
+  if (result.ran) {
+    // A run that completes clears the faults "in a row" (loop L21), so a subject whose runs
+    // alternate fault and success never halts here. That is a deliberate wait, not a work loop:
+    // containEach sends no model request of its own and backs every fault off, a minute doubling
+    // to an hour; every model request a subject's run sends draws from the work ledger, which
+    // ends the subject's paid work when its project's budget is spent.
+    if (prior !== undefined) await containment.clear(step, subject.id);
+    return result.outcome;
+  }
+  if (containment.escapes(result.error)) throw result.error;
+  const error = describeErrorChain(result.error);
+  // eslint-disable-next-line no-restricted-syntax -- policy default: no standing on the ledger is a subject with no fault in a row, so this fault is its first
+  const retryAfterSeconds = faultBackoffSeconds((prior?.faults ?? 0) + 1);
+  const faults = await containment.record({ step, subjectId: subject.id, projectId: subject.projectId, error, retryAfterSeconds });
+  const where = `[${step}] ${subject.id} (project ${subject.projectId}): fault ${faults} in a row`;
+  if (faults >= MAX_SUBJECT_FAULTS) {
+    const halted = await containment.halt(subject.projectId, new StepFaultsExhausted(step, subject.id, faults, error, { cause: result.error }));
+    await containment.park(step, subject.id);
+    const project =
+      halted === "blocked" ? "its project is now halted, under whose failure this last fault was" : "its project was already halted, stopped or accepted, and keeps its first cause";
+    console.error(
+      `${where}; ${project}; the subject is parked in step_faults and not tried again until its project is back at work ` +
+        `(npx tsx scripts/project.ts unblock ${subject.projectId} --reason <what was repaired>); the step goes on with its other subjects: ${error}`,
+    );
+  } else {
+    console.warn(`${where}, tried again in ${retryAfterSeconds}s; the step goes on with its other subjects: ${error}`);
+  }
+  return { kind: "step-faulted", step, subjectId: subject.id, projectId: subject.projectId, faults, retryAfterSeconds, error };
 }
 
 /**
@@ -242,6 +262,8 @@ export function memoryStepContainment(escapes: (error: unknown) => boolean): Ste
   const notAtWork = new Set<ProjectId>();
   const key = (step: CycleStep, subjectId: string): string => `${step}/${subjectId}`;
   return {
+    // A test of a step's outcomes reads none of its records; one that does supplies its own logger.
+    logger: createLogger({ sink: { write: () => undefined }, clock: systemClock, minLevel: "error" }),
     recorded,
     halted,
     notAtWork,
@@ -310,8 +332,9 @@ class UncontainedStepFault extends Error {
  * throws through. For a run that must stop on its first failure and ignore any backoff kept in the
  * records it reads, such as a replay of a kept run's records.
  */
-export function uncontainedSteps(): StepContainment {
+export function uncontainedSteps(logger: Logger): StepContainment {
   return {
+    logger,
     escapes: () => true,
     faultsOf: async () => new Map(),
     record: async (fault) => {

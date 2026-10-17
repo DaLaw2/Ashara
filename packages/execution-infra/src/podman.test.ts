@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { recordingLogger } from "@ashara/shared";
 import { createCellBackend } from "./cell-backend.js";
 import { readCellLimits } from "./cell-limits.js";
 import {
@@ -51,7 +52,7 @@ function recorder(responses: Array<ProcessResult | Error>) {
     if (next instanceof Error) throw next;
     return next;
   };
-  return { requests, substrate: new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS }) };
+  return { requests, substrate: new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS }) };
 }
 
 // A real directory tree: mounts are canonicalized with realpath before podman runs.
@@ -93,6 +94,7 @@ describe("PodmanSubstrate argv", () => {
       "--label", "ashara.project=proj-1",
       "--label", "ashara.task=task-1",
       "--label", "ashara.role=worker",
+      "--label", "ashara.trace=test-trace",
       "-e", "HOME=/ashara-cell/home",
       "-v", `${tree}:/workspace:Z`,
       "-v", `${root}/.ashara-cell-state/inst-1/${name}/home:/ashara-cell/home:Z`,
@@ -109,7 +111,7 @@ describe("PodmanSubstrate argv", () => {
     const saved = process.env.ASHARA_CELL_MEMORY;
     delete process.env.ASHARA_CELL_MEMORY;
     try {
-      expect(() => new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root })).toThrow(CellLimitsInvalid);
+      expect(() => new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "/opt/podman", mountRoot: root })).toThrow(CellLimitsInvalid);
       expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4", ASHARA_CELL_CPUS: "1", ASHARA_CELL_PIDS_LIMIT: "10" })).toThrow(/ASHARA_CELL_MEMORY="4"/);
       expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "0", ASHARA_CELL_PIDS_LIMIT: "10" })).toThrow(/ASHARA_CELL_CPUS/);
       expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "1", ASHARA_CELL_PIDS_LIMIT: " " })).toThrow(/ASHARA_CELL_PIDS_LIMIT is not set/);
@@ -193,6 +195,36 @@ describe("PodmanSubstrate argv", () => {
     await mkdir(join(states, "ashara-cell-stray", "home"), { recursive: true });
     expect(await substrate.reconcileOrphans("inst-sweep")).toEqual([]);
     expect(await readdir(states)).toEqual([]);
+  });
+
+  it("labels a cell with the trace its creator's logger scope is in, and refuses a trace that is no label value", async () => {
+    const logger = recordingLogger();
+    const requests: ProcessRequest[] = [];
+    const responses = [ok(ID), ok(OTHER_ID)];
+    const runner = async (request: ProcessRequest): Promise<ProcessResult> => {
+      requests.push(request);
+      const next = responses.shift();
+      if (next === undefined) throw new Error(`unexpected podman call: ${request.args.join(" ")}`);
+      return next;
+    };
+    const substrate = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS, trace: () => logger.trace() });
+
+    const traces = await Promise.all([1, 2].map((attempt) =>
+      logger.scope({ taskId: "task-1", attempt, trace: "new" }, async () => {
+        await substrate.createCell(spec);
+        return logger.trace();
+      }),
+    ));
+    expect(new Set(traces).size).toBe(2);
+    expect(traces).not.toContain(logger.trace());
+    // The two creations interleave, so the runner sees them in either order: match by label, not by index.
+    const labels = requests.map((request) => request.args.filter((arg) => arg.startsWith("ashara.trace=")));
+    expect(labels.every((own) => own.length === 1)).toBe(true);
+    expect(labels.flat().sort()).toEqual(traces.map((trace) => `ashara.trace=${trace}`).sort());
+
+    const unlabelled = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS, trace: () => "a b" });
+    await expect(unlabelled.createCell(spec)).rejects.toBeInstanceOf(InvalidCellRequest);
+    expect(requests).toHaveLength(2);
   });
 
   it("rejects specs that could become options or break the volume syntax", async () => {
@@ -355,7 +387,7 @@ describe("PodmanSubstrate argv", () => {
       active--;
       return ran("", 0);
     };
-    const substrate = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner });
+    const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "/opt/podman", mountRoot: root, runner });
     const cell = await substrate.createCell(spec);
     const results = await Promise.all([1, 2, 3].map(() => cell.exec(["true"], { timeoutSeconds: 1 })));
     expect(results.map((r) => r.exitCode)).toEqual([0, 0, 0]);

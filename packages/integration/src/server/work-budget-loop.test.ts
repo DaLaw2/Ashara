@@ -19,7 +19,7 @@ import { GuardedModelAccess, LlmCallLedger, SpendCap, WORK_BUDGET_ERROR_CLASS } 
 import type { WorkBudgets } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
@@ -85,7 +85,7 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
     exitCode: 0, signal: null, stdout, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null,
     statusReport: null,
   });
-  return new PodmanSubstrate({
+  return new PodmanSubstrate({ trace: () => "test-trace", 
     podmanPath: "podman",
     mountRoot,
     runner: async ({ args }) => {
@@ -154,7 +154,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     },
     checkedSources: ["test"],
     clock: () => new Date(),
-  }), new LlmCallLedger(calls, spendCap));
+  }), new LlmCallLedger(calls, spendCap), recordingLogger());
   const dispatchService = new DispatchService({
     config: { workdirBase: at.workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
@@ -188,6 +188,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
   const deps: CoreLoopDeps = {
     config: { ...DEFAULT_CONFIG, workdirBase: at.workdirBase },
     cycleLog: { emit: () => {} },
+    logger: recordingLogger(),
     containment: memoryStepContainment((error) => spendCap.refusalOf(error) !== null),
     workItemRepo: adaptWorkItemRepo(new WorkItemRowRepository(db)),
     eventStore: new EventStoreRepository(db),

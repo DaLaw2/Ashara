@@ -27,7 +27,7 @@ function substrateListing(images: unknown[], containers: unknown[], rmExit: (ima
   const done = (stdout: string, exitCode = 0, stderr = "") => ({
     exitCode, signal: null, stdout, stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null, statusReport: null,
   });
-  const substrate = new PodmanSubstrate({
+  const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
     podmanPath: "podman",
     mountRoot: "/tmp",
     runner: async (request) => {

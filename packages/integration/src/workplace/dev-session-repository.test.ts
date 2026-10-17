@@ -40,7 +40,8 @@ describe("DevSessionRepository", () => {
   test("insert creates a session and it can be read back", async () => {
     const brief = { instructions: "do something" };
     const environmentVersion = "e".repeat(64);
-    await new DevSessionRepository(db).insert(sessionId, taskId, brief, environmentVersion);
+    const traceId = randomUUID();
+    await new DevSessionRepository(db).insert(sessionId, taskId, brief, environmentVersion, traceId);
 
     const [row] = await db.select().from(devSessions).where(sql`${devSessions.id} = ${sessionId}`).limit(1);
 
@@ -50,6 +51,8 @@ describe("DevSessionRepository", () => {
     expect(row?.phase).toBe("Preparing");
     expect(row?.brief).toEqual(brief);
     expect(row?.environmentVersion).toBe(environmentVersion);
+    // Migration 078: the session carries the trace of the attempt it was opened in.
+    expect(row?.traceId).toBe(traceId);
     expect(row?.createdAt).toBeInstanceOf(Date);
     expect(row?.updatedAt).toBeInstanceOf(Date);
   });
@@ -61,8 +64,8 @@ describe("DevSessionRepository", () => {
     const evidence = await rolledBack(async (tx) => {
       const repo = new DevSessionRepository(tx);
       // Both sessions are open: one's agent died with the process, the other's terminal write was lost.
-      await repo.insert(randomUUID(), crashedTaskId, {}, null);
-      await repo.insert(randomUUID(), endedTaskId, {}, null);
+      await repo.insert(randomUUID(), crashedTaskId, {}, null, "test-trace");
+      await repo.insert(randomUUID(), endedTaskId, {}, null, "test-trace");
       const reconcile = await terminalizeOrphanedSessions(repo, [crashedTaskId]);
       return {
         reconcile,

@@ -11,7 +11,7 @@ import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, Failure
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
@@ -73,7 +73,7 @@ describe("a project whose workspace path is refused", () => {
     });
 
     const podmanCalls: string[] = [];
-    const substrate = new PodmanSubstrate({
+    const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
       podmanPath: "podman",
       mountRoot: root,
       runner: async ({ args }) => {
@@ -113,7 +113,7 @@ describe("a project whose workspace path is refused", () => {
       },
       checkedSources: ["test"],
       clock: () => new Date(),
-    }), new LlmCallLedger(calls, spendCap));
+    }), new LlmCallLedger(calls, spendCap), recordingLogger());
     const workdirBase = join(root, "work");
     const dispatchService = new DispatchService({
       config: { workdirBase },
@@ -142,6 +142,7 @@ describe("a project whose workspace path is refused", () => {
     const loop = new CoreLoop({
       config: { ...DEFAULT_CONFIG, workdirBase },
       cycleLog: { emit: () => {} },
+      logger: recordingLogger(),
       containment: memoryStepContainment(() => true),
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: new EventStoreRepository(db),

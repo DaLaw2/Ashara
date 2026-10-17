@@ -69,6 +69,7 @@ function call(taskId: typeof TASK | null, callSite: PendingLlmCall["context"]["c
     requestBytes: 10,
     maxOutputTokens: 10,
     context: { projectId: PROJECT, taskId, callSite },
+    traceId: "test-trace",
   };
 }
 

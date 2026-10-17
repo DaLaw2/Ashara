@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { ProjectId, StepContainment } from "@ashara/shared";
+import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
 import type { WorkItemRepository, PlanningService } from "./domain/index.js";
 import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
@@ -136,6 +136,8 @@ export interface CoreLoopDeps {
   readonly config: CoreLoopConfig;
   /** Where each cycle's tally is written: the server log's event writer. */
   readonly cycleLog: { emit(event: CycleComplete): void };
+  /** Each dispatched attempt runs in its own trace on it, carrying its task and attempt number. */
+  readonly logger: Logger;
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;

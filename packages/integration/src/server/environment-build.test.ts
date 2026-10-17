@@ -68,7 +68,7 @@ beforeAll(async () => {
   repo = join(root, "repo");
   await mkdir(repo);
   await git("init", "-q", "-b", "main");
-  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: root });
+  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: root });
 }, 60_000);
 
 afterAll(async () => {

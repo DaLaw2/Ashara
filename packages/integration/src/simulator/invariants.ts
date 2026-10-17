@@ -24,9 +24,10 @@ const run = promisify(execFile);
 
 /**
  * The invariants of design §2.9, as judged on today's schema, I10 (ADR-080 d10 C1, C2), and the
- * termination invariants W1-W4 (ADR-084 decision 4, termination.ts).
+ * termination invariants W1-W4 (ADR-084 decision 4, termination.ts), and L1, log correlation
+ * (c-observability §3, log-correlation.ts).
  */
-const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10", "W1", "W2", "W3", "W4"] as const;
+const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9", "I10", "W1", "W2", "W3", "W4", "L1"] as const;
 type InvariantId = (typeof INVARIANTS)[number];
 
 export interface Violation {

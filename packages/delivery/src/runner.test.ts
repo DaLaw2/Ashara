@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { recordingLogger } from "@ashara/shared";
 import type { CycleResult } from "./types.js";
 import { ContinuousRunner } from "./runner.js";
 import type { CycleRunner } from "./runner.js";
@@ -57,7 +58,7 @@ describe("ContinuousRunner wakePending", () => {
       (runner) => { runner.wake(); return idle(); },
       idle,
     ]);
-    const runner = new ContinuousRunner(cycles.loop, { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
+    const runner = new ContinuousRunner(cycles.loop, recordingLogger(), { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);
     const abort = new AbortController();
 
@@ -77,7 +78,7 @@ describe("ContinuousRunner wakePending", () => {
       (runner) => { runner.wake(); throw new Error("cycle failed"); },
       idle,
     ]);
-    const runner = new ContinuousRunner(cycles.loop, {
+    const runner = new ContinuousRunner(cycles.loop, recordingLogger(), {
       databaseUrl: null,
       idleIntervalMs: IDLE_MS,
       pollIntervalMs: IDLE_MS,
@@ -104,7 +105,7 @@ describe("ContinuousRunner stop", () => {
   test("a cycle that reports a stop halts the work for good; from then on only the client's stops are taken in, until shutdown", async () => {
     const stop = { reason: "budget_cap: deployment cap reached", spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } };
     const cycles = scriptedCycles([() => ({ tasksProcessed: 0, results: [], stop }), idle]);
-    const runner = new ContinuousRunner(cycles.loop, { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
+    const runner = new ContinuousRunner(cycles.loop, recordingLogger(), { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);
     const halts: string[] = [];
     const abort = new AbortController();
@@ -126,5 +127,33 @@ describe("ContinuousRunner stop", () => {
     // No full cycle after the one that stopped: nothing is planned or dispatched past the cap.
     expect(cycles.calls()).toBe(1);
     expect(halts).toHaveLength(1);
+  });
+});
+
+describe("ContinuousRunner cycle scope", () => {
+  test("each cycle, full or halted and whoever steps it, is numbered by the runner and runs in its own trace", async () => {
+    const logger = recordingLogger();
+    const loop: CycleRunner = {
+      runCycle: async () => {
+        logger.warn("test.in-cycle", "a full cycle's record");
+        return idle();
+      },
+      runHaltedCycle: async () => {
+        logger.error("test.in-halted-cycle", "a halted cycle's record", {});
+      },
+    };
+    const runner = new ContinuousRunner(loop, logger, { databaseUrl: null });
+
+    await runner.runCycle();
+    await runner.runHaltedCycle();
+    await runner.runCycle();
+
+    expect(logger.records.map((record) => record.cycle)).toEqual([1, 2, 3]);
+    expect(new Set(logger.records.map((record) => record.traceId)).size).toBe(3);
+    const root = logger.trace();
+    for (const record of logger.records) {
+      expect(record.traceId).not.toBe(root);
+      expect(record.parentTraceId).toBe(root);
+    }
   });
 });

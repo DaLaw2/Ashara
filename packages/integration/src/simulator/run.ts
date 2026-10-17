@@ -26,6 +26,7 @@ import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
 import { asharaFaultHaltOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
 import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
+import { checkLogCorrelation, readCorrelationRows, uncorrelatedInCycle } from "./log-correlation.js";
 import { refusedModelSchemas } from "./model-schemas.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
@@ -239,10 +240,14 @@ function seededIds(seed: number): () => void {
   };
 }
 
-/** The log port every composed instance writes to: its records go into the run's, the last LOG_RECORDS kept. */
-function capturingSink(records: LogRecord[]): LogSink {
+/**
+ * The log port every composed instance writes to: its records go into the run's, the last
+ * LOG_RECORDS kept. Each is judged as it is written, while what was running is still known.
+ */
+function capturingSink(records: LogRecord[], judge: (record: LogRecord) => void): LogSink {
   return {
     write(record) {
+      judge(record);
       records.push(record);
       if (records.length > LOG_RECORDS) records.splice(0, records.length - LOG_RECORDS);
     },
@@ -589,6 +594,8 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   ];
   const log: string[] = [];
   const records: LogRecord[] = [];
+  /** Set while a cycle (full or halted) of the live instance runs: L1 asks every record logged meanwhile for the cycle. */
+  let cycleRunning = false;
   const violations = new Map<string, Violation>();
   const coverage = emptyCoverage();
   const report = (violation: Violation): void => {
@@ -818,7 +825,10 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
             git: faultingGit(seam, gitBroker.runner),
             clock,
             taskLanes: interleaver.lanes,
-            log: capturingSink(records),
+            log: capturingSink(records, (record) => {
+              const uncorrelated = cycleRunning ? uncorrelatedInCycle(cycles, record) : null;
+              if (uncorrelated !== null) report(uncorrelated);
+            }),
           });
           handle.abort = () => ashara.abort();
           await ashara.startup();
@@ -1003,13 +1013,24 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           // The runner's own path (orchestrator runner.ts run): once a cycle stops the loop, the
           // process runs only halted cycles until it restarts, and its onHalt removes every cell.
           if (haltedLive === current) {
-            await current.ashara.cycles.runHaltedCycle();
+            cycleRunning = true;
+            try {
+              await current.ashara.cycles.runHaltedCycle();
+            } finally {
+              cycleRunning = false;
+            }
             residue.cycleRan(scheduler.faults().length === faultsBefore && !current.handle.dead && !current.handle.sigtermed);
             trace.push(`cycle ${cycles}: halted`);
             crashed = current.handle.dead || current.handle.sigtermed;
             continue;
           }
-          const result = await current.ashara.cycles.runCycle();
+          cycleRunning = true;
+          let result: Awaited<ReturnType<AsharaInstance["cycles"]["runCycle"]>>;
+          try {
+            result = await current.ashara.cycles.runCycle();
+          } finally {
+            cycleRunning = false;
+          }
           residue.cycleRan(scheduler.faults().length === faultsBefore && !current.handle.dead && !current.handle.sigtermed);
           dispatches += result.tasksProcessed;
           processed += result.tasksProcessed;
@@ -1154,6 +1175,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     // W1 and W4, judged whatever the run ended in: a spend-cap halt is how a runaway loop would
     // otherwise pass (termination.ts).
     for (const { project, violation } of checkWork(cycles, port, await readRequests(observing, projectIds))) report(ofProject(project, violation));
+    for (const violation of checkLogCorrelation(cycles, records, await readCorrelationRows(observing), dispatches > 0)) report(violation);
     if (options.profile === "liveness") {
       for (const [index, each] of finals.entries()) {
         const end = index === 0 || spendHalted ? outcome : outcomeOf(each);

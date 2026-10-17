@@ -14,7 +14,7 @@ import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, ProjectHaltRepository, createFirstPlanStore } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
@@ -344,7 +344,7 @@ beforeAll(async () => {
   }), new LlmCallLedger(
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-  ));
+  ), recordingLogger());
 });
 
 beforeEach(() => {

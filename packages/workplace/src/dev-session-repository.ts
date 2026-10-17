@@ -45,14 +45,18 @@ function attemptColumns(attempt: SessionAttempt | null) {
 export class DevSessionRepository {
   constructor(private readonly db: DbHandle) {}
 
-  /** `environmentVersion`: the environment version the session's cells were built from; null on the BaseCell (migration 034). */
-  async insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null) {
+  /**
+   * `environmentVersion`: the environment version the session's cells were built from; null on the BaseCell (migration 034).
+   * `traceId`: the trace of the dispatched attempt the session opens in (migration 076).
+   */
+  async insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null, traceId: string) {
     await this.db.insert(devSessions).values({
       id: sessionId,
       taskId,
       phase: "Preparing",
       brief,
       environmentVersion,
+      traceId,
     });
   }
 

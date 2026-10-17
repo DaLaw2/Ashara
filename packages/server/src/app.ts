@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import type { ErrorHandler } from "hono";
+import type { ErrorHandler, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { describeErrorChain } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
@@ -12,15 +13,30 @@ import type { WebClientDeps } from "./web-client.js";
  * The server's HTTP surface. The web client's routes are registered before the
  * bearer middleware and answer every request they match, so a browser reaches
  * them with its session cookie alone (ADR-076); every other route still requires
- * the operator's bearer token, and a bearer token opens no /client/api route.
+ * the operator's bearer token, and a bearer token opens no /client/api route. Every request, refused
+ * ones included, runs in its own log trace (requestTrace).
  */
-export function buildApp(apiToken: string, appDeps: AppDeps, webClientDeps: WebClientDeps): Hono {
+export function buildApp(apiToken: string, appDeps: AppDeps, webClientDeps: WebClientDeps, logger: Logger): Hono {
   const app = new Hono();
+  app.use("*", requestTrace(logger));
   app.route("/", createWebClientRoutes(webClientDeps));
   app.use("*", bearerAuth(apiToken));
   app.route("/", createRoutes(appDeps));
   app.onError(internalError);
   return app;
+}
+
+/** The response header naming the trace a request ran in: a caller quotes it, an operator finds the request's records by it. */
+const TRACE_HEADER = "x-ashara-trace";
+
+/** Each request in a new trace, named on its response, whatever answered it. */
+function requestTrace(logger: Logger): MiddlewareHandler {
+  return (c, next) =>
+    logger.scope({ trace: "new" }, async () => {
+      const trace = logger.trace();
+      await next();
+      c.res.headers.set(TRACE_HEADER, trace);
+    });
 }
 
 /**

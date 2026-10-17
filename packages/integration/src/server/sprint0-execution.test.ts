@@ -22,7 +22,7 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
@@ -224,8 +224,8 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
   }), new LlmCallLedger(
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-  ));
-  const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
+  ), recordingLogger());
+  const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRowRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
@@ -432,7 +432,7 @@ describe("Sprint 0", () => {
         toolCallTurn("finish", { status: "done", summary: "Wrote hello.txt." }),
       ],
       {
-        insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version),
+        insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version, "test-trace"),
         complete: (sid, attempt, end) => sessions.complete(sid, attempt, end),
         fail: (sid, verification, attempt) => sessions.fail(sid, verification, attempt),
       },

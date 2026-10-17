@@ -1305,7 +1305,10 @@ export async function processTask(
   }
 
   try {
-    return await runCountedDispatch(deps, task, workItem, routingDeps, targetProjectPath, attempt);
+    // The attempt's own trace, its parent the cycle's: a lane can outlive the cycle that started it.
+    return await deps.logger.scope({ projectId: workItem.projectId, taskId: task.id, attempt, trace: "new" }, () =>
+      runCountedDispatch(deps, task, workItem, routingDeps, targetProjectPath, attempt),
+    );
   } catch (e) {
     throw new CountedDispatchThrew(task.id, e);
   }

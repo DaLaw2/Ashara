@@ -87,7 +87,9 @@ async function main(): Promise<void> {
   const image = requested ?? (await loadBaseCell()).image;
   const mountRoot = await realpath(await mkdtemp(join(tmpdir(), "ashara-probes-")));
   const instance = `probes-${randomUUID()}`;
-  const substrate = new PodmanSubstrate({ podmanPath: process.env["ASHARA_PODMAN_BINARY"] ?? "podman", mountRoot, limits });
+  // One trace for the probe run: its cells are found by `podman ps --filter label=ashara.trace=<it>`.
+  const trace = `probes-${randomUUID()}`;
+  const substrate = new PodmanSubstrate({ podmanPath: process.env["ASHARA_PODMAN_BINARY"] ?? "podman", mountRoot, limits, trace: () => trace });
   console.log(
     `Probing image ${image}; caps from ${Object.values(CELL_LIMIT_VARIABLES).join(", ")}: ` +
       `memory ${limits.memoryBytes} bytes, ${limits.cpus} CPUs, ${limits.pids} pids`,

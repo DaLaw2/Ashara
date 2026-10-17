@@ -16,6 +16,7 @@ import {
   spawnProcess,
   type ProcessRunner,
 } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
@@ -43,7 +44,7 @@ beforeAll(async () => {
   process.env.ASHARA_PROBE_SECRET = "probe-secret-must-not-reach-the-cell";
   mountRoot = await realpath(await mkdtemp(join(tmpdir(), "ashara-cell-root-")));
   workspace = await mkdtemp(join(mountRoot, "ws-"));
-  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot });
+  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot });
 }, 60_000);
 
 afterAll(async () => {
@@ -113,6 +114,24 @@ describe("cell on real podman", () => {
 
   // A worktree's gitlink names its git dir's host path, which a cell cannot reach, and a toolchain
   // that reads the repository needs a usable one, not a stand-in (ADR-074 addendum 2 d73).
+  it("a cell created inside a logger scope is found by that scope's trace label, and by no other trace's", async () => {
+    const logger = recordingLogger();
+    const traced = new PodmanSubstrate({ podmanPath: "podman", mountRoot, trace: () => logger.trace() });
+    try {
+      const base = await loadBaseCell();
+      const { cell, trace } = await logger.scope({ taskId: task, attempt: 1, trace: "new" }, async () => ({
+        cell: await traced.createCell({ image: base.image, project: "proj-cell-test", task, role: "worker", instance, mount: { hostPath: workspace } }),
+        trace: logger.trace(),
+      }));
+      const found = await ps(`label=ashara.trace=${trace}`);
+      expect(found.map((entry) => entry.Id)).toEqual([cell.id]);
+      expect(await ps(`label=ashara.trace=${logger.trace()}`)).toHaveLength(0);
+      await cell.teardown();
+    } finally {
+      await traced.teardownAll();
+    }
+  }, 60_000);
+
   it("a cell sees a throwaway repository of its own: one commit, no remote, nothing of the host's; what it does there never reaches Z0's diff", async () => {
     const git = async (cwd: string, ...args: string[]): Promise<string> =>
       (await run("git", ["-C", cwd, "-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args])).stdout.trim();
@@ -309,7 +328,7 @@ describe("cell on real podman", () => {
           : request.args;
       return spawnProcess({ ...request, args: wrapped });
     };
-    const nested = new PodmanSubstrate({ podmanPath: "podman", mountRoot, runner: trampoline });
+    const nested = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot, runner: trampoline });
     const cell = await nested.createCell({
       image: image === "base" ? (await loadBaseCell()).image : image,
       project: "proj-cell-test",
@@ -379,7 +398,7 @@ describe("cell on real podman", () => {
   it("reconciles a leaked cell of this instance and leaves every other container alone", async () => {
     const base = await loadBaseCell();
     // A previous process of this instance that died without tearing down.
-    const previous = new PodmanSubstrate({ podmanPath: "podman", mountRoot });
+    const previous = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot });
     const leaked = await previous.createCell({
       image: base.image,
       project: "proj-cell-test",

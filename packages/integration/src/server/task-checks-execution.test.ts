@@ -25,7 +25,7 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { WorkKind } from "@ashara/organization";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
@@ -173,7 +173,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   }), new LlmCallLedger(
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-  ));
+  ), recordingLogger());
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DispatchService({
@@ -277,7 +277,7 @@ beforeAll(async () => {
     VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the product''s layout', ${projectId},
             'implementation', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
-  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
+  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
 }, 60_000);
 
 afterAll(async () => {

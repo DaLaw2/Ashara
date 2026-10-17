@@ -8,6 +8,8 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, Pr
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable, SpendCap, UnpricedModel } from "@ashara/finance";
 import { SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
+import { recordingLogger } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -54,6 +56,7 @@ function gateway(
   modelConfig: ModelConfig,
   clock: () => Date = () => PEAK,
   thinking?: Parameters<typeof buildGateway>[0]["config"]["thinking"],
+  logger: Logger = recordingLogger(),
 ): GuardedModelAccess {
   const config: Parameters<typeof buildGateway>[0]["config"] = {
     providers: [
@@ -79,7 +82,7 @@ function gateway(
     calls,
     // Caps far above anything a stubbed call can cost: this suite is about the rows, not the cap.
     new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } }),
-  ));
+  ), logger);
 }
 
 function stubModel(doGenerate: ConstructorParameters<typeof MockLanguageModelV4>[0]): MockLanguageModelV4 {
@@ -189,6 +192,32 @@ describe("one llm_calls row per provider call", () => {
     // 200 plain input at 3, 900 cache read at 0.30, 100 cache write at 3.75, 80 output at 15.
     expect(row.costUsd).toBeCloseTo((200 * 3 + 900 * 0.3 + 100 * 3.75 + 80 * 15) / 1_000_000, 6);
     expect(row.createdAt.toISOString()).toBe(PEAK.toISOString());
+  });
+
+  test("a call's admission and record are logged in a scope naming it: callId is its llm_calls row, whose trace_id is the admission's trace", async () => {
+    await clearRows();
+    stubModel({ doGenerate: textResult('{"greeting":"hi"}', { input: 10, output: 5 }) });
+    const logger = recordingLogger();
+
+    await logger.scope({ taskId: "task-x", attempt: 2, trace: "new" }, () =>
+      gateway("anthropic", model({ id: "priced-model" }), () => PEAK, undefined, logger)
+        .forCall({ projectId, taskId: null, callSite: "roster" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+    );
+
+    const rows = z.array(z.object({ id: z.string(), traceId: z.string().nullable() })).parse(
+      (await db.execute(sql`SELECT id::text, trace_id AS "traceId" FROM llm_calls WHERE project_id = ${projectId}`)).rows,
+    );
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    const admitted = logger.records.filter((record) => record.event === "finance.call-admitted");
+    const recorded = logger.records.filter((record) => record.event === "finance.call-recorded");
+    expect(admitted).toHaveLength(1);
+    expect(recorded).toHaveLength(1);
+    for (const record of [...admitted, ...recorded]) {
+      expect(record).toMatchObject({ callId: row?.id, callSite: "roster", taskId: "task-x", attempt: 2 });
+      expect(record.traceId).toBe(row?.traceId);
+    }
   });
 
   test("a call's cost uses the rate of the window its instant falls in", async () => {
@@ -413,6 +442,7 @@ describe("one llm_calls row per provider call", () => {
     return new GuardedModelAccess(
       buildGateway({ models, config: { providers, defaultProvider: "anthropic", contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] } }, checkedSources: ["test"], clock: () => PEAK }),
       new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
+      recordingLogger(),
     );
   }
 
@@ -469,6 +499,7 @@ describe("one llm_calls row per provider call", () => {
           clock: () => PEAK,
         }),
         new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
+        recordingLogger(),
       );
     // One provider key and a second Strong model: no other family; that model; never the same one again.
     const twoModels = single([model({ id: "sibling-strong", inputCostPer1M: 5 })]);
@@ -838,7 +869,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
       }), new LlmCallLedger(
         calls,
         new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
-      ))
+      ), recordingLogger())
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
         .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 

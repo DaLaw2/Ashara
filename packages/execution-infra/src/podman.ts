@@ -24,6 +24,7 @@ const LABEL_INSTANCE = "ashara.instance";
 const LABEL_PROJECT = "ashara.project";
 const LABEL_TASK = "ashara.task";
 const LABEL_ROLE = "ashara.role";
+const LABEL_TRACE = "ashara.trace";
 
 /**
  * Under the mount root, by instance and cell name: each cell's own state (its home, its throwaway
@@ -303,6 +304,12 @@ interface PodmanSubstrateOptions {
    * the constructor throws CellLimitsInvalid when one is unset: there is no limit in code.
    */
   readonly limits?: CellResourceLimits;
+  /**
+   * The log trace the caller is in when it creates a cell (Logger.trace): the cell is labelled
+   * `ashara.trace=<it>`, so `podman ps --filter label=ashara.trace=<id>` maps a trace to its
+   * containers. A label only: nothing of it reaches the client's processes in the cell.
+   */
+  readonly trace: () => string;
 }
 
 const podmanInfoSchema = z.object({
@@ -352,7 +359,7 @@ interface CellState {
     | null;
 }
 
-function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: CellState, limits: CellResourceLimits): string[] {
+function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: CellState, limits: CellResourceLimits, trace: string): string[] {
   const label = spec.mount.shared === true ? "z" : "Z";
   const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
   // The state is the cell's alone (private label); the gitlink stand-in is every cell's (shared label).
@@ -379,6 +386,7 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: Cel
     "--label", `${LABEL_PROJECT}=${spec.project}`,
     "--label", `${LABEL_TASK}=${spec.task}`,
     "--label", `${LABEL_ROLE}=${spec.role}`,
+    "--label", `${LABEL_TRACE}=${trace}`,
     "-e", `HOME=${CELL_HOME}`,
     "-v", `${hostPath}:${WORKSPACE_ROOT}:${options}`,
     "-v", `${state.home}:${CELL_HOME}:Z`,
@@ -627,6 +635,7 @@ export class PodmanSubstrate {
   private readonly maxOutputBytes: number;
   private readonly mountRoot: string;
   private readonly limits: CellResourceLimits;
+  private readonly trace: () => string;
   private readonly cells = new Map<string, PodmanCell>();
   /** Containers a failed `podman run` may have left behind and that could not be removed yet, by name. */
   private readonly unconfirmed = new Set<string>();
@@ -647,6 +656,7 @@ export class PodmanSubstrate {
     this.mountRoot = options.mountRoot;
     this.runner = options.runner ?? spawnProcess;
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+    this.trace = options.trace;
   }
 
   /**
@@ -694,13 +704,15 @@ export class PodmanSubstrate {
   async createCell(spec: CellSpec): Promise<Cell> {
     const parsed = cellSpecSchema.safeParse(spec);
     if (!parsed.success) throw new InvalidCellRequest("createCell", issuesOf(parsed.error));
+    const trace = labelValue.safeParse(this.trace());
+    if (!trace.success) throw new InvalidCellRequest("createCell", issuesOf(trace.error).map((issue) => `trace ${issue}`));
     const hostPath = await this.canonicalMountPath(parsed.data.mount.hostPath);
     const gitEntry = await this.gitEntryKind(hostPath);
     const name = `ashara-cell-${randomUUID()}`;
     this.starting.add(name);
     try {
       const state = await this.prepareState(parsed.data.instance, name, hostPath, gitEntry);
-      const args = buildRunArgs(parsed.data, name, hostPath, state, this.limits);
+      const args = buildRunArgs(parsed.data, name, hostPath, state, this.limits, trace.data);
       let result: ProcessResult;
       try {
         result = await this.run(args);

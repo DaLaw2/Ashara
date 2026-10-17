@@ -18,7 +18,7 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, systemClock } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
@@ -141,8 +141,8 @@ async function harness(name: string): Promise<Harness> {
     },
     checkedSources: ["test"],
     clock: () => new Date(),
-  }), new LlmCallLedger(calls, spendCap));
-  const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
+  }), new LlmCallLedger(calls, spendCap), recordingLogger());
+  const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRowRepository(db);
   const sessions = new DevSessionRepository(db);
@@ -150,7 +150,7 @@ async function harness(name: string): Promise<Harness> {
   const dispatchService = new DispatchService({
     config: { workdirBase },
     sessionStore: {
-      insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version),
+      insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version, "test-trace"),
       complete: (sid, attempt, end) => sessions.complete(sid, attempt, end),
       fail: (sid, verification, attempt) => sessions.fail(sid, verification, attempt),
     },
@@ -189,6 +189,7 @@ async function harness(name: string): Promise<Harness> {
   const loop = new CoreLoop({
     config: { ...DEFAULT_CONFIG, workdirBase },
     cycleLog: { emit: () => {} },
+    logger: recordingLogger(),
     containment: memoryStepContainment(() => true),
     workItemRepo: adaptWorkItemRepo(workItems),
     eventStore: new EventStoreRepository(db),

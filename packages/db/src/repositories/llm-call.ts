@@ -20,6 +20,8 @@ interface AdmittedLlmCall {
   readonly model: string;
   /** Finance's worst-case estimate of the call (migration 035). */
   readonly estimatedCostUsd: number;
+  /** The trace of the log scope the call was admitted in (migration 076): its row leads to its records. */
+  readonly traceId: string;
 }
 
 /** What a call's record adds to its admitted row. Every `null` token or cost field means "not measured". */
@@ -162,6 +164,7 @@ export class LlmCallRepository {
       provider: call.provider,
       model: call.model,
       estimatedCostUsd: call.estimatedCostUsd,
+      traceId: call.traceId,
       state: "pending",
     });
   }

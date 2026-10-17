@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning } from "./first-plan.js";
@@ -119,6 +119,7 @@ function buildDeps(
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
     cycleLog: { emit: (tally) => cycleTallies.push(tally) },
+    logger: recordingLogger(),
     containment: memoryStepContainment(() => true),
     workItemRepo,
     eventStore: { publish: async () => {} },

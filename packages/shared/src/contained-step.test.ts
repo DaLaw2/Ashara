@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { UnreadSubject, containEach, memoryStepContainment, readEach, uncontainedSteps } from "./contained-step.js";
 import { parseProjectId } from "./ids.js";
+import { recordingLogger } from "./log.js";
 
 class Escaping extends Error {}
 
@@ -29,6 +30,20 @@ describe("containEach", () => {
     expect(containment.recorded.get("roster/a")).toMatchObject({ faults: 1 });
     // Waiting out its backoff, the subject is skipped; the other still runs.
     expect(await containEach(containment, "roster", subjects, (s) => s, run)).toEqual(["b"]);
+  });
+
+  test("each subject's run is scoped on the containment's logger: its records carry its project and subject, in the enclosing trace", async () => {
+    const logger = recordingLogger();
+    const containment = { ...memoryStepContainment(() => false), logger };
+    await logger.scope({ cycle: 7, trace: "new" }, () =>
+      containEach(containment, "roster", subjects, (s) => s, async (subject) => logger.info("test.subject-ran", subject.id)),
+    );
+
+    expect(logger.records.map(({ projectId, subject, cycle }) => ({ projectId, subject, cycle }))).toEqual([
+      { projectId: projectA, subject: "a", cycle: 7 },
+      { projectId: projectB, subject: "b", cycle: 7 },
+    ]);
+    expect(new Set(logger.records.map((record) => record.traceId)).size).toBe(1);
   });
 
   test("a subject past its backoff runs again: a second fault doubles the wait, a run that completes clears it", async () => {
@@ -140,7 +155,7 @@ describe("containEach", () => {
 
   test("uncontained steps skip nothing and contain nothing", async () => {
     const thrown = new TypeError("first failure");
-    await expect(containEach(uncontainedSteps(), "block-report", subjects, (s) => s, async () => Promise.reject(thrown))).rejects.toBe(thrown);
+    await expect(containEach(uncontainedSteps(recordingLogger()), "block-report", subjects, (s) => s, async () => Promise.reject(thrown))).rejects.toBe(thrown);
   });
 });
 

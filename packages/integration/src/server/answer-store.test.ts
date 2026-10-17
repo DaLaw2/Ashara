@@ -14,7 +14,7 @@ import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, ProjectHaltRepository, createFirstPlanStore, stepContainment } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
-import { systemClock, type ProjectId } from "@ashara/shared";
+import { recordingLogger, systemClock, type ProjectId } from "@ashara/shared";
 import type { StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -126,7 +126,7 @@ function ours<T extends { readonly projectId: string }>(list: () => Promise<read
 
 /** The cycle's containment, as the composition root supplies it; a spend-cap refusal escapes. */
 function containment(): StepContainment {
-  return stepContainment(db, systemClock, (error) => error instanceof BudgetExceeded);
+  return stepContainment(db, systemClock, (error) => error instanceof BudgetExceeded, recordingLogger());
 }
 
 function answers(): ClientAnswers {
@@ -227,7 +227,7 @@ beforeAll(async () => {
   }), new LlmCallLedger(
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-  ));
+  ), recordingLogger());
 });
 
 beforeEach(() => {

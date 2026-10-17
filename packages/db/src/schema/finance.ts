@@ -42,6 +42,8 @@ export const llmCalls = pgTable(
     // Migration 075: the window of the model the call was sent to, written with its record; its
     // utilisation is inputTokens over it. NULL on rows recorded before it and on rows not recorded yet.
     contextWindowTokens: integer("context_window_tokens"),
+    // Migration 078: the trace of the log scope the call was admitted in; NULL only on rows admitted before it.
+    traceId: text("trace_id"),
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),

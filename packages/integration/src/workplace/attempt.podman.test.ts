@@ -9,7 +9,7 @@ import { GuardedModelAccess, measureCost } from "@ashara/finance";
 import type { LlmCallRecorder, LlmProviderCall } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
 import type { AttemptRecord } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
@@ -52,7 +52,7 @@ let substrate: PodmanSubstrate;
 
 beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "ashara-workplace-"));
-  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: tmpdir() });
+  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: tmpdir() });
 }, 60_000);
 
 afterAll(async () => {
@@ -96,7 +96,7 @@ describe("runAttempt on a real cell", () => {
       },
       checkedSources: ["test"],
       clock: () => new Date(),
-    }), recorder);
+    }), recorder, recordingLogger());
 
     const base = await loadBaseCell();
     const taskId = createWorkItemId();

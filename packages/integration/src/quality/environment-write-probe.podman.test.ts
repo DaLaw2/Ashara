@@ -16,7 +16,7 @@ let substrate: PodmanSubstrate;
 
 beforeAll(async () => {
   mountRoot = await realpath(await mkdtemp(join(tmpdir(), "ashara-env-write-probe-")));
-  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot, limits: { memoryBytes: 256 * 1024 * 1024, cpus: 0.5, pids: 64 } });
+  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot, limits: { memoryBytes: 256 * 1024 * 1024, cpus: 0.5, pids: 64 } });
 });
 
 afterAll(async () => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "./work-item-language/work-item-row.js";
@@ -114,6 +114,7 @@ function coreLoopDeps(
     // Every target here is made under the temporary directory.
     config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
     cycleLog: { emit: () => {} },
+    logger: recordingLogger(),
     containment: memoryStepContainment(() => true),
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
@@ -249,6 +250,32 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("processTask attempt scope", () => {
+  test("the dispatched attempt runs in a new trace, its parent the cycle's, every record of it carrying its task and attempt", async () => {
+    const { deps: base } = buildPreemptionDeps();
+    const logger = recordingLogger();
+    const deps: CoreLoopDeps = {
+      ...base,
+      logger,
+      dispatchService: {
+        execute: async (...args) => {
+          logger.warn("test.in-dispatch", "a record of the attempt");
+          return base.dispatchService.execute(...args);
+        },
+      },
+    };
+
+    const cycleTrace = await logger.scope({ cycle: 4, trace: "new" }, async () => {
+      await processTask(deps, freshPendingItem());
+      return logger.trace();
+    });
+
+    const [inDispatch] = logger.records.filter((record) => record.event === "test.in-dispatch");
+    expect(inDispatch).toMatchObject({ taskId: ITEM_ID, attempt: 1, projectId: TEST_PROJECT_ID, cycle: 4, parentTraceId: cycleTrace });
+    expect(inDispatch?.traceId).not.toBe(cycleTrace);
+  });
 });
 
 describe("processTask post-agent status ladder", () => {

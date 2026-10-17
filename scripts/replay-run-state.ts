@@ -60,7 +60,7 @@ import type { StoredTextViolation } from "@ashara/integration";
 import { PUBLIC_INTERFACE_FILE } from "@ashara/quality";
 import { createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { describeErrorChain, uncontainedSteps } from "@ashara/shared";
+import { createLogger, describeErrorChain, stdoutSink, systemClock, uncontainedSteps } from "@ashara/shared";
 
 const USAGE = 'Usage: npx tsx scripts/replay-run-state.ts --dump FILE --psql "COMMAND" [--keep]';
 const RESTORE_TIMEOUT_MS = 5 * 60_000;
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
       }).runPending();
       // A replay contains nothing and skips nothing: any report that fails throws, so the replay stops on it, and a
       // backoff kept in the restored step_faults does not hide a report.
-      await new BlockReports(createBlockReportStore(db), uncontainedSteps()).runPending();
+      await new BlockReports(createBlockReportStore(db), uncontainedSteps(createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }))).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(
         `today's composers: every recorded brief's facts, and ${recomposed.length} of ${setAside.records.length} kept delivered and halt ` +

@@ -17,7 +17,7 @@ import type { BaseCellReference, GitRunner } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, parseWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, parseWorkItemId, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
@@ -135,7 +135,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
   }), new LlmCallLedger(
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps }),
-  ));
+  ), recordingLogger());
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DispatchService({
@@ -229,7 +229,7 @@ beforeAll(async () => {
     VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Set up the project environment', ${projectId},
             'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
-  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
+  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
 }, 60_000);
 
 afterAll(async () => {

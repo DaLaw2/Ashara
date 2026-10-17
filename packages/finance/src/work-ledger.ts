@@ -119,6 +119,7 @@ export class WorkLedger {
       provider: call.provider,
       model: call.model.id,
       estimatedCostUsd,
+      traceId: call.traceId,
     });
   }
 

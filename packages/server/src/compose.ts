@@ -158,7 +158,10 @@ export interface AsharaPorts {
 
 /** One composed Ashara process: what its main starts, serves and shuts down. */
 export interface AsharaInstance {
-  /** One cycle of the core loop, every host git call in it through this instance's runner. */
+  /**
+   * One cycle of the core loop, every host git call in it through this instance's runner, numbered
+   * and traced by `runner` as its own loop's cycles are.
+   */
   readonly cycles: CycleRunner;
   readonly runner: ContinuousRunner;
   readonly app: Hono;
@@ -167,7 +170,7 @@ export interface AsharaInstance {
   readonly shutdownSignal: AbortSignal;
   /**
    * Startup reconciliation (Discipline B), then the cells and environment images a previous
-   * process left. MUST run before the runner starts cycling.
+   * process left, in its own trace. MUST run before the runner starts cycling.
    */
   startup(): Promise<void>;
   abort(): void;
@@ -269,7 +272,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     models: ports.models,
   });
   // Finance in front of Model Access: every model call below goes through this guarded port.
-  const modelCalls = new GuardedModelAccess(llmGateway, llmCallLedger);
+  const modelCalls = new GuardedModelAccess(llmGateway, llmCallLedger, logger);
   console.log("LLM gateway initialized");
   console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
 
@@ -280,7 +283,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   let targetClaims: Awaited<ReturnType<typeof claimTargetCheckouts>> | null = null;
 
   const sessionStore: SessionStore = {
-    insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion),
+    // Opened inside the dispatched attempt's scope: the session carries that attempt's trace.
+    insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion, logger.trace()),
     complete: (sid, attempt, end) => devSessionRepo.complete(sid, attempt, end),
     fail: (sid, vr, attempt) => devSessionRepo.fail(sid, vr, attempt),
   };
@@ -298,6 +302,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     mountRoot: config.coreLoop.workdirBase,
     runner: ports.processRunner,
     limits: config.cellLimits,
+    trace: () => logger.trace(),
   });
   const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
   const environmentBuildRepo = new EnvironmentBuildRepository(db);
@@ -398,12 +403,13 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
   // spend-cap refusal escapes to the cycle, which halts at the cap (CoreLoop.step).
-  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null);
+  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null, logger);
   // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
   const blockReports = new BlockReports(createBlockReportStore(db), containment);
   const coreLoopDeps: CoreLoopDeps = {
     config: config.coreLoop,
     cycleLog: eventLog,
+    logger,
     workItemRepo,
     eventStore,
     failedApproachRepo,
@@ -475,12 +481,15 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const coreLoop = new CoreLoop(coreLoopDeps);
 
-  const cycles: CycleRunner = {
+  const gitScopedCycles: CycleRunner = {
     runCycle: () => withGitRunner(ports.git, () => coreLoop.runCycle()),
     runHaltedCycle: () => withGitRunner(ports.git, () => coreLoop.runHaltedCycle()),
   };
 
-  const runner = new ContinuousRunner(cycles, { databaseUrl: config.databaseUrl });
+  // The runner numbers every cycle and opens its trace, so a cycle a harness steps through
+  // `cycles` is numbered and traced as one the runner's own loop runs.
+  const runner = new ContinuousRunner(gitScopedCycles, logger, { databaseUrl: config.databaseUrl });
+  const cycles: CycleRunner = runner;
 
   const appDeps: AppDeps = {
     workItemRepo: dbWorkItemRepo,
@@ -506,7 +515,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     sessionTtlSeconds: CLIENT_SESSION_TTL_SECONDS,
     loginFailureDelayMs: CLIENT_LOGIN_FAILURE_DELAY_MS,
     assets: loadWebClientAssets(),
-  });
+  }, logger);
 
   return {
     cycles,
@@ -514,7 +523,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     app,
     port: config.port,
     shutdownSignal: abortController.signal,
-    startup: () => withGitRunner(ports.git, async () => {
+    startup: () => logger.scope({ trace: "new" }, () => withGitRunner(ports.git, async () => {
       // One process drives a target: the checkout lock that serialises its finalizes is
       // in-process only, so the claim is taken in the database before anything touches a target,
       // and a second process on the same targets refuses to start. Recorded targets are claimed
@@ -569,7 +578,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       for (const project of await projectRepo.listWithWorkspace()) {
         await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages, readEnvironmentDefinition);
       }
-    }),
+    })),
     abort: () => abortController.abort(),
     teardownCells: () => teardownCellsAtShutdown(cellSubstrate),
     async closeDatabase() {

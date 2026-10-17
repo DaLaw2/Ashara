@@ -17,7 +17,7 @@ import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentI
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
 
@@ -161,7 +161,7 @@ describe("a task runs on cells end to end", () => {
     }), new LlmCallLedger(
       new LlmCallRepository(db),
       new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-    ));
+    ), recordingLogger());
 
     // The environment a merged Sprint 0 leaves on main: the BaseCell image, unchanged.
     const base = await loadBaseCell();
@@ -176,7 +176,7 @@ describe("a task runs on cells end to end", () => {
     await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment"], { cwd: target });
 
     const instance = testCellInstance();
-    const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
+    const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
     const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();

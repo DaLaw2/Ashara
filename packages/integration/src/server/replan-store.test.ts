@@ -23,7 +23,7 @@ import { releaseClearedBlocks, FirstPlanner, PlanningService, Replanner, failWor
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
-import { memoryStepContainment, parseWorkItemId, type DomainEvent, type ProjectId, type StepContainment } from "@ashara/shared";
+import { memoryStepContainment, parseWorkItemId, recordingLogger, type DomainEvent, type ProjectId, type StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -310,7 +310,7 @@ beforeAll(async () => {
   }), new LlmCallLedger(
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-  ));
+  ), recordingLogger());
 });
 
 beforeEach(() => {

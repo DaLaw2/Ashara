@@ -10,7 +10,7 @@ import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { parseWorkItemId, wholeText } from "@ashara/shared";
+import { parseWorkItemId, recordingLogger, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { formatRunReport } from "./run-report-format.js";
 
@@ -133,10 +133,10 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       },
       checkedSources: ["test"],
       clock: () => new Date(),
-    }), new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })));
+    }), new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })), recordingLogger());
     const repo = new DevSessionRepository(db);
     const store: SessionStore = {
-      insert: (sid, tid, brief, version) => repo.insert(sid, tid, brief, version),
+      insert: (sid, tid, brief, version) => repo.insert(sid, tid, brief, version, "test-trace"),
       complete: (sid, attempt, end) => repo.complete(sid, attempt, end),
       fail: (sid, end, attempt) => repo.fail(sid, end, attempt),
     };
@@ -213,12 +213,12 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     // reconciler closed (on the task with calls, as a crashed dispatch would leave it) and a row
     // from before migration 046 all read NULL, and the report must say which.
     const openSession = createSessionId();
-    await repo.insert(openSession, idleTaskId, brief, null);
+    await repo.insert(openSession, idleTaskId, brief, null, "test-trace");
     const orphanSession = createSessionId();
-    await repo.insert(orphanSession, attemptTaskId, brief, null);
+    await repo.insert(orphanSession, attemptTaskId, brief, null, "test-trace");
     await repo.fail(orphanSession, { outcome: "abandoned", detail: "test orphan", resolvedBy: "startup-reconciler" }, null);
     const oldSession = createSessionId();
-    await repo.insert(oldSession, idleTaskId, brief, null);
+    await repo.insert(oldSession, idleTaskId, brief, null, "test-trace");
     await repo.fail(oldSession, { outcome: "failed", detail: "a pre-046 row" }, null);
     await db.execute(sql`UPDATE dev_sessions SET created_at = '2000-01-01T00:00:00Z' WHERE id = ${oldSession}`);
 

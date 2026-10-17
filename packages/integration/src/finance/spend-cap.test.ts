@@ -7,6 +7,7 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, Pr
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap, worstCaseCostUsd } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
+import { recordingLogger } from "@ashara/shared";
 import { projectState } from "../simulator/project-state.js";
 
 // Against Postgres: every row belongs to a project this suite creates under a
@@ -72,7 +73,7 @@ function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]
     },
     checkedSources: ["test"],
     clock: () => new Date(),
-  }), new LlmCallLedger(calls, cap));
+  }), new LlmCallLedger(calls, cap), recordingLogger());
   return { gateway, cap };
 }
 
@@ -219,6 +220,7 @@ describe("Finance's spend cap, read from llm_calls", () => {
     const pending = {
       callId: randomUUID(),
       context: { projectId, taskId: null, callSite: "decomposition" as const },
+      traceId: "test-trace",
       provider: "deepseek",
       model: MODEL,
       operation: "generateObject" as const,

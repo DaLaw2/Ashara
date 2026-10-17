@@ -147,6 +147,8 @@ export interface Logger {
    * `trace: "new"` mints a trace whose parent is the enclosing one.
    */
   scope<T>(narrow: Narrowing, work: () => T): T;
+  /** The trace the enclosing scope carries, the root's outside every scope: what a record emitted here would carry. */
+  trace(): string;
 }
 
 /** A v4 UUID from the host's entropy, never from `randomUUID`, so minting one draws nothing from an id stream. */
@@ -317,6 +319,7 @@ export function createLogger(options: { readonly sink: LogSink; readonly clock: 
         trace === "new" ? { ...enclosing, ...rest, traceId: freshId(), parentTraceId: enclosing.traceId } : { ...enclosing, ...rest };
       return scopes.run(next, work);
     },
+    trace: () => (scopes.getStore() ?? root).traceId,
   };
 }
 
