@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
+import { LEGACY_MIGRATIONS } from "./legacy-migrations.js";
 
 // The runner owns its tracking table, so the table and its columns are created
 // here, not by a numbered migration: a numbered migration cannot describe the
@@ -18,6 +19,99 @@ const MIGRATION_LOCK_KEY = 7_212_345_501;
 
 /** The repository's migrations/ directory, anchored to this module's location. */
 export const MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
+
+/** The file a new database starts from; LEGACY_MIGRATIONS lists the numbered files it stands in for. */
+const INIT_MIGRATION = "000_init.sql";
+
+const LEGACY_SHA256 = new Map(LEGACY_MIGRATIONS.map((m) => [m.filename, m.sha256]));
+
+interface LegacyHashMismatch {
+  readonly filename: string;
+  /** null when the row records no hash. */
+  readonly storedSha256: string | null;
+  readonly manifestSha256: string;
+}
+
+type BaselineRefusal =
+  | {
+      readonly kind: "legacy_incomplete";
+      readonly missing: readonly string[];
+      readonly mismatched: readonly LegacyHashMismatch[];
+    }
+  | { readonly kind: "init_file_missing" };
+
+/**
+ * schema_migrations lists some of the numbered files 000_init.sql stands in for, but not every one
+ * with its recorded hash, or the init file to record is not in the directory. The database holds a
+ * schema the init does not describe, so recording the init as applied would vouch for a schema
+ * that does not exist. Fail closed, naming every missing and every mismatched file.
+ */
+export class MigrationBaselineError extends Error {
+  readonly refusal: BaselineRefusal;
+  readonly migrationsDir: string;
+
+  constructor(refusal: BaselineRefusal, migrationsDir: string) {
+    super(`Migration baseline refused: ${describeRefusal(refusal)} | dir=${migrationsDir}`);
+    this.name = "MigrationBaselineError";
+    this.refusal = refusal;
+    this.migrationsDir = migrationsDir;
+  }
+}
+
+function describeRefusal(refusal: BaselineRefusal): string {
+  switch (refusal.kind) {
+    case "init_file_missing":
+      return (
+        `schema_migrations lists all ${LEGACY_MIGRATIONS.length} numbered files ${INIT_MIGRATION} stands in for, ` +
+        `but ${INIT_MIGRATION} is not in the migrations directory, so there is no file to record as applied`
+      );
+    case "legacy_incomplete": {
+      const parts = [
+        `schema_migrations lists ${LEGACY_MIGRATIONS.length - refusal.missing.length} of the ` +
+          `${LEGACY_MIGRATIONS.length} numbered files ${INIT_MIGRATION} stands in for`,
+      ];
+      if (refusal.missing.length > 0) parts.push(`missing: ${refusal.missing.join(", ")}`);
+      for (const m of refusal.mismatched) {
+        parts.push(
+          `[${m.filename}] stored sha256=${m.storedSha256 ?? "(none)"}, expected sha256=${m.manifestSha256}`,
+        );
+      }
+      parts.push(
+        `the database holds a schema ${INIT_MIGRATION} does not describe; bring it to the last numbered file ` +
+          "from a checkout that still has those files, then run `just migrate` again",
+      );
+      return parts.join("; ");
+    }
+  }
+}
+
+/**
+ * Whether the database ran the numbered files 000_init.sql stands in for: "none" when it lists none
+ * of them, "complete" when it lists every one with its recorded hash. Anything between throws.
+ */
+function legacyState(applied: ReadonlyMap<string, string | null>, migrationsDir: string): "none" | "complete" {
+  const listed = LEGACY_MIGRATIONS.filter((m) => applied.has(m.filename));
+  if (listed.length === 0) return "none";
+  const missing = LEGACY_MIGRATIONS.filter((m) => !applied.has(m.filename)).map((m) => m.filename);
+  const mismatched = listed.flatMap((m): LegacyHashMismatch[] => {
+    const stored = applied.get(m.filename) ?? null;
+    return stored === m.sha256 ? [] : [{ filename: m.filename, storedSha256: stored, manifestSha256: m.sha256 }];
+  });
+  if (missing.length > 0 || mismatched.length > 0) {
+    throw new MigrationBaselineError({ kind: "legacy_incomplete", missing, mismatched }, migrationsDir);
+  }
+  return "complete";
+}
+
+/**
+ * The init file a database that ran every numbered file is recorded against. Its absence is a
+ * baseline refusal, not drift: the database is sound, the directory cannot describe it.
+ */
+function initFileFor(files: readonly MigrationFile[], migrationsDir: string): MigrationFile {
+  const init = files.find((f) => f.filename === INIT_MIGRATION);
+  if (init === undefined) throw new MigrationBaselineError({ kind: "init_file_missing" }, migrationsDir);
+  return init;
+}
 
 interface PgDiagnostics {
   readonly code: string | undefined;
@@ -46,7 +140,7 @@ function extractPgDiagnostics(err: unknown): PgDiagnostics | undefined {
 }
 
 
-type TransactionOperation = "apply" | "backfill_hashes";
+type TransactionOperation = "apply" | "backfill_hashes" | "baseline";
 
 /**
  * A migration transaction failed and was rolled back. The original error is the `cause`;
@@ -65,7 +159,11 @@ class MigrationTransactionError extends Error {
     rollbackError: unknown;
   }) {
     const pgDiag = extractPgDiagnostics(args.cause);
-    const label = args.operation === "apply" ? "Migration failed" : "Migration hash backfill failed";
+    const label = {
+      apply: "Migration failed",
+      backfill_hashes: "Migration hash backfill failed",
+      baseline: "Migration baseline failed",
+    }[args.operation];
     const parts = [`${label} [${args.filenames.join(", ")}]: ${describeErrorChain(args.cause)}`];
     if (pgDiag?.code) parts.push(`code=${pgDiag.code}`);
     if (pgDiag?.position) parts.push(`position=${pgDiag.position}`);
@@ -191,7 +289,10 @@ async function readApplied(client: pg.Client): Promise<Map<string, string | null
   return new Map(rows.map((r) => [r.filename, r.content_sha256]));
 }
 
-/** Every drift between files and applied rows, in filename order; `undefined` when none. */
+/**
+ * Every drift between files and applied rows, in filename order; `undefined` when none. Rows of the
+ * numbered files 000_init.sql stands in for are not drift: legacyState has vouched for them.
+ */
 function findDrift(
   files: readonly MigrationFile[],
   applied: ReadonlyMap<string, string | null>,
@@ -200,7 +301,7 @@ function findDrift(
 ): MigrationDriftError | undefined {
   const fileNames = new Set(files.map((f) => f.filename));
   const drifts: MigrationDrift[] = [...applied.keys()]
-    .filter((name) => !fileNames.has(name))
+    .filter((name) => !fileNames.has(name) && !LEGACY_SHA256.has(name))
     .map((filename) => ({ kind: "applied_without_file", filename }));
   for (const file of files) {
     if (!applied.has(file.filename)) {
@@ -248,6 +349,8 @@ async function inTransaction(
 interface MigrationRunResult {
   readonly applied: readonly string[];
   readonly backfilled: readonly string[];
+  /** The init recorded as applied without running it, because the database ran every file it stands in for. */
+  readonly baselined: readonly string[];
   readonly alreadyApplied: number;
 }
 
@@ -260,6 +363,11 @@ interface MigrationRunResult {
  * Rows applied before hashes were tracked carry a NULL hash; they are backfilled
  * with the current file's hash once, with a warning: the runner cannot know whether
  * the bytes that ran then are the bytes on disk now.
+ *
+ * A database that ran every numbered file 000_init.sql stands in for, each with its
+ * recorded hash, has the init recorded as applied without running it; no row is
+ * removed. One that ran some of them, or ran one with a different hash, throws
+ * MigrationBaselineError before anything is written. An empty database runs the init.
  */
 export async function runMigrations(databaseUrl: string, migrationsDir: string): Promise<MigrationRunResult> {
   const files = readMigrationFiles(migrationsDir);
@@ -294,6 +402,19 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
       );
     }
 
+    const baselined: string[] = [];
+    if (legacyState(applied, migrationsDir) === "complete" && !applied.has(INIT_MIGRATION)) {
+      const init = initFileFor(files, migrationsDir);
+      await inTransaction(client, "baseline", [init.filename], async () => {
+        await client.query(`INSERT INTO ${TRACKING_TABLE} (filename, content_sha256) VALUES ($1, $2)`, [
+          init.filename,
+          init.sha256,
+        ]);
+      });
+      applied.set(init.filename, init.sha256);
+      baselined.push(init.filename);
+    }
+
     const drift = findDrift(files, applied, migrationsDir, { pendingIsDrift: false });
     if (drift !== undefined) throw drift;
 
@@ -315,6 +436,7 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
     return {
       applied: pending.map((f) => f.filename),
       backfilled: backfill.map((f) => f.filename),
+      baselined,
       alreadyApplied: files.length - pending.length,
     };
   } finally {
@@ -325,7 +447,9 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
 /**
  * Read-only startup check: every file in migrationsDir is applied with a matching
  * content hash, and nothing is recorded that has no file. Throws MigrationDriftError
- * naming every missing, unhashed or mismatched file.
+ * naming every missing, unhashed or mismatched file, and MigrationBaselineError when
+ * the numbered files 000_init.sql stands in for are recorded only in part, or recorded in
+ * full with no init file in the directory to record against them.
  */
 export async function assertMigrationsCurrent(databaseUrl: string, migrationsDir: string): Promise<void> {
   const files = readMigrationFiles(migrationsDir);
@@ -350,6 +474,7 @@ export async function assertMigrationsCurrent(databaseUrl: string, migrationsDir
     } else {
       applied = await readApplied(client);
     }
+    if (legacyState(applied, migrationsDir) === "complete") initFileFor(files, migrationsDir);
     const drift = findDrift(files, applied, migrationsDir, { pendingIsDrift: true });
     if (drift !== undefined) throw drift;
   } finally {

@@ -1,0 +1,1081 @@
+column acceptance_sweeps #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column acceptance_sweeps #10 report_id type=uuid not_null=f default=- identity= generated= collation=-
+column acceptance_sweeps #11 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column acceptance_sweeps #12 report_failures type=integer not_null=t default=0 identity= generated= collation=-
+column acceptance_sweeps #13 report_interface_read_failures type=integer not_null=t default=0 identity= generated= collation=-
+column acceptance_sweeps #14 report_last_error type=text not_null=f default=- identity= generated= collation=default
+column acceptance_sweeps #15 report_retry_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column acceptance_sweeps #16 report_record_failures type=integer not_null=t default=0 identity= generated= collation=-
+column acceptance_sweeps #17 executed_checks type=jsonb not_null=f default=- identity= generated= collation=-
+column acceptance_sweeps #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column acceptance_sweeps #3 main_commit type=text not_null=f default=- identity= generated= collation=default
+column acceptance_sweeps #4 environment_version type=text not_null=f default=- identity= generated= collation=default
+column acceptance_sweeps #5 checked_tasks type=jsonb not_null=t default=- identity= generated= collation=-
+column acceptance_sweeps #6 unchecked_tasks type=jsonb not_null=t default=- identity= generated= collation=-
+column acceptance_sweeps #7 passed type=boolean not_null=t default=- identity= generated= collation=-
+column acceptance_sweeps #8 details type=text not_null=t default=- identity= generated= collation=default
+column acceptance_sweeps #9 defect_item_id type=uuid not_null=f default=- identity= generated= collation=-
+column check_disputes #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column check_disputes #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column check_disputes #3 task_id type=uuid not_null=t default=- identity= generated= collation=-
+column check_disputes #4 check_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column check_disputes #5 revision type=integer not_null=t default=- identity= generated= collation=-
+column check_disputes #6 check_name type=text not_null=t default=- identity= generated= collation=default
+column check_disputes #7 reason type=text not_null=t default=- identity= generated= collation=default
+column check_disputes #8 evidence type=text not_null=f default=- identity= generated= collation=default
+column check_disputes #9 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column check_set_freezes #1 review_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column check_set_freezes #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column check_set_freezes #3 frozen_by type=uuid not_null=t default=- identity= generated= collation=-
+column check_set_freezes #4 check_set type=jsonb not_null=t default=- identity= generated= collation=-
+column check_set_freezes #5 frozen_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column client_login_failures #1 client_name type=text not_null=t default=- identity= generated= collation=default
+column client_login_failures #2 failed_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column client_login_failures #3 source_address type=text not_null=t default=- identity= generated= collation=default
+column client_messages #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column client_messages #10 intake_last_error type=text not_null=f default=- identity= generated= collation=default
+column client_messages #11 reports_on type=character varying(20) not_null=f default=- identity= generated= collation=default
+column client_messages #12 position type=integer not_null=f default=- identity= generated= collation=-
+column client_messages #13 intake_last_failure type=text not_null=f default=- identity= generated= collation=default
+column client_messages #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column client_messages #3 direction type=character varying(10) not_null=t default=- identity= generated= collation=default
+column client_messages #4 kind type=character varying(10) not_null=t default=- identity= generated= collation=default
+column client_messages #5 body type=text not_null=t default=- identity= generated= collation=default
+column client_messages #6 in_reply_to type=uuid not_null=f default=- identity= generated= collation=-
+column client_messages #7 consumed_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column client_messages #8 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column client_messages #9 intake_attempts type=integer not_null=t default=0 identity= generated= collation=-
+column client_sessions #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column client_sessions #2 token_hash type=text not_null=t default=- identity= generated= collation=default
+column client_sessions #3 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column client_sessions #4 expires_at type=timestamp with time zone not_null=t default=- identity= generated= collation=-
+column client_sessions #5 revoked_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column client_sessions #6 client_id type=uuid not_null=t default=- identity= generated= collation=-
+column clients #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column clients #2 name type=text not_null=t default=- identity= generated= collation=default
+column clients #3 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column dependencies #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column dependencies #2 from_id type=uuid not_null=t default=- identity= generated= collation=-
+column dependencies #3 to_id type=uuid not_null=t default=- identity= generated= collation=-
+column dependencies #4 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column dev_sessions #1 id type=uuid not_null=t default=- identity= generated= collation=-
+column dev_sessions #10 attempt_terminal type=text not_null=f default=- identity= generated= collation=default
+column dev_sessions #11 attempt_turns type=integer not_null=f default=- identity= generated= collation=-
+column dev_sessions #12 attempt_provider type=text not_null=f default=- identity= generated= collation=default
+column dev_sessions #13 attempt_model type=text not_null=f default=- identity= generated= collation=default
+column dev_sessions #14 attempt_cell type=text not_null=f default=- identity= generated= collation=default
+column dev_sessions #15 trace_id type=text not_null=f default=- identity= generated= collation=default
+column dev_sessions #2 task_id type=uuid not_null=t default=- identity= generated= collation=-
+column dev_sessions #3 phase type=character varying(20) not_null=t default='Preparing'::character varying identity= generated= collation=default
+column dev_sessions #4 brief type=jsonb not_null=f default=- identity= generated= collation=-
+column dev_sessions #5 verification_result type=jsonb not_null=f default=- identity= generated= collation=-
+column dev_sessions #6 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column dev_sessions #7 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column dev_sessions #8 environment_version type=text not_null=f default=- identity= generated= collation=default
+column dev_sessions #9 attempt_prompt_digest type=text not_null=f default=- identity= generated= collation=default
+column domain_events #1 event_id type=uuid not_null=t default=- identity= generated= collation=-
+column domain_events #2 event_type type=character varying(100) not_null=t default=- identity= generated= collation=default
+column domain_events #3 timestamp type=timestamp with time zone not_null=t default=- identity= generated= collation=-
+column domain_events #4 source_context type=character varying(50) not_null=t default=- identity= generated= collation=default
+column domain_events #5 correlation_id type=uuid not_null=f default=- identity= generated= collation=-
+column domain_events #6 payload type=jsonb not_null=t default='{}'::jsonb identity= generated= collation=-
+column domain_events #7 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column environment_builds #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column environment_builds #10 error type=text not_null=f default=- identity= generated= collation=default
+column environment_builds #11 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column environment_builds #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column environment_builds #3 version type=text not_null=t default=- identity= generated= collation=default
+column environment_builds #4 commit type=text not_null=t default=- identity= generated= collation=default
+column environment_builds #5 image_ref type=text not_null=t default=- identity= generated= collation=default
+column environment_builds #6 image_id type=text not_null=f default=- identity= generated= collation=default
+column environment_builds #7 status type=text not_null=t default=- identity= generated= collation=default
+column environment_builds #8 network type=text not_null=t default=- identity= generated= collation=default
+column environment_builds #9 log_digest type=text not_null=t default=- identity= generated= collation=default
+column failed_approaches #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column failed_approaches #2 task_id type=uuid not_null=f default=- identity= generated= collation=-
+column failed_approaches #3 epic_id type=uuid not_null=f default=- identity= generated= collation=-
+column failed_approaches #4 title type=text not_null=t default=- identity= generated= collation=default
+column failed_approaches #5 failure_reason type=text not_null=t default=- identity= generated= collation=default
+column failed_approaches #6 learned type=text not_null=t default=''::text identity= generated= collation=default
+column failed_approaches #7 recorded_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column failed_approaches #8 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column intake_readings #1 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column intake_readings #10 second_questions type=integer not_null=f default=- identity= generated= collation=-
+column intake_readings #11 passed_over type=jsonb not_null=t default='[]'::jsonb identity= generated= collation=-
+column intake_readings #12 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column intake_readings #2 tender_id type=uuid not_null=t default=- identity= generated= collation=-
+column intake_readings #3 first_provider type=text not_null=t default=- identity= generated= collation=default
+column intake_readings #4 first_model type=text not_null=t default=- identity= generated= collation=default
+column intake_readings #5 first_questions type=integer not_null=t default=- identity= generated= collation=-
+column intake_readings #6 confirmation type=text not_null=t default=- identity= generated= collation=default
+column intake_readings #7 second_strength type=text not_null=f default=- identity= generated= collation=default
+column intake_readings #8 second_provider type=text not_null=f default=- identity= generated= collation=default
+column intake_readings #9 second_model type=text not_null=f default=- identity= generated= collation=default
+column knowledge_entries #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column knowledge_entries #10 source_task_id type=uuid not_null=f default=- identity= generated= collation=-
+column knowledge_entries #11 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column knowledge_entries #12 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column knowledge_entries #2 kind type=character varying(20) not_null=t default=- identity= generated= collation=default
+column knowledge_entries #3 title type=text not_null=t default=- identity= generated= collation=default
+column knowledge_entries #4 content type=text not_null=t default=- identity= generated= collation=default
+column knowledge_entries #5 source type=text not_null=t default=- identity= generated= collation=default
+column knowledge_entries #6 epic_id type=uuid not_null=f default=- identity= generated= collation=-
+column knowledge_entries #7 tags type=text[] not_null=t default='{}'::text[] identity= generated= collation=default
+column knowledge_entries #8 event_time type=timestamp with time zone not_null=t default=- identity= generated= collation=-
+column knowledge_entries #9 freshness type=character varying(10) not_null=t default='fresh'::character varying identity= generated= collation=default
+column llm_calls #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column llm_calls #10 cache_write_tokens type=integer not_null=f default=- identity= generated= collation=-
+column llm_calls #11 cost_usd type=numeric(20,12) not_null=f default=- identity= generated= collation=-
+column llm_calls #12 outcome type=text not_null=f default=- identity= generated= collation=default
+column llm_calls #13 error_kind type=text not_null=f default=- identity= generated= collation=default
+column llm_calls #14 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column llm_calls #15 finish_reason type=text not_null=f default=- identity= generated= collation=default
+column llm_calls #16 reasoning_tokens type=integer not_null=f default=- identity= generated= collation=-
+column llm_calls #17 estimated_cost_usd type=numeric(20,12) not_null=f default=- identity= generated= collation=-
+column llm_calls #18 state type=text not_null=t default=- identity= generated= collation=default
+column llm_calls #19 context_window_tokens type=integer not_null=f default=- identity= generated= collation=-
+column llm_calls #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column llm_calls #20 trace_id type=text not_null=f default=- identity= generated= collation=default
+column llm_calls #3 task_id type=uuid not_null=f default=- identity= generated= collation=-
+column llm_calls #4 call_site type=text not_null=t default=- identity= generated= collation=default
+column llm_calls #5 provider type=text not_null=t default=- identity= generated= collation=default
+column llm_calls #6 model type=text not_null=t default=- identity= generated= collation=default
+column llm_calls #7 input_tokens type=integer not_null=f default=- identity= generated= collation=-
+column llm_calls #8 output_tokens type=integer not_null=f default=- identity= generated= collation=-
+column llm_calls #9 cache_read_tokens type=integer not_null=f default=- identity= generated= collation=-
+column model_configs #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column model_configs #10 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column model_configs #11 cache_read_cost_per_1m type=double precision not_null=f default=- identity= generated= collation=-
+column model_configs #12 cache_write_cost_per_1m type=double precision not_null=f default=- identity= generated= collation=-
+column model_configs #2 model_id type=text not_null=t default=- identity= generated= collation=default
+column model_configs #3 provider_name type=text not_null=t default=- identity= generated= collation=default
+column model_configs #4 api_model_id type=text not_null=f default=- identity= generated= collation=default
+column model_configs #5 capability type=text not_null=t default=- identity= generated= collation=default
+column model_configs #6 input_cost_per_1m type=double precision not_null=t default=- identity= generated= collation=-
+column model_configs #7 output_cost_per_1m type=double precision not_null=t default=- identity= generated= collation=-
+column model_configs #8 max_context_tokens type=integer not_null=t default=- identity= generated= collation=-
+column model_configs #9 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column model_price_tiers #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column model_price_tiers #2 model_id type=text not_null=t default=- identity= generated= collation=default
+column model_price_tiers #3 min_input_tokens type=integer not_null=t default=- identity= generated= collation=-
+column model_price_tiers #4 input_cost_per_1m type=double precision not_null=t default=- identity= generated= collation=-
+column model_price_tiers #5 output_cost_per_1m type=double precision not_null=t default=- identity= generated= collation=-
+column model_price_tiers #6 cache_read_cost_per_1m type=double precision not_null=f default=- identity= generated= collation=-
+column model_price_tiers #7 cache_write_cost_per_1m type=double precision not_null=f default=- identity= generated= collation=-
+column model_price_windows #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column model_price_windows #2 model_id type=text not_null=t default=- identity= generated= collation=default
+column model_price_windows #3 iso_weekday type=smallint not_null=t default=- identity= generated= collation=-
+column model_price_windows #4 utc_start_minute type=smallint not_null=t default=- identity= generated= collation=-
+column model_price_windows #5 utc_end_minute type=smallint not_null=t default=- identity= generated= collation=-
+column model_price_windows #6 input_cost_per_1m type=double precision not_null=t default=- identity= generated= collation=-
+column model_price_windows #7 output_cost_per_1m type=double precision not_null=t default=- identity= generated= collation=-
+column model_price_windows #8 cache_read_cost_per_1m type=double precision not_null=f default=- identity= generated= collation=-
+column model_price_windows #9 cache_write_cost_per_1m type=double precision not_null=f default=- identity= generated= collation=-
+column plan_repairs #1 work_item_id type=uuid not_null=t default=- identity= generated= collation=-
+column plan_repairs #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column plan_repairs #3 plan_revision_id type=uuid not_null=f default=- identity= generated= collation=-
+column plan_repairs #4 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column plan_revisions #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column plan_revisions #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column plan_revisions #3 revision type=integer not_null=t default=- identity= generated= collation=-
+column plan_revisions #4 vision_version type=integer not_null=t default=- identity= generated= collation=-
+column plan_revisions #5 requested_by type=uuid not_null=f default=- identity= generated= collation=-
+column plan_revisions #6 summary type=jsonb not_null=t default=- identity= generated= collation=-
+column plan_revisions #7 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column plan_revisions #8 report_id type=uuid not_null=f default=- identity= generated= collation=-
+column plan_revisions #9 kind type=text not_null=t default='client_change'::text identity= generated= collation=default
+column project_blocks #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column project_blocks #10 unblocked_by type=text not_null=f default=- identity= generated= collation=default
+column project_blocks #11 unblock_reason type=text not_null=f default=- identity= generated= collation=default
+column project_blocks #12 resumed_report_id type=uuid not_null=f default=- identity= generated= collation=-
+column project_blocks #13 resume_evidence type=text not_null=f default=- identity= generated= collation=default
+column project_blocks #14 spend type=jsonb not_null=f default=- identity= generated= collation=-
+column project_blocks #15 work type=jsonb not_null=f default=- identity= generated= collation=-
+column project_blocks #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column project_blocks #3 kind type=text not_null=t default=- identity= generated= collation=default
+column project_blocks #4 error_class type=text not_null=f default=- identity= generated= collation=default
+column project_blocks #5 reason type=text not_null=f default=- identity= generated= collation=default
+column project_blocks #6 blocked_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column project_blocks #7 report_id type=uuid not_null=f default=- identity= generated= collation=-
+column project_blocks #8 ended_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column project_blocks #9 end_kind type=text not_null=f default=- identity= generated= collation=default
+column projects #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column projects #10 workspace_path type=text not_null=f default=- identity= generated= collation=default
+column projects #11 blocked_error_class type=text not_null=f default=- identity= generated= collation=default
+column projects #12 blocked_reason type=text not_null=f default=- identity= generated= collation=default
+column projects #13 plan_dropped_dependencies type=jsonb not_null=f default=- identity= generated= collation=-
+column projects #14 blocked_category type=text not_null=f default=- identity= generated= collation=default
+column projects #15 replan_attempts type=integer not_null=t default=0 identity= generated= collation=-
+column projects #16 replan_last_error type=text not_null=f default=- identity= generated= collation=default
+column projects #17 acceptance_faults type=integer not_null=t default=0 identity= generated= collation=-
+column projects #18 replan_last_failure type=text not_null=f default=- identity= generated= collation=default
+column projects #2 name type=text not_null=t default=- identity= generated= collation=default
+column projects #3 lifecycle type=character varying(20) not_null=t default='active'::character varying identity= generated= collation=default
+column projects #4 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column projects #5 client_id type=uuid not_null=t default=- identity= generated= collation=-
+column projects #6 plan_attempts type=integer not_null=t default=0 identity= generated= collation=-
+column projects #7 plan_last_error type=text not_null=f default=- identity= generated= collation=default
+column projects #8 first_planned_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column projects #9 plan_stopped_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column provider_configs #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column provider_configs #2 name type=text not_null=t default=- identity= generated= collation=default
+column provider_configs #3 provider_type type=text not_null=t default=- identity= generated= collation=default
+column provider_configs #4 base_url type=text not_null=f default=- identity= generated= collation=default
+column provider_configs #5 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column provider_configs #6 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column replan_requests #1 answer_id type=uuid not_null=t default=- identity= generated= collation=-
+column replan_requests #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column replan_requests #3 plan_revision_id type=uuid not_null=f default=- identity= generated= collation=-
+column replan_requests #4 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column roster_roles #1 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column roster_roles #2 revision type=integer not_null=t default=- identity= generated= collation=-
+column roster_roles #3 role_id type=uuid not_null=t default=- identity= generated= collation=-
+column roster_roles #4 name type=text not_null=t default=- identity= generated= collation=default
+column roster_roles #5 responsibility type=text not_null=t default=- identity= generated= collation=default
+column roster_roles #6 capabilities type=text[] not_null=t default=- identity= generated= collation=default
+column roster_roles #7 vision_version type=integer not_null=t default=- identity= generated= collation=-
+column roster_roles #8 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column schema_migrations #1 filename type=text not_null=t default=- identity= generated= collation=default
+column schema_migrations #2 applied_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column schema_migrations #3 content_sha256 type=text not_null=f default=- identity= generated= collation=default
+column secrets #1 name type=text not_null=t default=- identity= generated= collation=default
+column secrets #2 key_id type=text not_null=t default=- identity= generated= collation=default
+column secrets #3 iv type=bytea not_null=t default=- identity= generated= collation=-
+column secrets #4 ciphertext type=bytea not_null=t default=- identity= generated= collation=-
+column secrets #5 auth_tag type=bytea not_null=t default=- identity= generated= collation=-
+column secrets #6 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column secrets #7 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column step_faults #1 step type=text not_null=t default=- identity= generated= collation=default
+column step_faults #2 subject_id type=text not_null=t default=- identity= generated= collation=default
+column step_faults #3 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column step_faults #4 faults type=integer not_null=t default=- identity= generated= collation=-
+column step_faults #5 last_error type=text not_null=t default=- identity= generated= collation=default
+column step_faults #6 retry_at type=timestamp with time zone not_null=t default=- identity= generated= collation=-
+column step_faults #7 parked_at type=timestamp with time zone not_null=f default=- identity= generated= collation=-
+column step_faults #8 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column suite_review_claims #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column suite_review_claims #10 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column suite_review_claims #11 second_strength type=text not_null=f default=- identity= generated= collation=default
+column suite_review_claims #12 passed_over type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_claims #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_claims #3 review_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_claims #4 basis type=text not_null=t default=- identity= generated= collation=default
+column suite_review_claims #5 covered type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_claims #6 first_model type=text not_null=t default=- identity= generated= collation=default
+column suite_review_claims #7 second_model type=text not_null=f default=- identity= generated= collation=default
+column suite_review_claims #8 second_findings type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_claims #9 second_failure type=text not_null=f default=- identity= generated= collation=default
+column suite_review_findings #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column suite_review_findings #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_findings #3 review_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_findings #4 check_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_findings #5 problems type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_findings #6 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column suite_review_judgements #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column suite_review_judgements #10 second_model type=text not_null=f default=- identity= generated= collation=default
+column suite_review_judgements #11 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column suite_review_judgements #12 basis type=text not_null=t default=- identity= generated= collation=default
+column suite_review_judgements #13 second_failure type=text not_null=f default=- identity= generated= collation=default
+column suite_review_judgements #14 second_strength type=text not_null=f default=- identity= generated= collation=default
+column suite_review_judgements #15 passed_over type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_judgements #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_judgements #3 review_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_judgements #4 check_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column suite_review_judgements #5 check_name type=text not_null=f default=- identity= generated= collation=default
+column suite_review_judgements #6 outcome type=text not_null=t default=- identity= generated= collation=default
+column suite_review_judgements #7 first_finding type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_judgements #8 second_findings type=jsonb not_null=t default=- identity= generated= collation=-
+column suite_review_judgements #9 first_model type=text not_null=t default=- identity= generated= collation=default
+column system_settings #1 key type=text not_null=t default=- identity= generated= collation=default
+column system_settings #2 value type=text not_null=t default=- identity= generated= collation=default
+column system_settings #3 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column task_checks #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column task_checks #10 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column task_checks #11 baseline_commit type=text not_null=f default=- identity= generated= collation=default
+column task_checks #12 decides type=jsonb not_null=f default=- identity= generated= collation=-
+column task_checks #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column task_checks #3 task_id type=uuid not_null=t default=- identity= generated= collation=-
+column task_checks #4 check_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column task_checks #5 revision type=integer not_null=t default=- identity= generated= collation=-
+column task_checks #6 name type=text not_null=t default=- identity= generated= collation=default
+column task_checks #7 command type=text not_null=t default=- identity= generated= collation=default
+column task_checks #8 files type=jsonb not_null=t default=- identity= generated= collation=-
+column task_checks #9 environment_version type=text not_null=t default=- identity= generated= collation=default
+column undecided_item_claims #1 claim_id type=uuid not_null=t default=- identity= generated= collation=-
+column undecided_item_claims #2 check_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column undecided_item_claims #3 item_id type=text not_null=t default=- identity= generated= collation=default
+column undecided_item_claims #4 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column undecided_items #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column undecided_items #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column undecided_items #3 review_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column undecided_items #4 check_task_id type=uuid not_null=t default=- identity= generated= collation=-
+column undecided_items #5 item_id type=text not_null=t default=- identity= generated= collation=default
+column undecided_items #6 item_text type=text not_null=t default=- identity= generated= collation=default
+column undecided_items #7 judgement_id type=uuid not_null=f default=- identity= generated= collation=-
+column undecided_items #8 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column undecided_items #9 claim_id type=uuid not_null=f default=- identity= generated= collation=-
+column vision_documents #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column vision_documents #10 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column vision_documents #11 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column vision_documents #2 version type=integer not_null=t default=- identity= generated= collation=-
+column vision_documents #3 vision_text type=text not_null=t default=- identity= generated= collation=default
+column vision_documents #4 summary type=text not_null=t default=- identity= generated= collation=default
+column vision_documents #5 inferences type=jsonb not_null=t default='{}'::jsonb identity= generated= collation=-
+column vision_documents #6 scope_boundaries type=jsonb not_null=t default='[]'::jsonb identity= generated= collation=-
+column vision_documents #7 confirmed_directions type=jsonb not_null=t default='[]'::jsonb identity= generated= collation=-
+column vision_documents #8 open_questions type=jsonb not_null=t default='[]'::jsonb identity= generated= collation=-
+column vision_documents #9 change_reason type=text not_null=f default=- identity= generated= collation=default
+column work_burn_warnings #1 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #10 report_id type=uuid not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #11 operator_report type=text not_null=f default=- identity= generated= collation=default
+column work_burn_warnings #12 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column work_burn_warnings #2 plan_revision type=integer not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #3 zone type=text not_null=t default=- identity= generated= collation=default
+column work_burn_warnings #4 drawn_requests type=integer not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #5 budget_requests type=integer not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #6 reserve_requests type=integer not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #7 upstream_requests type=integer not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #8 planned_tasks type=integer not_null=t default=- identity= generated= collation=-
+column work_burn_warnings #9 completed_tasks type=integer not_null=t default=- identity= generated= collation=-
+column work_grants #1 id type=uuid not_null=t default=gen_random_uuid() identity= generated= collation=-
+column work_grants #2 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column work_grants #3 requests type=integer not_null=t default=- identity= generated= collation=-
+column work_grants #4 granted_by type=text not_null=t default=- identity= generated= collation=default
+column work_grants #5 reason type=text not_null=t default=- identity= generated= collation=default
+column work_grants #6 granted_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column work_items #1 id type=uuid not_null=t default=- identity= generated= collation=-
+column work_items #10 blocked_reason type=jsonb not_null=f default=- identity= generated= collation=-
+column work_items #11 dispatch_count type=integer not_null=t default=0 identity= generated= collation=-
+column work_items #12 created_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column work_items #13 updated_at type=timestamp with time zone not_null=t default=now() identity= generated= collation=-
+column work_items #14 project_id type=uuid not_null=t default=- identity= generated= collation=-
+column work_items #15 work_kind type=text not_null=f default=- identity= generated= collation=default
+column work_items #16 owner_role_id type=uuid not_null=f default=- identity= generated= collation=-
+column work_items #17 environment_statement type=text not_null=f default=- identity= generated= collation=default
+column work_items #18 environment_statement_version type=text not_null=f default=- identity= generated= collation=default
+column work_items #19 merge_commit type=text not_null=f default=- identity= generated= collation=default
+column work_items #2 level type=character varying(10) not_null=t default=- identity= generated= collation=default
+column work_items #20 infrastructure_faults type=integer not_null=t default=0 identity= generated= collation=-
+column work_items #21 merge_kind type=text not_null=f default=- identity= generated= collation=default
+column work_items #22 failure_verdict type=jsonb not_null=f default=- identity= generated= collation=-
+column work_items #23 crash_orphans type=integer not_null=t default=0 identity= generated= collation=-
+column work_items #24 overflowed_window_tokens type=integer not_null=f default=- identity= generated= collation=-
+column work_items #25 repairs_task_id type=uuid not_null=f default=- identity= generated= collation=-
+column work_items #3 status type=character varying(15) not_null=t default='Pending'::character varying identity= generated= collation=default
+column work_items #4 parent_id type=uuid not_null=f default=- identity= generated= collation=-
+column work_items #5 title type=text not_null=t default=- identity= generated= collation=default
+column work_items #6 description type=text not_null=f default=- identity= generated= collation=default
+column work_items #7 task_spec type=jsonb not_null=f default=- identity= generated= collation=-
+column work_items #8 north_star type=text not_null=f default=- identity= generated= collation=default
+column work_items #9 success_criteria type=jsonb not_null=f default=- identity= generated= collation=-
+constraint acceptance_sweeps acceptance_sweeps_checked_tasks_check CHECK ((jsonb_typeof(checked_tasks) = 'array'::text))
+constraint acceptance_sweeps acceptance_sweeps_defect_item_id_fkey FOREIGN KEY (defect_item_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint acceptance_sweeps acceptance_sweeps_defect_item_id_key UNIQUE (defect_item_id)
+constraint acceptance_sweeps acceptance_sweeps_defect_on_failure CHECK ((passed = (defect_item_id IS NULL)))
+constraint acceptance_sweeps acceptance_sweeps_details_check CHECK ((details <> ''::text))
+constraint acceptance_sweeps acceptance_sweeps_environment_version_check CHECK ((environment_version <> ''::text))
+constraint acceptance_sweeps acceptance_sweeps_executed_checks_check CHECK (((executed_checks IS NULL) OR (jsonb_typeof(executed_checks) = 'array'::text)))
+constraint acceptance_sweeps acceptance_sweeps_main_commit_check CHECK ((main_commit ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text))
+constraint acceptance_sweeps acceptance_sweeps_pass_has_environment CHECK (((NOT passed) OR (environment_version IS NOT NULL)))
+constraint acceptance_sweeps acceptance_sweeps_pass_has_main CHECK (((NOT passed) OR (main_commit IS NOT NULL)))
+constraint acceptance_sweeps acceptance_sweeps_pkey PRIMARY KEY (id)
+constraint acceptance_sweeps acceptance_sweeps_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint acceptance_sweeps acceptance_sweeps_report_failures_check CHECK ((report_failures >= 0))
+constraint acceptance_sweeps acceptance_sweeps_report_id_fkey FOREIGN KEY (report_id) REFERENCES client_messages(id) ON DELETE SET NULL
+constraint acceptance_sweeps acceptance_sweeps_report_id_key UNIQUE (report_id)
+constraint acceptance_sweeps acceptance_sweeps_report_interface_read_failures_check CHECK ((report_interface_read_failures >= 0))
+constraint acceptance_sweeps acceptance_sweeps_report_on_pass CHECK (((report_id IS NULL) OR passed))
+constraint acceptance_sweeps acceptance_sweeps_report_record_failures_check CHECK ((report_record_failures >= 0))
+constraint acceptance_sweeps acceptance_sweeps_unchecked_tasks_check CHECK ((jsonb_typeof(unchecked_tasks) = 'array'::text))
+constraint check_disputes check_disputes_check_name_check CHECK ((btrim(check_name) <> ''::text))
+constraint check_disputes check_disputes_check_task_id_fkey FOREIGN KEY (check_task_id) REFERENCES work_items(id)
+constraint check_disputes check_disputes_not_self CHECK ((task_id <> check_task_id))
+constraint check_disputes check_disputes_pkey PRIMARY KEY (id)
+constraint check_disputes check_disputes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint check_disputes check_disputes_reason_check CHECK ((btrim(reason) <> ''::text))
+constraint check_disputes check_disputes_revision_check CHECK ((revision >= 1))
+constraint check_disputes check_disputes_task_id_fkey FOREIGN KEY (task_id) REFERENCES work_items(id)
+constraint check_set_freezes check_set_freezes_check_set_check CHECK ((jsonb_typeof(check_set) = 'array'::text))
+constraint check_set_freezes check_set_freezes_frozen_by_fkey FOREIGN KEY (frozen_by) REFERENCES work_items(id) ON DELETE CASCADE
+constraint check_set_freezes check_set_freezes_pkey PRIMARY KEY (review_task_id)
+constraint check_set_freezes check_set_freezes_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint check_set_freezes check_set_freezes_review_task_id_fkey FOREIGN KEY (review_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint client_login_failures client_login_failures_source_address_check CHECK ((length(source_address) > 0))
+constraint client_messages client_messages_answer_replies CHECK ((((kind)::text <> 'answer'::text) OR (in_reply_to IS NOT NULL)))
+constraint client_messages client_messages_body_check CHECK ((length(body) > 0))
+constraint client_messages client_messages_direction_check CHECK (((direction)::text = ANY ((ARRAY['inbound'::character varying, 'outbound'::character varying])::text[])))
+constraint client_messages client_messages_direction_kind CHECK (((((direction)::text = 'inbound'::text) AND ((kind)::text = ANY ((ARRAY['tender'::character varying, 'answer'::character varying, 'change'::character varying, 'stop'::character varying])::text[]))) OR (((direction)::text = 'outbound'::text) AND ((kind)::text = ANY ((ARRAY['question'::character varying, 'report'::character varying])::text[])))))
+constraint client_messages client_messages_in_reply_to_fkey FOREIGN KEY (in_reply_to) REFERENCES client_messages(id)
+constraint client_messages client_messages_intake_attempts_check CHECK ((intake_attempts >= 0))
+constraint client_messages client_messages_intake_error_recorded CHECK (((intake_attempts = 0) OR (intake_last_error IS NOT NULL)))
+constraint client_messages client_messages_intake_last_failure_known CHECK (((intake_last_failure IS NULL) OR ((intake_last_failure = ANY (ARRAY['model'::text, 'provider'::text])) AND ((kind)::text = 'answer'::text) AND (intake_attempts > 0))))
+constraint client_messages client_messages_intake_tender_or_answer_only CHECK ((((kind)::text = ANY ((ARRAY['tender'::character varying, 'answer'::character varying])::text[])) OR ((intake_attempts = 0) AND (intake_last_error IS NULL))))
+constraint client_messages client_messages_kind_check CHECK (((kind)::text = ANY ((ARRAY['tender'::character varying, 'answer'::character varying, 'change'::character varying, 'stop'::character varying, 'question'::character varying, 'report'::character varying])::text[])))
+constraint client_messages client_messages_pkey PRIMARY KEY (id)
+constraint client_messages client_messages_position_question_only CHECK ((("position" IS NULL) OR (((direction)::text = 'outbound'::text) AND ((kind)::text = 'question'::text) AND ("position" >= 1))))
+constraint client_messages client_messages_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint client_messages client_messages_reports_on_known CHECK (((reports_on IS NULL) OR (((direction)::text = 'outbound'::text) AND ((kind)::text = 'report'::text) AND ((reports_on)::text = ANY ((ARRAY['first-plan'::character varying, 'planning-stopped'::character varying, 'client-stop'::character varying, 'stack-choice'::character varying])::text[])))))
+constraint client_sessions client_sessions_client_id_fkey FOREIGN KEY (client_id) REFERENCES clients(id)
+constraint client_sessions client_sessions_expiry_after_creation CHECK ((expires_at > created_at))
+constraint client_sessions client_sessions_pkey PRIMARY KEY (id)
+constraint client_sessions client_sessions_token_hash_check CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text))
+constraint client_sessions client_sessions_token_hash_key UNIQUE (token_hash)
+constraint clients clients_name_check CHECK ((length(name) > 0))
+constraint clients clients_name_key UNIQUE (name)
+constraint clients clients_pkey PRIMARY KEY (id)
+constraint dependencies dependencies_check CHECK ((from_id <> to_id))
+constraint dependencies dependencies_from_id_fkey FOREIGN KEY (from_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint dependencies dependencies_from_id_to_id_key UNIQUE (from_id, to_id)
+constraint dependencies dependencies_pkey PRIMARY KEY (id)
+constraint dependencies dependencies_to_id_fkey FOREIGN KEY (to_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint dev_sessions dev_sessions_attempt_cell_check CHECK ((attempt_cell = ANY (ARRAY['base-cell'::text, 'environment'::text])))
+constraint dev_sessions dev_sessions_attempt_cell_version CHECK (((attempt_cell IS NULL) OR ((attempt_cell = 'environment'::text) = (environment_version IS NOT NULL))))
+constraint dev_sessions dev_sessions_attempt_model_check CHECK ((attempt_model <> ''::text))
+constraint dev_sessions dev_sessions_attempt_prompt_digest_check CHECK ((attempt_prompt_digest ~ '^[0-9a-f]{64}$'::text))
+constraint dev_sessions dev_sessions_attempt_provider_check CHECK ((attempt_provider <> ''::text))
+constraint dev_sessions dev_sessions_attempt_terminal_check CHECK ((attempt_terminal = ANY (ARRAY['finished:done'::text, 'finished:blocked'::text, 'disputed'::text, 'model_stopped_without_finish'::text, 'output_truncated'::text, 'context_budget_exceeded'::text, 'turn_cap'::text, 'wall_clock'::text, 'transport_exhausted'::text, 'refused'::text, 'environment_failure'::text, 'cancelled'::text])))
+constraint dev_sessions dev_sessions_attempt_turns_check CHECK ((attempt_turns >= 0))
+constraint dev_sessions dev_sessions_attempt_whole CHECK ((num_nulls(attempt_prompt_digest, attempt_terminal, attempt_turns, attempt_provider, attempt_model, attempt_cell) = ANY (ARRAY[0, 6])))
+constraint dev_sessions dev_sessions_environment_version_digest CHECK (((environment_version IS NULL) OR (environment_version ~ '^[0-9a-f]{64}$'::text)))
+constraint dev_sessions dev_sessions_phase_check CHECK (((phase)::text = ANY ((ARRAY['Preparing'::character varying, 'Completed'::character varying, 'Failed'::character varying])::text[])))
+constraint dev_sessions dev_sessions_pkey PRIMARY KEY (id)
+constraint dev_sessions dev_sessions_task_id_fkey FOREIGN KEY (task_id) REFERENCES work_items(id)
+constraint dev_sessions dev_sessions_trace_id_nonempty CHECK (((trace_id IS NULL) OR (trace_id <> ''::text)))
+constraint domain_events domain_events_pkey PRIMARY KEY (event_id)
+constraint environment_builds environment_builds_commit_check CHECK ((commit ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text))
+constraint environment_builds environment_builds_image_id_check CHECK ((image_id ~ '^sha256:[0-9a-f]{64}$'::text))
+constraint environment_builds environment_builds_image_ref_check CHECK ((image_ref <> ''::text))
+constraint environment_builds environment_builds_log_digest_check CHECK ((log_digest ~ '^[0-9a-f]{64}$'::text))
+constraint environment_builds environment_builds_network_check CHECK ((network <> ''::text))
+constraint environment_builds environment_builds_outcome_columns CHECK ((((status = 'succeeded'::text) AND (image_id IS NOT NULL) AND (error IS NULL)) OR ((status = 'failed'::text) AND (image_id IS NULL) AND (error IS NOT NULL) AND (error <> ''::text))))
+constraint environment_builds environment_builds_pkey PRIMARY KEY (id)
+constraint environment_builds environment_builds_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint environment_builds environment_builds_status_check CHECK ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))
+constraint environment_builds environment_builds_version_check CHECK ((version ~ '^[0-9a-f]{64}$'::text))
+constraint failed_approaches failed_approaches_epic_id_fkey FOREIGN KEY (epic_id) REFERENCES work_items(id)
+constraint failed_approaches failed_approaches_pkey PRIMARY KEY (id)
+constraint failed_approaches failed_approaches_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint failed_approaches failed_approaches_task_id_fkey FOREIGN KEY (task_id) REFERENCES work_items(id) ON DELETE SET NULL
+constraint intake_readings intake_readings_claim CHECK (((confirmation = 'not-needed'::text) = (first_questions > 0)))
+constraint intake_readings intake_readings_confirmation_known CHECK ((confirmation = ANY (ARRAY['not-needed'::text, 'confirmed'::text, 'questions-raised'::text, 'unconfirmed'::text])))
+constraint intake_readings intake_readings_first_questions CHECK ((first_questions >= 0))
+constraint intake_readings intake_readings_passed_over_list CHECK ((jsonb_typeof(passed_over) = 'array'::text))
+constraint intake_readings intake_readings_pkey PRIMARY KEY (project_id)
+constraint intake_readings intake_readings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint intake_readings intake_readings_second_answered CHECK ((((confirmation = ANY (ARRAY['confirmed'::text, 'questions-raised'::text])) = (second_strength IS NOT NULL)) AND ((second_strength IS NULL) = (second_provider IS NULL)) AND ((second_strength IS NULL) = (second_model IS NULL)) AND ((second_strength IS NULL) = (second_questions IS NULL))))
+constraint intake_readings intake_readings_second_questions CHECK (((second_questions IS NULL) OR ((confirmation = 'questions-raised'::text) = (second_questions > 0))))
+constraint intake_readings intake_readings_strength_fits CHECK (((second_strength IS NULL) OR (second_strength =
+CASE
+    WHEN (second_provider <> first_provider) THEN 'other-family'::text
+    WHEN (second_model = first_model) THEN 'same-model'::text
+    ELSE 'same-family-other-model'::text
+END)))
+constraint intake_readings intake_readings_strength_known CHECK (((second_strength IS NULL) OR (second_strength = ANY (ARRAY['other-family'::text, 'same-family-other-model'::text, 'same-model'::text]))))
+constraint intake_readings intake_readings_tender_id_fkey FOREIGN KEY (tender_id) REFERENCES client_messages(id) ON DELETE CASCADE
+constraint intake_readings intake_readings_unconfirmed_asked_every_strength CHECK (((confirmation <> 'unconfirmed'::text) OR (jsonb_array_length(passed_over) = 3)))
+constraint knowledge_entries knowledge_entries_freshness_check CHECK (((freshness)::text = ANY ((ARRAY['fresh'::character varying, 'stale'::character varying, 'archived'::character varying])::text[])))
+constraint knowledge_entries knowledge_entries_kind_check CHECK (((kind)::text = ANY ((ARRAY['decision'::character varying, 'finding'::character varying, 'insight'::character varying])::text[])))
+constraint knowledge_entries knowledge_entries_pkey PRIMARY KEY (id)
+constraint knowledge_entries knowledge_entries_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint knowledge_entries knowledge_entries_source_task_id_fkey FOREIGN KEY (source_task_id) REFERENCES work_items(id)
+constraint llm_calls llm_calls_check CHECK (((outcome = 'error'::text) = (error_kind IS NOT NULL)))
+constraint llm_calls llm_calls_context_window_positive CHECK (((context_window_tokens IS NULL) OR (context_window_tokens > 0)))
+constraint llm_calls llm_calls_estimate_recorded CHECK ((estimated_cost_usd IS NOT NULL)) NOT VALID
+constraint llm_calls llm_calls_estimated_cost_usd_check CHECK ((estimated_cost_usd > (0)::numeric))
+constraint llm_calls llm_calls_finish_reason_recorded CHECK (((state <> 'recorded'::text) OR (finish_reason IS NOT NULL))) NOT VALID
+constraint llm_calls llm_calls_outcome_check CHECK ((outcome = ANY (ARRAY['ok'::text, 'error'::text])))
+constraint llm_calls llm_calls_outcome_when_recorded CHECK (((state = 'recorded'::text) = (outcome IS NOT NULL)))
+constraint llm_calls llm_calls_pkey PRIMARY KEY (id)
+constraint llm_calls llm_calls_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint llm_calls llm_calls_reasoning_tokens_check CHECK ((reasoning_tokens >= 0))
+constraint llm_calls llm_calls_spend_known CHECK (((cost_usd IS NOT NULL) OR (estimated_cost_usd IS NOT NULL)))
+constraint llm_calls llm_calls_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'recorded'::text, 'unmeasured_after_crash'::text])))
+constraint llm_calls llm_calls_trace_id_nonempty CHECK (((trace_id IS NULL) OR (trace_id <> ''::text)))
+constraint llm_calls llm_calls_truncated_stopped_at_length CHECK (((error_kind IS DISTINCT FROM 'truncated'::text) OR (finish_reason = 'length'::text))) NOT VALID
+constraint llm_calls llm_calls_unrecorded_measures_nothing CHECK (((state = 'recorded'::text) OR ((cost_usd IS NULL) AND (error_kind IS NULL) AND (finish_reason IS NULL) AND (input_tokens IS NULL) AND (output_tokens IS NULL) AND (cache_read_tokens IS NULL) AND (cache_write_tokens IS NULL) AND (reasoning_tokens IS NULL))))
+constraint model_configs model_configs_cache_read_cost_per_1m_check CHECK (((cache_read_cost_per_1m IS NULL) OR (cache_read_cost_per_1m >= (0)::double precision)))
+constraint model_configs model_configs_cache_write_cost_per_1m_check CHECK (((cache_write_cost_per_1m IS NULL) OR (cache_write_cost_per_1m >= (0)::double precision)))
+constraint model_configs model_configs_capability_check CHECK ((capability = ANY (ARRAY['Frontier'::text, 'Strong'::text, 'Medium'::text, 'Light'::text])))
+constraint model_configs model_configs_model_id_key UNIQUE (model_id)
+constraint model_configs model_configs_pkey PRIMARY KEY (id)
+constraint model_configs model_configs_provider_name_fkey FOREIGN KEY (provider_name) REFERENCES provider_configs(name)
+constraint model_price_tiers model_price_tiers_cache_read_cost_per_1m_check CHECK (((cache_read_cost_per_1m IS NULL) OR (cache_read_cost_per_1m >= (0)::double precision)))
+constraint model_price_tiers model_price_tiers_cache_write_cost_per_1m_check CHECK (((cache_write_cost_per_1m IS NULL) OR (cache_write_cost_per_1m >= (0)::double precision)))
+constraint model_price_tiers model_price_tiers_input_cost_per_1m_check CHECK ((input_cost_per_1m > (0)::double precision))
+constraint model_price_tiers model_price_tiers_min_input_tokens_check CHECK ((min_input_tokens > 0))
+constraint model_price_tiers model_price_tiers_model_id_fkey FOREIGN KEY (model_id) REFERENCES model_configs(model_id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint model_price_tiers model_price_tiers_model_id_min_input_tokens_key UNIQUE (model_id, min_input_tokens)
+constraint model_price_tiers model_price_tiers_output_cost_per_1m_check CHECK ((output_cost_per_1m > (0)::double precision))
+constraint model_price_tiers model_price_tiers_pkey PRIMARY KEY (id)
+constraint model_price_windows model_price_windows_cache_read_cost_per_1m_check CHECK (((cache_read_cost_per_1m IS NULL) OR (cache_read_cost_per_1m >= (0)::double precision)))
+constraint model_price_windows model_price_windows_cache_write_cost_per_1m_check CHECK (((cache_write_cost_per_1m IS NULL) OR (cache_write_cost_per_1m >= (0)::double precision)))
+constraint model_price_windows model_price_windows_check CHECK ((utc_start_minute < utc_end_minute))
+constraint model_price_windows model_price_windows_input_cost_per_1m_check CHECK ((input_cost_per_1m > (0)::double precision))
+constraint model_price_windows model_price_windows_iso_weekday_check CHECK (((iso_weekday >= 1) AND (iso_weekday <= 7)))
+constraint model_price_windows model_price_windows_model_id_fkey FOREIGN KEY (model_id) REFERENCES model_configs(model_id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint model_price_windows model_price_windows_model_id_iso_weekday_utc_start_minute_key UNIQUE (model_id, iso_weekday, utc_start_minute)
+constraint model_price_windows model_price_windows_output_cost_per_1m_check CHECK ((output_cost_per_1m > (0)::double precision))
+constraint model_price_windows model_price_windows_pkey PRIMARY KEY (id)
+constraint model_price_windows model_price_windows_utc_end_minute_check CHECK ((utc_end_minute <= 1440))
+constraint model_price_windows model_price_windows_utc_start_minute_check CHECK ((utc_start_minute >= 0))
+constraint plan_repairs plan_repairs_pkey PRIMARY KEY (work_item_id)
+constraint plan_repairs plan_repairs_plan_revision_id_fkey FOREIGN KEY (plan_revision_id) REFERENCES plan_revisions(id) ON DELETE SET NULL
+constraint plan_repairs plan_repairs_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint plan_repairs plan_repairs_work_item_id_fkey FOREIGN KEY (work_item_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint plan_revisions plan_revisions_cause_recorded CHECK (((kind = 'client_change'::text) = (requested_by IS NOT NULL)))
+constraint plan_revisions plan_revisions_kind_check CHECK ((kind = ANY (ARRAY['client_change'::text, 'repair'::text])))
+constraint plan_revisions plan_revisions_one_per_number UNIQUE (project_id, revision)
+constraint plan_revisions plan_revisions_pkey PRIMARY KEY (id)
+constraint plan_revisions plan_revisions_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint plan_revisions plan_revisions_report_id_fkey FOREIGN KEY (report_id) REFERENCES client_messages(id) ON DELETE SET NULL
+constraint plan_revisions plan_revisions_report_id_key UNIQUE (report_id)
+constraint plan_revisions plan_revisions_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES client_messages(id) ON DELETE CASCADE
+constraint plan_revisions plan_revisions_revision_check CHECK ((revision >= 2))
+constraint project_blocks project_blocks_end_kind_check CHECK ((end_kind = ANY (ARRAY['unblocked'::text, 'client_stop'::text, 'probe_passed'::text])))
+constraint project_blocks project_blocks_end_whole CHECK (((ended_at IS NULL) = (end_kind IS NULL)))
+constraint project_blocks project_blocks_halt_consistent TRIGGER DEFERRABLE INITIALLY DEFERRED
+constraint project_blocks project_blocks_kind_check CHECK ((kind = ANY (ARRAY['budget_cap'::text, 'configuration'::text, 'fault'::text, 'planning_stopped'::text, 'check_dispute'::text, 'replan_bound'::text, 'suite_review'::text, 'plan_repair'::text, 'infrastructure'::text, 'replan_stopped'::text, 'replan_provider_failed'::text, 'model_failed'::text, 'provider_failed'::text, 'work_budget'::text])))
+constraint project_blocks project_blocks_pkey PRIMARY KEY (id)
+constraint project_blocks project_blocks_probe_ends_infrastructure CHECK (((end_kind IS DISTINCT FROM 'probe_passed'::text) OR (kind = 'infrastructure'::text)))
+constraint project_blocks project_blocks_probe_recorded CHECK (((end_kind = 'probe_passed'::text) = (resume_evidence IS NOT NULL)))
+constraint project_blocks project_blocks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint project_blocks project_blocks_report_id_fkey FOREIGN KEY (report_id) REFERENCES client_messages(id) ON DELETE SET NULL
+constraint project_blocks project_blocks_report_id_key UNIQUE (report_id)
+constraint project_blocks project_blocks_resumed_after_unblock CHECK (((resumed_report_id IS NULL) OR (end_kind = ANY (ARRAY['unblocked'::text, 'probe_passed'::text]))))
+constraint project_blocks project_blocks_resumed_report_id_fkey FOREIGN KEY (resumed_report_id) REFERENCES client_messages(id) ON DELETE SET NULL
+constraint project_blocks project_blocks_resumed_report_id_key UNIQUE (resumed_report_id)
+constraint project_blocks project_blocks_spend_only_budget_cap CHECK (((spend IS NULL) OR (kind = 'budget_cap'::text)))
+constraint project_blocks project_blocks_unblock_recorded CHECK ((((end_kind = 'unblocked'::text) = ((unblocked_by IS NOT NULL) AND (unblock_reason IS NOT NULL))) OR ((end_kind IS NULL) AND (unblocked_by IS NULL) AND (unblock_reason IS NULL))))
+constraint project_blocks project_blocks_work_only_work_budget CHECK (((work IS NULL) OR (kind = 'work_budget'::text)))
+constraint projects projects_acceptance_faults_check CHECK ((acceptance_faults >= 0))
+constraint projects projects_blocked_category_known CHECK (((blocked_category IS NULL) OR (blocked_category = ANY (ARRAY['budget_cap'::text, 'configuration'::text, 'fault'::text, 'check_dispute'::text, 'replan_bound'::text, 'suite_review'::text, 'plan_repair'::text, 'infrastructure'::text, 'replan_stopped'::text, 'replan_provider_failed'::text, 'model_failed'::text, 'provider_failed'::text, 'work_budget'::text]))))
+constraint projects projects_blocked_category_with_cause CHECK (((blocked_category IS NULL) = (blocked_error_class IS NULL)))
+constraint projects projects_blocked_cause_lifecycle CHECK (((blocked_reason IS NULL) OR ((lifecycle)::text = ANY ((ARRAY['active'::character varying, 'stopped'::character varying])::text[]))))
+constraint projects projects_blocked_cause_whole CHECK (((blocked_error_class IS NULL) = (blocked_reason IS NULL)))
+constraint projects projects_client_id_fkey FOREIGN KEY (client_id) REFERENCES clients(id)
+constraint projects projects_halt_consistent TRIGGER DEFERRABLE INITIALLY DEFERRED
+constraint projects projects_lifecycle_known CHECK (((lifecycle)::text = ANY ((ARRAY['active'::character varying, 'stopped'::character varying, 'accepted'::character varying])::text[])))
+constraint projects projects_pkey PRIMARY KEY (id)
+constraint projects projects_plan_attempts_check CHECK ((plan_attempts >= 0))
+constraint projects projects_plan_dropped_dependencies_planned CHECK (((plan_dropped_dependencies IS NULL) OR ((first_planned_at IS NOT NULL) AND (jsonb_typeof(plan_dropped_dependencies) = 'array'::text))))
+constraint projects projects_plan_error_recorded CHECK (((plan_attempts = 0) OR (plan_last_error IS NOT NULL)))
+constraint projects projects_plan_outcome_single CHECK (((first_planned_at IS NULL) OR (plan_stopped_at IS NULL)))
+constraint projects projects_plan_stopped_lifecycle CHECK (((plan_stopped_at IS NULL) OR ((lifecycle)::text = ANY ((ARRAY['active'::character varying, 'stopped'::character varying])::text[]))))
+constraint projects projects_replan_failure_recorded CHECK (((replan_attempts = 0) OR (replan_last_error IS NOT NULL)))
+constraint projects projects_replan_last_failure_known CHECK (((replan_last_failure IS NULL) OR ((replan_last_failure = ANY (ARRAY['model'::text, 'provider'::text])) AND (replan_attempts > 0))))
+constraint provider_configs provider_configs_name_key UNIQUE (name)
+constraint provider_configs provider_configs_pkey PRIMARY KEY (id)
+constraint replan_requests replan_requests_answer_id_fkey FOREIGN KEY (answer_id) REFERENCES client_messages(id) ON DELETE CASCADE
+constraint replan_requests replan_requests_pkey PRIMARY KEY (answer_id)
+constraint replan_requests replan_requests_plan_revision_id_fkey FOREIGN KEY (plan_revision_id) REFERENCES plan_revisions(id) ON DELETE CASCADE
+constraint replan_requests replan_requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint roster_roles roster_roles_capabilities_check CHECK (((cardinality(capabilities) >= 1) AND (capabilities <@ ARRAY['client-comms'::text, 'write-source'::text, 'author-checks'::text, 'write-environment'::text])))
+constraint roster_roles roster_roles_name_check CHECK ((btrim(name) <> ''::text))
+constraint roster_roles roster_roles_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint roster_roles roster_roles_responsibility_check CHECK ((btrim(responsibility) <> ''::text))
+constraint roster_roles roster_roles_revision_check CHECK ((revision >= 1))
+constraint roster_roles roster_roles_unique_role UNIQUE (project_id, revision, role_id)
+constraint roster_roles roster_roles_vision_exists FOREIGN KEY (project_id, vision_version) REFERENCES vision_documents(project_id, version)
+constraint schema_migrations schema_migrations_pkey PRIMARY KEY (filename)
+constraint secrets secrets_pkey PRIMARY KEY (name)
+constraint step_faults step_faults_faults_check CHECK ((faults > 0))
+constraint step_faults step_faults_pkey PRIMARY KEY (step, subject_id)
+constraint step_faults step_faults_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint step_faults step_faults_step_check CHECK ((length(step) > 0))
+constraint step_faults step_faults_subject_id_check CHECK ((length(subject_id) > 0))
+constraint suite_review_claims suite_review_claims_basis_known CHECK ((basis = ANY (ARRAY['second-opinion-clean'::text, 'second-opinion-found'::text, 'no-other-family'::text, 'second-review-failed'::text])))
+constraint suite_review_claims suite_review_claims_covered_check CHECK (((jsonb_typeof(covered) = 'array'::text) AND (jsonb_array_length(covered) >= 1)))
+constraint suite_review_claims suite_review_claims_failure_of_failed CHECK (((basis = 'second-review-failed'::text) = (second_failure IS NOT NULL)))
+constraint suite_review_claims suite_review_claims_first_model_check CHECK ((length(first_model) > 0))
+constraint suite_review_claims suite_review_claims_found_has_findings CHECK (((basis <> 'second-opinion-found'::text) OR (jsonb_array_length(second_findings) >= 1)))
+constraint suite_review_claims suite_review_claims_no_other_family_same_provider CHECK (((basis <> 'no-other-family'::text) OR (second_strength <> 'other-family'::text)))
+constraint suite_review_claims suite_review_claims_passed_over_list CHECK ((jsonb_typeof(passed_over) = 'array'::text))
+constraint suite_review_claims suite_review_claims_pkey PRIMARY KEY (id)
+constraint suite_review_claims suite_review_claims_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint suite_review_claims suite_review_claims_review_task_id_fkey FOREIGN KEY (review_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint suite_review_claims suite_review_claims_second_asked CHECK ((((second_model IS NULL) = (second_strength IS NULL)) AND ((second_model IS NULL) = (basis = 'second-review-failed'::text)) AND ((second_model IS NOT NULL) OR (jsonb_array_length(second_findings) = 0))))
+constraint suite_review_claims suite_review_claims_second_failure_check CHECK (((second_failure IS NULL) OR (length(second_failure) > 0)))
+constraint suite_review_claims suite_review_claims_second_findings_check CHECK ((jsonb_typeof(second_findings) = 'array'::text))
+constraint suite_review_claims suite_review_claims_second_model_check CHECK (((second_model IS NULL) OR (length(second_model) > 0)))
+constraint suite_review_claims suite_review_claims_strength_fits_models CHECK (((second_strength IS NULL) OR (((second_strength = 'same-model'::text) = (first_model = second_model)) AND ((second_strength = 'other-family'::text) = (split_part(first_model, '/'::text, 1) <> split_part(second_model, '/'::text, 1))))))
+constraint suite_review_claims suite_review_claims_strength_known CHECK (((second_strength IS NULL) OR (second_strength = ANY (ARRAY['other-family'::text, 'same-family-other-model'::text, 'same-model'::text]))))
+constraint suite_review_findings suite_review_findings_check_task_id_fkey FOREIGN KEY (check_task_id) REFERENCES work_items(id)
+constraint suite_review_findings suite_review_findings_not_self CHECK ((review_task_id <> check_task_id))
+constraint suite_review_findings suite_review_findings_pkey PRIMARY KEY (id)
+constraint suite_review_findings suite_review_findings_problems_check CHECK (((jsonb_typeof(problems) = 'array'::text) AND (jsonb_array_length(problems) >= 1)))
+constraint suite_review_findings suite_review_findings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint suite_review_findings suite_review_findings_review_task_id_fkey FOREIGN KEY (review_task_id) REFERENCES work_items(id)
+constraint suite_review_judgements suite_review_judgements_basis_fits_kind CHECK (((basis = 'two-reviews'::text) = (((first_finding ->> 'kind'::text) = 'outside-vision'::text) AND (outcome <> 'advisory'::text))))
+constraint suite_review_judgements suite_review_judgements_basis_known CHECK ((basis = ANY (ARRAY['two-reviews'::text, 'second-opinion-agreed'::text, 'second-opinion-disagreed'::text, 'no-other-family'::text, 'second-review-failed'::text, 'frozen'::text, 'reopened-once'::text])))
+constraint suite_review_judgements suite_review_judgements_check_name_check CHECK ((length(check_name) > 0))
+constraint suite_review_judgements suite_review_judgements_check_of_rejection CHECK ((((first_finding ->> 'kind'::text) = 'outside-vision'::text) = (check_name IS NOT NULL)))
+constraint suite_review_judgements suite_review_judgements_check_task_id_fkey FOREIGN KEY (check_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint suite_review_judgements suite_review_judgements_failure_of_failed CHECK (((basis = 'second-review-failed'::text) = (second_failure IS NOT NULL)))
+constraint suite_review_judgements suite_review_judgements_first_finding_check CHECK ((jsonb_typeof(first_finding) = 'object'::text))
+constraint suite_review_judgements suite_review_judgements_first_model_check CHECK ((length(first_model) > 0))
+constraint suite_review_judgements suite_review_judgements_kind_known CHECK (((first_finding ->> 'kind'::text) = ANY (ARRAY['contradiction'::text, 'outside-vision'::text, 'undecided-item'::text])))
+constraint suite_review_judgements suite_review_judgements_no_other_family_same_provider CHECK (((basis <> 'no-other-family'::text) OR (second_strength <> 'other-family'::text)))
+constraint suite_review_judgements suite_review_judgements_outcome_fits_basis CHECK ((((outcome = 'routed'::text) = ((basis = 'second-opinion-agreed'::text) OR ((basis = 'two-reviews'::text) AND (outcome = 'routed'::text)))) AND ((outcome <> 'released'::text) OR (basis = 'two-reviews'::text))))
+constraint suite_review_judgements suite_review_judgements_outcome_known CHECK ((outcome = ANY (ARRAY['routed'::text, 'released'::text, 'advisory'::text])))
+constraint suite_review_judgements suite_review_judgements_passed_over_list CHECK ((jsonb_typeof(passed_over) = 'array'::text))
+constraint suite_review_judgements suite_review_judgements_pkey PRIMARY KEY (id)
+constraint suite_review_judgements suite_review_judgements_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint suite_review_judgements suite_review_judgements_review_task_id_fkey FOREIGN KEY (review_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint suite_review_judgements suite_review_judgements_routed_has_second CHECK (((outcome <> 'routed'::text) OR (jsonb_array_length(second_findings) >= 1)))
+constraint suite_review_judgements suite_review_judgements_second_asked CHECK ((((second_model IS NULL) = (second_strength IS NULL)) AND ((basis = ANY (ARRAY['frozen'::text, 'reopened-once'::text, 'second-review-failed'::text])) OR (second_model IS NOT NULL)) AND ((basis <> 'second-review-failed'::text) OR (second_model IS NULL)) AND ((second_model IS NOT NULL) OR (jsonb_array_length(second_findings) = 0))))
+constraint suite_review_judgements suite_review_judgements_second_failure_check CHECK (((second_failure IS NULL) OR (length(second_failure) > 0)))
+constraint suite_review_judgements suite_review_judgements_second_findings_check CHECK ((jsonb_typeof(second_findings) = 'array'::text))
+constraint suite_review_judgements suite_review_judgements_second_model_check CHECK ((length(second_model) > 0))
+constraint suite_review_judgements suite_review_judgements_strength_fits_models CHECK (((second_strength IS NULL) OR (((second_strength = 'same-model'::text) = (first_model = second_model)) AND ((second_strength = 'other-family'::text) = (split_part(first_model, '/'::text, 1) <> split_part(second_model, '/'::text, 1))))))
+constraint suite_review_judgements suite_review_judgements_strength_known CHECK (((second_strength IS NULL) OR (second_strength = ANY (ARRAY['other-family'::text, 'same-family-other-model'::text, 'same-model'::text]))))
+constraint system_settings system_settings_pkey PRIMARY KEY (key)
+constraint task_checks task_checks_baseline_commit_shape CHECK (((baseline_commit IS NULL) OR (baseline_commit ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text)))
+constraint task_checks task_checks_check_task_id_fkey FOREIGN KEY (check_task_id) REFERENCES work_items(id)
+constraint task_checks task_checks_command_check CHECK ((btrim(command) <> ''::text))
+constraint task_checks task_checks_decides_check CHECK (((decides IS NULL) OR ((jsonb_typeof(decides) = 'array'::text) AND (jsonb_array_length(decides) >= 1))))
+constraint task_checks task_checks_environment_version_check CHECK ((environment_version ~ '^[0-9a-f]{64}$'::text))
+constraint task_checks task_checks_files_check CHECK ((jsonb_typeof(files) = 'array'::text))
+constraint task_checks task_checks_name_check CHECK ((btrim(name) <> ''::text))
+constraint task_checks task_checks_not_self CHECK ((task_id <> check_task_id))
+constraint task_checks task_checks_pkey PRIMARY KEY (id)
+constraint task_checks task_checks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint task_checks task_checks_revision_check CHECK ((revision >= 1))
+constraint task_checks task_checks_task_id_fkey FOREIGN KEY (task_id) REFERENCES work_items(id)
+constraint task_checks task_checks_unique_name UNIQUE (task_id, revision, name)
+constraint undecided_item_claims undecided_item_claims_check_task_id_fkey FOREIGN KEY (check_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint undecided_item_claims undecided_item_claims_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES suite_review_claims(id) ON DELETE CASCADE
+constraint undecided_item_claims undecided_item_claims_item_id_check CHECK ((length(item_id) > 0))
+constraint undecided_item_claims undecided_item_claims_pkey PRIMARY KEY (claim_id, check_task_id, item_id)
+constraint undecided_items undecided_items_check_task_id_fkey FOREIGN KEY (check_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint undecided_items undecided_items_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES suite_review_claims(id) ON DELETE CASCADE
+constraint undecided_items undecided_items_claim_linked FOREIGN KEY (claim_id, check_task_id, item_id) REFERENCES undecided_item_claims(claim_id, check_task_id, item_id) DEFERRABLE INITIALLY DEFERRED
+constraint undecided_items undecided_items_item_id_check CHECK ((length(item_id) > 0))
+constraint undecided_items undecided_items_item_text_check CHECK ((length(item_text) > 0))
+constraint undecided_items undecided_items_judgement_id_fkey FOREIGN KEY (judgement_id) REFERENCES suite_review_judgements(id) ON DELETE CASCADE
+constraint undecided_items undecided_items_one_per_check_task UNIQUE (check_task_id, item_id)
+constraint undecided_items undecided_items_one_source CHECK (((judgement_id IS NULL) <> (claim_id IS NULL)))
+constraint undecided_items undecided_items_pkey PRIMARY KEY (id)
+constraint undecided_items undecided_items_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint undecided_items undecided_items_review_task_id_fkey FOREIGN KEY (review_task_id) REFERENCES work_items(id) ON DELETE CASCADE
+constraint vision_documents vision_documents_pkey PRIMARY KEY (id)
+constraint vision_documents vision_documents_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint vision_documents vision_documents_project_version_unique UNIQUE (project_id, version)
+constraint work_burn_warnings work_burn_warnings_budget_requests_check CHECK ((budget_requests > 0))
+constraint work_burn_warnings work_burn_warnings_check CHECK (((reserve_requests >= 0) AND (reserve_requests < budget_requests)))
+constraint work_burn_warnings work_burn_warnings_check1 CHECK ((upstream_requests = (budget_requests - reserve_requests)))
+constraint work_burn_warnings work_burn_warnings_check2 CHECK (((completed_tasks >= 0) AND (completed_tasks <= planned_tasks)))
+constraint work_burn_warnings work_burn_warnings_check3 CHECK (((zone = 'red'::text) = ((operator_report IS NOT NULL) AND (length(TRIM(BOTH FROM operator_report)) > 0))))
+constraint work_burn_warnings work_burn_warnings_drawn_requests_check CHECK ((drawn_requests >= 0))
+constraint work_burn_warnings work_burn_warnings_pkey PRIMARY KEY (project_id, plan_revision, zone)
+constraint work_burn_warnings work_burn_warnings_plan_revision_check CHECK ((plan_revision >= 1))
+constraint work_burn_warnings work_burn_warnings_planned_tasks_check CHECK ((planned_tasks >= 0))
+constraint work_burn_warnings work_burn_warnings_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint work_burn_warnings work_burn_warnings_report_id_fkey FOREIGN KEY (report_id) REFERENCES client_messages(id)
+constraint work_burn_warnings work_burn_warnings_zone_check CHECK ((zone = ANY (ARRAY['yellow'::text, 'red'::text])))
+constraint work_grants work_grants_granted_by_check CHECK ((length(TRIM(BOTH FROM granted_by)) > 0))
+constraint work_grants work_grants_pkey PRIMARY KEY (id)
+constraint work_grants work_grants_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+constraint work_grants work_grants_reason_check CHECK ((length(TRIM(BOTH FROM reason)) > 0))
+constraint work_grants work_grants_requests_check CHECK ((requests > 0))
+constraint work_items work_items_crash_orphans_check CHECK ((crash_orphans >= 0))
+constraint work_items work_items_environment_statement_on_environment_work CHECK (((environment_statement IS NULL) OR ((work_kind = ANY (ARRAY['environment'::text, 'implementation'::text])) AND (btrim(environment_statement) <> ''::text))))
+constraint work_items work_items_environment_statement_version_shape CHECK (((environment_statement_version IS NULL) OR ((environment_statement IS NOT NULL) AND (environment_statement_version ~ '^[0-9a-f]{64}$'::text))))
+constraint work_items work_items_infrastructure_faults_check CHECK ((infrastructure_faults >= 0))
+constraint work_items work_items_level_check CHECK (((level)::text = ANY ((ARRAY['Epic'::character varying, 'Task'::character varying])::text[])))
+constraint work_items work_items_merge_commit_shape CHECK (((merge_commit IS NULL) OR (merge_commit ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'::text)))
+constraint work_items work_items_merge_kind_known CHECK (((merge_kind IS NULL) OR (merge_kind = ANY (ARRAY['merged'::text, 'already_delivered'::text]))))
+constraint work_items work_items_merge_kind_with_commit CHECK (((merge_kind IS NULL) OR (merge_commit IS NOT NULL)))
+constraint work_items work_items_overflowed_window_tokens_check CHECK ((overflowed_window_tokens > 0))
+constraint work_items work_items_owner_on_task CHECK (((work_kind IS NULL) OR ((level)::text = 'Task'::text)))
+constraint work_items work_items_owner_whole CHECK (((work_kind IS NULL) = (owner_role_id IS NULL)))
+constraint work_items work_items_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES work_items(id)
+constraint work_items work_items_pkey PRIMARY KEY (id)
+constraint work_items work_items_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id)
+constraint work_items work_items_repairs_task_id_fkey FOREIGN KEY (repairs_task_id) REFERENCES work_items(id) ON DELETE SET NULL
+constraint work_items work_items_repairs_task_only_environment_change CHECK (((repairs_task_id IS NULL) OR (((task_spec ->> 'origin'::text) = 'environment-change'::text) AND (repairs_task_id <> id))))
+constraint work_items work_items_status_check CHECK (((status)::text = ANY ((ARRAY['Pending'::character varying, 'InProgress'::character varying, 'Completed'::character varying, 'Blocked'::character varying, 'Failed'::character varying, 'Abandoned'::character varying])::text[])))
+constraint work_items work_items_work_kind_known CHECK ((work_kind = ANY (ARRAY['environment'::text, 'implementation'::text, 'check'::text])))
+extension pgcrypto schema=public
+extension plpgsql schema=pg_catalog
+function CREATE OR REPLACE FUNCTION public.check_disputes_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'check_disputes is append-only (dispute % of check task %)', OLD.id, OLD.check_task_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.check_set_freezes_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'check_set_freezes is append-only (review task %)', OLD.review_task_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.dependency_same_project()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  from_project UUID;
+  to_project UUID;
+BEGIN
+  SELECT project_id INTO from_project FROM work_items WHERE id = NEW.from_id;
+  SELECT project_id INTO to_project FROM work_items WHERE id = NEW.to_id;
+  IF from_project IS DISTINCT FROM to_project THEN
+    RAISE EXCEPTION 'dependency % -> % crosses projects (% -> %)', NEW.from_id, NEW.to_id, from_project, to_project;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.notify_ashara_events()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+    PERFORM pg_notify('ashara_events', NEW.event_id::text);
+    RETURN NEW;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.notify_client_message()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  PERFORM pg_notify(
+    'ashara_events',
+    json_build_object('type', 'client_message', 'project_id', NEW.project_id, 'message_id', NEW.id)::text
+  );
+  RETURN NEW;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.plan_repair_on_abandon()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF NEW.status = 'Abandoned' AND OLD.status <> 'Abandoned' AND NEW.level = 'Task'
+     AND NEW.project_id IS NOT NULL AND NEW.blocked_reason->>'source' IS DISTINCT FROM 'superseded' THEN
+    INSERT INTO plan_repairs (work_item_id, project_id) VALUES (NEW.id, NEW.project_id)
+      ON CONFLICT (work_item_id) DO NOTHING;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.project_acceptance_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF NEW.lifecycle = 'accepted' AND OLD.lifecycle IS DISTINCT FROM 'accepted'
+     AND NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.project_id = NEW.id AND s.passed) THEN
+    RAISE EXCEPTION 'project % cannot become accepted: no passed acceptance sweep is recorded for it', NEW.id;
+  END IF;
+  IF OLD.lifecycle = 'accepted' AND NEW.lifecycle NOT IN ('accepted', 'stopped') THEN
+    RAISE EXCEPTION 'project % cannot leave accepted for %: only the client''s stop ends it', NEW.id, NEW.lifecycle;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.project_halt_consistent()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  target UUID;
+  project RECORD;
+  halted BOOLEAN;
+BEGIN
+  IF TG_TABLE_NAME = 'projects' THEN
+    target := NEW.id;
+  ELSE
+    target := NEW.project_id;
+  END IF;
+  SELECT p.lifecycle, p.plan_stopped_at, p.blocked_error_class INTO project FROM projects p WHERE p.id = target;
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+  halted := EXISTS (SELECT 1 FROM project_blocks b WHERE b.project_id = target AND b.ended_at IS NULL);
+  IF halted AND project.lifecycle <> 'active' THEN
+    RAISE EXCEPTION 'project % is halted while its lifecycle is %: only an active project is halted', target, project.lifecycle;
+  END IF;
+  IF halted AND project.plan_stopped_at IS NULL AND project.blocked_error_class IS NULL THEN
+    RAISE EXCEPTION 'project % is halted with no cause recorded: neither planning stopped nor a blocked cause', target;
+  END IF;
+  IF NOT halted AND project.lifecycle = 'active' AND (project.plan_stopped_at IS NOT NULL OR project.blocked_error_class IS NOT NULL) THEN
+    RAISE EXCEPTION 'project % records a halt''s cause but has no open block episode', target;
+  END IF;
+  RETURN NULL;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.project_stop_ends_halt()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF NEW.lifecycle = 'stopped' AND OLD.lifecycle IS DISTINCT FROM 'stopped' THEN
+    UPDATE project_blocks SET ended_at = now(), end_kind = 'client_stop'
+      WHERE project_id = NEW.id AND ended_at IS NULL;
+  END IF;
+  RETURN NEW;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.roster_roles_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'roster_roles is append-only: a changed roster is a new revision (project %, revision %, role %)',
+    OLD.project_id, OLD.revision, OLD.role_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.suite_review_claims_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'suite_review_claims is append-only (claim % of review task %)', OLD.id, OLD.review_task_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.suite_review_findings_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'suite_review_findings is append-only (finding % of check task %)', OLD.id, OLD.check_task_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.suite_review_judgements_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'suite_review_judgements is append-only (judgement % of review task %)', OLD.id, OLD.review_task_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.task_checks_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'task_checks is append-only: changed checks are a new revision (task %, revision %, check %)',
+    OLD.task_id, OLD.revision, OLD.name;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.undecided_item_claims_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'undecided_item_claims is append-only (item % of check task %, claim %)', OLD.item_id, OLD.check_task_id, OLD.claim_id;
+END;
+$function$
+
+function CREATE OR REPLACE FUNCTION public.undecided_items_refuse_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'undecided_items is append-only (item % of check task %)', OLD.item_id, OLD.check_task_id;
+END;
+$function$
+
+index CREATE INDEX check_disputes_check_task ON public.check_disputes USING btree (check_task_id)
+index CREATE INDEX idx_client_login_failures_name_source_time ON public.client_login_failures USING btree (client_name, source_address, failed_at)
+index CREATE INDEX idx_client_login_failures_name_time ON public.client_login_failures USING btree (client_name, failed_at)
+index CREATE INDEX idx_client_login_failures_source_time ON public.client_login_failures USING btree (source_address, failed_at)
+index CREATE INDEX idx_client_login_failures_time ON public.client_login_failures USING btree (failed_at)
+index CREATE INDEX idx_client_messages_project_created ON public.client_messages USING btree (project_id, created_at)
+index CREATE INDEX idx_failed_approaches_epic ON public.failed_approaches USING btree (epic_id)
+index CREATE INDEX idx_failed_approaches_project ON public.failed_approaches USING btree (project_id)
+index CREATE INDEX idx_knowledge_content_search ON public.knowledge_entries USING gin (to_tsvector('english'::regconfig, content))
+index CREATE INDEX idx_knowledge_epic ON public.knowledge_entries USING btree (epic_id)
+index CREATE INDEX idx_knowledge_freshness ON public.knowledge_entries USING btree (freshness)
+index CREATE INDEX idx_knowledge_kind ON public.knowledge_entries USING btree (kind)
+index CREATE INDEX idx_knowledge_project ON public.knowledge_entries USING btree (project_id)
+index CREATE INDEX idx_knowledge_tags ON public.knowledge_entries USING gin (tags)
+index CREATE INDEX idx_llm_calls_pending ON public.llm_calls USING btree (id) WHERE (state = 'pending'::text)
+index CREATE INDEX idx_llm_calls_project_created ON public.llm_calls USING btree (project_id, created_at)
+index CREATE INDEX idx_llm_calls_task ON public.llm_calls USING btree (task_id) WHERE (task_id IS NOT NULL)
+index CREATE INDEX idx_projects_client_created ON public.projects USING btree (client_id, created_at DESC)
+index CREATE INDEX idx_work_grants_project ON public.work_grants USING btree (project_id)
+index CREATE INDEX idx_work_items_project_id ON public.work_items USING btree (project_id)
+index CREATE INDEX plan_repairs_pending ON public.plan_repairs USING btree (project_id) WHERE (plan_revision_id IS NULL)
+index CREATE INDEX replan_requests_pending ON public.replan_requests USING btree (project_id) WHERE (plan_revision_id IS NULL)
+index CREATE INDEX suite_review_claims_review_task ON public.suite_review_claims USING btree (review_task_id, created_at)
+index CREATE INDEX suite_review_findings_check_task ON public.suite_review_findings USING btree (check_task_id)
+index CREATE INDEX suite_review_findings_project ON public.suite_review_findings USING btree (project_id, created_at)
+index CREATE INDEX suite_review_judgements_review_task ON public.suite_review_judgements USING btree (review_task_id, created_at)
+index CREATE INDEX task_checks_task_revision ON public.task_checks USING btree (task_id, revision)
+index CREATE INDEX undecided_item_claims_item ON public.undecided_item_claims USING btree (check_task_id, item_id)
+index CREATE INDEX undecided_items_project ON public.undecided_items USING btree (project_id, created_at)
+index CREATE UNIQUE INDEX acceptance_sweeps_defect_item_id_key ON public.acceptance_sweeps USING btree (defect_item_id)
+index CREATE UNIQUE INDEX acceptance_sweeps_one_pass ON public.acceptance_sweeps USING btree (project_id) WHERE passed
+index CREATE UNIQUE INDEX acceptance_sweeps_pkey ON public.acceptance_sweeps USING btree (id)
+index CREATE UNIQUE INDEX acceptance_sweeps_report_id_key ON public.acceptance_sweeps USING btree (report_id)
+index CREATE UNIQUE INDEX check_disputes_pkey ON public.check_disputes USING btree (id)
+index CREATE UNIQUE INDEX check_set_freezes_pkey ON public.check_set_freezes USING btree (review_task_id)
+index CREATE UNIQUE INDEX client_messages_one_report_per_outcome ON public.client_messages USING btree (project_id, reports_on) WHERE (reports_on IS NOT NULL)
+index CREATE UNIQUE INDEX client_messages_pkey ON public.client_messages USING btree (id)
+index CREATE UNIQUE INDEX client_messages_question_position_unique ON public.client_messages USING btree (in_reply_to, "position") WHERE ("position" IS NOT NULL)
+index CREATE UNIQUE INDEX client_sessions_pkey ON public.client_sessions USING btree (id)
+index CREATE UNIQUE INDEX client_sessions_token_hash_key ON public.client_sessions USING btree (token_hash)
+index CREATE UNIQUE INDEX clients_name_key ON public.clients USING btree (name)
+index CREATE UNIQUE INDEX clients_pkey ON public.clients USING btree (id)
+index CREATE UNIQUE INDEX dependencies_from_id_to_id_key ON public.dependencies USING btree (from_id, to_id)
+index CREATE UNIQUE INDEX dependencies_pkey ON public.dependencies USING btree (id)
+index CREATE UNIQUE INDEX dev_sessions_pkey ON public.dev_sessions USING btree (id)
+index CREATE UNIQUE INDEX domain_events_pkey ON public.domain_events USING btree (event_id)
+index CREATE UNIQUE INDEX environment_builds_one_succeeded ON public.environment_builds USING btree (project_id, version) WHERE (status = 'succeeded'::text)
+index CREATE UNIQUE INDEX environment_builds_pkey ON public.environment_builds USING btree (id)
+index CREATE UNIQUE INDEX failed_approaches_pkey ON public.failed_approaches USING btree (id)
+index CREATE UNIQUE INDEX intake_readings_pkey ON public.intake_readings USING btree (project_id)
+index CREATE UNIQUE INDEX knowledge_entries_pkey ON public.knowledge_entries USING btree (id)
+index CREATE UNIQUE INDEX llm_calls_pkey ON public.llm_calls USING btree (id)
+index CREATE UNIQUE INDEX model_configs_model_id_key ON public.model_configs USING btree (model_id)
+index CREATE UNIQUE INDEX model_configs_pkey ON public.model_configs USING btree (id)
+index CREATE UNIQUE INDEX model_price_tiers_model_id_min_input_tokens_key ON public.model_price_tiers USING btree (model_id, min_input_tokens)
+index CREATE UNIQUE INDEX model_price_tiers_pkey ON public.model_price_tiers USING btree (id)
+index CREATE UNIQUE INDEX model_price_windows_model_id_iso_weekday_utc_start_minute_key ON public.model_price_windows USING btree (model_id, iso_weekday, utc_start_minute)
+index CREATE UNIQUE INDEX model_price_windows_pkey ON public.model_price_windows USING btree (id)
+index CREATE UNIQUE INDEX plan_repairs_pkey ON public.plan_repairs USING btree (work_item_id)
+index CREATE UNIQUE INDEX plan_revisions_one_per_number ON public.plan_revisions USING btree (project_id, revision)
+index CREATE UNIQUE INDEX plan_revisions_pkey ON public.plan_revisions USING btree (id)
+index CREATE UNIQUE INDEX plan_revisions_report_id_key ON public.plan_revisions USING btree (report_id)
+index CREATE UNIQUE INDEX project_blocks_one_open ON public.project_blocks USING btree (project_id) WHERE (ended_at IS NULL)
+index CREATE UNIQUE INDEX project_blocks_pkey ON public.project_blocks USING btree (id)
+index CREATE UNIQUE INDEX project_blocks_report_id_key ON public.project_blocks USING btree (report_id)
+index CREATE UNIQUE INDEX project_blocks_resumed_report_id_key ON public.project_blocks USING btree (resumed_report_id)
+index CREATE UNIQUE INDEX projects_pkey ON public.projects USING btree (id)
+index CREATE UNIQUE INDEX provider_configs_name_key ON public.provider_configs USING btree (name)
+index CREATE UNIQUE INDEX provider_configs_pkey ON public.provider_configs USING btree (id)
+index CREATE UNIQUE INDEX replan_requests_pkey ON public.replan_requests USING btree (answer_id)
+index CREATE UNIQUE INDEX roster_roles_unique_name ON public.roster_roles USING btree (project_id, revision, lower(name))
+index CREATE UNIQUE INDEX roster_roles_unique_role ON public.roster_roles USING btree (project_id, revision, role_id)
+index CREATE UNIQUE INDEX schema_migrations_pkey ON public.schema_migrations USING btree (filename)
+index CREATE UNIQUE INDEX secrets_pkey ON public.secrets USING btree (name)
+index CREATE UNIQUE INDEX step_faults_pkey ON public.step_faults USING btree (step, subject_id)
+index CREATE UNIQUE INDEX suite_review_claims_pkey ON public.suite_review_claims USING btree (id)
+index CREATE UNIQUE INDEX suite_review_findings_pkey ON public.suite_review_findings USING btree (id)
+index CREATE UNIQUE INDEX suite_review_judgements_pkey ON public.suite_review_judgements USING btree (id)
+index CREATE UNIQUE INDEX system_settings_pkey ON public.system_settings USING btree (key)
+index CREATE UNIQUE INDEX task_checks_pkey ON public.task_checks USING btree (id)
+index CREATE UNIQUE INDEX task_checks_unique_name ON public.task_checks USING btree (task_id, revision, name)
+index CREATE UNIQUE INDEX undecided_item_claims_pkey ON public.undecided_item_claims USING btree (claim_id, check_task_id, item_id)
+index CREATE UNIQUE INDEX undecided_items_one_per_check_task ON public.undecided_items USING btree (check_task_id, item_id)
+index CREATE UNIQUE INDEX undecided_items_pkey ON public.undecided_items USING btree (id)
+index CREATE UNIQUE INDEX uq_client_messages_one_answer_per_question ON public.client_messages USING btree (in_reply_to) WHERE ((kind)::text = 'answer'::text)
+index CREATE UNIQUE INDEX vision_documents_pkey ON public.vision_documents USING btree (id)
+index CREATE UNIQUE INDEX vision_documents_project_version_unique ON public.vision_documents USING btree (project_id, version)
+index CREATE UNIQUE INDEX work_burn_warnings_pkey ON public.work_burn_warnings USING btree (project_id, plan_revision, zone)
+index CREATE UNIQUE INDEX work_grants_pkey ON public.work_grants USING btree (id)
+index CREATE UNIQUE INDEX work_items_pkey ON public.work_items USING btree (id)
+relation acceptance_sweeps kind=r persistence=p rls=f force_rls=f
+relation check_disputes kind=r persistence=p rls=f force_rls=f
+relation check_set_freezes kind=r persistence=p rls=f force_rls=f
+relation client_login_failures kind=r persistence=p rls=f force_rls=f
+relation client_messages kind=r persistence=p rls=f force_rls=f
+relation client_sessions kind=r persistence=p rls=f force_rls=f
+relation clients kind=r persistence=p rls=f force_rls=f
+relation dependencies kind=r persistence=p rls=f force_rls=f
+relation dev_sessions kind=r persistence=p rls=f force_rls=f
+relation domain_events kind=r persistence=p rls=f force_rls=f
+relation environment_builds kind=r persistence=p rls=f force_rls=f
+relation failed_approaches kind=r persistence=p rls=f force_rls=f
+relation intake_readings kind=r persistence=p rls=f force_rls=f
+relation knowledge_entries kind=r persistence=p rls=f force_rls=f
+relation llm_calls kind=r persistence=p rls=f force_rls=f
+relation model_configs kind=r persistence=p rls=f force_rls=f
+relation model_price_tiers kind=r persistence=p rls=f force_rls=f
+relation model_price_windows kind=r persistence=p rls=f force_rls=f
+relation plan_repairs kind=r persistence=p rls=f force_rls=f
+relation plan_revisions kind=r persistence=p rls=f force_rls=f
+relation project_blocks kind=r persistence=p rls=f force_rls=f
+relation projects kind=r persistence=p rls=f force_rls=f
+relation provider_configs kind=r persistence=p rls=f force_rls=f
+relation replan_requests kind=r persistence=p rls=f force_rls=f
+relation roster_roles kind=r persistence=p rls=f force_rls=f
+relation schema_migrations kind=r persistence=p rls=f force_rls=f
+relation secrets kind=r persistence=p rls=f force_rls=f
+relation step_faults kind=r persistence=p rls=f force_rls=f
+relation suite_review_claims kind=r persistence=p rls=f force_rls=f
+relation suite_review_findings kind=r persistence=p rls=f force_rls=f
+relation suite_review_judgements kind=r persistence=p rls=f force_rls=f
+relation system_settings kind=r persistence=p rls=f force_rls=f
+relation task_checks kind=r persistence=p rls=f force_rls=f
+relation undecided_item_claims kind=r persistence=p rls=f force_rls=f
+relation undecided_items kind=r persistence=p rls=f force_rls=f
+relation vision_documents kind=r persistence=p rls=f force_rls=f
+relation work_burn_warnings kind=r persistence=p rls=f force_rls=f
+relation work_grants kind=r persistence=p rls=f force_rls=f
+relation work_items kind=r persistence=p rls=f force_rls=f
+rows acceptance_sweeps []
+rows check_disputes []
+rows check_set_freezes []
+rows client_login_failures []
+rows client_messages []
+rows client_sessions []
+rows clients []
+rows dependencies []
+rows dev_sessions []
+rows domain_events []
+rows environment_builds []
+rows failed_approaches []
+rows intake_readings []
+rows knowledge_entries []
+rows llm_calls []
+rows model_configs [{"model_id": "claude-fable-5-1", "capability": "Frontier", "api_model_id": "claude-fable-5-1", "provider_name": "anthropic", "input_cost_per_1m": 10, "max_context_tokens": 1000000, "output_cost_per_1m": 50, "cache_read_cost_per_1m": 0.25, "cache_write_cost_per_1m": 12.5}, {"model_id": "claude-haiku-5-5", "capability": "Medium", "api_model_id": "claude-haiku-5-5", "provider_name": "anthropic", "input_cost_per_1m": 0.1, "max_context_tokens": 1000000, "output_cost_per_1m": 0.5, "cache_read_cost_per_1m": 0.01, "cache_write_cost_per_1m": 0.125}, {"model_id": "claude-opus-5-5", "capability": "Frontier", "api_model_id": "claude-opus-5-5", "provider_name": "anthropic", "input_cost_per_1m": 4, "max_context_tokens": 1000000, "output_cost_per_1m": 20, "cache_read_cost_per_1m": 0.2, "cache_write_cost_per_1m": 5}, {"model_id": "claude-sonnet-5-5", "capability": "Strong", "api_model_id": "claude-sonnet-5-5", "provider_name": "anthropic", "input_cost_per_1m": 2, "max_context_tokens": 1000000, "output_cost_per_1m": 10, "cache_read_cost_per_1m": 0.1, "cache_write_cost_per_1m": 2.5}, {"model_id": "codestral-2508", "capability": "Light", "api_model_id": "codestral-2508", "provider_name": "mistral", "input_cost_per_1m": 0.3, "max_context_tokens": 128000, "output_cost_per_1m": 0.9, "cache_read_cost_per_1m": 0.03, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "capability": "Strong", "api_model_id": "deepseek-flash", "provider_name": "deepseek", "input_cost_per_1m": 0.3, "max_context_tokens": 1000000, "output_cost_per_1m": 1.2, "cache_read_cost_per_1m": 0.006, "cache_write_cost_per_1m": null}, {"model_id": "gemini-3.5-flash-lite", "capability": "Light", "api_model_id": "gemini-3.5-flash-lite", "provider_name": "google", "input_cost_per_1m": 0.3, "max_context_tokens": 1048576, "output_cost_per_1m": 2.5, "cache_read_cost_per_1m": 0.03, "cache_write_cost_per_1m": null}, {"model_id": "gemini-3.8-flash", "capability": "Medium", "api_model_id": "gemini-3.8-flash", "provider_name": "google", "input_cost_per_1m": 0.75, "max_context_tokens": 1048576, "output_cost_per_1m": 3.75, "cache_read_cost_per_1m": 0.075, "cache_write_cost_per_1m": null}, {"model_id": "gemini-4-argon", "capability": "Frontier", "api_model_id": "gemini-4-argon", "provider_name": "google", "input_cost_per_1m": 2, "max_context_tokens": 1048576, "output_cost_per_1m": 10, "cache_read_cost_per_1m": 0.1, "cache_write_cost_per_1m": null}, {"model_id": "gpt-6.1-sol", "capability": "Strong", "api_model_id": "gpt-6.1-sol", "provider_name": "openai", "input_cost_per_1m": 2, "max_context_tokens": 1050000, "output_cost_per_1m": 10, "cache_read_cost_per_1m": 0.1, "cache_write_cost_per_1m": 2.5}, {"model_id": "gpt-6-astra", "capability": "Frontier", "api_model_id": "gpt-6-astra", "provider_name": "openai", "input_cost_per_1m": 10, "max_context_tokens": 1050000, "output_cost_per_1m": 50, "cache_read_cost_per_1m": 1, "cache_write_cost_per_1m": 12.5}, {"model_id": "gpt-6-luna", "capability": "Light", "api_model_id": "gpt-6-luna", "provider_name": "openai", "input_cost_per_1m": 0.1, "max_context_tokens": 1050000, "output_cost_per_1m": 0.5, "cache_read_cost_per_1m": 0.01, "cache_write_cost_per_1m": 0.125}, {"model_id": "grok-4.3", "capability": "Light", "api_model_id": "grok-4.3", "provider_name": "xai", "input_cost_per_1m": 1.25, "max_context_tokens": 1000000, "output_cost_per_1m": 2.5, "cache_read_cost_per_1m": 0.2, "cache_write_cost_per_1m": null}, {"model_id": "grok-4.7", "capability": "Medium", "api_model_id": "grok-4.7", "provider_name": "xai", "input_cost_per_1m": 2, "max_context_tokens": 500000, "output_cost_per_1m": 6, "cache_read_cost_per_1m": 0.5, "cache_write_cost_per_1m": null}, {"model_id": "ministral-3b-2512", "capability": "Light", "api_model_id": "ministral-3b-2512", "provider_name": "mistral", "input_cost_per_1m": 0.1, "max_context_tokens": 256000, "output_cost_per_1m": 0.1, "cache_read_cost_per_1m": 0.01, "cache_write_cost_per_1m": null}, {"model_id": "mistral-large-4", "capability": "Strong", "api_model_id": "mistral-large-4", "provider_name": "mistral", "input_cost_per_1m": 1.36, "max_context_tokens": 1000000, "output_cost_per_1m": 4.18, "cache_read_cost_per_1m": 0.14, "cache_write_cost_per_1m": null}, {"model_id": "mistral-medium-3-5", "capability": "Light", "api_model_id": "mistral-medium-3-5", "provider_name": "mistral", "input_cost_per_1m": 1.5, "max_context_tokens": 256000, "output_cost_per_1m": 7.5, "cache_read_cost_per_1m": 0.15, "cache_write_cost_per_1m": null}, {"model_id": "mistral-small-2603", "capability": "Light", "api_model_id": "mistral-small-2603", "provider_name": "mistral", "input_cost_per_1m": 0.15, "max_context_tokens": 256000, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.015, "cache_write_cost_per_1m": null}]
+rows model_price_tiers [{"model_id": "claude-haiku-5-5", "min_input_tokens": 100001, "input_cost_per_1m": 0.5, "output_cost_per_1m": 2.5, "cache_read_cost_per_1m": 0.05, "cache_write_cost_per_1m": 0.625}, {"model_id": "gpt-6.1-sol", "min_input_tokens": 272001, "input_cost_per_1m": 4, "output_cost_per_1m": 15, "cache_read_cost_per_1m": 0.2, "cache_write_cost_per_1m": 5}, {"model_id": "gpt-6-astra", "min_input_tokens": 272001, "input_cost_per_1m": 20, "output_cost_per_1m": 75, "cache_read_cost_per_1m": 2, "cache_write_cost_per_1m": 25}, {"model_id": "gpt-6-luna", "min_input_tokens": 272001, "input_cost_per_1m": 0.2, "output_cost_per_1m": 0.75, "cache_read_cost_per_1m": 0.02, "cache_write_cost_per_1m": 0.25}, {"model_id": "grok-4.3", "min_input_tokens": 200000, "input_cost_per_1m": 2.5, "output_cost_per_1m": 5, "cache_read_cost_per_1m": 0.4, "cache_write_cost_per_1m": null}, {"model_id": "grok-4.7", "min_input_tokens": 200000, "input_cost_per_1m": 4, "output_cost_per_1m": 12, "cache_read_cost_per_1m": 1, "cache_write_cost_per_1m": null}]
+rows model_price_windows [{"model_id": "deepseek-flash", "iso_weekday": 1, "utc_end_minute": 1440, "utc_start_minute": 600, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 1, "utc_end_minute": 360, "utc_start_minute": 240, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 1, "utc_end_minute": 60, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 2, "utc_end_minute": 1440, "utc_start_minute": 600, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 2, "utc_end_minute": 360, "utc_start_minute": 240, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 2, "utc_end_minute": 60, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 3, "utc_end_minute": 1440, "utc_start_minute": 600, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 3, "utc_end_minute": 360, "utc_start_minute": 240, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 3, "utc_end_minute": 60, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 4, "utc_end_minute": 1440, "utc_start_minute": 600, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 4, "utc_end_minute": 360, "utc_start_minute": 240, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 4, "utc_end_minute": 60, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 5, "utc_end_minute": 1440, "utc_start_minute": 600, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 5, "utc_end_minute": 360, "utc_start_minute": 240, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 5, "utc_end_minute": 60, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 6, "utc_end_minute": 1440, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}, {"model_id": "deepseek-flash", "iso_weekday": 7, "utc_end_minute": 1440, "utc_start_minute": 0, "input_cost_per_1m": 0.15, "output_cost_per_1m": 0.6, "cache_read_cost_per_1m": 0.003, "cache_write_cost_per_1m": null}]
+rows plan_repairs []
+rows plan_revisions []
+rows project_blocks []
+rows projects []
+rows provider_configs [{"name": "anthropic", "base_url": null, "provider_type": "anthropic"}, {"name": "deepseek", "base_url": "https://api.deepseek.com/v1", "provider_type": "deepseek"}, {"name": "google", "base_url": null, "provider_type": "openai-compatible"}, {"name": "local", "base_url": null, "provider_type": "local"}, {"name": "mistral", "base_url": "https://api.mistral.ai/v1", "provider_type": "openai-compatible"}, {"name": "openai", "base_url": null, "provider_type": "openai"}, {"name": "xai", "base_url": "https://api.x.ai/v1", "provider_type": "openai-compatible"}]
+rows replan_requests []
+rows roster_roles []
+rows secrets []
+rows step_faults []
+rows suite_review_claims []
+rows suite_review_findings []
+rows suite_review_judgements []
+rows system_settings []
+rows task_checks []
+rows undecided_item_claims []
+rows undecided_items []
+rows vision_documents []
+rows work_burn_warnings []
+rows work_grants []
+rows work_items []
+trigger CREATE CONSTRAINT TRIGGER project_blocks_halt_consistent AFTER INSERT OR UPDATE ON public.project_blocks DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION project_halt_consistent() enabled=O
+trigger CREATE CONSTRAINT TRIGGER projects_halt_consistent AFTER INSERT OR UPDATE ON public.projects DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION project_halt_consistent() enabled=O
+trigger CREATE TRIGGER check_disputes_append_only BEFORE UPDATE ON public.check_disputes FOR EACH ROW EXECUTE FUNCTION check_disputes_refuse_update() enabled=O
+trigger CREATE TRIGGER check_set_freezes_append_only BEFORE UPDATE ON public.check_set_freezes FOR EACH ROW EXECUTE FUNCTION check_set_freezes_refuse_update() enabled=O
+trigger CREATE TRIGGER client_messages_inbound_notify AFTER INSERT ON public.client_messages FOR EACH ROW WHEN (((new.direction)::text = 'inbound'::text)) EXECUTE FUNCTION notify_client_message() enabled=O
+trigger CREATE TRIGGER dependencies_same_project BEFORE INSERT OR UPDATE OF from_id, to_id ON public.dependencies FOR EACH ROW EXECUTE FUNCTION dependency_same_project() enabled=O
+trigger CREATE TRIGGER domain_events_notify AFTER INSERT ON public.domain_events FOR EACH ROW EXECUTE FUNCTION notify_ashara_events() enabled=O
+trigger CREATE TRIGGER projects_acceptance_guard BEFORE UPDATE OF lifecycle ON public.projects FOR EACH ROW EXECUTE FUNCTION project_acceptance_guard() enabled=O
+trigger CREATE TRIGGER projects_stop_ends_halt AFTER UPDATE OF lifecycle ON public.projects FOR EACH ROW EXECUTE FUNCTION project_stop_ends_halt() enabled=O
+trigger CREATE TRIGGER roster_roles_append_only BEFORE UPDATE ON public.roster_roles FOR EACH ROW EXECUTE FUNCTION roster_roles_refuse_update() enabled=O
+trigger CREATE TRIGGER suite_review_claims_append_only BEFORE UPDATE ON public.suite_review_claims FOR EACH ROW EXECUTE FUNCTION suite_review_claims_refuse_update() enabled=O
+trigger CREATE TRIGGER suite_review_findings_append_only BEFORE UPDATE ON public.suite_review_findings FOR EACH ROW EXECUTE FUNCTION suite_review_findings_refuse_update() enabled=O
+trigger CREATE TRIGGER suite_review_judgements_append_only BEFORE UPDATE ON public.suite_review_judgements FOR EACH ROW EXECUTE FUNCTION suite_review_judgements_refuse_update() enabled=O
+trigger CREATE TRIGGER task_checks_append_only BEFORE UPDATE ON public.task_checks FOR EACH ROW EXECUTE FUNCTION task_checks_refuse_update() enabled=O
+trigger CREATE TRIGGER undecided_item_claims_append_only BEFORE UPDATE ON public.undecided_item_claims FOR EACH ROW EXECUTE FUNCTION undecided_item_claims_refuse_update() enabled=O
+trigger CREATE TRIGGER undecided_items_append_only BEFORE UPDATE ON public.undecided_items FOR EACH ROW EXECUTE FUNCTION undecided_items_refuse_update() enabled=O
+trigger CREATE TRIGGER work_items_plan_repair AFTER UPDATE OF status ON public.work_items FOR EACH ROW EXECUTE FUNCTION plan_repair_on_abandon() enabled=O

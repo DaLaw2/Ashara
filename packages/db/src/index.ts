@@ -54,6 +54,7 @@ export { WorkGrantRepository } from "./repositories/work-grant.js";
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export {
   MIGRATIONS_DIR,
+  MigrationBaselineError,
   MigrationDriftError,
   assertMigrationsCurrent,
   runMigrations,

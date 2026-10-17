@@ -89,7 +89,7 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_judgements (migrations 063, 069, 071, 073, Quality): one row per finding of a suite
+// suite_review_judgements (Quality): one row per finding of a suite
 // review's first pass that Z0 could not disprove, routed, released or advisory, with both reviews'
 // findings whole, the second review's model and strength (none when no second review could change
 // the outcome, or when it failed, with why in second_failure), the strengths it passed over, and why
@@ -122,7 +122,7 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_claims (migrations 072, 073, Quality): one row per suite review whose outcome routed
+// suite_review_claims (Quality): one row per suite review whose outcome routed
 // nothing: its claim that the checks decide the items it covers, with the second review that confirms
 // it or not (basis) whole, at the strength it answered (second_strength) after the strengths it passed
 // over. Append-only; second_findings, covered and passed_over are jsonb arrays.
@@ -148,7 +148,7 @@ export const suiteReviewClaims = pgTable("suite_review_claims", {
 });
 
 // ---------------------------------------------------------------------------
-// undecided_items (migrations 069, 072, Quality): one row per cited item a suite review left
+// undecided_items (Quality): one row per cited item a suite review left
 // undecided: a finding on it that did not act (judgement_id), or a claim covering it that no second
 // review confirmed (claim_id), exactly one: the source that kept the row first. Every claim that
 // leaves the item undecided, that first one included, is tied to it in undecided_item_claims, which

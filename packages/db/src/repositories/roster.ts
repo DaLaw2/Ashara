@@ -113,7 +113,7 @@ export async function recordFirstRoster(db: Database, write: RosterWrite): Promi
   });
 }
 
-/** The rows of the project's latest roster revision, by name; empty when it has none. Rows are never updated (031). */
+/** The rows of the project's latest roster revision, by name; empty when it has none. Rows are never updated. */
 export async function latestRosterRoles(db: DbHandle, projectId: ProjectId) {
   const revision = await latestRosterRevision(db, projectId);
   if (revision === null) return [];

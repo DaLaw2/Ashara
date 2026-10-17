@@ -29,7 +29,7 @@ const CountsSchema = z.object({
 });
 
 /**
- * Web-client login attempts (migrations 018 and 027), keyed by the client name
+ * Web-client login attempts, keyed by the client name
  * as presented and the source the attempt came from (column `source_address`;
  * the caller decides what one source is). A row is a failed attempt or one still
  * being evaluated; a success deletes its pair's rows. Every window is judged

@@ -54,8 +54,7 @@ export async function loadApiToken(secrets: SecretReader): Promise<string> {
     throw new ServerStartupRefused(
       "The API token is not in the secret store; the server cannot authenticate any request.",
       `secret store, name "${API_TOKEN_SECRET_NAME}"`,
-      `\`read -rs T && printf '%s' "$T" | npx tsx scripts/secret.ts put ${API_TOKEN_SECRET_NAME}\` ` +
-        "(or `npx tsx scripts/secret.ts import-legacy` to move a pre-store token out of system_settings).",
+      `\`read -rs T && printf '%s' "$T" | npx tsx scripts/secret.ts put ${API_TOKEN_SECRET_NAME}\``,
     );
   }
   return secrets.get(API_TOKEN_SECRET_NAME);

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationDriftError } from "@ashara/db";
+import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationBaselineError, MigrationDriftError } from "@ashara/db";
 import type { PoolFactory } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
@@ -197,6 +197,16 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
         { cause: err },
       );
     }
+    if (err instanceof MigrationBaselineError) {
+      throw new ServerStartupRefused(
+        `The database schema is not one migrations/ describes: ${err.message}`,
+        `schema_migrations in ${redactedDatabaseUrl(databaseUrl)}`,
+        err.refusal.kind === "init_file_missing"
+          ? "check out the repository's migrations/ directory"
+          : "bring the database to the last numbered migration from a checkout that still has those files, then run `just migrate`",
+        { cause: err },
+      );
+    }
     throw err;
   }
   const db = createDb(databaseUrl, ports.createPool);
@@ -246,7 +256,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       `work budgets: ${config.workBudgets.perTaskRequests} model requests per task, ${config.workBudgets.perProjectRequests} per project`,
   );
   const llmCallLedger = new LlmCallLedger(llmCallRepo, spendCap);
-  // Model catalog is DB-authoritative (seeded by a migration).
+  // Model catalog is DB-authoritative (seeded by the init migration).
   // Load from DB, convert to the model-access ModelConfig shape, and build the
   // gateway config. Routing profiles remain deployment-specific TOML config.
   const dbModelRows = await configRepo.listModelConfigs();

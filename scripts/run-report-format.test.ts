@@ -246,7 +246,7 @@ describe("formatRunReport cost per Epic and goal task", () => {
     expect(lineOf(report.text, `goal task ${id(0x12)}`)).toContain("charged $0.380000 (checks $0.120000, repairs $0.260000)");
     expect(lineOf(report.text, `Epic ${id(0xe2)} Epic B:`)).toContain("spend $0.720000 over 2 goal task(s)");
     expect(lineOf(report.text, `Epic ${id(0xe1)} Epic A:`)).toContain("spend $0.420000 over 1 goal task(s)");
-    expect(lineOf(report.text, "unattributed: $0.150000")).toContain(`${id(0x35)} environment change with no work_items.repairs_task_id on record (created before migration 077) $0.150000`);
+    expect(lineOf(report.text, "unattributed: $0.150000")).toContain(`${id(0x35)} environment change with no work_items.repairs_task_id on record (created before the link was recorded) $0.150000`);
     expect(report.attributionViolation).toBe(false);
   });
 
@@ -295,7 +295,7 @@ describe("formatRunReport cost per Epic and goal task", () => {
     expect(lines.slice(heading + 1, heading + 4)).toEqual([
       "    2026-10-16T03:10:30.000Z agent-runner: 15.0% (30000 of 200000 tokens)",
       "    2026-10-16T03:11:30.000Z agent-runner: unknown (no input tokens reported)",
-      "    2026-10-16T03:12:30.000Z agent-runner: unknown (no window recorded (a row recorded before migration 074, or not recorded yet))",
+      "    2026-10-16T03:12:30.000Z agent-runner: unknown (no window recorded (a row recorded before windows were, or not recorded yet))",
     ]);
     expect(report.text).not.toMatch(/agent-runner: 0\.0%/);
     expect(lineOf(report.text, `Epic ${id(0xe1)} Epic A:`)).toContain(
@@ -427,7 +427,7 @@ describe("formatSuiteReviewClaims", () => {
     };
     const text = formatSuiteReviewClaims([sameProvider]);
     expect(text).toContain(
-      "  review r5, covering check task(s) c5: no-other-family (unconfirmed: the second opinion came from the first review's provider (recorded before migration 073)); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
+      "  review r5, covering check task(s) c5: no-other-family (unconfirmed: the second opinion came from the first review's provider (recorded before second-opinion strength was)); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
     );
     expect(text).toContain('    unverified S9 of task c5 "put survives a power loss": no second opinion of another provider confirmed it (another model of the family)');
   });

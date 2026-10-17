@@ -15,18 +15,23 @@ class RunReportProjectMissing extends Error {
 }
 
 /**
- * schema_migrations has no row for ATTEMPT_MIGRATION, so no session can be dated against it and a
- * session without attempt columns cannot be told apart from one written before they existed.
+ * schema_migrations has no row for any migration that created the attempt columns, so no session
+ * can be dated against them and a session without attempt columns cannot be told apart from one
+ * written before they existed.
  */
 class RunReportAttemptMigrationUnrecorded extends Error {
-  constructor(readonly filename: string) {
-    super(`run-report: schema_migrations has no row for ${filename}; cannot tell a session written before it from one with no recorded attempt`);
+  constructor(readonly filenames: readonly string[]) {
+    super(`run-report: schema_migrations has no row for any of ${filenames.join(", ")}; cannot tell a session written before the attempt columns from one with no recorded attempt`);
     this.name = "RunReportAttemptMigrationUnrecorded";
   }
 }
 
-/** The migration that added the attempt columns; a session created before it applied cannot have them. */
-const ATTEMPT_MIGRATION = "046_dev_session_attempt_evidence.sql";
+/**
+ * The migrations that create the attempt columns: the numbered file that added them on a database
+ * that ran it, and the init on one built from it. The earliest applied is when the columns began;
+ * a session created before it cannot have them.
+ */
+const ATTEMPT_MIGRATIONS = ["046_dev_session_attempt_evidence.sql", "000_init.sql"] as const;
 
 const count = z.coerce.number().int().nonnegative();
 const usd = z.coerce.number().nonnegative();
@@ -103,7 +108,7 @@ const WorkItemRowSchema = z.object({
  * each NULL case names only what the row actually shows.
  * - `open`: the phase is not terminal (in flight, or a crash orphan not yet reconciled).
  * - `reconciled`: a reconciler (`by`), not the session itself, wrote its terminal phase.
- * - `predates-attempt-columns`: created before ATTEMPT_MIGRATION applied.
+ * - `predates-attempt-columns`: created before its database had the attempt columns.
  * - `completed-without-attempt`: it completed with no attempt (its work already delivered on main,
  *   so it says why); `endDetail` is its terminal write's own detail, null on a row written before a
  *   completion recorded one.
@@ -134,7 +139,7 @@ interface SessionEvidence {
  * AGENT_CALL_SITE, the only site an attempt calls as, so it belongs to one of the task's dev
  * sessions; a call of any other site is no attempt's turn. `costUsd` is NULL when no cost was
  * measured, `inputTokens` when the provider reported none, `contextWindowTokens` (the window of the
- * model it was sent to) on a row recorded before the column existed or not recorded yet.
+ * model it was sent to) on a row recorded before windows were, or not recorded yet.
  */
 interface TaskCall {
   readonly callSite: string;
@@ -181,7 +186,7 @@ interface RunEvidence {
 
 function attemptRecord(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: Date): AttemptRecord {
   const columns = [row.attemptPromptDigest, row.attemptTerminal, row.attemptTurns, row.attemptProvider, row.attemptModel, row.attemptCell];
-  // ATTEMPT_MIGRATION's CHECK keeps the six together; parse them only when they are present.
+  // The attempt columns' CHECK keeps the six together; parse them only when they are present.
   if (!columns.every((c) => c === null)) {
     return {
       kind: "recorded",
@@ -227,9 +232,12 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
   if (projectRow === undefined) throw new RunReportProjectMissing(projectId);
   const project = ProjectRowSchema.parse(projectRow);
 
-  const migrationRows = await db.execute(sql`SELECT applied_at AS "appliedAt" FROM schema_migrations WHERE filename = ${ATTEMPT_MIGRATION}`);
+  const migrationRows = await db.execute(
+    sql`SELECT applied_at AS "appliedAt" FROM schema_migrations
+         WHERE filename IN (${ATTEMPT_MIGRATIONS[0]}, ${ATTEMPT_MIGRATIONS[1]}) ORDER BY applied_at LIMIT 1`,
+  );
   const [migrationRow] = migrationRows.rows;
-  if (migrationRow === undefined) throw new RunReportAttemptMigrationUnrecorded(ATTEMPT_MIGRATION);
+  if (migrationRow === undefined) throw new RunReportAttemptMigrationUnrecorded(ATTEMPT_MIGRATIONS);
   const attemptColumnsSince = z.object({ appliedAt: z.coerce.date() }).parse(migrationRow).appliedAt;
 
   const sessionRows = await db.execute(sql`

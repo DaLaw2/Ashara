@@ -69,7 +69,7 @@ class LlmCallSpendUnknown extends Error {
     super(
       `llm_calls holds ${rows} row(s) with neither cost_usd nor estimated_cost_usd in scope ` +
         `${describeScope(scope)}; their spend cannot be counted against the cap. ` +
-        `Check that migration 035 (CHECK llm_calls_spend_known) is applied.`,
+        `Check that CHECK llm_calls_spend_known exists and is validated.`,
     );
     this.name = "LlmCallSpendUnknown";
   }
@@ -149,7 +149,7 @@ const WorkRowSchema = z.object({
 
 const SiteRowSchema = z.object({ callSite: z.string().min(1), requests: z.coerce.number().int().positive() });
 
-/** The Finance cost ledger's per-call rows (architecture K10, migrations 015, 030, 035 and 053). */
+/** The Finance cost ledger's per-call rows (architecture K10). */
 export class LlmCallRepository {
   constructor(private readonly db: DbHandle) {}
 

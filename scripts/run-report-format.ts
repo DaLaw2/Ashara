@@ -93,7 +93,7 @@ function sessionLine(index: number, s: Session): string {
     case "reconciled":
       return `${head}: no attempt recorded; closed by ${record.by} as a crash orphan, so any agent call it made is tied to no attempt`;
     case "predates-attempt-columns":
-      return `${head}: no attempt recorded; the session predates migration 046, which added the attempt columns`;
+      return `${head}: no attempt recorded; the session predates the attempt columns`;
     case "completed-without-attempt":
       return (
         `${head}: no attempt; it completed without one, and its end record reads: ` +
@@ -160,7 +160,7 @@ type Utilisation = { readonly kind: "known"; readonly share: number; readonly in
 
 function utilisationOf(call: TaskCall): Utilisation {
   if (call.inputTokens === null) return { kind: "unknown", why: "no input tokens reported" };
-  if (call.contextWindowTokens === null) return { kind: "unknown", why: "no window recorded (a row recorded before migration 074, or not recorded yet)" };
+  if (call.contextWindowTokens === null) return { kind: "unknown", why: "no window recorded (a row recorded before windows were, or not recorded yet)" };
   return { kind: "known", share: call.inputTokens / call.contextWindowTokens, input: call.inputTokens, window: call.contextWindowTokens };
 }
 
@@ -234,7 +234,7 @@ function spendText(s: Spend): string {
 /**
  * The goal task an item's spend serves, or why none. A goal task (isGoalTask, the one definition)
  * serves itself; a check task serves the task its task_spec.checksFor names; an environment change
- * serves the task its work_items.repairs_task_id records it was opened for (migration 077). A link
+ * serves the task its work_items.repairs_task_id records it was opened for. A link
  * not on record, or one naming no goal task of the project, serves none and says so. Anything else
  * serves no goal task.
  */
@@ -249,7 +249,7 @@ function servedBy(item: WorkItem, items: ReadonlyMap<string, WorkItem>): Served 
     return { kind: "goal", goal: checked, as: "check" };
   }
   if (item.origin === "environment-change") {
-    if (item.repairsTaskId === null) return { kind: "none", why: "environment change with no work_items.repairs_task_id on record (created before migration 077)" };
+    if (item.repairsTaskId === null) return { kind: "none", why: "environment change with no work_items.repairs_task_id on record (created before the link was recorded)" };
     const repaired = items.get(item.repairsTaskId);
     if (repaired === undefined || !isGoalTask(repaired)) return { kind: "none", why: `environment change whose repairs_task_id ${item.repairsTaskId} is no goal task of the project` };
     return { kind: "goal", goal: repaired, as: "repair" };
@@ -531,7 +531,7 @@ const CLAIM_BASIS: Readonly<Record<StoredClaim["basis"], { readonly label: strin
   "second-opinion-clean": { label: "clean: the second opinion found no problem either", unverified: "a clean claim leaves no item unverified" },
   "second-opinion-found": { label: "finding: the second opinion found a problem", unverified: "the second opinion named a problem in it" },
   "no-other-family": {
-    label: "unconfirmed: the second opinion came from the first review's provider (recorded before migration 073)",
+    label: "unconfirmed: the second opinion came from the first review's provider (recorded before second-opinion strength was)",
     unverified: "no second opinion of another provider confirmed it",
   },
   "second-review-failed": { label: "unconfirmed: the second opinion failed at every strength", unverified: "no second opinion answered" },

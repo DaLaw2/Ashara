@@ -28,7 +28,7 @@ const spendRecord = z.strictObject({
   inFlightUsd: z.number(),
   nextCallUsd: z.number().nullable(),
 });
-/** The work ledger a work_budget halt recorded, as project_blocks.work holds it (migrations 067, 068). */
+/** The work ledger a work_budget halt recorded, as project_blocks.work holds it. */
 const workRecord = z.strictObject({
   scope: z.enum(["task", "project"]),
   budgetRequests: z.number(),
@@ -99,7 +99,7 @@ const UNDECIDED_CLAIMS_SQL = sql.raw(`LEFT JOIN undecided_item_claims l ON l.che
           LEFT JOIN suite_review_claims c ON c.id = l.claim_id`);
 
 /**
- * A cited item a suite review left undecided (undecided_items, migrations 069, 072): its id, the
+ * A cited item a suite review left undecided (undecided_items): its id, the
  * text its check task cited it with, and why.
  */
 const undecidedRow = z.object({ id: z.string(), text: z.string(), reason: z.enum(UNDECIDED_REASONS) });
@@ -659,7 +659,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
         add(`halt-cause:${kind}`, `the ${kind} halt report does not state the recorded cause as "${stated.slice(0, 200)}"; it reads "${report.body.slice(0, 200)}"`);
       }
     } else if (judgement === "retired") {
-      add(`halt-kind-retired:${kind}`, `a ${kind} halt was written, a kind no code path writes since migration 048`);
+      add(`halt-kind-retired:${kind}`, `a ${kind} halt was written, a kind no code path writes`);
     } else if (kind === "plan_repair" && !episode.ended) {
       const blocking = records.repairs.filter((repair) => repair.episodeId === episode.id);
       for (const repair of blocking) {

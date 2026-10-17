@@ -32,7 +32,7 @@ afterAll(async () => {
 });
 
 describe("LlmCallRepository.admit", () => {
-  test("the admitted row carries the trace the call was admitted in (migration 076)", async () => {
+  test("the admitted row carries the trace the call was admitted in", async () => {
     const id = randomUUID();
     const traceId = randomUUID();
     await new LlmCallRepository(db).admit({

@@ -22,7 +22,7 @@ const modified = (p: string): ChangedPath => ({ path: p, status: "modified" });
 describe("the whole-suite rules", () => {
   // One path per rule; a rule added without a path here fails the coverage check below.
   const WHOLE_SUITE_PATHS = [
-    "migrations/072_next.sql",
+    "migrations/added.sql",
     "boundary-rules.toml",
     "eslint.config.mjs",
     "tsconfig.json",

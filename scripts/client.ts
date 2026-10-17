@@ -1,5 +1,5 @@
 /**
- * Operator access to the firm's clients (migration 018). Never prints an access code.
+ * Operator access to the firm's clients. Never prints an access code.
  *
  *   npx tsx scripts/client.ts add <name>              creates the client and stores its web-client
  *                                                     access code, read from piped stdin, as the

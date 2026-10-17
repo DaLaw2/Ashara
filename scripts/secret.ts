@@ -5,9 +5,6 @@
  *                                            refuses a client access code (scripts/client.ts set-code)
  *   npx tsx scripts/secret.ts check <name>   confirms the secret exists and decrypts under the loaded key
  *   npx tsx scripts/secret.ts list           names only
- *   npx tsx scripts/secret.ts import-legacy  moves plaintext provider_configs.api_key and the
- *                                            system_settings 'api_token' row into the store, in
- *                                            one transaction; prints names and counts only
  *
  * The value comes from stdin, never argv, so it does not land in shell history or `ps`.
  * Key file: $ASHARA_SECRET_KEY_FILE or ~/.config/ashara/secret.key (scripts/secret-key-init.ts).
@@ -22,13 +19,12 @@ import {
   resolveKeyFilePath,
 } from "@ashara/security";
 import { describeErrorChain } from "@ashara/shared";
-import { importLegacyCredentials } from "./import-legacy-credentials.js";
 import { readPipedStdin } from "./read-piped-stdin.js";
 
 class SecretCliUsageError extends Error {
   constructor(detail: string) {
     super(
-      `${detail}\nUsage: npx tsx scripts/secret.ts put <name> | check <name> | list | import-legacy\n` +
+      `${detail}\nUsage: npx tsx scripts/secret.ts put <name> | check <name> | list\n` +
         `  put reads the value from piped stdin, e.g. \`read -rs V && printf '%s' "$V" | npx tsx scripts/secret.ts put provider/deepseek/api_key\``,
     );
     this.name = "SecretCliUsageError";
@@ -77,19 +73,6 @@ async function main(): Promise<void> {
       case "list": {
         const names = await store.listNames();
         console.log(names.length > 0 ? names.join("\n") : "(no secrets stored)");
-        return;
-      }
-      case "import-legacy": {
-        if (name !== undefined) {
-          throw new SecretCliUsageError("import-legacy takes no arguments.");
-        }
-        const report = await db.transaction((tx) => importLegacyCredentials(tx, key));
-        if (report.imported.length === 0) {
-          console.log("Nothing to import: no plaintext provider api_key and no system_settings 'api_token' row.");
-        } else {
-          console.log(`Imported ${report.imported.length} secret(s) under key ${key.id}; plaintext removed:`);
-          console.log(report.imported.map((n) => `  ${n}`).join("\n"));
-        }
         return;
       }
       default:

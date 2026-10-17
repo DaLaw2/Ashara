@@ -51,7 +51,7 @@ describe("DevSessionRepository", () => {
     expect(row?.phase).toBe("Preparing");
     expect(row?.brief).toEqual(brief);
     expect(row?.environmentVersion).toBe(environmentVersion);
-    // Migration 078: the session carries the trace of the attempt it was opened in.
+    // The session carries the trace of the attempt it was opened in.
     expect(row?.traceId).toBe(traceId);
     expect(row?.createdAt).toBeInstanceOf(Date);
     expect(row?.updatedAt).toBeInstanceOf(Date);

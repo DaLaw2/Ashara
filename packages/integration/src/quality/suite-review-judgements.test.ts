@@ -10,7 +10,7 @@ import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId, recordingLogger } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 
-// Migration 063: a suite review's judgements on the outside-vision rejections it routed or released
+// A suite review's judgements on the outside-vision rejections it routed or released
 // are written whole before its outcome is acted on, and read back only through their schema. Every
 // row belongs to a project this suite creates, and afterAll deletes it.
 
@@ -63,7 +63,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe("suite review judgements (migration 063)", () => {
+describe("suite review judgements", () => {
   test("a routed and a released rejection are recorded whole with both reviews' models, read back through their schema, and never updated", async () => {
     const reviewTask = parseWorkItemId(await workItem("Review the plan's checks"), "test review task");
     const implA = await workItem("Sum by month");
@@ -151,7 +151,7 @@ describe("suite review judgements (migration 063)", () => {
     await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
   });
 
-  test("a second review's strength must fit its two models: the same model twice, another of the provider, or another provider (migration 073)", async () => {
+  test("a second review's strength must fit its two models: the same model twice, another of the provider, or another provider", async () => {
     const reviewTask = await workItem("Review with a mislabelled second review");
     const checkTask = await workItem("Checks with a mislabelled second review");
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
@@ -168,7 +168,7 @@ describe("suite review judgements (migration 063)", () => {
   });
 });
 
-describe("witnessed findings and the check set freeze (migration 069, ADR-084 decisions 2 and 3)", () => {
+describe("witnessed findings and the check set freeze (ADR-084 decisions 2 and 3)", () => {
   async function task(title: string, spec: unknown, workKind: string | null): Promise<string> {
     const id = randomUUID();
     await db.execute(sql`
@@ -225,7 +225,7 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     ]);
   });
 
-  test("a second review no model answered is stored as failed with its reason, the item kept advisory and undecided (migration 071)", async () => {
+  test("a second review no model answered is stored as failed with its reason, the item kept advisory and undecided", async () => {
     const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
     const { outcome, kept, judged, check } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b" } }, true, failure);
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
@@ -302,7 +302,7 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     return { outcome, kept: kept.rows, claims: claims.rows, check };
   }
 
-  test("a clean review another family confirms is recorded as a claim and leaves nothing undecided (migration 072)", async () => {
+  test("a clean review another family confirms is recorded as a claim and leaves nothing undecided", async () => {
     const { outcome, kept, claims, check } = await reviewClean(() => ({ problems: [] }));
     expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "second-opinion-clean", strength: "other-family", unconfirmed: [] } });
     expect(kept).toEqual([]);

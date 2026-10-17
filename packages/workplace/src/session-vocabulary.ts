@@ -9,7 +9,7 @@ export const CONVERSATION_RECORDS_DIR = "records";
 
 /**
  * Every typed end a Workplace attempt can record on its dev_sessions row: the Outcome kind, with a
- * finished attempt's status. The `attempt_terminal` CHECK (migrations/046_dev_session_attempt_evidence.sql, widened by 050 and 075)
+ * finished attempt's status. The `attempt_terminal` CHECK on dev_sessions
  * admits exactly these; integration's lifecycle-lists.test.ts compares the two.
  */
 export const ATTEMPT_TERMINALS = [
@@ -31,7 +31,7 @@ export type AttemptTerminal = (typeof ATTEMPT_TERMINALS)[number];
 
 /**
  * The phases a dev_sessions row can hold. Only these three are ever written, and
- * the `dev_sessions.phase` CHECK constraint (migrations/001_initial.sql) refuses
+ * the `dev_sessions.phase` CHECK constraint refuses
  * anything else, so a phase the code cannot produce cannot reach the DB either.
  * `Preparing` is the only non-terminal phase; a session in it after a restart is
  * a crash orphan, not a live agent.

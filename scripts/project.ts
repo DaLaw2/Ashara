@@ -1,6 +1,6 @@
 /**
- * Operator access to a project's status (story s-loop-never-stop-m1, migration 040) and its work
- * budget (ADR-084 decision 1, migration 067).
+ * Operator access to a project's status (story s-loop-never-stop-m1) and its work
+ * budget (ADR-084 decision 1).
  *
  *   npx tsx scripts/project.ts unblock <project-id> --reason <text> [--by <name>]
  *   npx tsx scripts/project.ts grant <project-id> --requests <n> --reason <text> [--by <name>]

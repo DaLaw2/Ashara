@@ -1,12 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { DEFAULT_DATABASE_URL } from "./connection.js";
-import { MigrationDriftError, assertMigrationsCurrent, runMigrations } from "./migrations.js";
+import { LEGACY_MIGRATIONS } from "./legacy-migrations.js";
+import {
+  MIGRATIONS_DIR,
+  MigrationBaselineError,
+  MigrationDriftError,
+  assertMigrationsCurrent,
+  runMigrations,
+} from "./migrations.js";
 
 // Each test owns a fresh Postgres schema (search_path pinned through the URL) and a
 // temp migrations dir, so the database's real schema_migrations is never touched.
@@ -33,6 +40,30 @@ async function driftOf(run: Promise<unknown>): Promise<MigrationDriftError> {
   );
   if (!(err instanceof MigrationDriftError)) throw new Error(`expected MigrationDriftError, got ${String(err)}`);
   return err;
+}
+
+async function baselineRefusalOf(run: Promise<unknown>): Promise<MigrationBaselineError> {
+  const err: unknown = await run.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  if (!(err instanceof MigrationBaselineError)) throw new Error(`expected MigrationBaselineError, got ${String(err)}`);
+  return err;
+}
+
+async function present(table: string): Promise<boolean> {
+  const r = await admin("SELECT to_regclass($1) IS NOT NULL AS present", [table]);
+  return z.object({ present: z.boolean() }).parse(r.rows[0]).present;
+}
+
+/** schema_migrations as a database that ran `rows` of the numbered files the init stands in for. */
+async function recordLegacy(rows: readonly { readonly filename: string; readonly sha256: string }[]): Promise<void> {
+  await admin(
+    "CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), content_sha256 TEXT)",
+  );
+  for (const row of rows) {
+    await admin("INSERT INTO schema_migrations (filename, content_sha256) VALUES ($1, $2)", [row.filename, row.sha256]);
+  }
 }
 
 beforeEach(async () => {
@@ -160,4 +191,129 @@ describe("migration runner robustness", () => {
     const row = await admin("SELECT count(*)::int AS n FROM schema_migrations WHERE filename = '003_c.sql'");
     expect(z.object({ n: z.number() }).parse(row.rows[0]).n).toBe(0);
   });
+});
+
+describe("baseline onto 000_init.sql", () => {
+  // The init here is a marker table: the test reads whether it ran, not what it builds.
+  beforeEach(() => {
+    rmSync(join(dir, "001_a.sql"));
+    rmSync(join(dir, "002_b.sql"));
+    writeFileSync(join(dir, "000_init.sql"), "CREATE TABLE init_ran (id int);");
+  });
+
+  test("an empty database runs the init", async () => {
+    const result = await runMigrations(url, dir);
+    expect(result.applied).toEqual(["000_init.sql"]);
+    expect(result.baselined).toEqual([]);
+    expect(await present("init_ran")).toBe(true);
+    await assertMigrationsCurrent(url, dir);
+  });
+
+  test("a database that ran every numbered file with its hash records the init without running it, removing nothing", async () => {
+    await recordLegacy(LEGACY_MIGRATIONS);
+    const notYet = await driftOf(assertMigrationsCurrent(url, dir));
+    expect(notYet.drifts.map((d) => ("filename" in d ? `${d.kind}:${d.filename}` : d.kind))).toEqual([
+      "not_applied:000_init.sql",
+    ]);
+
+    const result = await runMigrations(url, dir);
+    expect(result.baselined).toEqual(["000_init.sql"]);
+    expect(result.applied).toEqual([]);
+    expect(await present("init_ran")).toBe(false);
+    const rows = await admin("SELECT count(*)::int AS n FROM schema_migrations");
+    expect(z.object({ n: z.number() }).parse(rows.rows[0]).n).toBe(LEGACY_MIGRATIONS.length + 1);
+    await assertMigrationsCurrent(url, dir);
+
+    const again = await runMigrations(url, dir);
+    expect(again.baselined).toEqual([]);
+    expect(again.applied).toEqual([]);
+  });
+
+  test("a database that ran only some numbered files fails closed naming every missing one", async () => {
+    const [first, second, ...rest] = LEGACY_MIGRATIONS;
+    if (first === undefined || second === undefined) throw new Error("the legacy manifest lists fewer than two files");
+    await recordLegacy(rest);
+
+    const err = await baselineRefusalOf(runMigrations(url, dir));
+    if (err.refusal.kind !== "legacy_incomplete") throw new Error(`expected legacy_incomplete, got ${err.refusal.kind}`);
+    expect(err.refusal.missing).toEqual([first.filename, second.filename]);
+    expect(err.refusal.mismatched).toEqual([]);
+    expect(err.message).toContain(first.filename);
+    expect(err.message).toContain(second.filename);
+    expect(await present("init_ran")).toBe(false);
+    const init = await admin("SELECT count(*)::int AS n FROM schema_migrations WHERE filename = '000_init.sql'");
+    expect(z.object({ n: z.number() }).parse(init.rows[0]).n).toBe(0);
+
+    await baselineRefusalOf(assertMigrationsCurrent(url, dir));
+  });
+
+  test("a numbered file recorded with a different hash fails closed naming it and both hashes", async () => {
+    const [first, ...rest] = LEGACY_MIGRATIONS;
+    if (first === undefined) throw new Error("the legacy manifest is empty");
+    const otherHash = "0".repeat(64);
+    await recordLegacy([{ filename: first.filename, sha256: otherHash }, ...rest]);
+
+    const err = await baselineRefusalOf(runMigrations(url, dir));
+    if (err.refusal.kind !== "legacy_incomplete") throw new Error(`expected legacy_incomplete, got ${err.refusal.kind}`);
+    expect(err.refusal.missing).toEqual([]);
+    expect(err.refusal.mismatched).toEqual([
+      { filename: first.filename, storedSha256: otherHash, manifestSha256: first.sha256 },
+    ]);
+    expect(err.message).toContain(first.filename);
+    expect(err.message).toContain(otherHash);
+    expect(err.message).toContain(first.sha256);
+    expect(await present("init_ran")).toBe(false);
+  });
+
+  test("a complete record with no init file to record fails closed", async () => {
+    rmSync(join(dir, "000_init.sql"));
+    writeFileSync(join(dir, "001_a.sql"), "CREATE TABLE a (id int);");
+    await recordLegacy(LEGACY_MIGRATIONS);
+    const err = await baselineRefusalOf(runMigrations(url, dir));
+    expect(err.refusal.kind).toBe("init_file_missing");
+    expect(await present("a")).toBe(false);
+
+    const onStart = await baselineRefusalOf(assertMigrationsCurrent(url, dir));
+    expect(onStart.refusal.kind).toBe("init_file_missing");
+  });
+});
+
+describe("migrations/ holds one init equal to the numbered files it stands in for", () => {
+  test("000_init.sql is the only file in migrations/", () => {
+    expect(readdirSync(MIGRATIONS_DIR)).toEqual(["000_init.sql"]);
+  });
+
+  // The fingerprint file was taken from a database built by running every numbered file in order;
+  // a database built from 000_init.sql alone must match it object for object and row for row.
+  test("a database built from 000_init.sql alone has the schema and seeded rows of the numbered files", async () => {
+    const base = new URL(DATABASE_URL);
+    const name = `${base.pathname.slice(1)}_init_${randomBytes(6).toString("hex")}`;
+    const fresh = new URL(DATABASE_URL);
+    fresh.pathname = `/${name}`;
+    const server = new pg.Client({ connectionString: DATABASE_URL });
+    await server.connect();
+    try {
+      await server.query(`CREATE DATABASE ${name}`);
+      try {
+        const result = await runMigrations(fresh.toString(), MIGRATIONS_DIR);
+        expect(result.applied).toEqual(["000_init.sql"]);
+        const client = new pg.Client({ connectionString: fresh.toString() });
+        await client.connect();
+        let fingerprint: string;
+        try {
+          const sql = readFileSync(new URL("./schema-fingerprint.sql", import.meta.url), "utf-8");
+          const rows = await client.query(sql);
+          fingerprint = z.array(z.object({ fingerprint: z.string() })).length(1).parse(rows.rows)[0]?.fingerprint ?? "";
+        } finally {
+          await client.end();
+        }
+        const expected = readFileSync(new URL("./init-schema.fingerprint.txt", import.meta.url), "utf-8");
+        expect(`${fingerprint}\n`).toBe(expected);
+      } finally {
+        await server.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      }
+    } finally {
+      await server.end();
+    }
+  }, 60_000);
 });

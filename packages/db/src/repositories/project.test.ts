@@ -77,7 +77,7 @@ describe("project_id is required", () => {
   });
 });
 
-describe("Project workspace path (migration 024)", () => {
+describe("Project workspace path", () => {
   test("a new project has no workspace path; the first recorded path wins and is never rewritten", async () => {
     const p = await projects.create(`project-test-${NONCE}-ws`, clientId);
     expect(p.workspacePath).toBeNull();

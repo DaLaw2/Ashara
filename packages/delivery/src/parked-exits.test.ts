@@ -204,7 +204,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     "merge-recorded": "parked-exits.ts completeRecordedMerge: WorkItemRepository.recordMergeCommit, then completeRecordedMerge to Completed",
     "read-main": "parked-exits.ts settleOnMain: mergeOnMainOf reads main; none found (no target here), release: unblockWorkItem to Pending",
     requeue: "parked-exits.ts release: unblockWorkItem to Pending",
-    "give-up": "parked-exits.ts giveUp: giveUpWorkItem to Abandoned; migration 048's plan_repair_on_abandon opens the repair the Replanner answers",
+    "give-up": "parked-exits.ts giveUp: giveUpWorkItem to Abandoned; the plan_repair_on_abandon trigger opens the repair the Replanner answers",
   };
   const LEAVES_TO: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: WorkItemStatus } = {
     "merge-recorded": "Completed",

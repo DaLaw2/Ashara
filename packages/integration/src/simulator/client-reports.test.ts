@@ -115,7 +115,7 @@ describe("checkReports, a halt's cause", () => {
     expect(keysOf(told(`- "Goal", after 3 attempts. As recorded: task_failed`), "blocked")).toEqual(["halt-cause:plan_repair"]);
   });
 
-  it("names a halt of a kind no code path writes since migration 048", () => {
+  it("names a halt of a kind no code path writes", () => {
     expect(keysOf(haltWith("check_dispute", "X", "y", "Work on this project is paused."), "blocked")).toEqual(["halt-kind-retired:check_dispute"]);
   });
 });

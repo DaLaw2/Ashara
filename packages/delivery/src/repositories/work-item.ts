@@ -309,7 +309,7 @@ export class WorkItemRowRepository {
 
   /**
    * saveRefunded for a turn that overflowed a context window: raises the largest window an attempt
-   * of the item did not fit to `windowTokens` (migration 076), never lowering it, in the same
+   * of the item did not fit to `windowTokens`, never lowering it, in the same
    * transaction as the transition and the refund. A fault under any of the three writes none, so
    * the item is never requeued without the window that sends it to a wider model.
    */

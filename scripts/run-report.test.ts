@@ -274,7 +274,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     expect(line(idleSession)).toMatch(/\(Failed, .*\): no attempt recorded; it ended \(failed\) without an attempt outcome/);
     expect(line(openSession)).toMatch(/\(Preparing, .*\): no attempt recorded; the session is not terminal/);
     expect(line(orphanSession)).toContain("no attempt recorded; closed by startup-reconciler as a crash orphan");
-    expect(line(oldSession)).toContain("no attempt recorded; the session predates migration 046");
+    expect(line(oldSession)).toContain("no attempt recorded; the session predates the attempt columns");
     expect(line(deliveredSession)).toContain(`(Completed, `);
     expect(line(deliveredSession)).toContain(`no attempt; it completed without one, and its end record reads: ${deliveredDetail}`);
     expect(line(deliveredSession)).not.toMatch(/threw|before the model/);
