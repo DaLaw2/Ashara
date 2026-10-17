@@ -34,7 +34,7 @@ function seededUniform(seed: number, key: string): number {
 type SiteMatch = string | RegExp;
 
 /**
- * One behaviour a directed run forces (simulator.test.ts), named by what it is rather than by a
+ * One behaviour a directed run forces (simulator-harness.ts directed), named by what it is rather than by a
  * seed that happens to reach it, so a production change that adds or moves a seam call cannot
  * move it off its behaviour:
  * - draw: the `nth` draw (or `every` draw) of a matching site takes `value`; `scope` narrows the
@@ -43,7 +43,6 @@ type SiteMatch = string | RegExp;
  *   `interleave:<seam>:<label>` valued 1 hands the turn to the other task of the batch there;
  * - fault: the `nth` seam call of `seam` whose label matches carries `fault` (Scheduler.enter), in
  *   no budget's count; a fault the call cannot carry is not injected and the direction stays untaken.
- * @testseam simulator.test.ts writes the directions of each behaviour it forces
  */
 export type Direction =
   | {

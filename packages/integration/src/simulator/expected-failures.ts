@@ -27,7 +27,7 @@ interface ExpectedFailure {
  * The soak's known production failures. An entry keeps `just simulate` from counting its seed as
  * unexpected until the defect is fixed; a fix shows the entry as listed-but-not-failed, and the
  * entry is then removed. A change that adds a seam call on a seed's path re-rolls that seed, so the
- * list is re-derived from a soak whenever such a change lands; simulator.test.ts forces each
+ * list is re-derived from a soak whenever such a change lands; the directed tier forces each
  * defect on a directed tape instead of pinning a seed.
  */
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [];

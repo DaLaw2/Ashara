@@ -80,7 +80,7 @@ export class Interleaver {
 
   constructor(
     private readonly tape: Tape,
-    /** Waits a mutation skips: the lane goes on as if the other task had let it (simulator.test.ts). */
+    /** Waits a mutation skips: the lane goes on as if the other task had let it (simulator-plants.test.ts). */
     private readonly bypass: ReadonlySet<ContendedWaitKind>,
     private readonly observe: (event: InterleaveEvent) => void,
   ) {}
