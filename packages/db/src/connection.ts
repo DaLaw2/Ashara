@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -46,14 +47,14 @@ export function createDb(databaseUrl: string, createPool: PoolFactory = createPg
       `[db] WARN: an idle pooled connection failed and was removed from the pool (code ${code}): ${describeErrorChain(err)}`,
     );
   });
-  const db = drizzle(pool, { schema });
+  const db = drizzle(conflictRetryingPool(pool), { schema });
   // Every top-level transaction of this Database runs through the one wrapper below. It exists
   // because drizzle-orm 0.45.2 (the pinned version; node-postgres/session.js NodePgSession.transaction)
   // sends BEGIN on a client checked out of the pool before the try/finally that releases it, so a
   // failed BEGIN would keep that connection checked out for good. Re-read that method before
   // changing the pinned version. Nested `tx.transaction` calls are savepoints on the already
   // checked-out client and need no wrapper.
-  db.transaction = transactionOnOwnCheckout(pool);
+  db.transaction = retriedTransaction(transactionOnOwnCheckout(pool));
   return db;
 }
 
@@ -119,4 +120,98 @@ function transactionOnOwnCheckout(pool: pg.Pool): SchemaDatabase["transaction"] 
       client.release(destroy);
     }
   };
+}
+
+/**
+ * SQLSTATEs of work the server rolled back because a concurrent transaction conflicted with it:
+ * 40001 serialization_failure, 40P01 deadlock_detected. The server has already undone the statement
+ * or the whole transaction, so running it again is safe, and a later attempt may not meet the
+ * conflict. Any other failure is rethrown at once.
+ */
+const CONFLICT_SQLSTATES: ReadonlySet<string> = new Set(["40001", "40P01"]);
+
+/**
+ * Attempts per statement or transaction before a conflict that keeps recurring is rethrown typed.
+ * @testseam connection.test.ts counts the attempts of a conflict that never clears against it
+ */
+export const CONFLICT_ATTEMPTS = 5;
+/** The wait before the second attempt; each later wait doubles it. */
+const CONFLICT_BACKOFF_MS = 10;
+const MAX_CAUSE_DEPTH = 8;
+
+/** A statement or transaction met a concurrent-update conflict on every one of its attempts. */
+class DatabaseConflictRetriesExhausted extends Error {
+  constructor(
+    readonly work: string,
+    readonly attempts: number,
+    readonly sqlState: string,
+    cause: unknown,
+  ) {
+    super(`${work} met a concurrent-update conflict (SQLSTATE ${sqlState}) on each of its ${attempts} attempts: ${describeErrorChain(cause)}`, {
+      cause,
+    });
+    this.name = "DatabaseConflictRetriesExhausted";
+  }
+}
+
+/**
+ * The conflict SQLSTATE in `error`'s cause chain, or null. Drizzle wraps the driver's error as the
+ * cause of its own, and the transaction wrapper's typed errors carry theirs the same way. A conflict
+ * that already spent its retries is not retried again by an enclosing transaction.
+ */
+function conflictStateOf(error: unknown): string | null {
+  let layer: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && layer instanceof Error; depth++) {
+    if (layer instanceof DatabaseConflictRetriesExhausted) return null;
+    if ("code" in layer && typeof layer.code === "string" && CONFLICT_SQLSTATES.has(layer.code)) return layer.code;
+    layer = layer.cause;
+  }
+  return null;
+}
+
+async function retriedOnConflict<T>(work: string, run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (err: unknown) {
+      const sqlState = conflictStateOf(err);
+      if (sqlState === null) throw err;
+      if (attempt >= CONFLICT_ATTEMPTS) throw new DatabaseConflictRetriesExhausted(work, attempt, sqlState, err);
+      const wait = CONFLICT_BACKOFF_MS * 2 ** (attempt - 1);
+      console.warn(
+        `[db] WARN: ${work} met a concurrent-update conflict (SQLSTATE ${sqlState}) on attempt ${attempt} of ${CONFLICT_ATTEMPTS}; ` +
+          `retrying in ${wait} ms: ${describeErrorChain(err)}`,
+      );
+      await sleep(wait);
+    }
+  }
+}
+
+/**
+ * A statement sent on the pool outside a transaction runs in autocommit, so one that failed on a
+ * conflict was rolled back on its own and is sent again. The callback form of `query` passes through
+ * untouched: drizzle never uses it.
+ */
+function conflictRetryingPool(pool: pg.Pool): pg.Pool {
+  return new Proxy(pool, {
+    get(target, property, receiver) {
+      if (property !== "query") {
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return (...args: unknown[]): unknown => {
+        const send = (): unknown => Reflect.apply(target.query, target, args);
+        if (typeof args.at(-1) === "function") return send();
+        return retriedOnConflict("a statement", async () => await send());
+      };
+    },
+  });
+}
+
+/**
+ * A transaction a conflict aborted was rolled back whole, so it runs again from its BEGIN on a fresh
+ * checkout, its body included: a body reruns only after its earlier run's writes were undone.
+ */
+function retriedTransaction(once: SchemaDatabase["transaction"]): SchemaDatabase["transaction"] {
+  return (body, config) => retriedOnConflict("a transaction", () => once(body, config));
 }

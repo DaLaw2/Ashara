@@ -13,6 +13,13 @@ import type { Direction } from "./tape.js";
  */
 useSimulatorDatabase();
 
+/**
+ * The db layer's attempts per statement or transaction on a concurrent-update conflict (db
+ * connection.ts CONFLICT_ATTEMPTS), restated because the simulator imports only reviewed names. A
+ * bound changed there fails the directed tests below that count on it.
+ */
+const CONFLICT_ATTEMPTS = 5;
+
 describe("lifecycle simulator, directed", () => {
   // The first BEGIN fails with a 40001. The transaction wrapper (db
   // connection.ts) releases the connection whose BEGIN failed, so no checkout outlives the process.
@@ -22,18 +29,35 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
+  // A 40001 on the roster read that staffs the first attempt (assignAgent), on one send fewer than
+  // the db layer's conflict bound, which is one more than the task's fault budget. The statement was
+  // rolled back on its own and is sent again, so the conflict never reaches dispatch as a fault: no
+  // requeue, no fault counted on the task, no AsharaFaultBudgetSpent halt. The run's first two roster
+  // reads are the roster and first-plan steps'; staffing's follow.
+  it("absorbs a serialization failure on the roster read that staffs an attempt, never spending the task's fault budget", async (ctx) => {
+    const rosterRead = /^select "?revision"? from "?roster_roles/;
+    const conflicts = Array.from({ length: CONFLICT_ATTEMPTS - 1 }, (_, index) => ({ kind: "fault", seam: "db", label: rosterRead, nth: index + 3, fault: "db-query-failed" }) as const);
+    const result = await directed(ctx, conflicts);
+    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(conflicts.map(() => "db:db-query-failed"));
+    expect(result.log.filter((line) => line.includes("met a concurrent-update conflict (SQLSTATE 40001)"))).toHaveLength(conflicts.length);
+    expect(result.log.filter((line) => line.includes("stage assignAgent") || line.includes("infrastructure fault") || line.includes("AsharaFaultBudgetSpent"))).toEqual([]);
+    expect(result.asharaHalts).toEqual([]);
+    expect(result.outcome.kind).toBe("accepted");
+    expect(keys(result), statements(result)).toEqual([]);
+  }, 90_000);
+
   /** A crash in the implementation's dispatch, which leaves its task InProgress for the next startup. */
   const CRASH_IN_DISPATCH: Direction = { kind: "fault", seam: "git", label: "ls-tree", nth: 2, fault: "crash-before" };
 
-  // A crash in a dispatch leaves its task InProgress (its orphan),
-  // then a 40001 on the startup reconciler's dev_sessions read of that orphan. The reconciler
-  // retries the requeue within its bound, so the orphan is never left InProgress.
+  // A crash in a dispatch leaves its task InProgress (its orphan), then a 40001 on the startup
+  // reconciler's dev_sessions read of that orphan on every send the db layer's conflict retry makes,
+  // so the read fails. The reconciler retries the requeue within its bound, so the orphan is never
+  // left InProgress.
   it("retries a failed requeue of an orphan, never leaving it InProgress while the process lives", async (ctx) => {
-    const result = await directed(ctx, [
-      CRASH_IN_DISPATCH,
-      { kind: "fault", seam: "db", label: /^select count\(\*\) from "dev_sessions"/, nth: 2, fault: "db-query-failed" },
-    ]);
-    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:db-query-failed"]);
+    const devSessionsCount = /^select count\(\*\) from "dev_sessions"/;
+    const conflicts = Array.from({ length: CONFLICT_ATTEMPTS }, (_, index) => ({ kind: "fault", seam: "db", label: devSessionsCount, nth: index + 2, fault: "db-query-failed" }) as const);
+    const result = await directed(ctx, [CRASH_IN_DISPATCH, ...conflicts]);
+    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", ...conflicts.map(() => "db:db-query-failed")]);
     expect(result.log.some((line) => line.includes("requeue the task failed on attempt 1 of 3; retrying"))).toBe(true);
     expect(keys(result)).toEqual([]);
   }, 90_000);

@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
 import { describeErrorChain, serializeError } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL } from "./connection.js";
+import { CONFLICT_ATTEMPTS, createDb, DEFAULT_DATABASE_URL } from "./connection.js";
 import type { PoolFactory } from "./connection.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -156,6 +156,166 @@ describe("Database.transaction", () => {
       expect(db.$client.idleCount).toBe(1);
       const committed = await db.transaction(async (tx) => tx.execute(sql`SELECT 2 AS two`));
       expect(z.object({ two: z.number() }).parse(committed.rows[0]).two).toBe(2);
+    } finally {
+      await db.$client.end();
+    }
+  });
+});
+
+/** The error node-postgres rejects a query with when the server answers it with `code`. */
+function pgError(code: string): Error {
+  return Object.assign(new Error(`server rejected the query with SQLSTATE ${code} (probe)`), { code });
+}
+
+const BODY_PROBE = "body_probe";
+
+/**
+ * A pool whose next pool queries reject with the SQLSTATEs in `statements`, one each, and whose
+ * checked-out queries naming BODY_PROBE reject with those in `bodies`; every other query reaches
+ * the database. `sent` counts the pool queries and the probe queries that were attempted.
+ */
+function conflictingPool(plan: { statements: string[]; bodies: string[] }): { factory: PoolFactory; sent: { statements: number; bodies: number } } {
+  const sent = { statements: 0, bodies: 0 };
+  const factory: PoolFactory = (config) => {
+    const pool = new pg.Pool(config);
+    return new Proxy(pool, {
+      get(target, property, receiver) {
+        if (property === "query") {
+          return (...args: unknown[]) => {
+            sent.statements += 1;
+            const code = plan.statements.shift();
+            if (code !== undefined) return Promise.reject(pgError(code));
+            return Reflect.apply(target.query, target, args);
+          };
+        }
+        if (property === "connect") {
+          return async () => {
+            const client = await target.connect();
+            return new Proxy(client, {
+              get(inner, innerProperty, innerReceiver) {
+                if (innerProperty === "query") {
+                  return (...args: unknown[]) => {
+                    const parsed = sentQuery.safeParse(args[0]);
+                    const text = !parsed.success ? "" : typeof parsed.data === "string" ? parsed.data : parsed.data.text;
+                    if (text.includes(BODY_PROBE)) {
+                      sent.bodies += 1;
+                      const code = plan.bodies.shift();
+                      if (code !== undefined) return Promise.reject(pgError(code));
+                    }
+                    return Reflect.apply(inner.query, inner, args);
+                  };
+                }
+                const value: unknown = Reflect.get(inner, innerProperty, innerReceiver);
+                return typeof value === "function" ? value.bind(inner) : value;
+              },
+            });
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  return { factory, sent };
+}
+
+const OneRow = z.object({ one: z.number() });
+
+describe("a concurrent-update conflict", () => {
+  for (const code of ["40001", "40P01"]) {
+    test(`a statement outside a transaction rejected with ${code} is sent again and succeeds`, async () => {
+      const probe = conflictingPool({ statements: [code], bodies: [] });
+      const db = createDb(DATABASE_URL, probe.factory);
+      try {
+        const result = await db.execute(sql`SELECT 1 AS one`);
+        expect(OneRow.parse(result.rows[0]).one).toBe(1);
+        expect(probe.sent.statements).toBe(2);
+      } finally {
+        await db.$client.end();
+      }
+    });
+
+    test(`a transaction whose body query is rejected with ${code} runs again from BEGIN, its body included, and commits`, async () => {
+      const probe = conflictingPool({ statements: [], bodies: [code] });
+      const db = createDb(DATABASE_URL, probe.factory);
+      let runs = 0;
+      try {
+        const result = await db.transaction(async (tx) => {
+          runs += 1;
+          return tx.execute(sql.raw(`SELECT 1 AS one, '${BODY_PROBE}' AS probe`));
+        });
+        expect(OneRow.parse(result.rows[0]).one).toBe(1);
+        expect(runs).toBe(2);
+        expect(probe.sent.bodies).toBe(2);
+        expect(db.$client.totalCount - db.$client.idleCount).toBe(0);
+      } finally {
+        await db.$client.end();
+      }
+    });
+  }
+
+  test("a statement that meets a conflict on every attempt rethrows a typed error naming its attempts", async () => {
+    const probe = conflictingPool({ statements: Array.from({ length: CONFLICT_ATTEMPTS }, () => "40001"), bodies: [] });
+    const db = createDb(DATABASE_URL, probe.factory);
+    try {
+      const thrown: unknown = await db.execute(sql`SELECT 1 AS one`).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      // drizzle wraps whatever the pool's query rejected with, the typed error included.
+      expect(thrown).toMatchObject({ cause: { name: "DatabaseConflictRetriesExhausted", attempts: CONFLICT_ATTEMPTS, sqlState: "40001" } });
+      expect(describeErrorChain(thrown)).toContain("SQLSTATE 40001 (probe)");
+      expect(probe.sent.statements).toBe(CONFLICT_ATTEMPTS);
+    } finally {
+      await db.$client.end();
+    }
+  });
+
+  test("a transaction that meets a conflict on every attempt rethrows a typed error and leaves no connection checked out", async () => {
+    const probe = conflictingPool({ statements: [], bodies: Array.from({ length: CONFLICT_ATTEMPTS }, () => "40001") });
+    const db = createDb(DATABASE_URL, probe.factory);
+    let runs = 0;
+    try {
+      const thrown: unknown = await db
+        .transaction(async (tx) => {
+          runs += 1;
+          return tx.execute(sql.raw(`SELECT '${BODY_PROBE}' AS probe`));
+        })
+        .then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+      expect(thrown).toMatchObject({ name: "DatabaseConflictRetriesExhausted", attempts: CONFLICT_ATTEMPTS, sqlState: "40001" });
+      expect(runs).toBe(CONFLICT_ATTEMPTS);
+      expect(db.$client.totalCount - db.$client.idleCount).toBe(0);
+    } finally {
+      await db.$client.end();
+    }
+  });
+
+  test("a failure that is not a conflict is rethrown at once, never retried", async () => {
+    const probe = conflictingPool({ statements: ["23505"], bodies: ["23505"] });
+    const db = createDb(DATABASE_URL, probe.factory);
+    let runs = 0;
+    try {
+      const statement: unknown = await db.execute(sql`SELECT 1 AS one`).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(describeErrorChain(statement)).toContain("SQLSTATE 23505 (probe)");
+      expect(statement).not.toMatchObject({ name: "DatabaseConflictRetriesExhausted" });
+      expect(probe.sent.statements).toBe(1);
+      const transaction: unknown = await db
+        .transaction(async (tx) => {
+          runs += 1;
+          return tx.execute(sql.raw(`SELECT '${BODY_PROBE}' AS probe`));
+        })
+        .then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+      expect(describeErrorChain(transaction)).toContain("SQLSTATE 23505 (probe)");
+      expect(runs).toBe(1);
     } finally {
       await db.$client.end();
     }
