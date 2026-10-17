@@ -17,15 +17,16 @@ export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-l
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
 export {
   NoLLMProvidersConfigured,
-  NoOtherFamilyAnswered,
   ProviderConfigurationRejected,
   ProviderError,
+  SecondOpinionUnanswered,
+  SecondOpinionUnavailable,
 } from "./errors.js";
 /** @testseam the integration llm-call-ledger.test.ts asserts the refusal's call site and path; the gateway throws it */
 export { SchemaUnacceptable } from "./schema-acceptance.js";
 export { schemaRefusalsFor } from "./schema-acceptance.js";
 export { wireSchemaOf } from "./schema-acceptance.js";
-export { PROVIDER_TYPES } from "./types.js";
+export { PROVIDER_TYPES, SECOND_OPINION_STRENGTHS } from "./types.js";
 export type { ProviderType } from "./types.js";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "./errors.js";
@@ -37,6 +38,8 @@ export type {
   ProviderRequest,
   ProviderRequestGate,
   ReportedTokens,
+  SecondOpinion,
+  SecondOpinionStrength,
   SentProviderRequest,
   TokenRates,
   TokenUsage,

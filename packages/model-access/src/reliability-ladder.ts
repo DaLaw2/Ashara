@@ -2,7 +2,7 @@ import type { ZodType } from "zod";
 import type { CapabilityLevel } from "./capability-level.js";
 import { GatewayError, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK } from "./capability-rank.js";
-import type { KnownLLMSite, ModelIdentity } from "./types.js";
+import type { KnownLLMSite, SecondOpinion } from "./types.js";
 
 /**
  * Routing-profiles site tag stamped on every ladder attempt run at an
@@ -293,8 +293,8 @@ interface StructuredProviderRequest<T> {
   readonly maxTokens: number;
   /** Routing site override for this call (rarely set directly — see `StructuredLadderOptions.site`, which sets it for every call this wrapper makes). */
   readonly site?: KnownLLMSite;
-  /** A second opinion: every attempt goes to a model other than this one, another family's first, never back to its family once another serves it (StructuredRequest.otherThan). */
-  readonly otherThan?: ModelIdentity;
+  /** A second opinion of one strength: every attempt, the escalated one included, goes only to a model of that strength (StructuredRequest.secondOpinion). */
+  readonly secondOpinion?: SecondOpinion;
   /**
    * Optional semantic check run on the PARSED value inside each ladder attempt.
    * A `false` verdict is a retryable validation failure (feedback fed back via

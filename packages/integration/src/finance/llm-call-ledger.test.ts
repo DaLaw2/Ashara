@@ -5,7 +5,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, NoOtherFamilyAnswered, ProviderError, SpendCap, UnpricedModel } from "@ashara/finance";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable, SpendCap, UnpricedModel } from "@ashara/finance";
 import { SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
 
@@ -440,15 +440,20 @@ describe("one llm_calls row per provider call", () => {
     expect(await failureOf(413, 503)).toBe("ashara");
   });
 
-  test("a second opinion goes to another model at the capability when the catalog has one, else to the same model again", async () => {
+  // ADR-084 addendum 3 decision 12: each strength of second opinion goes only to a model of that strength.
+  test("a second opinion of each strength goes to the model the catalog offers for it, and a strength it does not offer is refused unsent", async () => {
+    await clearRows();
     const answer = async () => textResult('{"greeting":"hi"}', { input: 10, output: 5 });
-    const ask = (llm: GuardedModelAccess, otherThan: { provider: string; model: string }) =>
-      llm.forCall({ projectId, taskId: null, callSite: "suite-review" }).generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, otherThan });
+    type Strength = "other-family" | "same-family-other-model" | "same-model";
+    const ask = (llm: GuardedModelAccess, strength: Strength, avoid = { provider: "anthropic", model: "only-strong" }) =>
+      llm
+        .forCall({ projectId, taskId: null, callSite: "suite-review" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, secondOpinion: { avoid, strength } })
+        .then((response) => `${response.provider}/${response.model}`, (e: unknown) => e);
 
-    const across = await ask(twoProviders({ anthropic: answer, deepseek: answer }), { provider: "anthropic", model: "anthropic-strong" });
-    expect({ provider: across.provider, model: across.model }).toEqual({ provider: "deepseek", model: "deepseek-strong" });
+    const across = await ask(twoProviders({ anthropic: answer, deepseek: answer }), "other-family", { provider: "anthropic", model: "anthropic-strong" });
+    expect(across).toBe("deepseek/deepseek-strong");
 
-    // One provider with a second Strong model: that model.
     stubModel({ doGenerate: answer });
     const single = (extra: readonly ModelConfig[]) =>
       new GuardedModelAccess(
@@ -463,16 +468,21 @@ describe("one llm_calls row per provider call", () => {
         }),
         new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
       );
-    const sibling = await ask(single([model({ id: "sibling-strong", inputCostPer1M: 5 })]), { provider: "anthropic", model: "only-strong" });
-    expect(sibling.model).toBe("sibling-strong");
-
-    // No other model at the capability: the same model answers again, and the response says so.
-    const again = await ask(single([model({ id: "too-light", capabilityLevel: "Light", inputCostPer1M: 0.1 })]), { provider: "anthropic", model: "only-strong" });
-    expect({ provider: again.provider, model: again.model }).toEqual({ provider: "anthropic", model: "only-strong" });
+    // One provider key and a second Strong model: no other family; that model; never the same one again.
+    const twoModels = single([model({ id: "sibling-strong", inputCostPer1M: 5 })]);
+    expect(await ask(twoModels, "other-family")).toBeInstanceOf(SecondOpinionUnavailable);
+    expect(await ask(twoModels, "same-family-other-model")).toBe("anthropic/sibling-strong");
+    expect(await ask(twoModels, "same-model")).toBeInstanceOf(SecondOpinionUnavailable);
+    // One provider key and one model at the capability: only the same model answers a second time.
+    const oneModel = single([model({ id: "too-light", capabilityLevel: "Light", inputCostPer1M: 0.1 })]);
+    expect(await ask(oneModel, "same-family-other-model")).toBeInstanceOf(SecondOpinionUnavailable);
+    expect(await ask(oneModel, "same-model")).toBe("anthropic/only-strong");
+    // A refused strength sends nothing and records nothing: only the three answered requests are rows.
+    expect(await rowsOfThisProject()).toHaveLength(3);
   });
 
   // D2: an opinion meant to come from another family never comes back from the avoided one through failover.
-  test("a second opinion whose other-family request fails never fails over to the avoided family: no other family answered", async () => {
+  test("a second opinion whose other-family request fails never fails over to the avoided family: it is unanswered at that strength", async () => {
     let avoidedAsked = 0;
     const llm = twoProviders({
       anthropic: async () => {
@@ -485,10 +495,16 @@ describe("one llm_calls row per provider call", () => {
     });
     const err: unknown = await llm
       .forCall({ projectId, taskId: null, callSite: "suite-review" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, otherThan: { provider: "anthropic", model: "anthropic-strong" } })
+      .generateStructured({
+        capability: "Strong",
+        prompt: "greet",
+        schema: GreetingSchema,
+        maxTokens: 512,
+        secondOpinion: { avoid: { provider: "anthropic", model: "anthropic-strong" }, strength: "other-family" },
+      })
       .then(() => null, (e: unknown) => e);
-    expect(err).toBeInstanceOf(NoOtherFamilyAnswered);
-    expect(String(err)).toContain("avoiding anthropic/anthropic-strong got no answer: routed to provider deepseek, and no failover went to anthropic");
+    expect(err).toBeInstanceOf(SecondOpinionUnanswered);
+    expect(String(err)).toContain("a other-family second opinion on anthropic/anthropic-strong got no answer: routed to deepseek/deepseek-strong, and no failover went to anthropic");
     expect(avoidedAsked).toBe(0);
   });
 

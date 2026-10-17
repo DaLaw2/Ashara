@@ -51,7 +51,7 @@ import { abandonedReleaseSkipped } from "./residue.js";
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9);
- * - unconfirmed-claim-dropped: a clean review's claim no other model family confirmed leaves no item
+ * - unconfirmed-claim-dropped: a clean review's claim no second opinion confirmed leaves no item
  *   undecided, so the delivered report calls those items decided by a stored check (I6, ADR-084
  *   addendum 2 decision 11);
  * - check-set-skips-item: a check set is stored with one item its check task cites decided by none

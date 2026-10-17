@@ -1,8 +1,15 @@
 import { z } from "zod";
 import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { ContextualLlm } from "@ashara/finance";
-import { ModelAnswerUnfit, NoOtherFamilyAnswered, StructuredOutputExhausted, withStructuredLadder } from "@ashara/finance";
-import type { LadderAttemptEvent, StructuredValidation } from "@ashara/finance";
+import {
+  ModelAnswerUnfit,
+  SECOND_OPINION_STRENGTHS,
+  SecondOpinionUnanswered,
+  SecondOpinionUnavailable,
+  StructuredOutputExhausted,
+  withStructuredLadder,
+} from "@ashara/finance";
+import type { LadderAttemptEvent, SecondOpinion, SecondOpinionStrength, StructuredValidation } from "@ashara/finance";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
 import type { StoredTaskSpec } from "./acl/delivery-acl.js";
@@ -25,29 +32,33 @@ import type { TaskChecks } from "./task-checks.js";
 // and punctuation aside) in the text of an item the check's task cites. Such a rejection is
 // discarded and the review asked again within the ladder's bound. Z0 cannot tell that a paraphrased
 // clause is absent, so a rejection it cannot disprove is the reviewer's judgement, not a verified
-// fact: it is acted on only when a second review, a fresh call with the same prompt that never sees
-// the first verdict, rejects the same check as outside the vision too. The second review is asked of
-// another model at the same capability when the catalog has one, another family's first, and its
-// failover never returns to the first's family; otherwise it is a re-sample of the first review's
-// model, and every text that names it says which it was. When the second does not reject that check,
-// the check is released as passing review. A second review that fails (no model it may go to
-// answers, or its answer never validates) confirms and releases nothing: every finding it was asked
-// for is kept as advisory, recorded as failed, never as a disagreement.
+// fact: it is acted on only when a second review, a fresh call on the same inputs that never sees
+// the first verdict, rejects the same check as outside the vision too. The second review is an
+// independent opinion (ADR-084 addendum 3 decision 12), asked in order of strength from what the
+// catalog offers at the capability: another model family, whose failover never returns to the
+// first's; else another model of the first's family; else, only in a deployment with no other model,
+// the first's model again. The last two are asked from another angle: to look for what each check
+// cannot observe. A strength the catalog does not serve, or whose answer never validates, is passed
+// over explicitly and recorded; agreement at any strength acts as decisions 2 and 11 say, and every
+// text and record that names the second review names its strength. When the second does not reject
+// that check, the check is released as passing review. A second review that fails at every strength
+// confirms and releases nothing: every finding it was asked for is kept as advisory, recorded as
+// failed, never as a disagreement.
 // A contradiction must quote, from the stored check files, what each of its two checks requires; Z0
 // holds each quote to the check it names. Whether two shell commands can pass together is not
 // decidable from their text without reading them as some stack's language, which Ashara never does,
 // so a grounded contradiction still needs agreement. An undecided item ("no check decides A22")
 // overrules the stored record that some check decides it (ADR-083), and no run can witness an
-// absence. Either acts only when the second review, from another model family (another provider),
-// reaches the same finding; otherwise it is kept as advisory, and an undecided item stays undecided
-// (undecided_items) and is reported unverified, never covered.
+// absence. Either acts only when the second review reaches the same finding; otherwise it is kept
+// as advisory, and an undecided item stays undecided (undecided_items) and is reported unverified,
+// never covered.
 // A review that routes nothing is a claim about the checks too (ADR-084 addendum 2 decision 11):
 // that they decide the items their tasks cite. An empty problem list is the identity element of a
 // verdict and no evidence of one, so the second review is asked on every review, clean or not, and
-// a covered item reads as verified only when that second review came from another model family
-// and named nothing about it. An item it named, or every covered item when it failed or came from
-// the first's family, is stored undecided and reported unverified, with why; nothing reopens on the
-// second review's own findings, which no first finding raised.
+// a covered item reads as verified only when that second review answered and named nothing about
+// it. An item it named, or every covered item when it failed, is stored undecided and reported
+// unverified, with why; nothing reopens on the second review's own findings, which no first finding
+// raised.
 // Two ratchets bound the rounds (ADR-084 decision 3): a check task the review already reopened once
 // is not reopened for an undecided item again (the item stays undecided), and once the check set is
 // frozen, at the first implementation dispatched on it, no finding acts. Every judgement, and the
@@ -128,7 +139,7 @@ interface ReleasedRejection {
   readonly check: string;
   readonly first: string;
   readonly second: readonly string[];
-  /** What the second review was, in words: another model, or a re-sample of the first's (secondReviewText). */
+  /** What the second review was, in words, with its strength (secondReviewText). */
   readonly secondReview: string;
 }
 
@@ -138,49 +149,66 @@ interface ReviewModel {
   readonly model: string;
 }
 
-/** The second review against the first: another model, or the first's model asked again. */
+/** The second review against the first: the model that answered it, and how independent of the first it is. */
 interface SecondReview {
-  readonly kind: "other-model" | "re-sample";
+  readonly strength: SecondOpinionStrength;
   readonly first: ReviewModel;
   readonly second: ReviewModel;
 }
 
-function secondReviewOf(first: ReviewModel, second: ReviewModel): SecondReview {
-  const kind = first.provider === second.provider && first.model === second.model ? "re-sample" : "other-model";
-  return { kind, first, second };
+/**
+ * A strength of second opinion the review did not get an answer at before the one that answered, or
+ * before it failed: the catalog offered no model for it, or the model it went to never gave a fit
+ * answer. Recorded, so moving to a weaker strength is never silent.
+ */
+interface PassedOver {
+  readonly strength: SecondOpinionStrength;
+  readonly outcome: "unavailable" | "failed";
+  readonly reason: string;
 }
 
 function modelName(model: ReviewModel): string {
   return `${model.provider}/${model.model}`;
 }
 
-/** What the second review was, as every routed or recorded text says it: never "independent" for a re-sample. */
+/** Each strength in words, as the client and the operator read it: a weaker one says what it shares. */
+const STRENGTH_TEXT: Readonly<Record<SecondOpinionStrength, string>> = {
+  "other-family": "another model family",
+  "same-family-other-model": "another model of the same family, which shares more blind spots with the first than another family would",
+  "same-model": "the same model asked again from another angle, which shares every blind spot of the first",
+};
+
+/** What the second review was, as every routed or recorded text says it, its strength included. */
 function secondReviewText(review: SecondReview): string {
-  return review.kind === "re-sample"
-    ? `a re-sample of the first review's model ${modelName(review.first)}, so not an independent judgement`
-    : `a review by a different model, ${modelName(review.second)}, than the first's ${modelName(review.first)}`;
+  return review.strength === "same-model"
+    ? `the first review's model ${modelName(review.first)} asked again from another angle, which shares every blind spot of the first`
+    : `a review by ${STRENGTH_TEXT[review.strength]}, ${modelName(review.second)}, than the first's ${modelName(review.first)}`;
+}
+
+/** The strength the answering model has against the first, from the two models alone. */
+function strengthBetween(first: ReviewModel, second: ReviewModel): SecondOpinionStrength {
+  if (first.provider !== second.provider) return "other-family";
+  return first.model === second.model ? "same-model" : "same-family-other-model";
 }
 
 /**
  * Why a finding acted or did not (suite_review_judgements.basis): an outside-vision rejection's two
- * reviews; another model family's agreement, or its absence, on a finding no witness can settle; a
- * second review that was asked and failed, which leaves every finding it was asked for advisory; or
- * a ratchet that holds whatever a second review says.
+ * reviews; the second opinion's agreement, or its absence, on a finding no witness can settle; a
+ * second review that failed at every strength, which leaves every finding it was asked for advisory;
+ * or a ratchet that holds whatever a second review says.
  */
 type JudgementBasis =
   | "two-reviews"
-  | "other-family-agreed"
-  | "other-family-disagreed"
-  | "no-other-family"
+  | "second-opinion-agreed"
+  | "second-opinion-disagreed"
   | "second-review-failed"
   | "frozen"
   | "reopened-once";
 
 /** What each basis means, as every text that reports a finding that did not act says it. */
-const BASIS_TEXT: Readonly<Record<Exclude<JudgementBasis, "two-reviews" | "other-family-agreed">, string>> = {
-  "other-family-disagreed": "the second review, by another model family, did not reach it",
-  "no-other-family": "no model of another family reviewed it, so nothing confirmed it",
-  "second-review-failed": "the second review that could have confirmed or settled it failed, so nothing confirmed it",
+const BASIS_TEXT: Readonly<Record<Exclude<JudgementBasis, "two-reviews" | "second-opinion-agreed">, string>> = {
+  "second-opinion-disagreed": "the second review did not reach it",
+  "second-review-failed": "the second review that could have confirmed or settled it failed at every strength, so nothing confirmed it",
   frozen: "the plan's check set is frozen: an implementation was dispatched on it",
   "reopened-once": "its check task was already reopened once by this review",
 };
@@ -207,6 +235,8 @@ interface ReviewJudgement {
   readonly second: readonly ReviewFinding[];
   /** Null when the second review failed. */
   readonly secondReview: SecondReview | null;
+  /** The strengths passed over before the second review answered or failed; none when it was not asked. */
+  readonly passedOver: readonly PassedOver[];
   /** Why the second review failed, exactly when the basis is second-review-failed; null otherwise. */
   readonly secondFailure: string | null;
   /** The item an advisory undecided-item finding leaves undecided; null for every other finding. */
@@ -215,24 +245,23 @@ interface ReviewJudgement {
 
 /**
  * Why the items a review that routed nothing covers read as verified or not
- * (suite_review_claims.basis): another family's second review named nothing about them, or named
- * something about some of them; or no second review of another family confirmed any of them,
- * because it came from the first's provider or failed.
+ * (suite_review_claims.basis): the second review, of the strength the claim records, named nothing
+ * about them, or named something about some of them; or it failed at every strength, so it
+ * confirmed none of them.
  */
-type ClaimBasis = "other-family-clean" | "other-family-found" | "no-other-family" | "second-review-failed";
+type ClaimBasis = "second-opinion-clean" | "second-opinion-found" | "second-review-failed";
 
-/** What each basis leaves of the claim, as every text that reports it says it. */
+/** What each basis leaves of the claim, as every text that reports it says it; the strength is added where one answered. */
 const CLAIM_TEXT: Readonly<Record<ClaimBasis, string>> = {
-  "other-family-clean": "a second review by another model family found no problem in them either",
-  "other-family-found": "the review that found no problem in them was not confirmed: a second review by another model family found one",
-  "no-other-family": "the review that found no problem in them was not confirmed: no model of another family reviewed the checks",
-  "second-review-failed": "the review that found no problem in them was not confirmed: the second review by another model family failed",
+  "second-opinion-clean": "a second review found no problem in them either",
+  "second-opinion-found": "the review that found no problem in them was not confirmed: a second review found one",
+  "second-review-failed": "the review that found no problem in them was not confirmed: the second review failed at every strength the catalog offers",
 };
 
 /**
  * The claim of a review that routed nothing: the checks decide every item they record they decide,
- * but those it already left undecided. Recorded whole, with the second review that confirms it or not
- * and the covered items it leaves unverified.
+ * but those it already left undecided. Recorded whole, with the second review that confirms it or not,
+ * its strength, and the covered items it leaves unverified.
  */
 interface ReviewClaim {
   readonly basis: ClaimBasis;
@@ -241,6 +270,8 @@ interface ReviewClaim {
   readonly firstModel: ReviewModel;
   /** Null exactly when the second review failed. */
   readonly secondReview: SecondReview | null;
+  /** The strengths passed over before the second review answered or failed. */
+  readonly passedOver: readonly PassedOver[];
   /** Every finding the second review made, whole; none when it failed. */
   readonly second: readonly ReviewFinding[];
   /** Why the second review failed, exactly when the basis is second-review-failed. */
@@ -285,9 +316,11 @@ interface ReviewedOutcome {
   readonly undecided: readonly UndecidedItem[];
 }
 
-/** A clean outcome's claim as its dispatch reports it: why its items read as verified or not, and those that do not. */
+/** A clean outcome's claim as its dispatch reports it: why its items read as verified or not, at what strength, and those that do not. */
 interface ClaimOutcome {
   readonly basis: ClaimBasis;
+  /** The strength of the second review that answered; null when it failed at every strength. */
+  readonly strength: SecondOpinionStrength | null;
   readonly why: string;
   readonly unconfirmed: readonly UndecidedItem[];
 }
@@ -407,6 +440,8 @@ interface CitedItem {
 /** One suite as the review reads it: its task's cited items, each with its id and status when the row records them. */
 interface ReviewedSuite {
   readonly checkTaskId: string;
+  /** The task whose checks its check task wrote: an id the check files' paths may carry, never one a finding names. */
+  readonly checksFor: string;
   readonly taskTitle: string;
   readonly cited: readonly CitedItem[];
   readonly checks: TaskChecks;
@@ -446,7 +481,9 @@ function suiteSection(suite: ReviewedSuite): string {
   const files = suite.checks.files.map((file) => `--- file ${file.path}\n${fileText(file.content)}`);
   return [
     `## Check task ${suite.checkTaskId}`,
-    `It wrote the checks of the task ${JSON.stringify(suite.taskTitle)}, which cites these vision items:`,
+    `It wrote the checks of the task ${JSON.stringify(suite.taskTitle)} (task ${suite.checksFor}, whose id the paths of the ` +
+      `files below may carry; it is not a check task id: a finding on these checks names check task ${suite.checkTaskId}), ` +
+      `which cites these vision items:`,
     ...suite.cited.map((item) => `- ${item.line}`),
     `Checks (revision ${suite.checks.revision}${suite.checks.baselineCommit === null ? "" : `, written against commit ${suite.checks.baselineCommit}`}):`,
     ...suite.checks.checks.map(
@@ -473,7 +510,31 @@ function interfaceSection(readings: readonly InterfaceReading[]): string[] {
   });
 }
 
-function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceReading[], suites: readonly ReviewedSuite[]): string {
+/**
+ * How a review reads the checks: `direct` as the first review and an other-family second one do;
+ * `blind-spots` as a second opinion within the first's family does, which shares more of its blind
+ * spots and so starts from what each check cannot observe (ADR-084 addendum 3 decision 12).
+ */
+type ReviewAngle = "direct" | "blind-spots";
+
+/** The angle a second opinion of each strength is asked from: only another family reads as the first did. */
+const ANGLE_OF: Readonly<Record<SecondOpinionStrength, ReviewAngle>> = {
+  "other-family": "direct",
+  "same-family-other-model": "blind-spots",
+  "same-model": "blind-spots",
+};
+
+function angleSection(angle: ReviewAngle): string[] {
+  if (angle === "direct") return [];
+  return [
+    `Read the checks from this angle first. For each check, work out what it cannot observe: the ways a product could`,
+    `break what its task's cited items ask for while that check still passes (an input it never gives, an output it never`,
+    `compares, a state it never reopens, a failure it never forces). A cited item that every check of its task would let`,
+    `break unseen is an "undecided-item". Then name every problem of the three kinds below, judged as written there.`,
+  ];
+}
+
+function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceReading[], suites: readonly ReviewedSuite[], angle: ReviewAngle): string {
   return [
     `You review the acceptance checks of a software project before any of its work starts. Each check is a shell`,
     `command run from the repository root; it passes when it exits 0 and prints output. Every check below runs on the`,
@@ -493,6 +554,7 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     ...suites.map(suiteSection),
     ``,
     `# What to return`,
+    ...angleSection(angle),
     `Name every problem of these three kinds, and nothing else:`,
     `- "contradiction": two checks, of one check task or of two, that no single product could both pass (one requires`,
     `  an output, a format, a file or an exit status that the other forbids). Name every check task whose checks are`,
@@ -548,8 +610,11 @@ function normalized(text: string): string {
  * A paraphrase of a cited item passes this check: Z0 cannot verify that a clause is absent.
  */
 function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, ReviewedSuite>): string[] {
-  const unreadError = (i: number, id: string): string =>
-    `problem ${i + 1} names check task ${JSON.stringify(id)}, which is none of [${[...suites.keys()].join(", ")}]`;
+  const unreadError = (i: number, id: string): string => {
+    const writer = [...suites.values()].find((suite) => suite.checksFor === id);
+    const named = `problem ${i + 1} names check task ${JSON.stringify(id)}, which is none of [${[...suites.keys()].join(", ")}]`;
+    return writer === undefined ? named : `${named}: ${id} is the task whose checks check task ${writer.checkTaskId} wrote, so name check task ${writer.checkTaskId}`;
+  };
   return response.problems.flatMap((problem, i) => {
     if (problem.kind === "contradiction") {
       const unread = problem.checkTasks.filter((id) => !suites.has(id)).map((id) => unreadError(i, id));
@@ -616,15 +681,46 @@ function conflictErrors(problem: ContradictionFinding, i: number, suites: Readon
       continue;
     }
     const quote = spaced(side.requires);
-    const texts = [check.command, ...suite.checks.files.map((file) => file.content)].map(spaced);
-    if (quote === "" || !texts.some((text) => text.includes(quote))) {
+    const stored = [check.command, ...suite.checks.files.map((file) => file.content)];
+    if (quote === "" || !stored.map(spaced).some((text) => text.includes(quote))) {
       errors.push(
         `side ${n + 1} of problem ${i + 1} quotes ${JSON.stringify(side.requires)} as what check ${JSON.stringify(side.check)} requires, but neither its command nor ` +
-          `any file of check task ${side.checkTask} holds that text: copy it exactly`,
+          `any file of check task ${side.checkTask} holds that text: copy it exactly.${whereQuoteDiffers(side.requires, stored)}`,
       );
     }
   }
   return errors;
+}
+
+/** Shared words of two lines, over the longer's word count: how near a stored line is to a quoted one. */
+function likeness(quoted: string, stored: string): number {
+  const words = new Set(stored.split(" "));
+  const shared = quoted.split(" ").filter((word) => words.has(word)).length;
+  return shared / Math.max(quoted.split(" ").length, stored.split(" ").length);
+}
+
+/**
+ * Where a quote no stored text holds goes wrong, for the re-ask to name: its first line no stored
+ * text holds, with the stored line nearest it, so a model that changed a character is shown the
+ * text to copy rather than told again to copy it. Whitespace and line endings are never the cause:
+ * every comparison runs on text with each run of whitespace made one space.
+ */
+function whereQuoteDiffers(quote: string, stored: readonly string[]): string {
+  const texts = stored.map(spaced);
+  const missing = quote
+    .split(/\r?\n/)
+    .map(spaced)
+    .find((line) => line !== "" && !texts.some((text) => text.includes(line)));
+  if (missing === undefined) return " Each of its lines is stored, but not one after another: quote one run of consecutive lines.";
+  const candidates = stored.flatMap((text) => text.split(/\r?\n/)).map(spaced).filter((line) => line !== "");
+  let nearest: { readonly line: string; readonly score: number } | null = null;
+  for (const line of candidates) {
+    const score = likeness(missing, line);
+    if (score > 0 && (nearest === null || score > nearest.score)) nearest = { line, score };
+  }
+  return nearest === null
+    ? ` Its line ${JSON.stringify(missing)} shares no word with any stored line.`
+    : ` Its line ${JSON.stringify(missing)} is in none of them; the stored line nearest it reads ${JSON.stringify(nearest.line)}.`;
 }
 
 function verdictValidation(response: ReviewResponse, suites: ReadonlyMap<string, ReviewedSuite>): StructuredValidation {
@@ -684,28 +780,29 @@ function agreeingWith(finding: ReviewFinding, second: readonly ReviewFinding[]):
   }
 }
 
-/** A contradiction both families reached, as Delivery routes it: what each of its checks requires, quoted, and who agreed. */
+/** A contradiction both reviews reached, as Delivery routes it: what each of its checks requires, quoted, and who agreed. */
 function agreedContradiction(first: ContradictionFinding, review: SecondReview): SuiteReviewProblem {
   return {
     checkTaskIds: namedBy(first),
     kind: "contradiction",
-    problem:
-      `${first.problem} Two reviews by different model families, ${modelName(review.first)} and ${modelName(review.second)}, ` +
-      `each found that no product can pass both: ${sidesOf(first).map(sideLine).join("; ")}.`,
+    problem: `${first.problem} ${agreedBy(review)} each found that no product can pass both: ${sidesOf(first).map(sideLine).join("; ")}.`,
     evidence: first.evidence,
   };
 }
 
-/** An undecided item both families reached, as the reopened check author reads it. */
+/** An undecided item both reviews reached, as the reopened check author reads it. */
 function agreedUndecided(first: UndecidedItemFinding, review: SecondReview): SuiteReviewProblem {
   return {
     checkTaskIds: namedBy(first),
     kind: "undecided-item",
-    problem:
-      `Cited item ${first.item} is decided by none of the checks: ${first.problem} Two reviews by different model families, ` +
-      `${modelName(review.first)} and ${modelName(review.second)}, each found it so.`,
+    problem: `Cited item ${first.item} is decided by none of the checks: ${first.problem} ${agreedBy(review)} each found it so.`,
     evidence: first.evidence,
   };
+}
+
+/** Who agreed on a finding, with the strength of the second: a weaker one says what it shares with the first. */
+function agreedBy(review: SecondReview): string {
+  return `Two reviews, the first by ${modelName(review.first)} and the second ${secondReviewText(review)},`;
 }
 
 /**
@@ -792,19 +889,19 @@ function itemsNamedBy(finding: ReviewFinding, suites: ReadonlyMap<string, Review
   }
 }
 
-/** What the second review gave: its verdict and model, or why it gave none. */
+/** What the second review gave: its verdict and who answered at what strength, or why it gave none; with the strengths passed over on the way. */
 type SecondVerdict =
-  | { readonly kind: "answered"; readonly data: ReviewResponse; readonly model: ReviewModel }
-  | { readonly kind: "failed"; readonly reason: string };
+  | { readonly kind: "answered"; readonly data: ReviewResponse; readonly review: SecondReview; readonly passedOver: readonly PassedOver[] }
+  | { readonly kind: "failed"; readonly reason: string; readonly passedOver: readonly PassedOver[] };
 
 /**
- * The claim of a review that routed nothing (ADR-084 addendum 2 decision 11): it covers every item
- * a reviewed suite cites and one of its checks records that it decides, but those its findings
- * already left undecided; an item no check claims is reported as decided by none. A covered item reads as
- * verified only when the second review came from another model family and named nothing about it;
- * the second review's findings act on nothing, the first having raised none of them, and only leave
- * the items they name unverified. A second review from the first's family or none at all confirms
- * no item: every covered one is unverified (fail closed).
+ * The claim of a review that routed nothing (ADR-084 addendum 2 decision 11, addendum 3 decision
+ * 12): it covers every item a reviewed suite cites and one of its checks records that it decides, but
+ * those its findings already left undecided; an item no check claims is reported as decided by none.
+ * A covered item reads as verified only when the second review answered and named nothing about it,
+ * at the strength the claim records; the second review's findings act on nothing, the first having
+ * raised none of them, and only leave the items they name unverified. A second review that failed at
+ * every strength confirms no item: every covered one is unverified (fail closed).
  */
 function claimOf(
   suites: ReadonlyMap<string, ReviewedSuite>,
@@ -819,23 +916,38 @@ function claimOf(
       .map((item) => ({ checkTaskId: suite.checkTaskId, itemId: item.id, itemText: item.text })),
   );
   const covered = [...suites.keys()];
+  const { passedOver } = second;
   if (second.kind === "failed") {
-    return { basis: "second-review-failed", covered, firstModel, secondReview: null, second: [], secondFailure: second.reason, unconfirmed: coveredItems };
+    return { basis: "second-review-failed", covered, firstModel, secondReview: null, passedOver, second: [], secondFailure: second.reason, unconfirmed: coveredItems };
   }
-  const secondReview = secondReviewOf(firstModel, second.model);
   const found = second.data.problems;
-  if (secondReview.first.provider === secondReview.second.provider) {
-    return { basis: "no-other-family", covered, firstModel, secondReview, second: found, secondFailure: null, unconfirmed: coveredItems };
-  }
   const named = new Set(found.flatMap((finding) => itemsNamedBy(finding, suites)));
   const unconfirmed = coveredItems.filter((item) => named.has(itemKey(item.checkTaskId, item.itemId)));
-  return { basis: unconfirmed.length === 0 ? "other-family-clean" : "other-family-found", covered, firstModel, secondReview, second: found, secondFailure: null, unconfirmed };
+  const basis = unconfirmed.length === 0 ? "second-opinion-clean" : "second-opinion-found";
+  return { basis, covered, firstModel, secondReview: second.review, passedOver, second: found, secondFailure: null, unconfirmed };
 }
 
-/** The claim as the dispatch reports it: why, with why the second review failed cut to its advisory length. */
+/** The claim as the dispatch reports it: why, at what strength, with why the second review failed cut to its advisory length. */
 function claimOutcome(claim: ReviewClaim): ClaimOutcome {
-  const why = claim.secondFailure === null ? CLAIM_TEXT[claim.basis] : `${CLAIM_TEXT[claim.basis]} (${claim.secondFailure.slice(0, FAILURE_CHARS)})`;
-  return { basis: claim.basis, why, unconfirmed: claim.unconfirmed };
+  const strength = claim.secondReview === null ? null : claim.secondReview.strength;
+  const by = claim.secondReview === null ? "" : `; the second review was ${secondReviewText(claim.secondReview)}`;
+  const failure = claim.secondFailure === null ? "" : ` (${claim.secondFailure.slice(0, FAILURE_CHARS)})`;
+  return { basis: claim.basis, strength, why: `${CLAIM_TEXT[claim.basis]}${by}${failure}`, unconfirmed: claim.unconfirmed };
+}
+
+/** A second opinion's answer came from a model of another strength than the one it asked for: the gateway broke its contract. */
+class SecondOpinionMisrouted extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly asked: SecondOpinionStrength,
+    readonly answered: SecondReview,
+  ) {
+    super(
+      `review task ${reviewTaskId}: a ${asked} second opinion on ${modelName(answered.first)} was answered by ${modelName(answered.second)}, ` +
+        `which is ${answered.strength}: no agreement is read from it`,
+    );
+    this.name = "SecondOpinionMisrouted";
+  }
 }
 
 interface SuiteReviewerDeps {
@@ -862,16 +974,16 @@ export class SuiteReviewer implements SuiteReviewing {
       this.deps.llm.forCall({ projectId: task.projectId, taskId: task.id, callSite: "suite-review" }),
       { site: "suite-review", attempts: 2, onAttempt: this.deps.onAttempt, reask: reviewReask },
     );
-    const prompt = reviewPrompt(itemLines(task.taskSpec?.sources, vision), interfaces, suites);
+    const items = itemLines(task.taskSpec?.sources, vision);
     const maxTokens = reviewOutputBound(suites);
-    const ask = (otherThan?: ReviewModel) =>
+    const ask = (secondOpinion?: SecondOpinion) =>
       provider.generateStructured({
         capability: "Strong",
-        prompt,
+        prompt: reviewPrompt(items, interfaces, suites, secondOpinion === undefined ? "direct" : ANGLE_OF[secondOpinion.strength]),
         schema: ReviewResponseSchema,
         validate: (value) => verdictValidation(value, bySuite),
         maxTokens,
-        otherThan,
+        secondOpinion,
       });
     const reviewed = { reviewed: [...bySuite.keys()], setAside };
     const first = await this.verdict(task.id, () => ask(), bySuite);
@@ -879,14 +991,15 @@ export class SuiteReviewer implements SuiteReviewing {
       const suite = suiteOf(task.id, finding, bySuite);
       return { finding, suite, ratchet: ratchetOf(finding, frozen, suite) };
     });
-    // The second review sees exactly the first's inputs and none of its verdict, asked of another
-    // model when the catalog has one. It is asked on every review: a finding acts only on its
-    // agreement, and a review that routes nothing is a claim only it confirms.
-    const secondAsked = await this.secondVerdict(task.id, () => ask(first.model), bySuite);
+    // The second review sees exactly the first's inputs and none of its verdict, asked at the
+    // strongest independence the catalog offers. It is asked on every review: a finding acts only
+    // on its agreement, and a review that routes nothing is a claim only it confirms.
+    const secondAsked = await this.secondVerdict(task.id, first.model, ask, bySuite);
     const answered = secondAsked.kind === "answered" ? secondAsked : null;
     const secondFailure = secondAsked.kind === "failed" ? secondAsked.reason : null;
-    const review = answered === null ? null : secondReviewOf(first.model, answered.model);
+    const review = answered === null ? null : answered.review;
     const second = answered === null ? [] : answered.data.problems;
+    const { passedOver } = secondAsked;
 
     const routed: SuiteReviewProblem[] = [];
     const released: ReleasedRejection[] = [];
@@ -895,11 +1008,12 @@ export class SuiteReviewer implements SuiteReviewing {
     for (const { finding, suite, ratchet } of findings) {
       const named = namedBy(finding);
       const onTasks = second.filter((other) => namedBy(other).some((id) => named.includes(id)));
-      const base = { checkTaskId: suite.checkTaskId, first: finding, firstModel: first.model, second: onTasks, secondReview: review, secondFailure: null };
-      const keep = (basis: Exclude<JudgementBasis, "two-reviews" | "other-family-agreed">, failure: string | null): void => {
+      const base = { checkTaskId: suite.checkTaskId, first: finding, firstModel: first.model, second: onTasks, secondReview: review, passedOver, secondFailure: null };
+      const keep = (basis: Exclude<JudgementBasis, "two-reviews" | "second-opinion-agreed">, failure: string | null): void => {
         const undecided = finding.kind === "undecided-item" ? undecidedItemOf(task.id, finding, suite) : null;
         judgements.push({ ...base, check: isOutsideVision(finding) ? finding.check : null, outcome: "advisory", basis, undecided, secondFailure: failure });
-        const why = failure === null ? BASIS_TEXT[basis] : `${BASIS_TEXT[basis]} (${failure.slice(0, FAILURE_CHARS)})`;
+        const by = basis === "second-opinion-disagreed" && review !== null ? `; the second review was ${secondReviewText(review)}` : "";
+        const why = failure === null ? `${BASIS_TEXT[basis]}${by}` : `${BASIS_TEXT[basis]} (${failure.slice(0, FAILURE_CHARS)})`;
         advisory.push({ checkTaskIds: named, kind: finding.kind, finding: findingLine(finding), why });
       };
       if (ratchet !== null) {
@@ -924,16 +1038,12 @@ export class SuiteReviewer implements SuiteReviewing {
         }
         continue;
       }
-      // No witness can settle these: only another model family's agreement acts on them.
-      if (review.first.provider === review.second.provider) {
-        keep("no-other-family", null);
-        continue;
-      }
+      // No witness can settle these: only the independent second opinion's agreement acts on them.
       if (agreeing === undefined) {
-        keep("other-family-disagreed", null);
+        keep("second-opinion-disagreed", null);
         continue;
       }
-      judgements.push({ ...base, check: null, outcome: "routed", basis: "other-family-agreed", undecided: null });
+      judgements.push({ ...base, check: null, outcome: "routed", basis: "second-opinion-agreed", undecided: null });
       routed.push(finding.kind === "contradiction" ? agreedContradiction(finding, review) : agreedUndecided(finding, review));
     }
     const undecided = judgements.flatMap((judgement) => (judgement.undecided === null ? [] : [judgement.undecided]));
@@ -950,24 +1060,38 @@ export class SuiteReviewer implements SuiteReviewing {
   }
 
   /**
-   * The second review's verdict, or why it gave none: no model it may go to answered
-   * (NoOtherFamilyAnswered), its answers never validated (StructuredOutputExhausted), or its verdict
-   * was unfit to act on. Any other throw (a spend-cap refusal, a schema Ashara must not send) is not
-   * the review's failure and fails the review task.
+   * The second review's verdict at the strongest independence that answers, or why none did
+   * (ADR-084 addendum 3 decision 12). Each strength is asked in order: one the catalog does not
+   * serve at the capability (SecondOpinionUnavailable) or whose model gave no fit answer
+   * (SecondOpinionUnanswered, StructuredOutputExhausted, SuiteVerdictUnfit) is passed over, recorded
+   * and logged, and the next is asked. Any other throw (a spend-cap refusal, a schema Ashara must not
+   * send, an answer from a model of another strength) is not the review's failure and fails the
+   * review task.
    */
   private async secondVerdict(
     reviewTaskId: WorkItemId,
-    ask: () => Promise<{ readonly data: ReviewResponse; readonly provider: string; readonly model: string }>,
+    first: ReviewModel,
+    ask: (secondOpinion: SecondOpinion) => Promise<{ readonly data: ReviewResponse; readonly provider: string; readonly model: string }>,
     suites: ReadonlyMap<string, ReviewedSuite>,
   ): Promise<SecondVerdict> {
-    try {
-      return { kind: "answered", ...(await this.verdict(reviewTaskId, ask, suites)) };
-    } catch (err) {
-      if (!(err instanceof NoOtherFamilyAnswered || err instanceof StructuredOutputExhausted || err instanceof SuiteVerdictUnfit)) throw err;
-      const reason = describeErrorChain(err);
-      console.warn(`[suite-review] review task ${reviewTaskId}: the second review failed, so no finding it was asked for acts and no item reads as verified on it: ${reason}`);
-      return { kind: "failed", reason };
+    const passedOver: PassedOver[] = [];
+    for (const strength of SECOND_OPINION_STRENGTHS) {
+      try {
+        const { data, model } = await this.verdict(reviewTaskId, () => ask({ avoid: first, strength }), suites);
+        const review: SecondReview = { strength: strengthBetween(first, model), first, second: model };
+        if (review.strength !== strength) throw new SecondOpinionMisrouted(reviewTaskId, strength, review);
+        return { kind: "answered", data, review, passedOver };
+      } catch (err) {
+        const unavailable = err instanceof SecondOpinionUnavailable;
+        if (!(unavailable || err instanceof SecondOpinionUnanswered || err instanceof StructuredOutputExhausted || err instanceof SuiteVerdictUnfit)) throw err;
+        const reason = describeErrorChain(err);
+        passedOver.push({ strength, outcome: unavailable ? "unavailable" : "failed", reason });
+        console.warn(`[suite-review] review task ${reviewTaskId}: no ${strength} second opinion (${unavailable ? "the catalog offers none" : "it failed"}); the next strength is asked: ${reason}`);
+      }
     }
+    const reason = passedOver.map((over) => `${over.strength} ${over.outcome}: ${over.reason}`).join("; ");
+    console.warn(`[suite-review] review task ${reviewTaskId}: the second review failed at every strength, so no finding it was asked for acts and no item reads as verified on it: ${reason}`);
+    return { kind: "failed", reason, passedOver };
   }
 
   /** One review's verdict, validated by the ladder and again here: a model that ignored validate is caught, never acted on. */
@@ -1011,6 +1135,7 @@ export class SuiteReviewer implements SuiteReviewing {
       }
       suites.push({
         checkTaskId: checkTask.id,
+        checksFor: checkTask.checksFor,
         taskTitle: checkTask.checkedTitle,
         cited: citedItems(checkTask.sources, checkTask.visionItems),
         checks,

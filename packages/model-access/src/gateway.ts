@@ -14,10 +14,11 @@ import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
 import {
-  NoOtherFamilyAnswered,
   ProviderConfigurationRejected,
   ProviderError,
   SchemaValidationError,
+  SecondOpinionUnanswered,
+  SecondOpinionUnavailable,
   StructuredOutputTruncated,
   TurnResponseInvalid,
 } from "./errors.js";
@@ -379,21 +380,44 @@ export class LLMGateway {
     // provider refuses Ashara's defect: none is retried on another provider, where it would only be hidden.
     const rethrown = (error: unknown): boolean => error instanceof SchemaValidationError || error instanceof GateThrew || error instanceof SchemaUnacceptable;
     const execute = (req: StructuredRequest<T>, r: ResolvedProvider) => this.executeStructuredCall(req, r, scope);
-    const avoided = request.otherThan;
-    if (avoided === undefined) {
+    const opinion = request.secondOpinion;
+    if (opinion === undefined) {
       return this.withFallback(request, this.registry.resolve(request.capability, [], request.site), execute, "structured request", rethrown, []);
     }
-    // A second opinion goes to another family when the catalog has one, and its failover never
-    // returns to the avoided family; with no other family it asks the avoided provider again, which
-    // the response names. No answer from any of those is NoOtherFamilyAnswered, never a same-family
-    // answer reached through failover.
-    const resolved = this.registry.resolveOther(request.capability, avoided, request.site) ?? this.registry.resolve(request.capability, [], request.site);
-    const excluded = resolved.providerName === avoided.provider ? [] : [avoided.provider];
+    // A second opinion goes only to a model of the strength it asks for: the catalog has one or the
+    // request is refused unsent. An other-family opinion's failover never returns to the avoided
+    // provider; a same-family or same-model one is pinned to its one model. Moving to a weaker
+    // strength is the caller's explicit step, never a failover here.
+    const resolved = this.registry.resolveSecondOpinion(request.capability, opinion, request.site);
+    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request.capability, this.registry.enabledModels());
     try {
-      return await this.withFallback(request, resolved, execute, "structured request", rethrown, excluded);
+      return opinion.strength === "other-family"
+        ? await this.withFallback(request, resolved, execute, "structured request", rethrown, [opinion.avoid.provider])
+        : await this.pinned(request, resolved, execute, "structured request", rethrown);
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
-      throw new NoOtherFamilyAnswered(avoided, resolved.providerName, { cause: error });
+      throw new SecondOpinionUnanswered(opinion, { provider: resolved.providerName, model: resolved.modelConfig.id }, { cause: error });
+    }
+  }
+
+  /** One request to `resolved` with no fallback; a failure not opted out by `shouldRethrow` is a ProviderError naming whose it was. */
+  private async pinned<TRequest, TResult>(
+    request: TRequest,
+    resolved: ResolvedProvider,
+    execute: (request: TRequest, resolved: ResolvedProvider) => Promise<TResult>,
+    label: string,
+    shouldRethrow: (error: unknown) => boolean,
+  ): Promise<TResult> {
+    try {
+      return await execute(request, resolved);
+    } catch (error) {
+      if (shouldRethrow(error)) throw error;
+      throw new ProviderError(
+        resolved.providerName,
+        `${label} on model=${resolved.modelConfig.id} failed (${describeErrorChain(error)}); it is pinned to that model, with no fallback`,
+        providerFailureOf(error),
+        { cause: error },
+      );
     }
   }
 
@@ -553,7 +577,10 @@ export class LLMGateway {
   ): Promise<StructuredResponse<T>> {
     const operation: LlmCallOperation = "generateText:structured-fallback";
     const site = request.site ?? scope.site;
-    const prompt = request.prompt + "\n\nRespond with valid JSON only. No markdown, no explanation.";
+    // A provider answering in text never receives the schema as a request parameter, so the schema
+    // the answer is validated against travels in the prompt: a required field the caller's own prose
+    // leaves implicit is still stated.
+    const prompt = textStructuredPrompt(request.prompt, request.schema);
     const requestBytes = utf8Bytes(prompt, request.systemPrompt);
     const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
     const params: Parameters<typeof generateText>[0] = {
@@ -633,17 +660,48 @@ function configurationRejectionOf(error: unknown, resolved: CallTarget): Provide
   return new ProviderConfigurationRejected(resolved.providerName, resolved.modelConfig.id, error.statusCode, { cause: error });
 }
 
+/**
+ * The prompt of a structured request to a provider that answers in text: the caller's prompt, then
+ * the JSON Schema the answer is validated against, whole.
+ * @testseam gateway.test.ts asserts the schema it carries; executeTextStructured is its production caller
+ */
+export function textStructuredPrompt(prompt: string, schema: StructuredRequest<unknown>["schema"]): string {
+  return (
+    `${prompt}\n\nRespond with valid JSON only. No markdown, no explanation. The JSON must validate against this JSON Schema: ` +
+    `every property it lists as required is present, with the type it names, and no property it does not list:\n${schemaText(schema)}`
+  );
+}
+
 type ParsedStructuredText<T> =
   | { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly errorKind: "InvalidJson" | "SchemaMismatch"; readonly errors: string[] };
 
-function parseStructuredText<T>(text: string, schema: StructuredRequest<T>["schema"]): ParsedStructuredText<T> {
+/** Characters of an unparseable answer shown on each side of where the parser stopped. */
+const SYNTAX_CONTEXT_CHARS = 120;
+
+/**
+ * Where a text that is not JSON stopped parsing, as the parser said it, with the text around that
+ * point: the error a re-ask names, so a model is told what to correct, not only that it failed.
+ */
+function syntaxError(detail: string, jsonText: string): string {
+  const at = /position (\d+)/.exec(detail);
+  const position = at?.[1] === undefined ? null : Number(at[1]);
+  if (position === null || !Number.isSafeInteger(position)) {
+    return `Invalid JSON (${detail}); it is ${jsonText.length} characters and ends ${JSON.stringify(jsonText.slice(-SYNTAX_CONTEXT_CHARS))}`;
+  }
+  const before = jsonText.slice(Math.max(0, position - SYNTAX_CONTEXT_CHARS), position);
+  const after = jsonText.slice(position, position + SYNTAX_CONTEXT_CHARS);
+  return `Invalid JSON (${detail}): the text before that point is ${JSON.stringify(before)} and from it ${JSON.stringify(after)}`;
+}
+
+/** @testseam gateway.test.ts asserts the errors a re-ask names; executeTextStructured is its production caller */
+export function parseStructuredText<T>(text: string, schema: StructuredRequest<T>["schema"]): ParsedStructuredText<T> {
   const jsonText = extractJson(text);
   try {
     return { ok: true, data: parseJson(schema, jsonText, "structured output text") };
   } catch (err) {
     if (!(err instanceof JsonParseFailed)) throw err;
-    if (err.stage === "syntax") return { ok: false, errorKind: "InvalidJson", errors: [`Invalid JSON: ${jsonText.slice(0, 100)}`] };
+    if (err.stage === "syntax") return { ok: false, errorKind: "InvalidJson", errors: [syntaxError(err.detail, jsonText)] };
     return { ok: false, errorKind: "SchemaMismatch", errors: [...err.issues] };
   }
 }

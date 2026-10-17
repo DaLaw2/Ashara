@@ -75,7 +75,7 @@ const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable()
 /**
  * Why a suite review left an item undecided, as the delivered report must say it: a finding that
  * did not act, its second review not agreeing (unsettled) or failing (migration 071); or a clean
- * review whose claim another model family contradicted or never answered (migration 072).
+ * review whose claim a second review contradicted or never confirmed (migrations 072, 073).
  */
 const UNDECIDED_REASONS = ["review-failed", "clean-unconfirmed", "clean-contradicted", "unsettled"] as const;
 type UndecidedReason = (typeof UNDECIDED_REASONS)[number];
@@ -88,7 +88,7 @@ function firstReason(a: UndecidedReason, b: UndecidedReason): UndecidedReason {
 /** An undecided_items row's reason, from the judgement or the claim it is tied to. */
 const UNDECIDED_REASON_SQL = sql.raw(`CASE WHEN j.basis = 'second-review-failed' THEN 'review-failed'
               WHEN j.id IS NOT NULL THEN 'unsettled'
-              WHEN c.basis = 'other-family-found' THEN 'clean-contradicted'
+              WHEN c.basis = 'second-opinion-found' THEN 'clean-contradicted'
               ELSE 'clean-unconfirmed' END`);
 
 /**
@@ -879,13 +879,14 @@ function undecidedAtSweep(
 
 /**
  * One suite review a stand-in answered with a whole answer (scripted-models.ts): the review task,
- * the check revisions it read (`<task id>@<revision>`), the provider it answered as, and its
- * problems as sent.
+ * the check revisions it read (`<task id>@<revision>`), the provider it answered as, whether its
+ * prompt asked it to start from what each check cannot observe, and its problems as sent.
  */
 export interface ObservedReview {
   readonly reviewTaskId: string;
   readonly checks: readonly string[];
   readonly provider: string;
+  readonly blindSpots: boolean;
   readonly problems: readonly unknown[];
 }
 
@@ -914,13 +915,14 @@ function namesItem(problem: unknown, checkTaskId: string, itemId: string): boole
 }
 
 /**
- * ADR-084 addendum 2 decision 11, judged from the stand-ins' own answers, never production's claim
- * record: an asked-for item a passed sweep's delivered report calls decided by a stored check (a
- * check the sweep ran decides it and no undecided row names it) whose suite a review read at the
- * revision the sweep ran was confirmed by a second model family. Some review round of that revision
- * holds an answer from a provider other than the round's first answer's that says nothing about the
- * item. A suite no review read is not judged here. One finding per item, keyed by its id, at the
- * first sweep that misses it.
+ * ADR-084 addendum 2 decision 11 and addendum 3 decision 12, judged from the stand-ins' own answers,
+ * never production's claim record: an asked-for item a passed sweep's delivered report calls decided
+ * by a stored check (a check the sweep ran decides it and no undecided row names it) whose suite a
+ * review read at the revision the sweep ran was confirmed by a second opinion. Some review round of
+ * that revision holds a second opinion that says nothing about the item: an answer from a provider
+ * other than the round's first answer's, or one asked to start from what each check cannot observe,
+ * as a second opinion within the first's family is. A suite no review read is not judged here. One
+ * finding per item, keyed by its id, at the first sweep that misses it.
  */
 export function unconfirmedAtPassedSweeps(records: Pick<ReportRecords, "passedSweeps">, reviews: readonly ObservedReview[]): UncheckedFinding[] {
   const found = new Map<string, string>();
@@ -941,13 +943,13 @@ export function unconfirmedAtPassedSweeps(records: Pick<ReportRecords, "passedSw
         if (source.type === "scope" ? source.side === "out" : source.kind === "internal-design") continue;
         const confirmed = rounds.some((round) => {
           const first = round[0]?.provider;
-          return round.some((review) => review.provider !== first && !review.problems.some((problem) => namesItem(problem, check.checkTaskId, id)));
+          return round.some((review) => (review.provider !== first || review.blindSpots) && !review.problems.some((problem) => namesItem(problem, check.checkTaskId, id)));
         });
         if (!confirmed) {
           found.set(
             id,
             `${id} ("${source.text.slice(0, 120)}") is called decided by a stored check in the delivered report of passed sweep ${n + 1} (${sweep.id}), ` +
-              `but no review of check "${check.name}"'s suite by a second model family found its checks clean on it`,
+              `but no second opinion on check "${check.name}"'s suite found its checks clean on it`,
           );
         }
       }
@@ -1006,25 +1008,58 @@ const UNCOVERED_HEAD = "These items of what you asked for are decided by no stor
 const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 const UNDECIDED_HEAD = "These items of what you asked for have a stored check that passed on main and is recorded as deciding them";
 /**
- * What an undecided section's first line says for each reason, and no other section's does: the
- * second review that could have settled its items failed; another family's review did not settle a
- * finding; or the review that found no problem was contradicted, or never confirmed, by one.
+ * What an undecided section's first line says for each reason, whatever the strength of the second
+ * review behind it, and no other section's does: the second review that could have settled its items
+ * failed; a second review did not settle a finding; or the review that found no problem was
+ * contradicted, or never confirmed, by one.
  */
-const SAYS: Readonly<Record<UndecidedReason, string>> = {
-  "review-failed": "review failed",
-  unsettled: "no second review by another model family confirmed or settled that",
-  "clean-contradicted": "a second review by another model family found a problem there",
-  "clean-unconfirmed": "no second review by another model family answered",
+const SAYS: Readonly<Record<UndecidedReason, readonly string[]>> = {
+  "review-failed": ["because that review failed"],
+  unsettled: ["no second review confirmed or settled that", "did not confirm or settle that"],
+  "clean-contradicted": ["found a problem there"],
+  "clean-unconfirmed": ["no second review of those checks answered", "was not counted as confirming it"],
 };
 
 /** The reasons a section's first line states. */
 function reasonsSaid(head: string): UndecidedReason[] {
-  return UNDECIDED_REASONS.filter((reason) => head.includes(SAYS[reason]));
+  return UNDECIDED_REASONS.filter((reason) => SAYS[reason].some((said) => head.includes(said)));
 }
 
 type CoverageUndecided = Extract<CoverageOnRecord, { readonly kind: "recorded" }>["undecided"];
 const ALL_COVERED = "Every item of what you asked for is decided";
-const OTHERS_COVERED = "Every other item of what you asked for is decided";
+/**
+ * The sentence counting the asked-for items decided and confirmed (ADR-084 addendum 3 decision 12):
+ * every one, none of N, or K of N.
+ */
+const CONFIRMED_COUNT =
+  /(?:^|\n)(Every item|None of the (\d+) items?|(\d+) of the (\d+) items?) of what you asked for (?:is|are) decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks/;
+const CONFIRMED_HEAD = "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a second review";
+const UNREVIEWED_HEAD = "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review";
+
+/**
+ * ADR-084 addendum 3 decision 12: every asked-for item a stored check decides and no review left
+ * undecided is listed once, as confirmed by a second review or as not confirmed; the count sentence
+ * counts only the confirmed ones, of every asked-for item, and says none when none is.
+ */
+function confirmedCountProblems(body: string, asked: number, decided: readonly VisionSource[]): string[] {
+  const linesOf = (head: string): string[] => paragraphs(body, head).flatMap((part) => part.split("\n").filter((line) => line.startsWith("- ")));
+  const confirmed = linesOf(CONFIRMED_HEAD);
+  const listed = [...confirmed, ...linesOf(UNREVIEWED_HEAD)];
+  const problems: string[] = [];
+  for (const source of decided) {
+    const times = listed.filter((line) => line.includes(source.text)).length;
+    if (times !== 1) problems.push(`the delivered report lists "${source.text}" (${source.id}), decided and left undecided by no review, ${times} time(s) as confirmed or not; it must once`);
+  }
+  if (listed.length !== decided.length) problems.push(`the delivered report lists ${listed.length} item(s) as confirmed or not; the records hold ${decided.length} decided item(s) no review left undecided`);
+  const count = CONFIRMED_COUNT.exec(body);
+  if (count === null) return [...problems, `the delivered report does not say how many of the ${asked} asked-for item(s) are decided and confirmed`];
+  const [, said, none, some, of] = count;
+  const stated = said === "Every item" ? { confirmed: asked, of: asked } : none !== undefined ? { confirmed: 0, of: Number(none) } : { confirmed: Number(some), of: Number(of) };
+  if (stated.of !== asked || stated.confirmed !== confirmed.length || (said !== "Every item" && stated.confirmed === asked)) {
+    problems.push(`the delivered report says "${said}" of the asked-for items are decided and confirmed; it lists ${confirmed.length} confirmed of ${asked}`);
+  }
+  return problems;
+}
 
 /** Where the delivered report's coverage section departs from the records. */
 function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
@@ -1039,11 +1074,8 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
   if (coverage.kind === "unrecorded") return expectSentence("is not on record for this plan", "no record of what the checks decide");
   const problems = [...unverifiedProblems(body, coverage.notAsked), ...undecidedProblems(body, coverage.undecided)];
   if (coverage.asked.length === 0) return [...problems, ...expectSentence("holds no item of what you asked for", "no item the client asked for")];
-  if (coverage.uncovered.length === 0) {
-    return coverage.undecided.length === 0
-      ? [...problems, ...expectSentence(ALL_COVERED, "every asked-for item decided")]
-      : [...problems, ...expectSentence(OTHERS_COVERED, "every asked-for item decided but those left undecided")];
-  }
+  const notDecided = new Set([...coverage.uncovered, ...coverage.undecided.map((item) => item.source)]);
+  problems.push(...confirmedCountProblems(body, coverage.asked.length, coverage.asked.filter((source) => !notDecided.has(source))));
   for (const source of coverage.uncovered) {
     if (!listed.some((line) => line.includes(source.text))) problems.push(`the delivered report does not list "${source.text}" (${source.id}) as decided by no stored check`);
   }
@@ -1058,8 +1090,8 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
  * ADR-084 decision 2 and addendum 2 decision 11: the delivered report names every asked-for item a
  * suite review left undecided as not verified, and nothing else there; no such section when there
  * is none. Each item is named in a section that states its reason and no other, so the client can
- * tell a failed review from one that did not settle the item, and a clean review another family
- * contradicted from one no other family answered.
+ * tell a failed review from one that did not settle the item, and a clean review a second opinion
+ * contradicted from one no second opinion confirmed.
  */
 function undecidedProblems(body: string, undecided: CoverageUndecided): string[] {
   const sections = paragraphs(body, UNDECIDED_HEAD);

@@ -215,7 +215,7 @@ export const deliveredReportUnrecorded: QueryPlant = (args) => {
 };
 
 /**
- * A clean review's claim that no other model family confirmed leaves no item undecided
+ * A clean review's claim that no second opinion confirmed leaves no item undecided
  * (SuiteReviewJudgementRepository, migration 072): an insert of undecided_items rows that names a
  * claim is sent as a statement that writes nothing, so every item it covers reads as decided by a
  * stored check in the delivered report, as when no second review was asked of a clean one. The

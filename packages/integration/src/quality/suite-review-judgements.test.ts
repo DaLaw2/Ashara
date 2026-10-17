@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
-import { NoOtherFamilyAnswered, ProviderError } from "@ashara/finance";
-import type { ContextualLlm } from "@ashara/finance";
+import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
+import type { ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
 import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId } from "@ashara/shared";
@@ -19,6 +19,21 @@ const NAME = `suite-review-judgements-test-${randomUUID().slice(0, 8)}`;
 let db: ReturnType<typeof createDb>;
 let clientId: string;
 let projectId: ProjectId;
+
+/** The model a stub catalog serves the first review with. */
+const FIRST = { provider: "first", model: "strong-a" };
+
+/**
+ * The model each strength of second opinion goes to in a stub catalog, as the gateway resolves it:
+ * a strength the catalog lacks is refused unsent with SecondOpinionUnavailable.
+ */
+function secondBy(request: { readonly capability: "Light" | "Medium" | "Strong" | "Frontier"; readonly secondOpinion?: { readonly avoid: { readonly provider: string; readonly model: string }; readonly strength: SecondOpinionStrength } }, catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>) {
+  const opinion = request.secondOpinion;
+  if (opinion === undefined) return FIRST;
+  const by = catalog[opinion.strength];
+  if (by === undefined) throw new SecondOpinionUnavailable(opinion, request.capability, []);
+  return by;
+}
 
 async function workItem(title: string): Promise<string> {
   const id = randomUUID();
@@ -78,8 +93,8 @@ describe("suite review judgements (migration 063)", () => {
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
+          const by = secondBy(request, { "other-family": { provider: "second", model: "strong-b" } });
           const answer = answers[next++];
-          const by = request.otherThan === undefined ? { provider: "first", model: "strong-a" } : { provider: "second", model: "strong-b" };
           return { data: request.schema.parse(answer), ...by };
         },
       }),
@@ -101,7 +116,8 @@ describe("suite review judgements (migration 063)", () => {
         secondFindings: [{ ...rejectA, missingClause: "a count of the rows" }],
         firstModel: "first/strong-a",
         secondModel: "second/strong-b",
-        secondReview: "other-model",
+        secondStrength: "other-family",
+        passedOver: [],
         secondFailure: null,
       },
       {
@@ -114,7 +130,8 @@ describe("suite review judgements (migration 063)", () => {
         secondFindings: [undecidedB],
         firstModel: "first/strong-a",
         secondModel: "second/strong-b",
-        secondReview: "other-model",
+        secondStrength: "other-family",
+        passedOver: [],
         secondFailure: null,
       },
     ]);
@@ -126,23 +143,27 @@ describe("suite review judgements (migration 063)", () => {
     const reviewTask = await workItem("Review with a corrupt judgement");
     const checkTask = await workItem("Checks with a corrupt judgement");
     await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_review)
-      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 're-sample')`);
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over)
+      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb)`);
     await expect(suiteReviewJudgementsOf(db, projectId)).rejects.toMatchObject({ name: "SuiteReviewJudgementCorrupt" });
     // The corrupt row is this test's alone: the project's other judgements are read whole after it.
     await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
   });
 
-  test("a re-sample must name the same model twice, and another model two different ones", async () => {
+  test("a second review's strength must fit its two models: the same model twice, another of the provider, or another provider (migration 073)", async () => {
     const reviewTask = await workItem("Review with a mislabelled second review");
     const checkTask = await workItem("Checks with a mislabelled second review");
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
-    const insert = (secondModel: string, secondReview: string) =>
+    const insert = (secondModel: string, secondStrength: string) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_review)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondReview})`);
-    await expect(insert("q/n", "re-sample")).rejects.toThrow();
-    await expect(insert("p/m", "other-model")).rejects.toThrow();
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb)`);
+    await expect(insert("q/n", "same-model")).rejects.toThrow();
+    await expect(insert("p/m", "same-family-other-model")).rejects.toThrow();
+    await expect(insert("p/n", "other-family")).rejects.toThrow();
+    await expect(insert("q/m", "same-family-other-model")).rejects.toThrow();
+    await insert("p/n", "same-family-other-model");
+    await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
   });
 });
 
@@ -155,8 +176,11 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     return id;
   }
 
-  /** A review in which both reviews raise one undecided item, the second answering from `secondProvider`, or failing with its error. */
-  async function reviewUndecided(secondProvider: string | Error) {
+  /**
+   * A review whose first pass raises one undecided item; the second answers from the model `catalog`
+   * serves its strength with, raising the item too when `agrees`, or fails with `failure`.
+   */
+  async function reviewUndecided(catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>, agrees: boolean, failure: Error | null = null) {
     const reviewTask = parseWorkItemId(await workItem("Review an undecided item"), "test review task");
     const impl = await workItem("Durable put");
     const check = await workItem("Checks of Durable put");
@@ -167,14 +191,12 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
       frozen: async () => false,
     };
     const undecided = { checkTasks: [check], kind: "undecided-item", item: "S9", problem: "no check distinguishes fsynced from written data", evidence: "sh put.sh" };
-    const answers = [{ problems: [undecided] }, { problems: [undecided] }];
-    let next = 0;
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          const answer = answers[next++];
-          if (secondProvider instanceof Error && request.otherThan !== undefined) throw secondProvider;
-          const by = request.otherThan === undefined ? { provider: "first", model: "strong-a" } : { provider: secondProvider instanceof Error ? "unanswered" : secondProvider, model: "strong-b" };
+          const by = secondBy(request, catalog);
+          if (request.secondOpinion !== undefined && failure !== null) throw failure;
+          const answer = request.secondOpinion === undefined || agrees ? { problems: [undecided] } : { problems: [] };
           return { data: request.schema.parse(answer), ...by };
         },
       }),
@@ -186,20 +208,34 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     return { outcome, kept: kept.rows, judged, check };
   }
 
-  test("an undecided item only one model family raised is kept advisory and stored undecided, never routed", async () => {
-    const { outcome, kept, judged, check } = await reviewUndecided("first");
+  test("an undecided item the second review does not reach is kept advisory and stored undecided, never routed, with the second's strength", async () => {
+    const { outcome, kept, judged, check } = await reviewUndecided({ "same-family-other-model": { provider: "first", model: "strong-b" } }, false);
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
     expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
-    expect(judged).toMatchObject([{ checkName: null, outcome: "advisory", basis: "no-other-family", secondModel: "first/strong-b" }]);
+    expect(judged).toMatchObject([
+      {
+        checkName: null,
+        outcome: "advisory",
+        basis: "second-opinion-disagreed",
+        secondModel: "first/strong-b",
+        secondStrength: "same-family-other-model",
+        passedOver: [{ strength: "other-family", outcome: "unavailable" }],
+      },
+    ]);
   });
 
-  test("a second review no other family answered is stored as failed with its reason, the item kept advisory and undecided (migration 071)", async () => {
-    const failure = new NoOtherFamilyAnswered({ provider: "first", model: "strong-a" }, "second", { cause: new ProviderError("second", "503", "provider") });
-    const { outcome, kept, judged, check } = await reviewUndecided(failure);
+  test("a second review no model answered is stored as failed with its reason, the item kept advisory and undecided (migration 071)", async () => {
+    const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
+    const { outcome, kept, judged, check } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b" } }, true, failure);
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
     expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
-    expect(judged).toMatchObject([{ outcome: "advisory", basis: "second-review-failed", secondModel: null, secondReview: null, secondFindings: [] }]);
+    expect(judged).toMatchObject([{ outcome: "advisory", basis: "second-review-failed", secondModel: null, secondStrength: null, secondFindings: [] }]);
     expect(judged[0]?.secondFailure).toContain("got no answer");
+    expect(judged[0]?.passedOver.map((over) => [over.strength, over.outcome])).toEqual([
+      ["other-family", "failed"],
+      ["same-family-other-model", "unavailable"],
+      ["same-model", "unavailable"],
+    ]);
   });
 
   test("a failed basis without its reason, or a reason on another basis, is refused by the table", async () => {
@@ -208,23 +244,30 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
     const insert = (basis: string, failure: string | null) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_failure)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', ${failure})`);
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, passed_over, second_failure)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', '[]'::jsonb, ${failure})`);
     await expect(insert("second-review-failed", null)).rejects.toThrow();
     await expect(insert("frozen", "a reason")).rejects.toThrow();
-    await insert("second-review-failed", "no other family answered");
+    await insert("second-review-failed", "no second opinion answered");
     await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
   });
 
   test("an undecided item another model family agrees on is routed once and not stored undecided", async () => {
-    const { outcome, kept, judged } = await reviewUndecided("second");
+    const { outcome, kept, judged } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b" } }, true);
     expect(outcome).toMatchObject({ kind: "problems", undecided: [], problems: [{ kind: "undecided-item" }] });
     expect(kept).toEqual([]);
-    expect(judged).toMatchObject([{ outcome: "routed", basis: "other-family-agreed", secondModel: "second/strong-b", secondReview: "other-model" }]);
+    expect(judged).toMatchObject([{ outcome: "routed", basis: "second-opinion-agreed", secondModel: "second/strong-b", secondStrength: "other-family", passedOver: [] }]);
+  });
+
+  test("in a deployment with one model, its own agreement from the other angle routes the item, recorded as the same model", async () => {
+    const { outcome, judged } = await reviewUndecided({ "same-model": FIRST }, true);
+    expect(outcome).toMatchObject({ kind: "problems", problems: [{ kind: "undecided-item" }] });
+    expect(judged).toMatchObject([{ outcome: "routed", basis: "second-opinion-agreed", secondModel: "first/strong-a", secondStrength: "same-model" }]);
   });
 
   /** A review whose first pass finds nothing, its second answering `second` from another family, or failing with it. */
   async function reviewClean(second: ((check: string) => { readonly problems: readonly unknown[] }) | Error) {
+    const catalog = { "other-family": { provider: "second", model: "strong-b" } };
     const reviewTask = parseWorkItemId(await workItem("Review a clean suite"), "test review task");
     const impl = await workItem("Durable put");
     const check = await workItem("Checks of Durable put");
@@ -240,9 +283,10 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          if (request.otherThan === undefined) return { data: request.schema.parse({ problems: [] }), provider: "first", model: "strong-a" };
+          const by = secondBy(request, catalog);
+          if (request.secondOpinion === undefined) return { data: request.schema.parse({ problems: [] }), ...by };
           if (second instanceof Error) throw second;
-          return { data: request.schema.parse(second(check)), provider: "second", model: "strong-b" };
+          return { data: request.schema.parse(second(check)), ...by };
         },
       }),
     };
@@ -252,34 +296,36 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
       SELECT u.item_id AS "itemId", u.judgement_id AS "judgementId", c.basis FROM undecided_items u JOIN suite_review_claims c ON c.id = u.claim_id
       WHERE u.review_task_id = ${reviewTask} ORDER BY u.item_id`);
     const claims = await db.execute(sql`
-      SELECT basis, covered, first_model AS "firstModel", second_model AS "secondModel", second_review AS "secondReview", second_findings AS "secondFindings", second_failure AS "secondFailure"
+      SELECT basis, covered, first_model AS "firstModel", second_model AS "secondModel", second_strength AS "secondStrength", second_findings AS "secondFindings", second_failure AS "secondFailure"
       FROM suite_review_claims WHERE review_task_id = ${reviewTask}`);
     return { outcome, kept: kept.rows, claims: claims.rows, check };
   }
 
   test("a clean review another family confirms is recorded as a claim and leaves nothing undecided (migration 072)", async () => {
     const { outcome, kept, claims, check } = await reviewClean(() => ({ problems: [] }));
-    expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "other-family-clean", unconfirmed: [] } });
+    expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "second-opinion-clean", strength: "other-family", unconfirmed: [] } });
     expect(kept).toEqual([]);
-    expect(claims).toEqual([{ basis: "other-family-clean", covered: [check], firstModel: "first/strong-a", secondModel: "second/strong-b", secondReview: "other-model", secondFindings: [], secondFailure: null }]);
+    expect(claims).toEqual([
+      { basis: "second-opinion-clean", covered: [check], firstModel: "first/strong-a", secondModel: "second/strong-b", secondStrength: "other-family", secondFindings: [], secondFailure: null },
+    ]);
   });
 
   test("a clean review the other family contradicts stores only the items it named undecided, tied to the claim", async () => {
     const doubt = (check: string) => ({ checkTasks: [check], kind: "undecided-item", item: "S9", problem: "no check distinguishes fsynced from written data", evidence: "sh put.sh" });
     const { outcome, kept, claims } = await reviewClean((check) => ({ problems: [doubt(check)] }));
-    expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "other-family-found", unconfirmed: [{ itemId: "S9" }] } });
-    expect(kept).toEqual([{ itemId: "S9", judgementId: null, basis: "other-family-found" }]);
-    expect(claims).toMatchObject([{ basis: "other-family-found", secondFindings: [{ kind: "undecided-item", item: "S9" }] }]);
+    expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "second-opinion-found", unconfirmed: [{ itemId: "S9" }] } });
+    expect(kept).toEqual([{ itemId: "S9", judgementId: null, basis: "second-opinion-found" }]);
+    expect(claims).toMatchObject([{ basis: "second-opinion-found", secondFindings: [{ kind: "undecided-item", item: "S9" }] }]);
   });
 
   test("a clean review whose second review failed stores every covered item undecided, with why", async () => {
-    const failure = new NoOtherFamilyAnswered({ provider: "first", model: "strong-a" }, "second", { cause: new ProviderError("second", "503", "provider") });
+    const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
     const { kept, claims } = await reviewClean(failure);
     expect(kept).toEqual([
       { itemId: "S8", judgementId: null, basis: "second-review-failed" },
       { itemId: "S9", judgementId: null, basis: "second-review-failed" },
     ]);
-    expect(claims).toMatchObject([{ basis: "second-review-failed", secondModel: null, secondReview: null, secondFindings: [], secondFailure: expect.stringContaining("got no answer") }]);
+    expect(claims).toMatchObject([{ basis: "second-review-failed", secondModel: null, secondStrength: null, secondFindings: [], secondFailure: expect.stringContaining("got no answer") }]);
   });
 
   test("an undecided item tied to neither a judgement nor a claim is refused, and a claim's basis must fit its second review", async () => {
@@ -290,16 +336,20 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
         INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text)
         VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'S1', 'Keys can be stored')`),
     ).rejects.toThrow();
-    // A claim another family confirmed holds another model; one that failed holds why and no model.
-    const claim = (basis: string, secondModel: string | null, secondReview: string | null, failure: string | null) =>
+    // A confirmed claim holds the second model and its strength; one that failed holds why and no model.
+    const claim = (basis: string, secondModel: string | null, secondStrength: string | null, failure: string | null) =>
       db.execute(sql`
-        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_review, second_findings, second_failure)
-        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondReview}, '[]'::jsonb, ${failure})`);
-    await expect(claim("other-family-clean", "p/m", "re-sample", null)).rejects.toThrow();
+        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure)
+        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, '[]'::jsonb, ${failure})`);
+    await expect(claim("second-opinion-clean", "p/m", null, null)).rejects.toThrow();
+    await expect(claim("second-opinion-clean", "p/m", "other-family", null)).rejects.toThrow();
     await expect(claim("second-review-failed", null, null, null)).rejects.toThrow();
-    await expect(claim("other-family-found", "q/n", "other-model", null)).rejects.toThrow();
-    await claim("second-review-failed", null, null, "no other family answered");
-    await expect(db.execute(sql`UPDATE suite_review_claims SET basis = 'other-family-clean' WHERE review_task_id = ${reviewTask}`)).rejects.toThrow();
+    // A found claim holds the findings that left items unverified.
+    await expect(claim("second-opinion-found", "q/n", "other-family", null)).rejects.toThrow();
+    await expect(claim("no-other-family", "q/n", "other-family", null)).rejects.toThrow();
+    await claim("second-opinion-clean", "p/m", "same-model", null);
+    await claim("second-review-failed", null, null, "no second opinion answered");
+    await expect(db.execute(sql`UPDATE suite_review_claims SET basis = 'second-opinion-clean' WHERE review_task_id = ${reviewTask}`)).rejects.toThrow();
   });
 
   test("the first task dispatched on a review's check set freezes it once, with the set as it stood; the freeze is never updated", async () => {

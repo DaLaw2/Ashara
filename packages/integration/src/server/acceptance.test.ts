@@ -318,7 +318,14 @@ describe("acceptance on main", () => {
         "- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
     );
     expect(body).toContain("they are not verified by Ashara.\n- A2: The log file is kv.log\n\n");
-    for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service"]) expect(body).not.toContain(absent);
+    // ADR-084 addendum 3 decision 12: no suite review is on record, so the decided items are listed
+    // as unconfirmed and none is counted.
+    expect(body).toContain(
+      "None of the 5 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.\n\n" +
+        "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review of those checks is on record as confirming that: " +
+        "they are not verified by Ashara.\n- Keys can be stored and read\n- Keys can be deleted\n- A missing key exits 3 (your answer)\n\n",
+    );
+    expect(body).not.toContain("Any network service");
   });
 
   // ADR-084 decision 2: an item a suite review left undecided on a delivered task's check task is
@@ -327,8 +334,8 @@ describe("acceptance on main", () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" });
     const judged = await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_review)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'no-other-family', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 're-sample')
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over)
+      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb)
       RETURNING id`);
     const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
     await db.execute(sql`
@@ -341,16 +348,18 @@ describe("acceptance on main", () => {
     expect(items.filter((item) => item.undecided).map((item) => [item.source.id, item.checked])).toEqual([["S1", true]]);
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     const [body = ""] = await reportsOf(projectId);
-    expect(body).toContain("no second review by another model family confirmed or settled that: they are not verified by Ashara.\n- Keys can be stored and read\n\n");
+    expect(body).toContain(
+      "the second review, by the same model as the first review asked again from another angle, which shares every one of its blind spots, did not confirm or settle that: they are not verified by Ashara.\n- Keys can be stored and read\n\n",
+    );
   });
 
-  // ADR-084 addendum 2 decision 11: an item a clean review covered that no other model family
-  // confirmed is read back as undecided and told as not verified, with why, never as decided.
+  // ADR-084 addendum 2 decision 11: an item a clean review covered that no second review confirmed
+  // is read back as undecided and told as not verified, with why, never as decided.
   test("an item an unconfirmed clean review covered is read as undecided and reported as not verified", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const claimed = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_review, second_findings)
-      VALUES (${projectId}, ${checksOfStore}, 'no-other-family', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', 'p/m', 're-sample', '[]'::jsonb)
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure)
+      VALUES (${projectId}, ${checksOfStore}, 'second-review-failed', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'no second opinion answered')
       RETURNING id`);
     const [claim] = z.array(z.object({ id: z.string() })).parse(claimed.rows);
     await db.execute(sql`
@@ -363,7 +372,7 @@ describe("acceptance on main", () => {
     expect(items.filter((item) => item.undecided).map((item) => [item.source.id, item.undecided])).toEqual([["S1", "clean-unconfirmed"]]);
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     const [body = ""] = await reportsOf(projectId);
-    expect(body).toContain("the review that found no problem in their checks was not confirmed: no second review by another model family answered. They are not verified by Ashara.\n- Keys can be stored and read\n\n");
+    expect(body).toContain("the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored and read\n\n");
     expect(body).not.toContain("Every item of what you asked for is decided");
   });
 

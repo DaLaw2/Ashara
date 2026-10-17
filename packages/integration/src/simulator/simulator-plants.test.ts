@@ -122,30 +122,34 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed([], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
   }, 120_000);
 
-  // ADR-084 addendum 2 decision 11: the first review finds nothing. The simulator's catalog holds one
-  // model family, so the second review is a same-family re-sample and confirms nothing; here it
-  // also never answers whole (each of its ladder's attempts is invalid output). Either way every item
-  // the suites' checks decide is reported unverified, and the project is still delivered. With the
-  // claim's undecided rows dropped, the report calls them decided on one family's clean review alone,
-  // as when no second review was asked of a clean one, and I6 names each from the stand-ins' answers.
-  // The first review is the first call; its ladder's attempts, escalation included, are the next four.
-  const SECOND_REVIEW_FAILS = [2, 3, 4, 5].map((nth) => draw("model.suite-review.invalid", nth));
-  const CONFIRMATION_FAILED = "the second review failed, so no finding it was asked for acts and no item reads as verified on it";
-  for (const [name, directions] of [
-    ["is a same-family re-sample", []],
-    ["fails", SECOND_REVIEW_FAILS],
-  ] as const) {
-    it(`delivers with every item unverified when a clean review's confirmation ${name}, and catches a report that calls them decided`, async () => {
-      const clean = await directed(directions);
-      expect(clean.outcome.kind, statements(clean)).toBe("accepted");
-      expect(keys(clean), statements(clean)).toEqual([]);
-      expect(clean.log.some((line) => line.includes(CONFIRMATION_FAILED))).toBe(directions.length > 0);
-      expect(clean.log.some((line) => line.includes("Not verified, to be reported unverified (the review that found no problem in them was not confirmed"))).toBe(true);
-      const planted = keys(await directed(directions, { mutation: "unconfirmed-claim-dropped" }));
-      expect(planted.length).toBeGreaterThan(0);
-      expect(planted.every((key) => key.startsWith("I6:unconfirmed-clean:")), planted.join(", ")).toBe(true);
-    }, 120_000);
-  }
+  // ADR-084 addendum 3 decision 12: the first review finds nothing. The simulator's catalog holds one
+  // model family, so the second opinion is asked within it, from what each check cannot observe; its
+  // clean answer confirms the claim, and every item the suites' checks decide reads as verified.
+  it("verifies the items a clean review covered on a second opinion within the one model family", async () => {
+    const clean = await directed([]);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+    expect(keys(clean), statements(clean)).toEqual([]);
+    expect(clean.log.some((line) => line.includes("Every item the suites cite and no finding left undecided reads as verified"))).toBe(true);
+    expect(clean.log.some((line) => line.includes("Not verified, to be reported unverified"))).toBe(false);
+  }, 120_000);
+
+  // ADR-084 addendum 2 decision 11: here the second opinion never answers whole (each of its ladder's
+  // attempts is invalid output), so every item the suites' checks decide is reported unverified, and
+  // the project is still delivered. With the claim's undecided rows dropped, the report calls them
+  // decided on the first review alone, as when no second review was asked of a clean one, and I6
+  // names each from the stand-ins' answers. The first review is the first call; its ladder's
+  // attempts, escalation included, are the next four.
+  it("delivers with every item unverified when a clean review's confirmation fails, and catches a report that calls them decided", async () => {
+    const directions = [2, 3, 4, 5].map((nth) => draw("model.suite-review.invalid", nth));
+    const clean = await directed(directions);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+    expect(keys(clean), statements(clean)).toEqual([]);
+    expect(clean.log.some((line) => line.includes("the second review failed at every strength, so no finding it was asked for acts and no item reads as verified on it"))).toBe(true);
+    expect(clean.log.some((line) => line.includes("Not verified, to be reported unverified (the review that found no problem in them was not confirmed"))).toBe(true);
+    const planted = keys(await directed(directions, { mutation: "unconfirmed-claim-dropped" }));
+    expect(planted.length).toBeGreaterThan(0);
+    expect(planted.every((key) => key.startsWith("I6:unconfirmed-clean:")), planted.join(", ")).toBe(true);
+  }, 120_000);
 
   // I9 (text against fact): what a composer states is what the store held when it composed it. Every
   // brief carries the stand-ins' asked assumption with its standing, and the question states it. The

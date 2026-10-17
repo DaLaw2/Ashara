@@ -11,7 +11,9 @@ import type { VisionSource } from "./vision-language/vision-source.js";
 // whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
 // folded into "delivered" or into what passed: the opening claims only the run that happened. Every
 // assumption classed internal design is named as not verified by Ashara (ADR-083): no check decides it.
-// So is every item a review of the checks left undecided (ADR-084): never counted as covered.
+// So is every item a review of the checks left undecided (ADR-084): never counted as covered. Every
+// item counted as covered was confirmed by a second review of its checks, and the report names how
+// independent that review was (ADR-084 addendum 3 decision 12).
 // The only ways of running the product presented as verified are the commands acceptance ran and saw
 // pass; the public interface file, none of whose entries acceptance runs, is quoted as unverified.
 
@@ -39,24 +41,31 @@ type AcceptedVisionItem =
 
 /**
  * Whether a review of the checks left an item undecided, and why. A finding that no check really
- * decides it did not act (ADR-084 decision 2): "unsettled" when no second review by another model
- * family confirmed or settled it, "review-failed" when the second review that could have was asked
- * and failed. A review that found no problem in its checks was not confirmed (addendum 2 decision
- * 11): "clean-contradicted" when a second review by another model family found one there,
- * "clean-unconfirmed" when no second review by another model family answered. False when no review
- * left it so.
+ * decides it did not act (ADR-084 decision 2): "unsettled" when no second review confirmed or
+ * settled it, "review-failed" when the second review that could have was asked and failed. A review
+ * that found no problem in its checks was not confirmed (addendum 2 decision 11): "clean-contradicted"
+ * when a second review found one there, "clean-unconfirmed" when no second review answered. False
+ * when no review left it so.
  */
 export type UndecidedBy = false | "unsettled" | "review-failed" | "clean-contradicted" | "clean-unconfirmed";
 
 /**
+ * How independent of the first review the second review of an item's checks was (ADR-084 addendum
+ * 3 decision 12): another model family, another model of the same family, or the same model asked
+ * again from another angle.
+ */
+export type ReviewStrength = "other-family" | "same-family-other-model" | "same-model";
+
+/**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
- * ran records that it decides it (ADR-083), and whether a review of those checks left it undecided;
- * or none recorded.
+ * ran records that it decides it (ADR-083), whether a review of those checks left it undecided, and
+ * the strength of the second review behind that: the one that confirmed a decided item, or the one
+ * that left it undecided; null where none answered. Or none recorded.
  */
 type VisionCoverage =
   | {
       readonly kind: "recorded";
-      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy }>;
+      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy; readonly review: ReviewStrength | null }>;
     }
   | { readonly kind: "unrecorded" };
 
@@ -367,6 +376,20 @@ function coverageLine(source: AcceptedVisionItem): string {
   return `- Ashara's assumption, ${SEEN_BY_CLIENT[source.standing]}: ${source.text}${unclassified}`;
 }
 
+/** How independent each strength of second review is, in the client's words: a weaker one says what it shares. */
+const REVIEWED_BY: Readonly<Record<ReviewStrength, string>> = {
+  "other-family": "another model family",
+  "same-family-other-model": "another model of the same family as the first review, which shares more of its blind spots than another family would",
+  "same-model": "the same model as the first review asked again from another angle, which shares every one of its blind spots",
+};
+
+const STRENGTH_ORDER = ["other-family", "same-family-other-model", "same-model"] as const satisfies readonly ReviewStrength[];
+
+/**
+ * Which asked-for items no stored check decides, listed; then how many are decided by a stored check
+ * and confirmed by a second review of those checks. Only those are counted: an item a review left
+ * undecided, or one no second review confirmed, is never among them, and "none" is said when none is.
+ */
 function coverageSection(vision: VisionCoverage): string {
   if (vision.kind === "unrecorded") {
     return "Which parts of what you asked for the checks cover is not on record for this plan, so none of it is stated as checked.";
@@ -374,52 +397,98 @@ function coverageSection(vision: VisionCoverage): string {
   const asked = vision.items.filter((item) => askedFor(item.source));
   if (asked.length === 0) return "The plan's record holds no item of what you asked for, so none of it is stated as checked.";
   const uncovered = asked.filter((item) => !item.checked);
-  if (uncovered.length === 0) {
-    if (asked.some((item) => item.undecided)) {
-      return "Every other item of what you asked for is decided by a stored check of a task whose stored checks passed on main.";
-    }
-    return "Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main.";
-  }
+  const confirmed = asked.filter((item) => item.checked && item.undecided === false && item.review !== null).length;
+  const decided = "decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks";
+  const count =
+    confirmed === asked.length
+      ? `Every item of what you asked for is ${decided}; how independent that review was is said below.`
+      : confirmed === 0
+        ? `None of the ${plural(asked.length, "item")} of what you asked for is ${decided}.`
+        : `${confirmed} of the ${plural(asked.length, "item")} of what you asked for are ${decided}; how independent that review was is said below.`;
+  if (uncovered.length === 0) return count;
   return [
     `These items of what you asked for are decided by no stored check of a task whose stored checks passed on ` +
       `main, so nothing confirms them either way:`,
     ...uncovered.map((item) => coverageLine(item.source)),
+    ``,
+    count,
   ].join("\n");
 }
 
-/** What a review of the checks made of an undecided item, and why nothing settled it, as the report says it to the client. */
-const UNSETTLED_BECAUSE: Readonly<Record<Exclude<UndecidedBy, false>, string>> = {
-  unsettled: "a review of the checks found that none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.",
-  "review-failed":
-    "a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.",
-  "clean-contradicted":
-    "the review that found no problem in their checks was not confirmed: a second review by another model family found a problem there. They are not verified by Ashara.",
-  "clean-unconfirmed":
-    "the review that found no problem in their checks was not confirmed: no second review by another model family answered. They are not verified by Ashara.",
-};
+/**
+ * The asked-for items a stored check decides that no review left undecided, grouped by how
+ * independent the second review that confirmed them was; and those no second review of their checks
+ * is on record as confirming. Empty when there are none.
+ */
+function confirmedSection(vision: VisionCoverage): string[] {
+  if (vision.kind === "unrecorded") return [];
+  const decided = vision.items.filter((item) => askedFor(item.source) && item.checked && item.undecided === false);
+  const byStrength = STRENGTH_ORDER.flatMap((strength) => {
+    const confirmed = decided.filter((item) => item.review === strength);
+    if (confirmed.length === 0) return [];
+    return [
+      [
+        `These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a ` +
+          `second review of those checks, by ${REVIEWED_BY[strength]}, found no problem with that:`,
+        ...confirmed.map((item) => coverageLine(item.source)),
+      ].join("\n"),
+    ];
+  });
+  const unreviewed = decided.filter((item) => item.review === null);
+  if (unreviewed.length === 0) return byStrength;
+  return [
+    ...byStrength,
+    [
+      `These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no ` +
+        `second review of those checks is on record as confirming that: they are not verified by Ashara.`,
+      ...unreviewed.map((item) => coverageLine(item.source)),
+    ].join("\n"),
+  ];
+}
 
 const UNDECIDED_ORDER = ["unsettled", "review-failed", "clean-contradicted", "clean-unconfirmed"] as const satisfies ReadonlyArray<Exclude<UndecidedBy, false>>;
+
+/** What a review of the checks made of an undecided item, and why nothing settled it, by the strength of the second review behind it. */
+function unsettledBecause(why: Exclude<UndecidedBy, false>, strength: ReviewStrength | null): string {
+  const by = strength === null ? "" : `, by ${REVIEWED_BY[strength]},`;
+  switch (why) {
+    case "unsettled":
+      return strength === null
+        ? "a review of the checks found that none of them really decides it, and no second review confirmed or settled that: they are not verified by Ashara."
+        : `a review of the checks found that none of them really decides it, and the second review${by} did not confirm or settle that: they are not verified by Ashara.`;
+    case "review-failed":
+      return "a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.";
+    case "clean-contradicted":
+      return `the review that found no problem in their checks was not confirmed: a second review${by} found a problem there. They are not verified by Ashara.`;
+    case "clean-unconfirmed":
+      return strength === null
+        ? "the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara."
+        : `the review that found no problem in their checks was not confirmed: the second review${by} was not counted as confirming it. They are not verified by Ashara.`;
+  }
+}
 
 /**
  * The items of what the client asked for that a stored check claims to decide but no confirmed
  * review of the checks holds as decided: a review found none really does with nothing to settle it
- * (ADR-084 decision 2), or the review that found no problem was not confirmed by another model
- * family (addendum 2 decision 11). They are unverified, never covered, grouped by why, so a failed
- * review never reads as a disagreement. Empty when there are none.
+ * (ADR-084 decision 2), or the review that found no problem was not confirmed (addendum 2 decision
+ * 11). They are unverified, never covered, grouped by why and by the strength of the second review
+ * behind it, so a failed review never reads as a disagreement. Empty when there are none.
  */
 function undecidedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
   const asked = vision.items.filter((item) => askedFor(item.source) && item.checked);
-  return UNDECIDED_ORDER.flatMap((why) => {
-    const undecided = asked.filter((item) => item.undecided === why);
-    if (undecided.length === 0) return [];
-    return [
-      [
-        `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but ${UNSETTLED_BECAUSE[why]}`,
-        ...undecided.map((item) => coverageLine(item.source)),
-      ].join("\n"),
-    ];
-  });
+  return UNDECIDED_ORDER.flatMap((why) =>
+    [...STRENGTH_ORDER, null].flatMap((strength) => {
+      const undecided = asked.filter((item) => item.undecided === why && item.review === strength);
+      if (undecided.length === 0) return [];
+      return [
+        [
+          `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but ${unsettledBecause(why, strength)}`,
+          ...undecided.map((item) => coverageLine(item.source)),
+        ].join("\n"),
+      ];
+    }),
+  );
 }
 
 /** What ran on main, and only that: the environment's test and the stored checks of the tasks named. */
@@ -461,6 +530,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
     ...uncheckedSection(due.unchecked),
     ...givenUpSection(due.givenUp),
     coverageSection(due.vision),
+    ...confirmedSection(due.vision),
     ...undecidedSection(due.vision),
     ...unverifiedSection(due.vision),
     `Nothing more is built on this project; it waits until you stop it.`,

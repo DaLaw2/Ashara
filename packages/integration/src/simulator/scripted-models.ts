@@ -234,7 +234,13 @@ interface ReviewRound {
 }
 
 /** What one suite review call read: its review task and the check revisions under review, each `<task id>@<revision>`. */
-type ReviewRead = Omit<ObservedReview, "provider" | "problems">;
+type ReviewRead = Omit<ObservedReview, "provider" | "blindSpots" | "problems">;
+
+/**
+ * What a suite review prompt says when it asks a second opinion within the first review's family to
+ * start from what each check cannot observe (suite-review.ts angleSection), as a model reads it.
+ */
+const BLIND_SPOTS_ASKED = "work out what it cannot observe";
 
 /** The provider a stand-in model answers as: the factory names each model `<provider>/<model id>`. */
 function providerOf(modelId: string): string {
@@ -422,7 +428,9 @@ export class StandIns {
           return reviewed.answer;
         },
         (answer) => {
-          if (read !== null) this.answeredReviews.push({ ...read, provider: providerOf(modelId), problems: answer.problems });
+          if (read !== null) {
+            this.answeredReviews.push({ ...read, provider: providerOf(modelId), blindSpots: promptText(options).includes(BLIND_SPOTS_ASKED), problems: answer.problems });
+          }
         },
       );
     }

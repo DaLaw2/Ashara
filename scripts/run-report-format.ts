@@ -434,8 +434,8 @@ function findingLine(finding: StoredJudgement["secondFindings"][number]): string
 
 /**
  * The suite reviews' judgements on every finding of their first pass, routed, released or kept as
- * advisory, each with why, both reviews' findings whole and what the second review was: another
- * model, a re-sample of the first, or none asked.
+ * advisory, each with why, both reviews' findings whole, the second review's strength (or none
+ * asked), and every strength it passed over before it answered or failed.
  */
 export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement[]): string {
   if (judgements.length === 0) return "Suite review judgements: none recorded";
@@ -445,14 +445,15 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
     const second =
       judgement.secondFailure !== null
         ? `second review failed (first ${judgement.firstModel}): ${judgement.secondFailure}`
-        : judgement.secondReview === null
+        : judgement.secondStrength === null
           ? "no second review asked"
-          : `second review ${judgement.secondReview} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
+          : `second review ${judgement.secondStrength} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
     lines.push(
       `  review ${judgement.reviewTaskId}, ${subject} of task ${judgement.checkTaskId}: ${judgement.outcome} (${judgement.basis}); ${second}`,
+      ...judgement.passedOver.map((over) => `    passed over ${over.strength} (${over.outcome}): ${over.reason}`),
       `    first review:  ${findingLine(judgement.firstFinding)}`,
     );
-    if (judgement.secondReview !== null && judgement.secondFindings.length === 0) lines.push("    second review: no finding on this check task");
+    if (judgement.secondStrength !== null && judgement.secondFindings.length === 0) lines.push("    second review: no finding on this check task");
     for (const finding of judgement.secondFindings) lines.push(`    second review: ${findingLine(finding)}`);
   }
   return lines.join("\n");

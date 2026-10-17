@@ -2,6 +2,7 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
+import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
 // Quality's record of the reviews of plan revisions' check suites (migration 044): each review
@@ -127,22 +128,27 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/** A strength of second opinion a review got no answer at (migration 073). */
+const PassedOverSchema = z.strictObject({ strength: z.enum(SECOND_OPINION_STRENGTHS), outcome: z.enum(["unavailable", "failed"]), reason: z.string().min(1) });
+
 const StoredJudgementSchema = z
   .strictObject({
     reviewTaskId: z.string().min(1),
     checkTaskId: z.string().min(1),
     checkName: z.string().min(1).nullable(),
     outcome: z.enum(["routed", "released", "advisory"]),
-    basis: z.enum(["two-reviews", "other-family-agreed", "other-family-disagreed", "no-other-family", "second-review-failed", "frozen", "reopened-once"]),
+    // no-other-family: a same-provider answer that confirmed nothing, on rows written before migration 073.
+    basis: z.enum(["two-reviews", "second-opinion-agreed", "second-opinion-disagreed", "no-other-family", "second-review-failed", "frozen", "reopened-once"]),
     firstFinding: StoredFindingSchema,
     secondFindings: z.array(StoredFindingSchema),
     firstModel: z.string().min(1),
     secondModel: z.string().min(1).nullable(),
-    secondReview: z.enum(["other-model", "re-sample"]).nullable(),
+    secondStrength: z.enum(SECOND_OPINION_STRENGTHS).nullable(),
+    passedOver: z.array(PassedOverSchema),
     secondFailure: z.string().min(1).nullable(),
   })
   .refine((row) => (row.firstFinding.kind === "outside-vision") === (row.checkName !== null), "a judgement names a check exactly when its first finding is an outside-vision rejection")
-  .refine((row) => (row.secondModel === null) === (row.secondReview === null), "a judgement records a second review's model exactly when it records what that review was")
+  .refine((row) => (row.secondModel === null) === (row.secondStrength === null), "a judgement records a second review's model exactly when it records that review's strength")
   .refine((row) => (row.basis === "second-review-failed") === (row.secondFailure !== null), "a judgement records why its second review failed exactly when its basis is second-review-failed");
 
 export type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
@@ -179,8 +185,8 @@ class SuiteReviewClaimUnreturned extends Error {
 }
 
 /**
- * Quality's record of a suite review's judgements on its findings (migrations 063, 069, 071), of
- * its claim when it routed nothing (migration 072), and of the cited items either leaves undecided,
+ * Quality's record of a suite review's judgements on its findings (migrations 063, 069, 071, 073),
+ * of its claim when it routed nothing (migrations 072, 073), and of the cited items either leaves undecided,
  * in one transaction: an item is never kept undecided without the judgement or claim that left it
  * so, nor a judgement or claim without its items.
  */
@@ -210,7 +216,8 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
             secondFindings: judgement.second,
             firstModel: modelText(judgement.firstModel),
             secondModel: judgement.secondReview === null ? null : modelText(judgement.secondReview.second),
-            secondReview: judgement.secondReview === null ? null : judgement.secondReview.kind,
+            secondStrength: judgement.secondReview === null ? null : judgement.secondReview.strength,
+            passedOver: judgement.passedOver,
             secondFailure: judgement.secondFailure,
           })),
         )
@@ -240,7 +247,8 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
         covered: claim.covered,
         firstModel: modelText(claim.firstModel),
         secondModel: claim.secondReview === null ? null : modelText(claim.secondReview.second),
-        secondReview: claim.secondReview === null ? null : claim.secondReview.kind,
+        secondStrength: claim.secondReview === null ? null : claim.secondReview.strength,
+        passedOver: claim.passedOver,
         secondFindings: claim.second,
         secondFailure: claim.secondFailure,
       })
@@ -286,7 +294,8 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
       secondFindings: suiteReviewJudgements.secondFindings,
       firstModel: suiteReviewJudgements.firstModel,
       secondModel: suiteReviewJudgements.secondModel,
-      secondReview: suiteReviewJudgements.secondReview,
+      secondStrength: suiteReviewJudgements.secondStrength,
+      passedOver: suiteReviewJudgements.passedOver,
       secondFailure: suiteReviewJudgements.secondFailure,
     })
     .from(suiteReviewJudgements)

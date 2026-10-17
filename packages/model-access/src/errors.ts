@@ -1,5 +1,6 @@
 import { describeErrorChain } from "@ashara/shared";
 import type { CapabilityLevel } from "./capability-level.js";
+import type { ModelIdentity, SecondOpinion } from "./types.js";
 
 export class GatewayError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -484,24 +485,49 @@ export class TurnResponseInvalid extends GatewayError {
 }
 
 /**
- * A second opinion (StructuredRequest.otherThan) got no answer from any model it may go to: the
- * model routed to failed and so did every failover, none of which is of the avoided family once
- * another family serves the request. Never answered by the avoided family instead.
+ * A second opinion (StructuredRequest.secondOpinion) of one strength got no answer: the model the
+ * catalog offered for it failed, and so did every failover an other-family opinion may take, none of
+ * which is of the avoided provider. Never answered by a model of another strength instead.
  */
-export class NoOtherFamilyAnswered extends GatewayError {
-  readonly avoided: { readonly provider: string; readonly model: string };
-  /** The provider the request was routed to first. */
-  readonly routedTo: string;
+export class SecondOpinionUnanswered extends GatewayError {
+  readonly opinion: SecondOpinion;
+  /** The provider and model the request was routed to first. */
+  readonly routedTo: ModelIdentity;
 
-  constructor(avoided: { readonly provider: string; readonly model: string }, routedTo: string, options: { readonly cause: unknown }) {
+  constructor(opinion: SecondOpinion, routedTo: ModelIdentity, options: { readonly cause: unknown }) {
     super(
-      `a second opinion avoiding ${avoided.provider}/${avoided.model} got no answer: routed to provider ${routedTo}` +
-        `${routedTo === avoided.provider ? " (the catalog holds no other family at this capability)" : `, and no failover went to ${avoided.provider}`}: ` +
+      `a ${opinion.strength} second opinion on ${opinion.avoid.provider}/${opinion.avoid.model} got no answer: routed to ` +
+        `${routedTo.provider}/${routedTo.model}` +
+        `${opinion.strength === "other-family" ? `, and no failover went to ${opinion.avoid.provider}` : ", with no failover to a model of another strength"}: ` +
         describeErrorChain(options.cause),
       options,
     );
-    this.name = "NoOtherFamilyAnswered";
-    this.avoided = avoided;
+    this.name = "SecondOpinionUnanswered";
+    this.opinion = opinion;
     this.routedTo = routedTo;
   }
 }
+
+/**
+ * The catalog offers no model for a second opinion of this strength at this capability: nothing was
+ * sent. A NoProviderAvailableError, so a ladder's escalation tier reads it as a tier it cannot serve.
+ */
+export class SecondOpinionUnavailable extends NoProviderAvailableError {
+  readonly opinion: SecondOpinion;
+
+  constructor(opinion: SecondOpinion, capability: CapabilityLevel, availableModels: readonly string[]) {
+    super(capability, availableModels);
+    this.message =
+      `no model serves a ${opinion.strength} second opinion on ${opinion.avoid.provider}/${opinion.avoid.model} at capability ` +
+      `"${capability}" or above (${SECOND_OPINION_RULE[opinion.strength]}; enabled models: ${availableModels.length > 0 ? availableModels.join(", ") : "none"})`;
+    this.name = "SecondOpinionUnavailable";
+    this.opinion = opinion;
+  }
+}
+
+/** Which models each strength may go to, as SecondOpinionUnavailable states it. */
+const SECOND_OPINION_RULE: Readonly<Record<SecondOpinion["strength"], string>> = {
+  "other-family": "it goes only to an enabled provider other than the avoided one",
+  "same-family-other-model": "it goes only to another model of the avoided provider",
+  "same-model": "it goes only to the avoided model itself, and only when no other model serves the capability",
+};

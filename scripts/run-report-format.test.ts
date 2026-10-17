@@ -232,9 +232,9 @@ describe("formatSuiteReviewJudgements", () => {
   test("states both reviews' findings whole, side by side, with what the second review was", () => {
     const first = { kind: "outside-vision" as const, checkTasks: ["c1"], check: "prints-count", judgedItems: ["Monthly totals"], missingClause: "a count", problem: "the check asserts a count", evidence: "line 3" };
     const text = formatSuiteReviewJudgements([
-      { reviewTaskId: "r1", checkTaskId: "c1", checkName: "prints-count", outcome: "routed", basis: "two-reviews", firstFinding: first, secondFindings: [{ ...first, missingClause: "a row count" }], firstModel: "a/m", secondModel: "a/m", secondReview: "re-sample", secondFailure: null },
+      { reviewTaskId: "r1", checkTaskId: "c1", checkName: "prints-count", outcome: "routed", basis: "two-reviews", firstFinding: first, secondFindings: [{ ...first, missingClause: "a row count" }], firstModel: "a/m", secondModel: "a/m", secondStrength: "same-model", passedOver: [], secondFailure: null },
     ]);
-    expect(text).toContain("routed (two-reviews); second review re-sample (first a/m, second a/m)");
+    expect(text).toContain("routed (two-reviews); second review same-model (first a/m, second a/m)");
     expect(text).toContain('first review:  missing "a count": the check asserts a count');
     expect(text).toContain('second review: missing "a row count": the check asserts a count');
   });
@@ -242,14 +242,27 @@ describe("formatSuiteReviewJudgements", () => {
   test("states an advisory finding with why it did not act, and a ratchet's finding with no second review", () => {
     const undecided = { kind: "undecided-item" as const, checkTasks: ["c1"], item: "S9", problem: "no check forces data to disk", evidence: "put.sh" };
     const text = formatSuiteReviewJudgements([
-      { reviewTaskId: "r1", checkTaskId: "c1", checkName: null, outcome: "advisory", basis: "no-other-family", firstFinding: undecided, secondFindings: [undecided], firstModel: "a/m", secondModel: "a/n", secondReview: "other-model", secondFailure: null },
-      { reviewTaskId: "r1", checkTaskId: "c1", checkName: null, outcome: "advisory", basis: "frozen", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondReview: null, secondFailure: null },
-      { reviewTaskId: "r1", checkTaskId: "c2", checkName: null, outcome: "advisory", basis: "second-review-failed", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondReview: null, secondFailure: "NoOtherFamilyAnswered: no answer" },
+      {
+        reviewTaskId: "r1",
+        checkTaskId: "c1",
+        checkName: null,
+        outcome: "advisory",
+        basis: "second-opinion-disagreed",
+        firstFinding: undecided,
+        secondFindings: [undecided],
+        firstModel: "a/m",
+        secondModel: "a/n",
+        secondStrength: "same-family-other-model",
+        passedOver: [{ strength: "other-family", outcome: "unavailable", reason: "SecondOpinionUnavailable: no other provider" }],
+        secondFailure: null,
+      },
+      { reviewTaskId: "r1", checkTaskId: "c1", checkName: null, outcome: "advisory", basis: "frozen", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondStrength: null, passedOver: [], secondFailure: null },
+      { reviewTaskId: "r1", checkTaskId: "c2", checkName: null, outcome: "advisory", basis: "second-review-failed", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondStrength: null, passedOver: [], secondFailure: "SecondOpinionUnanswered: no answer" },
     ]);
-    expect(text).toContain("its undecided-item finding of task c1: advisory (no-other-family); second review other-model (first a/m, second a/n)");
-    expect(text).toContain("    first review:  undecided S9: no check forces data to disk");
+    expect(text).toContain("its undecided-item finding of task c1: advisory (second-opinion-disagreed); second review same-family-other-model (first a/m, second a/n)");
+    expect(text).toContain("    passed over other-family (unavailable): SecondOpinionUnavailable: no other provider\n    first review:  undecided S9: no check forces data to disk");
     expect(text).toContain("advisory (frozen); no second review asked");
-    expect(text).toContain("advisory (second-review-failed); second review failed (first a/m): NoOtherFamilyAnswered: no answer");
+    expect(text).toContain("advisory (second-review-failed); second review failed (first a/m): SecondOpinionUnanswered: no answer");
     expect(text).not.toContain("no finding on this check task");
   });
 });

@@ -27,11 +27,13 @@ export { UnpricedModel } from "./errors.js";
 // Finance is Model Access's only customer (ADR-075 context map): every other context reads the model
 // language its calls through the guarded port speak (the structured-output ladder, the capability
 // tier, a resolved model, the provider failures) here, never from model-access itself.
-export { CapabilityLevelSchema, StructuredOutputExhausted, withStructuredLadder } from "@ashara/model-access";
+export { CapabilityLevelSchema, SECOND_OPINION_STRENGTHS, StructuredOutputExhausted, withStructuredLadder } from "@ashara/model-access";
 export type {
   CapabilityLevel,
   LadderAttemptEvent,
   ResolvedModel,
+  SecondOpinion,
+  SecondOpinionStrength,
   StructuredProvider,
   StructuredValidation,
   TokenUsage,
@@ -40,7 +42,8 @@ export type {
 // A provider's failure, naming the party at fault, as modelCallFailureOf reads it: a caller's own class
 // for a provider failure it detects in an answer extends it (Workplace's ProviderErrorFinish).
 export { ProviderError } from "@ashara/model-access";
-// A second opinion that got no answer from any model it may go to: its caller reports it as failed.
-export { NoOtherFamilyAnswered } from "@ashara/model-access";
+// A second opinion the catalog cannot serve at a strength, or that got no answer at it: its caller
+// moves to the next strength or reports it as failed.
+export { SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/model-access";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "@ashara/model-access";

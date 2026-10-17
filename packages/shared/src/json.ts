@@ -18,6 +18,8 @@ export class JsonParseFailed extends Error {
   readonly stage: "syntax" | "schema";
   /** Each schema issue as `path: message`; empty for a syntax failure. */
   readonly issues: readonly string[];
+  /** What the parser or the schema said was wrong, without the text. */
+  readonly detail: string;
   readonly excerpt: string;
 
   constructor(source: string, stage: "syntax" | "schema", detail: string, issues: readonly string[], text: string, options?: ErrorOptions) {
@@ -27,6 +29,7 @@ export class JsonParseFailed extends Error {
     this.source = source;
     this.stage = stage;
     this.issues = issues;
+    this.detail = detail;
     this.excerpt = excerpt;
   }
 }

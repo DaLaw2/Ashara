@@ -171,9 +171,9 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "A key can be stored and read back"), checked: true, undecided: false },
-          { source: scope("S2", "A key can be deleted"), checked: true, undecided: false },
-          { source: scope("S3", "Concurrent writers never corrupt the store"), checked: false, undecided: false },
+          { source: scope("S1", "A key can be stored and read back"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S2", "A key can be deleted"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S3", "Concurrent writers never corrupt the store"), checked: false, undecided: false, review: null },
         ],
       },
     });
@@ -184,7 +184,9 @@ describe("the delivered report", () => {
     expect(body).toContain(`"List keys": closed on commit ${MERGE_A}; whether it was merged or already delivered there is not on record.`);
     expect(body).toContain("decided by no stored check of a task whose stored checks passed on main");
     expect(body).toContain("- Concurrent writers never corrupt the store");
-    expect(body).not.toContain("- A key can be deleted\n");
+    const uncovered = body.split("\n\n").find((section) => section.includes("decided by no stored check"));
+    expect(uncovered).not.toContain("- A key can be deleted");
+    expect(body).toContain("found no problem with that:\n- A key can be stored and read back\n- A key can be deleted");
   });
 
   test("with no coverage on record, nothing is stated as checked", async () => {
@@ -210,10 +212,71 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family" }] },
     });
-    expect(body).toContain("Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main.");
+    expect(body).toContain(
+      "Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks; how independent that review was is said below.",
+    );
+    expect(body).toContain("and a second review of those checks, by another model family, found no problem with that:\n- Keys can be stored");
     expect(body).not.toContain("not checked");
+  });
+
+  // ADR-084 addendum 3 decision 12: every confirmed or unverified item is named with how independent
+  // its second review was; agreement within one family is said to share blind spots.
+  test("each confirmed item is grouped by the strength of the review that confirmed it, a weaker one saying what it shares", async () => {
+    const body = await render({
+      ...BASE,
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: false, review: "same-family-other-model" },
+          { source: scope("S3", "Keys can be listed"), checked: true, undecided: false, review: "same-model" },
+          { source: scope("S4", "Keys survive a power loss"), checked: true, undecided: "unsettled", review: "same-family-other-model" },
+          { source: scope("S5", "Keys can be renamed"), checked: true, undecided: false, review: null },
+        ],
+      },
+    });
+    expect(body).toContain("3 of the 5 items of what you asked for are decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks;");
+    expect(body).toContain("a second review of those checks, by another model family, found no problem with that:\n- Keys can be stored\n\n");
+    expect(body).toContain(
+      "a second review of those checks, by another model of the same family as the first review, which shares more of its blind spots than another family would, found no problem with that:\n- Keys can be deleted\n\n",
+    );
+    expect(body).toContain(
+      "a second review of those checks, by the same model as the first review asked again from another angle, which shares every one of its blind spots, found no problem with that:\n- Keys can be listed\n\n",
+    );
+    expect(body).toContain(
+      "and the second review, by another model of the same family as the first review, which shares more of its blind spots than another family would, did not confirm or settle that: they are not verified by Ashara.\n- Keys survive a power loss",
+    );
+    expect(body).toContain("but no second review of those checks is on record as confirming that: they are not verified by Ashara.\n- Keys can be renamed");
+  });
+
+  // D4: the coverage sentence counts only items decided and confirmed, so it never contradicts a list of unverified items.
+  test("when every item is unverified, the coverage sentence says none is confirmed, above the list that names them", async () => {
+    const body = await render({
+      ...BASE,
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: "clean-unconfirmed", review: null },
+          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: "clean-unconfirmed", review: null },
+          { source: scope("S3", "Keys can be listed"), checked: false, undecided: false, review: null },
+        ],
+      },
+    });
+    expect(body).toContain(
+      "None of the 3 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.",
+    );
+    expect(body).not.toContain("Every other item");
+    expect(body).not.toMatch(/Every item of what you asked for is decided/);
+    expect(body).toContain("no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored\n- Keys can be deleted");
+    expect(body).toContain("so nothing confirms them either way:\n- Keys can be listed\n\nNone of the 3 items");
   });
 
   // ADR-084 decision 2: an item a review of the checks left undecided is unverified, never covered,
@@ -230,15 +293,15 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled" },
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled", review: "other-family" },
         ],
       },
     });
     expect(body).not.toContain("Every item of what you asked for is decided");
-    expect(body).toContain("Every other item of what you asked for is decided by a stored check");
+    expect(body).toContain("1 of the 2 items of what you asked for are decided by a stored check");
     const [, unverified = ""] = body.split("a review of the checks found that none of them really decides it");
-    expect(unverified).toContain("no second review by another model family confirmed or settled that: they are not verified by Ashara.\n- A stored key survives a power loss");
+    expect(unverified).toContain("and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n- A stored key survives a power loss");
     expect(unverified).not.toContain("Keys can be stored");
   });
 
@@ -255,21 +318,21 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: "review-failed" },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled" },
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: "review-failed", review: null },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled", review: "other-family" },
         ],
       },
     });
     expect(body).toContain(
       "none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n- Keys can be stored",
     );
-    expect(body).toContain("none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.\n- A stored key survives a power loss");
+    expect(body).toContain("none of them really decides it, and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n- A stored key survives a power loss");
     const [, failedSection = ""] = body.split("because that review failed.");
     expect(failedSection.split("\n\n")[0]).not.toContain("A stored key survives a power loss");
   });
 
   // ADR-084 addendum 2 decision 11: a review that found nothing is a claim; an item it covers that
-  // no other model family confirmed is unverified, never "decided by a stored check".
+  // no second opinion confirmed is unverified, never "decided by a stored check".
   test("an item whose clean review was not confirmed is named unverified with why, apart from one the second review contradicted", async () => {
     const body = await render({
       sweepId: "s3e",
@@ -282,22 +345,22 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "clean-unconfirmed" },
-          { source: scope("S3", "A key can be deleted"), checked: true, undecided: "clean-contradicted" },
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "clean-unconfirmed", review: null },
+          { source: scope("S3", "A key can be deleted"), checked: true, undecided: "clean-contradicted", review: "other-family" },
         ],
       },
     });
     expect(body).not.toContain("Every item of what you asked for is decided");
-    expect(body).toContain("Every other item of what you asked for is decided by a stored check");
+    expect(body).toContain("1 of the 3 items of what you asked for are decided by a stored check");
     expect(body).toContain(
-      "but the review that found no problem in their checks was not confirmed: no second review by another model family answered. They are not verified by Ashara.\n- A stored key survives a power loss",
+      "but the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- A stored key survives a power loss",
     );
     expect(body).toContain(
-      "but the review that found no problem in their checks was not confirmed: a second review by another model family found a problem there. They are not verified by Ashara.\n- A key can be deleted",
+      "but the review that found no problem in their checks was not confirmed: a second review, by another model family, found a problem there. They are not verified by Ashara.\n- A key can be deleted",
     );
     expect(body).not.toContain("review failed");
-    const [, unconfirmed = ""] = body.split("no second review by another model family answered.");
+    const [, unconfirmed = ""] = body.split("no second review of those checks answered.");
     expect(unconfirmed.split("\n\n")[0]).not.toContain("Keys can be stored");
   });
 
@@ -310,7 +373,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Any network service", "out"), checked: false, undecided: false }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Any network service", "out"), checked: false, undecided: false, review: null }] },
     });
     expect(body).toContain("The plan's record holds no item of what you asked for, so none of it is stated as checked.");
     expect(body).not.toContain("Every item");
@@ -331,18 +394,18 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "put stores a value under a key"), checked: true, undecided: false },
-          { source: scope("S2", "Several processes may use the same data directory at the same time"), checked: true, undecided: false },
-          { source: scope("S3", "A partly written final log record is ignored on recovery"), checked: true, undecided: false },
-          { source: scope("S4", "Any network service or remote access; this is a local CLI tool.", "out"), checked: false, undecided: false },
-          { source: scope("S5", "Non-Linux platforms.", "out"), checked: false, undecided: false },
-          { source: assumption("A4", "Commands wait for the data-directory lock.", "stated", "client-visible"), checked: true, undecided: false },
-          { source: assumption("A2", "Keys and values are UTF-8 text.", "stated", "client-visible"), checked: false, undecided: false },
-          { source: assumption("A8", "The tool uses an OS advisory lock on a lock file.", "reported", "internal-design"), checked: false, undecided: false },
-          { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false, undecided: false },
-          { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false, undecided: false },
-          { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false, undecided: false },
-          { source: assumption("A27", "Empty keys are refused.", "unrecorded", "unclassified"), checked: false, undecided: false },
+          { source: scope("S1", "put stores a value under a key"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S2", "Several processes may use the same data directory at the same time"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S3", "A partly written final log record is ignored on recovery"), checked: true, undecided: false, review: "other-family" },
+          { source: scope("S4", "Any network service or remote access; this is a local CLI tool.", "out"), checked: false, undecided: false, review: null },
+          { source: scope("S5", "Non-Linux platforms.", "out"), checked: false, undecided: false, review: null },
+          { source: assumption("A4", "Commands wait for the data-directory lock.", "stated", "client-visible"), checked: true, undecided: false, review: "other-family" },
+          { source: assumption("A2", "Keys and values are UTF-8 text.", "stated", "client-visible"), checked: false, undecided: false, review: null },
+          { source: assumption("A8", "The tool uses an OS advisory lock on a lock file.", "reported", "internal-design"), checked: false, undecided: false, review: null },
+          { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false, undecided: false, review: null },
+          { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false, undecided: false, review: null },
+          { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false, undecided: false, review: null },
+          { source: assumption("A27", "Empty keys are refused.", "unrecorded", "unclassified"), checked: false, undecided: false, review: null },
         ],
       },
     });
@@ -364,14 +427,17 @@ describe("the delivered report", () => {
       ].join("\n"),
     );
     expect(body).not.toContain("network");
-    expect(body).not.toContain("Several processes");
+    // A covered item is listed only with the review that confirmed it.
+    expect(body.split("\n\n").filter((section) => section.includes("Several processes"))).toEqual([
+      expect.stringContaining("a second review of those checks, by another model family, found no problem with that:\n- put stores a value under a key\n- Several processes"),
+    ]);
   });
 
   test("a vision with no internal-design assumption, or no recorded coverage, names nothing as not verified", async () => {
     const fields = { ...BASE, checked: ["Count words"], unchecked: [], givenUp: [] };
     const visible = await render({
       ...fields,
-      vision: { kind: "recorded", items: [{ source: assumption("A1", "Totals print last.", "reported", "client-visible"), checked: true, undecided: false }] },
+      vision: { kind: "recorded", items: [{ source: assumption("A1", "Totals print last.", "reported", "client-visible"), checked: true, undecided: false, review: "other-family" }] },
     });
     expect(visible).not.toContain("not verified by Ashara");
     expect(await render({ ...fields, vision: { kind: "unrecorded" } })).not.toContain("not verified by Ashara");
@@ -390,10 +456,10 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: assumption("A1", "Python 3.12 is the runtime.", "confirmed", "client-visible"), checked: false, undecided: false },
-          { source: assumption("A2", "Totals print last.", "changed", "client-visible"), checked: false, undecided: false },
-          { source: assumption("A3", "No argument prints usage.", "answered", "client-visible"), checked: false, undecided: false },
-          { source: assumption("A4", "Missing files exit 1.", "answer-unread", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A1", "Python 3.12 is the runtime.", "confirmed", "client-visible"), checked: false, undecided: false, review: null },
+          { source: assumption("A2", "Totals print last.", "changed", "client-visible"), checked: false, undecided: false, review: null },
+          { source: assumption("A3", "No argument prints usage.", "answered", "client-visible"), checked: false, undecided: false, review: null },
+          { source: assumption("A4", "Missing files exit 1.", "answer-unread", "client-visible"), checked: false, undecided: false, review: null },
         ],
       },
     });
@@ -417,7 +483,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Out of scope: non-Linux platforms.", "unclassified"), checked: false, undecided: false }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Out of scope: non-Linux platforms.", "unclassified"), checked: false, undecided: false, review: null }] },
     });
     expect(body).toContain("- Out of scope: non-Linux platforms. (recorded without saying whether it is in or out of scope)");
   });
@@ -431,7 +497,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: ["Set up the product's module root"],
       givenUp: ["Shard the store"],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family" }] },
     });
     const [opening] = body.split("\n\n");
     expect(opening).toBe(

@@ -202,20 +202,34 @@ export interface StructuredRequest<T> {
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
   /**
-   * A second opinion: the request goes to another family's model (another provider) at the same
-   * capability when the catalog has one, else to another model of this one's provider, else to this
-   * one again; the response's provider and model say which. Once another family serves it, the
-   * exclusion of this one's family is hard for every caller, failover included: an opinion meant to
-   * be independent that quietly comes back from the same family reads as independent and is not.
-   * No answer from any model it may go to is NoOtherFamilyAnswered.
+   * A second opinion of one strength (SecondOpinionStrength), chosen from the catalog by capability
+   * and provider: no request ever reaches a model of another strength. An other-family opinion and
+   * its failover never go to the avoided provider; a same-family or same-model one is pinned to the
+   * one model the catalog offers for it. A strength the catalog does not serve at the capability is
+   * SecondOpinionUnavailable, before anything is sent; no answer from the model it went to is
+   * SecondOpinionUnanswered.
    */
-  otherThan?: ModelIdentity;
+  secondOpinion?: SecondOpinion;
 }
 
 /** One model of the catalog, as a response names the model that answered it. */
 export interface ModelIdentity {
   readonly provider: string;
   readonly model: string;
+}
+
+/**
+ * How independent a second opinion is of the first (ADR-084 addendum 3 decision 12), strongest
+ * first: a model of another provider; another model of the first's provider; the first's model
+ * asked again. Agreement within one family shares more blind spots, which every record of it names.
+ */
+export const SECOND_OPINION_STRENGTHS = ["other-family", "same-family-other-model", "same-model"] as const;
+export type SecondOpinionStrength = (typeof SECOND_OPINION_STRENGTHS)[number];
+
+/** A request for a second opinion on the answer `avoid` gave, of exactly one strength. */
+export interface SecondOpinion {
+  readonly avoid: ModelIdentity;
+  readonly strength: SecondOpinionStrength;
 }
 
 export interface StructuredResponse<T> {

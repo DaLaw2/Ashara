@@ -20,6 +20,7 @@ import type {
   ProviderConfig,
   ProviderType,
   RoutingProfiles,
+  SecondOpinion,
 } from "./types.js";
 
 export interface ResolvedProvider {
@@ -178,19 +179,31 @@ export class ProviderRegistry {
   }
 
   /**
-   * A model other than `avoid` that serves `capability` at `site`, for a second opinion: another
-   * provider's first, by the same routing as any request; else another model of `avoid`'s provider
-   * graded at or above `capability`, the cheapest. Null when the catalog has no other.
+   * The model a second opinion of `opinion.strength` goes to at `capability` and `site`, chosen from
+   * the catalog by provider and graded capability alone; null when the catalog offers none:
+   * - other-family: another provider's model, by the same routing as any request at `site`;
+   * - same-family-other-model: the cheapest other model of the avoided provider graded at or above
+   *   `capability`;
+   * - same-model: the avoided model itself, graded at or above `capability`, and only when no other
+   *   enabled model is: a deployment that offers another model never re-asks the same one.
    */
-  resolveOther(capability: CapabilityLevel, avoid: { readonly provider: string; readonly model: string }, site?: KnownLLMSite): ResolvedProvider | null {
-    const elsewhere = this.resolveFallback(capability, [avoid.provider], site);
-    if (elsewhere !== null) return elsewhere;
+  resolveSecondOpinion(capability: CapabilityLevel, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
+    const { avoid } = opinion;
+    if (opinion.strength === "other-family") return this.resolveFallback(capability, [avoid.provider], site);
     const same = this.config.providers.find((p) => p.enabled && p.name === avoid.provider);
     if (!same) return null;
-    const modelConfig = findBestModel(
-      same.models.filter((m) => m.id !== avoid.model),
-      capability,
-    );
+    const targetRank = CAPABILITY_RANK[capability];
+    let modelConfig: ModelConfig | undefined;
+    if (opinion.strength === "same-family-other-model") {
+      modelConfig = findBestModel(same.models.filter((m) => m.id !== avoid.model), capability);
+    } else {
+      const others = this.config.providers
+        .filter((p) => p.enabled)
+        .flatMap((p) => p.models.filter((m) => !(p.name === avoid.provider && m.id === avoid.model)))
+        .filter((m) => CAPABILITY_RANK[m.capabilityLevel] >= targetRank);
+      const itself = same.models.find((m) => m.id === avoid.model);
+      modelConfig = others.length === 0 && itself !== undefined && CAPABILITY_RANK[itself.capabilityLevel] >= targetRank ? itself : undefined;
+    }
     if (!modelConfig) return null;
     return {
       provider: this.createLanguageModel(same, modelConfig),
@@ -198,6 +211,11 @@ export class ProviderRegistry {
       providerName: same.name,
       providerType: same.providerType,
     };
+  }
+
+  /** `id (capability)` of every model the enabled providers offer, for a refusal's message. */
+  enabledModels(): string[] {
+    return this.config.providers.filter((p) => p.enabled).flatMap((p) => p.models.map((m) => `${p.name}/${m.id} (${m.capabilityLevel})`));
   }
 
   /**

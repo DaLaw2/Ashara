@@ -772,6 +772,8 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/delivered-report.ts#uncheckedSection`, judges: [i4("delivered-unchecked")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#unverifiedSection`, judges: [i4("delivered-coverage")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#undecidedSection`, judges: [i4("delivered-coverage")] },
+  // Every decided item no review left undecided is listed once, confirmed or not, and only the confirmed are counted.
+  { source: `${ENGAGEMENT}/delivered-report.ts#confirmedSection`, judges: [i4("delivered-coverage")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#givenUpSection`, judges: [i4("delivered-given-up")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#unreadNotice`, judges: [i4("delivered-notice-unfounded")] },
   { source: `${ENGAGEMENT}/block-report.ts#projectBlockedReport`, judges: [i4("halt-cause")] },
@@ -807,6 +809,8 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
   { source: `${QUALITY}/suite-review.ts#reviewPrompt`, kind: "not-kept", reason: "the suite review's prompt" },
   { source: `${QUALITY}/suite-review.ts#suiteSection`, kind: "not-kept", reason: "part of the suite review's prompt" },
   { source: `${QUALITY}/suite-review.ts#interfaceSection`, kind: "not-kept", reason: "part of the suite review's prompt" },
+  { source: `${QUALITY}/suite-review.ts#angleSection`, kind: "not-kept", reason: "part of a second opinion's suite review prompt" },
+  { source: "packages/model-access/src/gateway.ts#textStructuredPrompt", kind: "not-kept", reason: "a structured request's prompt with the schema it must answer, for a provider that takes no schema" },
   { source: `${DELIVERY}/decomposition.ts#DecompositionEngine.buildDecomposePrompt`, kind: "not-kept", reason: "the planner's prompt" },
   { source: `${DELIVERY}/replan.ts#causeSection`, kind: "not-kept", reason: "part of a plan revision's planner prompt" },
   { source: `${DELIVERY}/replan.ts#abandonmentSection`, kind: "not-kept", reason: "part of a plan revision's planner and environment prompts" },

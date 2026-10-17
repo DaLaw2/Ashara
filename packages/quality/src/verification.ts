@@ -396,8 +396,8 @@ export class TaskVerification {
         ? ""
         : `\nLeft undecided, to be reported unverified: ${outcome.undecided.map((u) => `${u.itemId} of ${u.checkTaskId}`).join(", ")}`);
     if (outcome.kind === "clean") {
-      // A review that routes nothing is a claim another model family confirms or not (ADR-084
-      // addendum 2 decision 11): the items it leaves unconfirmed are reported unverified.
+      // A review that routes nothing is a claim a second opinion confirms or not (ADR-084 addendum 2
+      // decision 11, addendum 3 decision 12): the items it leaves unconfirmed are reported unverified.
       const { claim } = outcome;
       const claimed =
         claim.unconfirmed.length === 0

@@ -5,7 +5,7 @@ import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
-import type { DeliveredReportFailureRecord, UndecidedBy } from "../delivered-report.js";
+import type { DeliveredReportFailureRecord, ReviewStrength, UndecidedBy } from "../delivered-report.js";
 import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
@@ -46,7 +46,7 @@ type AcceptedVisionItem =
 type VisionCoverage =
   | {
       readonly kind: "recorded";
-      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy }>;
+      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy; readonly review: ReviewStrength | null }>;
     }
   /** The review, or a check task whose checks ran, records no traced items: coverage cannot be stated. */
   | { readonly kind: "unrecorded" };
@@ -414,22 +414,31 @@ async function visionCoverage(
     .limit(1);
   const items = review ? storedSpecOf(review.id, review.taskSpec)?.sources : undefined;
   if (items === undefined) return { kind: "unrecorded" };
-  const decided = new Set<string>();
+  /** Each decided item, by identity, with the check tasks whose stored checks decide it. */
+  const deciders = new Map<string, Set<string>>();
   for (const check of goalIds.length === 0 ? [] : await storedChecksOf(db, goalIds)) {
     const items = decidedBy(check);
     if (items === null) return { kind: "unrecorded" };
-    for (const identity of items) decided.add(identity);
+    for (const identity of items) {
+      const by = deciders.get(identity);
+      if (by === undefined) deciders.set(identity, new Set([check.checkTaskId]));
+      else by.add(check.checkTaskId);
+    }
   }
   const current = items.some((source) => source.type === "assumption") ? await assumptionsAtAcceptance(db, sweep) : new Map<string, AcceptedAssumption>();
-  const undecided = goalIds.length === 0 ? new Map<string, Exclude<UndecidedBy, false>>() : await undecidedOf(db, projectId, goalIds);
+  const undecided = goalIds.length === 0 ? new Map<string, UndecidedRecord>() : await undecidedOf(db, projectId, goalIds);
+  const confirmations = await claimStrengths(db, projectId);
   return {
     kind: "recorded",
     items: items.map((source) => {
-      const checked = decided.has(sourceIdentity(source));
-      // An item no review left undecided is false: no row names it.
-      // eslint-disable-next-line no-restricted-syntax -- policy default: the absence of an undecided_items row is the record that no review left the item undecided
-      const left = undecided.get(undecidedIdentity(source)) ?? false;
-      if (source.type === "scope") return { source, checked, undecided: left };
+      const by = deciders.get(sourceIdentity(source));
+      const checked = by !== undefined;
+      const record = undecided.get(undecidedIdentity(source));
+      // An item no review left undecided is false: no undecided_items row names it. Its review is then
+      // the weakest confirmation among the check tasks deciding it, none when one of them has none.
+      const left: UndecidedBy = record === undefined ? false : record.reason;
+      const review = record !== undefined ? record.strength : by === undefined ? null : weakestConfirmation([...by].map((checkTaskId) => confirmationOf(confirmations, checkTaskId)));
+      if (source.type === "scope") return { source, checked, undecided: left, review };
       const now = current.get(source.id);
       if (now === undefined) {
         throw new AcceptedStandingUnreadable(sweep.id, projectId, null, `the vision at acceptance holds no assumption ${source.id}, which the plan's review recorded`);
@@ -442,7 +451,7 @@ async function visionCoverage(
           `assumption ${source.id} reads "${now.text}" at acceptance, not "${source.text}" as the plan's review recorded it`,
         );
       }
-      return { source: now, checked, undecided: left };
+      return { source: now, checked, undecided: left, review };
     }),
   };
 }
@@ -463,12 +472,39 @@ class UndecidedItemUnsourced extends ReportRecordUnreadable {
   }
 }
 
+/** The strength of a second review as stored (migration 073); null where none answered. */
+const StoredStrengthSchema = z.enum(["other-family", "same-family-other-model", "same-model"]).nullable();
+
+/** A stored second review's strength does not parse, or a confirmed claim records none. */
+class ReviewStrengthUnreadable extends ReportRecordUnreadable {
+  constructor(
+    readonly table: string,
+    readonly detail: string,
+  ) {
+    super(`${table}: second_strength is not a strength of second opinion: ${detail}`);
+    this.name = "ReviewStrengthUnreadable";
+  }
+}
+
+function storedStrength(table: string, raw: unknown): ReviewStrength | null {
+  const parsed = StoredStrengthSchema.safeParse(raw);
+  if (!parsed.success) throw new ReviewStrengthUnreadable(table, z.prettifyError(parsed.error));
+  return parsed.data;
+}
+
+/** Why an item is undecided, with the strength of the second review behind it; null where none answered. */
+interface UndecidedRecord {
+  readonly reason: Exclude<UndecidedBy, false>;
+  readonly strength: ReviewStrength | null;
+}
+
 /** Why one undecided_items row leaves its item undecided, from the judgement or the claim it is tied to. */
 function undecidedReason(row: { readonly id: string; readonly judgementBasis: string | null; readonly claimBasis: string | null }): Exclude<UndecidedBy, false> {
   if (row.judgementBasis !== null && row.claimBasis !== null) throw new UndecidedItemUnsourced(row.id, "it is tied to both a judgement and a claim");
   if (row.judgementBasis !== null) return row.judgementBasis === "second-review-failed" ? "review-failed" : "unsettled";
   if (row.claimBasis === null) throw new UndecidedItemUnsourced(row.id, "it is tied to neither a judgement nor a claim");
-  if (row.claimBasis === "other-family-found") return "clean-contradicted";
+  if (row.claimBasis === "second-opinion-found") return "clean-contradicted";
+  // no-other-family: a same-provider answer that confirmed nothing, on a claim written before migration 073.
   if (row.claimBasis === "no-other-family" || row.claimBasis === "second-review-failed") return "clean-unconfirmed";
   throw new UndecidedItemUnsourced(row.id, `its claim's basis ${JSON.stringify(row.claimBasis)} confirms the item it leaves undecided`);
 }
@@ -483,27 +519,98 @@ const REASON_RANK: Readonly<Record<Exclude<UndecidedBy, false>, number>> = {
 
 /**
  * The items a suite review left undecided on a check task of one of the goal tasks the sweep ran
- * (migrations 069, 071, 072), by id and cited text, so the report never counts them as covered:
+ * (migrations 069, 071, 072, 073), by id and cited text, so the report never counts them as covered:
  * a review found no check really deciding them and nothing settled it, or the review that found no
- * problem in their checks was not confirmed by another model family. Each says why, the reason of
- * its rows that ranks first in REASON_RANK.
+ * problem in their checks was not confirmed. Each says why, the reason of its rows that ranks first
+ * in REASON_RANK, with the strength of that row's second review.
  */
-async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Map<string, Exclude<UndecidedBy, false>>> {
+async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Map<string, UndecidedRecord>> {
   const rows = await db
-    .select({ id: undecidedItems.itemId, text: undecidedItems.itemText, judgementBasis: suiteReviewJudgements.basis, claimBasis: suiteReviewClaims.basis })
+    .select({
+      id: undecidedItems.itemId,
+      text: undecidedItems.itemText,
+      judgementBasis: suiteReviewJudgements.basis,
+      judgementStrength: suiteReviewJudgements.secondStrength,
+      claimBasis: suiteReviewClaims.basis,
+      claimStrength: suiteReviewClaims.secondStrength,
+    })
     .from(undecidedItems)
     .innerJoin(workItems, eq(workItems.id, undecidedItems.checkTaskId))
     .leftJoin(suiteReviewJudgements, eq(suiteReviewJudgements.id, undecidedItems.judgementId))
     .leftJoin(suiteReviewClaims, eq(suiteReviewClaims.id, undecidedItems.claimId))
     .where(and(eq(undecidedItems.projectId, projectId), inArray(sql`${workItems.taskSpec}->>'checksFor'`, [...goalIds])));
-  const undecided = new Map<string, Exclude<UndecidedBy, false>>();
+  const undecided = new Map<string, UndecidedRecord>();
   for (const row of rows) {
     const identity = undecidedIdentity(row);
     const reason = undecidedReason(row);
+    const strength =
+      row.judgementBasis !== null ? storedStrength("suite_review_judgements", row.judgementStrength) : storedStrength("suite_review_claims", row.claimStrength);
     const kept = undecided.get(identity);
-    if (kept === undefined || REASON_RANK[reason] < REASON_RANK[kept]) undecided.set(identity, reason);
+    if (kept === undefined || REASON_RANK[reason] < REASON_RANK[kept.reason]) undecided.set(identity, { reason, strength });
   }
   return undecided;
+}
+
+/** suite_review_claims.covered: the check tasks a claim covers. */
+const ClaimCoveredSchema = z.array(z.string().min(1)).min(1);
+
+/** A stored claim's covered list does not parse. */
+class ClaimCoveredUnreadable extends ReportRecordUnreadable {
+  constructor(
+    readonly claimId: string,
+    readonly detail: string,
+  ) {
+    super(`suite_review_claims row ${claimId}: covered is not a list of check task ids: ${detail}`);
+    this.name = "ClaimCoveredUnreadable";
+  }
+}
+
+/** How the latest claim covering a check task stands: confirmed at a strength, or not confirmed. */
+type ClaimConfirmation = { readonly kind: "confirmed"; readonly strength: ReviewStrength } | { readonly kind: "unconfirmed" };
+
+/**
+ * Per check task, how the latest claim covering it stands (migrations 072, 073): confirmed at the
+ * strength of the second review that answered, whether it named nothing or something about other
+ * items; unconfirmed when it failed or was answered by its first's provider before 073. A check task
+ * no claim covers has no entry.
+ */
+async function claimStrengths(db: DbHandle, projectId: string): Promise<Map<string, ClaimConfirmation>> {
+  const rows = await db
+    .select({ id: suiteReviewClaims.id, basis: suiteReviewClaims.basis, covered: suiteReviewClaims.covered, strength: suiteReviewClaims.secondStrength })
+    .from(suiteReviewClaims)
+    .where(eq(suiteReviewClaims.projectId, projectId))
+    .orderBy(asc(suiteReviewClaims.createdAt), asc(suiteReviewClaims.id));
+  const latest = new Map<string, ClaimConfirmation>();
+  for (const row of rows) {
+    const covered = ClaimCoveredSchema.safeParse(row.covered);
+    if (!covered.success) throw new ClaimCoveredUnreadable(row.id, z.prettifyError(covered.error));
+    let standing: ClaimConfirmation = { kind: "unconfirmed" };
+    if (row.basis === "second-opinion-clean" || row.basis === "second-opinion-found") {
+      const strength = storedStrength("suite_review_claims", row.strength);
+      if (strength === null) throw new ReviewStrengthUnreadable("suite_review_claims", `claim ${row.id} is ${row.basis} but records no strength`);
+      standing = { kind: "confirmed", strength };
+    }
+    for (const checkTaskId of covered.data) latest.set(checkTaskId, standing);
+  }
+  return latest;
+}
+
+/** A check task's confirmation strength; null when its latest claim was not confirmed or no claim covers it. */
+function confirmationOf(confirmations: ReadonlyMap<string, ClaimConfirmation>, checkTaskId: string): ReviewStrength | null {
+  const standing = confirmations.get(checkTaskId);
+  return standing === undefined || standing.kind === "unconfirmed" ? null : standing.strength;
+}
+
+/** Strongest first: an item decided by several check tasks is confirmed only as strongly as the weakest of them. */
+const STRENGTH_RANK: Readonly<Record<ReviewStrength, number>> = { "other-family": 0, "same-family-other-model": 1, "same-model": 2 };
+
+function weakestConfirmation(strengths: ReadonlyArray<ReviewStrength | null>): ReviewStrength | null {
+  let weakest: ReviewStrength | null = null;
+  for (const strength of strengths) {
+    if (strength === null) return null;
+    if (weakest === null || STRENGTH_RANK[strength] > STRENGTH_RANK[weakest]) weakest = strength;
+  }
+  return weakest;
 }
 
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */

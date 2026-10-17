@@ -227,3 +227,43 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
     expect(() => curated.resolveFallback("Strong", ["other"], "agent-runner")).toThrow(RoutingProfileUnresolved);
   });
 });
+
+// ADR-084 addendum 3 decision 12: a second opinion is chosen by strength from the catalog alone.
+describe("ProviderRegistry.resolveSecondOpinion", () => {
+  const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, inputCostPer1M });
+  const deployment = (...providers: ReadonlyArray<readonly [string, readonly ModelConfig[]]>): ProviderRegistry =>
+    registryOf({
+      providers: providers.map(([name, models]) => ({ name, providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [...models], enabled: true })),
+      defaultProvider: providers[0]?.[0] ?? "none",
+    });
+  const avoid = { provider: "alpha", model: "alpha-strong" };
+  const chosen = (registry: ProviderRegistry, strength: "other-family" | "same-family-other-model" | "same-model", capability: ModelConfig["capabilityLevel"] = "Strong") => {
+    const resolved = registry.resolveSecondOpinion(capability, { avoid, strength });
+    return resolved === null ? null : `${resolved.providerName}/${resolved.modelConfig.id}`;
+  };
+
+  test("two providers: another family serves the first strength, and only the avoided provider serves the second", () => {
+    const registry = deployment(["alpha", [model("alpha", "alpha-strong", "Strong"), model("alpha", "alpha-frontier", "Frontier", 9)]], ["beta", [model("beta", "beta-strong", "Strong")]]);
+    expect(chosen(registry, "other-family")).toBe("beta/beta-strong");
+    expect(chosen(registry, "same-family-other-model")).toBe("alpha/alpha-frontier");
+    expect(chosen(registry, "same-model")).toBeNull();
+    // No other family at Frontier: that strength is unavailable there, never served by the avoided provider.
+    expect(chosen(registry, "other-family", "Frontier")).toBeNull();
+  });
+
+  test("one provider key with two models: no other family, the cheapest other model of the family, never the same model again", () => {
+    const registry = deployment(["alpha", [model("alpha", "alpha-strong", "Strong"), model("alpha", "alpha-dear", "Strong", 9), model("alpha", "alpha-cheap", "Strong", 1), model("alpha", "alpha-light", "Light", 0.1)]]);
+    expect(chosen(registry, "other-family")).toBeNull();
+    expect(chosen(registry, "same-family-other-model")).toBe("alpha/alpha-cheap");
+    expect(chosen(registry, "same-model")).toBeNull();
+  });
+
+  test("one provider key with one model at the capability: only the same model answers a second time", () => {
+    const registry = deployment(["alpha", [model("alpha", "alpha-strong", "Strong"), model("alpha", "alpha-light", "Light", 0.1)]]);
+    expect(chosen(registry, "other-family")).toBeNull();
+    expect(chosen(registry, "same-family-other-model")).toBeNull();
+    expect(chosen(registry, "same-model")).toBe("alpha/alpha-strong");
+    // Graded below the capability asked, the model is not substituted.
+    expect(chosen(registry, "same-model", "Frontier")).toBeNull();
+  });
+});

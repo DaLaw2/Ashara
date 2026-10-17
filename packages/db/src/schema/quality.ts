@@ -89,11 +89,11 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_judgements (migrations 063, 069, 071, Quality): one row per finding of a suite review's
-// first pass that Z0 could not disprove, routed, released or advisory, with both reviews' findings
-// whole, what the second review was (none when no second review could change the outcome, or when
-// it failed, with why in second_failure) and why it acted or did not (basis). Append-only; the jsonb
-// columns are parsed by the repository.
+// suite_review_judgements (migrations 063, 069, 071, 073, Quality): one row per finding of a suite
+// review's first pass that Z0 could not disprove, routed, released or advisory, with both reviews'
+// findings whole, the second review's model and strength (none when no second review could change
+// the outcome, or when it failed, with why in second_failure), the strengths it passed over, and why
+// it acted or did not (basis). Append-only; the jsonb columns are parsed by the repository.
 // ---------------------------------------------------------------------------
 
 export const suiteReviewJudgements = pgTable("suite_review_judgements", {
@@ -115,16 +115,17 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
   secondFindings: jsonb("second_findings").notNull(),
   firstModel: text("first_model").notNull(),
   secondModel: text("second_model"),
-  secondReview: text("second_review"),
+  secondStrength: text("second_strength"),
+  passedOver: jsonb("passed_over").notNull(),
   secondFailure: text("second_failure"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_claims (migration 072, Quality): one row per suite review whose outcome routed
-// nothing: its claim that the checks decide the items it covers, with the second review by another
-// model family that confirms it or not (basis), whole. Append-only; second_findings and covered are
-// jsonb arrays.
+// suite_review_claims (migrations 072, 073, Quality): one row per suite review whose outcome routed
+// nothing: its claim that the checks decide the items it covers, with the second review that confirms
+// it or not (basis) whole, at the strength it answered (second_strength) after the strengths it passed
+// over. Append-only; second_findings, covered and passed_over are jsonb arrays.
 // ---------------------------------------------------------------------------
 
 export const suiteReviewClaims = pgTable("suite_review_claims", {
@@ -139,7 +140,8 @@ export const suiteReviewClaims = pgTable("suite_review_claims", {
   covered: jsonb().notNull(),
   firstModel: text("first_model").notNull(),
   secondModel: text("second_model"),
-  secondReview: text("second_review"),
+  secondStrength: text("second_strength"),
+  passedOver: jsonb("passed_over").notNull(),
   secondFindings: jsonb("second_findings").notNull(),
   secondFailure: text("second_failure"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
@@ -148,7 +150,7 @@ export const suiteReviewClaims = pgTable("suite_review_claims", {
 // ---------------------------------------------------------------------------
 // undecided_items (migrations 069, 072, Quality): one row per cited item a suite review left
 // undecided: a finding on it that did not act (judgement_id), or a claim covering it that no second
-// review by another model family confirmed (claim_id), exactly one; the item is reported unverified.
+// review confirmed (claim_id), exactly one; the item is reported unverified.
 // Append-only, one row per check task and item.
 // ---------------------------------------------------------------------------
 

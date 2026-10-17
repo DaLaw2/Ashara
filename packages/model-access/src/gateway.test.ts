@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { extractUsage } from "./gateway.js";
+import { z } from "zod";
+import { extractUsage, parseStructuredText, textStructuredPrompt } from "./gateway.js";
 describe("extractUsage", () => {
   test("reads OpenAI Responses cache reads from the raw usage", () => {
     const { reported } = extractUsage({
@@ -53,5 +54,31 @@ describe("extractUsage", () => {
       expect(extraction.reported.outputTokens).toBe(sdkUsage?.outputTokens ?? null);
       expect(extraction.usage.inputTokens).toBe(sdkUsage?.inputTokens ?? 0);
     }
+  });
+});
+
+// A provider that answers in text receives no schema parameter: what the answer is validated against travels in the prompt.
+describe("a structured request to a provider that answers in text", () => {
+  const Schema = z.strictObject({ problems: z.array(z.strictObject({ kind: z.literal("undecided-item"), item: z.string(), evidence: z.string() })) });
+
+  test("its prompt carries the JSON Schema the answer is validated against, every required property named", () => {
+    const prompt = textStructuredPrompt("Review the checks.", Schema);
+    expect(prompt.startsWith("Review the checks.\n\nRespond with valid JSON only.")).toBe(true);
+    expect(prompt).toContain(`"required":["kind","item","evidence"]`);
+    expect(prompt).toContain(`"additionalProperties":false`);
+  });
+
+  test("an answer that is not JSON names where the parser stopped and the text around it, for the re-ask", () => {
+    const parsed = parseStructuredText(`{"problems": [{"kind": "undecided-item", "item": "S4", "evidence": "fsync \\$D"}]}`, Schema);
+    if (parsed.ok) return expect.unreachable("an invalid escape is not JSON");
+    expect(parsed.errorKind).toBe("InvalidJson");
+    expect(parsed.errors[0]).toMatch(/^Invalid JSON \(Bad escaped character in JSON at position 75 /);
+    expect(parsed.errors[0]).toContain(String.raw`\"evidence\": \"fsync \\" and from it "$D\"}]}"`);
+  });
+
+  test("an answer missing a required property names the property", () => {
+    const parsed = parseStructuredText(`{"problems": [{"kind": "undecided-item", "item": "S4"}]}`, Schema);
+    if (parsed.ok) return expect.unreachable("a missing property does not validate");
+    expect(parsed).toMatchObject({ errorKind: "SchemaMismatch", errors: ["problems.0.evidence: Invalid input: expected string, received undefined"] });
   });
 });
