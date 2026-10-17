@@ -94,12 +94,18 @@ export class SuiteReviewFindingRepository {
 
 const StoredConflictSideSchema = z.strictObject({ checkTask: z.string().min(1), check: z.string().min(1), requires: z.string().min(1) });
 
+/** A contradiction's two sides, named; a row written before migration 071 holds them as a pair, read as the same two. */
+const StoredConflictSchema = z.union([
+  z.strictObject({ first: StoredConflictSideSchema, second: StoredConflictSideSchema }),
+  z.tuple([StoredConflictSideSchema, StoredConflictSideSchema]).transform(([first, second]) => ({ first, second })),
+]);
+
 const StoredFindingSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("contradiction"),
     checkTasks: z.array(z.string().min(1)).min(1),
     // A second review's contradiction recorded before migration 069 quotes no conflict.
-    conflict: z.tuple([StoredConflictSideSchema, StoredConflictSideSchema]).optional(),
+    conflict: StoredConflictSchema.optional(),
     problem: z.string().min(1),
     evidence: z.string().min(1),
   }),
@@ -127,15 +133,17 @@ const StoredJudgementSchema = z
     checkTaskId: z.string().min(1),
     checkName: z.string().min(1).nullable(),
     outcome: z.enum(["routed", "released", "advisory"]),
-    basis: z.enum(["two-reviews", "other-family-agreed", "other-family-disagreed", "no-other-family", "frozen", "reopened-once"]),
+    basis: z.enum(["two-reviews", "other-family-agreed", "other-family-disagreed", "no-other-family", "second-review-failed", "frozen", "reopened-once"]),
     firstFinding: StoredFindingSchema,
     secondFindings: z.array(StoredFindingSchema),
     firstModel: z.string().min(1),
     secondModel: z.string().min(1).nullable(),
     secondReview: z.enum(["other-model", "re-sample"]).nullable(),
+    secondFailure: z.string().min(1).nullable(),
   })
   .refine((row) => (row.firstFinding.kind === "outside-vision") === (row.checkName !== null), "a judgement names a check exactly when its first finding is an outside-vision rejection")
-  .refine((row) => (row.secondModel === null) === (row.secondReview === null), "a judgement records a second review's model exactly when it records what that review was");
+  .refine((row) => (row.secondModel === null) === (row.secondReview === null), "a judgement records a second review's model exactly when it records what that review was")
+  .refine((row) => (row.basis === "second-review-failed") === (row.secondFailure !== null), "a judgement records why its second review failed exactly when its basis is second-review-failed");
 
 export type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
 
@@ -163,7 +171,7 @@ class SuiteReviewJudgementsUnreturned extends Error {
 }
 
 /**
- * Quality's record of a suite review's judgements on its findings (migrations 063, 069), and of the
+ * Quality's record of a suite review's judgements on its findings (migrations 063, 069, 071), and of the
  * cited items its advisory findings leave undecided, in one transaction: an item is never kept
  * undecided without the judgement that left it so, nor a judgement without its item.
  */
@@ -188,6 +196,7 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
             firstModel: modelText(judgement.firstModel),
             secondModel: judgement.secondReview === null ? null : modelText(judgement.secondReview.second),
             secondReview: judgement.secondReview === null ? null : judgement.secondReview.kind,
+            secondFailure: judgement.secondFailure,
           })),
         )
         .returning({ id: suiteReviewJudgements.id });
@@ -225,6 +234,7 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
       firstModel: suiteReviewJudgements.firstModel,
       secondModel: suiteReviewJudgements.secondModel,
       secondReview: suiteReviewJudgements.secondReview,
+      secondFailure: suiteReviewJudgements.secondFailure,
     })
     .from(suiteReviewJudgements)
     .where(eq(suiteReviewJudgements.projectId, projectId))

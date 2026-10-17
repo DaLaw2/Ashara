@@ -40,5 +40,7 @@ export type {
 // A provider's failure, naming the party at fault, as modelCallFailureOf reads it: a caller's own class
 // for a provider failure it detects in an answer extends it (Workplace's ProviderErrorFinish).
 export { ProviderError } from "@ashara/model-access";
+// A second opinion that got no answer from any model it may go to: its caller reports it as failed.
+export { NoOtherFamilyAnswered } from "@ashara/model-access";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "@ashara/model-access";

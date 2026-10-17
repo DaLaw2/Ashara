@@ -137,28 +137,34 @@ importers = []
 # package only the symbols listed here: composition, a fake's port type, a class the simulator wraps
 # to observe, and the shared vocabulary. No Engagement composer, no acceptance or block-report read
 # model of db, and from Delivery only its work-item vocabulary is listed. Adding a name is a decision to review, not a
-# formality. The cross-package tests (src/server/) are not held to it.
+# formality. The cross-package tests (src/server/) are not held to it. The *_MODEL_SCHEMAS registries,
+# offeredToolSchemas and wireSchemaOf are what Ashara sends a model, judged by the providers' refusal
+# table (schemaRefusalsFor, PROVIDER_TYPES) at a run's start (model-schemas.ts): the gateway refuses
+# such a schema before any stand-in sees it, so the oracle judges the sent schemas themselves.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
-names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
-names.engagement = ["PROJECT_STATUSES", "VisionSource"]
+names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "DELIVERY_MODEL_SCHEMAS", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
+names.engagement = ["ENGAGEMENT_MODEL_SCHEMAS", "PROJECT_STATUSES", "VisionSource"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
 names.finance = ["SPEND_CAP_ERROR_CLASS"]
-names.model-access = ["LanguageModelFactory"]
-names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "observeAcceptanceSweeps"]
+names.model-access = ["LanguageModelFactory", "PROVIDER_TYPES", "ProviderType", "schemaRefusalsFor", "wireSchemaOf"]
+names.organization = ["ORGANIZATION_MODEL_SCHEMAS"]
+names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "QUALITY_MODEL_SCHEMAS", "observeAcceptanceSweeps"]
 names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "describeErrorChain", "observeContendedWaits", "parseJson"]
-names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT"]
+names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchemas"]
 # ADR-080 d10: a stand-in model answers the product's model calls, so one that imports the rule judging
 # its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the
 # oracle judging that rule stops being independent. A stand-in, and every simulator file it reaches by
 # a relative value import, may import from another package only the transport and type names below,
 # never a product rule; each must also be in names.<pkg>. Blind spots: a stand-in that games the rule
 # by hand (writes the minimal text the rule accepts) imports nothing and passes; an `import type` edge
-# is not followed; tests written from observed behaviour are not checked at all.
+# is not followed; tests written from observed behaviour are not checked at all. schemaRefusalsFor is
+# the providers' refusal of the schema a request carries, which a stand-in applies as the transport it
+# stands in for: it judges what Ashara sends, never the stand-in's answer.
 stand-ins = ["src/simulator/scripted-models.ts"]
-stand-in-names.model-access = ["LanguageModelFactory"]
+stand-in-names.model-access = ["LanguageModelFactory", "ProviderType", "schemaRefusalsFor"]
 # ADR-084 decision 4: the termination invariants judge work against an oracle-owned bounds table. A
 # bounds table imports nothing at all, no other package's symbol (a production bound such as the work
 # ledger's DEFAULT_WORK_BUDGETS) and no other file that could hand it one, so each bound in it is the

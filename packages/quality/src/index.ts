@@ -1,4 +1,5 @@
 export { TaskVerification, observeAcceptanceSweeps } from "./verification.js";
+export { QUALITY_MODEL_SCHEMAS } from "./suite-review.js";
 export type { AcceptanceSweep } from "./verification.js";
 export {
   EXECUTION_STATUSES,

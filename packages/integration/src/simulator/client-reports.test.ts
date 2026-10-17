@@ -217,11 +217,21 @@ describe("checkReports, a delivered report", () => {
     const undecidedHead = (lines: readonly string[]): string =>
       `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.\n${lines.join("\n")}`;
     it("holds an item a review left undecided to being named as not verified, never counted covered", () => {
-      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets." }] };
+      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reviewFailed: false }] };
       const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."]);
       expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, left, uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
       expect(keysOf(delivered(merged, traced, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+    });
+
+    // D5: an item whose second review failed is named under a section that says so, never as unsettled.
+    it("holds an item whose second review failed to a section saying the review failed", () => {
+      const failedHead = (lines: readonly string[]): string =>
+        `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n${lines.join("\n")}`;
+      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reviewFailed: true }] };
+      const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."]);
+      expect(keysOf(delivered(merged, left, `${uncovered}${failedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
+      expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
     it("holds a report to saying coverage is not on record when a swept check records no items it decides", () => {
@@ -294,7 +304,7 @@ describe("uncheckedAtPassedSweeps", () => {
 
   // ADR-084 decision 2: an item a suite review left undecided reaches I6 as unverified, never covered.
   it("names an item a review left undecided that the sweep's delivered report does not name as unverified, or calls covered", () => {
-    const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text }] });
+    const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text, reviewFailed: false }] });
     const named = `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but nothing settled it.\n- ${greets.text}`;
     expect(keysOf(left(`Delivered.\n\n${named}\n\nNothing more.`))).toEqual([]);
     expect(keysOf(left("Delivered.\n\nEvery item of what you asked for is decided by a stored check."))).toEqual(["undecided-unreported:S1", "undecided-covered"]);

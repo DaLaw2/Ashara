@@ -6,7 +6,8 @@ import type {
 } from "@ai-sdk/provider";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import type { LanguageModelFactory } from "@ashara/model-access";
+import { schemaRefusalsFor } from "@ashara/model-access";
+import type { LanguageModelFactory, ProviderType } from "@ashara/model-access";
 import {
   CheckSpecSchema,
   INTERFACE_TASK_REF,
@@ -45,6 +46,27 @@ class StandInUnanswerable extends Error {
   }
 }
 
+/** A request carried a schema its provider type refuses: the stand-in refuses the whole request, as that provider does. */
+class StandInRefusedSchema extends Error {
+  constructor(
+    readonly model: string,
+    readonly providerType: string,
+    readonly what: string,
+    readonly detail: string,
+  ) {
+    super(`scripted model ${model} (provider type ${providerType}) refuses the ${what} schema: ${detail}`);
+    this.name = "StandInRefusedSchema";
+  }
+}
+
+/** A schema a stand-in refused, as the run reports it. */
+interface RefusedSchema {
+  readonly model: string;
+  readonly providerType: string;
+  readonly what: string;
+  readonly detail: string;
+}
+
 /** What the stand-ins read and decide with. Every project of the run shares one universe. */
 interface StandInContext {
   readonly tape: Tape;
@@ -59,6 +81,8 @@ interface StandInContext {
   readonly onModelCall: (call: ModelCallRecord) => void;
   /** Once per request the model port receives, before it is answered: W1 counts work here, outside production (termination.ts). */
   readonly onRequest: () => void;
+  /** A request carried a schema its provider type refuses: the run reports it as a violation. */
+  readonly onSchemaRefused: (refused: RefusedSchema) => void;
   /** The task whose lane makes the call (Interleaver.currentTask), or null outside a batch's tasks. */
   readonly laneTask: () => string | null;
 }
@@ -318,19 +342,42 @@ export class StandIns {
 
   constructor(private readonly context: StandInContext) {}
 
-  readonly factory: LanguageModelFactory = (provider, model) => this.model(`${provider.name}/${model.id}`);
+  readonly factory: LanguageModelFactory = (provider, model) => this.model(`${provider.name}/${model.id}`, provider.providerType);
 
-  private model(modelId: string): LanguageModelV4 {
+  private model(modelId: string, providerType: ProviderType): LanguageModelV4 {
     return {
       specificationVersion: "v4",
       provider: "ashara-simulator",
       modelId,
       supportedUrls: {},
-      doGenerate: (options) => this.respond(options),
+      doGenerate: async (options) => {
+        this.refuseUnacceptableSchemas(modelId, providerType, options);
+        return await this.respond(options);
+      },
       doStream: async () => {
         throw new StandInUnanswerable("stream", "no Ashara call site streams");
       },
     };
+  }
+
+  /**
+   * The provider's own refusal of a schema it does not accept, as a real one makes it: the whole
+   * request, before any answer. Every schema a request carries is judged by its provider type's
+   * restrictions, and a refusal is reported to the run, so a soak fails on a schema a provider would
+   * refuse even when nothing else in the run notices.
+   */
+  private refuseUnacceptableSchemas(modelId: string, providerType: ProviderType, options: LanguageModelV4CallOptions): void {
+    const sent: Array<readonly [string, "structured-output" | "tool-input", unknown]> = [];
+    if (options.responseFormat?.type === "json" && options.responseFormat.schema !== undefined) sent.push(["structured output", "structured-output", options.responseFormat.schema]);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a request with no tools sends no tool schema
+    for (const tool of options.tools ?? []) if (tool.type === "function") sent.push([`tool "${tool.name}" input`, "tool-input", tool.inputSchema]);
+    for (const [what, use, schema] of sent) {
+      const refusals = schemaRefusalsFor(providerType, use, schema);
+      if (refusals.length === 0) continue;
+      const detail = refusals.map((refusal) => `${refusal.path}: ${refusal.rule}: ${refusal.detail}`).join("; ");
+      this.context.onSchemaRefused({ model: modelId, providerType, what, detail });
+      throw new StandInRefusedSchema(modelId, providerType, what, detail);
+    }
   }
 
   private async respond(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
@@ -343,7 +390,7 @@ export class StandIns {
     if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
     if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan(promptText(options)));
     if (keys.includes("problems")) return this.structured(options, "suite-review", () => this.review());
-    if (keys.includes("verdict")) return this.structured(options, "liaison-answer", () => this.answer());
+    if (keys.includes("reading")) return this.structured(options, "liaison-answer", () => this.answer());
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
       const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);
@@ -511,10 +558,10 @@ export class StandIns {
       problems.push({
         checkTasks: [row.checkTaskId, partner.checkTaskId],
         kind: "contradiction",
-        conflict: [
-          { checkTask: row.checkTaskId, check: row.name, requires: row.command },
-          { checkTask: partner.checkTaskId, check: partner.name, requires: partner.command },
-        ],
+        conflict: {
+          first: { checkTask: row.checkTaskId, check: row.name, requires: row.command },
+          second: { checkTask: partner.checkTaskId, check: partner.name, requires: partner.command },
+        },
         problem: `Check ${row.name} forbids [${own.forbids.join(", ")}], which check ${partner.name} requires.`,
         evidence: `${row.command}; ${partner.command}`,
       });
@@ -621,7 +668,7 @@ export class StandIns {
         const side = { checkTask: row.checkTaskId, check: row.name, requires: row.command };
         return this.answered(round, [
           ...honest,
-          { checkTasks: [row.checkTaskId], kind: "contradiction", conflict: [side, side], problem: `Check ${row.name} both requires and forbids what it runs.`, evidence: row.command },
+          { checkTasks: [row.checkTaskId], kind: "contradiction", conflict: { first: side, second: side }, problem: `Check ${row.name} both requires and forbids what it runs.`, evidence: row.command },
         ]);
       }
       case "correlated-second": {
@@ -699,7 +746,7 @@ export class StandIns {
   }
 
   private answer(): unknown {
-    return { verdict: "changes", statement: "Messages are in French.", kind: "undecided" };
+    return { reading: { verdict: "changes", statement: "Messages are in French.", kind: "undecided" } };
   }
 
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {

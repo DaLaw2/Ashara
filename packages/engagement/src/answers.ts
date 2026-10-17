@@ -161,6 +161,12 @@ const AnswerReadingSchema = z.discriminatedUnion("verdict", [
 
 type AnswerReading = z.infer<typeof AnswerReadingSchema>;
 
+/**
+ * The reading as the model returns it: one object holding it, since a provider decoding against the
+ * schema takes only an object at its root, never a union of them (model-access schema-acceptance).
+ */
+export const AnswerResponseSchema = z.strictObject({ reading: AnswerReadingSchema });
+
 /** The question the answer replies to, as the vision holds it open: it names the assumption it adopted. */
 interface AnsweredQuestion {
   readonly messageId: string;
@@ -190,7 +196,7 @@ function buildAnswerPrompt(context: AnswerContext): string {
     `The client's answer:`,
     JSON.stringify(context.answer.body),
     ``,
-    `Return exactly one of:`,
+    `Return {"reading": <reading>}, where <reading> is exactly one of:`,
     `- {"verdict": "confirms"} when the answer agrees with the assumption as stated.`,
     `- {"verdict": "changes", "statement": "...", "kind": "client-visible"} when the answer says something different from`,
     `  the assumption, in any part. "statement" is the decision work now proceeds on, stated`,
@@ -346,10 +352,10 @@ export class ClientAnswers implements LiaisonAnswers {
     const response = await provider.generateStructured({
       capability: "Strong",
       prompt: buildAnswerPrompt(context),
-      schema: AnswerReadingSchema,
+      schema: AnswerResponseSchema,
       maxTokens: 1024,
     });
-    return response.data;
+    return response.data.reading;
   }
 
   private async fail(answer: OpenAnswer, err: unknown, failure: Exclude<ModelCallFailure, "ashara">): Promise<AnswerOutcome> {

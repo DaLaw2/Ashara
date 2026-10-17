@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
-import type { DeliveredReportFailureRecord } from "../delivered-report.js";
+import type { DeliveredReportFailureRecord, UndecidedBy } from "../delivered-report.js";
 import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
@@ -46,7 +46,7 @@ type AcceptedVisionItem =
 type VisionCoverage =
   | {
       readonly kind: "recorded";
-      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: boolean }>;
+      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy }>;
     }
   /** The review, or a check task whose checks ran, records no traced items: coverage cannot be stated. */
   | { readonly kind: "unrecorded" };
@@ -421,12 +421,14 @@ async function visionCoverage(
     for (const identity of items) decided.add(identity);
   }
   const current = items.some((source) => source.type === "assumption") ? await assumptionsAtAcceptance(db, sweep) : new Map<string, AcceptedAssumption>();
-  const undecided = goalIds.length === 0 ? new Set<string>() : await undecidedOf(db, projectId, goalIds);
+  const undecided = goalIds.length === 0 ? new Map<string, Exclude<UndecidedBy, false>>() : await undecidedOf(db, projectId, goalIds);
   return {
     kind: "recorded",
     items: items.map((source) => {
       const checked = decided.has(sourceIdentity(source));
-      const left = undecided.has(undecidedIdentity(source));
+      // An item no review left undecided is false: no row names it.
+      // eslint-disable-next-line no-restricted-syntax -- policy default: the absence of an undecided_items row is the record that no review left the item undecided
+      const left = undecided.get(undecidedIdentity(source)) ?? false;
       if (source.type === "scope") return { source, checked, undecided: left };
       const now = current.get(source.id);
       if (now === undefined) {
@@ -452,16 +454,24 @@ function undecidedIdentity(item: { readonly id: string; readonly text: string })
 
 /**
  * The items a suite review left undecided on a check task of one of the goal tasks the sweep ran
- * (migration 069), by id and cited text: a review found no check really deciding them and nothing
- * settled it, so the report never counts them as covered.
+ * (migrations 069, 071), by id and cited text: a review found no check really deciding them and
+ * nothing settled it, so the report never counts them as covered. Each says why nothing settled it:
+ * "review-failed" when the second review of any judgement leaving it so failed, else "unsettled".
  */
-async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Set<string>> {
+async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Map<string, Exclude<UndecidedBy, false>>> {
   const rows = await db
-    .select({ id: undecidedItems.itemId, text: undecidedItems.itemText })
+    .select({ id: undecidedItems.itemId, text: undecidedItems.itemText, basis: suiteReviewJudgements.basis })
     .from(undecidedItems)
     .innerJoin(workItems, eq(workItems.id, undecidedItems.checkTaskId))
+    .innerJoin(suiteReviewJudgements, eq(suiteReviewJudgements.id, undecidedItems.judgementId))
     .where(and(eq(undecidedItems.projectId, projectId), inArray(sql`${workItems.taskSpec}->>'checksFor'`, [...goalIds])));
-  return new Set(rows.map(undecidedIdentity));
+  const undecided = new Map<string, Exclude<UndecidedBy, false>>();
+  for (const row of rows) {
+    const identity = undecidedIdentity(row);
+    if (row.basis === "second-review-failed") undecided.set(identity, "review-failed");
+    else if (!undecided.has(identity)) undecided.set(identity, "unsettled");
+  }
+  return undecided;
 }
 
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */

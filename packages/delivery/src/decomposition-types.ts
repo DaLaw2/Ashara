@@ -216,14 +216,16 @@ export const TaskOutputSchema = z.object({
         /**
          * Stable, decomposer-local handle for this task. `dependsOn`
          * entries reference sibling tasks by this `ref` so an edge survives even
-         * when the LLM paraphrases a title. Optional so legacy plans that only emit
-         * titles still parse; resolution falls back to exact-title match for them.
+         * when the LLM paraphrases a title; resolution also accepts an exact title.
+         * Every field is required: a provider decoding strictly against the schema
+         * takes no optional property (model-access schema-acceptance), and an empty
+         * `dependsOn` or `goal` says "none" as plainly as an omitted one.
          */
-        ref: z.string().optional(),
+        ref: z.string(),
         title: z.string(),
         description: z.string(),
-        dependsOn: z.array(z.string()).default([]),
-        goal: z.string().default(""),
+        dependsOn: z.array(z.string()),
+        goal: z.string(),
         // Required and non-empty: an omission is a schema failure the ladder re-asks, never
         // filled by inference over the title, which would write a guessed spec in the register
         // of the model's own.

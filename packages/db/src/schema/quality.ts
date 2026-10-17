@@ -89,10 +89,11 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_judgements (migrations 063, 069, Quality): one row per finding of a suite review's
+// suite_review_judgements (migrations 063, 069, 071, Quality): one row per finding of a suite review's
 // first pass that Z0 could not disprove, routed, released or advisory, with both reviews' findings
-// whole, what the second review was (none when no second review could change the outcome) and why
-// it acted or did not (basis). Append-only; the jsonb columns are parsed by the repository.
+// whole, what the second review was (none when no second review could change the outcome, or when
+// it failed, with why in second_failure) and why it acted or did not (basis). Append-only; the jsonb
+// columns are parsed by the repository.
 // ---------------------------------------------------------------------------
 
 export const suiteReviewJudgements = pgTable("suite_review_judgements", {
@@ -115,6 +116,7 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
   firstModel: text("first_model").notNull(),
   secondModel: text("second_model"),
   secondReview: text("second_review"),
+  secondFailure: text("second_failure"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 

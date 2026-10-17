@@ -72,8 +72,12 @@ const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks:
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
 const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown(), reportBody: z.string().nullable() });
-/** A cited item a suite review left undecided (undecided_items, migration 069): its id and the text its check task cited it with. */
-const undecidedRow = z.object({ id: z.string(), text: z.string() });
+/**
+ * A cited item a suite review left undecided (undecided_items, migration 069): its id, the text its
+ * check task cited it with, and whether the second review of the judgement that left it so failed
+ * (migration 071).
+ */
+const undecidedRow = z.object({ id: z.string(), text: z.string(), reviewFailed: z.boolean() });
 const sweptUndecidedRow = undecidedRow.extend({ sweepId: z.string() });
 /** One stored check, with the check task that wrote it and what it says it decides (migration 064). */
 const storedCheckRow = z.object({ checkTaskId: z.string(), taskSpec: z.unknown(), name: z.string(), decides: z.unknown() });
@@ -171,8 +175,9 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     goalUndecided: await rows(
       undecidedRow,
-      sql`SELECT u.item_id AS id, u.item_text AS text
+      sql`SELECT u.item_id AS id, u.item_text AS text, j.basis = 'second-review-failed' AS "reviewFailed"
           FROM undecided_items u
+          JOIN suite_review_judgements j ON j.id = u.judgement_id
           JOIN work_items a ON a.id = u.check_task_id
           JOIN work_items g ON g.id::text = a.task_spec->>'checksFor'
           WHERE u.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
@@ -208,18 +213,19 @@ async function passedSweepsOf(
   );
   const undecided = await rows(
     sweptUndecidedRow,
-    sql`SELECT s.id AS "sweepId", u.item_id AS id, u.item_text AS text
+    sql`SELECT s.id AS "sweepId", u.item_id AS id, u.item_text AS text, j.basis = 'second-review-failed' AS "reviewFailed"
         FROM acceptance_sweeps s
         CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
         JOIN work_items a ON a.task_spec->>'checksFor' = t.task_id
         JOIN undecided_items u ON u.check_task_id = a.id AND u.created_at <= s.created_at
+        JOIN suite_review_judgements j ON j.id = u.judgement_id
         WHERE s.project_id = ${projectId} AND s.passed
         ORDER BY s.id, u.item_id`,
   );
   return sweeps.map((sweep) => ({
     ...sweep,
     storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ checkTaskId, taskSpec, name, decides }) => ({ checkTaskId, taskSpec, name, decides })),
-    undecided: undecided.filter((item) => item.sweepId === sweep.id).map(({ id, text }) => ({ id, text })),
+    undecided: undecided.filter((item) => item.sweepId === sweep.id).map(({ id, text, reviewFailed }) => ({ id, text, reviewFailed })),
   }));
 }
 
@@ -561,6 +567,11 @@ function paragraph(body: string, head: string): string | null {
   return body.split("\n\n").find((part) => part.startsWith(head)) ?? null;
 }
 
+/** Every paragraph of a report that starts with `head`, in order. */
+function paragraphs(body: string, head: string): string[] {
+  return body.split("\n\n").filter((part) => part.startsWith(head));
+}
+
 /** The lines of a paragraph that name a task (`- "<title>"...`). */
 function namedLines(part: string | null): string[] {
   return part === null ? [] : part.split("\n").filter((line) => line.startsWith(`- "`));
@@ -722,8 +733,11 @@ type CoverageOnRecord =
       readonly kind: "recorded";
       readonly asked: readonly VisionSource[];
       readonly uncovered: readonly VisionSource[];
-      /** Asked items a stored check records it decides but a suite review left undecided (ADR-084 decision 2). */
-      readonly undecided: readonly VisionSource[];
+      /**
+       * Asked items a stored check records it decides but a suite review left undecided (ADR-084
+       * decision 2), each with whether a second review that could have settled it failed.
+       */
+      readonly undecided: ReadonlyArray<{ readonly source: VisionSource; readonly reviewFailed: boolean }>;
       readonly notAsked: readonly VisionSource[];
     };
 
@@ -830,8 +844,7 @@ function undecidedAtSweep(
   ]);
   const undecided = sweep.undecided.filter((item) => asked.has(item.id));
   if (undecided.length === 0) return [];
-  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item, so every undecided item is reported unlisted below
-  const listed = (paragraph(sweep.reportBody, UNDECIDED_HEAD) ?? "").split("\n").filter((line) => line.startsWith("- "));
+  const listed = paragraphs(sweep.reportBody, UNDECIDED_HEAD).flatMap((part) => part.split("\n").filter((line) => line.startsWith("- ")));
   const findings = undecided.flatMap((item) =>
     listed.some((line) => line.includes(item.text))
       ? []
@@ -859,12 +872,19 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
   const decided = swept.decided;
   const isAsked = (source: VisionSource): boolean => (source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design");
   const asked = items.filter(isAsked);
-  const left = new Set(records.goalUndecided.map((item) => JSON.stringify([item.id, item.text])));
+  const left = new Map<string, boolean>();
+  for (const item of records.goalUndecided) {
+    const key = JSON.stringify([item.id, item.text]);
+    left.set(key, left.get(key) === true || item.reviewFailed);
+  }
   return {
     kind: "recorded",
     asked,
     uncovered: asked.filter((source) => !decided.has(identityOf(source))),
-    undecided: asked.filter((source) => decided.has(identityOf(source)) && left.has(JSON.stringify([source.id, source.text]))),
+    undecided: asked.flatMap((source) => {
+      const failed = left.get(JSON.stringify([source.id, source.text]));
+      return decided.has(identityOf(source)) && failed !== undefined ? [{ source, reviewFailed: failed }] : [];
+    }),
     notAsked: items.filter((source) => !isAsked(source)),
   };
 }
@@ -872,6 +892,10 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
 const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 const UNDECIDED_HEAD = "These items of what you asked for have a stored check that passed on main and is recorded as deciding them";
+/** What an undecided section says when the second review that could have settled its items failed. */
+const REVIEW_FAILED = "review failed";
+
+type CoverageUndecided = Extract<CoverageOnRecord, { readonly kind: "recorded" }>["undecided"];
 const ALL_COVERED = "Every item of what you asked for is decided";
 const OTHERS_COVERED = "Every other item of what you asked for is decided";
 
@@ -905,18 +929,34 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
 
 /**
  * ADR-084 decision 2: the delivered report names every asked-for item a suite review left undecided
- * as not verified, and nothing else there; no such section when there is none.
+ * as not verified, and nothing else there; no such section when there is none. An item whose second
+ * review failed is named in a section that says the review failed, and every other item in one that
+ * does not, so the client can tell a failed review from one that did not settle the item.
  */
-function undecidedProblems(body: string, undecided: readonly VisionSource[]): string[] {
-  const section = paragraph(body, UNDECIDED_HEAD);
-  if (undecided.length === 0) return section === null ? [] : ["the delivered report names items a review left undecided; the records hold none"];
-  if (section === null) return [`the delivered report does not name the ${undecided.length} item(s) a review left undecided as not verified`];
-  const listed = section.split("\n").filter((line) => line.startsWith("- "));
-  const missing = undecided.filter((source) => !listed.some((line) => line.includes(source.text)));
-  return [
-    ...missing.map((source) => `the delivered report does not name "${source.text}" (${source.id}), left undecided by a review, as not verified`),
-    ...(listed.length === undecided.length ? [] : [`the delivered report names ${listed.length} item(s) as left undecided; the records hold ${undecided.length}`]),
-  ];
+function undecidedProblems(body: string, undecided: CoverageUndecided): string[] {
+  const sections = paragraphs(body, UNDECIDED_HEAD);
+  if (undecided.length === 0) return sections.length === 0 ? [] : ["the delivered report names items a review left undecided; the records hold none"];
+  if (sections.length === 0) return [`the delivered report does not name the ${undecided.length} item(s) a review left undecided as not verified`];
+  const linesOf = (part: string): string[] => part.split("\n").filter((line) => line.startsWith("- "));
+  const listed = sections.flatMap(linesOf);
+  const sectionOf = (source: VisionSource): string | undefined => sections.find((part) => linesOf(part).some((line) => line.includes(source.text)));
+  const problems: string[] = [];
+  for (const { source, reviewFailed } of undecided) {
+    const section = sectionOf(source);
+    if (section === undefined) {
+      problems.push(`the delivered report does not name "${source.text}" (${source.id}), left undecided by a review, as not verified`);
+      continue;
+    }
+    const saysFailed = section.split("\n")[0]?.includes(REVIEW_FAILED) === true;
+    if (saysFailed !== reviewFailed) {
+      problems.push(
+        `the delivered report names "${source.text}" (${source.id}) under a section that ${saysFailed ? "says" : "does not say"} the second review failed; ` +
+          `the records say it ${reviewFailed ? "failed" : "did not fail"}`,
+      );
+    }
+  }
+  if (listed.length !== undecided.length) problems.push(`the delivered report names ${listed.length} item(s) as left undecided; the records hold ${undecided.length}`);
+  return problems;
 }
 
 /**

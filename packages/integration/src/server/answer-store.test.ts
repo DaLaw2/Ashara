@@ -95,7 +95,7 @@ const ROSTER = {
 const TASKS = {
   tasks: [
     {
-      ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [],
+      ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [], goal: "",
       endState: "Classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
@@ -110,7 +110,7 @@ function pipelineModel(reading: unknown): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
     doGenerate: async (options) => {
       const prompt = JSON.stringify(options.prompt);
-      if (prompt.includes("Read their answer and say what it does")) return jsonResult(reading);
+      if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading });
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
       return jsonResult(citingItemsToCheck(TASKS, prompt));

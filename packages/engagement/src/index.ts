@@ -1,3 +1,4 @@
+export { ENGAGEMENT_MODEL_SCHEMAS } from "./model-schemas.js";
 export { TenderIntake } from "./intake.js";
 export type { IntakeOutcome, IntakeStore, LiaisonIntake } from "./intake.js";
 export { ClientAnswers } from "./answers.js";

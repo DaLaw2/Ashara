@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { PreCallRefusal } from "@ashara/finance";
+import { NoOtherFamilyAnswered, PreCallRefusal } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
 import { StructuredOutputExhausted } from "@ashara/finance";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
@@ -137,10 +137,10 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   const conflict = {
     checkTasks: [CHECK_A, CHECK_B],
     kind: "contradiction",
-    conflict: [
-      { checkTask: CHECK_A, check: "prints-count", requires: "sh checks/count.sh" },
-      { checkTask: CHECK_B, check: "stdout-empty", requires: "sh   checks/empty.sh" },
-    ],
+    conflict: {
+      first: { checkTask: CHECK_A, check: "prints-count", requires: "sh checks/count.sh" },
+      second: { checkTask: CHECK_B, check: "stdout-empty", requires: "sh   checks/empty.sh" },
+    },
     problem: "a prints a count, b requires empty stdout",
     evidence: "count.sh; empty.sh",
   };
@@ -177,9 +177,9 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
 
   test("a contradiction quoting text its check does not hold, or one check twice, is re-asked", async () => {
     const prompts: string[] = [];
-    const [sideA, sideB] = conflict.conflict;
-    const misquoted = { ...conflict, conflict: [sideA, { ...sideB, requires: "stdout is never empty" }] };
-    const twice = { ...conflict, checkTasks: [CHECK_A], conflict: [sideA, sideA] };
+    const { first: sideA, second: sideB } = conflict.conflict;
+    const misquoted = { ...conflict, conflict: { first: sideA, second: { ...sideB, requires: "stdout is never empty" } } };
+    const twice = { ...conflict, checkTasks: [CHECK_A], conflict: { first: sideA, second: sideA } };
     const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misquoted, twice] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [] });
     expect(prompts[1]).toContain(`quotes "stdout is never empty" as what check "stdout-empty" requires, but neither its command nor any file of check task ${CHECK_B} holds that text`);
@@ -222,9 +222,40 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
         firstModel: model,
         second: [undecided],
         secondReview: { kind: "re-sample", first: model, second: model },
+        secondFailure: null,
         undecided: item,
       },
     ]);
+  });
+
+  // D5: a second review that failed is recorded and reported as failed, never as a disagreement.
+  test("a second review no model answered leaves every finding advisory, recorded as failed with why, and the item undecided", async () => {
+    const recorded: Recorded[] = [];
+    const failed = new NoOtherFamilyAnswered({ provider: "stub", model: "stub-model" }, "other", { cause: new Error("400 Invalid schema") });
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [undecided, conflict] }, failed], [], OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
+
+    const outcome = await reviewer.review(TASK, PROJECT_PATH);
+    expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: CHECK_A, itemId: SCOPE.id }] });
+    expect(outcome.advisory.map((each) => each.why)).toEqual([
+      expect.stringContaining("the second review that could have confirmed or settled it failed, so nothing confirmed it (NoOtherFamilyAnswered: "),
+      expect.stringContaining("the second review that could have confirmed or settled it failed"),
+    ]);
+    expect(recorded[0]?.judgements).toMatchObject([
+      { outcome: "advisory", basis: "second-review-failed", second: [], secondReview: null, secondFailure: expect.stringContaining("400 Invalid schema") },
+      { outcome: "advisory", basis: "second-review-failed", second: [], secondReview: null, secondFailure: expect.stringContaining("400 Invalid schema") },
+    ]);
+  });
+
+  test("a second review whose answers never validate is a failed review, never a disagreement", async () => {
+    const recorded: Recorded[] = [];
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [undecided] }, { problems: [{ ...undecided, checkTasks: ["ghost"] }] }], [], OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", undecided: [{ itemId: SCOPE.id }] });
+    expect(recorded[0]?.judgements).toMatchObject([{ basis: "second-review-failed", secondFailure: expect.stringContaining("StructuredOutputExhausted") }]);
+  });
+
+  test("a refusal that is not the second review's own failure fails the review instead of reading as one", async () => {
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [undecided] }, new PreCallRefusal("budget_cap: refused")], [], OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep() });
+    await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toBeInstanceOf(PreCallRefusal);
   });
 
   test("an undecided item the other family does not reach stays undecided", async () => {
@@ -394,6 +425,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
             firstModel: model,
             second: [secondClause],
             secondReview: { kind: "re-sample", first: model, second: model },
+            secondFailure: null,
             undecided: null,
           },
         ],

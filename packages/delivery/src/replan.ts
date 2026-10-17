@@ -464,7 +464,7 @@ function causeSection(cause: RevisionCause): string {
   );
 }
 
-const EnvironmentJudgmentSchema = z.strictObject({ environmentChange: z.boolean(), reason: z.string().min(1) });
+export const EnvironmentJudgmentSchema = z.strictObject({ environmentChange: z.boolean(), reason: z.string().min(1) });
 
 function environmentPrompt(cause: RevisionCause, statement: string | null): string {
   const situation =

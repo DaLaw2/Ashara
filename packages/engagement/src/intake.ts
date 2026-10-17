@@ -56,7 +56,7 @@ const AssumptionSchema = z.strictObject({
   kind: ClassifiedAssumptionKindSchema,
 });
 
-const IntakeResponseSchema = z.strictObject({
+export const IntakeResponseSchema = z.strictObject({
   summary: z.string().min(1),
   // Kept apart so the vision records each line's side, and no report has to read it from the wording.
   inScope: z.array(z.string().min(1)).min(1),

@@ -202,8 +202,12 @@ export interface StructuredRequest<T> {
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
   /**
-   * A second opinion: the request goes to a model other than this one at the same capability when
-   * the catalog has one, and to this one again otherwise. The response's provider and model say which.
+   * A second opinion: the request goes to another family's model (another provider) at the same
+   * capability when the catalog has one, else to another model of this one's provider, else to this
+   * one again; the response's provider and model say which. Once another family serves it, the
+   * exclusion of this one's family is hard for every caller, failover included: an opinion meant to
+   * be independent that quietly comes back from the same family reads as independent and is not.
+   * No answer from any model it may go to is NoOtherFamilyAnswered.
    */
   otherThan?: ModelIdentity;
 }

@@ -38,15 +38,22 @@ type AcceptedVisionItem =
     };
 
 /**
+ * Whether a review of the checks left an item undecided (ADR-084 decision 2: a stored check claims it,
+ * a review found none really decides it, and nothing settled that), and why nothing settled it:
+ * false when no review left it so; "unsettled" when no second review by another model family
+ * confirmed or settled it; "review-failed" when the second review that could have was asked and failed.
+ */
+export type UndecidedBy = false | "unsettled" | "review-failed";
+
+/**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
- * ran records that it decides it (ADR-083), and whether a review of those checks left it undecided
- * (ADR-084 decision 2: a stored check claims it, a review found none really decides it, and nothing
- * settled that); or none recorded.
+ * ran records that it decides it (ADR-083), and whether a review of those checks left it undecided;
+ * or none recorded.
  */
 type VisionCoverage =
   | {
       readonly kind: "recorded";
-      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: boolean }>;
+      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy }>;
     }
   | { readonly kind: "unrecorded" };
 
@@ -377,23 +384,32 @@ function coverageSection(vision: VisionCoverage): string {
   ].join("\n");
 }
 
+/** Why nothing settled an undecided item, as the report says it to the client. */
+const UNSETTLED_BECAUSE: Readonly<Record<Exclude<UndecidedBy, false>, string>> = {
+  unsettled: "no second review by another model family confirmed or settled that: they are not verified by Ashara.",
+  "review-failed": "the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.",
+};
+
 /**
  * The items of what the client asked for that a stored check claims to decide but a review of the
  * checks found none really does, with nothing to settle it: they are unverified, never covered
- * (ADR-084 decision 2). Empty when there are none.
+ * (ADR-084 decision 2), grouped by why nothing settled them, so a failed review never reads as a
+ * disagreement. Empty when there are none.
  */
 function undecidedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
-  const undecided = vision.items.filter((item) => askedFor(item.source) && item.checked && item.undecided);
-  if (undecided.length === 0) return [];
-  return [
-    [
-      `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a ` +
-        `review of the checks found that none of them really decides it, and no second review by another model family confirmed ` +
-        `or settled that: they are not verified by Ashara.`,
-      ...undecided.map((item) => coverageLine(item.source)),
-    ].join("\n"),
-  ];
+  const asked = vision.items.filter((item) => askedFor(item.source) && item.checked);
+  return (["unsettled", "review-failed"] as const).flatMap((why) => {
+    const undecided = asked.filter((item) => item.undecided === why);
+    if (undecided.length === 0) return [];
+    return [
+      [
+        `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a ` +
+          `review of the checks found that none of them really decides it, and ${UNSETTLED_BECAUSE[why]}`,
+        ...undecided.map((item) => coverageLine(item.source)),
+      ].join("\n"),
+    ];
+  });
 }
 
 /** What ran on main, and only that: the environment's test and the stored checks of the tasks named. */

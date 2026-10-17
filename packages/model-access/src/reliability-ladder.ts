@@ -293,7 +293,7 @@ interface StructuredProviderRequest<T> {
   readonly maxTokens: number;
   /** Routing site override for this call (rarely set directly — see `StructuredLadderOptions.site`, which sets it for every call this wrapper makes). */
   readonly site?: KnownLLMSite;
-  /** A second opinion: every attempt goes to a model other than this one when the catalog has one (StructuredRequest.otherThan). */
+  /** A second opinion: every attempt goes to a model other than this one, another family's first, never back to its family once another serves it (StructuredRequest.otherThan). */
   readonly otherThan?: ModelIdentity;
   /**
    * Optional semantic check run on the PARSED value inside each ladder attempt.

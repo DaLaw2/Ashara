@@ -14,6 +14,7 @@ import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
 import {
+  NoOtherFamilyAnswered,
   ProviderConfigurationRejected,
   ProviderError,
   SchemaValidationError,
@@ -25,6 +26,7 @@ import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
+import { SchemaUnacceptable, refuseUnacceptableSchema, sendsStructuredSchema, wireSchemaOf } from "./schema-acceptance.js";
 import { outputBudget, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
 import type { OutputBudget } from "./thinking.js";
 import { SdkFinishReasonSchema, assistantMessageOf, cachedTurnPrompt, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
@@ -39,7 +41,6 @@ import type {
   ModelConfig,
   ProviderRequest,
   ProviderRequestGate,
-  ProviderType,
   StructuredRequest,
   StructuredResponse,
   ThinkingPolicy,
@@ -184,7 +185,8 @@ export class LLMGateway {
   /**
    * Shared "resolve → try → catch → fallback → retry once" shape for
    * structured calls: run `execute` against `resolved`; on failure, resolve
-   * one fallback provider and retry once. A failure with no fallback left
+   * one fallback provider, never `resolved`'s own nor any of `excluded`, and
+   * retry once. A failure with no fallback left
    * (none available, or the fallback failed too) throws a ProviderError whose
    * `failure` says whose it was. `shouldRethrow` lets a caller opt an error class out of
    * the fallback retry and propagate it immediately instead —
@@ -195,16 +197,17 @@ export class LLMGateway {
     resolved: ResolvedProvider,
     execute: (request: TRequest, resolved: ResolvedProvider) => Promise<TResult>,
     label: string,
-    shouldRethrow?: (error: unknown) => boolean,
+    shouldRethrow: (error: unknown) => boolean,
+    excluded: readonly string[],
   ): Promise<TResult> {
     try {
       return await execute(request, resolved);
     } catch (error) {
-      if (shouldRethrow?.(error)) throw error;
+      if (shouldRethrow(error)) throw error;
 
       let fallback: ResolvedProvider | null;
       try {
-        fallback = this.registry.resolveFallback(request.capability, resolved.providerName, request.site);
+        fallback = this.registry.resolveFallback(request.capability, [resolved.providerName, ...excluded], request.site);
       } catch (resolutionError) {
         // The configuration fault propagates; the call failure that led here is not lost.
         console.error(
@@ -232,7 +235,7 @@ export class LLMGateway {
       try {
         return await execute(request, fallback);
       } catch (fallbackError) {
-        if (shouldRethrow?.(fallbackError)) throw fallbackError;
+        if (shouldRethrow(fallbackError)) throw fallbackError;
         // Whose failure it was is read from both requests: Ashara's fault on either side is Ashara's,
         // whichever request failed last.
         const failure: ProviderFailure =
@@ -290,6 +293,14 @@ export class LLMGateway {
       providerType: this.registry.providerTypeOf(request.model.provider),
     };
     const site = scope.site;
+    // Judged before the gate admits the turn: a tool schema the provider refuses is never sent or spent on.
+    for (const [name, tool] of Object.entries(request.tools)) {
+      refuseUnacceptableSchema(
+        { site, provider: target.providerName, providerType: target.providerType, model: target.modelConfig.id, sentAs: `tool "${name}" input` },
+        "tool-input",
+        tool.inputSchema,
+      );
+    }
     const tools = toSdkTools(request.tools);
     const { providerOptions, budget } = this.thinkingFor(target, site, TURN_MAX_OUTPUT_TOKENS, 0);
     const prompt = cachedTurnPrompt(target.providerType, request.system, request.messages);
@@ -364,16 +375,26 @@ export class LLMGateway {
   }
 
   private async structured<T>(request: StructuredRequest<T>, scope: CallScope): Promise<StructuredResponse<T>> {
-    // A second opinion with no other model in the catalog asks the same model again; the response names the model either way.
-    const other = request.otherThan === undefined ? null : this.registry.resolveOther(request.capability, request.otherThan, request.site);
-    const resolved = other ?? this.registry.resolve(request.capability, [], request.site);
-    return this.withFallback(
-      request,
-      resolved,
-      (req, r) => this.executeStructuredCall(req, r, scope),
-      "structured request",
-      (error) => error instanceof SchemaValidationError || error instanceof GateThrew,
-    );
+    // A malformed answer is a ladder attempt's failure, a gate refusal the caller's, and a schema the
+    // provider refuses Ashara's defect: none is retried on another provider, where it would only be hidden.
+    const rethrown = (error: unknown): boolean => error instanceof SchemaValidationError || error instanceof GateThrew || error instanceof SchemaUnacceptable;
+    const execute = (req: StructuredRequest<T>, r: ResolvedProvider) => this.executeStructuredCall(req, r, scope);
+    const avoided = request.otherThan;
+    if (avoided === undefined) {
+      return this.withFallback(request, this.registry.resolve(request.capability, [], request.site), execute, "structured request", rethrown, []);
+    }
+    // A second opinion goes to another family when the catalog has one, and its failover never
+    // returns to the avoided family; with no other family it asks the avoided provider again, which
+    // the response names. No answer from any of those is NoOtherFamilyAnswered, never a same-family
+    // answer reached through failover.
+    const resolved = this.registry.resolveOther(request.capability, avoided, request.site) ?? this.registry.resolve(request.capability, [], request.site);
+    const excluded = resolved.providerName === avoided.provider ? [] : [avoided.provider];
+    try {
+      return await this.withFallback(request, resolved, execute, "structured request", rethrown, excluded);
+    } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+      throw new NoOtherFamilyAnswered(avoided, resolved.providerName, { cause: error });
+    }
   }
 
   private async executeStructuredCall<T>(
@@ -381,14 +402,10 @@ export class LLMGateway {
     resolved: ResolvedProvider,
     scope: CallScope,
   ): Promise<StructuredResponse<T>> {
-    if (this.providerSupportsStructuredOutput(resolved.providerType)) {
+    if (sendsStructuredSchema(resolved.providerType)) {
       return await this.executeGenerateObject(request, resolved, scope);
     }
     return await this.executeTextStructured(request, resolved, scope);
-  }
-
-  private providerSupportsStructuredOutput(providerType: ProviderType): boolean {
-    return providerType === "anthropic" || providerType === "openai";
   }
 
   /**
@@ -461,6 +478,12 @@ export class LLMGateway {
   ): Promise<StructuredResponse<T>> {
     const operation: LlmCallOperation = "generateObject";
     const site = request.site ?? scope.site;
+    // Judged before the gate admits the request: a schema the provider refuses is never sent or spent on.
+    refuseUnacceptableSchema(
+      { site, provider: resolved.providerName, providerType: resolved.providerType, model: resolved.modelConfig.id, sentAs: "structured output" },
+      "structured-output",
+      await wireSchemaOf(request.schema),
+    );
     const requestBytes = utf8Bytes(request.prompt, request.systemPrompt, schemaText(request.schema));
     const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
     const size: RequestSize = { requestBytes, maxOutputTokens: budget.maxOutputTokens };

@@ -17,7 +17,7 @@
       "entry": ["src/cell-leak-guard.ts", "src/test-cells.ts"],
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false,
-      "ignoreDependencies": ["@ashara/knowledge", "@ashara/organization", "@hono/node-server", "ai", "hono"]
+      "ignoreDependencies": ["@ashara/knowledge", "@hono/node-server", "ai", "hono"]
     },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],

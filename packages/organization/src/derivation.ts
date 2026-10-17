@@ -93,6 +93,11 @@ const DerivationResponseSchema = z.strictObject({
     .min(1),
 });
 
+/**
+ * Every schema Organization sends to a model, by call site: the integration schema-acceptance test judges each against every provider type, so a schema a provider refuses fails a test before any run sends it.
+ */
+export const ORGANIZATION_MODEL_SCHEMAS: Readonly<Record<string, z.ZodType<unknown>>> = { roster: DerivationResponseSchema };
+
 /** A schema-valid response that still has an empty array: the schema and this module disagree. */
 class RosterResponseEmpty extends Error {
   constructor(

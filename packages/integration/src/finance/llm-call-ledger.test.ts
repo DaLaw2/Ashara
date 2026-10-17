@@ -5,8 +5,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SpendCap, UnpricedModel } from "@ashara/finance";
-import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, NoOtherFamilyAnswered, ProviderError, SpendCap, UnpricedModel } from "@ashara/finance";
+import { SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
 
 // Against the shared dev database: every row here belongs to a project this
@@ -469,6 +469,47 @@ describe("one llm_calls row per provider call", () => {
     // No other model at the capability: the same model answers again, and the response says so.
     const again = await ask(single([model({ id: "too-light", capabilityLevel: "Light", inputCostPer1M: 0.1 })]), { provider: "anthropic", model: "only-strong" });
     expect({ provider: again.provider, model: again.model }).toEqual({ provider: "anthropic", model: "only-strong" });
+  });
+
+  // D2: an opinion meant to come from another family never comes back from the avoided one through failover.
+  test("a second opinion whose other-family request fails never fails over to the avoided family: no other family answered", async () => {
+    let avoidedAsked = 0;
+    const llm = twoProviders({
+      anthropic: async () => {
+        avoidedAsked += 1;
+        return textResult('{"greeting":"hi"}', { input: 10, output: 5 });
+      },
+      deepseek: async () => {
+        throw new APICallError({ message: "stub 503", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode: 503, isRetryable: false });
+      },
+    });
+    const err: unknown = await llm
+      .forCall({ projectId, taskId: null, callSite: "suite-review" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, otherThan: { provider: "anthropic", model: "anthropic-strong" } })
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(NoOtherFamilyAnswered);
+    expect(String(err)).toContain("avoiding anthropic/anthropic-strong got no answer: routed to provider deepseek, and no failover went to anthropic");
+    expect(avoidedAsked).toBe(0);
+  });
+
+  // D1: a schema the target provider refuses is never sent, spent on, or retried on another provider.
+  test("a schema the provider type refuses is refused before admission: no request, no row, no failover", async () => {
+    await clearRows();
+    let sent = 0;
+    const answer = async () => {
+      sent += 1;
+      return textResult('{"pair":["a","b"]}', { input: 10, output: 5 });
+    };
+    const PairSchema = z.strictObject({ pair: z.tuple([z.string(), z.string()]) });
+    const err: unknown = await twoProviders({ anthropic: answer, deepseek: answer })
+      .forCall({ projectId, taskId: null, callSite: "suite-review" })
+      .generateStructured({ capability: "Strong", prompt: "pair", schema: PairSchema, maxTokens: 512 })
+      .then(() => null, (e: unknown) => e);
+    if (!(err instanceof SchemaUnacceptable)) return expect.unreachable(`not SchemaUnacceptable: ${String(err)}`);
+    expect(err.message).toContain('call site "suite-review": the structured output schema is one provider type "anthropic" refuses (provider anthropic, model anthropic-strong)');
+    expect(err.message).toContain("#/properties/pair/items: single-schema-items");
+    expect(sent).toBe(0);
+    expect(await rowsOfThisProject()).toHaveLength(0);
   });
 
   test("unreported usage is written as NULL tokens and NULL cost, never 0", async () => {

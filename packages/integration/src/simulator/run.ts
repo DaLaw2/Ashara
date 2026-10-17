@@ -25,6 +25,7 @@ import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
 import { asharaFaultHaltOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
 import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
+import { refusedModelSchemas } from "./model-schemas.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
@@ -691,7 +692,17 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       },
       onRequest: () => port.record(interleaver.currentTask()),
       laneTask: () => interleaver.currentTask(),
+      onSchemaRefused: (refused) => {
+        trace.push(`model ${refused.model} refused the ${refused.what} schema`);
+        report({
+          invariant: "I1",
+          step: cycles,
+          statement: `a request to ${refused.model} carried a ${refused.what} schema provider type ${refused.providerType} refuses: ${refused.detail}`,
+          key: `I1:schema-refused:${refused.providerType}:${refused.what}`,
+        });
+      },
     });
+    for (const violation of await refusedModelSchemas(cycles)) report(violation);
     const baseCell = await loadBaseCell();
     /** Every cell started over the run, live or removed: I3 judges the role each one ran as. */
     const startedCells: FakeCell[] = [];

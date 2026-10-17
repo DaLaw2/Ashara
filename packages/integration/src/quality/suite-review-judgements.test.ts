@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
+import { NoOtherFamilyAnswered, ProviderError } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
 import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
@@ -100,6 +101,7 @@ describe("suite review judgements (migration 063)", () => {
         firstModel: "first/strong-a",
         secondModel: "second/strong-b",
         secondReview: "other-model",
+        secondFailure: null,
       },
       {
         reviewTaskId: reviewTask,
@@ -112,6 +114,7 @@ describe("suite review judgements (migration 063)", () => {
         firstModel: "first/strong-a",
         secondModel: "second/strong-b",
         secondReview: "other-model",
+        secondFailure: null,
       },
     ]);
 
@@ -151,8 +154,8 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     return id;
   }
 
-  /** A review in which both reviews raise one undecided item, the second answering from `secondProvider`. */
-  async function reviewUndecided(secondProvider: string) {
+  /** A review in which both reviews raise one undecided item, the second answering from `secondProvider`, or failing with its error. */
+  async function reviewUndecided(secondProvider: string | Error) {
     const reviewTask = parseWorkItemId(await workItem("Review an undecided item"), "test review task");
     const impl = await workItem("Durable put");
     const check = await workItem("Checks of Durable put");
@@ -169,7 +172,8 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
       forCall: () => ({
         generateStructured: async (request) => {
           const answer = answers[next++];
-          const by = request.otherThan === undefined ? { provider: "first", model: "strong-a" } : { provider: secondProvider, model: "strong-b" };
+          if (secondProvider instanceof Error && request.otherThan !== undefined) throw secondProvider;
+          const by = request.otherThan === undefined ? { provider: "first", model: "strong-a" } : { provider: secondProvider instanceof Error ? "unanswered" : secondProvider, model: "strong-b" };
           return { data: request.schema.parse(answer), ...by };
         },
       }),
@@ -186,6 +190,29 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
     expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
     expect(judged).toMatchObject([{ checkName: null, outcome: "advisory", basis: "no-other-family", secondModel: "first/strong-b" }]);
+  });
+
+  test("a second review no other family answered is stored as failed with its reason, the item kept advisory and undecided (migration 071)", async () => {
+    const failure = new NoOtherFamilyAnswered({ provider: "first", model: "strong-a" }, "second", { cause: new ProviderError("second", "503", "provider") });
+    const { outcome, kept, judged, check } = await reviewUndecided(failure);
+    expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
+    expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
+    expect(judged).toMatchObject([{ outcome: "advisory", basis: "second-review-failed", secondModel: null, secondReview: null, secondFindings: [] }]);
+    expect(judged[0]?.secondFailure).toContain("got no answer");
+  });
+
+  test("a failed basis without its reason, or a reason on another basis, is refused by the table", async () => {
+    const reviewTask = await workItem("Review with a mislabelled failure");
+    const checkTask = await workItem("Checks with a mislabelled failure");
+    const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
+    const insert = (basis: string, failure: string | null) =>
+      db.execute(sql`
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_failure)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', ${failure})`);
+    await expect(insert("second-review-failed", null)).rejects.toThrow();
+    await expect(insert("frozen", "a reason")).rejects.toThrow();
+    await insert("second-review-failed", "no other family answered");
+    await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
   });
 
   test("an undecided item another model family agrees on is routed once and not stored undecided", async () => {

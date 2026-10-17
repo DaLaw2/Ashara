@@ -33,7 +33,9 @@ export type AssignmentBrief = Pick<
  * Every profile has the workspace tools and finish. Neither "build-environment" nor "define-checks"
  * is given the stored checks.
  */
-export type ToolProfile = "build-environment" | "define-checks" | "run-and-dispute-checks" | "run-checks";
+export const TOOL_PROFILES = ["build-environment", "define-checks", "run-and-dispute-checks", "run-checks"] as const;
+
+export type ToolProfile = (typeof TOOL_PROFILES)[number];
 
 /**
  * The charter of the role an attempt works as, as its system prompt states it: who the agent is,

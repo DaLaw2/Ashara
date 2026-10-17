@@ -80,12 +80,12 @@ const BOOKING_FORM = "Create the booking form for a class";
 const TASKS = {
   tasks: [
     {
-      ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [],
+      ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [], goal: "",
       endState: "Both studios' classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
     {
-      ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"],
+      ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"], goal: "",
       endState: "A member books a seat", scope: "booking", deliverables: [{ text: "booking form", sources: ["S1"] }], acceptance: [{ text: "a client uses the booking form", sources: ["S1"] }],
       capability: "Frontier", capabilityReason: "graded for the test",
     },

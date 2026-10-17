@@ -205,7 +205,7 @@ function findingLine(finding: StoredJudgement["secondFindings"][number]): string
     case "undecided-item":
       return `undecided ${finding.item}: ${finding.problem}`;
     case "contradiction":
-      return `contradiction${finding.conflict === undefined ? "" : ` (${finding.conflict.map((side) => `"${side.check}" of ${side.checkTask} requires "${side.requires}"`).join("; ")})`}: ${finding.problem}`;
+      return `contradiction${finding.conflict === undefined ? "" : ` (${[finding.conflict.first, finding.conflict.second].map((side) => `"${side.check}" of ${side.checkTask} requires "${side.requires}"`).join("; ")})`}: ${finding.problem}`;
   }
 }
 
@@ -219,7 +219,12 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
   const lines = [`Suite review judgements (${judgements.length}):`];
   for (const judgement of judgements) {
     const subject = judgement.checkName === null ? `its ${judgement.firstFinding.kind} finding` : `check "${judgement.checkName}"`;
-    const second = judgement.secondReview === null ? "no second review asked" : `second review ${judgement.secondReview} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
+    const second =
+      judgement.secondFailure !== null
+        ? `second review failed (first ${judgement.firstModel}): ${judgement.secondFailure}`
+        : judgement.secondReview === null
+          ? "no second review asked"
+          : `second review ${judgement.secondReview} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
     lines.push(
       `  review ${judgement.reviewTaskId}, ${subject} of task ${judgement.checkTaskId}: ${judgement.outcome} (${judgement.basis}); ${second}`,
       `    first review:  ${findingLine(judgement.firstFinding)}`,

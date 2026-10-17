@@ -110,7 +110,7 @@ const ROSTER = {
 const FIRST_TASKS = {
   tasks: [
     {
-      ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [],
+      ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [], goal: "",
       endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["S1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
@@ -120,7 +120,7 @@ const FIRST_TASKS = {
 const REVISED_TASKS = {
   tasks: [
     {
-      ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [],
+      ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [], goal: "",
       endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["S1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
@@ -132,7 +132,7 @@ function pipelineModel(reading: unknown): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
     doGenerate: async (call) => {
       const prompt = JSON.stringify(call.prompt);
-      if (prompt.includes("Read their answer and say what it does")) return jsonResult(reading);
+      if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading });
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
       if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {

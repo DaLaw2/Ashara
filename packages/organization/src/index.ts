@@ -1,4 +1,5 @@
 export { RosterDerivation } from "./derivation.js";
+export { ORGANIZATION_MODEL_SCHEMAS } from "./derivation.js";
 export type { RosterDerivationStep, RosterOutcome, RosterStore } from "./derivation.js";
 export { RoleNotInRoster, RosterUnreadable, parseStoredRoster, roleInRoster } from "./stored-roster.js";
 export type { WorkKind } from "./work-kind.js";

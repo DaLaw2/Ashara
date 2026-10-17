@@ -47,6 +47,8 @@ function task(ref: string, extra: Record<string, unknown> = {}, sources: readonl
         ref,
         title: `Task ${ref}`,
         description: `Do ${ref}.`,
+        dependsOn: [],
+        goal: `Deliver ${ref}`,
         endState: `${ref} is observable`,
         scope: `the ${ref} module`,
         deliverables: [{ text: `${ref} works`, sources }],

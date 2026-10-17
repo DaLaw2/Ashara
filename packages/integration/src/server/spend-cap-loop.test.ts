@@ -423,7 +423,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
 const PLAN_TASKS = {
   tasks: [
     {
-      ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [],
+      ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [], goal: "",
       endState: "Classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
       capability: "Strong", capabilityReason: "graded for the test",
     },

@@ -218,12 +218,12 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
       defaultProvider: "mistral",
       routingProfiles: { "mistral+other": { "agent-runner": "mistral-large" } },
     });
-    expect(registry.resolveFallback("Strong", "mistral", "agent-runner")?.modelConfig.id).toBe("other-large");
+    expect(registry.resolveFallback("Strong", ["mistral"], "agent-runner")?.modelConfig.id).toBe("other-large");
   });
 
   test("resolveFallback reads only 'no other provider' as no fallback; a configuration error propagates", () => {
-    expect(registryOf(config()).resolveFallback("Strong", "mistral")).toBeNull();
+    expect(registryOf(config()).resolveFallback("Strong", ["mistral"])).toBeNull();
     const curated = registryOf(config({ mistral: { "agent-runner": { Frontier: "mistral-large" } } }));
-    expect(() => curated.resolveFallback("Strong", "other", "agent-runner")).toThrow(RoutingProfileUnresolved);
+    expect(() => curated.resolveFallback("Strong", ["other"], "agent-runner")).toThrow(RoutingProfileUnresolved);
   });
 });

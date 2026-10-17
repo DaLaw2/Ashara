@@ -231,15 +231,41 @@ describe("the delivered report", () => {
         kind: "recorded",
         items: [
           { source: scope("S1", "Keys can be stored"), checked: true, undecided: false },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: true },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled" },
         ],
       },
     });
     expect(body).not.toContain("Every item of what you asked for is decided");
     expect(body).toContain("Every other item of what you asked for is decided by a stored check");
     const [, unverified = ""] = body.split("a review of the checks found that none of them really decides it");
-    expect(unverified).toContain("they are not verified by Ashara.\n- A stored key survives a power loss");
+    expect(unverified).toContain("no second review by another model family confirmed or settled that: they are not verified by Ashara.\n- A stored key survives a power loss");
     expect(unverified).not.toContain("Keys can be stored");
+  });
+
+  // D5: the client can tell a second review that failed from one that disagreed.
+  test("an item left undecided because the second review failed says the review failed, apart from one no review settled", async () => {
+    const body = await render({
+      sweepId: "s3d",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: "review-failed" },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled" },
+        ],
+      },
+    });
+    expect(body).toContain(
+      "none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n- Keys can be stored",
+    );
+    expect(body).toContain("none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.\n- A stored key survives a power loss");
+    const [, failedSection = ""] = body.split("because that review failed.");
+    expect(failedSection.split("\n\n")[0]).not.toContain("A stored key survives a power loss");
   });
 
   test("a record with no item of what the client asked for claims no coverage", async () => {

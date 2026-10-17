@@ -160,18 +160,19 @@ export class ProviderRegistry {
     return provider.providerType;
   }
 
+  /** A provider other than every one of `excluded` that serves `capability` at `site`; null when none does. */
   resolveFallback(
     capability: CapabilityLevel,
-    failedProvider: string,
+    excluded: readonly string[],
     site?: KnownLLMSite,
   ): ResolvedProvider | null {
     try {
-      return this.resolve(capability, [failedProvider], site);
+      return this.resolve(capability, [...excluded], site);
     } catch (err) {
       // Only "no other provider serves this" means no fallback; any other error is a
       // configuration fault (e.g. RoutingProfileUnresolved) and must not read as one.
       if (!(err instanceof NoProviderAvailableError)) throw err;
-      console.warn(`[ProviderRegistry] no fallback for ${capability} (excluding ${failedProvider}):`, describeErrorChain(err));
+      console.warn(`[ProviderRegistry] no fallback for ${capability} (excluding ${excluded.join(", ")}):`, describeErrorChain(err));
       return null;
     }
   }
@@ -182,7 +183,7 @@ export class ProviderRegistry {
    * graded at or above `capability`, the cheapest. Null when the catalog has no other.
    */
   resolveOther(capability: CapabilityLevel, avoid: { readonly provider: string; readonly model: string }, site?: KnownLLMSite): ResolvedProvider | null {
-    const elsewhere = this.resolveFallback(capability, avoid.provider, site);
+    const elsewhere = this.resolveFallback(capability, [avoid.provider], site);
     if (elsewhere !== null) return elsewhere;
     const same = this.config.providers.find((p) => p.enabled && p.name === avoid.provider);
     if (!same) return null;

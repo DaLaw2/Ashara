@@ -482,3 +482,26 @@ export class TurnResponseInvalid extends GatewayError {
     this.context = context;
   }
 }
+
+/**
+ * A second opinion (StructuredRequest.otherThan) got no answer from any model it may go to: the
+ * model routed to failed and so did every failover, none of which is of the avoided family once
+ * another family serves the request. Never answered by the avoided family instead.
+ */
+export class NoOtherFamilyAnswered extends GatewayError {
+  readonly avoided: { readonly provider: string; readonly model: string };
+  /** The provider the request was routed to first. */
+  readonly routedTo: string;
+
+  constructor(avoided: { readonly provider: string; readonly model: string }, routedTo: string, options: { readonly cause: unknown }) {
+    super(
+      `a second opinion avoiding ${avoided.provider}/${avoided.model} got no answer: routed to provider ${routedTo}` +
+        `${routedTo === avoided.provider ? " (the catalog holds no other family at this capability)" : `, and no failover went to ${avoided.provider}`}: ` +
+        describeErrorChain(options.cause),
+      options,
+    );
+    this.name = "NoOtherFamilyAnswered";
+    this.avoided = avoided;
+    this.routedTo = routedTo;
+  }
+}
