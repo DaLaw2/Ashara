@@ -654,11 +654,15 @@ class FaultBlameUnknown extends Error {
  * Whose a fault is, for I10: `ashara` a call of the substrate that failed (a database, git or podman
  * call) or a request Ashara built that the provider rejected (400, 413, 422); `provider` the
  * provider's failure (a reset, 429, 5xx), which a read is counted against by design (ADR-080 d5);
- * `process` the process's death or stop (a crash, a SIGTERM), whose dispatch production leaves
- * counted when no record shows it unfinished or it died before (delivery startup-reconciler.ts
- * requeueOrphan: a dispatch that keeps killing the process may be what kills it); `none` a clock
- * jump, which fails no call. Total over FaultKind: a kind added to faults.ts fails the type check
- * here until it is given a blame.
+ * `process` the process's death or stop (a crash, a SIGTERM, a killed transaction), whose dispatch
+ * production leaves counted when no record shows it unfinished or it died before (delivery
+ * startup-reconciler.ts requeueOrphan: a dispatch that keeps killing the process may be what kills
+ * it); `none` a clock jump, which fails no call. A killed transaction is a process death by
+ * construction (faults.ts faultingPools: its backend ends between two queries of a checked-out
+ * connection, whose error no listener takes, and production's uncaughtException handler exits), so
+ * the process dies before any refund it would write, and its restart cannot tell whose fault the
+ * dispatch it finds unfinished met: it is judged as a crash is. Total over FaultKind: a kind added
+ * to faults.ts fails the type check here until it is given a blame.
  */
 function blameOf(fault: FaultRecord): "ashara" | "provider" | "process" | "none" {
   const kind: FaultKind = fault.fault;
@@ -671,10 +675,10 @@ function blameOf(fault: FaultRecord): "ashara" | "provider" | "process" | "none"
     case "crash-before":
     case "crash-after":
     case "sigterm":
+    case "db-transaction-killed":
       return "process";
     case "db-unreachable":
     case "db-query-failed":
-    case "db-transaction-killed":
     case "cell-start-failed":
     case "cell-exec-failed":
     case "cell-teardown-failed":
@@ -720,8 +724,9 @@ function describeFaults(faults: readonly FaultRecord[]): string {
  * a task's window in which its model answered is not judged (the fault may have struck after work
  * that earned the charge), so a fault late in an attempt, after its agent worked (a verification
  * cell that fails to start), goes unjudged; nor is a window with a misbehaviour, a provider's
- * failure, a crash or a SIGTERM in it; and the project clause's window is the whole cycle, so in a
- * two-project run one project's misbehaviour exempts the other's counters for that cycle.
+ * failure, a crash, a SIGTERM or a killed transaction in it; and the project clause's window is the
+ * whole cycle, so in a two-project run one project's misbehaviour exempts the other's counters for
+ * that cycle.
  */
 export function checkCharges(window: ChargeWindow): Violation[] {
   const violations: Violation[] = [];
@@ -732,7 +737,7 @@ export function checkCharges(window: ChargeWindow): Violation[] {
   const asharas = (faults: readonly FaultRecord[]): FaultRecord[] => faults.filter((fault) => blameOf(fault) === "ashara");
   // A window that carried a fault production may charge for by design is not judged.
   const exempting = (faults: readonly FaultRecord[]): boolean => faults.some((fault) => blameOf(fault) === "provider" || blameOf(fault) === "process");
-  // A crash or a SIGTERM stops every lane of the process, whichever lane it was injected in.
+  // A crash, a SIGTERM or a killed transaction stops every lane of the process, whichever lane it was injected in.
   const processStopped = window.faults.some((fault) => blameOf(fault) === "process");
 
   for (const [id, after] of window.after.tasks) {

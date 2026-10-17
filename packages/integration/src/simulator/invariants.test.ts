@@ -67,6 +67,16 @@ describe("I10, charged only for agent work", () => {
     expect(checkCharges(window({ ...charged, faults: [fault("impl", "db-query-failed"), fault(null, "crash-after")] }))).toEqual([]);
   });
 
+  it("judges a killed transaction as the process death it is, and every other database fault as Ashara's (seed 77, two projects)", () => {
+    const charged = { after: charges(1, 0, 0) };
+    expect(checkCharges(window({ ...charged, faults: [fault("impl", "db-transaction-killed")] }))).toEqual([]);
+    expect(checkCharges(window({ ...charged, faults: [fault("impl", "git-failed"), fault(null, "db-transaction-killed")] }))).toEqual([]);
+    expect(checkCharges(window({ after: charges(0, 0, 1), faults: [fault(null, "provider-error", malformed), fault(null, "db-transaction-killed")] }))).toEqual([]);
+    for (const kind of ["db-unreachable", "db-query-failed"] as const) {
+      expect(checkCharges(window({ ...charged, faults: [fault("impl", kind)] })).map((violation) => violation.key)).toEqual(["I10:dispatch:Deliver b1"]);
+    }
+  });
+
   it("names a read counted as failed under a request the provider rejected as Ashara built it, unless a model misbehaved", () => {
     const rejected = window({ after: charges(0, 0, 1), faults: [fault(null, "provider-error", malformed)] });
     expect(checkCharges(rejected).map((violation) => violation.key)).toEqual(["I10:intakeAttempts"]);

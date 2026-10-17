@@ -34,6 +34,7 @@ export async function resumeInfrastructureHalts(halts: InfrastructureHalts, prob
   try {
     result = await probe.probe();
   } catch (err) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: a probe that throws is recorded as a failed probe, so every halted project stays halted (fail-closed)
     result = { passed: false, evidence: `the probe itself threw: ${describeErrorChain(err)}` };
   }
   if (!result.passed) {

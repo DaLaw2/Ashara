@@ -133,6 +133,7 @@ async function removeWorktree(targetProjectPath: string, workDir: string): Promi
     try {
       await runHostGit(repo, ["worktree", "prune"]);
     } catch (e) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: worktree removal is cleanup on the way out of a path that carries its own result; the startup sweep removes what it leaves
       console.warn(`[worktree] ${workDir} is gone, but its registration could not be pruned: ${describeErrorChain(e)}`);
     }
     return;
@@ -141,15 +142,18 @@ async function removeWorktree(targetProjectPath: string, workDir: string): Promi
     await runHostGit(repo, ["worktree", "remove", workDir, "--force"]);
     return;
   } catch (removeError) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: worktree removal is cleanup on the way out of a path that carries its own result; the fallback below removes the directory instead and logs what it leaves
     const left: string[] = [];
     try {
       await rm(workDir, { recursive: true, force: true });
     } catch (e) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failure is kept in left and logged below; worktree removal is cleanup the startup sweep finishes
       left.push(`the directory could not be removed either: ${describeErrorChain(e)}`);
     }
     try {
       await runHostGit(repo, ["worktree", "prune"]);
     } catch (e) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failure is kept in left and logged below; worktree removal is cleanup the startup sweep finishes
       left.push(`its registration could not be pruned: ${describeErrorChain(e)}`);
     }
     console.warn(
@@ -585,6 +589,7 @@ export async function sweepOrphanedWorktrees(workdirBase: string, activeTaskIds:
       await rm(join(workdirBase, dirName), { recursive: true, force: true });
       removed += 1;
     } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: removing an orphaned worktree is cleanup; the next startup sweep retries it
       console.warn(`[worktree-sweep] failed to remove orphaned worktree ${dirName}:`, err);
     }
   }

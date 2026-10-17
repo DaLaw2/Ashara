@@ -70,6 +70,7 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
   try {
     rawText = JSON.stringify(ctx.raw, null, 2);
   } catch {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: a raw failure context JSON cannot serialise is shown by String() instead; the brief still carries the failure's detail
     rawText = String(ctx.raw);
   }
 

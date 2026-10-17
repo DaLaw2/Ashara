@@ -6,7 +6,10 @@ import type { SessionAttempt } from "./session-attempt.js";
 /**
  * The dev_sessions attempt log: when an attempt opened and how it ended. Not a verdict on the
  * task and not a record of what was merged (that is the work item's merge commit, migration
- * 041): its terminal write is fail-soft, so nothing is decided on it.
+ * 041): its terminal write is fail-soft. One decision reads it: the startup reconcile refunds a
+ * crash-orphaned dispatch whose latest session is still open, and counts the sessions it closed as
+ * crash orphans; a session a lost terminal write left open is counted as one only when its task is
+ * still InProgress at the next start (terminalizeOrphanedSessions).
  */
 export interface SessionStore {
   /** `environmentVersion` is the version the dispatch's cells were built from; null on the BaseCell. */
@@ -95,6 +98,7 @@ async function closeSession(taskId: string, sessionId: string, write: () => Prom
   try {
     await write();
   } catch (e) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the dispatch's outcome is returned and routed as it is; the next start closes the open row as a crash orphan only when its task is still InProgress there, so the lost write takes no refund away and changes no verdict
     console.warn(
       `[${taskId}] failed to write the terminal dev_session phase for ${sessionId}; ` +
         `the row stays non-terminal until startup reconciliation resolves it:`,

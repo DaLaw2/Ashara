@@ -321,6 +321,7 @@ export async function discardCheckWorkdir(workDir: string, targetProjectPath: st
   try {
     await dropCheckBranch(targetProjectPath, branch);
   } catch (err) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: a check task's throwaway branch is never merged; the next attempt deletes it before it starts, or the settled-branch release
     console.warn(
       `[checks] the throwaway branch ${branch} could not be deleted and is left in ${targetProjectPath}; the task's next ` +
         `attempt deletes it before it starts, or the settled-branch release once the task is Completed or Abandoned:`,

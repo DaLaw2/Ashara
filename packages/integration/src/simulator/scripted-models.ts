@@ -1125,6 +1125,7 @@ function specsOf(files: ReadonlyArray<{ readonly path: string; readonly content:
       // eslint-disable-next-line no-restricted-syntax -- a stand-in model may import no product package (boundary-rules.toml stand-ins), so it cannot reach parseJson; CheckSpecSchema validates the value below
       raw = JSON.parse(file.content);
     } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: a stand-in model skips a check file that is not JSON; the real checks judge the task's work
       console.warn(`[simulator] check file ${file.path} is not JSON, skipped: ${err instanceof Error ? err.message : String(err)}`);
       continue;
     }

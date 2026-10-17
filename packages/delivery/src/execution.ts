@@ -63,6 +63,7 @@ async function recordMergeWithRetry(deps: ExecutionRoutingDeps, taskId: WorkItem
       if (attempt > 1) console.warn(`[${taskId}] merge record for ${mergeCommit} written on attempt ${attempt}`);
       return null;
     } catch (e) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last attempt's error is kept and returned below, where the caller parks the task merge_unrecorded
       last = describeErrorChain(e);
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
       console.warn(
@@ -638,6 +639,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
     try {
       merge = await mergeOnMainOf(deps.projects, deps.workdirBase, task);
     } catch (e) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept, and main still unread after it parks the task orphan_unreconciled with the project blocked, below
       last = e;
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
       console.warn(`[${task.id}] main could not be read for its merge after a fault, attempt ${attempt}:`, e);
@@ -723,18 +725,6 @@ async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   console.warn(`[${taskId}] back to Pending after ${why}, no dispatch counted`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.requeueUncounted");
-}
-
-/**
- * Sets the task's startups in a row found InProgress back to 0. A failed write leaves the count as
- * it was, the direction that gives a crash-looping task up sooner, never later; it is logged.
- */
-async function clearCrashOrphansBestEffort(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]): Promise<void> {
-  try {
-    await deps.workItemRepo.clearCrashOrphans(taskId);
-  } catch (e) {
-    console.warn(`[${taskId}] its dispatch ended in this process, but its count of startups found InProgress could not be cleared:`, e);
-  }
 }
 
 /**
@@ -1127,6 +1117,7 @@ async function publishBestEffort(
     try {
       await eventStore.publish(event);
     } catch (publishError) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the status transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
       console.warn(
         `[${site}] failed to publish audit event for ${workItemId} (status transition already committed):`,
         publishError,
@@ -1177,6 +1168,7 @@ async function salvagePreemptedResult(
   } catch (salvageError) {
     // The item is already terminal — a salvage failure does not change its status.
     // Log structured context (Discipline C) so the lost result is visible.
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the item is already terminal (Abandoned by the operator's preemption); without the salvaged outcome its parent stays unsettled (isSettled), the fail-closed direction, and its abandonment opens a plan repair
     console.warn(
       `[${item.id}] failed to salvage preempted result ` +
       `(outcome: ${outcome}, detail: ${detail.slice(0, 200)}); ` +
@@ -1304,9 +1296,6 @@ async function runCountedDispatch(
     await haltOnProjectRefusal(deps, task, e);
     await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
     return { taskId: task.id, status: "interrupted", detail: fault.reason };
-  } finally {
-    // The dispatch ended in the process that started it, however it ended: no crash loop runs on it.
-    await clearCrashOrphansBestEffort(routingDeps, task.id);
   }
   const { result, outcome, errorEnvelope: execEnvelope, verdict, routedHere } = executed;
 
@@ -1457,6 +1446,7 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
   try {
     events = await PlanningService.route(deps.workItemRepo, task.id, verdict);
   } catch (e) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: a failed route falls back to the domain method below, which commits the Failed transition itself and propagates its own failure
     console.warn(`[${task.id}] lifecycle route also failed:`, e);
     const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (!item || !canTransitionTo(item.status, "Failed")) {
@@ -1546,6 +1536,7 @@ export async function handleProcessingError(
       }
     }
   } catch (recoveryError) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the recovery of a thrown orchestrator error failed: the item stays InProgress, the crash-orphan state the startup reconciler settles from main, and the result returned is interrupted, never a success
     console.warn(
       `[${task.id}] recovery after orchestrator error failed; item left for the startup reconciler:`,
       recoveryError,

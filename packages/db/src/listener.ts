@@ -92,6 +92,7 @@ export async function listenForEvents(
         }
         attempt = 0;
       } catch (e) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the next reconnect is scheduled with backoff, and a NOTIFY only wakes the runner early: its poll interval picks the same work up without one
         console.warn(
           `[PG listener] reconnect attempt ${attempt} failed, next in ${Math.min(1000 * 2 ** (attempt + 1), 30_000)}ms:`,
           describeErrorChain(e),
@@ -104,6 +105,7 @@ export async function listenForEvents(
   try {
     await connect();
   } catch (e) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the reconnect is scheduled with backoff, and a NOTIFY only wakes the runner early: its poll interval picks the same work up without one
     console.warn("[PG listener] initial connection failed, will retry:", describeErrorChain(e));
     scheduleReconnect();
   }

@@ -60,6 +60,7 @@ export async function releaseHeldCells(substrate: Pick<PodmanSubstrate, "teardow
     const removed = await substrate.teardownAll();
     if (removed.length > 0) console.log(`Cells: removed ${removed.length} cell(s) a failed teardown left: ${removed.join(", ")}`);
   } catch (err) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: removal of cells a failed teardown left is cleanup, retried every cycle and at shutdown
     console.warn(`Cells: a cell a failed teardown left could not be removed; the next cycle retries it: ${describeErrorChain(err)}`);
   }
 }
@@ -70,6 +71,7 @@ export async function teardownCellsAtShutdown(substrate: Pick<PodmanSubstrate, "
     const removed = await substrate.teardownAll();
     console.log(`Cells: removed ${removed.length} cell(s) at shutdown`);
   } catch (err) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the shutdown drain is cleanup; the next startup's reconciliation removes the cells it left
     console.error("Cells: teardown at shutdown incomplete; the next startup's reconciliation removes the rest:", err);
   }
 }

@@ -202,7 +202,9 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     recordCrashOrphan: async () => 1,
-    clearCrashOrphans: async () => {},
+    saveOrphanExit: async () => {
+      throw new Error("saveOrphanExit is not exercised by this test");
+    },
     saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit: async (id, commit) => {
       mergeRecords.push({ id, commit });
@@ -406,7 +408,9 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: async () => ++faults,
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         refunded++;
@@ -472,7 +476,9 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       },
       recordInfrastructureFault: async () => 1,
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         // The one transaction rolled back: neither the requeue nor the refund was written.
         if (refundFaults-- > 0) throw new Error("Failed query: update \"work_items\" set \"dispatch_count\" = \"work_items\".\"dispatch_count\" - 1");
@@ -837,7 +843,9 @@ describe("stored checks stale: the check task is reopened and the item waits on 
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
@@ -989,7 +997,9 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
@@ -1156,7 +1166,9 @@ describe("an environment change requested: an environment task is opened and the
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
@@ -1350,7 +1362,9 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
@@ -1492,7 +1506,9 @@ describe("a completed dispatch records its merge before the task is Completed", 
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       saveRefunded: notExercised("saveRefunded"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
@@ -1720,7 +1736,9 @@ describe("a review of the plan's suites with problems: the named check tasks are
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
+      saveOrphanExit: async () => {
+        throw new Error("saveOrphanExit is not exercised by this test");
+      },
       async saveRefunded(item, expectedPreviousStatus) {
         await this.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);

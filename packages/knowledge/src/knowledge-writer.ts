@@ -98,6 +98,7 @@ export async function storeFailureKnowledge(
       `outcome:${result.status}`,
     ]);
   } catch (e) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: a failure finding is context for later briefs; the dispatch's result is already decided and returned, and no verdict, counter or charge reads it
     console.warn(`[${task.id}] failed to store failure knowledge:`, e);
   }
 }

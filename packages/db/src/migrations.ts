@@ -238,6 +238,7 @@ async function inTransaction(
     try {
       await client.query("ROLLBACK");
     } catch (rollbackErr: unknown) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failed ROLLBACK is kept as rollbackError and thrown with the body's error in MigrationTransactionError below
       rollbackError = rollbackErr;
     }
     throw new MigrationTransactionError({ operation, filenames, cause: err, rollbackError });

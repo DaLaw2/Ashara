@@ -1,6 +1,6 @@
-import { and, count, desc, eq, notInArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { devSessions } from "@ashara/db";
-import type { Database } from "@ashara/db";
+import type { DbHandle } from "@ashara/db";
 import { TERMINAL_SESSION_PHASES, type AttemptTerminal } from "./session-vocabulary.js";
 
 /** A COUNT over dev_sessions returned no row: the evidence cannot be read, so nothing is decided on it. */
@@ -43,7 +43,7 @@ function attemptColumns(attempt: SessionAttempt | null) {
  * write is fail-soft (withSessionLifecycle), so no report or decision reads it as delivery.
  */
 export class DevSessionRepository {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: DbHandle) {}
 
   /** `environmentVersion`: the environment version the session's cells were built from; null on the BaseCell (migration 034). */
   async insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null) {
@@ -90,22 +90,36 @@ export class DevSessionRepository {
   /**
    * Terminalizes every session left in a non-terminal phase, for the startup
    * reconciler (Discipline B). The server is single-process (ADR-022), so at boot
-   * no session can legitimately be in flight: every surviving `Preparing` row is a
-   * crash orphan whose agent is gone. Leaving them would keep `listActive()`
-   * reporting dead sessions as live agents forever. Returns the number of rows resolved so the reconcile summary can
-   * report it rather than closing them silently.
+   * no session can legitimately be in flight. Leaving them would keep `listActive()`
+   * reporting dead sessions as live agents forever. A session of a task the start found
+   * InProgress (`inProgressTaskIds`) is a crash orphan whose agent died with the process, closed
+   * with `orphaned`; any other's dispatch ended, its task routed out of InProgress, and only its
+   * terminal write was lost, so it is closed with `ended`, which dispatchEvidence never counts as
+   * a crash orphan. Returns how many rows each closed, so the reconcile can report them rather
+   * than closing them silently.
    */
-  async failStale(verificationResult: unknown): Promise<number> {
-    const rows = await this.db
-      .update(devSessions)
-      .set({
-        verificationResult,
-        phase: "Failed",
-        updatedAt: new Date(),
-      })
-      .where(notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]))
-      .returning({ id: devSessions.id });
-    return rows.length;
+  async failStale(
+    orphaned: unknown,
+    ended: unknown,
+    inProgressTaskIds: readonly string[],
+  ): Promise<{ readonly orphaned: number; readonly ended: number }> {
+    const open = notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]);
+    return this.db.transaction(async (tx) => {
+      const orphanedRows =
+        inProgressTaskIds.length === 0
+          ? []
+          : await tx
+              .update(devSessions)
+              .set({ verificationResult: orphaned, phase: "Failed", updatedAt: new Date() })
+              .where(and(open, inArray(devSessions.taskId, [...inProgressTaskIds])))
+              .returning({ id: devSessions.id });
+      const endedRows = await tx
+        .update(devSessions)
+        .set({ verificationResult: ended, phase: "Failed", updatedAt: new Date() })
+        .where(open)
+        .returning({ id: devSessions.id });
+      return { orphaned: orphanedRows.length, ended: endedRows.length };
+    });
   }
 
   /**

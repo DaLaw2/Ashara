@@ -12,6 +12,8 @@ const IDENTITY = "Identity-element fallback";
 const JSON_PARSE = "JSON.parse outside parseJson";
 const BARE_ERROR = "Bare Error";
 const ASSERTION = "@typescript-eslint/consistent-type-assertions";
+const CATCH_CONTINUES = "Catch continues";
+const UNARGUED_DISABLE = "Unargued catch-continue disable";
 
 /** The guard each finding of `code`, linted as the file at `filePath` with the repo's config, belongs to. */
 async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<string[]> {
@@ -19,7 +21,7 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
   expect(results).toHaveLength(1);
   return results.flatMap((result) => result.messages).map((message) => {
     if (message.ruleId === ASSERTION) return ASSERTION;
-    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR].find((prefix) => message.message.startsWith(prefix));
+    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
 }
@@ -101,6 +103,37 @@ describe("eslint guards fire on planted instances", () => {
 
   test.each(['throw new Error("planted");', 'throw Error("planted");'])("bare Error: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([BARE_ERROR]);
+  });
+
+  test.each([
+    "try { await p; } catch (e) { console.warn(e); }",
+    "try { await p; } catch { console.warn(t); }",
+    "for (const n of [1]) { try { await p; } catch (e) { console.warn(n, e); continue; } }",
+    "try { await p; } catch (e) { [e].forEach(() => { return; }); }",
+    "try { await p; } catch (e) { class Planted { m(): never { throw e; } } void Planted; }",
+  ])("catch that continues: %s", async (line) => {
+    expect(await guardsOf(planted(line))).toEqual([CATCH_CONTINUES]);
+  });
+
+  test.each([
+    "try { await p; } catch (e) {\n// eslint-disable-next-line ashara/catch-continue\nconsole.warn(e); }",
+    "try { await p; } catch (e) {\n// eslint-disable-next-line ashara/catch-continue -- the log is enough\nconsole.warn(e); }",
+    "try { await p; } catch (e) {\n// eslint-disable-next-line ashara/catch-continue -- best effort:\nconsole.warn(e); }",
+  ])("unargued catch-continue disable: %s", async (line) => {
+    expect(await guardsOf(planted(line))).toEqual([UNARGUED_DISABLE]);
+  });
+
+  test.each([
+    "try { await p; } catch (e) {\n// eslint-disable-next-line ashara/catch-continue -- best effort: planted, nothing reads the dropped result\nconsole.warn(e); }",
+    "try { await p; } catch (e) { console.warn(e); throw e; }",
+    "try { await p; } catch (e) { console.warn(e); return null; }",
+    "try { await p; } catch (e) { if (e instanceof RangeError) return 1; throw e; }",
+  ])("leaves a catch that exits or is argued: %s", async (line) => {
+    expect(await guardsOf(planted(line))).toEqual([]);
+  });
+
+  test("the catch-continue rule holds production source only, not tests", async () => {
+    expect(await guardsOf(planted("try { await p; } catch (e) { console.warn(e); }"), TEST_FILE)).toEqual([]);
   });
 
   test("a typed error class is not a bare Error", async () => {

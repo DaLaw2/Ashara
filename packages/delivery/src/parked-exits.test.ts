@@ -59,7 +59,9 @@ function run(
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     recordCrashOrphan: async () => 1,
-    clearCrashOrphans: async () => {},
+    saveOrphanExit: async () => {
+      throw new Error("saveOrphanExit is not exercised by this test");
+    },
     saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit,
     addDependency: notExercised("addDependency"),

@@ -68,6 +68,7 @@ export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Pr
       left += result.left;
       checkouts += result.checkouts;
     } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: branch release is cleanup of settled tasks: the target is counted in targetsFailed and the next pass retries it
       targetsFailed += 1;
       console.warn(`[settled-branches] project ${target.id}: the branches of ${target.workspacePath} could not be listed; none is released this pass: ${describeErrorChain(err)}`);
     }

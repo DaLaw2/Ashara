@@ -27,6 +27,7 @@ export async function buildContextMap(targetProjectPath: string): Promise<string
       sections.push("## File Tree\n" + tree);
     }
   } catch (e: unknown) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the file tree is listed under Not Available in the brief, never stated as empty
     console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${describeErrorChain(e)}`);
     unavailable.push("- the file tree: reading it failed");
   }
@@ -37,6 +38,7 @@ export async function buildContextMap(targetProjectPath: string): Promise<string
       sections.push(`## Project Manifests\n${manifestContent}`);
     }
   } catch (e: unknown) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the top-level files are listed under Not Available in the brief, never stated as empty
     console.warn(`[buildContextMap] Failed to read manifests in ${targetProjectPath}: ${describeErrorChain(e)}`);
     unavailable.push("- the top-level files: reading them failed");
   }

@@ -126,6 +126,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
         else if (action === "abandon") failedAbandoned += 1;
         else failedHeld += 1;
       } catch (error) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the item is counted in failedErrored and left Failed, its recovery retried at the next reconcile
         failedErrored += 1;
         console.warn(
           `[startup-reconciler] failed to route parked Failed item ${failed.id}; left Failed for the next reconcile:`,
@@ -233,6 +234,7 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       console.warn(`[startup-reconciler] ${item.id} was merged on main as ${merge} by a dead process; merge recorded, Completed, not re-dispatched`);
       return "completed";
     } catch (error) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept, and an orphan still unsettled after it is blocked under OrphanUnreconciled, below
       last = error;
       const wait = ORPHAN_BACKOFF_MS[attempt - 1];
       console.warn(
@@ -255,7 +257,7 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       const result = await deps.projects.block(orphan.projectId, projectBlockCause(unsettled));
       console.warn(`[startup-reconciler] project ${orphan.projectId} ${result} on Ashara's own fault: ${unsettled.message}`);
     } catch (error) {
-      // The item is Blocked with its own exit, which the loop takes each cycle while the project runs.
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the orphan is already Blocked with its own exit, which the loop takes each cycle while the project runs
       console.warn(`[startup-reconciler] project ${orphan.projectId} could not be blocked on ${unsettled.message}:`, error);
     }
   }
@@ -275,11 +277,12 @@ async function blockUnsettled(
       const item = await deps.workItemRepo.findById(orphan.id);
       if (item === null || item.status !== "InProgress") return "moved";
       blockWorkItem(item, reason);
-      await deps.workItemRepo.save(item, "InProgress");
+      await deps.workItemRepo.saveOrphanExit(item, "InProgress", "keep-counted");
       await publishBestEffort(deps.eventStore, takeEvents(item), item.id);
       console.warn(`[startup-reconciler] orphan ${orphan.id} blocked (${reason.source}): ${unsettled.message}`);
       return "blocked";
     } catch (error) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept and thrown as OrphanUnreconciled below, which refuses the start
       last = error;
       const wait = ORPHAN_BACKOFF_MS[attempt - 1];
       console.warn(`[startup-reconciler] orphan ${orphan.id}: its block failed on attempt ${attempt}:`, error);
@@ -298,7 +301,7 @@ async function giveUpCrashLoop(deps: StartupReconcilerDeps, orphan: WorkItem, bo
     `ending in between (bound ${CRASH_LOOP_BOUND}): its dispatch may be what kills the process`;
   const previousStatus = orphan.status;
   giveUpWorkItem(orphan, { source: "crash_loop", boots, bound: CRASH_LOOP_BOUND, reason });
-  await deps.workItemRepo.save(orphan, previousStatus);
+  await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
   await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
   console.warn(`[startup-reconciler] ${orphan.id} given up (crash_loop), never re-dispatched; its plan is repaired: ${reason}`);
 }
@@ -319,13 +322,13 @@ async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Pro
   const previousStatus = orphan.status;
   requeueWorkItem(orphan);
   if (!unfinished) {
-    await deps.workItemRepo.save(orphan, previousStatus);
+    await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
     console.warn(
       `[startup-reconciler] requeued ${orphan.id}; its dispatch stays counted (latest session ${evidence.latestPhase ?? "none"}, ` +
         `so no record shows a dispatch that never finished)`,
     );
   } else if (evidence.orphanedBefore >= MAX_ORPHAN_REFUNDS) {
-    await deps.workItemRepo.save(orphan, previousStatus);
+    await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
     console.warn(
       `[startup-reconciler] requeued ${orphan.id}; its unfinished dispatch stays counted: ${evidence.orphanedBefore} earlier ` +
         `dispatch(es) of it were already orphaned by a dead process (bound ${MAX_ORPHAN_REFUNDS})`,
@@ -333,8 +336,8 @@ async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Pro
   } else {
     // The requeue and its refund are one write: a fault under either leaves the item InProgress for
     // the next attempt of the settlement, never requeued with its unfinished dispatch charged.
-    const dispatchCount = await deps.workItemRepo.saveRefunded(orphan, previousStatus);
-    console.warn(`[startup-reconciler] requeued ${orphan.id}; its dispatch never finished (session non-terminal), refunded (dispatch count ${dispatchCount})`);
+    await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "refund");
+    console.warn(`[startup-reconciler] requeued ${orphan.id}; its dispatch never finished (session non-terminal), refunded`);
   }
   await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
 }
@@ -366,6 +369,7 @@ async function publishBestEffort(
     try {
       await eventStore.publish(event);
     } catch (error) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
       console.warn(
         `[startup-reconciler] failed to publish audit event for ${itemId} (transition already committed):`,
         error,

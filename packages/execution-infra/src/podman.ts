@@ -787,6 +787,7 @@ export class PodmanSubstrate {
         await removeTree(join(instanceDir, name));
         removed.push(name);
       } catch (err) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the failure is collected and returned in failures, which teardownAll throws as TeardownIncomplete
         failures.push(new CellTeardownFailed(name, null, `its state dir could not be removed: ${describeErrorChain(err)}`, { cause: err }));
       }
     }
@@ -960,6 +961,7 @@ export class PodmanSubstrate {
         this.unconfirmed.delete(name);
         removed.push(name);
       } catch (err) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the failure is collected in failures, thrown below as TeardownIncomplete
         failures.push(err instanceof CellTeardownFailed ? err : new CellTeardownFailed(name, null, "", { cause: err }));
       }
     }

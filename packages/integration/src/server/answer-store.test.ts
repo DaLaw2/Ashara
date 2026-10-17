@@ -315,6 +315,11 @@ describe("the client's answers", () => {
     expect((await roster().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
     expect((await planner().runPending()).map((o) => o.kind)).toEqual(["planned"]);
     const projectRepo = new ProjectRepository(db);
+    // The plan is dispatched once the client is told it.
+    expect(await projectRepo.listActiveIds()).not.toContain(projectId);
+    await db.execute(sql`
+      INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
+      VALUES (${projectId}, 'outbound', 'report', 'The plan.', 'first-plan')`);
     expect(await projectRepo.listActiveIds()).toContain(projectId);
 
     const answerId = await answer(projectId, first, "No, the hill studio opens first.");
@@ -333,9 +338,10 @@ describe("the client's answers", () => {
     });
     expect(await awaitedChangesOf(projectId)).toEqual([answerId]);
     expect(await projectRepo.listActiveIds()).not.toContain(projectId);
-    // Beside intake's report of the unasked assumptions, in reply to the tender (ADR-074 addendum 2 d89 C).
+    // Beside intake's report of the unasked assumptions, in reply to the tender (ADR-074 addendum 2 d89 C),
+    // and the first-plan report, in reply to nothing.
     const reports = (await new ClientMessageRepository(db).listByProject(projectId)).filter(
-      (m) => m.kind === "report" && m.inReplyTo !== tenderId,
+      (m) => m.kind === "report" && m.inReplyTo !== tenderId && m.inReplyTo !== null,
     );
     expect(reports).toHaveLength(1);
     expect(reports[0]?.inReplyTo).toBe(answerId);

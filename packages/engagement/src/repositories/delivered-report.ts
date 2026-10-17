@@ -575,6 +575,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDe
       // Only a database that could not be reached says nothing of the records, and is retried
       // uncounted; every other failure counts toward the notice sent in the report's place, so one
       // nothing names is never retried unseen for good.
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failure is kept as the row's unread entry with its cause, which counts toward the notice sent in the report's place
       const cause = isDatabaseConnectionFault(error) ? "connection" : "record";
       due.push({ kind: "unread", cause, failures: row.failures, recordFailures: row.recordFailures, sweepId: row.id, projectId, error });
     }

@@ -910,6 +910,7 @@ function main(): void {
 try {
   main();
 } catch (err) {
+  // eslint-disable-next-line ashara/catch-continue -- best effort: the operator script exits 1 below with the error's chain
   console.error(`\nERROR: ${describeErrorChain(err)}\n`);
   process.exit(1);
 }

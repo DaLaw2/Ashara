@@ -212,10 +212,22 @@ export class WorkItemRowRepository {
    * Quality's verdict on the attempt (migration 058) is written with every move into Failed, which
    * fails closed with FailedWithoutVerdict when none is given, and cleared with every move out of
    * Failed; a write that keeps the status leaves it as it is.
+   * A move out of InProgress is a dispatch of the item ending in the process that started it, so
+   * the same UPDATE sets its startups in a row found InProgress (migration 070) back to 0: the
+   * crash-loop bound never reads a count a separate write failed to clear. The startup
+   * reconciler's exits of a crash orphan, whose dispatch did not end, keep it (saveOrphanExit).
    */
   async save(
     item: { id: string; status: string; blockedReason?: unknown; failureVerdict: FailureVerdict | null; updatedAt: Date },
     expectedPreviousStatus: string,
+  ) {
+    await this.write(item, expectedPreviousStatus, "dispatch-ended");
+  }
+
+  private async write(
+    item: { id: string; status: string; blockedReason?: unknown; failureVerdict: FailureVerdict | null; updatedAt: Date },
+    expectedPreviousStatus: string,
+    dispatch: "dispatch-ended" | "orphaned",
   ) {
     const from = parseWorkItemStatus(expectedPreviousStatus);
     const to = parseWorkItemStatus(item.status);
@@ -230,6 +242,7 @@ export class WorkItemRowRepository {
     } else if (from !== to && from === "Failed") {
       verdictWrite = { failureVerdict: null };
     }
+    const crashWrite = from === "InProgress" && to !== "InProgress" && dispatch === "dispatch-ended" ? { crashOrphans: 0 } : {};
 
     const updated = await this.db
       .update(workItems)
@@ -242,6 +255,7 @@ export class WorkItemRowRepository {
         // single physical writer, so every caller's clear actually clears.
         blockedReason: item.blockedReason ?? null,
         ...verdictWrite,
+        ...crashWrite,
         updatedAt: item.updatedAt,
       })
       .where(and(eq(workItems.id, item.id), eq(workItems.status, expectedPreviousStatus)))
@@ -294,6 +308,27 @@ export class WorkItemRowRepository {
     });
   }
 
+  /**
+   * The startup reconciler's move of a crash orphan out of InProgress: written as `save` writes it,
+   * except that its startups in a row found InProgress are kept, since the dispatch did not end in
+   * the process that started it. With `refund`, the dispatch the dead process counted is taken back
+   * in the same transaction, as saveRefunded does.
+   */
+  async saveOrphanExit(
+    item: { id: string; status: string; blockedReason?: unknown; failureVerdict: FailureVerdict | null; updatedAt: Date },
+    expectedPreviousStatus: string,
+    refund: "refund" | "keep-counted",
+  ): Promise<void> {
+    if (refund === "keep-counted") {
+      await this.write(item, expectedPreviousStatus, "orphaned");
+      return;
+    }
+    await this.withTransaction(async (tx) => {
+      await tx.write(item, expectedPreviousStatus, "orphaned");
+      await tx.takeBackDispatch(item.id);
+    });
+  }
+
   private async takeBackDispatch(id: string): Promise<number> {
     const [row] = await this.db
       .update(workItems)
@@ -326,14 +361,6 @@ export class WorkItemRowRepository {
       .returning({ crashOrphans: workItems.crashOrphans });
     if (!row) throw new WorkItemNotFound(id);
     return row.crashOrphans;
-  }
-
-  /** A dispatch of the item ended in the process that started it: its startups in a row found InProgress are 0 again. */
-  async clearCrashOrphans(id: string): Promise<void> {
-    await this.db
-      .update(workItems)
-      .set({ crashOrphans: 0 })
-      .where(and(eq(workItems.id, id), sql`${workItems.crashOrphans} > 0`));
   }
 
   async addDependency(fromId: string, toId: string) {

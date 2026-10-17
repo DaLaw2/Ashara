@@ -32,7 +32,9 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     saveRefunded: async () => 0,
     recordInfrastructureFault: async () => 1,
     recordCrashOrphan: async () => 1,
-    clearCrashOrphans: async () => {},
+    saveOrphanExit: async () => {
+      throw new Error("saveOrphanExit is not exercised by this test");
+    },
     recordMergeCommit: async () => {},
     addDependency: async () => {},
     getDependencies: async () => [],

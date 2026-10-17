@@ -175,6 +175,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       try {
         await eventStore.publish(event);
       } catch (e) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the status transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
         console.warn(
           `[PATCH /work-items/:id/status] failed to publish audit event for ${item.id} (status transition already committed):`,
           e,

@@ -570,6 +570,7 @@ export async function executeTool(toolName: string, input: unknown, context: Too
   try {
     execution = await runTool(toolName, input, context);
   } catch (error) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the cell's error is classified into the call's result: a tool error the model is shown, or an environment failure the attempt ends on
     execution = classifyCellError(toolName, error);
   }
   return execution.kind === "result" ? { ...execution, output: truncateElided(execution.output) } : execution;

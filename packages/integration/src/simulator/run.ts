@@ -835,6 +835,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         try {
           await current.ashara.teardownCells();
         } catch (err) {
+          // eslint-disable-next-line ashara/catch-continue -- best effort: the simulator traces a failed drain; the invariants checked right after it judge what the drain left
           trace.push(`drain: teardown failed ${err instanceof Error ? err.name : "error"}`);
         }
         for (const violation of leakedConnections(current.handle, cycles)) violations.set(violation.key, violation);
@@ -1002,6 +1003,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
             await current.ashara.teardownCells();
           }
         } catch (err) {
+          // eslint-disable-next-line ashara/catch-continue -- best effort: the simulator records a cycle's error in its trace and reports one no injected fault explains (unfaultedError) as a violation
           trace.push(`cycle ${cycles}: error ${err instanceof SimulatedCrash ? "SimulatedCrash" : err instanceof Error ? err.name : "unknown"}`);
           if (!(err instanceof SimulatedCrash) && !current.handle.dead) log.push(`cycle error: ${describeErrorChain(err)}`);
           const unfaulted = unfaultedError("cycle", err, cycles, scheduler.faults().slice(faultsBefore));

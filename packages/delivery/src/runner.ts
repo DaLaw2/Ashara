@@ -114,6 +114,7 @@ export class ContinuousRunner {
 
         await this.waitForWakeOrTimeout(waitMs, mergedSignal);
       } catch (e) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the supervisor loop: a failed cycle is counted in consecutiveErrors, backs off, and the next cycle re-reads every item from the store
         consecutiveErrors += 1;
         console.error(`Cycle error (consecutive: ${consecutiveErrors}):`, e);
         await this.backOff(consecutiveErrors, mergedSignal);
@@ -133,6 +134,7 @@ export class ContinuousRunner {
         if (this.wakePending) continue;
         await this.waitForWakeOrTimeout(this.config.idleIntervalMs, signal);
       } catch (e) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the supervisor loop: a failed halted cycle is counted in consecutiveErrors, backs off, and the next one re-reads the client's stops
         consecutiveErrors += 1;
         console.error(`Halted cycle error (consecutive: ${consecutiveErrors}): the client's stops are not taken in this time:`, e);
         await this.backOff(consecutiveErrors, signal);

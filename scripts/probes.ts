@@ -71,6 +71,7 @@ async function credentialCanaries(): Promise<CredentialCanaries> {
     if (key === "") console.log(`(the secret key file ${keyFile} is empty, so there is no content to search for)`);
     else values.push({ name: `the secret key file ${keyFile}`, value: key });
   } catch (err) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the operator probe says the key file was not searched for; DATABASE_URL and the environment are still searched
     console.log(`(the secret key file ${keyFile} is not readable here, so its content is not searched for: ${describeErrorChain(err)})`);
   }
   for (const [name, value] of Object.entries(process.env)) {

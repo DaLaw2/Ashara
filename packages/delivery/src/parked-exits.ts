@@ -130,6 +130,7 @@ async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: 
     try {
       await deps.eventStore.publish(event);
     } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
       console.warn(`[parked-exits] task ${taskId}: failed to publish ${event.eventType} (the transition is committed):`, err);
     }
   }

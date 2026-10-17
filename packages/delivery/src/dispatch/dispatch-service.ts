@@ -815,6 +815,7 @@ export class DispatchService {
         entries: findings.map((f) => `- "${f.title}" (source: ${f.source})\n  ${f.contentSnippet}`),
       });
     } catch (e: unknown) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the findings section is left out of the brief, never rendered as none, and the attempt is judged by its checks, not by what context it was given
       console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${describeErrorChain(e)}`);
     }
 
@@ -825,6 +826,7 @@ export class DispatchService {
         entries: approaches.map((a) => `- "${a.title}" — Failed: ${a.failureReason}\n  Learned: ${a.learned}`),
       });
     } catch (e: unknown) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failed-approaches section is left out of the brief, never rendered as none, and the attempt is judged by its checks, not by what context it was given
       console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${describeErrorChain(e)}`);
     }
 

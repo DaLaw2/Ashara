@@ -172,7 +172,8 @@ export class CoreLoop {
 
     // Then a first plan for each project that has a vision, a roster and no work items,
     // and the Liaison's report on each recorded planning outcome. Both before
-    // gating, so a plan written this cycle can be dispatched this cycle.
+    // gating, so a plan written this cycle can be dispatched this cycle; a plan whose report's post
+    // faulted is not dispatched until a retry posts it (ProjectRepository.listActiveIds).
     // A project whose own record is bad is blocked inside each step, logged at
     // warn there, and skipped; any other failure of one project is contained to it (containEach).
     const plans = await this.stepThenCap("first-plan", () => deps.firstPlanning.runPending());

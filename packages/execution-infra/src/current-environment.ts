@@ -119,6 +119,7 @@ export async function pruneStaleEnvironmentImages(
       console.warn(`[environment-images] project ${projectId}: image ${image.imageId} could not be removed: ${image.detail ?? "(no detail)"}`);
     }
   } catch (err) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: pruning stale images is cleanup, retried at the next environment task's end or startup; every image is kept meanwhile
     console.warn(`[environment-images] project ${projectId}: pruning failed; the next environment task's end or startup retries:`, err);
   }
 }

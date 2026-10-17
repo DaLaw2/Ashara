@@ -131,6 +131,7 @@ async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, interface
     try {
       await deps.eventStore.publish(event);
     } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the defect is recorded before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
       console.warn(`[acceptance] defect ${defect.id}: an audit event could not be published (the defect is already recorded):`, err);
     }
   }

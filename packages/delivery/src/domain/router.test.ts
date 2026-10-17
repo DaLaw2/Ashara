@@ -27,7 +27,9 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: async () => 1,
     recordCrashOrphan: async () => 1,
-    clearCrashOrphans: async () => {},
+    saveOrphanExit: async () => {
+      throw new Error("saveOrphanExit is not exercised by this test");
+    },
     saveRefunded: async () => 0,
     recordMergeCommit: async () => {},
     addDependency: async () => {},

@@ -45,6 +45,7 @@ export async function releaseSettledBranches(
       await runHostGit(repo, ["branch", "-D", branch]);
       released += 1;
     } catch (e) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: branch release is cleanup of a settled task: counted in left and retried by the next release
       left += 1;
       console.warn(`[settled-branches] the branch ${branch} of a settled task could not be released and is left in ${targetPath}; the next release retries it: ${describeErrorChain(e)}`);
     }

@@ -252,6 +252,22 @@ describe("a tentative merge that cannot be undone", () => {
   });
 });
 
+describe("a checkout stranded off main", () => {
+  test("whose restore failed at the merge recovery is put back on main before the merge, so the merge recorded is on main", async () => {
+    const [a, b] = [task(), task()];
+    const target = await targetWithBranches([a, b]);
+    // A dead finalize left b's branch checked out, with a change that refuses `git checkout main`.
+    await git(target, "checkout", "-q", taskBranchName(b.id));
+    await writeFile(join(target, "file-1.txt"), "changed by hand\n", "utf-8");
+
+    const result = await finalizeSuccess(deps(async () => ({ passed: true, details: "ok" })), a, target, 1);
+    if (!result.success) throw new Error(`the finalize failed: ${JSON.stringify(result)}`);
+    expect(await git(target, "rev-parse", "main")).toBe(result.mergeCommit);
+    expect(await git(target, "ls-tree", "--name-only", "main")).toBe("file-0.txt");
+    expect(await git(target, "symbolic-ref", "--short", "HEAD")).toBe("main");
+  });
+});
+
 describe("a conflicted merge", () => {
   test("is a failed merge, never a failed verify; one after the attempt was handed its conflict is recorded apart", async () => {
     const [a, b] = [task(), task()];

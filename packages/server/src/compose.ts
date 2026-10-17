@@ -534,6 +534,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       // cause) and parked Failed items are routed through the same FailureRouter policy, so the
       // gate (Pending-only) sees the recovered work on the first cycle. Idempotent; a pass that
       // throws, an orphan it could not even block included, refuses the start.
+      // The tasks found InProgress are read first: only their open sessions are crash orphans.
+      const inProgressAtStart = await workItemRepo.listIdsByStatus(["InProgress"]);
       await reconcileOrRefuse(
         () =>
           reconcileWorkItemsOnStartup({
@@ -551,7 +553,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       // Delivery's work items: a session a crash left open is Delivery's evidence that a dispatch
       // never finished. Execution Infrastructure's task worktrees after both, kept for every task
       // still active once its orphans are settled. Neither refuses the start; each logs its result.
-      await terminalizeOrphanedSessions(devSessionRepo);
+      await terminalizeOrphanedSessions(devSessionRepo, inProgressAtStart);
       // Ids only: a row whose jsonb does not parse still keeps its worktree.
       await sweepOrphanedWorktrees(config.coreLoop.workdirBase, () => workItemRepo.listIdsByStatus(["Pending", "InProgress", "Blocked"]));
 

@@ -93,6 +93,77 @@ const PRODUCTION_SYNTAX = [
   },
 ];
 
+// Discipline A: a catch that neither rethrows nor returns continues as if the failed operation
+// succeeded, so a failure that a verdict, a counter, a charge, persisted state or client text
+// depends on is dropped with only a log line to show for it. Every such catch in production source
+// fails unless it is argued, as the catch's first line: `// eslint-disable-next-line
+// ashara/catch-continue -- best effort: <why the dropped failure changes no verdict, counter,
+// charge or client text>`. A disable whose description does not start with `best effort:` is
+// itself reported, on its own line.
+// A `throw` or `return` counts only at the catch's own function level: one inside a nested
+// function or class does not leave the catch.
+// Blind spots: a catch that returns a fallback value (`return null`, `return []`: the
+// identity-element rule sees only constant identities), a rethrow of a different error that drops
+// the cause, a `throw`/`return` on one branch only (`if (x) throw e;` exits on some paths), a
+// `continue`/`break`/`process.exit` that leaves by another route (reported, argue it), logic after
+// the try statement that reads state the catch left half-written, the promise form
+// (`.catch((e) => log(e))`, which the swallowed-rejection rule sees only when the handler is
+// constant), and a block, file-wide or same-line disable, which silences the report of its own
+// missing argument too.
+const FUNCTION_BOUNDARY = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "ClassDeclaration",
+  "ClassExpression",
+]);
+const exitsCatch = (node) => {
+  if (node === null || typeof node !== "object") return false;
+  if (node.type === "ThrowStatement" || node.type === "ReturnStatement") return true;
+  if (FUNCTION_BOUNDARY.has(node.type)) return false;
+  return Object.entries(node).some(([key, value]) => {
+    if (key === "parent" || key === "loc" || key === "range") return false;
+    return Array.isArray(value) ? value.some(exitsCatch) : typeof value?.type === "string" && exitsCatch(value);
+  });
+};
+const CATCH_CONTINUE = "catch-continue";
+// A next-line disable naming the rule is argued only when its description starts with `best effort:`.
+const isUnarguedDirective = (text) => {
+  if (!/^\s*eslint-disable-next-line\s/.test(text)) return false;
+  const [rules, ...description] = text.split(/\s-{2,}\s/);
+  if (!rules.trim().split(/[\s,]+/).includes(`ashara/${CATCH_CONTINUE}`)) return false;
+  return !/^best effort:\s*\S/.test(description.join(" -- ").trim());
+};
+const ashara = {
+  rules: {
+    [CATCH_CONTINUE]: {
+      meta: {
+        type: "problem",
+        messages: {
+          continues:
+            "Catch continues (Discipline A). This catch neither rethrows nor returns, so the code after it runs as if the failed operation succeeded. If a verdict, a counter, a charge, persisted state another path trusts, or client text depends on the operation, propagate a typed error or record the failure where that path reads it. If nothing depends on it, argue it: `// eslint-disable-next-line ashara/catch-continue -- best effort: <why the dropped failure changes no verdict, counter, charge or client text>`.",
+          unargued:
+            "Unargued catch-continue disable (Discipline A). The description must start with `best effort:` and say why the dropped failure changes no verdict, counter, charge or client text.",
+        },
+        schema: [],
+      },
+      create(context) {
+        return {
+          Program() {
+            for (const comment of context.sourceCode.getAllComments()) {
+              if (isUnarguedDirective(comment.value)) context.report({ loc: comment.loc, messageId: "unargued" });
+            }
+          },
+          CatchClause(node) {
+            // Reported on the catch's first statement, so the argued disable is the catch's first line.
+            if (!exitsCatch(node.body)) context.report({ node: node.body.body[0] ?? node, messageId: "continues" });
+          },
+        };
+      },
+    },
+  },
+};
+
 export default tseslint.config(
   {
     ignores: ["**/dist/**", "**/node_modules/**", ".claude/**"],
@@ -157,8 +228,10 @@ export default tseslint.config(
     // object's, so the base selectors are repeated here.
     files: ["packages/*/src/**/*.ts", "scripts/**/*.ts"],
     ignores: ["**/*.test.ts"],
+    plugins: { ashara },
     rules: {
       "no-restricted-syntax": ["error", ...BASE_SYNTAX, ...PRODUCTION_SYNTAX],
+      [`ashara/${CATCH_CONTINUE}`]: "error",
 
       // No unvalidated `as` (CLAUDE.md): every assertion fails; `as const` stays legal. A cast
       // that follows a validation keeps an argued disable naming the validation.

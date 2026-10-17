@@ -723,6 +723,7 @@ function main(): void {
     documents = discoverDocuments(root);
     retentionFailures = checkRetention(root, autoMemoryDir(root));
   } catch (err: unknown) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the operator script exits 1 below with the error's chain
     console.error(`\nERROR: ${describeErrorChain(err)}\n`);
     process.exit(1);
   }
@@ -741,6 +742,7 @@ function main(): void {
     try {
       content = fs.readFileSync(docPath, "utf-8");
     } catch (err: unknown) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the unreadable file is kept as a failure, which fails the gate
       parseFailures.push({
         filePath: relPath,
         blockLine: 0,
@@ -756,6 +758,7 @@ function main(): void {
     try {
       allBlocks.push(...parseVerifyBlocks(content, relPath));
     } catch (err: unknown) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: a parse error is kept as a failure, which fails the gate; any other error is rethrown
       if (err instanceof BlockParseError) {
         parseFailures.push({
           filePath: err.filePath,

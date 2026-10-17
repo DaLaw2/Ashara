@@ -101,6 +101,17 @@ export const pendingRepair = (projectId: AnyColumn) =>
 export const pendingChange = (projectId: AnyColumn) =>
   sql`EXISTS (SELECT 1 FROM replan_requests rr WHERE rr.project_id = ${projectId} AND rr.plan_revision_id IS NULL)`;
 
+/**
+ * The project's first plan is written and the Liaison's report of it (reports_on 'first-plan') is
+ * not yet posted. Its dispatch is held until the report is: the report tells the client that none of
+ * the plan's tasks has started, and refuses to be posted once one has (PlanReportUnfounded), so a
+ * task dispatched while a faulted post waits for its retry would leave the plan unreportable and the
+ * project blocked (listActiveIds).
+ */
+const firstPlanUnreported = (): SQL =>
+  sql`(${qualified(projects.firstPlannedAt)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM client_messages fr
+    WHERE fr.project_id = ${qualified(projects.id)} AND fr.direction = 'outbound' AND fr.reports_on = 'first-plan'))`;
+
 // An answer the Liaison has yet to read may change the vision: the project is
 // planned once its answers are in (migration 038).
 export const noOpenAnswer = () =>
@@ -170,7 +181,8 @@ export class ProjectRepository {
   /**
    * The projects whose work may be dispatched: at work (active, not halted), no stop
    * awaiting the Liaison, no revision awaited for a client's change (migration 052: a client
-   * answer contradicted an assumption the plan was built on) and no plan repair awaited, oldest first.
+   * answer contradicted an assumption the plan was built on), no plan repair awaited and no
+   * first-plan report awaited (firstPlanUnreported), oldest first.
    * This read is the dispatch decision: a stop committed after it is ordered
    * after the dispatch it gated.
    */
@@ -178,7 +190,7 @@ export class ProjectRepository {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingChange(projects.id)}`, sql`NOT ${pendingRepair(projects.id)}`))
+      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingChange(projects.id)}`, sql`NOT ${pendingRepair(projects.id)}`, sql`NOT ${firstPlanUnreported()}`))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }

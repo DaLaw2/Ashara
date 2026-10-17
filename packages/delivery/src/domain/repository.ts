@@ -35,7 +35,9 @@ export interface WorkItemRepository {
    * the caller believes the row currently holds (typically the status the item was
    * loaded with, before a domain mutation). The physical writer validates the
    * transition against the state machine and against the live row, failing closed
-   * with InvalidStatusTransition (ADR-029).
+   * with InvalidStatusTransition (ADR-029). A move out of InProgress is a dispatch ending in
+   * the process that started it, so the same write sets the item's count of startups in a row
+   * found InProgress (migration 070) back to 0.
    */
   save(item: WorkItem, expectedPreviousStatus: WorkItemStatus): Promise<void>;
   /**
@@ -68,8 +70,14 @@ export interface WorkItemRepository {
    * re-dispatches after a crash. Throws when the item does not exist.
    */
   recordCrashOrphan(id: WorkItemId): Promise<number>;
-  /** A dispatch of the item ended in the process that started it: its count of startups in a row found InProgress goes back to 0. */
-  clearCrashOrphans(id: WorkItemId): Promise<void>;
+  /**
+   * The startup reconciler's move of a crash orphan out of InProgress: written as `save` writes it,
+   * except that its count of startups in a row found InProgress is kept, since its dispatch did not
+   * end in the process that started it (every other move out of InProgress sets the count back to
+   * 0 in its own write). With "refund", the dead process's counted dispatch is taken back in the
+   * same transaction, as saveRefunded does.
+   */
+  saveOrphanExit(item: WorkItem, expectedPreviousStatus: WorkItemStatus, refund: "refund" | "keep-counted"): Promise<void>;
   /**
    * Records the merge commit Z0's merge step made on the target's main for the task (migration
    * 041): the one record of what was merged, which reports to the client read. Throws when the

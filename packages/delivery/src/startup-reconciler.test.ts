@@ -27,7 +27,7 @@ function emptyWorkItemRepo(): WorkItemRepository {
     incrementDispatchCount: unused("incrementDispatchCount"),
     recordInfrastructureFault: unused("recordInfrastructureFault"),
     recordCrashOrphan: async () => 1,
-    clearCrashOrphans: async () => {},
+    saveOrphanExit: unused("saveOrphanExit"),
     saveRefunded: unused("saveRefunded"),
     recordMergeCommit: unused("recordMergeCommit"),
     addDependency: unused("addDependency"),
@@ -101,10 +101,8 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
       },
       recordInfrastructureFault: async () => { throw new Error("recordInfrastructureFault: not exercised"); },
       recordCrashOrphan: async () => 1,
-      clearCrashOrphans: async () => {},
-      saveRefunded: async (item) => {
-        row = { ...item, dispatchCount: row.dispatchCount - 1, events: [] };
-        return row.dispatchCount;
+      saveOrphanExit: async (item, _expected, refund) => {
+        row = { ...item, dispatchCount: refund === "refund" ? row.dispatchCount - 1 : row.dispatchCount, events: [] };
       },
     };
     const { deps } = buildDeps({
@@ -217,6 +215,10 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
       findByProjectAndStatus: async () => [{ ...row, events: [] }],
       findById: async () => ({ ...row, events: [] }),
       save: async (item) => {
+        if (saveFails(item.status)) throw new Error(`connection lost saving ${item.status}`);
+        row = { ...item, events: [] };
+      },
+      saveOrphanExit: async (item) => {
         if (saveFails(item.status)) throw new Error(`connection lost saving ${item.status}`);
         row = { ...item, events: [] };
       },

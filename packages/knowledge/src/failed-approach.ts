@@ -49,6 +49,7 @@ export async function recordFailedApproach(
       typeof learned === "object" ? routedLesson(task.title, learned, errorDetail) : (learned ?? errorDetail),
     );
   } catch (e) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: a lesson is context for later briefs; a lost one is absent from them, never rendered as none, and no verdict, counter or charge reads it
     console.warn(`[${task.id}] failed to record failed approach:`, e);
   }
 }

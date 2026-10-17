@@ -7,6 +7,8 @@ import type { EnvironmentError } from "../fault-class.js";
 import type { DispatchRef } from "../dispatch-result.js";
 import {
   commitMerge,
+  type HeadReading,
+  headOnMainReason,
   recoverOrphanedMerge,
   resetCheckoutToHead,
   taskBranchName,
@@ -144,15 +146,20 @@ class TargetCheckoutDirty extends Error {
   }
 }
 
-/** Why the checkout is not back at HEAD with no merge staged, or null when it is. */
-async function unrestoredReason(targetProjectPath: string): Promise<string | null> {
+/**
+ * Why the checkout is not back at HEAD on main with no merge staged, or null when it is. HEAD is
+ * put back on main only when `head` did not already read it there: a tentative merge never moves
+ * HEAD off the branch it was made on, so its undo passes "on-main".
+ */
+async function unrestoredReason(targetProjectPath: string, head: HeadReading): Promise<string | null> {
   const reset = await resetCheckoutToHead(targetProjectPath);
   if (reset.status === "error") return reset.message;
   try {
-    return (await mergeInProgress(targetRepo(targetProjectPath))) ? "a merge is still staged (MERGE_HEAD) after the reset to HEAD" : null;
+    if (await mergeInProgress(targetRepo(targetProjectPath))) return "a merge is still staged (MERGE_HEAD) after the reset to HEAD";
   } catch (e) {
     return `whether a merge is still staged could not be read: ${describeErrorChain(e)}`;
   }
+  return head === "on-main" ? null : headOnMainReason(targetProjectPath);
 }
 
 /**
@@ -164,7 +171,7 @@ async function unrestoredReason(targetProjectPath: string): Promise<string | nul
  * swallowed: a merge verdict built on top of the residue would be untrustworthy (Discipline A).
  */
 async function undoTentativeMerge(taskId: string, targetProjectPath: string, after: string): Promise<VerificationInfrastructureFault | null> {
-  const reason = await unrestoredReason(targetProjectPath);
+  const reason = await unrestoredReason(targetProjectPath, "on-main");
   if (reason === null) return null;
   const unrestored = new TargetCheckoutUnrestored(taskId, targetProjectPath, after, reason);
   console.warn(`[${taskId}] ${unrestored.message}`);
@@ -261,13 +268,13 @@ async function finalizeHeld(
   attempt: number,
   lease: CheckoutLease,
 ): Promise<FinalizeResult> {
-  await recoverOrphanedMerge(targetProjectPath);
+  const head = await recoverOrphanedMerge(targetProjectPath);
   await ensureTargetGitInit(targetProjectPath, deps.workdirBase);
 
   // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and before the tentative merge.
   // This is also where a checkout an earlier finalize could not restore (TargetCheckoutUnrestored)
   // stays blocked: every finalize restores it first, and none merges until that succeeds.
-  const unrestored = await unrestoredReason(targetProjectPath);
+  const unrestored = await unrestoredReason(targetProjectPath, head);
   if (unrestored !== null) {
     // Fail closed: an unrestorable checkout makes every merge verdict below
     // untrustworthy, so refuse rather than merge onto unknown residue. Nothing is known of the

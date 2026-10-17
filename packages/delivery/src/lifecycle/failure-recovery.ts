@@ -169,6 +169,7 @@ async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, 
     try {
       await deps.eventPublisher.publish(event);
     } catch (publishError) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the status transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
       console.warn(
         `[failure-recovery.publishEvents] failed to publish audit event for ${item.id} (status transition already committed):`,
         publishError,

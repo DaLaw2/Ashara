@@ -151,6 +151,7 @@ export async function readEach<R, T>(
     try {
       listed.push(await read(row));
     } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failed read is kept as its subject's UnreadSubject, which the step reports as that subject's fault
       const subject = subjectOf(row);
       listed.push(new UnreadSubject(subject.id, subject.projectId, err));
     }

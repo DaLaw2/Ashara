@@ -52,6 +52,7 @@ export async function deleteSettledTaskBranch(targetPath: string, taskId: string
   try {
     await discardTaskBranch(targetPath, taskId);
   } catch (e) {
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the task's verdict is reached; the branch left in the target is deleted by the settled-branch release
     console.warn(`[${taskId}] the branch ${taskBranchName(taskId)} of a task ${settled} could not be deleted and is left in ${targetPath}; the settled-branch release deletes it once the task is Completed: ${describeErrorChain(e)}`);
   }
 }
@@ -248,23 +249,58 @@ export async function taskMergeOnMain(targetPath: string, taskId: string): Promi
   return null;
 }
 
-/** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
-export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
+/**
+ * Whether the checkout's HEAD was read as main before the reset. Only "on-main" lets the restore
+ * skip putting HEAD back on main; "unconfirmed" (another branch, a detached HEAD, a read that
+ * failed) sends it through headOnMainReason, which fails closed.
+ */
+export type HeadReading = "on-main" | "unconfirmed";
+
+/**
+ * Crash recovery: an orphaned --no-commit merge left by a process that died mid-finalize, and a
+ * first read of the branch HEAD names, taken before the checkout is reset so finalize's git calls
+ * keep their order (the reset and the clean follow the read, never precede it).
+ */
+export async function recoverOrphanedMerge(targetPath: string): Promise<HeadReading> {
   if (await mergeInProgress(targetRepo(targetPath))) {
     try {
       await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
     } catch (e) {
-      // Not the verdict: finalize resets the checkout next and refuses to merge while a merge is still staged.
+      // eslint-disable-next-line ashara/catch-continue -- best effort: finalize resets the checkout next and refuses to merge while a merge is still staged (unrestoredReason), so the failed abort reaches no verdict
       console.warn(`[recoverOrphanedMerge] git merge --abort failed in ${targetPath}: ${describeErrorChain(e)}`);
     }
   }
   try {
-    const { stdout } = await runHostGit(targetRepo(targetPath), ["symbolic-ref", "--short", "HEAD"]);
-    if (stdout.trim() !== "main") {
-      await runHostGit(targetRepo(targetPath), ["checkout", "main"]);
-    }
-  } catch (e: unknown) {
-    console.warn(`[recoverOrphanedMerge] Failed to check/restore HEAD in ${targetPath}: ${describeErrorChain(e)}`);
+    const { stdout } = await runHostGit(targetRepo(targetPath), ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    return stdout.trim() === "main" ? "on-main" : "unconfirmed";
+  } catch (e) {
+    // Not the verdict: "unconfirmed" sends the restore through headOnMainReason, which reads HEAD again and refuses when it cannot.
+    console.warn(`[recoverOrphanedMerge] the branch HEAD names in ${targetPath} could not be read before the reset: ${describeErrorChain(e)}`);
+    return "unconfirmed";
+  }
+}
+
+/**
+ * Puts the target checkout's HEAD back on main, where every merge verdict is taken: a process that
+ * died mid-finalize can leave another branch or a detached HEAD checked out, and a merge made there
+ * would be recorded as merged while main never holds it. Run on a checkout already reset to HEAD,
+ * so no local change stands in the checkout's way. Null once HEAD names main; otherwise why not.
+ */
+export async function headOnMainReason(targetPath: string): Promise<string | null> {
+  const repo = targetRepo(targetPath);
+  try {
+    const { stdout } = await runHostGit(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    if (stdout.trim() === "main") return null;
+  } catch (e) {
+    // Exit 1 is a detached HEAD, which the checkout below puts back on main.
+    if (exitCodeOf(e) !== 1) return `the branch HEAD names in ${targetPath} could not be read: ${describeErrorChain(e).slice(0, 300)}`;
+  }
+  try {
+    await runHostGit(repo, ["checkout", "main"]);
+    return null;
+  } catch (e) {
+    const stderr = stderrOf(e);
+    return `HEAD in ${targetPath} is not on main and git checkout main failed: ${describeErrorChain(e).slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}`;
   }
 }
 
@@ -385,6 +421,7 @@ async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"mer
     try {
       if (await mergeInProgress(repo)) await runHostGit(repo, ["merge", "--abort"]);
     } catch (abortError) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the failed merge is thrown as ConflictRetryUnprepared below, so the branch is never dispatched without main
       console.warn(`[mergeMainIntoBranch] the failed merge of main into task ${taskId}'s branch could not be aborted: ${describeErrorChain(abortError)}`);
     }
     throw new ConflictRetryUnprepared(taskId, "merge", describeErrorChain(e), { cause: e });
