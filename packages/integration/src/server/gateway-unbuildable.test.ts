@@ -130,6 +130,7 @@ function compose(url: string) {
     git: refusingGit,
     clock: systemClock,
     taskLanes: (items, run) => Promise.allSettled(items.map(run)),
+    log: { write: () => undefined },
   });
 }
 

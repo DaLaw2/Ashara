@@ -3,7 +3,7 @@ import { createPgPool } from "@ashara/db";
 import { execFileGitRunner, spawnProcess } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured, sdkLanguageModels } from "@ashara/model-access";
 import { concurrentTaskLanes } from "@ashara/delivery";
-import { systemClock } from "@ashara/shared";
+import { stdoutSink, systemClock } from "@ashara/shared";
 import { composeAshara } from "./compose.js";
 import type { AsharaInstance } from "./compose.js";
 import { loadDatabaseUrl } from "./config.js";
@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   const databaseUrl = loadDatabaseUrl();
 
   // The production ports: a plain pg pool, the AI SDK providers, podman spawned directly, the
-  // host's git and the host's clock.
+  // host's git, the host's clock and JSON lines on stdout.
   let ashara: AsharaInstance;
   try {
     ashara = await composeAshara({
@@ -33,6 +33,7 @@ async function main(): Promise<void> {
       git: execFileGitRunner,
       clock: systemClock,
       taskLanes: concurrentTaskLanes,
+      log: stdoutSink,
     });
   } catch (err) {
     if (err instanceof NoLLMProvidersConfigured) {

@@ -12,6 +12,7 @@ import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
+import type { LogRecord, LogSink } from "@ashara/shared";
 import { AdmissionLedger } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
 import { createRunDatabase } from "./database.js";
@@ -95,6 +96,8 @@ export interface RunResult {
   readonly longestQuiet: number;
   /** The last lines production logged: what a reader of a failure looks at first. */
   readonly log: readonly string[];
+  /** The last records every composed instance logged through its log port, each tagged by its instance's `boot`. */
+  readonly records: readonly LogRecord[];
 }
 
 const DEFAULT_CAP_USD = 25;
@@ -137,6 +140,8 @@ export const REPORT_RETRY_MS = 60_000;
  */
 const SETTLE_CYCLES = Math.floor(REPORT_RETRY_MS / IDLE_INTERVAL_MS) + 1;
 const LOG_LINES = 400;
+/** Records kept: a run's whole tail, every instance's records together, at a bounded memory cost. */
+const LOG_RECORDS = 2_000;
 const UNPRICED_NOISE = ["cost unmeasured", "no routing profile for enabled-provider combo"];
 /** Compositions one run may make, restarts included: a boot that fails past it ends the run. */
 const MAX_BOOTS = 50;
@@ -231,6 +236,16 @@ function seededIds(seed: number): () => void {
     Reflect.set(cryptoModule, "randomUUID", original);
     if (typeof webOriginal === "function") Reflect.deleteProperty(globalThis.crypto, "randomUUID");
     syncBuiltinESMExports();
+  };
+}
+
+/** The log port every composed instance writes to: its records go into the run's, the last LOG_RECORDS kept. */
+function capturingSink(records: LogRecord[]): LogSink {
+  return {
+    write(record) {
+      records.push(record);
+      if (records.length > LOG_RECORDS) records.splice(0, records.length - LOG_RECORDS);
+    },
   };
 }
 
@@ -572,6 +587,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     personas.describe(),
   ];
   const log: string[] = [];
+  const records: LogRecord[] = [];
   const violations = new Map<string, Violation>();
   const coverage = emptyCoverage();
   const report = (violation: Violation): void => {
@@ -801,6 +817,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
             git: faultingGit(seam, gitBroker.runner),
             clock,
             taskLanes: interleaver.lanes,
+            log: capturingSink(records),
           });
           handle.abort = () => ashara.abort();
           await ashara.startup();
@@ -1196,5 +1213,6 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     durationMs: Date.now() - started,
     longestQuiet,
     log,
+    records,
   };
 }

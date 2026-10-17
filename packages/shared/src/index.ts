@@ -27,3 +27,8 @@ export { JsonParseFailed, parseJson } from "./json.js";
 
 export type { ElidedText } from "./elided-text.js";
 export { cutText, headBudget, joinElided, keepEnds, renderElided, shownText, uncutText, wholeText } from "./elided-text.js";
+
+export type { LogRecord, LogSink, Logger } from "./log.js";
+export { createLogger, stdoutSink } from "./log.js";
+/** @testseam tests capture records, exact lines and redacted values through these, and parse each line back with the schema */
+export { Secret, jsonLineSink, logRecordSchema, recordingLogger } from "./log.js";

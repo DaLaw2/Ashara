@@ -80,8 +80,8 @@ import { SecretStore } from "@ashara/security";
 import { DevSessionRepository, terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
-import type { Clock, ProjectId } from "@ashara/shared";
-import { contendedWait, parseWorkItemId } from "@ashara/shared";
+import type { Clock, LogSink, ProjectId } from "@ashara/shared";
+import { contendedWait, createLogger, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
 import type { AppDeps } from "./routes.js";
@@ -108,6 +108,8 @@ import { createEventLog } from "./event-log.js";
 // working day; a failed login answers one second after it arrived.
 const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
+// Policy default: info and above reach the log; debug is subprocess and model-call detail.
+const LOG_MIN_LEVEL = "info";
 // The limits of one agent attempt. Its wall clock is Workplace's own 20 minutes
 // (ADR-074 d56); 25 turns is a policy cap on the agent loop.
 const ATTEMPT_POLICY = {
@@ -149,6 +151,8 @@ export interface AsharaPorts {
   readonly clock: Clock;
   /** How the tasks of one cycle's batch run together (production: concurrentTaskLanes). */
   readonly taskLanes: TaskLanes;
+  /** Where every log record of this process goes (production: stdoutSink, one JSON line each). */
+  readonly log: LogSink;
 }
 
 /** One composed Ashara process: what its main starts, serves and shuts down. */
@@ -174,6 +178,8 @@ export interface AsharaInstance {
 
 export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
   const { masterKey, databaseUrl } = ports;
+  // One logger per composition: its boot id tells this process's records from a dead one's.
+  const logger = createLogger({ sink: ports.log, clock: ports.clock, minLevel: LOG_MIN_LEVEL });
   // Fail closed on schema drift: a database that ran a different draft of a
   // migration otherwise surfaces only as a runtime query error.
   try {
@@ -210,16 +216,12 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const config = loadServerConfig(databaseUrl, apiToken);
 
-  // Ladder attempts, execution events and completed cycles go to the server log, timestamped by
-  // the injected clock. A ladder attempt's capability, attempt number, validation errors and raw
-  // excerpt are in no llm_calls column, and an attempt the ladder judged invalid can be an ok
-  // provider call there.
+  // Ladder attempts, execution events and completed cycles go to the server log as records,
+  // timestamped by the injected clock. A ladder attempt's capability, attempt number, validation
+  // errors and raw excerpt are in no llm_calls column, and an attempt the ladder judged invalid can
+  // be an ok provider call there.
   // An event its schema refuses is logged at error with its issues, never thrown into the caller.
-  const eventLog = createEventLog(
-    ports.clock,
-    (line) => console.log(line),
-    (error) => console.error("[event] refused:", error),
-  );
+  const eventLog = createEventLog(logger);
   const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
 
   // Finance's cost ledger (K10), its one spend cap and its one work ledger, all on llm_calls: before

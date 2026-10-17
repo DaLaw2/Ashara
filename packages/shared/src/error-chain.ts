@@ -28,7 +28,7 @@ const CUT_STRING_CHARS = 4_000;
 const FALLBACK_TEXT_CHARS = 1_000;
 
 /** A JSON value: what a serialized error's own fields are reduced to, so the chain stays plain data. */
-type JsonValue = string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+export type JsonValue = string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
 /**
  * Why a chain is not whole: `depth` cut at MAX_CAUSE_DEPTH, `cycle` a cause that is an earlier

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { logRecordSchema } from "@ashara/shared";
 import { diffExpected } from "./expected-failures.js";
 import { minimize } from "./minimize.js";
 import { seeded, statements, useSimulatorDatabase } from "./simulator-harness.js";
@@ -20,6 +21,9 @@ describe("lifecycle simulator, fast tier", () => {
     it(`seed ${seed} fails exactly its listed violations`, async () => {
       const result = await seeded(seed);
       expect(diffExpected(result, {}), statements(result)).toEqual({ unexpected: [], missing: [] });
+      // Production's log port reaches the run: each completed cycle is a record the reader keys by event.
+      expect(result.records.filter((record) => record.event === "delivery.cycle-complete").length).toBeGreaterThan(0);
+      for (const record of result.records) logRecordSchema.parse(JSON.parse(JSON.stringify(record)));
     }, 90_000);
   }
 });

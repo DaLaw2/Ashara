@@ -3,9 +3,7 @@ import { CapabilityLevelSchema } from "@ashara/finance";
 import type { LadderAttemptEvent } from "@ashara/finance";
 import { AttemptEventNameSchema, ProjectEventNameSchema } from "@ashara/quality";
 import type { ExecutionEventSink } from "@ashara/quality";
-import type { Clock } from "@ashara/shared";
-
-const EVENT_LINE_PREFIX = "[event] ";
+import type { Logger } from "@ashara/shared";
 
 const count = z.number().int().nonnegative();
 
@@ -30,21 +28,15 @@ const cycleCompleteSchema = z.strictObject({
 });
 
 // Execution events carry their own fields beside a closed name. An attempt's event names its task
-// and attempt; a project's names its project. None brings a field named `timestamp`: the writer
-// adds that one.
+// and attempt; a project's names its project.
 const eventField = z.union([z.json(), z.undefined()]);
-const noTimestamp = (e: object): boolean => !Object.hasOwn(e, "timestamp");
-const NO_TIMESTAMP = "brings its own timestamp; the writer adds it";
 const executionEventSchema = z.union([
-  z
-    .object({ event: AttemptEventNameSchema, taskId: z.string().min(1), attempt: count })
-    .catchall(eventField)
-    .refine(noTimestamp, NO_TIMESTAMP),
-  z
-    .object({ event: ProjectEventNameSchema, projectId: z.string().min(1) })
-    .catchall(eventField)
-    .refine(noTimestamp, NO_TIMESTAMP),
+  z.object({ event: AttemptEventNameSchema, taskId: z.string().min(1), attempt: count }).catchall(eventField),
+  z.object({ event: ProjectEventNameSchema, projectId: z.string().min(1) }).catchall(eventField),
 ]);
+
+/** An event's fields once its schema accepted it: every value JSON, an absent one dropped. */
+const eventFieldsSchema = z.record(z.string(), z.json());
 
 type EventLine =
   | ({ readonly event: "ladder_attempt" } & LadderAttemptEvent)
@@ -55,6 +47,18 @@ function schemaFor(event: EventLine): z.ZodType {
   if (event.event === "ladder_attempt") return ladderAttemptSchema;
   if (event.event === "cycle_complete") return cycleCompleteSchema;
   return executionEventSchema;
+}
+
+/** The record's event name: the context whose vocabulary names the event, then the name in kebab case. */
+function recordEventName(event: EventLine): `${string}.${string}` {
+  const what = event.event.replaceAll("_", "-");
+  if (event.event === "ladder_attempt") return `model-access.${what}`;
+  if (event.event === "cycle_complete") return `delivery.${what}`;
+  return `quality.${what}`;
+}
+
+function issueLines(error: z.ZodError): string[] {
+  return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
 }
 
 /** An event that does not match its schema: written, it would be a log line no reader can trust. */
@@ -73,22 +77,30 @@ interface EventLog {
 }
 
 /**
- * The one writer of `[event]` lines: each event is validated against its schema, then written as
- * one JSON object led by an ISO-8601 UTC timestamp from the injected clock, so a simulated run's
- * log reads the simulated time. An event's types admit only JSON values; one the schema still
- * refuses (a NaN count) is handed to `refuse` and no line is written. Emitting never throws: a log
- * line is never a reason for the dispatch path that emits it to stop.
+ * The one writer of the loop's events: each event is validated against its schema, then logged at
+ * info as one record named `<context>.<event-in-kebab-case>` holding the event's own fields, so a
+ * simulated run's records carry the simulated time the logger's clock reads. An event's types
+ * admit only JSON values; one the schema still refuses (a NaN count) is logged at error as
+ * `server.event-refused` with its issues, and no event record is written. Emitting never throws: a
+ * log line is never a reason for the dispatch path that emits it to stop.
  */
-export function createEventLog(clock: Clock, write: (line: string) => void, refuse: (error: EventLineInvalid) => void): EventLog {
+export function createEventLog(logger: Logger): EventLog {
+  const refuse = (error: EventLineInvalid): void =>
+    logger.error("server.event-refused", error.message, { event: error.event, issues: [...error.issues] }, error);
   return {
     emit(event) {
       const parsed = schemaFor(event).safeParse(event);
       if (!parsed.success) {
-        refuse(new EventLineInvalid(event.event, parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)));
+        refuse(new EventLineInvalid(event.event, issueLines(parsed.error)));
         return;
       }
-      const timestamp = new Date(clock.now()).toISOString();
-      write(`${EVENT_LINE_PREFIX}${JSON.stringify({ timestamp, ...event })}`);
+      const present = Object.entries(event).filter(([key, value]) => key !== "event" && value !== undefined);
+      const fields = eventFieldsSchema.safeParse(Object.fromEntries(present));
+      if (!fields.success) {
+        refuse(new EventLineInvalid(event.event, issueLines(fields.error)));
+        return;
+      }
+      logger.info(recordEventName(event), event.event.replaceAll("_", " "), fields.data);
     },
   };
 }
