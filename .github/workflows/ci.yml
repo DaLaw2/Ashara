@@ -136,13 +136,14 @@ jobs:
       - name: Install headless Chromium
         run: npx playwright install --with-deps --only-shell chromium
 
-      # packages/integration/src/execution-infra/cell.podman.test.ts runs real cells, never skipped, on the
-      # podman of ubuntu-latest's runner image; catatonit backs `podman run --init` and is installed
-      # explicitly rather than assumed. README.md names every podman version the suite passes on, so a
-      # runner image that moves to an unnamed version fails here until README.md names it. Cells run
-      # with --pull=never, so the pinned BaseCell image is pulled here, by the reference
-      # config/base-cell.toml names.
-      - name: Prepare podman and the BaseCell image
+      # The podman tests run real cells, never skipped, on the podman of ubuntu-latest's runner image;
+      # catatonit backs `podman run --init` and is installed explicitly rather than assumed. README.md
+      # names every podman version the suite passes on, so a runner image that moves to an unnamed
+      # version fails here until README.md names it. Cells run with --pull=never, so every pinned image
+      # a run needs (the BaseCell config/base-cell.toml names and the images
+      # packages/integration/test-images.json names) is pulled here by the script `just test-images`
+      # runs; the suite's globalSetup stops the run if any is absent.
+      - name: Prepare podman and the pinned test images
         run: |
           sudo apt-get update
           sudo apt-get install -y podman catatonit
@@ -153,17 +154,7 @@ jobs:
             echo "::error::README.md does not name podman ${podman_version}, the version this runner tests on."
             exit 1
           fi
-          image="$(sed -n 's/^image = "\(.*\)"$/\1/p' config/base-cell.toml)"
-          test -n "$image"
-          podman pull "$image"
-          # The busybox cell cell.podman.test.ts runs beside the BaseCell, by the reference it names.
-          alpine="$(sed -n 's/^const ALPINE_IMAGE = "\(.*\)";$/\1/p' packages/integration/src/execution-infra/cell.podman.test.ts)"
-          test -n "$alpine"
-          podman pull "$alpine"
-          # The cell with a git client cell.podman.test.ts runs to read a cell's own repository, by the reference it names.
-          gitimage="$(sed -n 's/^const GIT_IMAGE = "\(.*\)";$/\1/p' packages/integration/src/execution-infra/cell.podman.test.ts)"
-          test -n "$gitimage"
-          podman pull "$gitimage"
+          npx tsx packages/integration/src/test-images-pull.ts
 
       - name: Run migrations
         run: npx tsx scripts/migrate.ts

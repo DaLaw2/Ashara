@@ -53,7 +53,7 @@ describe("ci.yml", () => {
   });
 
   test("the podman step fails unless README.md names the runner's podman version", () => {
-    const prepare = workflow.jobs.test.steps.find((step) => step.name === "Prepare podman and the BaseCell image");
+    const prepare = workflow.jobs.test.steps.find((step) => step.name === "Prepare podman and the pinned test images");
     expect(prepare?.run).toContain('grep -qF "podman ${podman_version}" README.md');
   });
 });

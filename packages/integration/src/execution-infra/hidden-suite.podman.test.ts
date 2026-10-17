@@ -6,14 +6,15 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { testCellInstance } from "../test-cells.js";
+import { TEST_IMAGES } from "../test-images.js";
 
 // The hidden-suite runner (scripts/hidden-suite.ts) on real podman, no skip, against throwaway suites and products
 // this file writes: a suite's verdict is judged by the runner, and a suite that crashes, hangs, omits a guarantee,
 // writes no valid verdict or changes its own files never reads as pass.
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
-/** A busybox image, pinned like the BaseCell; .github/workflows/ci.yml pulls it by this reference. */
-const ALPINE_IMAGE = "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e";
+/** A busybox image, pinned like the BaseCell. */
+const ALPINE_IMAGE = TEST_IMAGES.alpine;
 const run = promisify(execFile);
 
 const storedVerdictSchema = z.object({

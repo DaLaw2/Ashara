@@ -5,11 +5,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { probeEnvironmentWrite } from "@ashara/quality";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { testCellInstance } from "../test-cells.js";
+import { TEST_IMAGES } from "../test-images.js";
 
 // The environment-file write probe: real podman, real git, no skip.
 
-/** pinned like the BaseCell; .github/workflows/ci.yml pulls it by this reference. */
-const ALPINE_IMAGE = "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e";
+/** A busybox image, pinned like the BaseCell. */
+const ALPINE_IMAGE = TEST_IMAGES.alpine;
 
 let mountRoot = "";
 let substrate: PodmanSubstrate;

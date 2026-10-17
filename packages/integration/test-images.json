@@ -1,0 +1,4 @@
+{
+  "alpine": "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e",
+  "git": "docker.io/library/buildpack-deps:bookworm-scm@sha256:17923645546d74acef88727bce62c23bbaed953fc7097c41a8b777bba3ca98de"
+}

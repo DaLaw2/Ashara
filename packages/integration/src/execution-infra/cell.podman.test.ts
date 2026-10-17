@@ -18,6 +18,7 @@ import {
 } from "@ashara/execution-infra";
 import { recordingLogger } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
+import { TEST_IMAGES } from "../test-images.js";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
 // absent reports the same green as one that ran.
@@ -29,10 +30,10 @@ async function ps(filter: string): Promise<z.infer<typeof psSchema>> {
   return psSchema.parse(JSON.parse(stdout));
 }
 
-/** A busybox image, pinned like the BaseCell; .github/workflows/ci.yml pulls it by this reference. */
-const ALPINE_IMAGE = "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e";
-/** An image with a git client and no entrypoint, pinned; .github/workflows/ci.yml pulls it by this reference. */
-const GIT_IMAGE = "docker.io/library/buildpack-deps:bookworm-scm@sha256:17923645546d74acef88727bce62c23bbaed953fc7097c41a8b777bba3ca98de";
+/** A busybox image, pinned like the BaseCell. */
+const ALPINE_IMAGE = TEST_IMAGES.alpine;
+/** An image with a git client and no entrypoint, pinned. */
+const GIT_IMAGE = TEST_IMAGES.git;
 const instance = testCellInstance();
 const task = `task-${randomUUID()}`;
 const strayIds: string[] = [];

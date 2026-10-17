@@ -44,6 +44,11 @@ check-docs:
 typecheck-full:
     npm run --silent typecheck:full
 
+# Pulls every pinned image a test run needs: the BaseCell and packages/integration/test-images.json.
+# A test run never pulls; its globalSetup stops it before any test when one is absent and names this.
+test-images:
+    timeout 1200 npx tsx packages/integration/src/test-images-pull.ts
+
 # Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.ts globalSetup)
 # answers by removing the run's cells before vitest exits; SIGKILL only if the run is still alive
 # 150 s later. That grace outlasts the guard's signal-time removal at its worst, one podman listing
