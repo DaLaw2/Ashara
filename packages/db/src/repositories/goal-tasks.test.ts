@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
 import { workItems } from "../schema/index.js";
 import { ClientRepository } from "./client.js";
-import { completedGoalTasks, isGoalTask } from "./goal-tasks.js";
+import { completedGoalTasks, goalTaskSql, isGoalTask } from "./goal-tasks.js";
 import { ProjectRepository } from "./project.js";
 
 // Every row here belongs to a project this suite creates under a unique name; deleting the project
@@ -63,5 +63,37 @@ describe("completedGoalTasks and isGoalTask: one definition of a goal task", () 
       expect({ id: row.id, listed: listed.has(row.id), predicate: isGoalTask(row) }).toEqual({ id: row.id, listed: row.goal, predicate: row.goal });
     }
     expect(listed.has(epic)).toBe(false);
+  });
+
+  // SQL readers (Engagement's given-up goal tasks, Quality's acceptance readiness) take goalTaskSql;
+  // it must select exactly the rows isGoalTask names, whatever their level, origin or status.
+  test("goalTaskSql selects exactly the rows isGoalTask names, across levels, origins, a missing origin and statuses", async () => {
+    const own = (await new ProjectRepository(db).create(`goal-tasks-test-${NONCE}-sql`, (await new ClientRepository(db).create(`goal-tasks-test-${NONCE}-sql-client`)).id)).id;
+    const rows = [
+      { level: "Epic", origin: "decomposition", status: "Completed" },
+      { level: "Task", origin: "decomposition", status: "Completed" },
+      { level: "Task", origin: "decomposition", status: "Abandoned" },
+      { level: "Task", origin: "decomposition", status: "Pending" },
+      { level: "Task", origin: "review", status: "Completed" },
+      { level: "Task", origin: "environment-change", status: "Abandoned" },
+      { level: "Task", origin: "sprint0", status: "Completed" },
+      { level: "Task", origin: null, status: "Completed" },
+    ] as const;
+    const fixture = rows.map((row) => ({ ...row, id: randomUUID() }));
+    await db.insert(workItems).values(
+      fixture.map((row, i) => ({
+        id: row.id,
+        level: row.level,
+        status: row.status,
+        title: `row ${i}`,
+        taskSpec: row.origin === null ? {} : { origin: row.origin },
+        projectId: own,
+      })),
+    );
+
+    const selected = await db.select({ id: workItems.id }).from(workItems).where(and(eq(workItems.projectId, own), goalTaskSql));
+    const expected = fixture.filter((row) => isGoalTask(row)).map((row) => row.id);
+    expect(new Set(selected.map((row) => row.id))).toEqual(new Set(expected));
+    expect(expected).toHaveLength(3);
   });
 });

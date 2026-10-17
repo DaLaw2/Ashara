@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, isGoalTask, ProjectRepository } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import {
@@ -394,6 +394,47 @@ describe("acceptance on main", () => {
     const [body] = await reportsOf(projectId);
     expect(body).toContain(`These tasks were given up, and the plan was revised around them:\n- "List keys"`);
     expect(body).not.toContain("Watch keys");
+  });
+
+  // One definition of a goal task (isGoalTask): Quality's readiness and Engagement's given-up list
+  // read it in SQL, and each must select the rows the in-memory definition names.
+  test("acceptance readiness and the given-up list select the goal tasks isGoalTask names, never a task of another origin or level", async () => {
+    const { projectId, goals, scaffold } = await deliveredProject();
+    const insert = async (level: string, status: string, title: string, spec: unknown, reason: unknown = null): Promise<void> => {
+      await db.execute(sql`
+        INSERT INTO work_items (id, level, status, title, task_spec, blocked_reason, project_id)
+        VALUES (${randomUUID()}, ${level}, ${status}, ${title}, ${JSON.stringify(spec)}::jsonb, ${reason === null ? null : JSON.stringify(reason)}::jsonb, ${projectId})`);
+    };
+    const rowsOf = async () =>
+      z
+        .array(z.object({ id: z.string(), level: z.string(), status: z.string(), title: z.string(), origin: z.string().nullable(), source: z.string().nullable() }))
+        .parse((await db.execute(sql`
+          SELECT id, level, status, title, task_spec->>'origin' AS origin, blocked_reason->>'source' AS source
+          FROM work_items WHERE project_id = ${projectId} ORDER BY updated_at, id`)).rows);
+    const ready = async () => (await acceptanceStore().readyForAcceptance()).some((row) => row.projectId === projectId);
+
+    // No Completed goal task: the decomposed ones are re-recorded as another origin, beside an Epic
+    // the decomposition wrote and a Task whose origin was never recorded.
+    for (const goal of goals) await setSpec(goal, "origin", "review");
+    await insert("Epic", "Completed", "The decomposed epic", { origin: "decomposition" });
+    await insert("Task", "Completed", "A task planned before its origin was recorded", {});
+    expect((await rowsOf()).filter((row) => row.status === "Completed" && isGoalTask(row))).toEqual([]);
+    expect(await ready()).toBe(false);
+
+    for (const goal of goals) await setSpec(goal, "origin", "decomposition");
+    expect(await ready()).toBe(true);
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+
+    const givenUp = { source: "failure_given_up", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 };
+    await insert("Task", "Abandoned", "List keys", { origin: "decomposition" }, givenUp);
+    await insert("Task", "Abandoned", "Review again", { origin: "review" }, givenUp);
+    await insert("Task", "Abandoned", "Change the environment", { origin: "environment-change" }, givenUp);
+    await insert("Task", "Abandoned", "An old task", {}, givenUp);
+    await insert("Epic", "Abandoned", "An abandoned epic", { origin: "decomposition" }, givenUp);
+    const expected = (await rowsOf()).filter((row) => row.status === "Abandoned" && row.source !== "superseded" && isGoalTask(row)).map((row) => row.title);
+    expect(expected).toEqual(["List keys"]);
+    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    expect(due?.kind === "due" ? due.givenUp : due).toEqual(expected);
   });
 
   test("a sweep recorded without what it ran states no way of running the product as verified, and one whose record does not parse is refused", async () => {

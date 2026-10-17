@@ -1,3 +1,5 @@
+import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
+import type { SecondOpinionStrength } from "@ashara/finance";
 import { describeErrorChain, faultBackoffSeconds, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
@@ -55,7 +57,7 @@ export type UndecidedBy = false | "unsettled" | "review-failed" | "clean-contrad
  * 3 decision 12): another model family, another model of the same family, or the same model asked
  * again from another angle.
  */
-export type ReviewStrength = "other-family" | "same-family-other-model" | "same-model";
+export type ReviewStrength = SecondOpinionStrength;
 
 /**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
@@ -428,8 +430,6 @@ const REVIEWED_BY: Readonly<Record<ReviewStrength, string>> = {
   "same-model": "the same model as the first review asked again from another angle, which shares every one of its blind spots",
 };
 
-const STRENGTH_ORDER = ["other-family", "same-family-other-model", "same-model"] as const satisfies readonly ReviewStrength[];
-
 /**
  * Which asked-for items no stored check decides, listed; then how many are decided by a stored check
  * and confirmed by a second review of those checks. Only those are counted: an item a review left
@@ -468,7 +468,7 @@ function coverageSection(vision: VisionCoverage): string {
 function confirmedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
   const decided = vision.items.filter((item) => askedFor(item.source) && item.checked && item.undecided === false);
-  const byStrength = STRENGTH_ORDER.flatMap((strength) => {
+  const byStrength = SECOND_OPINION_STRENGTHS.flatMap((strength) => {
     const confirmed = decided.filter((item) => item.review === strength);
     if (confirmed.length === 0) return [];
     return [
@@ -523,7 +523,7 @@ function undecidedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
   const asked = vision.items.filter((item) => askedFor(item.source) && item.checked);
   return UNDECIDED_ORDER.flatMap((why) =>
-    [...STRENGTH_ORDER, null].flatMap((strength) => {
+    [...SECOND_OPINION_STRENGTHS, null].flatMap((strength) => {
       const undecided = asked.filter((item) => item.undecided === why && item.review === strength);
       if (undecided.length === 0) return [];
       return [

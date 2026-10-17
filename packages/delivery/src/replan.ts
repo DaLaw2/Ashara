@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isGoalTask } from "@ashara/db";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { DomainEvent, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { withStructuredLadder } from "./acl/finance-acl.js";
@@ -120,7 +121,7 @@ interface PlanRevisionWork {
   /** Whether the revision sets up the project environment again (an environment change). */
   readonly newEnvironmentTask: boolean;
   readonly supersededTasks: readonly string[];
-  /** Superseded check and environment tasks. */
+  /** Superseded tasks that are not goal tasks (isGoalTask): check, review and setup tasks, and any whose origin was never recorded. */
   readonly supersededOther: number;
   readonly keptCompleted: number;
 }
@@ -525,16 +526,23 @@ function isTask(planned: PlannedItem): boolean {
   return planned.item.level === "Task";
 }
 
-function isGoalTask(item: WorkItem): boolean {
-  const origin = item.taskSpec?.origin;
-  return (
-    origin !== "check" &&
-    origin !== "sprint0" &&
-    origin !== "product-scaffold" &&
-    origin !== "acceptance" &&
-    item.workKind !== "environment" &&
-    item.workKind !== "check"
-  );
+/** A work item read as isGoalTask reads its row: the level and the task_spec.origin, null where none is recorded. */
+function goalTask(item: WorkItem): boolean {
+  return isGoalTask({ level: item.level, origin: item.taskSpec?.origin ?? null });
+}
+
+/**
+ * The superseded tasks as a revision's summary tells them: each goal task (isGoalTask) by title, as
+ * the revision's new goal tasks are; every other task (a check, review or setup task, or one whose
+ * origin was never recorded) only counted.
+ *
+ * @testseam replan.test.ts classifies superseded tasks without a model; Replanner.compose is its production caller
+ */
+export function setAsideWork(tasks: readonly WorkItem[]): { readonly supersededTasks: readonly string[]; readonly supersededOther: number } {
+  return {
+    supersededTasks: tasks.filter(goalTask).map((item) => item.title),
+    supersededOther: tasks.filter((item) => !goalTask(item)).length,
+  };
 }
 
 function isEnvironmentTask(item: WorkItem): boolean {
@@ -562,13 +570,13 @@ function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
 }
 
 /**
- * The vision items the stored checks of a completed decomposed task decide (ADR-083), so a revision
+ * The vision items the stored checks of a completed goal task (isGoalTask) decide (ADR-083), so a revision
  * need not give them a task again. What the task cites is never read here: an item it cites that no
  * stored check decides, a check stored before decides was recorded or a task completed with no
  * stored checks, is planned again.
  */
 function checkedByDone(completed: readonly PlannedItem[]): VisionItem[] {
-  return completed.flatMap(({ item, decided }) => (item.taskSpec?.origin === "decomposition" ? [...decided] : []));
+  return completed.flatMap(({ item, decided }) => (goalTask(item) ? [...decided] : []));
 }
 
 /** The work already done, kept as the revision's context: titles and what merged them. */
@@ -802,15 +810,14 @@ export class Replanner implements Replanning {
       return { item, previousStatus };
     });
 
-    const supersededTasks = superseded.filter(({ item }) => item.level === "Task");
+    const setAside = setAsideWork(superseded.filter(({ item }) => item.level === "Task").map(({ item }) => item));
     const origins = decomposition.tasks.map((task) => task.taskSpec.origin);
     const work: PlanRevisionWork = {
       newTasks: decomposition.tasks.filter((task) => task.taskSpec.origin === "decomposition").map((task) => task.title),
       newCheckTasks: origins.filter((origin) => origin === "check").length,
       newReviewTasks: origins.filter((origin) => origin === "review").length,
       newEnvironmentTask: environment.kind === "new",
-      supersededTasks: supersededTasks.filter(({ item }) => isGoalTask(item)).map(({ item }) => item.title),
-      supersededOther: supersededTasks.filter(({ item }) => !isGoalTask(item)).length,
+      ...setAside,
       keptCompleted: completed.length,
     };
     return {

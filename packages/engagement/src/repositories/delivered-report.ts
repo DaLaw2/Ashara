@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, goalTaskSql, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
@@ -203,9 +204,8 @@ async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<strin
     .where(
       and(
         eq(workItems.projectId, projectId),
-        eq(workItems.level, "Task"),
         eq(workItems.status, "Abandoned"),
-        sql`${workItems.taskSpec}->>'origin' = 'decomposition'`,
+        goalTaskSql,
         sql`${workItems.blockedReason}->>'source' IS DISTINCT FROM 'superseded'`,
       ),
     )
@@ -474,7 +474,7 @@ class UndecidedItemUnsourced extends ReportRecordUnreadable {
 }
 
 /** The strength of a second review as stored (migration 073); null where none answered. */
-const StoredStrengthSchema = z.enum(["other-family", "same-family-other-model", "same-model"]).nullable();
+const StoredStrengthSchema = z.enum(SECOND_OPINION_STRENGTHS).nullable();
 
 /** A stored second review's strength does not parse, or a confirmed claim records none. */
 class ReviewStrengthUnreadable extends ReportRecordUnreadable {
@@ -602,14 +602,12 @@ function confirmationOf(confirmations: ReadonlyMap<string, ClaimConfirmation>, c
   return standing === undefined || standing.kind === "unconfirmed" ? null : standing.strength;
 }
 
-/** Strongest first: an item decided by several check tasks is confirmed only as strongly as the weakest of them. */
-const STRENGTH_RANK: Readonly<Record<ReviewStrength, number>> = { "other-family": 0, "same-family-other-model": 1, "same-model": 2 };
-
+/** An item decided by several check tasks is confirmed only as strongly as the weakest of them (SECOND_OPINION_STRENGTHS is strongest first). */
 function weakestConfirmation(strengths: ReadonlyArray<ReviewStrength | null>): ReviewStrength | null {
   let weakest: ReviewStrength | null = null;
   for (const strength of strengths) {
     if (strength === null) return null;
-    if (weakest === null || STRENGTH_RANK[strength] > STRENGTH_RANK[weakest]) weakest = strength;
+    if (weakest === null || SECOND_OPINION_STRENGTHS.indexOf(strength) > SECOND_OPINION_STRENGTHS.indexOf(weakest)) weakest = strength;
   }
   return weakest;
 }

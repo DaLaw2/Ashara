@@ -1,5 +1,5 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
+import { acceptanceSweeps, completedGoalTasks, goalTaskSql, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { ExecutedCheck } from "../verification.js";
@@ -21,8 +21,8 @@ const readyForAcceptance = sql`(${projectAtWork()}
   AND ${noOpenAnswer()}
   AND NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id AND w.level = 'Task'
     AND w.status IN ('Pending', 'InProgress', 'Blocked', 'Failed'))
-  AND EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id AND w.level = 'Task'
-    AND w.status = 'Completed' AND w.task_spec->>'origin' = 'decomposition'))`;
+  AND EXISTS (SELECT 1 FROM ${workItems} WHERE ${workItems.projectId} = projects.id
+    AND ${workItems.status} = 'Completed' AND ${goalTaskSql}))`;
 
 /** A Completed product scaffold with the merge its completion recorded; null when none is on record. */
 interface RecordedScaffold {
@@ -34,7 +34,7 @@ interface ReadyProjectRow {
   readonly projectId: ProjectId;
   /** null when no workspace was ever minted: nothing can be swept, and the caller says so. */
   readonly workspacePath: string | null;
-  /** The project's Completed goal tasks (decomposition), oldest completion first. */
+  /** The project's Completed goal tasks (isGoalTask), oldest completion first. */
   readonly goalTaskIds: readonly string[];
   /** The project's Completed product scaffolds with their recorded merges, oldest completion first. */
   readonly scaffoldMerges: readonly RecordedScaffold[];

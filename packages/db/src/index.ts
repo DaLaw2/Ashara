@@ -38,7 +38,7 @@ export {
 export { ProjectRepository, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projectHalted } from "./repositories/project.js";
 export type { ProjectRecord } from "./repositories/project.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
-export { completedGoalTasks, isGoalTask } from "./repositories/goal-tasks.js";
+export { completedGoalTasks, goalTaskSql, isGoalTask } from "./repositories/goal-tasks.js";
 export { stepFaultLedger } from "./repositories/step-fault.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
