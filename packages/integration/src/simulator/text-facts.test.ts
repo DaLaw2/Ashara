@@ -15,6 +15,7 @@ const none: TextFactRecords = {
   reviewSpec: null,
   firstPlan: { report: null, items: [], revisions: [] },
   interfaceOnMain: { kind: "not-held" },
+  intakeReading: { confirmation: "not-needed", secondStrength: null, secondQuestions: null },
 };
 
 const asked = { key: "A1", statement: "Commands wait for the lock.", status: "Inferred", kind: "client-visible", disclosed: "asked" };
@@ -100,6 +101,33 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
     expect(keysOf({ visions: [vision], tenderReports: [under("How we will build it (our own design choices):")] })).toEqual([]);
     expect(keysOf({ visions: [vision], tenderReports: [under("What the product will do:")] })).toEqual(["assumptions-report:A2"]);
     expect(keysOf({ visions: [vision], tenderReports: [] })).toEqual(["assumptions-report"]);
+  });
+});
+
+describe("checkTextFacts, the tender's reading", () => {
+  const confirmed = { confirmation: "confirmed", secondStrength: "same-family-other-model", secondQuestions: 0 };
+  const told = { id: "r2", body: "We read your tender and found nothing in it we need to ask you. A second reading of it, by another model of the same family as the first reading, which shares more, found nothing to ask either." };
+  const delivered = (sentence: string) => ({ sweepId: "s1", body: `Your project is delivered.\n\n${sentence}\n\nNothing more is built.`, mainCommit: "c".repeat(40), visionAtAcceptance: 1 });
+
+  it("holds a reading that asked nothing to one report naming the second reading's strength, and the delivered report too", () => {
+    const sentence = "When your tender was read, the first reading found nothing in it to ask you, and a second reading, by another model of the same family as the first reading, found nothing to ask either.";
+    expect(keysOf({ intakeReading: confirmed, tenderReports: [told], delivered: [delivered(sentence)] })).toEqual([]);
+    expect(keysOf({ intakeReading: { ...confirmed, secondStrength: "other-family" }, tenderReports: [told], delivered: [delivered(sentence)] })).toEqual(["reading-report", "delivered-reading"]);
+    expect(keysOf({ intakeReading: confirmed, tenderReports: [], delivered: [] })).toEqual(["reading-report"]);
+  });
+
+  it("holds an unconfirmed reading to a report that says so, and a delivered report that names it not verified", () => {
+    const unconfirmed = { confirmation: "unconfirmed", secondStrength: null, secondQuestions: null };
+    const report = { id: "r3", body: "We read your tender and found nothing in it to ask, but no second reading of it could be had to confirm that, so that reading is unconfirmed." };
+    const sentence = "When your tender was read, it found nothing in it to ask you, and no second reading could be had to confirm that: that your tender left nothing to ask is not verified by Ashara.";
+    expect(keysOf({ intakeReading: unconfirmed, tenderReports: [report], delivered: [delivered(sentence)] })).toEqual([]);
+    expect(keysOf({ intakeReading: unconfirmed, tenderReports: [report], delivered: [delivered("When your tender was read, it was fine.")] })).toEqual(["delivered-reading"]);
+  });
+
+  it("names a reading report for a reading that asked questions, and a delivered report silent on a reading not on record", () => {
+    expect(keysOf({ tenderReports: [told] })).toEqual(["reading-report"]);
+    expect(keysOf({ intakeReading: null, delivered: [delivered("Nothing about the tender.")] })).toEqual(["delivered-reading"]);
+    expect(keysOf({ intakeReading: null, delivered: [delivered("How your tender was read is not on record for this project.")] })).toEqual([]);
   });
 });
 

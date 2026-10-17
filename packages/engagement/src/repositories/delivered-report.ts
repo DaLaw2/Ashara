@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
-import type { DeliveredReportFailureRecord, ReviewStrength, UndecidedBy } from "../delivered-report.js";
+import type { DeliveredReportFailureRecord, ReadingTold, ReviewStrength, UndecidedBy } from "../delivered-report.js";
 import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
@@ -73,6 +73,7 @@ interface DueDeliveredReportRow {
   readonly givenUp: readonly string[];
   readonly executed: ExecutedChecks;
   readonly vision: VisionCoverage;
+  readonly reading: ReadingTold;
 }
 
 /** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before migration 065. */
@@ -613,6 +614,45 @@ function weakestConfirmation(strengths: ReadonlyArray<ReviewStrength | null>): R
   return weakest;
 }
 
+/** intake_readings (migration 074) as the report reads it; its CHECKs hold the second reading to its confirmation. */
+const IntakeReadingRowSchema = z.discriminatedUnion("confirmation", [
+  z.object({ confirmation: z.literal("not-needed") }),
+  z.object({ confirmation: z.literal("confirmed"), secondStrength: StoredStrengthSchema.unwrap() }),
+  z.object({ confirmation: z.literal("questions-raised"), secondStrength: StoredStrengthSchema.unwrap(), secondQuestions: z.number().int().min(1) }),
+  z.object({ confirmation: z.literal("unconfirmed") }),
+]);
+
+/** A stored intake reading does not read as one. */
+class IntakeReadingUnreadable extends ReportRecordUnreadable {
+  constructor(
+    readonly projectId: string,
+    readonly detail: string,
+  ) {
+    super(`intake_readings row of project ${projectId} does not read as a reading of its tender: ${detail}`);
+    this.name = "IntakeReadingUnreadable";
+  }
+}
+
+/** How the project's tender was read (migration 074); unrecorded for a project taken in before it. */
+async function readingOf(db: DbHandle, projectId: string): Promise<ReadingTold> {
+  const [row] = await db
+    .select({ confirmation: intakeReadings.confirmation, secondStrength: intakeReadings.secondStrength, secondQuestions: intakeReadings.secondQuestions })
+    .from(intakeReadings)
+    .where(eq(intakeReadings.projectId, projectId));
+  if (row === undefined) return { kind: "unrecorded" };
+  const parsed = IntakeReadingRowSchema.safeParse(row);
+  if (!parsed.success) throw new IntakeReadingUnreadable(projectId, z.prettifyError(parsed.error));
+  const reading = parsed.data;
+  switch (reading.confirmation) {
+    case "confirmed":
+      return { kind: "confirmed", strength: reading.secondStrength };
+    case "questions-raised":
+      return { kind: "questions-raised", strength: reading.secondStrength, questions: reading.secondQuestions };
+    default:
+      return { kind: reading.confirmation };
+  }
+}
+
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */
 class AcceptedSweepWithoutMain extends ReportRecordUnreadable {
   constructor(readonly sweepId: string) {
@@ -668,6 +708,7 @@ async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredRep
     givenUp: await givenUpGoalTitles(db, row.projectId),
     executed: await executedChecksOf(db, row.id, row.executedChecks),
     vision: await visionCoverage(db, { id: row.id, projectId: row.projectId, acceptedAt: row.acceptedAt }, goalIds),
+    reading: await readingOf(db, row.projectId),
   };
 }
 

@@ -68,6 +68,32 @@ export const clientMessages = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// intake_readings (migration 074, ADR-084 addenda 2 and 3 applied to intake, Engagement context)
+// ---------------------------------------------------------------------------
+// One row per project, written with vision v1: how many questions the tender's first reading asked
+// and, when it asked none, the second reading that confirmed it or raised questions, with its
+// strength, or that none answered at any strength. Its consistency is CHECKs in the migration.
+
+export const intakeReadings = pgTable("intake_readings", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  tenderId: uuid("tender_id")
+    .notNull()
+    .references(() => clientMessages.id, { onDelete: "cascade" }),
+  firstProvider: text("first_provider").notNull(),
+  firstModel: text("first_model").notNull(),
+  firstQuestions: integer("first_questions").notNull(),
+  confirmation: text().notNull(),
+  secondStrength: text("second_strength"),
+  secondProvider: text("second_provider"),
+  secondModel: text("second_model"),
+  secondQuestions: integer("second_questions"),
+  passedOver: jsonb("passed_over").notNull().default(sql`'[]'::jsonb`),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // work_burn_warnings (migration 068, ADR-084 addendum 1 decision 7, Engagement context)
 // ---------------------------------------------------------------------------
 // One row per zone of the work ledger's fever chart a project entered in one plan revision, with

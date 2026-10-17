@@ -643,7 +643,7 @@ describe("tender to first plan", () => {
 
     stubModel({ doGenerate: jsonResult(INTAKE) });
     expect(await intake().runPending()).toEqual([
-      { kind: "recorded", tenderId: created.message.id, projectId, questions: 2 },
+      { kind: "recorded", tenderId: created.message.id, projectId, questions: 2, confirmation: "not-needed" },
     ]);
     const visions = await db.execute(
       sql`SELECT version, vision_text AS "visionText" FROM vision_documents WHERE project_id = ${projectId}`,

@@ -13,7 +13,8 @@ import type { VisionSource } from "./vision-language/vision-source.js";
 // assumption classed internal design is named as not verified by Ashara (ADR-083): no check decides it.
 // So is every item a review of the checks left undecided (ADR-084): never counted as covered. Every
 // item counted as covered was confirmed by a second review of its checks, and the report names how
-// independent that review was (ADR-084 addendum 3 decision 12).
+// independent that review was (ADR-084 addendum 3 decision 12). A tender whose first reading asked the
+// client nothing is told with the strength of the second reading behind that, or that none answered.
 // The only ways of running the product presented as verified are the commands acceptance ran and saw
 // pass; the public interface file, none of whose entries acceptance runs, is quoted as unverified.
 
@@ -69,6 +70,18 @@ type VisionCoverage =
     }
   | { readonly kind: "unrecorded" };
 
+/**
+ * How the tender's reading stood (intake_readings, migration 074): its first reading asked the client
+ * questions; or it asked none, and a second reading of the strength named asked none either or raised
+ * the questions the client was sent; or no second reading answered. Or none is recorded.
+ */
+export type ReadingTold =
+  | { readonly kind: "not-needed" }
+  | { readonly kind: "confirmed"; readonly strength: ReviewStrength }
+  | { readonly kind: "questions-raised"; readonly strength: ReviewStrength; readonly questions: number }
+  | { readonly kind: "unconfirmed" }
+  | { readonly kind: "unrecorded" };
+
 /** An accepted project whose delivered report the client has not been sent. */
 interface DueDeliveredReport {
   readonly kind: "due";
@@ -94,6 +107,7 @@ interface DueDeliveredReport {
   /** The stored checks the sweep ran and saw pass (acceptance_sweeps.executed_checks). */
   readonly executed: ExecutedChecks;
   readonly vision: VisionCoverage;
+  readonly reading: ReadingTold;
 }
 
 /**
@@ -343,6 +357,37 @@ function unverifiedSection(vision: VisionCoverage): string[] {
   ];
 }
 
+/** Who gave the second reading of the tender, in the client's words: a weaker strength says what it shares. */
+const READ_BY: Readonly<Record<ReviewStrength, string>> = {
+  "other-family": "another model family",
+  "same-family-other-model": "another model of the same family as the first reading, which shares more of its blind spots than another family would",
+  "same-model": "the same model as the first reading asked again to look for what is ambiguous or assumed, which shares every one of its blind spots",
+};
+
+/**
+ * How the tender was read, where its first reading asked the client nothing (ADR-084 addenda 2 and 3
+ * applied to intake): the strength of the second reading that confirmed it or raised the questions the
+ * client was sent, or that none answered, so that the tender left nothing to ask is not verified by
+ * Ashara. Not on record is said so. Empty when the first reading asked questions.
+ */
+function readingSection(reading: ReadingTold): string[] {
+  switch (reading.kind) {
+    case "not-needed":
+      return [];
+    case "confirmed":
+      return [`When your tender was read, the first reading found nothing in it to ask you, and a second reading, by ${READ_BY[reading.strength]}, found nothing to ask either.`];
+    case "questions-raised":
+      return [
+        `When your tender was read, the first reading found nothing in it to ask you; a second reading, by ${READ_BY[reading.strength]}, ` +
+          `found ${plural(reading.questions, "question")}, which you were sent.`,
+      ];
+    case "unconfirmed":
+      return [`When your tender was read, it found nothing in it to ask you, and no second reading could be had to confirm that: that your tender left nothing to ask is not verified by Ashara.`];
+    case "unrecorded":
+      return [`How your tender was read is not on record for this project, so whether a second reading confirmed it is not stated.`];
+  }
+}
+
 type StatedStanding = Extract<AcceptedAssumptionStanding, "stated" | "confirmed" | "changed">;
 
 /** What the client's answer made of a Stated assumption, as its record says, in the client's words. */
@@ -533,6 +578,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
     ...confirmedSection(due.vision),
     ...undecidedSection(due.vision),
     ...unverifiedSection(due.vision),
+    ...readingSection(due.reading),
     `Nothing more is built on this project; it waits until you stop it.`,
   ].join("\n\n");
 }

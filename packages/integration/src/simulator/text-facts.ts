@@ -31,6 +31,7 @@ const firstPlanRow = z.object({ body: z.string() });
 const planItemRow = z.object({ origin: z.string().nullable(), beforeReport: z.boolean(), blockedReason: z.unknown() });
 const planRevisionRow = z.object({ revision: z.number(), beforeReport: z.boolean() });
 const reviewRow = z.object({ taskSpec: z.unknown() });
+const intakeReadingRow = z.object({ confirmation: z.string(), secondStrength: z.string().nullable(), secondQuestions: z.number().nullable() });
 
 export interface TextFactRecords {
   /** Every vision version of the project, oldest first. */
@@ -40,8 +41,10 @@ export interface TextFactRecords {
   readonly questions: ReadonlyArray<z.infer<typeof messageRow>>;
   /** Outbound reports posted in reply to a client answer, other than the plan revision's report (which replies to the answer that asked for it). */
   readonly answerReplies: ReadonlyArray<z.infer<typeof replyRow>>;
-  /** Outbound reports posted in reply to the tender: the assumptions report. */
+  /** Outbound reports posted in reply to the tender: the assumptions report and the reading report. */
   readonly tenderReports: ReadonlyArray<z.infer<typeof messageRow>>;
+  /** The tender's reading as intake_readings records it (migration 074), or null when none is. */
+  readonly intakeReading: z.infer<typeof intakeReadingRow> | null;
   /** Every posted delivered report, with the vision version current at its sweep. */
   readonly delivered: ReadonlyArray<z.infer<typeof deliveredRow>>;
   /** Each delivered report's sweep: the client answers sent by acceptance, by question, and whether read by then. */
@@ -110,7 +113,12 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
   );
   // Times are compared in the database: its microseconds, not a Date's milliseconds, order the rows.
   const reportAt = sql`(SELECT created_at FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound' AND reports_on = 'first-plan')`;
+  const [intakeReading] = await rows(
+    intakeReadingRow,
+    sql`SELECT confirmation, second_strength AS "secondStrength", second_questions AS "secondQuestions" FROM intake_readings WHERE project_id = ${projectId}`,
+  );
   return {
+    intakeReading: intakeReading === undefined ? null : intakeReading,
     visions: await rows(
       visionRow,
       sql`SELECT version, inferences, open_questions AS "openQuestions" FROM vision_documents WHERE project_id = ${projectId} ORDER BY version`,
@@ -451,8 +459,10 @@ const ASSUMPTIONS_OPENING = "Besides the questions we asked, the tender leaves t
 function checkAssumptionsReport(records: TextFactRecords, add: Add, versions: Versions): void {
   const first = records.visions[0];
   const vision = first === undefined ? undefined : versions.get(first.version);
+  // A failed intake's report and the reading report reply to the tender too: the assumptions report is told by its opening.
+  const reports = records.tenderReports.filter((report) => report.body.startsWith(ASSUMPTIONS_OPENING));
   if (vision === undefined) {
-    if (records.tenderReports.length > 0) add("assumptions-report", "an assumptions report was posted for a project with no vision on record");
+    if (reports.length > 0) add("assumptions-report", "an assumptions report was posted for a project with no vision on record");
     return;
   }
   if (vision.kind === "unreadable") {
@@ -460,8 +470,6 @@ function checkAssumptionsReport(records: TextFactRecords, add: Add, versions: Ve
     return;
   }
   const reported = vision.assumptions.filter((a) => a.standing === "reported");
-  // A failed intake's report replies to the tender too: the assumptions report is told by its opening.
-  const reports = records.tenderReports.filter((report) => report.body.startsWith(ASSUMPTIONS_OPENING));
   if (reported.length === 0) {
     if (reports.length > 0) add("assumptions-report", `an assumptions report was posted, but vision v${first?.version ?? 1} records no assumption as reported`);
     return;
@@ -486,6 +494,62 @@ function checkAssumptionsReport(records: TextFactRecords, add: Add, versions: Ve
     }
   }
   if (listed.length !== reported.length) add("assumptions-report", `the assumptions report lists ${listed.length} assumption(s); the vision records ${reported.length} as reported`);
+}
+
+/** How a reading report opens, as the oracle words it: the first reading asked the client nothing. */
+const READING_OPENINGS = ["We read your tender and found nothing", "Our first reading of your tender found nothing"];
+
+/** The words that name each strength of second reading, as the oracle words them. */
+const READING_STRENGTH_WORDS: Readonly<Record<string, string>> = {
+  "other-family": "by another model family",
+  "same-family-other-model": "by another model of the same family as the first reading",
+  "same-model": "by the same model as the first reading",
+};
+
+/** What a text must state of a recorded reading that asked nothing: its strength and what it found, or that it is unconfirmed. */
+function readingClaims(reading: NonNullable<TextFactRecords["intakeReading"]>, delivered: boolean): string[] {
+  if (reading.confirmation === "unconfirmed") return delivered ? ["no second reading could be had", "not verified by Ashara"] : ["no second reading of it could be had", "unconfirmed"];
+  const strength = reading.secondStrength === null ? undefined : READING_STRENGTH_WORDS[reading.secondStrength];
+  const by = strength === undefined ? [`a strength the oracle knows (recorded ${reading.secondStrength ?? "none"})`] : [strength];
+  if (reading.confirmation === "confirmed") return [...by, "found nothing to ask either"];
+  const asked = reading.secondQuestions;
+  if (asked === null) return [...by, "a recorded count of questions"];
+  if (delivered) return [...by, `found ${asked} question`];
+  return [...by, asked === 1 ? "found the question we have sent you" : `found the ${asked} questions we have sent you`];
+}
+
+/**
+ * The reading report and the delivered report's sentence on the tender's reading (ADR-084 addenda 2
+ * and 3 applied to intake), against intake_readings: a reading that asked nothing is told once, at
+ * intake, with the strength of the second reading and what it found or that none answered, and so is
+ * every delivered report; a reading that asked questions is told neither way; one not on record is
+ * said to be so in the delivered report.
+ */
+function checkIntakeReading(records: TextFactRecords, add: Add): void {
+  const reading = records.intakeReading;
+  const told = records.tenderReports.filter((report) => READING_OPENINGS.some((opening) => report.body.startsWith(opening)));
+  if (reading === null || reading.confirmation === "not-needed") {
+    if (told.length > 0) add("reading-report", `a reading report was posted, but intake_readings records ${reading === null ? "no reading" : "a reading that asked questions"}`);
+    for (const report of records.delivered) {
+      const unrecorded = report.body.includes("How your tender was read is not on record");
+      if (report.body.includes("When your tender was read") || unrecorded !== (reading === null)) {
+        add("delivered-reading", `the delivered report's sentence on the tender's reading does not fit intake_readings (${reading === null ? "no row" : "not-needed"})`);
+      }
+    }
+    return;
+  }
+  if (told.length !== 1) {
+    add("reading-report", `intake_readings records a reading that asked nothing (${reading.confirmation}), told in ${told.length} reading report(s); expected exactly one`);
+  }
+  for (const report of told) {
+    const missing = readingClaims(reading, false).filter((claim) => !report.body.includes(claim));
+    if (missing.length > 0) add("reading-report", `the reading report does not state ${missing.map((claim) => `"${claim}"`).join(", ")} for a reading recorded ${reading.confirmation}`);
+  }
+  for (const report of records.delivered) {
+    const sentence = report.body.split("\n\n").find((part) => part.startsWith("When your tender was read"));
+    const missing = sentence === undefined ? ["When your tender was read"] : readingClaims(reading, true).filter((claim) => !sentence.includes(claim));
+    if (missing.length > 0) add("delivered-reading", `the delivered report does not state ${missing.map((claim) => `"${claim}"`).join(", ")} for a reading recorded ${reading.confirmation}`);
+  }
 }
 
 function plural(count: number, noun: string): string {
@@ -765,6 +829,9 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions)] },
   { source: `${ENGAGEMENT}/answers.ts#replanReport`, judges: [i9(checkAnswerReplies)] },
   { source: `${ENGAGEMENT}/intake.ts#assumptionsReport`, judges: [i9(checkAssumptionsReport)] },
+  // A reading that asked nothing: its confirmation's strength and what it found, against intake_readings.
+  { source: `${ENGAGEMENT}/intake.ts#readingReport`, judges: [i9(checkIntakeReading)] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#readingSection`, judges: [i9(checkIntakeReading)] },
   { source: `${ENGAGEMENT}/plan-report.ts#firstPlanReport`, judges: [i9(checkFirstPlan)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#coverageSection`, judges: [i9(checkDeliveredStandings), i4("delivered-coverage")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#interfaceSection`, judges: [i9(checkDeliveredInterface)] },
@@ -818,6 +885,8 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
   { source: `${DELIVERY}/replan.ts#environmentPrompt`, kind: "not-kept", reason: "the prompt asking whether a plan revision needs the environment changed" },
   { source: "packages/organization/src/derivation.ts#buildPrompt", kind: "not-kept", reason: "the prompt that derives the project's team" },
   { source: `${ENGAGEMENT}/intake.ts#buildIntakePrompt`, kind: "not-kept", reason: "the prompt that reads a tender" },
+  { source: `${ENGAGEMENT}/intake.ts#secondReadingPrompt`, kind: "not-kept", reason: "the prompt of a second reading of a tender whose first reading asked nothing" },
+  { source: `${ENGAGEMENT}/intake.ts#readingAngleSection`, kind: "not-kept", reason: "part of a second reading's prompt within the first reading's model family" },
   { source: `${ENGAGEMENT}/answers.ts#buildAnswerPrompt`, kind: "not-kept", reason: "the prompt that reads a client answer" },
 
   { source: `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`, kind: "fixed-text", reason: "the one reply to every change request" },
@@ -862,7 +931,12 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   { source: `${ENGAGEMENT}/repositories/client-answer.ts#writeClientAnswer`, posts: [`${ENGAGEMENT}/answers.ts#replanReport`], clientWords: false },
   {
     source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insert`,
-    posts: [`${ENGAGEMENT}/intake.ts#assumptionsReport`, `${ENGAGEMENT}/intake.ts#failureReport`, `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`],
+    posts: [
+      `${ENGAGEMENT}/intake.ts#assumptionsReport`,
+      `${ENGAGEMENT}/intake.ts#readingReport`,
+      `${ENGAGEMENT}/intake.ts#failureReport`,
+      `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`,
+    ],
     clientWords: true,
   },
   { source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`, posts: [`${ENGAGEMENT}/intake.ts#questionBody`], clientWords: false },

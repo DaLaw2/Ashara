@@ -141,10 +141,12 @@ importers = []
 # offeredToolSchemas and wireSchemaOf are what Ashara sends a model, judged by the providers' refusal
 # table (schemaRefusalsFor, PROVIDER_TYPES) at a run's start (model-schemas.ts): the gateway refuses
 # such a schema before any stand-in sees it, so the oracle judges the sent schemas themselves.
+# TenderIntake is the class a code plant patches (plants.ts intake-second-reading-dropped): the plant
+# replaces its second reading, and no oracle reads anything of it.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
 names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "DELIVERY_MODEL_SCHEMAS", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
-names.engagement = ["ENGAGEMENT_MODEL_SCHEMAS", "PROJECT_STATUSES", "VisionSource"]
+names.engagement = ["ENGAGEMENT_MODEL_SCHEMAS", "PROJECT_STATUSES", "TenderIntake", "VisionSource"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
 names.finance = ["SPEND_CAP_ERROR_CLASS"]
 names.model-access = ["LanguageModelFactory", "PROVIDER_TYPES", "ProviderType", "schemaRefusalsFor", "wireSchemaOf"]

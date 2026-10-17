@@ -13,6 +13,8 @@ import type { ObservedReview, ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
 import type { FaultKind, FaultRecord } from "./faults.js";
+import { lazyIntakes, readIntakeRecords } from "./intake-readings.js";
+import type { IntakeRecords, ObservedIntake } from "./intake-readings.js";
 import { MISREAD_REJECTION_MARKER } from "./product.js";
 import { projectState } from "./project-state.js";
 import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
@@ -92,6 +94,7 @@ interface MainCommit {
 }
 
 export interface Snapshot {
+  readonly projectId: string;
   readonly project: ProjectRow;
   readonly items: readonly ItemRow[];
   readonly episodes: ReadonlyArray<z.infer<typeof episodeRow>>;
@@ -106,6 +109,8 @@ export interface Snapshot {
   readonly reports: ReportRecords;
   /** What every brief, question and report states, with the records it is composed from (I9). */
   readonly textFacts: TextFactRecords;
+  /** The tender's reading as recorded, and the questions posted (I3's intake clause). */
+  readonly intake: IntakeRecords;
 }
 
 /** A snapshot query returned no row where it always returns one: the invariants cannot be judged. */
@@ -188,6 +193,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     ).rows,
   );
   return {
+    projectId,
     project,
     items,
     episodes,
@@ -199,6 +205,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     main: project.workspacePath === null ? [] : await mainLog(project.workspacePath),
     reports: await readReportRecords(db, projectId),
     textFacts: await readTextFactRecords(db, projectId, project.workspacePath),
+    intake: await readIntakeRecords(db, projectId),
   };
 }
 
@@ -427,6 +434,8 @@ export function checkSnapshot(
     readonly final: boolean;
     /** Every suite review the stand-ins answered (StandIns.observedReviews). */
     readonly reviews: readonly ObservedReview[];
+    /** Every tender reading the stand-ins were asked for or answered (StandIns.observedIntakes). */
+    readonly intakes: readonly ObservedIntake[];
   },
 ): Violation[] {
   const violations: Violation[] = [];
@@ -466,6 +475,11 @@ export function checkSnapshot(
   }
   for (const found of cellRoleViolations(snapshot.items, context.cells)) add("I3", found.key, found.statement);
   for (const found of misreadRejections(snapshot.reviewFindings, snapshot.items)) add("I3", found.key, found.statement);
+  // A tender's reading that asked the client nothing is put to a second reading by another model, and
+  // the record and the questions posted are that reading's (intake-readings.ts). Judged once the run ends.
+  if (context.final) {
+    for (const found of lazyIntakes(snapshot.projectId, snapshot.intake, context.intakes)) add("I3", found.key, found.statement);
+  }
 
   // I4: an accepted project has its delivered report, once the run ends; that a halt episode
   // has its report is I2's. What each report states is judged against the records it is rendered

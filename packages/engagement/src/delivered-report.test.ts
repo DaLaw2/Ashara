@@ -10,8 +10,14 @@ const MERGE_A = "a".repeat(40);
 
 type Listed = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
 type Due = Extract<Listed, { readonly kind: "due" }>;
-/** A due report's records; `executed`, when not the case under test, is one check that ran. */
-type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures" | "executed"> & { readonly executed?: Due["executed"] };
+/**
+ * A due report's records; `executed`, when not the case under test, is one check that ran, and
+ * `reading` a first reading of the tender that asked the client questions.
+ */
+type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures" | "executed" | "reading"> & {
+  readonly executed?: Due["executed"];
+  readonly reading?: Due["reading"];
+};
 const ONE_RUN: Due["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
 type Item = Extract<Due["vision"], { readonly kind: "recorded" }>["items"][number]["source"];
 
@@ -28,7 +34,7 @@ const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
 type InterfaceRead = Awaited<ReturnType<ConstructorParameters<typeof DeliveredReports>[1]["at"]>>;
 
 async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }): Promise<string> {
-  const due: Due = { ...fields, executed: fields.executed ?? ONE_RUN, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
+  const due: Due = { ...fields, executed: fields.executed ?? ONE_RUN, reading: fields.reading ?? { kind: "not-needed" }, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
   const reads: string[] = [];
   const reports = new DeliveredReports(
@@ -525,6 +531,37 @@ describe("the delivered report", () => {
   });
 });
 
+// ADR-084 addenda 2 and 3 applied to intake: a tender's first reading that asked the client nothing is
+// told with the strength of the second reading behind it, and one no second reading confirmed is
+// named not verified; a reading that asked questions adds nothing, and one not on record says so.
+describe("how the tender was read", () => {
+  const SENTENCE = "When your tender was read";
+  test("a reading that asked questions adds no sentence", async () => {
+    expect(await render({ ...BASE, reading: { kind: "not-needed" } })).not.toContain(SENTENCE);
+  });
+
+  test("a confirmed reading names the strength of the second reading", async () => {
+    const body = await render({ ...BASE, reading: { kind: "confirmed", strength: "same-family-other-model" } });
+    expect(body).toContain(
+      "When your tender was read, the first reading found nothing in it to ask you, and a second reading, by another model of the same family as the first reading, which shares more of its blind spots than another family would, found nothing to ask either.",
+    );
+  });
+
+  test("a second reading that raised questions says how many the client was sent", async () => {
+    const body = await render({ ...BASE, reading: { kind: "questions-raised", strength: "other-family", questions: 2 } });
+    expect(body).toContain("a second reading, by another model family, found 2 questions, which you were sent.");
+  });
+
+  test("an unconfirmed reading is named not verified by Ashara", async () => {
+    const body = await render({ ...BASE, reading: { kind: "unconfirmed" } });
+    expect(body).toContain("no second reading could be had to confirm that: that your tender left nothing to ask is not verified by Ashara.");
+  });
+
+  test("a reading not on record is said to be so", async () => {
+    expect(await render({ ...BASE, reading: { kind: "unrecorded" } })).toContain("How your tender was read is not on record for this project");
+  });
+});
+
 // One project's report failing never stops another's, and is recorded, retried with a backoff and,
 // past its bound of interface reads, posted saying the file could not be read.
 describe("a delivered report that fails is its own project's", () => {
@@ -568,6 +605,7 @@ describe("a delivered report that fails is its own project's", () => {
   const due = (sweepId: string, id: typeof projectId, targetProjectPath: string, failures: number, interfaceReadFailures = failures): Due => ({
     ...BASE,
     executed: ONE_RUN,
+    reading: { kind: "not-needed" },
     kind: "due",
     failures,
     interfaceReadFailures,

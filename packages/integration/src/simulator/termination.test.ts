@@ -42,14 +42,15 @@ describe("termination under permanent personas", () => {
   for (const [index, name] of REVIEWERS.entries()) {
     it(`ends a project whose reviewer is ${name}`, async () => {
       const result = await live([persona("suite-review", index + 1)]);
-      expect(result.trace).toContain(`personas suite-review=${name} planner=honest classifier=honest check-author=honest from cycle 1`);
+      expect(result.trace).toContain(`personas suite-review=${name} planner=honest classifier=honest check-author=honest intake=honest from cycle 1`);
       expect(keys(result), statements(result)).toEqual([]);
       expect(result.outcome.kind, statements(result)).not.toBe("open");
     }, 150_000);
   }
 
-  it("ends a project whose planner oscillates, whose classifier flips and whose check author is sticky-bad", async () => {
-    const result = await live([persona("planner", 1), persona("classifier", 1), persona("check-author", 1)]);
+  it("ends a project whose planner oscillates, whose classifier flips, whose check author is sticky-bad and whose intake is lazy", async () => {
+    const result = await live([persona("planner", 1), persona("classifier", 1), persona("check-author", 1), persona("intake", 1)]);
+    expect(result.trace).toContain("personas suite-review=honest planner=oscillating classifier=flipping check-author=sticky-bad intake=lazy from cycle 1");
     expect(keys(result), statements(result)).toEqual([]);
     expect(result.outcome.kind, statements(result)).not.toBe("open");
   }, 150_000);

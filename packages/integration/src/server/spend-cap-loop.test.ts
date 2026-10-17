@@ -370,6 +370,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
       givenUp: [],
       executed: { kind: "unrecorded" },
       vision: { kind: "unrecorded" },
+      reading: { kind: "unrecorded" },
     };
     const posted: string[] = [];
     let postFaults = 1;

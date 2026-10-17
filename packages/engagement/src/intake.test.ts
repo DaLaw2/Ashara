@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { BudgetExceeded, PreCallRefusal, ProviderError } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
-import { SchemaValidationError } from "@ashara/finance";
+import { SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
 import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
 import type { IntakeStore } from "./intake.js";
@@ -553,6 +553,8 @@ describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
       forCall: () => ({
         generateStructured: async (request) => {
           prompts.push(request.prompt);
+          // The reading asks nothing, so another family's second reading confirms it.
+          if (request.secondOpinion !== undefined) return { data: request.schema.parse({ questions: [] }), model: "other-model", provider: "other" };
           return { data: request.schema.parse(response), model: "stub-model", provider: "stub" };
         },
       }),
@@ -596,5 +598,138 @@ describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
     // A17 of the M2.5 exit run sits beside another recovery assumption; the rule gives no reason to class it internal.
     expect(prompt).toContain("is not internal design even when another assumption states something close to it");
     expect(prompt).not.toContain("through another assumption");
+  });
+});
+
+// ADR-084 addenda 2 and 3 applied to intake: a reading that asks the client nothing is a claim that the
+// tender leaves nothing open worth asking. It is put to a second reading at the strongest independence
+// the catalog offers; the second reading's questions are the ones the client is sent; a reading no
+// second reading answered is recorded unconfirmed and the client is told, never held.
+describe("TenderIntake second reading of a reading that asks nothing", () => {
+  const QUESTION = {
+    text: "Must a booking be cancellable online?",
+    whyItMatters: "It decides whether the page has a cancel flow.",
+    assumption: { statement: "Bookings are cancelled by phone.", rationale: "The tender names no cancel flow.", kind: "client-visible" },
+  };
+  const lazy = {
+    summary: "A booking page.",
+    inScope: ["booking"],
+    outOfScope: [],
+    questions: [],
+    assumptions: [{ statement: "Times are shown in the studio's zone.", rationale: "One studio.", kind: "client-visible" }],
+  };
+  type Sent = Parameters<ReturnType<ContextualLlm["forCall"]>["generateStructured"]>[0];
+  type Request = { readonly secondOpinion: NonNullable<Sent["secondOpinion"]>; readonly capability: Sent["capability"] };
+  type Answer = { readonly data: unknown; readonly provider: string; readonly model: string };
+
+  async function intakeWith(first: unknown, second: (request: Request) => Answer) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const asked: Array<{ readonly strength: string | null; readonly prompt: string }> = [];
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          asked.push({ strength: request.secondOpinion?.strength ?? null, prompt: request.prompt });
+          if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet" };
+          const answer = second({ secondOpinion: request.secondOpinion, capability: request.capability });
+          return { ...answer, data: request.schema.parse(answer.data) };
+        },
+      }),
+    };
+    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
+    const store: IntakeStore = {
+      openTenders: async () => [
+        { id: "tender-s", projectId: parseProjectId("00000000-0000-4000-8000-000000000084", "test"), body: "A booking page.", intakeAttempts: 0, intakeLastError: null },
+      ],
+      currentVisionVersion: async () => null,
+      recordIntake: async (write) => {
+        writes.push(write);
+        return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
+      },
+      consumeTender: async () => {},
+      recordFailedAttempt: async () => {
+        throw new Error("recordFailedAttempt must not be reached: no read failed");
+      },
+      closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
+    };
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    return { outcome, asked, write: writes[0] };
+  }
+
+  const unavailable = (request: Request): never => {
+    throw new SecondOpinionUnavailable(request.secondOpinion, request.capability, []);
+  };
+
+  test("a reading that asks questions is not put to a second reading", async () => {
+    const { outcome, asked, write } = await intakeWith({ ...lazy, questions: [QUESTION] }, () => expect.unreachable("no second reading"));
+    expect(asked.map((a) => a.strength)).toEqual([null]);
+    expect(outcome).toMatchObject({ kind: "recorded", questions: 1, confirmation: "not-needed" });
+    expect(write?.reading).toEqual({ first: { provider: "anthropic", model: "sonnet" }, firstQuestions: 1, confirmation: { kind: "not-needed" } });
+    expect(write?.readingReport).toBeNull();
+  });
+
+  test("another family's second reading that asks nothing confirms the reading, and the client is told at that strength", async () => {
+    const { outcome, asked, write } = await intakeWith(lazy, () => ({ data: { questions: [] }, provider: "openai", model: "gpt" }));
+    expect(asked.map((a) => a.strength)).toEqual([null, "other-family"]);
+    // Another family reads the tender alone, as the first did: no angle, never the first reading's answer.
+    expect(asked[1]?.prompt).not.toContain("ambiguous or assumed");
+    expect(asked[1]?.prompt).not.toContain("Times are shown in the studio's zone.");
+    expect(outcome).toMatchObject({ kind: "recorded", questions: 0, confirmation: "confirmed" });
+    expect(write?.reading.confirmation).toEqual({
+      kind: "confirmed",
+      second: { strength: "other-family", model: { provider: "openai", model: "gpt" }, questions: [] },
+      passedOver: [],
+    });
+    expect(write?.readingReport).toContain("A second reading of it, by another model family, found nothing to ask either.");
+  });
+
+  test("the questions a second reading raises are the ones the client is sent, with their assumptions asked", async () => {
+    const { outcome, write } = await intakeWith(lazy, () => ({ data: { questions: [QUESTION] }, provider: "openai", model: "gpt" }));
+    expect(outcome).toMatchObject({ kind: "recorded", questions: 1, confirmation: "questions-raised" });
+    expect(write?.questions[0]).toContain("Must a booking be cancellable online?");
+    const vision = write?.vision(["q0"]);
+    expect(vision?.openQuestions).toEqual([{ messageId: "q0", text: QUESTION.text, whyItMatters: QUESTION.whyItMatters, assumptionKey: "A1" }]);
+    expect(vision?.inferences.map((a) => [a.key, a.statement, a.disclosed])).toEqual([
+      ["A1", "Bookings are cancelled by phone.", "asked"],
+      ["A2", "Times are shown in the studio's zone.", "reported"],
+    ]);
+    expect(write?.readingReport).toContain("found the question we have sent you");
+  });
+
+  test("with no other family, another model of the family is asked from the ambiguity angle, and the passed-over strength is recorded", async () => {
+    const { asked, write } = await intakeWith(lazy, (request) =>
+      request.secondOpinion?.strength === "other-family" ? unavailable(request) : { data: { questions: [] }, provider: "anthropic", model: "haiku" },
+    );
+    expect(asked.map((a) => a.strength)).toEqual([null, "other-family", "same-family-other-model"]);
+    expect(asked[2]?.prompt).toContain("Work out what in it is ambiguous or assumed");
+    const confirmation = write?.reading.confirmation;
+    if (confirmation?.kind !== "confirmed") return expect.unreachable(`confirmation is ${confirmation?.kind}`);
+    expect(confirmation.second.strength).toBe("same-family-other-model");
+    expect(confirmation.passedOver).toEqual([{ strength: "other-family", outcome: "unavailable", reason: expect.stringContaining("SecondOpinionUnavailable") }]);
+    expect(write?.readingReport).toContain("another model of the same family as the first reading, which shares more of its blind spots");
+  });
+
+  test("a second reading failing at every strength is bounded: recorded unconfirmed, the client told, the tender never held", async () => {
+    const { outcome, write } = await intakeWith(lazy, (request) => {
+      if (request.secondOpinion?.strength === "other-family") return unavailable(request);
+      throw new SchemaValidationError(["scripted failure"], null);
+    });
+    expect(outcome).toMatchObject({ kind: "recorded", questions: 0, confirmation: "unconfirmed" });
+    const confirmation = write?.reading.confirmation;
+    if (confirmation?.kind !== "unconfirmed") return expect.unreachable(`confirmation is ${confirmation?.kind}`);
+    expect(confirmation.passedOver.map((p) => [p.strength, p.outcome])).toEqual([
+      ["other-family", "unavailable"],
+      ["same-family-other-model", "failed"],
+      ["same-model", "failed"],
+    ]);
+    expect(write?.readingReport).toContain("no second reading of it could be had to confirm that, so that reading is unconfirmed. Work proceeds on it.");
+  });
+
+  test("a second reading answered by a model of another strength confirms nothing: the intake faults on Ashara's side, uncounted", async () => {
+    const { outcome, write } = await intakeWith(lazy, () => ({ data: { questions: [] }, provider: "anthropic", model: "sonnet" }));
+    expect(outcome).toMatchObject({ kind: "step-faulted", error: expect.stringContaining("SecondReadingMisrouted") });
+    expect(write).toBeUndefined();
   });
 });

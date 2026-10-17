@@ -20,7 +20,7 @@ function logIntake(outcome: IntakeOutcome): void {
   if (outcome.kind === "recorded") {
     console.log(
       `[liaison-intake] tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
-        `${outcome.questions} question(s) posted`,
+        `${outcome.questions} question(s) posted; reading confirmation: ${outcome.confirmation}`,
     );
   }
 }

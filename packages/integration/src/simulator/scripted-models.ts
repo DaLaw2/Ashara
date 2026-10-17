@@ -30,6 +30,7 @@ import {
   taskTitle,
 } from "./product.js";
 import type { ObservedReview } from "./client-reports.js";
+import type { ObservedIntake } from "./intake-readings.js";
 import type { Database } from "./database.js";
 import type { CheckSpec, InterfaceForm, SimTask, Universe } from "./product.js";
 import type { Personas } from "./personas.js";
@@ -357,6 +358,8 @@ export class StandIns {
   private stickyKind: StickyKind | null = null;
   /** Every suite review the stand-ins answered with a whole answer, in order (client-reports.ts unconfirmedAtPassedSweeps). */
   private readonly answeredReviews: ObservedReview[] = [];
+  /** Every tender reading the stand-ins were asked for or answered whole, in order (intake-readings.ts lazyIntakes). */
+  private readonly intakeReadings: ObservedIntake[] = [];
 
   constructor(private readonly context: StandInContext) {}
 
@@ -367,6 +370,14 @@ export class StandIns {
    */
   observedReviews(): readonly ObservedReview[] {
     return this.answeredReviews;
+  }
+
+  /**
+   * Every tender reading asked or answered so far, as the stand-ins saw it, outside production's
+   * records: the oracle that holds a reading that asked nothing to a second reading reads these.
+   */
+  observedIntakes(): readonly ObservedIntake[] {
+    return this.intakeReadings;
   }
 
   readonly factory: LanguageModelFactory = (provider, model) => this.model(`${provider.name}/${model.id}`, provider.providerType);
@@ -413,7 +424,22 @@ export class StandIns {
     const format = options.responseFormat;
     if (format?.type !== "json") throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
     const keys = schemaKeys(format.schema);
-    if (keys.includes("inScope")) return this.structured(options, "liaison-intake", () => this.intake());
+    if (keys.includes("inScope")) {
+      const projectId = await this.intakeProject();
+      const model = modelId.slice(providerOf(modelId).length + 1);
+      return this.structured(options, "liaison-intake", () => this.intake(), (answer) => {
+        this.intakeReadings.push({ projectId, kind: "reading", provider: providerOf(modelId), model, questions: answer.questions.length });
+      });
+    }
+    // A second reading of a tender answers only the questions it would put to the client.
+    if (keys.length === 1 && keys[0] === "questions") {
+      const projectId = await this.intakeProject();
+      const model = modelId.slice(providerOf(modelId).length + 1);
+      this.intakeReadings.push({ projectId, kind: "second-asked", provider: providerOf(modelId), model, questions: 0 });
+      return this.structured(options, "liaison-intake.second", () => ({ questions: this.intakeQuestions() }), (answer) => {
+        this.intakeReadings.push({ projectId, kind: "second-answered", provider: providerOf(modelId), model, questions: answer.questions.length });
+      });
+    }
     if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
     if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan(promptText(options)));
     if (keys.includes("problems")) {
@@ -478,23 +504,50 @@ export class StandIns {
     return textResult(JSON.stringify(value));
   }
 
-  private intake(): unknown {
-    const { universe } = this.context;
+  /**
+   * A tender reading's answer: the one question the tender leaves open; or none, when the lazy intake
+   * persona fires (sticky: it asks nothing whatever the tender leaves open) or a reading misses the
+   * open decision (`unaskedReading`, per reading).
+   */
+  private intake(): { readonly questions: readonly unknown[] } & Record<string, unknown> {
+    const { universe, personas, tape, rates } = this.context;
+    const persona = personas.of("intake") === "lazy" && personas.fires("intake");
+    const lazy = persona || tape.chance("model.liaison-intake.unasked", rates.unaskedReading);
+    if (lazy) this.context.onModelCall({ site: "liaison-intake", action: persona ? "persona lazy: no question asked" : "unasked: no question asked" });
     return {
       summary: `A product with ${universe.behaviours.length} behaviours.`,
       // The last line names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that line's check decides it.
       inScope: [...universe.behaviours.map((b) => `The product does ${b}.`), "Every message reads the same on every run."],
       outOfScope: ["Any network service."],
-      questions: [
-        {
-          text: "Which language should messages use?",
-          whyItMatters: "It decides what every message shows.",
-          // A model that cannot tell answers "undecided" (ADR-083): the vision records it client-visible, so it is checked.
-          assumption: { statement: "Messages are in English.", rationale: "The tender is written in English.", kind: "undecided" },
-        },
-      ],
+      questions: lazy ? [] : this.intakeQuestions(),
       assumptions: [{ statement: "The product keeps no state between runs.", rationale: "The tender names no stored data.", kind: "internal-design" }],
     };
+  }
+
+  /** The questions an honest reading of the tender asks: the one decision it leaves open that the client would see. */
+  private intakeQuestions(): readonly unknown[] {
+    return [
+      {
+        text: "Which language should messages use?",
+        whyItMatters: "It decides what every message shows.",
+        // A model that cannot tell answers "undecided" (ADR-083): the vision records it client-visible, so it is checked.
+        assumption: { statement: "Messages are in English.", rationale: "The tender is written in English.", kind: "undecided" },
+      },
+    ];
+  }
+
+  /**
+   * The project whose tender a reading is asked of: the one the call's pending llm_calls row names,
+   * written at its admission before the call is sent (migration 053). Intake reads one tender at a
+   * time, so the latest pending intake row is this call's; null when none is, which the oracle names.
+   */
+  private async intakeProject(): Promise<string | null> {
+    const result = await this.context.observer.execute(sql`
+      SELECT project_id AS "projectId" FROM llm_calls
+      WHERE call_site = 'liaison-intake' AND state = 'pending'
+      ORDER BY created_at DESC, id DESC LIMIT 1`);
+    const [row] = z.array(z.object({ projectId: z.string() })).parse(result.rows);
+    return row === undefined ? null : row.projectId;
   }
 
   private roster(): unknown {

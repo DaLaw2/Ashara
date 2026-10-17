@@ -1,5 +1,7 @@
-import type { Database } from "@ashara/db";
+import { intakeReadings } from "@ashara/db";
+import type { Database, DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
+import type { IntakeReading } from "../intake.js";
 import type { FirstVision } from "../vision.js";
 import { ClientMessageRepository } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
@@ -26,8 +28,32 @@ interface TenderIntakeWrite {
   readonly questions: readonly string[];
   /** The report of the assumptions no question carries, posted after the questions; null when there is none. */
   readonly assumptionsReport: string | null;
+  /** The report of how a reading that asked nothing was confirmed, posted after the assumptions report; null when there is none. */
+  readonly readingReport: string | null;
+  /** The tender's reading, recorded in intake_readings (migration 074). */
+  readonly reading: IntakeReading;
   /** The vision v1 document, given the ids of the posted questions in the same order. */
   readonly vision: (questionIds: readonly string[]) => FirstVision;
+}
+
+/** One intake_readings row, written with vision v1; migration 074's CHECKs hold it consistent. */
+async function insertIntakeReading(db: DbHandle, write: TenderIntakeWrite): Promise<void> {
+  const { reading } = write;
+  const { confirmation } = reading;
+  const second = confirmation.kind === "confirmed" || confirmation.kind === "questions-raised" ? confirmation.second : null;
+  await db.insert(intakeReadings).values({
+    projectId: write.projectId,
+    tenderId: write.tenderId,
+    firstProvider: reading.first.provider,
+    firstModel: reading.first.model,
+    firstQuestions: reading.firstQuestions,
+    confirmation: confirmation.kind,
+    secondStrength: second === null ? null : second.strength,
+    secondProvider: second === null ? null : second.model.provider,
+    secondModel: second === null ? null : second.model.model,
+    secondQuestions: second === null ? null : second.questions.length,
+    passedOver: confirmation.kind === "not-needed" ? [] : confirmation.passedOver,
+  });
 }
 
 type TenderIntakeCommit =
@@ -35,8 +61,8 @@ type TenderIntakeCommit =
   | { readonly kind: "vision-exists"; readonly visionVersion: number };
 
 /**
- * One tender's intake, in one transaction: the tender consumed, its questions
- * and its assumptions report posted, vision v1 written. The tender is consumed first so its row lock
+ * One tender's intake, in one transaction: the tender consumed, its questions, its assumptions report
+ * and its reading report posted, its reading recorded, vision v1 written. The tender is consumed first so its row lock
  * serialises two intakes of it; a project that already has a vision gets only
  * the consumption and nothing new.
  */
@@ -56,6 +82,10 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
     if (write.assumptionsReport !== null) {
       await messages.insertOutbound({ projectId: write.projectId, kind: "report", body: write.assumptionsReport, inReplyTo: write.tenderId });
     }
+    if (write.readingReport !== null) {
+      await messages.insertOutbound({ projectId: write.projectId, kind: "report", body: write.readingReport, inReplyTo: write.tenderId });
+    }
+    await insertIntakeReading(tx, write);
     const vision = await visions.create(write.projectId, write.vision(questionIds));
     if (vision.version !== 1) throw new IntakeVisionNotFirst(write.projectId, write.tenderId, vision.version);
     return { kind: "recorded", visionId: vision.id, questionIds };

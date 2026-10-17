@@ -151,6 +151,33 @@ describe("lifecycle simulator, directed", () => {
     expect(planted.every((key) => key.startsWith("I6:unconfirmed-clean:")), planted.join(", ")).toBe(true);
   }, 120_000);
 
+  // ADR-084 addenda 2 and 3 applied to intake, I3's intake clause: the lazy intake persona's reading asks
+  // the client nothing. The simulator's catalog holds one model family, so the second reading is
+  // another model of it, asked what is ambiguous or assumed; it raises the question the tender leaves
+  // open, which is the one the client is sent, and the project is delivered. With the second reading
+  // dropped (the reading that asked nothing taken as the tender being unambiguous, recorded as another
+  // family's agreement no model gave), I3 names the reading no second reading was asked of.
+  const LAZY_INTAKE = [draw("persona.intake.on", 1), draw("persona.intake", 1), draw("persona.intake.fires", "every")];
+  it("puts a lazy intake's reading to a second reading whose question the client is sent, and catches an intake that drops it", async () => {
+    const clean = await directed(LAZY_INTAKE);
+    expect(clean.trace.some((line) => line.includes("intake=lazy")), clean.trace.slice(0, 5).join("\n")).toBe(true);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+    expect(keys(clean), statements(clean)).toEqual([]);
+    const planted = await directed(LAZY_INTAKE, { mutation: "intake-second-reading-dropped" });
+    expect(keys(planted), statements(planted)).toEqual(["I3:lazy-intake"]);
+  }, 120_000);
+
+  // A second reading that never answers whole at any strength (every attempt is invalid output) leaves
+  // the reading unconfirmed: recorded, told to the client and in the delivered report, never holding
+  // the tender, and the project is still delivered.
+  it("delivers on an unconfirmed reading when the second reading fails at every strength", async () => {
+    const failing = [...LAZY_INTAKE, draw("model.liaison-intake.second.invalid", "every")];
+    const result = await directed(failing);
+    expect(result.outcome.kind, statements(result)).toBe("accepted");
+    expect(keys(result), statements(result)).toEqual([]);
+    expect(result.log.some((line) => line.includes("no second reading answered at any strength"))).toBe(true);
+  }, 120_000);
+
   // I9 (text against fact): what a composer states is what the store held when it composed it. Every
   // brief carries the stand-ins' asked assumption with its standing, and the question states it. The
   // delivered report states the standing of an asked-for item no stored check decides, so its plant

@@ -4,6 +4,7 @@ import type { Snapshot } from "./invariants.js";
 
 function snapshotWith(events: Snapshot["events"]): Snapshot {
   return {
+    projectId: "p1",
     project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, deliveredReported: false },
     items: [],
     episodes: [],
@@ -25,7 +26,9 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
       reviewSpec: null,
       firstPlan: { report: null, items: [], revisions: [] },
       interfaceOnMain: { kind: "not-held" },
+      intakeReading: null,
     },
+    intake: { visionWritten: false, reading: null, questionsPosted: 0 },
   };
 }
 

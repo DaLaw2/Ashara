@@ -88,6 +88,7 @@ describe("I10, charged only for agent work", () => {
 /** A snapshot of one project holding `items`, with nothing else on record. */
 function plantedSnapshot(items: Snapshot["items"]): Snapshot {
   return {
+    projectId: "p1",
     project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, deliveredReported: false },
     items,
     episodes: [],
@@ -100,8 +101,9 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
     reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], goalUndecided: [], passedSweeps: [] },
     textFacts: {
       visions: [], briefs: [], questions: [], answerReplies: [], tenderReports: [], delivered: [], sweepReplies: [],
-      interfaceOnMain: { kind: "not-held" }, reviewSpec: null, firstPlan: { report: null, items: [], revisions: [] },
+      interfaceOnMain: { kind: "not-held" }, reviewSpec: null, firstPlan: { report: null, items: [], revisions: [] }, intakeReading: null,
     },
+    intake: { visionWritten: false, reading: null, questionsPosted: 0 },
   };
 }
 
@@ -113,7 +115,7 @@ describe("C9: a state with no exit", () => {
 
   it("names a Blocked task whose reason no exit of the loop reads (I2)", () => {
     const stranded = plantedSnapshot([task("Blocked", { source: "planted-no-such-source" })]);
-    const keys = checkSnapshot(4, stranded, { spendCapUsd: 25, cells: [], final: false, reviews: [] }).map((violation) => violation.key);
+    const keys = checkSnapshot(4, stranded, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
     expect(keys).toEqual(["I2:Deliver b1:none"]);
   });
 

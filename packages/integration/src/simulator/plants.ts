@@ -1,5 +1,6 @@
 import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
+import { intakeSecondReadingDropped } from "./intake-plants.js";
 import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
 import { ledgerDrawSkipped, reviewCountReset, reviewLoopUnbounded, suiteReviewBoundIgnored } from "./loop-plants.js";
@@ -54,6 +55,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - unconfirmed-claim-dropped: a clean review's claim no second opinion confirmed leaves no item
  *   undecided, so the delivered report calls those items decided by a stored check (I6, ADR-084
  *   addendum 2 decision 11);
+ * - intake-second-reading-dropped: a tender reading that asks the client nothing goes on with no
+ *   second reading asked, recorded as another family's agreement (I3, ADR-084 addenda 2 and 3 applied
+ *   to intake); caught under the lazy intake persona;
  * - check-set-skips-item: a check set is stored with one item its check task cites decided by none
  *   of its checks, past Z0's rule, so that item is accepted with no stored check deciding it, though
  *   an acceptance line still cites it (I6, d89 E, ADR-083);
@@ -93,6 +97,7 @@ export const MUTATIONS = [
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
   "unconfirmed-claim-dropped",
+  "intake-second-reading-dropped",
   "check-set-skips-item",
   "dispatch-refund-skipped",
   "step-fault-unrecorded",
@@ -131,6 +136,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
   "unconfirmed-claim-dropped": { bypassed: [], queries: unconfirmedClaimDropped, code: null },
+  "intake-second-reading-dropped": { bypassed: [], queries: null, code: intakeSecondReadingDropped },
   "check-set-skips-item": { bypassed: [], queries: checkSetSkipsItem, code: null },
   "dispatch-refund-skipped": { bypassed: [], queries: skipDispatchRefund, code: null },
   "step-fault-unrecorded": { bypassed: [], queries: unrecordedStepFault, code: null },

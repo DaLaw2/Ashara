@@ -18,6 +18,7 @@ export {
   domainEvents,
   devSessions,
   failedApproaches,
+  intakeReadings,
   knowledgeEntries,
   planRepairs,
   planRevisions,

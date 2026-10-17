@@ -26,13 +26,15 @@ import type { Tape } from "./tape.js";
  * Planner: oscillating, every other plan names its tasks in reverse order with their dependencies
  * reversed. Environment classifier: flipping, every other answer is the opposite of what its
  * evidence shows. Check author: sticky-bad, once it writes a bad check for a task it writes the same
- * bad check on every rewrite of that task's checks.
+ * bad check on every rewrite of that task's checks. Intake: lazy, the first reading of a tender asks
+ * the client nothing, whatever the tender leaves open; a second reading, another model, is honest.
  */
 const CATALOG = {
   "suite-review": ["honest", "never-satisfied", "rotating", "resurrecting", "flip-flop", "self-refuting", "correlated-second", "lazy-pass"],
   planner: ["honest", "oscillating"],
   classifier: ["honest", "flipping"],
   "check-author": ["honest", "sticky-bad"],
+  intake: ["honest", "lazy"],
 } as const;
 
 export type PersonaRole = keyof typeof CATALOG;
@@ -106,6 +108,7 @@ export class Personas {
       planner: pick("planner", CATALOG.planner),
       classifier: pick("classifier", CATALOG.classifier),
       "check-author": pick("check-author", CATALOG["check-author"]),
+      intake: pick("intake", CATALOG.intake),
     };
     const onset = rates.permanent ? 1 + tape.pick("persona.onset-cycle", LIVENESS_ONSET_CYCLES) : null;
     return new Personas(drawn, rates, onset, tape, cycle);
