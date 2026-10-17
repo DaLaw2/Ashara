@@ -20,7 +20,6 @@ export {
 export { CellExecFailed } from "./errors.js";
 /** @testseam the integration cell.podman.test.ts asserts the refusal class; loadBaseCell throws it */
 export { BaseCellConfigInvalid } from "./errors.js";
-/** @testseam the integration exit-probes.podman.test.ts plants a control file under it; the cell's own paths are its production callers */
 export { WORKSPACE_ROOT } from "./workspace-path.js";
 export { execFileGitRunner, runHostGit, withGitRunner } from "./host-git.js";
 export type { GitRunner, HostRepo } from "./host-git.js";

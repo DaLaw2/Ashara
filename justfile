@@ -126,6 +126,13 @@ probes *ARGS:
 run-report project:
     npx tsx scripts/run-report.ts {{project}}
 
+# A hidden acceptance suite run against a delivered product in its environment image, in one capped cell with no
+# network; the suite's directory is an argument, never a path in this repository. scripts/hidden-suite.ts states the
+# arguments and how each guarantee is judged. Example:
+#   just hidden-suite --suite <dir> --product <dir> --image <ref> --out <verdict.json> --timeout 1200 -- --cmd {product}/<executable>
+hidden-suite *ARGS:
+    npx tsx scripts/hidden-suite.ts {{ARGS}}
+
 install:
     npm install
 

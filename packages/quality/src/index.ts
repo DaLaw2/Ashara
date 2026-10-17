@@ -29,7 +29,7 @@ export type {
 } from "./dispatch-result.js";
 export { environmentCheckPort } from "./environment-check.js";
 export type { EnvironmentStatementStore } from "./environment-check.js";
-export { readEnvironmentDefinition } from "./environment-definition.js";
+export { parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment-definition.js";
 export { environmentErrorOf, unavailableOf } from "./fault-class.js";
 /** @testseam the integration fault-classifiers.test.ts feeds it an unknown error; dispatch-result.ts is its production caller */
 export { thrownFaultOf } from "./fault-class.js";
