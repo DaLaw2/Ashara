@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -231,6 +231,30 @@ describe("cell on real podman", () => {
       }
     }
   });
+
+  // An image's `USER root` must not make the cell root: it could write neither its tree nor HOME.
+  it("a cell on an image whose USER is root runs as the host's uid and gid and writes its tree and HOME as them", async () => {
+    const context = await mkdtemp(join(mountRoot, "user-root-image-"));
+    await writeFile(join(context, "Containerfile"), `FROM ${ALPINE_IMAGE}\nUSER root\n`);
+    // Built locally from the pinned base and never removed, so a rerun reuses it.
+    const image = "localhost/ashara-test-user-root:alpine-3.20";
+    await run("podman", ["build", "--pull=never", "-q", "-t", image, "-f", join(context, "Containerfile"), context]);
+    const tree = await mkdtemp(join(mountRoot, "user-root-tree-"));
+    const cell = await substrate.createCell({ image, project: "proj-cell-test", task: `${task}-user-root`, role: "worker", instance, mount: { hostPath: tree } });
+    try {
+      const ids = await cell.exec(["sh", "-c", 'id -u; id -g; touch /workspace/made-here "$HOME/made-here"'], { timeoutSeconds: 10 });
+      expect(ids).toMatchObject({ exitCode: 0, stdout: `${process.getuid?.()}\n${process.getgid?.()}\n` });
+      const { stdout } = await run("podman", ["inspect", "--format", "{{range .Mounts}}{{.Destination}}={{.Source}}\n{{end}}", cell.id]);
+      const home = stdout.split("\n").find((line) => line.startsWith("/ashara-cell/home="))?.slice("/ashara-cell/home=".length);
+      expect(home).toBeDefined();
+      for (const made of [join(tree, "made-here"), join(home ?? "", "made-here")]) {
+        const owner = await stat(made);
+        expect({ made, uid: owner.uid, gid: owner.gid }).toEqual({ made, uid: process.getuid?.(), gid: process.getgid?.() });
+      }
+    } finally {
+      await cell.teardown();
+    }
+  }, 120_000);
 
   it("a command's own exit 125 is its result; a cell removed under a running exec is CellExecFailed", async () => {
     const base = await loadBaseCell();

@@ -89,6 +89,7 @@ describe("PodmanSubstrate argv", () => {
       "--security-opt=no-new-privileges",
       "--memory=536870912", "--memory-swap=536870912", "--cpus=1.5", "--pids-limit=256",
       "--userns=keep-id",
+      `--user=${process.getuid?.()}:${process.getgid?.()}`,
       "--label", "ashara.managed=1",
       "--label", "ashara.instance=inst-1",
       "--label", "ashara.project=proj-1",

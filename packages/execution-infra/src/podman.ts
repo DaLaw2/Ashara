@@ -234,8 +234,10 @@ export interface CellSpec {
 
 /*
  * What every cell sees besides its tree, with no option to leave it out:
- * - It runs as the host's uid (--userns=keep-id), not root, with HOME set to a writable, empty
- *   directory of its own (CELL_HOME); the image's HOME, if any, is overridden.
+ * - It runs as the host's uid and gid, never root, whatever the image's USER: --userns=keep-id maps
+ *   the host uid to itself and --user pins the process to it, since keep-id alone leaves an image's
+ *   `USER root` in force. HOME is a writable, empty directory of its own (CELL_HOME); the image's
+ *   HOME, if any, is overridden.
  * - When hostPath holds a `.git` (a worktree's gitlink file, or a checkout's git dir), the cell
  *   never sees it: in its place is a throwaway repository of the cell's own, made by Z0 before the
  *   cell starts, whose one commit holds the tree's content (snapshotRepository). It has no remote,
@@ -359,7 +361,20 @@ interface CellState {
     | null;
 }
 
-function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: CellState, limits: CellResourceLimits, trace: string): string[] {
+interface HostIdentity {
+  readonly uid: number;
+  readonly gid: number;
+}
+
+function buildRunArgs(
+  spec: CellSpec,
+  name: string,
+  hostPath: string,
+  state: CellState,
+  limits: CellResourceLimits,
+  trace: string,
+  host: HostIdentity,
+): string[] {
   const label = spec.mount.shared === true ? "z" : "Z";
   const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
   // The state is the cell's alone (private label); the gitlink stand-in is every cell's (shared label).
@@ -381,6 +396,7 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: Cel
     "--security-opt=no-new-privileges",
     ...runLimitArgs(limits),
     "--userns=keep-id",
+    `--user=${host.uid}:${host.gid}`,
     "--label", `${LABEL_MANAGED}=1`,
     "--label", `${LABEL_INSTANCE}=${spec.instance}`,
     "--label", `${LABEL_PROJECT}=${spec.project}`,
@@ -602,7 +618,7 @@ function errorCode(err: unknown): unknown {
 /**
  * rm -rf that also removes what a cell left unwritable (a read-only directory, as some caches make
  * theirs): on EACCES/EPERM every directory under `path` is made writable, never following a symlink,
- * and the removal runs once more. Every file is the host uid's (--userns=keep-id).
+ * and the removal runs once more. Every file is the host uid's: the cell runs pinned to it.
  */
 async function removeTree(path: string): Promise<void> {
   try {
@@ -636,6 +652,7 @@ export class PodmanSubstrate {
   private readonly mountRoot: string;
   private readonly limits: CellResourceLimits;
   private readonly trace: () => string;
+  private readonly host: HostIdentity;
   private readonly cells = new Map<string, PodmanCell>();
   /** Containers a failed `podman run` may have left behind and that could not be removed yet, by name. */
   private readonly unconfirmed = new Set<string>();
@@ -650,7 +667,11 @@ export class PodmanSubstrate {
     if (!isAbsolute(options.mountRoot)) issues.push(`mountRoot must be an absolute path, got ${JSON.stringify(options.mountRoot)}`);
     const limits = cellLimitsSchema.safeParse(options.limits ?? readCellLimits(process.env));
     if (!limits.success) issues.push(...issuesOf(limits.error).map((issue) => `limits.${issue}`));
-    if (issues.length > 0 || !limits.success) throw new InvalidCellRequest("substrate", issues);
+    const uid = process.getuid?.();
+    const gid = process.getgid?.();
+    if (uid === undefined || gid === undefined) issues.push("the host has no POSIX uid/gid to run cells as");
+    if (issues.length > 0 || !limits.success || uid === undefined || gid === undefined) throw new InvalidCellRequest("substrate", issues);
+    this.host = { uid, gid };
     this.limits = limits.data;
     this.podmanPath = options.podmanPath;
     this.mountRoot = options.mountRoot;
@@ -712,7 +733,7 @@ export class PodmanSubstrate {
     this.starting.add(name);
     try {
       const state = await this.prepareState(parsed.data.instance, name, hostPath, gitEntry);
-      const args = buildRunArgs(parsed.data, name, hostPath, state, this.limits, trace.data);
+      const args = buildRunArgs(parsed.data, name, hostPath, state, this.limits, trace.data, this.host);
       let result: ProcessResult;
       try {
         result = await this.run(args);
