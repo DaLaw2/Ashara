@@ -16,11 +16,11 @@ function roster(...roles: [Role, ...Role[]]): Roster {
 }
 
 describe("validateRoster", () => {
-  it("accepts the M1 roster", () => {
+  it("accepts a roster that gives each capability to one role", () => {
     expect(validateRoster(roster(liaison, platform, implementer, checkAuthor))).toEqual([]);
   });
 
-  it("rejects one role holding write-source and author-checks (C2)", () => {
+  it("rejects one role holding write-source and author-checks", () => {
     const both = role("dev", "write-source", "author-checks");
     expect(validateRoster(roster(liaison, platform, both))).toEqual([
       {
@@ -31,7 +31,7 @@ describe("validateRoster", () => {
     ]);
   });
 
-  it("rejects two roles holding write-environment (C2)", () => {
+  it("rejects two roles holding write-environment", () => {
     const ops = role("ops", "write-environment");
     expect(validateRoster(roster(liaison, platform, ops, implementer, checkAuthor))).toEqual([
       {

@@ -37,7 +37,7 @@ import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // The "moved" loops have no counter of their own: a plan revision whose write finds the project
-// moved (L17) and an answer whose record finds it moved (L19) are tried again next cycle,
+// moved and an answer whose record finds it moved are tried again next cycle,
 // uncounted. Each attempt draws from the work ledger, so a project that
 // keeps moving under them halts as work_budget with its report, and nothing is drawn after the
 // halt. The store answers "moved" on every write, as a project that never stops moving would.
@@ -337,7 +337,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-// L17: Replanner.revise returns "moved" when its write finds the project changed; the next cycle decomposes again.
+// Replanner.revise returns "moved" when its write finds the project changed; the next cycle decomposes again.
 describe("a plan revision whose write finds the project moved every cycle", () => {
   test("halts the project as work_budget with its report once the revisions drew the project's budget", async () => {
     const { projectId, questionId } = await plannedProject();
@@ -372,7 +372,7 @@ describe("a plan revision whose write finds the project moved every cycle", () =
   }, 120_000);
 });
 
-// L19: ClientAnswers.read returns "moved" past MAX_ANSWER_WRITES; the answer stays open and is read again next cycle.
+// ClientAnswers.read returns "moved" past MAX_ANSWER_WRITES; the answer stays open and is read again next cycle.
 describe("an answer whose record finds the project moved every cycle", () => {
   test("halts the project as work_budget with its report once the re-reads drew the project's budget", async () => {
     const { projectId, questionId } = await plannedProject();

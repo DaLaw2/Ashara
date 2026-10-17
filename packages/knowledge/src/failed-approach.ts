@@ -14,7 +14,7 @@ interface RoutedFailure {
 }
 
 /**
- * Deterministic lesson text for a routed failure (kl-t1): every decision means this dispatch
+ * Deterministic lesson text for a routed failure: every decision means this dispatch
  * attempt did not succeed, so each is worth a lesson, composed with zero LLM calls from data
  * already in scope. It names the task, the action taken and the attempt count, so a later brief's
  * "Failed Approaches" section reads as a lesson rather than a bare error string.

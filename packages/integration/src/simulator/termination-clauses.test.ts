@@ -20,7 +20,7 @@ describe("W2 and W3 on loop records", () => {
     expect(keys(checkLoops(3, records({ checkTasks: [task({ disputes: 1 })] }), null, new Map([["ct1:disputes", 2]])))).toEqual(["W2:count-fell:checks:disputes"]);
   });
 
-  it("names a finding recorded after the review's check set froze, ADR-084 decision 3's ratchet", () => {
+  it("names a finding recorded after the review's check set froze", () => {
     expect(keys(checkLoops(4, records({ grownAfterFreeze: [{ title: "review", findings: 1 }] }), null, new Map()))).toEqual(["W3:grew-after-freeze:review"]);
   });
 

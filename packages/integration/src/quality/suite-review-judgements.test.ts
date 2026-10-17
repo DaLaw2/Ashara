@@ -168,7 +168,7 @@ describe("suite review judgements", () => {
   });
 });
 
-describe("witnessed findings and the check set freeze (ADR-084 decisions 2 and 3)", () => {
+describe("witnessed findings and the check set freeze", () => {
   async function task(title: string, spec: unknown, workKind: string | null): Promise<string> {
     const id = randomUUID();
     await db.execute(sql`

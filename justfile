@@ -23,24 +23,25 @@ migrate:
 check:
     npm run --silent typecheck
     npx tsx scripts/check-boundaries.ts
+    npx tsx scripts/check-comments.ts
     npx knip
     npx eslint .
 
 # The executable-claims gate. NOT in `check`, and the reason is not that it is optional:
-# it scans CLAUDE.md, .claude/commands/ and docs/ (and checks docs/investigations/ retention),
+# it scans CLAUDE.md, .claude/commands/ and docs/ (and checks the investigations' retention),
 # and ALL OF THEM ARE GITIGNORED.
 # CI checks out from git, finds zero documents, and fails closed -- correctly, but it means
 # CI can never run this gate while the claims live in untracked files. Making it pass on zero
 # documents would be the "All 0 checks passed" defect. Run it before every commit; `just save`
-# is not a substitute for the decision recorded in story `swamp-cleanup`.
+# is not a substitute.
 check-docs:
     npx tsx scripts/check-docs.ts
 
-# The gate typechecks with TS 7; typescript-eslint and tsx resolve TS 6. Both report
-# zero errors today, but that is a measurement, not a guarantee — a native-port
+# The gate typechecks with TS 7; typescript-eslint and tsx resolve TS 6. Agreement between
+# them is a measurement, not a guarantee — a native-port
 # reimplementation may diverge from the JS compiler on some input. This runs the OTHER
 # compiler so the divergence is checkable on demand instead of merely tolerated.
-# Run it before a release or after a large type-level change. ~10s vs the gate's ~1.8s.
+# Run it before a release or after a large type-level change; it is slower than the gate.
 typecheck-full:
     npm run --silent typecheck:full
 
@@ -90,7 +91,7 @@ test-affected base *ARGS:
       kill -0 "$run" 2>/dev/null || exit "$status"
     done
 
-# The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, each
+# The lifecycle simulator's soak tier: consecutive seeds, each
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default
 # DATABASE_URL), run by `--jobs J` worker processes at once (default: the host's cores, at most 16;
 # at most 20; `--jobs 1` runs them in one process). Output and exit code are the serial run's, each
@@ -121,7 +122,7 @@ secrets:
 server:
     npx tsx packages/server/src/index.ts
 
-# The roadmap's M2 exit 6 probes from inside real cells (W9): resource caps, a credential read, an
+# The isolation probes from inside real cells: resource caps, a credential read, an
 # outbound host and an environment-file write without the grant, one verdict each; exits non-zero
 # unless every probe held. Needs ASHARA_CELL_MEMORY, ASHARA_CELL_CPUS and ASHARA_CELL_PIDS_LIMIT
 # (config/env.example). `just probes --image <ref>` probes that environment image instead of the BaseCell.

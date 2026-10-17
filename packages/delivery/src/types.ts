@@ -170,8 +170,8 @@ export interface CoreLoopDeps {
    */
   readonly clientStops: LiaisonClientStops;
   /**
-   * The Liaison's reply to each of the client's changes of direction, which are not yet applied
-   * (M3 X5): run right after the stops, before the spend-cap check (no LLM call), so no change is
+   * The Liaison's reply to each of the client's changes of direction, which are not yet applied:
+   * run right after the stops, before the spend-cap check (no LLM call), so no change is
    * left unanswered.
    */
   readonly clientChanges: LiaisonClientChanges;

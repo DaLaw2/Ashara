@@ -5,7 +5,7 @@ import type { WorkItemRepository } from "./repository.js";
 import type { WorkItem } from "./work-item.js";
 import { completeRecordedMerge, completeWorkItem, failWorkItem, startWorkItem, takeEvents } from "./work-item.js";
 
-/** Quality's verdict on a task's attempt, as the lifecycle settles it: passed, or failed with whether another attempt can succeed (G4). */
+/** Quality's verdict on a task's attempt, as the lifecycle settles it: passed, or failed with whether another attempt can succeed. */
 export type AttemptVerdict = "passed" | FailureVerdict;
 
 export class LifecycleRouter {

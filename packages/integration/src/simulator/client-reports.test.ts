@@ -247,7 +247,7 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, traced, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(Array(3).fill("delivered-coverage"));
     });
 
-    // D5: an item whose second review failed is named under a section that says so, never as unsettled.
+    // An item whose second review failed is named under a section that says so, never as unsettled.
     it("holds an item whose second review failed to a section saying the review failed", () => {
       const failedHead = (lines: readonly string[]): string =>
         `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n${lines.join("\n")}`;

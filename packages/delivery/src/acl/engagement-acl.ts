@@ -140,7 +140,7 @@ interface AssignmentIntent {
 }
 
 /**
- * The vision rendered for the Assignment (O9): each assumption by its key, its statement, and a note
+ * The vision rendered for the Assignment, in Delivery's words: each assumption by its key, its statement, and a note
  * of what the record says of it (its standing with the client and its kind), so Workplace renders
  * text and knows no Engagement vocabulary. Throws VisionUnreadable, and AssumptionUnkeyed for an
  * assumption keyed only by its place.

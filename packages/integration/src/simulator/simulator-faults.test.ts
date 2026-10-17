@@ -68,7 +68,7 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
-  // Loop L7's early stop (startup-reconciler.ts CRASH_LOOP_BOUND): the task's
+  // The crash loop's early stop (startup-reconciler.ts CRASH_LOOP_BOUND): the task's
   // dispatch dies, and its re-dispatch dies again right after the task is set InProgress. The second
   // startup to find it InProgress gives it up as crash_loop instead of dispatching it a third time.
   it("gives up a task found InProgress at two startups in a row as a crash loop, never re-dispatching it", async (ctx) => {
@@ -206,7 +206,7 @@ describe("lifecycle simulator, directed", () => {
     expect(result.outcome, JSON.stringify(result.outcome)).toMatchObject({ kind: "accepted" });
   }, 90_000);
 
-  // The window guard (m3-scope X3): the provider rejects the first implementation attempt's turn as
+  // The window guard: the provider rejects the first implementation attempt's turn as
   // longer than the model's context window. The gateway reads that from the error data, the attempt
   // ends typed context_budget_exceeded, the failure router retries it, and the task still completes.
   it("ends an attempt whose turn the provider rejects as over its context window as context_budget_exceeded", async (ctx) => {

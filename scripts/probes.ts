@@ -1,5 +1,5 @@
 /**
- * The roadmap's M2 exit 6 probes, from inside real cells (ADR-074 d82 W9), for an exit run to record.
+ * The isolation probes, from inside real cells, for an exit run to record.
  *
  *   just probes [--image <ref>] [--host <host>]
  *

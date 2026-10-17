@@ -70,7 +70,7 @@ describe("the model catalog", () => {
     expect(row.priceWindows).toHaveLength(1);
     const model = toModelConfig("model_configs", row);
 
-    // Wednesday 2026-10-14: 09:59 UTC is outside the window, 10:00 is its first minute.
+    // On the fixture's Wednesday, 09:59 UTC is outside the window and 10:00 is its first minute.
     const reported = { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 400, cacheWriteTokens: 0 };
     const peak = measureCost(reported, model, new Date("2026-10-14T09:59:00Z"));
     const offPeak = measureCost(reported, model, new Date("2026-10-14T10:00:00Z"));
@@ -112,7 +112,7 @@ describe("the migrated catalog (021, 026, 047)", () => {
     const peak = (600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000;
     const offPeak = (600 * 0.15 + 400 * 0.003 + 100 * 0.6) / 1_000_000;
 
-    // 2026-10-12 is a Monday, 2026-10-17 a Saturday.
+    // The first fixture date is a Monday, the second a Saturday.
     expect(costAt("2026-10-12T00:59:00Z")).toBeCloseTo(offPeak, 12);
     expect(costAt("2026-10-12T01:00:00Z")).toBeCloseTo(peak, 12);
     expect(costAt("2026-10-12T10:00:00Z")).toBeCloseTo(offPeak, 12);

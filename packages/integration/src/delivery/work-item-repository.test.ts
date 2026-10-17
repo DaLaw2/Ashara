@@ -7,7 +7,7 @@ import type { Database } from "@ashara/db";
 import { WorkItemRowRepository } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
 
-// Delivery's work item repository (O1): one insert -> read round trip against real Postgres, for
+// Delivery's work item repository: one insert -> read round trip against real Postgres, for
 // the mechanics a mocked database cannot verify (jsonb, defaults, FK wiring).
 
 let db: Database;
@@ -140,7 +140,7 @@ describe("WorkItemRowRepository: the largest context window an attempt of a task
     expect((await repo.findById(id))?.overflowedWindowTokens).toBe(64_000);
   });
 
-  // t-overflow-edges: the window and the requeue are one transaction, so a fault between them never
+  // The window and the requeue are one transaction, so a fault between them never
   // leaves the window raised on an item still InProgress, nor an item requeued without it.
   test("a requeue refused after the window is raised writes neither: the item stays InProgress with no window and its dispatch counted", async () => {
     const repo = new WorkItemRowRepository(db);

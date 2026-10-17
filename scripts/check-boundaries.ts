@@ -1,5 +1,5 @@
 /**
- * ADR-044 Phase 7: Import boundary lint.
+ * Import boundary lint.
  *
  * Statically checks cross-package imports in src/ and test/ (test files
  * included) against the allowed matrix in boundary-rules.toml. A
@@ -27,7 +27,7 @@
  * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
  * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
  * relative import may not leave the named-only files, and a listed name no named-only file imports
- * is itself a violation, so the list never grows past what is used (ADR-081: a simulator oracle
+ * is itself a violation, so the list never grows past what is used (a simulator oracle
  * never imports the production predicate it judges). A stand-in is held to `stand-in-names` through
  * its relative value imports too, followed file to file, so a helper cannot hand it a product rule;
  * an `import type` edge carries no runtime code and is not followed. A stand-in glob that matches no

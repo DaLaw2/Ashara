@@ -111,7 +111,7 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result), statements(result)).toEqual([]);
   }, 90_000);
 
-  // W7: with no adversary the stand-ins drive the project to Accepted on one passed sweep of main;
+  // With no adversary the stand-ins drive the project to Accepted on one passed sweep of main;
   // the delivered report is judged against the goal tasks' merge records and the task and check
   // records, so a report that drops a goal's close, misstates what no stored check covers, leaves out
   // an asked-for item no acceptance line cites, or is posted with no record of it (and so posted
@@ -268,7 +268,7 @@ describe("lifecycle simulator, directed", () => {
     expect(sweeps.at(-1)).toBe("acceptance sweep ran:passed");
   }, 90_000);
 
-  // W6/W7: a halt's report quotes the cause recorded on its episode. Under a cell outage the project
+  // A halt's report quotes the cause recorded on its episode. Under a cell outage the project
   // halts on infrastructure and then undeliverable (plan_repair); at the low cap it halts at once.
   it("catches an outage's halt reports that state a fixed cause instead of the recorded one", async (ctx) => {
     const outage = await directed(ctx, [], { ...OUTAGE, mutation: "halt-report-fixed-cause" });
@@ -322,7 +322,7 @@ describe("lifecycle simulator, directed", () => {
     expect(planted.faults).toEqual([]);
   }, 90_000);
 
-  // C9, containment: the second project's rows are corrupted as the run reaches them, its first
+  // Containment: the second project's rows are corrupted as the run reaches them, its first
   // task_spec (the gate halts it) and then its halt episode's kind (the block report's listing reads
   // it, contained to that report). The first project is accepted all the same; the corrupted episode
   // can never be reported, which I2 names on the second project. With containment undone (a

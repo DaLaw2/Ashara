@@ -40,7 +40,7 @@ const callRows = z.array(
 type Seen = { readonly kind: "admitted" | "recorded"; readonly uuids: readonly string[] };
 
 /**
- * I5, the admission clause (F11): what the spend cap's admission promises, judged from outside it.
+ * I5, the admission clause, for two admissions racing the spend cap: what the spend cap's admission promises, judged from outside it.
  * At every instant, the deployment's recorded spend (each row at its cost, or its estimate when
  * unmeasured, as the cap counts it) plus the worst-case estimate of every call admitted and not yet
  * recorded is within the cap. A call is admitted when its pending row's insert returns and recorded

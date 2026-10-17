@@ -16,7 +16,7 @@ import type { ProjectId } from "@ashara/shared";
 import { runReport } from "./run-report-body.js";
 import { formatRunReport } from "./run-report-format.js";
 
-// The trace contract of roadmap M2 exit 7, on a scripted run: the real gateway, the Finance ledger
+// The trace contract of a run's evidence, on a scripted run: the real gateway, the Finance ledger
 // writing llm_calls, the Workplace attempt loop and the dev session's terminal write, with a mock
 // model in place of DeepSeek (no real LLM call) and an in-memory cell. Every attempt must carry a
 // typed terminal, a prompt digest and its environment version; every llm_calls row a measured cost
@@ -111,7 +111,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-describe("the trace contract (M2 exit 7) on a scripted run", () => {
+describe("the trace contract on a scripted run", () => {
   test("every attempt has a terminal, a prompt digest and its environment; every call a cost or an explicit NULL", async () => {
     const [attemptTaskId, idleTaskId] = taskIds;
     if (attemptTaskId === undefined || idleTaskId === undefined) throw new Error("tasks not created");

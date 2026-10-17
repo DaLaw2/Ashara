@@ -7,7 +7,7 @@ import { ProjectHaltRepository } from "./project-halt.js";
 /**
  * The cycle's containment of its steps' subjects: their faults kept in step_faults, the errors the
  * cycle handles itself escaping, and a subject that keeps failing halting its project through
- * Delivery's guard, the one writer of a project halt (O3 c), blamed on whose failure its last fault
+ * Delivery's guard, the one writer of a project halt, blamed on whose failure its last fault
  * was (projectBlockCause reads the fault's cause chain). Backoffs run on `clock`, the cycle's own;
  * each subject's run is scoped on `logger`.
  */

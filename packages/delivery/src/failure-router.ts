@@ -32,7 +32,7 @@ interface FailureRouteCommon {
 }
 
 /**
- * A failed attempt and Quality's verdict on it (G4): a retryable failure is routed against the
+ * A failed attempt and Quality's verdict on it: a retryable failure is routed against the
  * replan bound; a non-retryable one is given up at once and spends no retry. The verdict is set
  * where the failure is decided, never read back out of the failure's text.
  */

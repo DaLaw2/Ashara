@@ -60,7 +60,7 @@ export interface RunOptions {
   readonly timeoutMs: number;
   /**
    * Projects on the one deployment (policy default 1). Two share the deployment's spend cap, so
-   * their tasks' admissions race on it (F11 across projects); both are judged, the second's
+   * their tasks' admissions race on it across projects; both are judged, the second's
    * violation keys marked `p2`.
    */
   readonly projects?: 1 | 2;
@@ -417,7 +417,7 @@ class CorruptionWithoutSecondProject extends Error {
 }
 
 /**
- * The containment scenario (C9): between cycles the observer corrupts the project's rows
+ * The containment scenario: between cycles the observer corrupts the project's rows
  * as the run reaches them: its first task's task_spec once it has tasks (the gate reads it and
  * halts the project on the row, delivery gate.ts gateProject), then the kind of its open halt
  * episode with no report yet (the block reports' listing reads it, contained to that report), past
@@ -1041,7 +1041,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
         trace.push(`client stop at cycle ${cycles}`);
       }
       const current: Live = instance;
-      // F12: a lost wake skips a cycle; a duplicated one runs two back to back.
+      // A lost wake skips a cycle; a duplicated one runs two back to back.
       if (tape.chance("wake.lost", FAULTS[options.profile].perSeamCall * 10)) {
         trace.push(`cycle ${cycles}: wake lost`);
         continue;

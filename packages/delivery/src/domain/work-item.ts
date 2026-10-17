@@ -157,7 +157,7 @@ export function completeRecordedMerge(item: WorkItem): void {
 }
 
 /**
- * Fails an item with Quality's verdict on whether another attempt can succeed (G4): the verdict is
+ * Fails an item with Quality's verdict on whether another attempt can succeed: the verdict is
  * saved with the transition, so the item is routed by it whenever it is routed, a restart between
  * the two included.
  */

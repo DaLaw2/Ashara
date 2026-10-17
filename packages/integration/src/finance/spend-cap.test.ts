@@ -170,7 +170,7 @@ describe("Finance's spend cap, read from llm_calls", () => {
     expect(cap.refusalOf(refusal)).toMatchObject({ kind: "project", projectId });
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(await rowsOf(projectId)).toHaveLength(0);
-    // The project's halt at its cap is Delivery's (O3 c), which blocks with the refusal's reason.
+    // The project's halt at its cap is Delivery's, which blocks with the refusal's reason.
     expect((await projectRow(projectId)).status).toBe("active");
     if (!(refusal instanceof BudgetExceeded)) throw new Error("expected a BudgetExceeded refusal");
     expect(refusal.message).toMatch(/^budget_cap: the spend cap of project /);

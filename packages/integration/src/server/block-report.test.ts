@@ -343,9 +343,9 @@ describe("every task given up opens a plan repair, and the undeliverable halt na
   });
 });
 
-// A suite_review halt, a kind no code path writes now, is
+// A suite_review halt, a kind no code path writes, is
 // still told once, with the last review's problems.
-describe("a suite review halt an older database holds is told once", () => {
+describe("a stored suite review halt is told once", () => {
   test("the counts per check task survive in the record, and the block's report states the last review's problems", async () => {
     const projectId = await newProject();
     const review = await workItem(projectId, "Review the plan's checks", { origin: "review" });

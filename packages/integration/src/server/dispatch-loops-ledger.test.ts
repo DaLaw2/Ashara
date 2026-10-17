@@ -36,8 +36,8 @@ import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 
 // The dispatch loops that have no counter of their own end through the work ledger,
-// each in a typed, recorded state: a task requeued after every shutdown (L6) and a
-// task whose dispatch dies with the process at every restart (L7). L7 also stops early, before its
+// each in a typed, recorded state: a task requeued after every shutdown and a
+// task whose dispatch dies with the process at every restart. The second also stops early, before its
 // ledger share is spent: a task found InProgress at two startups in a row is given up as crash_loop.
 // A crash here is a process whose dispatch never returns: its model request never answers, and
 // the next process is a new loop over the same database. Against Postgres; no real LLM call is made.
@@ -355,7 +355,7 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-// L7: the startup reconciler requeues a crash orphan; CRASH_LOOP_BOUND stops it early, the work ledger in any case.
+// The startup reconciler requeues a crash orphan; CRASH_LOOP_BOUND stops it early, the work ledger in any case.
 describe("a task whose dispatch dies with the process at every restart", () => {
   test("is given up as crash_loop at the second startup in a row that finds it InProgress, and never dispatched again", async () => {
     const at = await fixture("crash-loop");
@@ -416,7 +416,7 @@ describe("a task whose dispatch dies with the process at every restart", () => {
   }, 60_000);
 });
 
-// L6: an interrupted dispatch is requeued with its dispatch refunded and no counter of its own; the work ledger ends it.
+// An interrupted dispatch is requeued with its dispatch refunded and no counter of its own; the work ledger ends it.
 describe("a task whose every dispatch a shutdown interrupts", () => {
   test("is requeued refunded until its work budget is drawn, then given up as work_budget_spent, never requeued again", async () => {
     const at = await fixture("shutdowns");

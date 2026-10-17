@@ -268,8 +268,8 @@ export class FirstPlanner implements FirstPlanning {
       // Only the model's or its provider's failure is a failed plan attempt (modelCallFailureOf, as
       // every counted step reads it). Ashara's own (a spend cap's refusal, a store write that failed,
       // a request built wrong, a fault nothing names) never counts toward the stop: a refusal escapes
-      // to the core loop's step, which halts the project it names (Finance refuses, Delivery halts:
-      // O3 c); any other is contained to this project (containEach), or blocks it when it is the
+      // to the core loop's step, which halts the project it names (Finance refuses, Delivery halts);
+      // any other is contained to this project (containEach), or blocks it when it is the
       // project's record (runPending).
       if (modelCallFailureOf(err) === "ashara") throw err;
       return this.fail(project, err);

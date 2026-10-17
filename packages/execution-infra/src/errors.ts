@@ -31,7 +31,7 @@ export class ProcessSpawnFailed extends ExecutionInfraError {
 
 /**
  * The container substrate cannot be used. Never answered by a host fallback: the caller blocks the
- * work (s-isolated-worker-m1 criterion C2).
+ * work.
  */
 export class SubstrateUnavailable extends ExecutionInfraError {
   readonly binary: string;

@@ -345,8 +345,8 @@ export interface StructuredLadderOptions {
  * the ladder: attempts on the requested model, escalate one
  * capability tier on persistent schema failure, then throw
  * `StructuredOutputExhausted` (also when no model is graded at the escalation
- * tier, which `unavailableEscalation` records). Replaces per-site ad-hoc enum-drift tolerance
- * (G5) with the shared retry+escalate contract. The wrapped provider's own
+ * tier, which `unavailableEscalation` records). One shared retry+escalate contract stands
+ * in for per-site enum-drift tolerance. The wrapped provider's own
  * validation surfaces as `SchemaValidationError`, which the ladder treats as a
  * failed attempt; any other (transport) error propagates unchanged.
  */

@@ -302,8 +302,8 @@ export type Outcome =
 
 /**
  * Each project block kind's halt cause, over the code's own list (`satisfies`: a kind added there
- * fails the type check here until it is given one). `infrastructure` is W6's halt on the machines,
- * which the substrate probe ends; `fault` is Ashara's own record or step failing, which W7 calls
+ * fails the type check here until it is given one). `infrastructure` is the halt on the machines,
+ * which the substrate probe ends; `fault` is Ashara's own record or step failing, which acceptance calls
  * undeliverable (orchestrator acceptance.ts); `configuration` (a model call refused by anything but a
  * spend cap) is Ashara's setup, kept with infrastructure as before. `work_budget` is the work
  * ledger's halt on a project's spent model requests, which the owner's grant

@@ -181,7 +181,7 @@ async function expectUntouched(projectId: string, tenderId: string): Promise<voi
   expect(open.map((t) => t.id)).toEqual([tenderId]);
 }
 
-describe("c-liaison-intake C3: intake with a gateway that cannot be built", () => {
+describe("intake with a gateway that cannot be built", () => {
   test("no provider key in the secret store: composition refuses with NoLLMProvidersConfigured", async () => {
     const { projectId, tenderId } = await tenderOnRecord();
 

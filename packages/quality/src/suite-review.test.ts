@@ -159,7 +159,7 @@ const RESAMPLED = {
   unconfirmed: [],
 };
 
-describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
+describe("SuiteReviewer", () => {
   test("a clean verdict is accepted after its schema validates; the prompt holds every suite and the vision", async () => {
     const prompts: string[] = [];
     const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [] }], prompts, TWO_FAMILIES), source: source(), publicInterface: INTERFACE, judgements: keep() });

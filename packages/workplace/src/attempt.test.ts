@@ -656,7 +656,7 @@ describe("define_check", () => {
     expect(result).toMatchObject({ value: expect.stringContaining("Cargo.toml") });
   });
 
-  it("tells Z0 every file the author writes with its file tools, and never one a command left (N22)", async () => {
+  it("tells Z0 every file the author writes with its file tools, and never one a command left", async () => {
     const { llm } = scriptedLlm([
       () => turn([{ name: "write_file", input: { path: "checks/run.sh", content: "echo hi\n" } }]),
       () => turn([{ name: "edit_file", input: { path: "checks/run.sh", old_text: "hi", new_text: "hello" } }]),
@@ -782,8 +782,8 @@ describe("define_check", () => {
     expect(answer).toMatchObject({ value: expect.stringContaining('It could not be red-run: on the foundation, check "builds" changed files the project tracks: src/main.src') });
   });
 
-  // d89 C: the header never claims the client agreed to an assumption it was only told of or asked about.
-  // O9: Delivery words each assumption's note; Workplace renders it and adds nothing of its own.
+  // The header never claims the client agreed to an assumption it was only told of or asked about.
+  // Delivery words each assumption's note; Workplace renders it and adds nothing of its own.
   it("renders each assumption by its key with the note Delivery wrote, and claims no agreement", () => {
     const brief = {
       ...assignment().brief,

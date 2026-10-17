@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { AsharaRootNotFound } from "./errors.js";
 
 // ---------------------------------------------------------------------------
-// CWD-independent Ashara root anchoring (rp-t2 — CWD blindness)
+// CWD-independent Ashara root anchoring
 //
 // A process whose cwd is not the Ashara source checkout mis-resolves a
 // cwd-relative config default: config/models.toml is not found.

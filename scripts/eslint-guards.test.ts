@@ -46,7 +46,7 @@ describe("eslint guards fire on planted instances", () => {
     "p.then((v) => v, (e) => {});",
     "p.then((v) => v, (e) => null);",
     "p.then((v) => v, (e) => { return undefined; });",
-  ])("C4 swallowed rejection: %s", async (line) => {
+  ])("swallowed rejection: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([SWALLOWED]);
   });
 
@@ -54,7 +54,7 @@ describe("eslint guards fire on planted instances", () => {
     "p.catch((e) => { console.warn(e); throw e; });",
     "p.then((v) => null, (e) => { throw e; });",
     "p.then((v) => v);",
-  ])("C4 leaves a handler that reports: %s", async (line) => {
+  ])("leaves a handler that reports: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([]);
   });
 
@@ -71,7 +71,7 @@ describe("eslint guards fire on planted instances", () => {
     "let n: unknown = x; n ||= []; return n;",
     "try { return JSON.stringify(x); } catch { return \"\"; }",
     "try { return JSON.stringify(x); } catch { return false; }",
-  ])("C5 identity-element fallback: %s", async (line) => {
+  ])("identity-element fallback: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([IDENTITY]);
   });
 
@@ -81,23 +81,23 @@ describe("eslint guards fire on planted instances", () => {
     'return x || "(none)";',
     "return x ?? [1];",
     "// eslint-disable-next-line no-restricted-syntax -- policy default: planted\nreturn x ?? 0;",
-  ])("C5 leaves a non-identity fallback and an argued one: %s", async (line) => {
+  ])("leaves a non-identity fallback and an argued one: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([]);
   });
 
-  test("C5 and C6 hold production source only, not tests", async () => {
+  test("the identity-element and type-assertion guards hold production source only, not tests", async () => {
     expect(await guardsOf(planted("return (x as string) ?? JSON.parse(t) ?? 0;"), TEST_FILE)).toEqual([]);
   });
 
-  test.each(["return x as string;", "return <string>x;"])("C6 type assertion: %s", async (line) => {
+  test.each(["return x as string;", "return <string>x;"])("type assertion: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([ASSERTION]);
   });
 
-  test("C6 leaves `as const`", async () => {
+  test("the type-assertion guard leaves `as const`", async () => {
     expect(await guardsOf(planted("return [1, 2] as const;"))).toEqual([]);
   });
 
-  test.each(["return JSON.parse(t);", "return [t].map(JSON.parse);"])("C6 JSON.parse outside parseJson: %s", async (line) => {
+  test.each(["return JSON.parse(t);", "return [t].map(JSON.parse);"])("JSON.parse outside parseJson: %s", async (line) => {
     expect(await guardsOf(planted(line))).toEqual([JSON_PARSE]);
   });
 

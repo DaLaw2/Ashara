@@ -62,7 +62,7 @@ export function thinkingModeFor(policy: ThinkingPolicy | undefined, site: string
 /**
  * The provider options that set `mode` for a provider type. Only the DeepSeek
  * adapter takes a thinking switch (`@ai-sdk/deepseek` 3.0.59: thinking is on by
- * default for `deepseek-flash` and every V4 id unless `thinking.type` is
+ * default for `deepseek-flash` and every `deepseek-v4-*` id unless `thinking.type` is
  * `disabled`); every other type gets no option.
  */
 export function thinkingProviderOptions(

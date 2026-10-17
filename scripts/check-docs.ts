@@ -1,12 +1,12 @@
 /**
  * Executable-claims gate.
  *
- * Finds every ```verify block in the scan scope of docs/README.md section 9 (SCAN_SOURCES), runs
+ * Finds every ```verify block in the scan scope the documentation README defines (SCAN_SOURCES), runs
  * each command from the repo root, and compares trimmed stdout against the recorded expected
  * output. A mismatch, a non-zero exit, an unreadable document, or an unparseable block is a
  * failure. Zero documents found is a failure.
  *
- * Also enforces docs/README.md sections 4 and 7 on docs/investigations/ (checkRetention), and
+ * Also enforces the README's retention rules on the investigations directory (checkRetention), and
  * requires the README to still hold, verbatim, every sentence that defines what this gate checks
  * (README_CLAUSES), so the README and the gate cannot drift apart. Exit non-zero on any failure.
  *
@@ -294,8 +294,8 @@ export function checkBlocks(blocks: readonly VerifyBlock[], cwd: string): CheckR
 // ---------------------------------------------------------------------------
 
 /**
- * Every docs/README.md sentence that defines what this gate checks, verbatim (whitespace
- * normalized). The gate fails when docs/README.md no longer holds one of them, so neither the
+ * Every documentation README sentence that defines what this gate checks, verbatim (whitespace
+ * normalized). The gate fails when the README does not hold one of them, so neither the
  * README nor the code below can change the rule alone. Each source table below names the README
  * token it implements; check-docs.test.ts requires the tables and these clauses to agree.
  */
@@ -410,7 +410,7 @@ const DEFAULT_ENTRY_POINT = "index.md";
 /**
  * Where LIVE_RECORD_CLAUSE's live records are read from. A `file` must exist: without it, every
  * citation it holds would read as missing. A `tree` is read recursively when present. `adr` is
- * every ADR body in docs/decisions/; `memory` is the auto-memory's *.md files, which must exist.
+ * every ADR body in the decisions directory; `memory` is the auto-memory's *.md files, which must exist.
  */
 type LiveRecordSource =
   | { readonly readmeName: string; readonly kind: "file" | "tree"; readonly rel: string }
@@ -479,7 +479,7 @@ function escapeRegExp(text: string): string {
 
 /**
  * CITATION_CLAUSE: a citation names the entry by its investigations path, `investigations/<name>`
- * as a whole token, alone or at the end of a longer path such as `docs/investigations/<name>`. A
+ * as a whole token, alone or at the end of a longer path that leads into it. A
  * subdirectory may be cited by a path into it. A bare name does not count, since a same-named file
  * elsewhere would satisfy it; nor does an `archive/` path, which names the archived copy.
  */
@@ -573,7 +573,7 @@ function checkSubdirectory(root: string, relDir: string, row: IndexRow | undefin
   return failures;
 }
 
-/** README sentences this gate implements that docs/README.md no longer holds verbatim. */
+/** README sentences this gate implements that the documentation README does not hold verbatim. */
 function readmeDrift(readmeText: string): RetentionFailure[] {
   const normalized = normalizeWhitespace(readmeText);
   return Object.values(README_CLAUSES)
@@ -588,8 +588,8 @@ function readmeDrift(readmeText: string): RetentionFailure[] {
 }
 
 /**
- * docs/README.md sections 4 and 7. The README must still hold every clause in README_CLAUSES.
- * Every file or subdirectory directly under docs/investigations/ (INDEX.md aside) is cited by its
+ * The documentation README's retention rules. The README must still hold every clause in README_CLAUSES.
+ * Every file or subdirectory directly under the investigations directory (INDEX.md aside) is cited by its
  * investigations path from a live record (LIVE_RECORD_SOURCES; the auto-memory is read from the
  * *.md files of `memoryDir`), else it is an archive candidate. Each entry has its own INDEX.md
  * row, every INDEX.md row names an entry that exists, and each subdirectory passes

@@ -547,7 +547,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       expect(failedApproaches()).toBe(0);
     });
 
-    // t-overflow-edges: the catalog changed since the overflow found a wider model. Every re-dispatch
+    // The catalog changed since the overflow found a wider model. Every re-dispatch
     // meets the same catalog, so the task is given up typed; it is no fault of Ashara's to requeue
     // and count toward a project halt.
     test("no catalog model wider than a recorded overflow: given up as no_wider_model, its dispatch given back; no requeue, no fault counted, no halt", async () => {

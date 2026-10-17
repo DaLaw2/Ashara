@@ -20,7 +20,7 @@ export function cellInstanceFor(workdirBase: string): string {
 /**
  * Startup (Discipline B): removes the cells a previous process of this instance left behind,
  * before the runner dispatches anything. A substrate that is unavailable now is not a reason to
- * refuse to boot: every task then blocks at its own probe (s-isolated-worker-m1 C2), and the
+ * refuse to boot: every task then blocks at its own probe, and the
  * leaked cells are removed by the first startup that can reach podman.
  */
 export async function reconcileCellsAtStartup(substrate: Pick<PodmanSubstrate, "reconcileOrphans">, instance: string): Promise<void> {
@@ -34,7 +34,7 @@ export async function reconcileCellsAtStartup(substrate: Pick<PodmanSubstrate, "
 }
 
 /**
- * The probe an infrastructure halt waits on (story s-loop-never-stop-m1 W6): the substrate answers
+ * The probe an infrastructure halt waits on: the substrate answers
  * `info`. A probe that throws, for any reason, did not pass.
  */
 export function substrateProbe(substrate: Pick<PodmanSubstrate, "probeSubstrate">): SubstrateProbe {

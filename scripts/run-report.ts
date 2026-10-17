@@ -12,7 +12,7 @@
  *
  * Per task: each dev session's attempt (terminal, turns, model, environment version, prompt
  * digest), or, when none is recorded, what the row says about why (still open, closed by the startup
- * reconciler, from before the attempt columns, or ended without an attempt outcome), never "no model
+ * reconciler, from before attempt outcomes were recorded, or ended without an attempt outcome), never "no model
  * call"; a task with an agent call admitted inside no session with a recorded attempt is flagged
  * UNTIED (one at or after the start of a session not yet terminal is listed apart as open: in flight,
  * or a crash orphan not yet reconciled, the rows do not say which; a call of any site but

@@ -514,7 +514,7 @@ describe("one llm_calls row per provider call", () => {
     expect(await rowsOfThisProject()).toHaveLength(3);
   });
 
-  // D2: an opinion meant to come from another family never comes back from the avoided one through failover.
+  // An opinion meant to come from another family never comes back from the avoided one through failover.
   test("a second opinion whose other-family request fails never fails over to the avoided family: it is unanswered at that strength", async () => {
     let avoidedAsked = 0;
     const llm = twoProviders({
@@ -541,7 +541,7 @@ describe("one llm_calls row per provider call", () => {
     expect(avoidedAsked).toBe(0);
   });
 
-  // D1: a schema the target provider refuses is never sent, spent on, or retried on another provider.
+  // A schema the target provider refuses is never sent, spent on, or retried on another provider.
   test("a schema the provider type refuses is refused before admission: no request, no row, no failover", async () => {
     await clearRows();
     let sent = 0;

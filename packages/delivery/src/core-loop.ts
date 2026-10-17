@@ -175,7 +175,7 @@ export class CoreLoop {
     const rosters = await this.stepThenCap("roster", () => deps.rosterDerivation.runPending());
     if (rosters.kind === "stop") return this.haltAtCap(rosters.stop);
     for (const outcome of rosters.outcomes) {
-      // Organization refuses a roster it cannot derive; the project's halt is Delivery's (O3 c),
+      // Organization refuses a roster it cannot derive; the project's halt is Delivery's,
       // blamed by the refusal's cause chain: a ladder run out is the model's failure, an unreadable
       // vision Ashara's own.
       if (outcome.kind === "refused") await this.halt(outcome.projectId, projectBlockCause(outcome.refusal.error), "roster");
@@ -399,7 +399,7 @@ export class CoreLoop {
     return stopped(stop);
   }
 
-  /** Halts the project under `cause` through Delivery's guard, the one writer of a project halt (O3 c). */
+  /** Halts the project under `cause` through Delivery's guard, the one writer of a project halt. */
   private async halt(projectId: ProjectId, cause: ProjectBlockCause, step: string): Promise<void> {
     const result = await this.deps.projectRepo.block(projectId, cause);
     this.deps.logger.info("delivery.project-blocked", `project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`, {

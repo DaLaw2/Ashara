@@ -1,5 +1,5 @@
 /**
- * The lifecycle simulator's soak tier (story s-independent-verify-m1 L2, design §4.13).
+ * The lifecycle simulator's soak tier.
  *
  *   npx tsx scripts/simulate.ts [--seeds N] [--start S] [--jobs J] [--profile P] [--projects 1|2] [--cap USD] [--minimize] [--trace] [--replay FILE]
  *
@@ -78,7 +78,7 @@ class WorkerProtocolError extends Error {
   }
 }
 
-/** Bounds (design §4.14): no unbounded run. */
+/** Bounds: no unbounded run. */
 const MAX_SEEDS = 500;
 const MAX_CYCLES = 120;
 const SEED_TIMEOUT_MS = 120_000;

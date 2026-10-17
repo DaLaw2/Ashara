@@ -107,7 +107,7 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
   };
 }
 
-describe("C9: a state with no exit", () => {
+describe("a state with no exit", () => {
   const task = (status: string, blockedReason: unknown): Snapshot["items"][number] => ({
     id: "impl", title: "Deliver b1", status, level: "Task", workKind: "implementation", origin: null, checksFor: null, blockedReason,
     mergeCommit: null, mergeKind: null, ownerRoleId: OWNER, dispatchCount: 1, infrastructureFaults: 0,

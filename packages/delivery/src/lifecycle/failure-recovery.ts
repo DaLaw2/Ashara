@@ -69,7 +69,7 @@ export async function recoverParkedFailedItem(
 }
 
 /**
- * Routes a Failed item by Quality's verdict on its last attempt (G4): replanned for another attempt
+ * Routes a Failed item by Quality's verdict on its last attempt: replanned for another attempt
  * or abandoned. The verdict is required, so no failure picks a route by default.
  */
 export async function recoverFailedItem(

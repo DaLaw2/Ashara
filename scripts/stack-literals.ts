@@ -1,7 +1,7 @@
 /**
  * Finds a stack literal in production source: a manifest file name, a language name, a source file
  * extension or a package-manager or toolchain name written as a string, template or regular
- * expression literal (CLAUDE.md "Target Generality", ADR-080 d10 class C8). Ashara provides
+ * expression literal (CLAUDE.md "Target Generality"). Ashara provides
  * context and never prescribes a stack, so a literal like "Cargo.toml" in packages/<pkg>/src is a
  * table of the projects that work, invisible in a TypeScript project and fatal in the rest.
  * Run by check-boundaries.ts inside `just check`; the tokens and the reviewed exemptions live in

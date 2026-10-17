@@ -693,7 +693,7 @@ export class Replanner implements Replanning {
       if (failure === "ashara") throw err;
       return this.fail(project, err, failure);
     }
-    // Revised again next cycle, uncounted (loop L17): the work ledger bounds it, since every
+    // Revised again next cycle, uncounted: the work ledger bounds it, since every
     // decomposition draws from the project's budget, which halts the project as work_budget when spent.
     if (result === "moved") return { kind: "moved", projectId };
     const why =

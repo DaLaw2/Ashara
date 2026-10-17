@@ -17,8 +17,8 @@ import { MUTATIONS } from "./plants.js";
 /**
  * What a run reached, against the code's own iterable lifecycle lists: every
  * work-item transition, blocked-reason source, project status, project block kind and execution
- * status, and every fault kind at every seam; every acceptance sweep outcome (W7) and every halt
- * by its cause and block kind (W6/W7).
+ * status, and every fault kind at every seam; every acceptance sweep outcome and every halt
+ * by its cause and block kind.
  */
 export interface Coverage {
   readonly transitions: Set<string>;
@@ -67,7 +67,7 @@ export function observeAcceptanceSweeps(onSweep: (outcome: string) => void): () 
 /**
  * - batch-of-two: a cycle dispatched two tasks at once;
  * - turn-handed-on: a task gave the turn to the other at a seam call;
- * - contended:<wait>: a task waited on the other's checkout lock or spend-cap admission (F11).
+ * - contended:<wait>: a task waited on the other's checkout lock or spend-cap admission.
  */
 const CONCURRENCY = ["batch-of-two", "turn-handed-on", "contended:target-checkout", "contended:spend-admission"] as const;
 
@@ -134,8 +134,8 @@ const EVENT_TARGET: Readonly<Record<string, WorkItemStatus | null>> = {
   "work_item.unblocked": "Pending",
   "work_item.replanned": "Pending",
   "work_item.abandoned": "Abandoned",
-  // giveUpWorkItem (W6): an open item given up, its cause on record; also the defect a failed acceptance sweep
-  // opens and gives up (W7).
+  // giveUpWorkItem: an open item given up, its cause on record; also the defect a failed acceptance sweep
+  // opens and gives up.
   "work_item.given_up": "Abandoned",
   "work_item.superseded": "Abandoned",
   "work_item.requeued": "Pending",

@@ -19,7 +19,7 @@ export interface ClientChannelDeps {
   readonly projectRepo: ProjectRepository;
   readonly clientMessageRepo: ClientMessageRepository;
   readonly clientRepo: ClientRepository;
-  /** A tender: the project row, owned by `clientId`, and its inbound 'tender' message in one transaction (K1). */
+  /** A tender: the project row, owned by `clientId`, and its inbound 'tender' message in one transaction. */
   readonly createTender: (clientId: string, projectName: string, body: string) => Promise<CreatedTender>;
 }
 

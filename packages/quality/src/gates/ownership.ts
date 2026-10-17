@@ -31,7 +31,7 @@ type OwnershipVerdict =
    * makes. `diff` is the branch's diff of those files against its merge base.
    */
   | { readonly kind: "environment_change"; readonly paths: readonly string[]; readonly diff: string; readonly reason: string }
-  /** A stored check file was changed (with or without recipe files): the task's failure. */
+  /** A stored check file changed (with or without recipe files): the task's failure. */
   | { readonly kind: "refused"; readonly recipePaths: readonly string[]; readonly checkPaths: readonly string[]; readonly reason: string };
 
 async function mergeBase(targetProjectPath: string, taskId: string, branch: string): Promise<string> {

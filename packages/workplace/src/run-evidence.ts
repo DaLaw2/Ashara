@@ -219,7 +219,7 @@ function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: D
 }
 
 /**
- * The evidence of one project's run (roadmap M2 exit 7): every task that had a dev session or an
+ * The evidence of one project's run: every task that had a dev session or an
  * llm_calls row, with each session's attempt record and each of its calls (when, by which site),
  * the project's llm_calls totals per task and provider, and every work item of the project with
  * the columns its spend is attributed by. Every row is validated on the way out of Postgres.

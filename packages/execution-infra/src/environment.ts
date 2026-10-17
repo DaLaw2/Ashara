@@ -157,7 +157,7 @@ export function recipePaths(definition: EnvironmentBuildContext): readonly strin
 
 /**
  * Everything the image build reads: the recipe and the inputs. The environment version is the digest
- * of exactly these files, so a merge that changes any of them moves the version (d72 B3).
+ * of exactly these files, so a merge that changes any of them moves the version.
  */
 export function buildContextPaths(definition: EnvironmentBuildContext): readonly string[] {
   return [...recipePaths(definition), ...definition.inputs];

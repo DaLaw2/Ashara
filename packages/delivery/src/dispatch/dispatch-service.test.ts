@@ -536,8 +536,8 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
-  // The real PodmanSubstrate, pointed at a binary that does not exist: the observation C2 asks
-  // for, without uninstalling podman.
+  // The real PodmanSubstrate, pointed at a binary that does not exist: a missing substrate observed
+  // without uninstalling podman.
   test("a missing podman binary: environment_blocked at the probe; no model, no session, no worktree, no records", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-envblk-")));
     scratch.push(root);
@@ -638,7 +638,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     vi.restoreAllMocks();
   });
 
-  // t-overflow-edges: a catalog with no window larger than one the task overflowed is a typed result
+  // A catalog with no window larger than one the task overflowed is a typed result
   // the orchestrator gives the task up on, never a throw routed as Ashara's fault.
   test("no catalog model wider than the task's overflow: no_wider_model; no worktree, no cell, no model, no session", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1296,7 +1296,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.status === "completed" && result.delivered.kind === "already-delivered").toBe(false);
   });
 
-  // The (c) review: stale checks were "failed", so replanned and lessoned against the implementer.
+  // Stale checks are not the implementer's failure: no replan and no lesson against it.
   test("checks from another environment version none of which fails on their baseline: checks_stale before the model, naming the check task and both versions", async () => {
     const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0, ciStdout: "" });
 
@@ -1358,7 +1358,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(probe.modelCalls).toBeGreaterThan(0);
   });
 
-  // The (c) review: a git or checkout step of the revalidating red run was rethrown into processTask.
+  // A git or checkout step of the revalidating red run blocks the task; it is never rethrown into processTask.
   test("Z0 cannot make the revalidating red run's checkout: blocked under checkRedRun before the model, never a failure", async () => {
     const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), checkoutsBlocked: true });
 

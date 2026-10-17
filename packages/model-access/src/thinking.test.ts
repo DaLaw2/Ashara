@@ -33,12 +33,12 @@ describe("loadThinkingPolicyFromToml", () => {
     }
   });
 
-  test("no [thinking] table is thinking off everywhere (ADR-074 D13); no file is refused, never read as off", () => {
+  test("no [thinking] table is thinking off everywhere; no file is refused, never read as off", () => {
     expect(loadThinkingPolicyFromToml(writeToml(`[routing.profiles."deepseek"]\n`))).toEqual({ default: "off", sites: {} });
     expect(() => loadThinkingPolicyFromToml(join(tmpdir(), "ashara-absent-thinking.toml"))).toThrow(ModelsConfigUnreadable);
   });
 
-  test("the repo's config/models.toml turns thinking on at every routing site but suite-review (ADR-074 item 83 a, d95 b)", () => {
+  test("the repo's config/models.toml turns thinking on at every routing site but suite-review", () => {
     const policy = loadThinkingPolicyFromToml(join(import.meta.dirname, "..", "..", "..", "config", "models.toml"));
     for (const site of KNOWN_LLM_SITES) {
       expect([site, thinkingModeFor(policy, site)]).toEqual([site, site === "suite-review" ? "off" : "on"]);
@@ -52,7 +52,7 @@ describe("loadThinkingPolicyFromToml", () => {
 
 describe("outputBudget", () => {
   // A reasoning allowance, even the 32,768 minimum, does not stop the suite review spending its whole bound on reasoning, so it runs with thinking off.
-  test("the repo's suite-review resolves to thinking off and its bound carries no reasoning allowance (ADR-074 d95 b)", () => {
+  test("the repo's suite-review resolves to thinking off and its bound carries no reasoning allowance", () => {
     const policy = loadThinkingPolicyFromToml(join(import.meta.dirname, "..", "..", "..", "config", "models.toml"));
     const mode = thinkingModeFor(policy, "suite-review");
     expect(mode).toBe("off");

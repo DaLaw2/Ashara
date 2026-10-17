@@ -23,7 +23,7 @@ describe("role charters", () => {
     expect(text).not.toContain("PUBLIC_INTERFACE.md");
   });
 
-  it("the environment role's charter states the recipe, the probe gate and that the product is not the environment's (d72)", () => {
+  it("the environment role's charter states the recipe, the probe gate and that the product is not the environment's", () => {
     const text = duties("environment");
     for (const field of ["- containerfile:", "- recipe:", "- inputs:", "- probe:", "- build:", "- test:"]) expect(text).toContain(field);
     expect(text).not.toContain("- owned:");

@@ -1,5 +1,5 @@
 /**
- * Operator access to the secret store (ADR-073 Q10). Never prints a secret value.
+ * Operator access to the secret store. Never prints a secret value.
  *
  *   npx tsx scripts/secret.ts put <name>     value read from piped stdin, one trailing newline stripped;
  *                                            refuses a client access code (scripts/client.ts set-code)

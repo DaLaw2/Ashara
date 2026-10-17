@@ -194,7 +194,7 @@ describe("formatRunReport cost per Epic and goal task", () => {
     return line;
   };
 
-  test("charges check, rework and repair spend to the goal task each serves, per Epic, with C5's mean input tokens", () => {
+  test("charges check, rework and repair spend to the goal task each serves, per Epic, with its mean input tokens", () => {
     const report = formatRunReport(costEvidence(workItems, taskCalls));
     const text = report.text;
     expect(report.attributionViolation).toBe(false);
@@ -292,7 +292,7 @@ describe("formatRunReport cost per Epic and goal task", () => {
     expect(report.text).toContain(`VIOLATION: the Epics and the project-level line account for 13 of 14 llm_calls row(s) and $0.717000 of $0.747000; task(s) ${id(0x50)} are no work item of the project`);
   });
 
-  // m3-scope C5: each call's input over its model's window, and each Epic's peak. A call with no
+  // Context utilisation: each call's input over its model's window, and each Epic's peak. A call with no
   // input tokens reported, or no window recorded, is unknown, never 0%.
   test("prints each call's context utilisation, unknown (never 0%) when its input tokens or window are not on record", () => {
     const calls = [call(10, 0.1, 30_000, 200_000), call(11, 0.1, null, 200_000), call(12, 0.1, 5000, null)];

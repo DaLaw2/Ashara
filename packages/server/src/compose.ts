@@ -310,7 +310,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   };
 
   // Execution infrastructure: every tool call and every check runs in a cell on
-  // this podman (s-isolated-worker-m1). The cells are labelled with this
+  // this podman. The cells are labelled with this
   // deployment's instance, so startup reconciliation removes only its own.
   const cellSubstrate = new PodmanSubstrate({
     podmanPath: config.podmanBinary,
@@ -329,7 +329,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   );
 
   // The agent half of each task's Assignment, resolved once per attempt: the work item's owner
-  // role from the project's latest stored roster (s-team-roster-m1), and the model.
+  // role from the project's latest stored roster, and the model.
   const staffing: AgentStaffing = createAgentStaffing({
     async ownerOf(taskId) {
       const row = await dbWorkItemRepo.findById(taskId);
@@ -364,7 +364,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   // The brief's intent: the task's project's current vision, its VERBATIM
   // visionText (never the summary: a paraphrase can drop what the client asked
-  // for) and its assumptions, which Delivery renders for the Assignment (O9).
+  // for) and its assumptions, which Delivery renders for the Assignment.
   const intentSource: ProjectIntentSource = {
     async loadIntent(taskId: string) {
       const projectId = await findTaskProjectId(taskId);

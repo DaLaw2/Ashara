@@ -10,7 +10,7 @@ import type { PlanReportStore } from "@ashara/engagement";
 
 /**
  * Engagement's planning-report store over projects, work_items, plan_revisions and client_messages.
- * A report that cannot be composed halts its project through Delivery's halt (O3 c).
+ * A report that cannot be composed halts its project through Delivery's halt.
  */
 export function createPlanReportStore(db: ReturnType<typeof createDb> | DbTransaction): PlanReportStore {
   const projects = new ProjectHaltRepository(db);

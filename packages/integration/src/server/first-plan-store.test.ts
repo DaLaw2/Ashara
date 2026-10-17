@@ -621,7 +621,7 @@ describe("roster", () => {
     expect(await rosterOf(projectId)).toEqual([]);
     const [refused] = outcomes;
     if (refused?.kind !== "refused") throw new Error("expected a refused roster");
-    // Organization halts nothing itself (O3 c); the core loop halts the project as a fault, so:
+    // Organization halts nothing itself; the core loop halts the project as a fault, so:
     await new ProjectHaltRepository(db).block(projectId, { category: "fault", ...refused.refusal });
     const row = await db.execute(
       sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`,

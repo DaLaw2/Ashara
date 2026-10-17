@@ -18,7 +18,7 @@ export interface KnowledgeSink {
  * walk found none), narrowing within the project. `queryText` is embedder-free
  * lexical signal derived from the task's own spec (title + goal + endState +
  * scope + deliverables), letting the port rank rows by relevance to THIS task
- * instead of returning an identical top-N to every task in the epic (Q3b).
+ * instead of returning an identical top-N to every task in the epic.
  */
 export interface KnowledgeScope {
   readonly projectId: ProjectId;
@@ -48,7 +48,7 @@ interface QueriedSpec {
 }
 
 /**
- * Lexical signal for `KnowledgeScope.queryText` (kl-t2/Q3b) — every field a
+ * Lexical signal for `KnowledgeScope.queryText` — every field a
  * task's own spec carries, joined into one string for `ts_rank`/
  * `plainto_tsquery` to match against.
  */
@@ -78,7 +78,7 @@ interface FailedDispatch {
 }
 
 /**
- * Captures a deterministic lesson for a non-completed terminal outcome (kl-t4):
+ * Captures a deterministic lesson for a non-completed terminal outcome:
  * `result.detail` already carries the blocking/failure reason (an agent-reported
  * failure/block, a gate/smoke failure, or a verification failure), so no LLM
  * distillation is needed to make it a usable lesson (deferred by story decision).

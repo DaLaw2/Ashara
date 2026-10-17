@@ -208,7 +208,7 @@ export class DecompositionEngine {
 
     /**
      * Turns raw LLM tasks into task specs with deterministically resolved, stable
-     * inter-task edges (G3). Each task is assigned a synthetic id; every
+     * inter-task edges. Each task is assigned a synthetic id; every
      * `dependsOn` entry is resolved to that id by `ref` first (primary), then
      * exact `title` (legacy fallback). Over-cap output and a dependency on
      * something never emitted both fail closed, so nothing the model produced is

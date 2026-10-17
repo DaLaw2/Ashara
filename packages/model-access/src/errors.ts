@@ -528,7 +528,7 @@ interface ContextBudgetExceededContext {
 /**
  * An agent turn whose input would not fit, or did not fit, its model's context window. The attempt
  * ends on it as `context_budget_exceeded`: there is no reduction and retry while compaction is
- * deferred (architecture §13.6).
+ * deferred.
  */
 export class ContextBudgetExceeded extends GatewayError {
   readonly context: ContextBudgetExceededContext;

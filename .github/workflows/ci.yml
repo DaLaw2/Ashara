@@ -82,7 +82,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Gate — typecheck + boundary lint + knip + eslint
+      - name: Gate — typecheck + boundary lint + comment lint + knip + eslint
         run: just check
 
   test:

@@ -37,7 +37,7 @@ function utf8Bytes(value: unknown): number {
 }
 
 /**
- * What a turn's input is projected from (architecture §13.6):
+ * What a turn's input is projected from:
  * - `reported-plus-tail`: the input the provider reported for the attempt's previous request, plus
  *   an estimate of what was appended since (that request's answer and the tool results after it);
  * - `estimated`: no provider count to start from (the attempt's first turn, or a previous request
@@ -70,7 +70,7 @@ type PreflightVerdict =
   | { readonly kind: "context_budget_exceeded"; readonly projectedInputTokens: number; readonly limitTokens: number };
 
 /**
- * The window guard (architecture §13.6 "Fail-closed"): a turn whose projected input exceeds the
+ * The window guard (fail-closed): a turn whose projected input exceeds the
  * model's window less the output it reserves is `context_budget_exceeded`; input of exactly that
  * limit fits.
  */

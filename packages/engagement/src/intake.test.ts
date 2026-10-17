@@ -302,7 +302,7 @@ describe("TenderIntake assumption label", () => {
   });
 });
 
-describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
+describe("TenderIntake assumptions report", () => {
   const raw = (assumptions: readonly Record<string, unknown>[]) => ({
     summary: "A key-value store.",
     inScope: ["put, get, list"],
@@ -400,7 +400,7 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
   });
 });
 
-describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
+describe("TenderIntake failure classes", () => {
   const valid = {
     summary: "A booking page.",
     inScope: ["booking"],
@@ -528,7 +528,7 @@ describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
 // An assumption whose breach a client could observe gets a check, and doubt classifies
 // toward one. Which kind a real model picks is not testable offline: these tests fix what Ashara
 // does with each answer and what every classifying prompt tells the model, never the model's choice.
-describe("TenderIntake assumption kinds fail safe (ADR-083)", () => {
+describe("TenderIntake assumption kinds fail safe", () => {
   // A tender for a command-line key-value store, and assumptions an intake of it wrote, as fixture.
   const TENDER =
     "I would like a key-value store written in Rust that we can use from the command line. Keep data in a directory we " +

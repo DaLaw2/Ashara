@@ -10,7 +10,7 @@ import { targetRepo as hostRepoOf } from "./target-repo.js";
 
 // Every task after Sprint 0 runs in cells built from the project's CURRENT environment version:
 // the build context (recipe and inputs) of environment/environment.toml as committed on main. There is no
-// other build path and no fallback to the BaseCell (s-platform-role-m1 C2).
+// other build path and no fallback to the BaseCell.
 
 const MAIN = "main";
 const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;

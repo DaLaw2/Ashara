@@ -154,7 +154,7 @@ function tieLines(task: RunEvidence["tasks"][number]): { readonly lines: string[
 }
 
 /**
- * A call's context utilisation, its input tokens over its model's window (m3-scope C5). Never 0%
+ * A call's context utilisation, its input tokens over its model's window. Never 0%
  * read off a missing count: a call whose provider reported no input tokens, or whose row records no
  * window, is unknown, with why.
  */
@@ -303,8 +303,8 @@ function perGoal(spend: Spend, goals: number): string {
 }
 
 /**
- * Spend per Epic and per goal task (m3-scope C4), and mean input tokens per agent call and the peak
- * context utilisation of any call per Epic (C5). Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
+ * Spend per Epic and per goal task, and mean input tokens per agent call and the peak
+ * context utilisation of any call per Epic. Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
  * Epic; a goal task's calls from its second dev session on are its rework. Spend that serves no
  * goal task is printed on its Epic's unattributed line, and llm_calls with no task on the project-level
  * line, never dropped or spread; the Epics' totals and the project-level line are checked to add up to
@@ -583,14 +583,14 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
 
 type Strength = Extract<StoredClaim["second"], { readonly kind: "answered" }>["strength"];
 
-/** What each strength of second opinion was, as the report names it (ADR-084 d12). */
+/** What each strength of second opinion was, as the report names it. */
 const STRENGTH_TEXT: Readonly<Record<Strength, string>> = {
   "other-family": "another model family",
   "same-family-other-model": "another model of the family",
   "same-model": "the same model from another angle",
 };
 
-/** What each claim basis leaves of the claim (ADR-084 d11), and why an item it leaves undecided reads unverified. */
+/** What each claim basis leaves of the claim, and why an item it leaves undecided reads unverified. */
 const CLAIM_BASIS: Readonly<Record<StoredClaim["basis"], { readonly label: string; readonly unverified: string }>> = {
   "second-opinion-clean": { label: "clean: the second opinion found no problem either", unverified: "a clean claim leaves no item unverified" },
   "second-opinion-found": { label: "finding: the second opinion found a problem", unverified: "the second opinion named a problem in it" },

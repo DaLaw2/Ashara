@@ -349,7 +349,7 @@ interface UnresolvableDependencyContext {
 }
 
 /**
- * Raised when a task's `dependsOn` entry (G3) matches neither a sibling task's
+ * Raised when a task's `dependsOn` entry matches neither a sibling task's
  * `ref` (primary) nor its exact `title` (legacy fallback), and the referent was
  * never emitted at all. Fails the decomposition closed (Discipline A) instead of
  * silently dropping the edge: a dropped edge lets a prerequisite run out of order.

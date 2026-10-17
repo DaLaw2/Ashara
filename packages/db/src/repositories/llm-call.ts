@@ -149,7 +149,7 @@ const WorkRowSchema = z.object({
 
 const SiteRowSchema = z.object({ callSite: z.string().min(1), requests: z.coerce.number().int().positive() });
 
-/** The Finance cost ledger's per-call rows (architecture K10). */
+/** The Finance cost ledger's per-call rows. */
 export class LlmCallRepository {
   constructor(private readonly db: DbHandle) {}
 

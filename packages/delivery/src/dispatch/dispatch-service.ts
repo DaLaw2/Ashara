@@ -306,7 +306,7 @@ export interface TaskDescriptor {
   readonly blockedReason?: StoredBlockedReason;
   /**
    * The task's true Epic ancestor id, walked up by the core loop (which reads the
-   * WorkItem hierarchy) before constructing this descriptor (kl-t2/Q5). `null`
+   * WorkItem hierarchy) before constructing this descriptor. `null`
    * means the walk ran and found no Epic ancestor. Required: a parent is not an Epic, so no
    * other field may stand in for it at the knowledge write.
    */
@@ -697,7 +697,7 @@ export class DispatchService {
         { sessionId, taskId: task.id, brief, environmentVersion: sessionEnvironmentVersion(environment) },
         (slot) => this.runExecution(dispatch, slot),
       );
-      // ONE seam covering every return path inside runExecution (kl-t4): only the agent's own work
+      // ONE seam covering every return path inside runExecution: only the agent's own work
       // failing is a lesson about the task (fault-class.ts). A substrate or Z0 fault, a refused call,
       // stale stored checks, a disputed check, a requested environment change and a shutdown are not.
       if (result.status === "failed" || result.status === "blocked") {

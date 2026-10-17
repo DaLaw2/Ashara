@@ -573,7 +573,7 @@ describe("CoreLoop spend cap", () => {
       },
     }).runCycle();
 
-    // Finance refuses; the halt is Delivery's (O3 c).
+    // Finance refuses; the halt is Delivery's.
     expect(halted).toEqual([
       { projectId: TEST_PROJECT_ID, cause: { category: "budget_cap", errorClass: "BudgetExceeded", reason: "budget_cap: stub project cap refusal", spend: STUB_SPEND } },
     ]);

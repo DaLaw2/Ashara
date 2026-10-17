@@ -4,7 +4,7 @@ import type { AgentBrief } from "./agent-brief.js";
 
 /**
  * The project's current vision as the Assignment carries it: its version, its text verbatim, and
- * every assumption by key, already rendered by Delivery in neutral words (O9).
+ * every assumption by key, already rendered by Delivery in neutral words.
  */
 interface AssignmentVision {
   readonly version: number;

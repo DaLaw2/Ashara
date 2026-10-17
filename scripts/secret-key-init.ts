@@ -1,5 +1,5 @@
 /**
- * Create the secret store's master key file (ADR-073 Q10: the key lives outside
+ * Create the secret store's master key file (the key lives outside
  * the database). Writes 32 random bytes, base64, mode 0600, to
  * $ASHARA_SECRET_KEY_FILE or ~/.config/ashara/secret.key. Refuses to overwrite an
  * existing file: secrets encrypted under it would become undecryptable.

@@ -55,7 +55,7 @@ function nextMacrotask(): Promise<void> {
 }
 
 /**
- * Runs a batch's tasks one at a time (F11): exactly one task holds the turn, and it
+ * Runs a batch's tasks one at a time, so two admissions race the spend cap: exactly one task holds the turn, and it
  * gives the turn up only at a seam call (drawn from the tape, keyed `interleave:<seam>:<label>`
  * like a fault), when it ends, or when it must wait on another task (a contended wait: the
  * checkout lock, the spend cap's admission queue). Every other task is parked at a seam call or

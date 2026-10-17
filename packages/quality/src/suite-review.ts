@@ -47,7 +47,7 @@ import type { TaskChecks } from "./task-checks.js";
 // A contradiction must quote, from the stored check files, what each of its two checks requires; Z0
 // holds each quote to the check it names. Whether two shell commands can pass together is not
 // decidable from their text without reading them as some stack's language, which Ashara never does,
-// so a grounded contradiction still needs agreement. An undecided item ("no check decides A22")
+// so a grounded contradiction still needs agreement. An undecided item, a claim that no check decides an item,
 // overrules the stored record that some check decides it, and no run can witness an
 // absence. Either acts only when the second review reaches the same finding; otherwise it is kept
 // as advisory, and an undecided item stays undecided (undecided_items) and is reported unverified,

@@ -16,7 +16,7 @@ export const SEAM_KINDS = ["db", "git", "podman", "model"] as const;
 export type SeamKind = (typeof SEAM_KINDS)[number];
 
 /**
- * The fault catalogue, as injected here. F11 (two admissions racing the spend cap)
+ * The fault catalogue, as injected here. Two admissions racing the spend cap
  * is no fault kind: it is the batch of two itself, interleaved at seam calls (interleave.ts).
  */
 const FAULT_KINDS = [
@@ -276,7 +276,7 @@ interface SeamContext {
   readonly scheduler: Scheduler;
   readonly instance: InstanceHandle;
   readonly clock: SimClock;
-  /** Terminates one backend from the observer's own connection (F3). */
+  /** Terminates one backend from the observer's own connection. */
   readonly terminateBackend: (pid: number) => Promise<void>;
   readonly interleaver: Interleaver;
   /** Judges each host git call of a batch's tasks before it runs (I7, merge-queue clause). */
@@ -296,7 +296,7 @@ interface SeamContext {
 }
 
 /**
- * A deliberate defect planted in the queries one instance sends (the L3 mutation check): the
+ * A deliberate defect planted in the queries one instance sends (the mutation check): the
  * arguments it sends instead, or null when it changed nothing of this query. The run counts the
  * queries it changed, and a plant that changed none is an error, never a quiet pass (run.ts).
  */

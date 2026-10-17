@@ -71,7 +71,7 @@ function measurementOf(call: LlmProviderCall, cost: CostMeasurement): LlmCallMea
 }
 
 /**
- * The Finance cost ledger's recorder (architecture K10): the guarded port
+ * The Finance cost ledger's recorder: the guarded port
  * calls `admit` before every provider request and `record` after it.
  * The pre-call check refuses an unpriced model, then asks the spend cap to
  * admit the call's worst case, which writes the call's row as pending. A

@@ -65,7 +65,7 @@ export interface StepContainment extends StepFaultLedger {
   /** An error the cycle handles for every subject at once (a spend-cap refusal): it throws through. */
   escapes(error: unknown): boolean;
   /**
-   * Halts the project (Delivery's halt, O3 c) under whose failure the subject's last fault was, read
+   * Halts the project (Delivery's halt) under whose failure the subject's last fault was, read
    * from the fault's cause (its last error) by the one classifier of a failed model call: the model's,
    * its provider's, or Ashara's own. A project already halted keeps its first cause, and one stopped
    * or accepted is not halted: either is "already-blocked".
@@ -218,7 +218,7 @@ async function containSubject<T, O>(
 ): Promise<O | StepFaulted> {
   const result = await runSubject(item, run);
   if (result.ran) {
-    // A run that completes clears the faults "in a row" (loop L21), so a subject whose runs
+    // A run that completes clears the faults "in a row", so a subject whose runs
     // alternate fault and success never halts here. That is a deliberate wait, not a work loop:
     // containEach sends no model request of its own and backs every fault off, a minute doubling
     // to an hour; every model request a subject's run sends draws from the work ledger, which

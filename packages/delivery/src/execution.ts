@@ -155,7 +155,7 @@ async function executeTask(
   result: TaskResult;
   outcome: Outcome | null;
   errorEnvelope?: ErrorEnvelope;
-  /** Quality's verdict on an attempt that failed or blocked and was not routed here (G4). */
+  /** Quality's verdict on an attempt that failed or blocked and was not routed here. */
   verdict?: FailureVerdict;
   /**
    * The item was routed here: parked at Blocked (a merge unrecorded), given up (an environment
@@ -167,8 +167,8 @@ async function executeTask(
 }> {
   // Walked up here, where the WorkItem hierarchy is read, so storeFailureKnowledge scopes
   // knowledge_entries by the true Epic, not whatever task.parentId points at
-  // (kl-t2/Q5 — the epic_id mis-write that made recentFindings effectively
-  // globally scoped across projects).
+  // (an epic_id written from the parent would scope recentFindings across
+  // projects).
   const epicId = await findEpicId(deps.workItemRepo, task);
 
   const taskDescriptor: TaskDescriptor = {
@@ -295,7 +295,7 @@ async function executeTask(
     // The shutdown stopped the attempt; it did not fail. No FailureRouter and no lesson: the
     // item goes back to Pending now with its dispatch refunded, so the startup reconciler
     // finds nothing InProgress to requeue and nothing Failed to route. No counter of its own bounds
-    // these requeues (loop L6): the work ledger does, since a refund returns no request drawn, and
+    // these requeues: the work ledger does, since a refund returns no request drawn, and
     // the task whose budget they spend is given up as work_budget_spent.
     await requeueAndRefund(deps, task.id, "a shutdown interrupted its attempt", "execution.routeAsInterrupted");
     return {
@@ -367,7 +367,7 @@ async function executeTask(
         result: blocked,
       });
     } else if (refusal.kind === "project") {
-      // Finance refuses the call; the project's halt at its cap is Delivery's (O3 c).
+      // Finance refuses the call; the project's halt at its cap is Delivery's.
       const blocked = await deps.projects.block(task.projectId, projectCapCause(refusal));
       deps.logger.info("delivery.project-blocked", `project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`, {
         taskId: task.id,
@@ -393,7 +393,7 @@ async function executeTask(
           : refusal.kind === "project_work"
             ? `project ${refusal.projectId}'s work budget`
             : `a configuration fault (${refusal.errorClass})`;
-    // These requeues have no counter of their own (loop L6): each refusal here halts the project
+    // These requeues have no counter of their own: each refusal here halts the project
     // (its spend cap, its work budget, its configuration) or stops the loop (the deployment's cap),
     // so the task is dispatched again only after a person's grant or unblock.
     await requeueAndRefund(deps, task.id, `a refusal at ${cap}: ${refusal.reason}`, "execution.routeAsRefused");
@@ -830,7 +830,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
 
 /**
  * A project's refusal that surfaced as a throw, not as a refused result, still halts the project:
- * at its spend cap, or on its spent work budget. Finance refuses, and the halt is Delivery's (O3 c),
+ * at its spend cap, or on its spent work budget. Finance refuses, and the halt is Delivery's,
  * wherever the refusal surfaces.
  */
 async function haltOnProjectRefusal(deps: Pick<CoreLoopDeps, "spendCap" | "projectRepo" | "logger">, task: WorkItem, error: unknown): Promise<void> {
@@ -1614,7 +1614,7 @@ async function runCountedDispatch(
             verdict,
           );
           // Every FailureRouter decision here (replan/abandon) means
-          // this dispatch attempt did not succeed (kl-t1): capture it as a
+          // this dispatch attempt did not succeed: capture it as a
           // failed_approaches lesson so a later brief sees WHY, closing the gap
           // where only a THROWN orchestrator error (the catch block below) ever
           // reached recordFailedApproach. This is the ONLY call site that writes

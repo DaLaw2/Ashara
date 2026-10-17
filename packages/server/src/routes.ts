@@ -115,7 +115,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
             409,
           );
         case "Blocked":
-          // No work item waits on a person (story s-loop-never-stop-m1 W6): a task is Blocked only
+          // No work item waits on a person: a task is Blocked only
           // by the loop, with an exit the loop takes by itself, so nobody parks one by hand.
           return c.json(
             { error: `cannot block ${item.id} by hand: a task is blocked only by the loop, with an exit the loop takes by itself` },
@@ -130,7 +130,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
         }
         case "Pending":
           // Failed -> Pending is the FailureRouter's "replan" decision taken by hand. A Blocked task
-          // is not unblocked by hand (story s-loop-never-stop-m1 W6): its exit is the loop's, each
+          // is not unblocked by hand: its exit is the loop's, each
           // cycle (orchestrator parked-exits.ts).
           if (previousStatus === "Blocked") {
             return c.json(
@@ -230,7 +230,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   });
 
   // -----------------------------------------------------------------------
-  // Client channel (K1). Inbound only: no route writes an outbound message;
+  // Client channel. Inbound only: no route writes an outbound message;
   // the Liaison writes those server-side. Every inbound insert NOTIFYs the loop.
   // -----------------------------------------------------------------------
 

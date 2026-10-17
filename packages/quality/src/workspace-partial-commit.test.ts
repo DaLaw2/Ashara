@@ -42,7 +42,7 @@ afterAll(async () => {
 // claim is about what git does with a branch, not about a function's return.
 // ---------------------------------------------------------------------------
 
-describe("commitPartialWork — ADR-036 point 6", () => {
+describe("commitPartialWork", () => {
   test("after a failure, the task branch has a commit containing the agent's files and a retry sees them", async () => {
     const base = await makeDir("ashara-partial-");
     const target = join(base, "project");

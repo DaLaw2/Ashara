@@ -18,8 +18,8 @@ const DecisionSchema = z.strictObject({ key: z.string().min(1), value: z.number(
  * The seeded value of one draw: a pure function of the seed and the draw's key (FNV-1a of the
  * key, mixed with the seed, then one mulberry32 step), the same on every platform. Not a shared
  * stream: a production change that adds or removes a seam call re-rolls that call's own site
- * only, so a seed keeps naming the same scenario everywhere else (the hardening of 31aefa1d added
- * one boot query and, under a stream, re-rolled every fast-tier seed).
+ * only, so a seed keeps naming the same scenario everywhere else (under a stream, one added boot
+ * query would re-roll every fast-tier seed).
  */
 function seededUniform(seed: number, key: string): number {
   let hash = 0x811c9dc5;

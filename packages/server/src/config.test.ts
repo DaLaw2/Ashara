@@ -86,7 +86,7 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/ASHARA_PROJECT_BUDGET_LIMIT_USD="none"/);
   });
 
-  test("unset work budgets are ADR-084's 60 and 600 model requests with a 25% reserve; set ones are read, and an unusable one is refused", () => {
+  test("unset work budgets are 60 and 600 model requests with a 25% reserve; set ones are read, and an unusable one is refused", () => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).workBudgets).toEqual({ perTaskRequests: 60, perProjectRequests: 600, verificationReservePercent: 25 });
     process.env["ASHARA_TASK_WORK_BUDGET_REQUESTS"] = "5";

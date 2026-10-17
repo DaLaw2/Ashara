@@ -264,7 +264,7 @@ describe("one project's bad record at startup", () => {
   });
 });
 
-// G4 across a restart: the verdict is saved with the
+// Quality's verdict across a restart: the verdict is saved with the
 // Failed transition and a parked Failed item is routed by it.
 describe("a parked Failed item at startup is routed by the verdict saved with its Failed transition", () => {
   const VerdictRowSchema = z.array(z.object({ status: z.string(), dispatchCount: z.number(), failureVerdict: z.unknown() }));

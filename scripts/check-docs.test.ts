@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 describe("discoverDocuments", () => {
-  test("scans docs/rules alongside the other scopes, and nothing under investigations", () => {
+  test("scans the rules directory alongside the other scopes, and nothing under investigations", () => {
     liveRecords();
     write("docs/rules/enforcement.md", "");
     write("docs/rules/notes.txt", "");

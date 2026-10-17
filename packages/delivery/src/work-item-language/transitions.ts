@@ -16,12 +16,11 @@ import type { WorkItemStatus } from "./work-item-status.js";
  *
  * `Blocked -> Abandoned` exists because Blocked is the owner-parked state and
  * its only other exit is `-> Pending`: without a give-up edge, work an owner
- * parks and then decides against can never leave the machine (HTTP PATCH to
- * Abandoned threw InvalidStatusTransition).
+ * parks and then decides against could never leave the machine.
  *
  * `Pending -> Abandoned` and `InProgress -> Abandoned` give every non-terminal
- * status a one-hop path to a terminal one. Without them, Pending had no path to
- * any terminal status at all, and InProgress required two hops (-> Failed ->
+ * status a one-hop path to a terminal one: without them Pending would reach no
+ * terminal status at all, and InProgress only in two hops (-> Failed ->
  * Abandoned). The owner's PATCH /work-items/:id/status route traverses them.
  *
  * `Completed -> Pending` has one traverser: planning's exitStaleChecks reopens a

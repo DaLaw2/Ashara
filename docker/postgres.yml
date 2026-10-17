@@ -4,8 +4,8 @@ services:
     # The simulator runs up to 20 seed workers at once, each holding several sessions (scripts/simulate.ts).
     command: ["postgres", "-c", "max_connections=400"]
     ports:
-      # 127.0.0.1-only binding is the sole access boundary under trust auth.
-      # A prior binding to 0.0.0.0 once let an E2E-built app write into the
+      # 127.0.0.1-only binding is the sole access boundary under trust auth: a wider
+      # binding lets any app on the network, an E2E-built one included, write into the
       # orchestrator's own database. Do not widen without restoring password auth.
       - "127.0.0.1:5432:5432"
     environment:

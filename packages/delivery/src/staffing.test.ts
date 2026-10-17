@@ -91,7 +91,7 @@ describe("a task whose attempt overflowed a context window is staffed on a model
     expect(asked).toEqual([32_000]);
   });
 
-  // t-overflow-edges: a catalog with nothing larger is a typed outcome the dispatch gives the task up
+  // A catalog with nothing larger is a typed outcome the dispatch gives the task up
   // on, never a throw read as Ashara's fault.
   test("none larger in the catalog: no-wider-model naming the window, never a throw and never a model the task is known not to fit", async () => {
     const staffed = await staffingOffering(null, []).staff({ ...task(), overflowedWindowTokens: 32_000 });

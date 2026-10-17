@@ -24,7 +24,7 @@ export class FailedApproachRepository {
   }
 
   /**
-   * Task-scoped counterpart to `recentFindingsScoped` (kl-t2) — same project-scope,
+   * Task-scoped counterpart to `recentFindingsScoped` — same project-scope,
    * epic-scope and lexical-relevance combination, mirrored here because
    * `failed_approaches` is a separate table from `knowledge_entries`, not a shared
    * query. See `KnowledgeRepository.recentFindingsScoped` for the full rationale.

@@ -22,7 +22,7 @@ import {
 import { abandonedReleaseSkipped } from "./residue.js";
 
 /**
- * A plant at a seam (L3 acceptance): the run must catch it, so a green invariant is not a blind one.
+ * A plant at a seam: the run must catch it, so a green invariant is not a blind one.
  * - skip-merge-record: every merge recorded under a commit main does not hold (I7, records clause);
  * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause);
  * - no-admission-queue: a spend-cap admission goes on without waiting for the ones ahead of it (I5,

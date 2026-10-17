@@ -1,4 +1,4 @@
-# Import boundary rules: ADR-075's context map, one section per package (ADR-044 mechanism).
+# Import boundary rules: the context map, one section per package.
 # scripts/check-boundaries.ts enforces them in `just check`; scripts/boundary-probes.test.ts plants
 # one violating import per forbidden package pair and per restrict rule and asserts the checker
 # reports each, and holds this file's edges to the list it states. An edge added here without
@@ -29,7 +29,7 @@ allow = ["shared"]
 # --- Generic and supporting contexts ----------------------------------------------------------
 
 [model-access]
-# ADR-075 Model Access (generic): providers, models, the structured-output ladder. Finance is its
+# Model Access (generic): providers, models, the structured-output ladder. Finance is its
 # only customer, so every model call goes through Finance's guarded port; the composition root
 # builds the gateway and the integration harness composes it as the root does. Every other context
 # reads the model language Finance re-publishes.
@@ -37,29 +37,29 @@ allow = ["shared"]
 importers = ["finance", "server", "integration"]
 
 [finance]
-# ADR-075 Finance in front of Model Access: llm_calls rows go through db; Finance measures cost,
+# Finance in front of Model Access: llm_calls rows go through db; Finance measures cost,
 # owns the recorder port and guards every model call; the model catalog and the gate it supplies
 # come from model-access's public API, whose language Finance re-publishes to the other contexts.
 allow = ["shared", "db", "model-access"]
 
 [security]
-# ADR-075 S1: db holds the ciphertext rows; the master key stays outside it.
+# Security: db holds the ciphertext rows; the master key stays outside it.
 allow = ["db"]
 # Only the composition root and the integration harness may hold a key or a store. The operator
 # tools in scripts/ also import it; this checker does not scan scripts/.
 importers = ["server", "integration"]
 
 [execution-infra]
-# ADR-075 Execution Infrastructure: cells on the container substrate. Imports no other context.
+# Execution Infrastructure: cells on the container substrate. Imports no other context.
 allow = ["shared"]
 
 [knowledge]
-# ADR-075 Knowledge: findings and failed approaches. It owns its repositories; db supplies the
+# Knowledge: findings and failed approaches. It owns its repositories; db supplies the
 # connection and the schema.
 allow = ["shared", "db"]
 
 [workplace]
-# ADR-075 Workplace, upstream of every role: the attempt loop in Z0, each model turn through
+# Workplace, upstream of every role: the attempt loop in Z0, each model turn through
 # Finance's guarded port, every tool on a cell (Workplace -> Execution Infrastructure). It owns its
 # session log (dev_sessions); db supplies the connection and the schema.
 allow = ["shared", "db", "finance", "execution-infra"]
@@ -67,9 +67,9 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # --- Core contexts ----------------------------------------------------------------------------
 
 [engagement]
-# ADR-075 Engagement, upstream of Delivery; its structured reads of client input go through
-# Finance's guarded port. O1 (ADR-080 d3): it owns its repositories; db supplies the connection and
-# the schema. O3 c (ADR-080 d3): a project's halt is Delivery's; Engagement's steps that ask for one
+# Engagement, upstream of Delivery; its structured reads of client input go through
+# Finance's guarded port. It owns its repositories; db supplies the connection and
+# the schema. A project's halt is Delivery's; Engagement's steps that ask for one
 # read its cause in Delivery's published language (project-halt), and its block and delivered
 # reports read the work item's recorded cause and task specification in Delivery's work-item
 # language, only in the files listed.
@@ -77,7 +77,7 @@ allow = ["shared", "db", "finance", "delivery"]
 restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/stack-choice.ts"]
 
 [organization]
-# ADR-075 Organization (S3): roster, role and the capability-class vocabulary, upstream of Delivery.
+# Organization: roster, role and the capability-class vocabulary, upstream of Delivery.
 # Roster derivation is Organization's language, so its structured call on the `roster` site lives
 # here, through Finance's guarded port. It reads the client vision in Engagement's published
 # language, and the conventions Workplace's tools enforce (stated in its role charters) in
@@ -87,7 +87,7 @@ restrict.engagement = ["src/acl/*.ts"]
 restrict.workplace = ["src/acl/*.ts"]
 
 [quality]
-# ADR-075 Quality: the checks, the gates, the merge and its verification, the suite review and the
+# Quality: the checks, the gates, the merge and its verification, the suite review and the
 # acceptance sweep, run on cells (Quality -> Execution Infrastructure). Workplace is upstream:
 # Quality supplies the ports its tools call and the verdicts they show. Its suite review calls a
 # model through Finance's guarded port. It owns its repositories; db supplies the connection and
@@ -99,13 +99,13 @@ restrict.delivery = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
 
 [delivery]
-# ADR-075 Delivery: the board, decomposition, routing and the contractor loop (its process manager).
+# Delivery: the board, decomposition, routing and the contractor loop (its process manager).
 # Engagement and Organization are upstream; Delivery reads Workplace's Outcome, an attempt's claim,
 # and Quality's verdict, reads and writes Knowledge, and makes its planning calls through Finance's
 # guarded port. Every other context is reachable only through src/acl/, except that the dispatcher
 # (src/dispatch/) composes a task's dispatch from Workplace's attempt, Quality's verification,
 # Knowledge's context and lessons, Execution Infrastructure's cells and worktrees and Finance's
-# guarded model port directly. Delivery owns its repositories (O1); db supplies the connection and
+# guarded model port directly. Delivery owns its repositories; db supplies the connection and
 # the schema.
 allow = ["shared", "db", "engagement", "organization", "workplace", "quality", "knowledge", "execution-infra", "finance"]
 restrict.engagement = ["src/acl/*.ts"]
@@ -119,20 +119,20 @@ restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
 # --- Infrastructure and the test harness ------------------------------------------------------
 
 [server]
-# The composition root and the client's only interface (ADR-076): it wires every context.
+# The composition root and the client's only interface: it wires every context.
 allow = ["*"]
 # The master key and the secret store are reached only where the server is composed and its
 # startup secrets loaded, plus the web-client login's secret-name vocabulary.
 restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
 
 [integration]
-# Story s-independent-verify-m1 L2: the lifecycle simulator and the cross-package integration
+# The lifecycle simulator and the cross-package integration
 # tests compose the real system as the composition root does, so the list is every package; a new
 # package is added here by decision, never reached through a wildcard. Nothing may import them back:
 # test harness code never becomes a production dependency.
 allow = ["shared", "db", "model-access", "finance", "security", "execution-infra", "knowledge", "workplace", "engagement", "organization", "quality", "delivery", "server"]
 importers = []
-# ADR-081: a simulator oracle never imports the production predicate or report composer it judges.
+# A simulator oracle never imports the production predicate or report composer it judges.
 # scripts/check-boundaries.ts holds every file under src/simulator/ to importing from another
 # package only the symbols listed here: composition, a fake's port type, a class the simulator wraps
 # to observe, and the shared vocabulary. No Engagement composer, no acceptance or block-report read
@@ -156,7 +156,7 @@ names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "cre
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "parseJson"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchemas"]
-# ADR-080 d10: a stand-in model answers the product's model calls, so one that imports the rule judging
+# A stand-in model answers the product's model calls, so one that imports the rule judging
 # its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the
 # oracle judging that rule stops being independent. A stand-in, and every simulator file it reaches by
 # a relative value import, may import from another package only the transport and type names below,
@@ -167,7 +167,7 @@ names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchema
 # stands in for: it judges what Ashara sends, never the stand-in's answer.
 stand-ins = ["src/simulator/scripted-models.ts"]
 stand-in-names.model-access = ["LanguageModelFactory", "ProviderType", "schemaRefusalsFor"]
-# ADR-084 decision 4: the termination invariants judge work against an oracle-owned bounds table. A
+# The termination invariants judge work against an oracle-owned bounds table. A
 # bounds table imports nothing at all, no other package's symbol (a production bound such as the work
 # ledger's DEFAULT_WORK_BUDGETS) and no other file that could hand it one, so each bound in it is the
 # value its cited decision states and a production change that moves a bound moves nothing here.
@@ -176,7 +176,7 @@ bounds-tables = ["src/simulator/work-bounds.ts"]
 # --- Stack literals (no package's section) ----------------------------------------------------
 
 [stack-literals]
-# CLAUDE.md "Target Generality" (ADR-080 d10, class C8): Ashara provides context and never
+# CLAUDE.md "Target Generality": Ashara provides context and never
 # prescribes a stack. scripts/check-boundaries.ts fails on any token below inside a string, template
 # or regular expression literal of a non-test module under packages/<pkg>/src; comments, identifiers
 # and module specifiers are not read (scripts/stack-literals.ts states why, and its blind spots).

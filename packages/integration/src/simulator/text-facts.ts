@@ -259,7 +259,7 @@ const ASSUMPTION_LINE = /^- (\S+) \(assumption; (.+); (client-visible behaviour|
 
 /**
  * A brief's structured assumption: the key, the statement and a note of the record's standing and
- * kind, in the words above (O9); a brief recorded before the note carried the record's own fields.
+ * kind, in the words above; a brief recorded before the note carried the record's own fields.
  */
 const briefAssumption = z.union([
   z.strictObject({ key: z.string(), statement: z.string(), note: z.string() }).transform((a) => ({ form: "noted" as const, ...a })),
@@ -441,7 +441,7 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
     const { version, assumption } = recordedBy;
     const before = versions.get(version - 1);
     const prior = before?.kind === "read" ? before.assumptions.find((a) => a.key === assumption.key) : undefined;
-    // An answer recorded before its verdict was changed the assumption when the two versions' statements differ.
+    // An answer recorded without a verdict changed the assumption when the two versions' statements differ.
     const verdict = assumption.answer?.verdict ?? (prior === undefined ? null : prior.statement === assumption.statement ? "confirms" : "changes");
     const problems = [
       ...(verdict === "changes" ? [] : [`tells the client their answer changed ${assumption.key}, which the vision records as ${verdict ?? "no verdict and no prior statement"}`]),

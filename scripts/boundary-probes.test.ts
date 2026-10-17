@@ -1,5 +1,5 @@
 /**
- * Negative probes for boundary-rules.toml (ADR-075 context map), run against the real checker.
+ * Negative probes for boundary-rules.toml (the context map), run against the real checker.
  *
  * The map below is the expected side: for every package it states the packages it may import, the
  * packages that admit only some importers, and the files a restricted edge is confined to. The test
@@ -273,7 +273,7 @@ function runChecker(root: string): { status: number | null; output: string } {
 
 const VIOLATION_LINE = /^ {2}(\S+:\d+ {2}.+)$/;
 
-describe("boundary-rules.toml against the ADR-075 map", () => {
+describe("boundary-rules.toml against the context map", () => {
   const packages = fs.readdirSync(path.join(REPO, "packages"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
   const probes = plannedProbes(packages.filter((pkg) => pkg in MAP));
   let scratch = "";
