@@ -67,6 +67,24 @@ test:
       kill -0 "$run" 2>/dev/null || exit "$status"
     done
 
+# Runs only the test files a change against <base> can affect (scripts/affected-tests.ts states the
+# selection rules and their blind spots); `just test` stays the full suite the merge lane runs.
+# Example: just test-affected origin/master --list
+#          just test-affected origin/master -- --maxWorkers=2
+# Bounded and signal-forwarding exactly as `test` is, for the same reasons.
+test-affected base *ARGS:
+    #!/usr/bin/env bash
+    set -u
+    timeout -k 150 1200 npx tsx scripts/affected-tests.ts {{base}} {{ARGS}} &
+    run=$!
+    trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
+    trap 'kill -TERM -- "-$run" 2>/dev/null || kill -TERM "$run"' TERM HUP
+    while :; do
+      wait "$run"
+      status=$?
+      kill -0 "$run" 2>/dev/null || exit "$status"
+    done
+
 # The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, each
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default
 # DATABASE_URL), run by `--jobs J` worker processes at once (default: the host's cores, at most 16;
