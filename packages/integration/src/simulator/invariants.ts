@@ -8,8 +8,8 @@ import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";
-import { checkReports, readReportRecords, uncheckedAtPassedSweeps } from "./client-reports.js";
-import type { ReportRecords } from "./client-reports.js";
+import { checkReports, readReportRecords, unconfirmedAtPassedSweeps, uncheckedAtPassedSweeps } from "./client-reports.js";
+import type { ObservedReview, ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
 import type { FaultKind, FaultRecord } from "./faults.js";
@@ -418,7 +418,17 @@ export function cellRoleViolations(
  * I2-I7 and I9, judged on one project's snapshot (design §4.8). I1, I8 (checkTotality) and I5's admission
  * clause (admissions.ts, the deployment's) are judged by the run over its whole course.
  */
-export function checkSnapshot(step: number, snapshot: Snapshot, context: { readonly spendCapUsd: number; readonly cells: readonly FakeCell[]; readonly final: boolean }): Violation[] {
+export function checkSnapshot(
+  step: number,
+  snapshot: Snapshot,
+  context: {
+    readonly spendCapUsd: number;
+    readonly cells: readonly FakeCell[];
+    readonly final: boolean;
+    /** Every suite review the stand-ins answered (StandIns.observedReviews). */
+    readonly reviews: readonly ObservedReview[];
+  },
+): Violation[] {
   const violations: Violation[] = [];
   const add = (invariant: InvariantId, key: string, statement: string): void => {
     violations.push({ invariant, step, statement, key: `${invariant}:${key}` });
@@ -485,10 +495,12 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
   // decide (an in-scope line, an assumption not recorded as internal design) is decided by a
   // stored check that sweep ran, as its recorded decides names it (d89 E, ADR-083), and every such
   // item a suite review left undecided is named unverified in the sweep's delivered report, never
-  // covered (ADR-084 decision 2). Judged on every passed sweep once the run ends, whatever the
-  // project's status then.
+  // covered (ADR-084 decision 2), and every such item the report calls decided had its suite's
+  // review found clean on it by a second model family, as the stand-ins answered it (addendum 2
+  // decision 11). Judged on every passed sweep once the run ends, whatever the project's status then.
   if (context.final) {
     for (const found of uncheckedAtPassedSweeps(snapshot.reports)) add("I6", `unchecked-item:${found.key}`, found.statement);
+    for (const found of unconfirmedAtPassedSweeps(snapshot.reports, context.reviews)) add("I6", `unconfirmed-clean:${found.key}`, found.statement);
   }
   const checkedTasks = new Set(snapshot.checks.map((check) => check.taskId));
   for (const item of snapshot.items) {

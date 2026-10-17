@@ -38,12 +38,15 @@ type AcceptedVisionItem =
     };
 
 /**
- * Whether a review of the checks left an item undecided (ADR-084 decision 2: a stored check claims it,
- * a review found none really decides it, and nothing settled that), and why nothing settled it:
- * false when no review left it so; "unsettled" when no second review by another model family
- * confirmed or settled it; "review-failed" when the second review that could have was asked and failed.
+ * Whether a review of the checks left an item undecided, and why. A finding that no check really
+ * decides it did not act (ADR-084 decision 2): "unsettled" when no second review by another model
+ * family confirmed or settled it, "review-failed" when the second review that could have was asked
+ * and failed. A review that found no problem in its checks was not confirmed (addendum 2 decision
+ * 11): "clean-contradicted" when a second review by another model family found one there,
+ * "clean-unconfirmed" when no second review by another model family answered. False when no review
+ * left it so.
  */
-export type UndecidedBy = false | "unsettled" | "review-failed";
+export type UndecidedBy = false | "unsettled" | "review-failed" | "clean-contradicted" | "clean-unconfirmed";
 
 /**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
@@ -384,28 +387,35 @@ function coverageSection(vision: VisionCoverage): string {
   ].join("\n");
 }
 
-/** Why nothing settled an undecided item, as the report says it to the client. */
+/** What a review of the checks made of an undecided item, and why nothing settled it, as the report says it to the client. */
 const UNSETTLED_BECAUSE: Readonly<Record<Exclude<UndecidedBy, false>, string>> = {
-  unsettled: "no second review by another model family confirmed or settled that: they are not verified by Ashara.",
-  "review-failed": "the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.",
+  unsettled: "a review of the checks found that none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.",
+  "review-failed":
+    "a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.",
+  "clean-contradicted":
+    "the review that found no problem in their checks was not confirmed: a second review by another model family found a problem there. They are not verified by Ashara.",
+  "clean-unconfirmed":
+    "the review that found no problem in their checks was not confirmed: no second review by another model family answered. They are not verified by Ashara.",
 };
 
+const UNDECIDED_ORDER = ["unsettled", "review-failed", "clean-contradicted", "clean-unconfirmed"] as const satisfies ReadonlyArray<Exclude<UndecidedBy, false>>;
+
 /**
- * The items of what the client asked for that a stored check claims to decide but a review of the
- * checks found none really does, with nothing to settle it: they are unverified, never covered
- * (ADR-084 decision 2), grouped by why nothing settled them, so a failed review never reads as a
- * disagreement. Empty when there are none.
+ * The items of what the client asked for that a stored check claims to decide but no confirmed
+ * review of the checks holds as decided: a review found none really does with nothing to settle it
+ * (ADR-084 decision 2), or the review that found no problem was not confirmed by another model
+ * family (addendum 2 decision 11). They are unverified, never covered, grouped by why, so a failed
+ * review never reads as a disagreement. Empty when there are none.
  */
 function undecidedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
   const asked = vision.items.filter((item) => askedFor(item.source) && item.checked);
-  return (["unsettled", "review-failed"] as const).flatMap((why) => {
+  return UNDECIDED_ORDER.flatMap((why) => {
     const undecided = asked.filter((item) => item.undecided === why);
     if (undecided.length === 0) return [];
     return [
       [
-        `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a ` +
-          `review of the checks found that none of them really decides it, and ${UNSETTLED_BECAUSE[why]}`,
+        `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but ${UNSETTLED_BECAUSE[why]}`,
         ...undecided.map((item) => coverageLine(item.source)),
       ].join("\n"),
     ];

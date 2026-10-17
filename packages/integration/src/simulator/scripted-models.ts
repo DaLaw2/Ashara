@@ -29,6 +29,7 @@ import {
   taskOfTitle,
   taskTitle,
 } from "./product.js";
+import type { ObservedReview } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { CheckSpec, InterfaceForm, SimTask, Universe } from "./product.js";
 import type { Personas } from "./personas.js";
@@ -232,6 +233,15 @@ interface ReviewRound {
   first: unknown[] | null;
 }
 
+/** What one suite review call read: its review task and the check revisions under review, each `<task id>@<revision>`. */
+type ReviewRead = Omit<ObservedReview, "provider" | "problems">;
+
+/** The provider a stand-in model answers as: the factory names each model `<provider>/<model id>`. */
+function providerOf(modelId: string): string {
+  const [provider] = modelId.split("/");
+  return provider === undefined || provider === "" ? modelId : provider;
+}
+
 /** The bad checks a sticky-bad check author writes again on every rewrite. */
 const STICKY_KINDS = ["contradictory", "wrong", "out_of_vision"] as const;
 type StickyKind = (typeof STICKY_KINDS)[number];
@@ -339,8 +349,19 @@ export class StandIns {
   private readonly stickyBad = new Set<string>();
   /** The bad check a sticky-bad check author writes, drawn once per run. */
   private stickyKind: StickyKind | null = null;
+  /** Every suite review the stand-ins answered with a whole answer, in order (client-reports.ts unconfirmedAtPassedSweeps). */
+  private readonly answeredReviews: ObservedReview[] = [];
 
   constructor(private readonly context: StandInContext) {}
+
+  /**
+   * Every suite review answered so far, as the stand-ins saw it, outside production's records: the
+   * oracle that holds a verified item to two families' clean reviews reads these, never the claim
+   * production recorded.
+   */
+  observedReviews(): readonly ObservedReview[] {
+    return this.answeredReviews;
+  }
 
   readonly factory: LanguageModelFactory = (provider, model) => this.model(`${provider.name}/${model.id}`, provider.providerType);
 
@@ -352,7 +373,7 @@ export class StandIns {
       supportedUrls: {},
       doGenerate: async (options) => {
         this.refuseUnacceptableSchemas(modelId, providerType, options);
-        return await this.respond(options);
+        return await this.respond(options, modelId);
       },
       doStream: async () => {
         throw new StandInUnanswerable("stream", "no Ashara call site streams");
@@ -380,7 +401,7 @@ export class StandIns {
     }
   }
 
-  private async respond(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
+  private async respond(options: LanguageModelV4CallOptions, modelId: string): Promise<LanguageModelV4GenerateResult> {
     this.context.onRequest();
     if (options.tools !== undefined && options.tools.length > 0) return this.agentTurn(options);
     const format = options.responseFormat;
@@ -389,7 +410,22 @@ export class StandIns {
     if (keys.includes("inScope")) return this.structured(options, "liaison-intake", () => this.intake());
     if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
     if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan(promptText(options)));
-    if (keys.includes("problems")) return this.structured(options, "suite-review", () => this.review());
+    if (keys.includes("problems")) {
+      // Kept per call, never on the instance: two lanes' reviews interleave between answer and delivery.
+      let read: ReviewRead | null = null;
+      return this.structured(
+        options,
+        "suite-review",
+        async () => {
+          const reviewed = await this.review();
+          read = reviewed.read;
+          return reviewed.answer;
+        },
+        (answer) => {
+          if (read !== null) this.answeredReviews.push({ ...read, provider: providerOf(modelId), problems: answer.problems });
+        },
+      );
+    }
     if (keys.includes("reading")) return this.structured(options, "liaison-answer", () => this.answer());
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
@@ -410,7 +446,7 @@ export class StandIns {
    * that does not parse, no content, the whole bound spent on reasoning, or the answer cut at the
    * bound mid-object.
    */
-  private async structured(options: LanguageModelV4CallOptions, site: string, answer: () => unknown): Promise<LanguageModelV4GenerateResult> {
+  private async structured<T>(options: LanguageModelV4CallOptions, site: string, answer: () => T | Promise<T>, delivered?: (value: T) => void): Promise<LanguageModelV4GenerateResult> {
     const { tape, rates, onModelCall } = this.context;
     if (tape.chance(`model.${site}.invalid`, rates.invalidOutput)) {
       onModelCall({ site, action: "invalid-output" });
@@ -430,6 +466,7 @@ export class StandIns {
       return cutAtBound([{ type: "text", text: firstHalf(JSON.stringify(value)) }], outputBoundOf(options));
     }
     onModelCall({ site, action: "answered" });
+    delivered?.(value);
     return textResult(JSON.stringify(value));
   }
 
@@ -539,13 +576,15 @@ export class StandIns {
    * A doubting review names a cited item of a sound suite as undecided, which only another model
    * family's agreement could act on.
    */
-  private async review(): Promise<unknown> {
+  private async review(): Promise<{ readonly answer: { readonly problems: unknown[] }; readonly read: ReviewRead }> {
     // A review is a task of its own (origin review): the checks it reads are its project's.
     const task = await this.taskInProgress();
     const rows = await this.latestChecks(task.projectId);
+    const underReview = await this.checkTasksUnderReview(task.id);
+    const read: ReviewRead = { reviewTaskId: task.id, checks: [...new Set(rows.filter((row) => underReview.includes(row.checkTaskId)).map((row) => `${row.taskId}@${row.revision}`))].sort() };
     const honest = await this.honestReview(rows);
-    if (this.context.personas.of("suite-review") === "honest") return { problems: honest };
-    return { problems: await this.reviewAsPersona(task, rows, honest) };
+    if (this.context.personas.of("suite-review") === "honest") return { answer: { problems: honest }, read };
+    return { answer: { problems: await this.reviewAsPersona(task, rows, honest) }, read };
   }
 
   private async honestReview(rows: ReadonlyArray<z.infer<typeof checkRowSchema>>): Promise<unknown[]> {

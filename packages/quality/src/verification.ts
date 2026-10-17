@@ -396,8 +396,16 @@ export class TaskVerification {
         ? ""
         : `\nLeft undecided, to be reported unverified: ${outcome.undecided.map((u) => `${u.itemId} of ${u.checkTaskId}`).join(", ")}`);
     if (outcome.kind === "clean") {
-      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem that acts${setAside}${released}${advisory}`;
-      if (released !== "" || advisory !== "") console.warn(`[${task.id}] ${detail}`);
+      // A review that routes nothing is a claim another model family confirms or not (ADR-084
+      // addendum 2 decision 11): the items it leaves unconfirmed are reported unverified.
+      const { claim } = outcome;
+      const claimed =
+        claim.unconfirmed.length === 0
+          ? `\nEvery item the suites cite and no finding left undecided reads as verified: ${claim.why}`
+          : `\nNot verified, to be reported unverified (${claim.why}): ${claim.unconfirmed.map((u) => `${u.itemId} of ${u.checkTaskId}`).join(", ")}`;
+      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem that acts${setAside}${released}${advisory}${claimed}`;
+      if (released !== "" || advisory !== "" || claim.unconfirmed.length > 0) console.warn(`[${task.id}] ${detail}`);
+      else console.log(`[${task.id}] ${detail}`);
       eventSink?.emit({ event: "suites_reviewed", taskId: task.id, attempt: task.attempt, reviewed: outcome.reviewed, setAside: outcome.setAside, released: releasedChecks });
       return {
         status: "completed",

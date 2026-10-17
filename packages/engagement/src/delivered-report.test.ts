@@ -268,6 +268,39 @@ describe("the delivered report", () => {
     expect(failedSection.split("\n\n")[0]).not.toContain("A stored key survives a power loss");
   });
 
+  // ADR-084 addendum 2 decision 11: a review that found nothing is a claim; an item it covers that
+  // no other model family confirmed is unverified, never "decided by a stored check".
+  test("an item whose clean review was not confirmed is named unverified with why, apart from one the second review contradicted", async () => {
+    const body = await render({
+      sweepId: "s3e",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "clean-unconfirmed" },
+          { source: scope("S3", "A key can be deleted"), checked: true, undecided: "clean-contradicted" },
+        ],
+      },
+    });
+    expect(body).not.toContain("Every item of what you asked for is decided");
+    expect(body).toContain("Every other item of what you asked for is decided by a stored check");
+    expect(body).toContain(
+      "but the review that found no problem in their checks was not confirmed: no second review by another model family answered. They are not verified by Ashara.\n- A stored key survives a power loss",
+    );
+    expect(body).toContain(
+      "but the review that found no problem in their checks was not confirmed: a second review by another model family found a problem there. They are not verified by Ashara.\n- A key can be deleted",
+    );
+    expect(body).not.toContain("review failed");
+    const [, unconfirmed = ""] = body.split("no second review by another model family answered.");
+    expect(unconfirmed.split("\n\n")[0]).not.toContain("Keys can be stored");
+  });
+
   test("a record with no item of what the client asked for claims no coverage", async () => {
     const body = await render({
       sweepId: "s3b",

@@ -16,6 +16,7 @@ import {
   haltReportFixedCause,
   questionMisstatesAssumption,
   stopReportOmitsMerge,
+  unconfirmedClaimDropped,
 } from "./report-plants.js";
 import { abandonedReleaseSkipped } from "./residue.js";
 
@@ -50,6 +51,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9);
+ * - unconfirmed-claim-dropped: a clean review's claim no other model family confirmed leaves no item
+ *   undecided, so the delivered report calls those items decided by a stored check (I6, ADR-084
+ *   addendum 2 decision 11);
  * - check-set-skips-item: a check set is stored with one item its check task cites decided by none
  *   of its checks, past Z0's rule, so that item is accepted with no stored check deciding it, though
  *   an acceptance line still cites it (I6, d89 E, ADR-083);
@@ -88,6 +92,7 @@ export const MUTATIONS = [
   "delivered-report-omits-unverified",
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
+  "unconfirmed-claim-dropped",
   "check-set-skips-item",
   "dispatch-refund-skipped",
   "step-fault-unrecorded",
@@ -125,6 +130,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-omits-unverified": { bypassed: [], queries: deliveredReportOmitsUnverified, code: null },
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
+  "unconfirmed-claim-dropped": { bypassed: [], queries: unconfirmedClaimDropped, code: null },
   "check-set-skips-item": { bypassed: [], queries: checkSetSkipsItem, code: null },
   "dispatch-refund-skipped": { bypassed: [], queries: skipDispatchRefund, code: null },
   "step-fault-unrecorded": { bypassed: [], queries: unrecordedStepFault, code: null },

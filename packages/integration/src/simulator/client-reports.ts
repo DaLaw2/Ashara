@@ -73,17 +73,36 @@ const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
 const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown(), reportBody: z.string().nullable() });
 /**
- * A cited item a suite review left undecided (undecided_items, migration 069): its id, the text its
- * check task cited it with, and whether the second review of the judgement that left it so failed
- * (migration 071).
+ * Why a suite review left an item undecided, as the delivered report must say it: a finding that
+ * did not act, its second review not agreeing (unsettled) or failing (migration 071); or a clean
+ * review whose claim another model family contradicted or never answered (migration 072).
  */
-const undecidedRow = z.object({ id: z.string(), text: z.string(), reviewFailed: z.boolean() });
+const UNDECIDED_REASONS = ["review-failed", "clean-unconfirmed", "clean-contradicted", "unsettled"] as const;
+type UndecidedReason = (typeof UNDECIDED_REASONS)[number];
+
+/** Which reason an item undecided on several check tasks is reported under: the earliest in UNDECIDED_REASONS. */
+function firstReason(a: UndecidedReason, b: UndecidedReason): UndecidedReason {
+  return UNDECIDED_REASONS.indexOf(a) <= UNDECIDED_REASONS.indexOf(b) ? a : b;
+}
+
+/** An undecided_items row's reason, from the judgement or the claim it is tied to. */
+const UNDECIDED_REASON_SQL = sql.raw(`CASE WHEN j.basis = 'second-review-failed' THEN 'review-failed'
+              WHEN j.id IS NOT NULL THEN 'unsettled'
+              WHEN c.basis = 'other-family-found' THEN 'clean-contradicted'
+              ELSE 'clean-unconfirmed' END`);
+
+/**
+ * A cited item a suite review left undecided (undecided_items, migrations 069, 072): its id, the
+ * text its check task cited it with, and why.
+ */
+const undecidedRow = z.object({ id: z.string(), text: z.string(), reason: z.enum(UNDECIDED_REASONS) });
 const sweptUndecidedRow = undecidedRow.extend({ sweepId: z.string() });
 /** One stored check, with the check task that wrote it and what it says it decides (migration 064). */
 const storedCheckRow = z.object({ checkTaskId: z.string(), taskSpec: z.unknown(), name: z.string(), decides: z.unknown() });
 type SweptCheck = z.infer<typeof storedCheckRow>;
-/** One stored check a passed sweep ran. */
-const sweptCheckRow = storedCheckRow.extend({ sweepId: z.string() });
+/** One stored check a passed sweep ran, with the task it checks and the revision of that task's checks it ran. */
+const sweptCheckRow = storedCheckRow.extend({ sweepId: z.string(), taskId: z.string(), revision: z.number().int() });
+type RanCheck = Omit<z.infer<typeof sweptCheckRow>, "sweepId">;
 
 export interface ReportRecords {
   /** Every outbound report of the project, in posting order. */
@@ -109,7 +128,7 @@ export interface ReportRecords {
    */
   readonly passedSweeps: ReadonlyArray<
     z.infer<typeof passedSweepRow> & {
-      readonly storedChecks: readonly SweptCheck[];
+      readonly storedChecks: readonly RanCheck[];
       /** The items a suite review left undecided, before the sweep, on a check task whose checks it ran. */
       readonly undecided: ReadonlyArray<z.infer<typeof undecidedRow>>;
     }
@@ -175,9 +194,10 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     goalUndecided: await rows(
       undecidedRow,
-      sql`SELECT u.item_id AS id, u.item_text AS text, j.basis = 'second-review-failed' AS "reviewFailed"
+      sql`SELECT u.item_id AS id, u.item_text AS text, ${UNDECIDED_REASON_SQL} AS reason
           FROM undecided_items u
-          JOIN suite_review_judgements j ON j.id = u.judgement_id
+          LEFT JOIN suite_review_judgements j ON j.id = u.judgement_id
+          LEFT JOIN suite_review_claims c ON c.id = u.claim_id
           JOIN work_items a ON a.id = u.check_task_id
           JOIN work_items g ON g.id::text = a.task_spec->>'checksFor'
           WHERE u.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
@@ -202,7 +222,7 @@ async function passedSweepsOf(
   );
   const checks = await rows(
     sweptCheckRow,
-    sql`SELECT s.id AS "sweepId", a.id AS "checkTaskId", a.task_spec AS "taskSpec", c.name, c.decides
+    sql`SELECT s.id AS "sweepId", a.id AS "checkTaskId", a.task_spec AS "taskSpec", c.name, c.decides, c.task_id AS "taskId", c.revision
         FROM acceptance_sweeps s
         CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
         JOIN task_checks c ON c.task_id::text = t.task_id
@@ -213,19 +233,20 @@ async function passedSweepsOf(
   );
   const undecided = await rows(
     sweptUndecidedRow,
-    sql`SELECT s.id AS "sweepId", u.item_id AS id, u.item_text AS text, j.basis = 'second-review-failed' AS "reviewFailed"
+    sql`SELECT s.id AS "sweepId", u.item_id AS id, u.item_text AS text, ${UNDECIDED_REASON_SQL} AS reason
         FROM acceptance_sweeps s
         CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
         JOIN work_items a ON a.task_spec->>'checksFor' = t.task_id
         JOIN undecided_items u ON u.check_task_id = a.id AND u.created_at <= s.created_at
-        JOIN suite_review_judgements j ON j.id = u.judgement_id
+        LEFT JOIN suite_review_judgements j ON j.id = u.judgement_id
+        LEFT JOIN suite_review_claims c ON c.id = u.claim_id
         WHERE s.project_id = ${projectId} AND s.passed
         ORDER BY s.id, u.item_id`,
   );
   return sweeps.map((sweep) => ({
     ...sweep,
-    storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ checkTaskId, taskSpec, name, decides }) => ({ checkTaskId, taskSpec, name, decides })),
-    undecided: undecided.filter((item) => item.sweepId === sweep.id).map(({ id, text, reviewFailed }) => ({ id, text, reviewFailed })),
+    storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ sweepId: _sweep, ...check }) => check),
+    undecided: undecided.filter((item) => item.sweepId === sweep.id).map(({ id, text, reason }) => ({ id, text, reason })),
   }));
 }
 
@@ -735,9 +756,9 @@ type CoverageOnRecord =
       readonly uncovered: readonly VisionSource[];
       /**
        * Asked items a stored check records it decides but a suite review left undecided (ADR-084
-       * decision 2), each with whether a second review that could have settled it failed.
+       * decision 2, addendum 2 decision 11), each with why.
        */
-      readonly undecided: ReadonlyArray<{ readonly source: VisionSource; readonly reviewFailed: boolean }>;
+      readonly undecided: ReadonlyArray<{ readonly source: VisionSource; readonly reason: UndecidedReason }>;
       readonly notAsked: readonly VisionSource[];
     };
 
@@ -857,6 +878,97 @@ function undecidedAtSweep(
 }
 
 /**
+ * One suite review a stand-in answered with a whole answer (scripted-models.ts): the review task,
+ * the check revisions it read (`<task id>@<revision>`), the provider it answered as, and its
+ * problems as sent.
+ */
+export interface ObservedReview {
+  readonly reviewTaskId: string;
+  readonly checks: readonly string[];
+  readonly provider: string;
+  readonly problems: readonly unknown[];
+}
+
+const observedProblem = z.looseObject({
+  kind: z.string(),
+  checkTasks: z.array(z.string()).optional(),
+  item: z.string().optional(),
+  judgedItems: z.array(z.string()).optional(),
+  conflict: z.looseObject({ first: z.looseObject({ checkTask: z.string() }), second: z.looseObject({ checkTask: z.string() }) }).optional(),
+});
+
+/**
+ * Whether a review's problem says anything about item `itemId` of check task `checkTaskId`: an
+ * undecided item naming it, an outside-vision rejection on that check task judged against it, or a
+ * contradiction one of whose sides is of that check task. A problem of no shape this reads names it.
+ */
+function namesItem(problem: unknown, checkTaskId: string, itemId: string): boolean {
+  const parsed = observedProblem.safeParse(problem);
+  if (!parsed.success) return true;
+  const { kind, checkTasks, item, judgedItems, conflict } = parsed.data;
+  const onTask = checkTasks?.includes(checkTaskId) === true;
+  if (kind === "undecided-item") return onTask && item === itemId;
+  if (kind === "outside-vision") return onTask && judgedItems?.includes(itemId) === true;
+  if (kind === "contradiction") return onTask || conflict?.first.checkTask === checkTaskId || conflict?.second.checkTask === checkTaskId;
+  return true;
+}
+
+/**
+ * ADR-084 addendum 2 decision 11, judged from the stand-ins' own answers, never production's claim
+ * record: an asked-for item a passed sweep's delivered report calls decided by a stored check (a
+ * check the sweep ran decides it and no undecided row names it) whose suite a review read at the
+ * revision the sweep ran was confirmed by a second model family. Some review round of that revision
+ * holds an answer from a provider other than the round's first answer's that says nothing about the
+ * item. A suite no review read is not judged here. One finding per item, keyed by its id, at the
+ * first sweep that misses it.
+ */
+export function unconfirmedAtPassedSweeps(records: Pick<ReportRecords, "passedSweeps">, reviews: readonly ObservedReview[]): UncheckedFinding[] {
+  const found = new Map<string, string>();
+  for (const [n, sweep] of records.passedSweeps.entries()) {
+    if (sweep.reportBody === null) continue;
+    const left = new Set(sweep.undecided.map((item) => JSON.stringify([item.id, item.text])));
+    for (const check of sweep.storedChecks) {
+      const decides = z.array(z.string()).safeParse(check.decides);
+      const sources = parseStoredTaskSpec(check.taskSpec)?.sources;
+      // An unreadable decides or trace is uncheckedAtPassedSweeps' finding.
+      if (!decides.success || sources === undefined) continue;
+      const revision = `${check.taskId}@${check.revision}`;
+      const rounds = roundsOf(reviews.filter((review) => review.checks.includes(revision)));
+      if (rounds.length === 0) continue;
+      for (const id of decides.data) {
+        const source = sources.find((each) => each.id === id);
+        if (source === undefined || found.has(id) || left.has(JSON.stringify([source.id, source.text]))) continue;
+        if (source.type === "scope" ? source.side === "out" : source.kind === "internal-design") continue;
+        const confirmed = rounds.some((round) => {
+          const first = round[0]?.provider;
+          return round.some((review) => review.provider !== first && !review.problems.some((problem) => namesItem(problem, check.checkTaskId, id)));
+        });
+        if (!confirmed) {
+          found.set(
+            id,
+            `${id} ("${source.text.slice(0, 120)}") is called decided by a stored check in the delivered report of passed sweep ${n + 1} (${sweep.id}), ` +
+              `but no review of check "${check.name}"'s suite by a second model family found its checks clean on it`,
+          );
+        }
+      }
+    }
+  }
+  return [...found].map(([key, statement]) => ({ key, statement }));
+}
+
+/** The reviews of one review task over one set of check revisions, in the order they were answered. */
+function roundsOf(reviews: readonly ObservedReview[]): ObservedReview[][] {
+  const rounds = new Map<string, ObservedReview[]>();
+  for (const review of reviews) {
+    const key = JSON.stringify([review.reviewTaskId, review.checks]);
+    const round = rounds.get(key);
+    if (round === undefined) rounds.set(key, [review]);
+    else round.push(review);
+  }
+  return [...rounds.values()];
+}
+
+/**
  * The coverage the delivered report must state, from the records alone: the review task's
  * sources are every item of the vision; an item is checked when a check of a goal task's latest
  * stored revision records that it decides it (ADR-083); an out-of-scope line, or an assumption
@@ -872,18 +984,19 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
   const decided = swept.decided;
   const isAsked = (source: VisionSource): boolean => (source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design");
   const asked = items.filter(isAsked);
-  const left = new Map<string, boolean>();
+  const left = new Map<string, UndecidedReason>();
   for (const item of records.goalUndecided) {
     const key = JSON.stringify([item.id, item.text]);
-    left.set(key, left.get(key) === true || item.reviewFailed);
+    const kept = left.get(key);
+    left.set(key, kept === undefined ? item.reason : firstReason(kept, item.reason));
   }
   return {
     kind: "recorded",
     asked,
     uncovered: asked.filter((source) => !decided.has(identityOf(source))),
     undecided: asked.flatMap((source) => {
-      const failed = left.get(JSON.stringify([source.id, source.text]));
-      return decided.has(identityOf(source)) && failed !== undefined ? [{ source, reviewFailed: failed }] : [];
+      const reason = left.get(JSON.stringify([source.id, source.text]));
+      return decided.has(identityOf(source)) && reason !== undefined ? [{ source, reason }] : [];
     }),
     notAsked: items.filter((source) => !isAsked(source)),
   };
@@ -892,8 +1005,22 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
 const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 const UNDECIDED_HEAD = "These items of what you asked for have a stored check that passed on main and is recorded as deciding them";
-/** What an undecided section says when the second review that could have settled its items failed. */
-const REVIEW_FAILED = "review failed";
+/**
+ * What an undecided section's first line says for each reason, and no other section's does: the
+ * second review that could have settled its items failed; another family's review did not settle a
+ * finding; or the review that found no problem was contradicted, or never confirmed, by one.
+ */
+const SAYS: Readonly<Record<UndecidedReason, string>> = {
+  "review-failed": "review failed",
+  unsettled: "no second review by another model family confirmed or settled that",
+  "clean-contradicted": "a second review by another model family found a problem there",
+  "clean-unconfirmed": "no second review by another model family answered",
+};
+
+/** The reasons a section's first line states. */
+function reasonsSaid(head: string): UndecidedReason[] {
+  return UNDECIDED_REASONS.filter((reason) => head.includes(SAYS[reason]));
+}
 
 type CoverageUndecided = Extract<CoverageOnRecord, { readonly kind: "recorded" }>["undecided"];
 const ALL_COVERED = "Every item of what you asked for is decided";
@@ -928,10 +1055,11 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
 }
 
 /**
- * ADR-084 decision 2: the delivered report names every asked-for item a suite review left undecided
- * as not verified, and nothing else there; no such section when there is none. An item whose second
- * review failed is named in a section that says the review failed, and every other item in one that
- * does not, so the client can tell a failed review from one that did not settle the item.
+ * ADR-084 decision 2 and addendum 2 decision 11: the delivered report names every asked-for item a
+ * suite review left undecided as not verified, and nothing else there; no such section when there
+ * is none. Each item is named in a section that states its reason and no other, so the client can
+ * tell a failed review from one that did not settle the item, and a clean review another family
+ * contradicted from one no other family answered.
  */
 function undecidedProblems(body: string, undecided: CoverageUndecided): string[] {
   const sections = paragraphs(body, UNDECIDED_HEAD);
@@ -941,18 +1069,16 @@ function undecidedProblems(body: string, undecided: CoverageUndecided): string[]
   const listed = sections.flatMap(linesOf);
   const sectionOf = (source: VisionSource): string | undefined => sections.find((part) => linesOf(part).some((line) => line.includes(source.text)));
   const problems: string[] = [];
-  for (const { source, reviewFailed } of undecided) {
+  for (const { source, reason } of undecided) {
     const section = sectionOf(source);
     if (section === undefined) {
       problems.push(`the delivered report does not name "${source.text}" (${source.id}), left undecided by a review, as not verified`);
       continue;
     }
-    const saysFailed = section.split("\n")[0]?.includes(REVIEW_FAILED) === true;
-    if (saysFailed !== reviewFailed) {
-      problems.push(
-        `the delivered report names "${source.text}" (${source.id}) under a section that ${saysFailed ? "says" : "does not say"} the second review failed; ` +
-          `the records say it ${reviewFailed ? "failed" : "did not fail"}`,
-      );
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a section with no first line states no reason, which differs from every recorded one below
+    const said = reasonsSaid(section.split("\n")[0] ?? "");
+    if (said.length !== 1 || said[0] !== reason) {
+      problems.push(`the delivered report names "${source.text}" (${source.id}) under a section that states [${said.join(", ")}]; the records say ${reason}`);
     }
   }
   if (listed.length !== undecided.length) problems.push(`the delivered report names ${listed.length} item(s) as left undecided; the records hold ${undecided.length}`);

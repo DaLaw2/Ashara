@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkReports, uncheckedAtPassedSweeps } from "./client-reports.js";
+import { checkReports, unconfirmedAtPassedSweeps, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
 const noRecords: ReportRecords = { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], goalUndecided: [], passedSweeps: [] };
@@ -217,7 +217,7 @@ describe("checkReports, a delivered report", () => {
     const undecidedHead = (lines: readonly string[]): string =>
       `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.\n${lines.join("\n")}`;
     it("holds an item a review left undecided to being named as not verified, never counted covered", () => {
-      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reviewFailed: false }] };
+      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason: "unsettled" as const }] };
       const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."]);
       expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, left, uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
@@ -228,10 +228,25 @@ describe("checkReports, a delivered report", () => {
     it("holds an item whose second review failed to a section saying the review failed", () => {
       const failedHead = (lines: readonly string[]): string =>
         `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n${lines.join("\n")}`;
-      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reviewFailed: true }] };
+      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason: "review-failed" as const }] };
       const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."]);
       expect(keysOf(delivered(merged, left, `${uncovered}${failedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+    });
+
+    // ADR-084 addendum 2 decision 11: an item an unconfirmed clean review covered is named under a
+    // section that says why, and a failed confirmation never reads as a contradicted one.
+    it("holds an item whose clean review was not confirmed to a section saying why", () => {
+      const head = (why: string, lines: readonly string[]): string =>
+        `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but the review that found no problem in their checks was not confirmed: ${why}. They are not verified by Ashara.\n${lines.join("\n")}`;
+      const unanswered = head("no second review by another model family answered", ["- The product greets."]);
+      const contradicted = head("a second review by another model family found a problem there", ["- The product greets."]);
+      const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."]);
+      const left = (reason: "clean-unconfirmed" | "clean-contradicted") => ({ ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason }] });
+      expect(keysOf(delivered(merged, left("clean-unconfirmed"), `${uncovered}${unanswered}`), "accepted", [mergedGoal])).toEqual([]);
+      expect(keysOf(delivered(merged, left("clean-contradicted"), `${uncovered}${contradicted}`), "accepted", [mergedGoal])).toEqual([]);
+      expect(keysOf(delivered(merged, left("clean-unconfirmed"), `${uncovered}${contradicted}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+      expect(keysOf(delivered(merged, left("clean-unconfirmed"), uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
     it("holds a report to saying coverage is not on record when a swept check records no items it decides", () => {
@@ -267,7 +282,7 @@ describe("uncheckedAtPassedSweeps", () => {
     version: 2,
     inferences,
     scopeBoundaries,
-    storedChecks: decided.length === 0 ? [] : [{ checkTaskId: "c1", taskSpec: spec(cited), name: "greets", decides: decided.map((cite) => cite.id) }],
+    storedChecks: decided.length === 0 ? [] : [{ checkTaskId: "c1", taskSpec: spec(cited), name: "greets", decides: decided.map((cite) => cite.id), taskId: "t1", revision: 1 }],
     reportBody: null,
     undecided: [],
   });
@@ -304,7 +319,7 @@ describe("uncheckedAtPassedSweeps", () => {
 
   // ADR-084 decision 2: an item a suite review left undecided reaches I6 as unverified, never covered.
   it("names an item a review left undecided that the sweep's delivered report does not name as unverified, or calls covered", () => {
-    const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text, reviewFailed: false }] });
+    const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text, reason: "unsettled" as const }] });
     const named = `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but nothing settled it.\n- ${greets.text}`;
     expect(keysOf(left(`Delivered.\n\n${named}\n\nNothing more.`))).toEqual([]);
     expect(keysOf(left("Delivered.\n\nEvery item of what you asked for is decided by a stored check."))).toEqual(["undecided-unreported:S1", "undecided-covered"]);
@@ -315,11 +330,43 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf({ ...sweep([], []), version: null })).toEqual(["no-vision"]);
     expect(keysOf(sweep({ planning: "a map" }, []))).toEqual(["vision-unreadable"]);
     expect(keysOf(sweep([visible], [S1], [{ text: "" }]))).toEqual(["vision-unreadable"]);
-    const check = { checkTaskId: "c1", taskSpec: spec([S1]), name: "greets", decides: ["S1"] };
+    const check = { checkTaskId: "c1", taskSpec: spec([S1]), name: "greets", decides: ["S1"], taskId: "t1", revision: 1 };
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, taskSpec: { origin: "check" } }] })).toEqual(["coverage-unreadable"]);
     // A check stored with no record of what it decides decides nothing on record.
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, decides: null }] })).toEqual(["coverage-unreadable"]);
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, decides: ["A1"] }] })).toEqual(["coverage-unreadable"]);
+  });
+
+  // ADR-084 addendum 2 decision 11: an item reads as decided only on a clean review another model
+  // family confirmed, judged from the stand-ins' answers, never from production's claim.
+  describe("unconfirmedAtPassedSweeps", () => {
+    const delivered = { ...sweep([visible], [S1, A1]), reportBody: "Delivered." };
+    const review = (provider: string, problems: readonly unknown[] = [], checks: readonly string[] = ["t1@1"]) => ({ reviewTaskId: "r1", checks, provider, problems });
+    const unconfirmed = (reviews: ReadonlyArray<ReturnType<typeof review>>, ...sweeps: ReportRecords["passedSweeps"]) =>
+      unconfirmedAtPassedSweeps({ passedSweeps: sweeps.length === 0 ? [delivered] : sweeps }, reviews).map((found) => found.key);
+
+    it("names every item a delivered report calls decided on one family's clean review alone", () => {
+      expect(unconfirmed([review("deepseek")])).toEqual(["S1", "A1"]);
+      expect(unconfirmed([review("deepseek"), review("deepseek")])).toEqual(["S1", "A1"]);
+    });
+
+    it("passes an item another family's review of the same revision also found clean", () => {
+      expect(unconfirmed([review("deepseek"), review("anthropic")])).toEqual([]);
+    });
+
+    it("names an item the other family's review said something about, and only that one", () => {
+      const doubt = { kind: "undecided-item", checkTasks: ["c1"], item: "A1", problem: "p", evidence: "e" };
+      expect(unconfirmed([review("deepseek"), review("anthropic", [doubt])])).toEqual(["A1"]);
+      const conflict = { kind: "contradiction", checkTasks: ["c1", "c2"], conflict: { first: { checkTask: "c1" }, second: { checkTask: "c2" } }, problem: "p", evidence: "e" };
+      expect(unconfirmed([review("deepseek"), review("anthropic", [conflict])])).toEqual(["S1", "A1"]);
+    });
+
+    it("judges only the revision the sweep ran, and never an item reported unverified, a report not posted, or a suite no review read", () => {
+      expect(unconfirmed([review("deepseek"), review("anthropic", [], ["t1@2"]), review("deepseek", [], ["t1@2"])])).toEqual(["S1", "A1"]);
+      expect(unconfirmed([review("deepseek")], { ...delivered, undecided: [{ id: "S1", text: greets.text, reason: "clean-unconfirmed" }] })).toEqual(["A1"]);
+      expect(unconfirmed([review("deepseek")], { ...delivered, reportBody: null })).toEqual([]);
+      expect(unconfirmed([])).toEqual([]);
+    });
   });
 });
 

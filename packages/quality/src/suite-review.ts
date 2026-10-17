@@ -41,10 +41,18 @@ import type { TaskChecks } from "./task-checks.js";
 // absence. Either acts only when the second review, from another model family (another provider),
 // reaches the same finding; otherwise it is kept as advisory, and an undecided item stays undecided
 // (undecided_items) and is reported unverified, never covered.
+// A review that routes nothing is a claim about the checks too (ADR-084 addendum 2 decision 11):
+// that they decide the items their tasks cite. An empty problem list is the identity element of a
+// verdict and no evidence of one, so the second review is asked on every review, clean or not, and
+// a covered item reads as verified only when that second review came from another model family
+// and named nothing about it. An item it named, or every covered item when it failed or came from
+// the first's family, is stored undecided and reported unverified, with why; nothing reopens on the
+// second review's own findings, which no first finding raised.
 // Two ratchets bound the rounds (ADR-084 decision 3): a check task the review already reopened once
 // is not reopened for an undecided item again (the item stays undecided), and once the check set is
-// frozen, at the first implementation dispatched on it, no finding acts. Every judgement is recorded
-// whole (suite_review_judgements) before anything is routed, released or kept on it.
+// frozen, at the first implementation dispatched on it, no finding acts. Every judgement, and the
+// claim of a review that routes nothing, is recorded whole (suite_review_judgements,
+// suite_review_claims) before anything is routed, released or kept on it.
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */
 interface CheckTaskUnderReview {
@@ -197,7 +205,7 @@ interface ReviewJudgement {
   readonly firstModel: ReviewModel;
   /** Every finding the second review made on the check tasks it names, none when it found nothing there or was not asked. */
   readonly second: readonly ReviewFinding[];
-  /** Null when no second review was asked (none could have changed the outcome) or when it failed. */
+  /** Null when the second review failed. */
   readonly secondReview: SecondReview | null;
   /** Why the second review failed, exactly when the basis is second-review-failed; null otherwise. */
   readonly secondFailure: string | null;
@@ -206,11 +214,52 @@ interface ReviewJudgement {
 }
 
 /**
- * Where a review's judgements, and the items they leave undecided, are recorded, together; a write
- * that fails fails the review.
+ * Why the items a review that routed nothing covers read as verified or not
+ * (suite_review_claims.basis): another family's second review named nothing about them, or named
+ * something about some of them; or no second review of another family confirmed any of them,
+ * because it came from the first's provider or failed.
+ */
+type ClaimBasis = "other-family-clean" | "other-family-found" | "no-other-family" | "second-review-failed";
+
+/** What each basis leaves of the claim, as every text that reports it says it. */
+const CLAIM_TEXT: Readonly<Record<ClaimBasis, string>> = {
+  "other-family-clean": "a second review by another model family found no problem in them either",
+  "other-family-found": "the review that found no problem in them was not confirmed: a second review by another model family found one",
+  "no-other-family": "the review that found no problem in them was not confirmed: no model of another family reviewed the checks",
+  "second-review-failed": "the review that found no problem in them was not confirmed: the second review by another model family failed",
+};
+
+/**
+ * The claim of a review that routed nothing: the checks decide every item they record they decide,
+ * but those it already left undecided. Recorded whole, with the second review that confirms it or not
+ * and the covered items it leaves unverified.
+ */
+interface ReviewClaim {
+  readonly basis: ClaimBasis;
+  /** The check tasks whose suites it covers. */
+  readonly covered: readonly string[];
+  readonly firstModel: ReviewModel;
+  /** Null exactly when the second review failed. */
+  readonly secondReview: SecondReview | null;
+  /** Every finding the second review made, whole; none when it failed. */
+  readonly second: readonly ReviewFinding[];
+  /** Why the second review failed, exactly when the basis is second-review-failed. */
+  readonly secondFailure: string | null;
+  /** The covered items it leaves undecided: reported unverified, never covered. */
+  readonly unconfirmed: readonly UndecidedItem[];
+}
+
+/**
+ * Where a review's judgements, its claim when it routed nothing, and the items they leave
+ * undecided, are recorded, together; a write that fails fails the review.
  */
 export interface SuiteReviewJudgementStore {
-  record(review: { readonly projectId: ProjectId; readonly reviewTaskId: WorkItemId; readonly judgements: readonly ReviewJudgement[] }): Promise<void>;
+  record(review: {
+    readonly projectId: ProjectId;
+    readonly reviewTaskId: WorkItemId;
+    readonly judgements: readonly ReviewJudgement[];
+    readonly claim: ReviewClaim | null;
+  }): Promise<void>;
 }
 
 /** A finding that did not act: kept as advisory, with why. */
@@ -236,8 +285,15 @@ interface ReviewedOutcome {
   readonly undecided: readonly UndecidedItem[];
 }
 
+/** A clean outcome's claim as its dispatch reports it: why its items read as verified or not, and those that do not. */
+interface ClaimOutcome {
+  readonly basis: ClaimBasis;
+  readonly why: string;
+  readonly unconfirmed: readonly UndecidedItem[];
+}
+
 type SuiteReviewOutcome =
-  | (ReviewedOutcome & { readonly kind: "clean" })
+  | (ReviewedOutcome & { readonly kind: "clean"; readonly claim: ClaimOutcome })
   | (ReviewedOutcome & { readonly kind: "problems"; readonly problems: readonly SuiteReviewProblem[] });
 
 /** The review task, as the dispatch describes it. */
@@ -712,6 +768,76 @@ function ratchetOf(finding: ReviewFinding, frozen: boolean, suite: ReviewedSuite
   return null;
 }
 
+/** A cited item of one check task, as a key: an item is the same across findings only on the same check task. */
+function itemKey(checkTaskId: string, itemId: string): string {
+  return JSON.stringify([checkTaskId, itemId]);
+}
+
+/**
+ * The cited items a finding says something about, as keys: an undecided item's own item, the items
+ * an outside-vision rejection judged its check against, and every item each side's check task of
+ * a contradiction cites, since no item of a suite that cannot pass is settled by it.
+ */
+function itemsNamedBy(finding: ReviewFinding, suites: ReadonlyMap<string, ReviewedSuite>): string[] {
+  switch (finding.kind) {
+    case "undecided-item":
+      return finding.checkTasks.map((checkTaskId) => itemKey(checkTaskId, finding.item));
+    case "outside-vision":
+      return finding.checkTasks.flatMap((checkTaskId) => finding.judgedItems.map((itemId) => itemKey(checkTaskId, itemId)));
+    case "contradiction":
+      return namedBy(finding).flatMap((checkTaskId) => {
+        const suite = suites.get(checkTaskId);
+        return suite === undefined ? [] : suite.cited.map((item) => itemKey(checkTaskId, item.id));
+      });
+  }
+}
+
+/** What the second review gave: its verdict and model, or why it gave none. */
+type SecondVerdict =
+  | { readonly kind: "answered"; readonly data: ReviewResponse; readonly model: ReviewModel }
+  | { readonly kind: "failed"; readonly reason: string };
+
+/**
+ * The claim of a review that routed nothing (ADR-084 addendum 2 decision 11): it covers every item
+ * a reviewed suite cites and one of its checks records that it decides, but those its findings
+ * already left undecided; an item no check claims is reported as decided by none. A covered item reads as
+ * verified only when the second review came from another model family and named nothing about it;
+ * the second review's findings act on nothing, the first having raised none of them, and only leave
+ * the items they name unverified. A second review from the first's family or none at all confirms
+ * no item: every covered one is unverified (fail closed).
+ */
+function claimOf(
+  suites: ReadonlyMap<string, ReviewedSuite>,
+  firstModel: ReviewModel,
+  second: SecondVerdict,
+  undecided: readonly UndecidedItem[],
+): ReviewClaim {
+  const left = new Set(undecided.map((item) => itemKey(item.checkTaskId, item.itemId)));
+  const coveredItems = [...suites.values()].flatMap((suite) =>
+    suite.cited
+      .filter((item) => !left.has(itemKey(suite.checkTaskId, item.id)) && suite.checks.checks.some((check) => check.decides?.includes(item.id) === true))
+      .map((item) => ({ checkTaskId: suite.checkTaskId, itemId: item.id, itemText: item.text })),
+  );
+  const covered = [...suites.keys()];
+  if (second.kind === "failed") {
+    return { basis: "second-review-failed", covered, firstModel, secondReview: null, second: [], secondFailure: second.reason, unconfirmed: coveredItems };
+  }
+  const secondReview = secondReviewOf(firstModel, second.model);
+  const found = second.data.problems;
+  if (secondReview.first.provider === secondReview.second.provider) {
+    return { basis: "no-other-family", covered, firstModel, secondReview, second: found, secondFailure: null, unconfirmed: coveredItems };
+  }
+  const named = new Set(found.flatMap((finding) => itemsNamedBy(finding, suites)));
+  const unconfirmed = coveredItems.filter((item) => named.has(itemKey(item.checkTaskId, item.itemId)));
+  return { basis: unconfirmed.length === 0 ? "other-family-clean" : "other-family-found", covered, firstModel, secondReview, second: found, secondFailure: null, unconfirmed };
+}
+
+/** The claim as the dispatch reports it: why, with why the second review failed cut to its advisory length. */
+function claimOutcome(claim: ReviewClaim): ClaimOutcome {
+  const why = claim.secondFailure === null ? CLAIM_TEXT[claim.basis] : `${CLAIM_TEXT[claim.basis]} (${claim.secondFailure.slice(0, FAILURE_CHARS)})`;
+  return { basis: claim.basis, why, unconfirmed: claim.unconfirmed };
+}
+
 interface SuiteReviewerDeps {
   readonly llm: ContextualLlm;
   readonly source: SuiteReviewSource;
@@ -749,16 +875,16 @@ export class SuiteReviewer implements SuiteReviewing {
       });
     const reviewed = { reviewed: [...bySuite.keys()], setAside };
     const first = await this.verdict(task.id, () => ask(), bySuite);
-    if (first.data.problems.length === 0) return { kind: "clean", ...reviewed, released: [], advisory: [], undecided: [] };
     const findings = first.data.problems.map((finding) => {
       const suite = suiteOf(task.id, finding, bySuite);
       return { finding, suite, ratchet: ratchetOf(finding, frozen, suite) };
     });
     // The second review sees exactly the first's inputs and none of its verdict, asked of another
-    // model when the catalog has one; it is asked only when some finding's outcome turns on it.
-    const secondAsked = findings.some(({ ratchet }) => ratchet === null) ? await this.secondVerdict(task.id, () => ask(first.model), bySuite) : null;
-    const answered = secondAsked?.kind === "answered" ? secondAsked : null;
-    const secondFailure = secondAsked?.kind === "failed" ? secondAsked.reason : null;
+    // model when the catalog has one. It is asked on every review: a finding acts only on its
+    // agreement, and a review that routes nothing is a claim only it confirms.
+    const secondAsked = await this.secondVerdict(task.id, () => ask(first.model), bySuite);
+    const answered = secondAsked.kind === "answered" ? secondAsked : null;
+    const secondFailure = secondAsked.kind === "failed" ? secondAsked.reason : null;
     const review = answered === null ? null : secondReviewOf(first.model, answered.model);
     const second = answered === null ? [] : answered.data.problems;
 
@@ -785,7 +911,7 @@ export class SuiteReviewer implements SuiteReviewing {
         keep("second-review-failed", secondFailure);
         continue;
       }
-      if (review === null) throw new SuiteVerdictUnfit(task.id, "a finding whose outcome turns on a second review has none");
+      if (review === null) throw new SuiteVerdictUnfit(task.id, "a second review that did not fail named no model");
       const agreeing = agreeingWith(finding, second);
       if (isOutsideVision(finding)) {
         const judgement: Omit<ReviewJudgement, "outcome"> = { ...base, check: finding.check, basis: "two-reviews", undecided: null };
@@ -810,14 +936,16 @@ export class SuiteReviewer implements SuiteReviewing {
       judgements.push({ ...base, check: null, outcome: "routed", basis: "other-family-agreed", undecided: null });
       routed.push(finding.kind === "contradiction" ? agreedContradiction(finding, review) : agreedUndecided(finding, review));
     }
+    const undecided = judgements.flatMap((judgement) => (judgement.undecided === null ? [] : [judgement.undecided]));
+    // A review that routes something is followed by another on the reopened checks, whose claim is the one judged.
+    const claim = routed.length === 0 ? claimOf(bySuite, first.model, secondAsked, undecided) : null;
     // Recorded before anything is released, routed or kept on them: a judgement that cannot be kept is not acted on.
     try {
-      await this.deps.judgements.record({ projectId: task.projectId, reviewTaskId: task.id, judgements });
+      await this.deps.judgements.record({ projectId: task.projectId, reviewTaskId: task.id, judgements, claim });
     } catch (err) {
       throw new SuiteJudgementsUnrecorded(task.id, judgements.length, { cause: err });
     }
-    const undecided = judgements.flatMap((judgement) => (judgement.undecided === null ? [] : [judgement.undecided]));
-    if (routed.length === 0) return { kind: "clean", ...reviewed, released, advisory, undecided };
+    if (claim !== null) return { kind: "clean", ...reviewed, released, advisory, undecided, claim: claimOutcome(claim) };
     return { kind: "problems", ...reviewed, released, advisory, undecided, problems: routed };
   }
 
@@ -831,13 +959,13 @@ export class SuiteReviewer implements SuiteReviewing {
     reviewTaskId: WorkItemId,
     ask: () => Promise<{ readonly data: ReviewResponse; readonly provider: string; readonly model: string }>,
     suites: ReadonlyMap<string, ReviewedSuite>,
-  ): Promise<({ readonly kind: "answered" } & Awaited<ReturnType<SuiteReviewer["verdict"]>>) | { readonly kind: "failed"; readonly reason: string }> {
+  ): Promise<SecondVerdict> {
     try {
       return { kind: "answered", ...(await this.verdict(reviewTaskId, ask, suites)) };
     } catch (err) {
       if (!(err instanceof NoOtherFamilyAnswered || err instanceof StructuredOutputExhausted || err instanceof SuiteVerdictUnfit)) throw err;
       const reason = describeErrorChain(err);
-      console.warn(`[suite-review] review task ${reviewTaskId}: the second review failed, so no finding it was asked for acts: ${reason}`);
+      console.warn(`[suite-review] review task ${reviewTaskId}: the second review failed, so no finding it was asked for acts and no item reads as verified on it: ${reason}`);
       return { kind: "failed", reason };
     }
   }

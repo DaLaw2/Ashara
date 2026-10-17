@@ -113,7 +113,7 @@ describe("C9: a state with no exit", () => {
 
   it("names a Blocked task whose reason no exit of the loop reads (I2)", () => {
     const stranded = plantedSnapshot([task("Blocked", { source: "planted-no-such-source" })]);
-    const keys = checkSnapshot(4, stranded, { spendCapUsd: 25, cells: [], final: false }).map((violation) => violation.key);
+    const keys = checkSnapshot(4, stranded, { spendCapUsd: 25, cells: [], final: false, reviews: [] }).map((violation) => violation.key);
     expect(keys).toEqual(["I2:Deliver b1:none"]);
   });
 

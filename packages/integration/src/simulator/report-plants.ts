@@ -213,3 +213,31 @@ export const deliveredReportUnrecorded: QueryPlant = (args) => {
   const parsed = sentText.safeParse(args[0]);
   return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];
 };
+
+/**
+ * A clean review's claim that no other model family confirmed leaves no item undecided
+ * (SuiteReviewJudgementRepository, migration 072): an insert of undecided_items rows that names a
+ * claim is sent as a statement that writes nothing, so every item it covers reads as decided by a
+ * stored check in the delivered report, as when no second review was asked of a clean one. The
+ * statement keeps every parameter, each read as text, so the server binds what was sent.
+ */
+export const unconfirmedClaimDropped: QueryPlant = (args) => {
+  const text = textOf(args);
+  const params = args[1];
+  if (text === null || !text.startsWith(`insert into "undecided_items"`) || !Array.isArray(params)) return null;
+  const shape = /^insert into "undecided_items" \(([^)]*)\) values (.*?)(?: on conflict .*)?$/s.exec(text);
+  if (shape === null) return null;
+  const [, columns, values] = shape;
+  if (columns === undefined || values === undefined) return null;
+  const at = columns.split(", ").indexOf('"claim_id"');
+  if (at < 0) return null;
+  // A tuple's claim_id sent as a parameter that is not null names a claim.
+  const claimed = [...values.matchAll(/\(([^()]*)\)/g)].some(([, tuple]) => {
+    const placeholder = tuple === undefined ? null : /^\$(\d+)$/.exec(tuple.split(", ")[at] ?? "-");
+    return placeholder !== null && params[Number(placeholder[1]) - 1] !== null;
+  });
+  if (!claimed) return null;
+  const planted = `select ${params.map((_, i) => `$${i + 1}::text`).join(", ")} where false`;
+  const parsed = sentText.safeParse(args[0]);
+  return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];
+};

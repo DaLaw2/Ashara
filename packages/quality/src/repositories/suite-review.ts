@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewFindings, suiteReviewJudgements, undecidedItems } from "@ashara/db";
-import type { Database, DbHandle } from "@ashara/db";
+import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItems } from "@ashara/db";
+import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
 // Quality's record of the reviews of plan revisions' check suites (migration 044): each review
@@ -170,17 +170,32 @@ class SuiteReviewJudgementsUnreturned extends Error {
   }
 }
 
+/** A claim's insert read back no row: the items it leaves undecided could not be tied to it. */
+class SuiteReviewClaimUnreturned extends Error {
+  constructor(readonly reviewTaskId: string) {
+    super(`review task ${reviewTaskId}: its claim was written but no row came back`);
+    this.name = "SuiteReviewClaimUnreturned";
+  }
+}
+
 /**
- * Quality's record of a suite review's judgements on its findings (migrations 063, 069, 071), and of the
- * cited items its advisory findings leave undecided, in one transaction: an item is never kept
- * undecided without the judgement that left it so, nor a judgement without its item.
+ * Quality's record of a suite review's judgements on its findings (migrations 063, 069, 071), of
+ * its claim when it routed nothing (migration 072), and of the cited items either leaves undecided,
+ * in one transaction: an item is never kept undecided without the judgement or claim that left it
+ * so, nor a judgement or claim without its items.
  */
 export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore {
   constructor(private readonly db: Database) {}
 
   async record(review: Parameters<SuiteReviewJudgementStore["record"]>[0]): Promise<void> {
-    if (review.judgements.length === 0) return;
+    const { claim } = review;
+    if (review.judgements.length === 0 && claim === null) return;
     await this.db.transaction(async (tx) => {
+      const claimed = claim === null ? [] : await this.recordClaim(tx, review.projectId, review.reviewTaskId, claim);
+      if (review.judgements.length === 0) {
+        await keepUndecided(tx, review.projectId, review.reviewTaskId, claimed);
+        return;
+      }
       const ids = await tx
         .insert(suiteReviewJudgements)
         .values(
@@ -203,16 +218,54 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
       if (ids.length !== review.judgements.length) throw new SuiteReviewJudgementsUnreturned(review.reviewTaskId, review.judgements.length, ids.length);
       const undecided = review.judgements.flatMap((judgement, i) => {
         const id = ids[i]?.id;
-        return judgement.undecided === null || id === undefined ? [] : [{ ...judgement.undecided, judgementId: id }];
+        return judgement.undecided === null || id === undefined ? [] : [{ ...judgement.undecided, judgementId: id, claimId: null }];
       });
-      if (undecided.length === 0) return;
-      // One row per check task and item: an item a later round leaves undecided again is already kept.
-      await tx
-        .insert(undecidedItems)
-        .values(undecided.map((item) => ({ projectId: review.projectId, reviewTaskId: review.reviewTaskId, ...item })))
-        .onConflictDoNothing({ target: [undecidedItems.checkTaskId, undecidedItems.itemId] });
+      await keepUndecided(tx, review.projectId, review.reviewTaskId, [...undecided, ...claimed]);
     });
   }
+
+  /** The claim's row, and the items it leaves undecided tied to it. */
+  private async recordClaim(
+    tx: DbTransaction,
+    projectId: string,
+    reviewTaskId: string,
+    claim: NonNullable<Parameters<SuiteReviewJudgementStore["record"]>[0]["claim"]>,
+  ): Promise<UndecidedRow[]> {
+    const [row] = await tx
+      .insert(suiteReviewClaims)
+      .values({
+        projectId,
+        reviewTaskId,
+        basis: claim.basis,
+        covered: claim.covered,
+        firstModel: modelText(claim.firstModel),
+        secondModel: claim.secondReview === null ? null : modelText(claim.secondReview.second),
+        secondReview: claim.secondReview === null ? null : claim.secondReview.kind,
+        secondFindings: claim.second,
+        secondFailure: claim.secondFailure,
+      })
+      .returning({ id: suiteReviewClaims.id });
+    if (row === undefined) throw new SuiteReviewClaimUnreturned(reviewTaskId);
+    return claim.unconfirmed.map((item) => ({ ...item, judgementId: null, claimId: row.id }));
+  }
+}
+
+/** One cited item to keep undecided, with the judgement or the claim that left it so. */
+interface UndecidedRow {
+  readonly checkTaskId: string;
+  readonly itemId: string;
+  readonly itemText: string;
+  readonly judgementId: string | null;
+  readonly claimId: string | null;
+}
+
+async function keepUndecided(tx: DbTransaction, projectId: string, reviewTaskId: string, rows: readonly UndecidedRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  // One row per check task and item: an item a later round, or this round's judgement, leaves undecided is already kept.
+  await tx
+    .insert(undecidedItems)
+    .values(rows.map((item) => ({ projectId, reviewTaskId, ...item })))
+    .onConflictDoNothing({ target: [undecidedItems.checkTaskId, undecidedItems.itemId] });
 }
 
 function modelText(model: { readonly provider: string; readonly model: string }): string {

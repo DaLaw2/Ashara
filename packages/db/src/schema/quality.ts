@@ -121,8 +121,34 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
 });
 
 // ---------------------------------------------------------------------------
-// undecided_items (migration 069, Quality): one row per cited item a suite review found no check
-// deciding where that finding did not act; the item stays undecided and is reported unverified.
+// suite_review_claims (migration 072, Quality): one row per suite review whose outcome routed
+// nothing: its claim that the checks decide the items it covers, with the second review by another
+// model family that confirms it or not (basis), whole. Append-only; second_findings and covered are
+// jsonb arrays.
+// ---------------------------------------------------------------------------
+
+export const suiteReviewClaims = pgTable("suite_review_claims", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  reviewTaskId: uuid("review_task_id")
+    .notNull()
+    .references(() => workItems.id, { onDelete: "cascade" }),
+  basis: text().notNull(),
+  covered: jsonb().notNull(),
+  firstModel: text("first_model").notNull(),
+  secondModel: text("second_model"),
+  secondReview: text("second_review"),
+  secondFindings: jsonb("second_findings").notNull(),
+  secondFailure: text("second_failure"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// undecided_items (migrations 069, 072, Quality): one row per cited item a suite review left
+// undecided: a finding on it that did not act (judgement_id), or a claim covering it that no second
+// review by another model family confirmed (claim_id), exactly one; the item is reported unverified.
 // Append-only, one row per check task and item.
 // ---------------------------------------------------------------------------
 
@@ -141,9 +167,8 @@ export const undecidedItems = pgTable(
       .references(() => workItems.id, { onDelete: "cascade" }),
     itemId: text("item_id").notNull(),
     itemText: text("item_text").notNull(),
-    judgementId: uuid("judgement_id")
-      .notNull()
-      .references(() => suiteReviewJudgements.id, { onDelete: "cascade" }),
+    judgementId: uuid("judgement_id").references(() => suiteReviewJudgements.id, { onDelete: "cascade" }),
+    claimId: uuid("claim_id").references(() => suiteReviewClaims.id, { onDelete: "cascade" }),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (t) => ({

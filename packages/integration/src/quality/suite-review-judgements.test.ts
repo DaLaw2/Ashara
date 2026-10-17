@@ -37,6 +37,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await db.execute(sql`DELETE FROM check_set_freezes WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM undecided_items WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM suite_review_claims WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM suite_review_judgements WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM task_checks WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM dependencies WHERE from_id IN (SELECT id FROM work_items WHERE project_id = ${projectId})`);
@@ -220,6 +221,85 @@ describe("witnessed findings and the check set freeze (migration 069, ADR-084 de
     expect(outcome).toMatchObject({ kind: "problems", undecided: [], problems: [{ kind: "undecided-item" }] });
     expect(kept).toEqual([]);
     expect(judged).toMatchObject([{ outcome: "routed", basis: "other-family-agreed", secondModel: "second/strong-b", secondReview: "other-model" }]);
+  });
+
+  /** A review whose first pass finds nothing, its second answering `second` from another family, or failing with it. */
+  async function reviewClean(second: ((check: string) => { readonly problems: readonly unknown[] }) | Error) {
+    const reviewTask = parseWorkItemId(await workItem("Review a clean suite"), "test review task");
+    const impl = await workItem("Durable put");
+    const check = await workItem("Checks of Durable put");
+    const cited = [
+      { type: "scope" as const, id: "S8", text: "put then get returns the value", side: "in" as const },
+      { type: "scope" as const, id: "S9", text: "put survives a power loss", side: "in" as const },
+    ];
+    const source: SuiteReviewSource = {
+      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: cited.map((item) => item.text), sources: cited, checkedTitle: "Durable put", reviewReopens: 0 }],
+      latest: async () => ({ checkTaskId: check, revision: 1, environmentVersion: "v1", baselineCommit: null, checks: [{ name: "put-then-get", command: "sh put.sh", decides: ["S8", "S9"] }], files: [] }),
+      frozen: async () => false,
+    };
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          if (request.otherThan === undefined) return { data: request.schema.parse({ problems: [] }), provider: "first", model: "strong-a" };
+          if (second instanceof Error) throw second;
+          return { data: request.schema.parse(second(check)), provider: "second", model: "strong-b" };
+        },
+      }),
+    };
+    const reviewer = new SuiteReviewer({ llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
+    const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: cited.map((item) => item.text) } }, "/unused");
+    const kept = await db.execute(sql`
+      SELECT u.item_id AS "itemId", u.judgement_id AS "judgementId", c.basis FROM undecided_items u JOIN suite_review_claims c ON c.id = u.claim_id
+      WHERE u.review_task_id = ${reviewTask} ORDER BY u.item_id`);
+    const claims = await db.execute(sql`
+      SELECT basis, covered, first_model AS "firstModel", second_model AS "secondModel", second_review AS "secondReview", second_findings AS "secondFindings", second_failure AS "secondFailure"
+      FROM suite_review_claims WHERE review_task_id = ${reviewTask}`);
+    return { outcome, kept: kept.rows, claims: claims.rows, check };
+  }
+
+  test("a clean review another family confirms is recorded as a claim and leaves nothing undecided (migration 072)", async () => {
+    const { outcome, kept, claims, check } = await reviewClean(() => ({ problems: [] }));
+    expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "other-family-clean", unconfirmed: [] } });
+    expect(kept).toEqual([]);
+    expect(claims).toEqual([{ basis: "other-family-clean", covered: [check], firstModel: "first/strong-a", secondModel: "second/strong-b", secondReview: "other-model", secondFindings: [], secondFailure: null }]);
+  });
+
+  test("a clean review the other family contradicts stores only the items it named undecided, tied to the claim", async () => {
+    const doubt = (check: string) => ({ checkTasks: [check], kind: "undecided-item", item: "S9", problem: "no check distinguishes fsynced from written data", evidence: "sh put.sh" });
+    const { outcome, kept, claims } = await reviewClean((check) => ({ problems: [doubt(check)] }));
+    expect(outcome).toMatchObject({ kind: "clean", claim: { basis: "other-family-found", unconfirmed: [{ itemId: "S9" }] } });
+    expect(kept).toEqual([{ itemId: "S9", judgementId: null, basis: "other-family-found" }]);
+    expect(claims).toMatchObject([{ basis: "other-family-found", secondFindings: [{ kind: "undecided-item", item: "S9" }] }]);
+  });
+
+  test("a clean review whose second review failed stores every covered item undecided, with why", async () => {
+    const failure = new NoOtherFamilyAnswered({ provider: "first", model: "strong-a" }, "second", { cause: new ProviderError("second", "503", "provider") });
+    const { kept, claims } = await reviewClean(failure);
+    expect(kept).toEqual([
+      { itemId: "S8", judgementId: null, basis: "second-review-failed" },
+      { itemId: "S9", judgementId: null, basis: "second-review-failed" },
+    ]);
+    expect(claims).toMatchObject([{ basis: "second-review-failed", secondModel: null, secondReview: null, secondFindings: [], secondFailure: expect.stringContaining("got no answer") }]);
+  });
+
+  test("an undecided item tied to neither a judgement nor a claim is refused, and a claim's basis must fit its second review", async () => {
+    const reviewTask = await workItem("Review with a mislabelled claim");
+    const checkTask = await workItem("Checks with a mislabelled claim");
+    await expect(
+      db.execute(sql`
+        INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'S1', 'Keys can be stored')`),
+    ).rejects.toThrow();
+    // A claim another family confirmed holds another model; one that failed holds why and no model.
+    const claim = (basis: string, secondModel: string | null, secondReview: string | null, failure: string | null) =>
+      db.execute(sql`
+        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_review, second_findings, second_failure)
+        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondReview}, '[]'::jsonb, ${failure})`);
+    await expect(claim("other-family-clean", "p/m", "re-sample", null)).rejects.toThrow();
+    await expect(claim("second-review-failed", null, null, null)).rejects.toThrow();
+    await expect(claim("other-family-found", "q/n", "other-model", null)).rejects.toThrow();
+    await claim("second-review-failed", null, null, "no other family answered");
+    await expect(db.execute(sql`UPDATE suite_review_claims SET basis = 'other-family-clean' WHERE review_task_id = ${reviewTask}`)).rejects.toThrow();
   });
 
   test("the first task dispatched on a review's check set freezes it once, with the set as it stood; the freeze is never updated", async () => {

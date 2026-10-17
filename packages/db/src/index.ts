@@ -24,6 +24,7 @@ export {
   projectBlocks,
   projects,
   replanRequests,
+  suiteReviewClaims,
   suiteReviewFindings,
   suiteReviewJudgements,
   taskChecks,

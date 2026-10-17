@@ -1022,7 +1022,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       const second = snapshots[1];
       if (corruption !== null && corrupted !== undefined && second !== undefined) await corruptRows(observing, corrupted, second, corruption, trace);
       for (const [index, each] of snapshots.entries()) {
-        for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: false })) report(ofProject(index, violation));
+        for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: false, reviews: standIns.observedReviews() })) report(ofProject(index, violation));
         sample(coverage, each, scheduler.faults(), executionEvidence(each, statuses));
         residue.observe(each);
       }
@@ -1106,7 +1106,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     // The report clause needs the settle cycles a halt's report is posted on: a run cut off for no
     // progress had none, and may end on a halt begun in its last cycle (I8 judges that run).
     for (const [index, each] of finals.entries()) {
-      for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: !noProgress })) report(ofProject(index, violation));
+      for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: !noProgress, reviews: standIns.observedReviews() })) report(ofProject(index, violation));
     }
     const overCommitted = await admissions.judge(observing, capUsd, cycles);
     if (overCommitted !== null) report(overCommitted);

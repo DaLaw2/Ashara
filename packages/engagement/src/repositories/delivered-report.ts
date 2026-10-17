@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
@@ -452,24 +452,56 @@ function undecidedIdentity(item: { readonly id: string; readonly text: string })
   return JSON.stringify([item.id, item.text]);
 }
 
+/** An undecided_items row ties its item to neither a judgement nor a claim, or to both, which undecided_items_one_source forbids. */
+class UndecidedItemUnsourced extends ReportRecordUnreadable {
+  constructor(
+    readonly itemId: string,
+    readonly detail: string,
+  ) {
+    super(`undecided item ${itemId}: ${detail} (undecided_items_one_source should forbid it)`);
+    this.name = "UndecidedItemUnsourced";
+  }
+}
+
+/** Why one undecided_items row leaves its item undecided, from the judgement or the claim it is tied to. */
+function undecidedReason(row: { readonly id: string; readonly judgementBasis: string | null; readonly claimBasis: string | null }): Exclude<UndecidedBy, false> {
+  if (row.judgementBasis !== null && row.claimBasis !== null) throw new UndecidedItemUnsourced(row.id, "it is tied to both a judgement and a claim");
+  if (row.judgementBasis !== null) return row.judgementBasis === "second-review-failed" ? "review-failed" : "unsettled";
+  if (row.claimBasis === null) throw new UndecidedItemUnsourced(row.id, "it is tied to neither a judgement nor a claim");
+  if (row.claimBasis === "other-family-found") return "clean-contradicted";
+  if (row.claimBasis === "no-other-family" || row.claimBasis === "second-review-failed") return "clean-unconfirmed";
+  throw new UndecidedItemUnsourced(row.id, `its claim's basis ${JSON.stringify(row.claimBasis)} confirms the item it leaves undecided`);
+}
+
+/** Which reason an item undecided on several check tasks is reported under: the failure first, so a failed review never reads as a disagreement. */
+const REASON_RANK: Readonly<Record<Exclude<UndecidedBy, false>, number>> = {
+  "review-failed": 0,
+  "clean-unconfirmed": 1,
+  "clean-contradicted": 2,
+  unsettled: 3,
+};
+
 /**
  * The items a suite review left undecided on a check task of one of the goal tasks the sweep ran
- * (migrations 069, 071), by id and cited text: a review found no check really deciding them and
- * nothing settled it, so the report never counts them as covered. Each says why nothing settled it:
- * "review-failed" when the second review of any judgement leaving it so failed, else "unsettled".
+ * (migrations 069, 071, 072), by id and cited text, so the report never counts them as covered:
+ * a review found no check really deciding them and nothing settled it, or the review that found no
+ * problem in their checks was not confirmed by another model family. Each says why, the reason of
+ * its rows that ranks first in REASON_RANK.
  */
 async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Map<string, Exclude<UndecidedBy, false>>> {
   const rows = await db
-    .select({ id: undecidedItems.itemId, text: undecidedItems.itemText, basis: suiteReviewJudgements.basis })
+    .select({ id: undecidedItems.itemId, text: undecidedItems.itemText, judgementBasis: suiteReviewJudgements.basis, claimBasis: suiteReviewClaims.basis })
     .from(undecidedItems)
     .innerJoin(workItems, eq(workItems.id, undecidedItems.checkTaskId))
-    .innerJoin(suiteReviewJudgements, eq(suiteReviewJudgements.id, undecidedItems.judgementId))
+    .leftJoin(suiteReviewJudgements, eq(suiteReviewJudgements.id, undecidedItems.judgementId))
+    .leftJoin(suiteReviewClaims, eq(suiteReviewClaims.id, undecidedItems.claimId))
     .where(and(eq(undecidedItems.projectId, projectId), inArray(sql`${workItems.taskSpec}->>'checksFor'`, [...goalIds])));
   const undecided = new Map<string, Exclude<UndecidedBy, false>>();
   for (const row of rows) {
     const identity = undecidedIdentity(row);
-    if (row.basis === "second-review-failed") undecided.set(identity, "review-failed");
-    else if (!undecided.has(identity)) undecided.set(identity, "unsettled");
+    const reason = undecidedReason(row);
+    const kept = undecided.get(identity);
+    if (kept === undefined || REASON_RANK[reason] < REASON_RANK[kept]) undecided.set(identity, reason);
   }
   return undecided;
 }
