@@ -689,7 +689,6 @@ export class StandIns {
       for (const spec of specsOf(row.files)) {
         if (spec.kind !== "out_of_vision") continue;
         if (!this.context.tape.chance("model.suite-review.catch", this.context.rates.reviewCatch)) continue;
-        const evidence = `It requires [${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`;
         const cited = await this.citedBy(row.checkTaskId);
         problems.push({
           checkTasks: [row.checkTaskId],
@@ -697,8 +696,8 @@ export class StandIns {
           check: row.name,
           judgedItems: cited.map((item) => item.id),
           missingClause: `does ${spec.requires.join(" and ")}`,
-          problem: `Check ${row.name} asks for behaviour no vision item names.`,
-          evidence,
+          problem: `Check ${row.name} asks for behaviour no vision item names: it requires [${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`,
+          evidence: row.command,
         });
       }
     }
@@ -716,7 +715,7 @@ export class StandIns {
           judgedItems: [item.id],
           missingClause: item.text,
           problem: `Check ${correct.name} asks for behaviour no cited item names (${MISREAD_REJECTION_MARKER}).`,
-          evidence: `${item.id} is read as not asking for it.`,
+          evidence: correct.command,
         });
       }
     }

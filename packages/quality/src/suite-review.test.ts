@@ -358,7 +358,7 @@ describe("SuiteReviewer", () => {
       second: { checkTask: CHECK_B, check: "stdout-empty", requires: "sh   checks/empty.sh" },
     },
     problem: "a prints a count, b requires empty stdout",
-    evidence: "count.sh; empty.sh",
+    evidence: "sh checks/count.sh; sh checks/empty.sh",
   };
 
   test("a grounded contradiction another model family reaches too is routed to both check tasks with its quotes", async () => {
@@ -408,6 +408,90 @@ describe("SuiteReviewer", () => {
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [] });
     expect(prompts[1]).toContain(`quotes "stdout is never empty" as what check "stdout-empty" requires, but neither its command nor any file of check task ${CHECK_B} holds that text`);
     expect(prompts[1]).toContain(`gives one check, "prints-count" of ${CHECK_A}, as both sides of its conflict`);
+  });
+
+  // A finding whose own text retracts it quotes nothing of the checks it judges: its evidence holds it to no stored text,
+  // so it is re-asked as any unfit verdict is, never counted.
+  describe("a finding's evidence is held to the checks it judges", () => {
+    const LOG_TASK = "24201187-5b6c-4553-9b8a-da9fd7785518";
+    const LOCK_TASK = "61adad49-b920-4dcb-891e-265f072ca8d0";
+    const LOG_FILE = [
+      `for ARGS in "get c" "get b" "get a" "put z zz"; do`,
+      `    kv "$D" $ARGS`,
+      `    [ "$RC" -eq 1 ] || fail "'$ARGS' on log with malformed non-final record exited $RC (expected 1): $ERR"`,
+      `done`,
+    ].join("\n");
+    const LOCK_FILE = `bg() {\n  ( timeout 60 "$BIN" --dir "$D" "$@" >"$T/out.$_n" 2>"$T/err.$_n"; echo $? >"$T/rc.$_n" ) &\n}`;
+    const sampled: SuiteReviewSource = {
+      checkTasksUnderReview: async () => [
+        { id: LOG_TASK, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Refuse a corrupt log", reviewReopens: 0 },
+        { id: LOCK_TASK, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Wait for the store lock", reviewReopens: 0 },
+      ],
+      latest: async (taskId) => {
+        const [checkTaskId, name, command, content] =
+          taskId === IMPL_A
+            ? [LOG_TASK, "malformed non-final record is fatal", "sh checks/corrupt_middle.sh", LOG_FILE]
+            : [LOCK_TASK, "command waits for held store lock and succeeds", "sh checks/lock.sh", LOCK_FILE];
+        return { checkTaskId, revision: 1, environmentVersion: "v1", baselineCommit: BASELINE, checks: [{ name, command, decides: [SCOPE.id] }], files: [{ path: "checks/lib.sh", content }] };
+      },
+      frozen: async () => false,
+    };
+    const retracting = {
+      kind: "contradiction",
+      checkTasks: [LOG_TASK, LOCK_TASK],
+      conflict: {
+        first: {
+          checkTask: LOG_TASK,
+          check: "malformed non-final record is fatal",
+          requires: `for ARGS in "get c" "get b" "get a" "put z zz"; do\n    kv "$D" $ARGS\n    [ "$RC" -eq 1 ] || fail "'$ARGS' on log with malformed non-final record exited $RC (expected 1): $ERR"`,
+        },
+        second: { checkTask: LOCK_TASK, check: "command waits for held store lock and succeeds", requires: `( timeout 60 "$BIN" --dir "$D" "$@" >"$T/out.$_n" 2>"$T/err.$_n"; echo $? >"$T/rc.$_n" ) &` },
+      },
+      problem:
+        "The first check requires every command (get/put) on a log with a malformed non-final record to exit 1, while the shared-lock check requires " +
+        "concurrent commands to wait and then exit 0; but these could coexist on different data directories. No—wait, they are on different stores.",
+      evidence: "Re-examine.",
+    };
+
+    test("a contradiction whose evidence quotes nothing stored is re-asked, never counted, and one that never quotes gives no verdict", async () => {
+      const prompts: string[] = [];
+      const recorded: Recorded[] = [];
+      const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [retracting] }, { problems: [] }], prompts), source: sampled, publicInterface: INTERFACE, judgements: keep(recorded) });
+      expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [], undecided: [] });
+      expect(prompts[1]).toContain(`problem 1 gives as evidence "Re-examine.", which neither is text nor holds a whole line that the command of either check it names or any file of their check tasks holds`);
+      expect(recorded[0]?.judgements).toEqual([]);
+      const stubborn = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [retracting] }]), source: sampled, publicInterface: INTERFACE, judgements: keep() });
+      await expect(stubborn.review(TASK, PROJECT_PATH)).rejects.toBeInstanceOf(StructuredOutputExhausted);
+    });
+
+    test("the same contradiction with evidence copied from a side's command or a whole file line passes on the first answer", async () => {
+      for (const evidence of ["sh checks/lock.sh", `the first runs: kv "$D" $ARGS, then requires exit 1`]) {
+        const prompts: string[] = [];
+        const grounded = { ...retracting, evidence };
+        const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [grounded] }, { problems: [grounded] }], prompts, TWO_FAMILIES), source: sampled, publicInterface: INTERFACE, judgements: keep() });
+        expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "problems", problems: [{ checkTaskIds: [LOG_TASK, LOCK_TASK], kind: "contradiction", evidence }] });
+        expect(prompts).toHaveLength(2);
+      }
+    });
+
+    test("an outside-vision or undecided-item finding whose evidence quotes nothing of its checks is re-asked; one quoting its command passes", async () => {
+      const outside = { checkTasks: [CHECK_A], kind: "outside-vision", check: "prints-count", judgedItems: ["S1"], missingClause: "prints the row count", problem: "prints-count requires a row count. No, wait.", evidence: "Re-examine." };
+      const undecidedItem = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total. No, wait.", evidence: "Re-examine." };
+      // Another check task's command is no evidence on this one's checks.
+      const elsewhere = { ...undecidedItem, evidence: "sh checks/empty.sh" };
+      const prompts: string[] = [];
+      const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [outside, undecidedItem, elsewhere] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
+      expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [], undecided: [], released: [] });
+      expect(prompts[1]).toContain(`problem 1 gives as evidence "Re-examine.", which neither is text nor holds a whole line that the command of check "prints-count" or any file of check task ${CHECK_A} holds`);
+      expect(prompts[1]).toContain(`problem 2 gives as evidence "Re-examine.", which neither is text nor holds a whole line that any command or file of check task ${CHECK_A} holds`);
+      expect(prompts[1]).toContain(`problem 3 gives as evidence "sh checks/empty.sh"`);
+      for (const finding of [{ ...outside, evidence: "sh checks/count.sh" }, { ...undecidedItem, evidence: "prints-count runs sh checks/count.sh and reads no total" }]) {
+        const asked: string[] = [];
+        const passing = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [finding] }, { problems: [finding] }], asked, TWO_FAMILIES), source: source(), publicInterface: INTERFACE, judgements: keep() });
+        expect(await passing.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "problems" });
+        expect(asked).toHaveLength(2);
+      }
+    });
   });
 
   // A check's stored decides is its author's claim; the reviewer judges whether any check really decides the item.
@@ -764,7 +848,7 @@ describe("SuiteReviewer", () => {
   });
 
   test("a second review that rejects a different check of the task does not confirm the first's rejection", async () => {
-    const other = { ...rowCount, checkTasks: [CHECK_B], check: "stdout-empty", judgedItems: ["A3"], missingClause: "prints nothing" };
+    const other = { ...rowCount, checkTasks: [CHECK_B], check: "stdout-empty", judgedItems: ["A3"], missingClause: "prints nothing", evidence: "sh checks/empty.sh" };
     const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [rowCount] }, { problems: [other] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
     const outcome = await reviewer.review(TASK, PROJECT_PATH);
     expect(outcome).toMatchObject({ kind: "clean", released: [{ checkTaskId: CHECK_A, check: "prints-count", second: [] }] });

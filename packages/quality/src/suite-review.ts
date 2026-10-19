@@ -571,7 +571,7 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `  fail on a product that breaks what the item asks for, whatever items its checks say they decide. Name the one`,
     `  check task.`,
     `For each: "checkTasks" lists those check task ids exactly as written above; "problem" says which checks and what`,
-    `cannot hold, in one or two sentences; "evidence" quotes the commands or file lines that show it. An "outside-vision"`,
+    `cannot hold, in one or two sentences; "evidence" quotes, copied exactly, the commands or file lines of those checks that show it. An "outside-vision"`,
     `finding is about one check: it also gives "check", that check's name exactly as written above, "judgedItems", the`,
     `ids of the cited items you judged the check against, exactly as written above, and "missingClause", the behaviour`,
     `the check requires, in a few words, that you say none of them states. An "undecided-item" finding also gives "item",`,
@@ -593,7 +593,8 @@ function reviewReask(ctx: { readonly errors: readonly string[] }): string {
     ctx.errors.map((e) => `- ${e}`).join("\n") +
     `\nRe-send corrected JSON only. In "checkTasks" use ONLY the check task ids written above, in "check" ONLY a ` +
     `check of that check task, in "judgedItems" ONLY the ids of the items that check task cites, in "requires" ONLY ` +
-    `text copied exactly from that check's command or its check task's files. No markdown, no prose.`
+    `text copied exactly from that check's command or its check task's files, in "evidence" a command or whole file lines ` +
+    `copied exactly from the checks the problem judges. No markdown, no prose.`
   );
 }
 
@@ -606,8 +607,9 @@ function normalized(text: string): string {
  * What makes a verdict unfit to act on: a check task it did not read, and an outside-vision finding
  * Z0 can disprove from the text, judged by Z0 and never by another model call: a check its check
  * task did not write, an item it says it judged that the check task does not cite, a clause that is
- * no words at all, or a clause that appears word for word in one of the check task's cited items.
- * A paraphrase of a cited item passes this check: Z0 cannot verify that a clause is absent.
+ * no words at all, or a clause that appears word for word in one of the check task's cited items;
+ * and any finding whose evidence quotes nothing of the checks it judges. A paraphrase of a cited
+ * item passes this check: Z0 cannot verify that a clause is absent.
  */
 function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, ReviewedSuite>): string[] {
   const unreadError = (i: number, id: string): string => {
@@ -624,23 +626,27 @@ function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, Rev
     const suite = checkTaskId === undefined ? undefined : suites.get(checkTaskId);
     if (checkTaskId === undefined || suite === undefined) return [unreadError(i, checkTaskId ?? "(none)")];
     const citedIds = suite.cited.map((item) => item.id);
+    const files = suite.checks.files.map((file) => file.content);
     if (problem.kind === "undecided-item") {
-      return citedIds.includes(problem.item)
+      const uncitedItem = citedIds.includes(problem.item)
         ? []
         : [`problem ${i + 1} names item ${JSON.stringify(problem.item)} as decided by no check, but check task ${checkTaskId} does not cite it (it cites [${citedIds.join(", ")}])`];
+      const stored = [...suite.checks.checks.map((check) => check.command), ...files];
+      return [...uncitedItem, ...evidenceErrors(problem.evidence, i, stored, `any command or file of check task ${checkTaskId}`)];
     }
     const checkNames = suite.checks.checks.map((check) => check.name);
-    const unwritten = checkNames.includes(problem.check)
-      ? []
+    const judged = suite.checks.checks.find((check) => check.name === problem.check);
+    const checkErrors = judged !== undefined
+      ? evidenceErrors(problem.evidence, i, [judged.command, ...files], `the command of check ${JSON.stringify(problem.check)} or any file of check task ${checkTaskId}`)
       : [`problem ${i + 1} judged check ${JSON.stringify(problem.check)}, which check task ${checkTaskId} did not write (it wrote [${checkNames.join(", ")}])`];
     const uncited = problem.judgedItems
       .filter((id) => !citedIds.includes(id))
       .map((id) => `problem ${i + 1} judged item ${JSON.stringify(id)}, which check task ${checkTaskId} does not cite (it cites [${citedIds.join(", ")}])`);
     const clause = normalized(problem.missingClause);
-    if (clause === "") return [...unwritten, ...uncited, `problem ${i + 1} gives a missingClause with no words: ${JSON.stringify(problem.missingClause)}`];
+    if (clause === "") return [...checkErrors, ...uncited, `problem ${i + 1} gives a missingClause with no words: ${JSON.stringify(problem.missingClause)}`];
     const stating = suite.cited.filter((item) => ` ${normalized(item.text)} `.includes(` ${clause} `));
     return [
-      ...unwritten,
+      ...checkErrors,
       ...uncited,
       ...stating.map(
         (item) =>
@@ -669,6 +675,7 @@ function conflictErrors(problem: ContradictionFinding, i: number, suites: Readon
   for (const id of problem.checkTasks.filter((named) => !sideTasks.has(named))) {
     errors.push(`problem ${i + 1} names check task ${JSON.stringify(id)}, which neither side of its conflict is of`);
   }
+  const sideTexts: string[] = [];
   for (const [n, side] of [a, b].entries()) {
     const suite = suites.get(side.checkTask);
     if (suite === undefined || !problem.checkTasks.includes(side.checkTask)) {
@@ -682,6 +689,7 @@ function conflictErrors(problem: ContradictionFinding, i: number, suites: Readon
     }
     const quote = spaced(side.requires);
     const stored = [check.command, ...suite.checks.files.map((file) => file.content)];
+    sideTexts.push(...stored);
     if (quote === "" || !stored.map(spaced).some((text) => text.includes(quote))) {
       errors.push(
         `side ${n + 1} of problem ${i + 1} quotes ${JSON.stringify(side.requires)} as what check ${JSON.stringify(side.check)} requires, but neither its command nor ` +
@@ -689,7 +697,38 @@ function conflictErrors(problem: ContradictionFinding, i: number, suites: Readon
       );
     }
   }
+  if (sideTexts.length > 0) errors.push(...evidenceErrors(problem.evidence, i, sideTexts, "the command of either check it names or any file of their check tasks"));
   return errors;
+}
+
+/**
+ * A finding's evidence is held to the checks it judges as a quote is: it is itself text one stored
+ * command or file holds, or it holds one whole stored line. Its prose is never judged, so a finding
+ * that argues itself out of its claim passes or fails on what it quotes; one that quotes nothing
+ * stored has no claim that can be held to the checks and is no verdict.
+ */
+function evidenceErrors(evidence: string, i: number, stored: readonly string[], where: string): string[] {
+  const quote = spaced(evidence);
+  const texts = stored.map(spaced);
+  if (quote !== "" && texts.some((text) => text.includes(quote))) return [];
+  const lines = stored.flatMap((text) => text.split(/\r?\n/)).map(spaced);
+  if (lines.some((line) => holdsWhole(quote, line))) return [];
+  return [
+    `problem ${i + 1} gives as evidence ${JSON.stringify(evidence)}, which neither is text nor holds a whole line that ${where} holds: ` +
+      `copy into "evidence" the command or the file lines that show the problem, exactly.${whereQuoteDiffers(evidence, stored)}`,
+  ];
+}
+
+/** Whether `line` stands in `text` whole: it names something, and no letter or digit runs on at either end of it. */
+function holdsWhole(text: string, line: string): boolean {
+  if (!/[\p{L}\p{N}]/u.test(line)) return false;
+  const wordChar = /[\p{L}\p{N}]/u;
+  for (let at = text.indexOf(line); at !== -1; at = text.indexOf(line, at + 1)) {
+    const before = text.charAt(at - 1);
+    const after = text.charAt(at + line.length);
+    if (!wordChar.test(before) && !wordChar.test(after)) return true;
+  }
+  return false;
 }
 
 /** Shared words of two lines, over the longer's word count: how near a stored line is to a quoted one. */
