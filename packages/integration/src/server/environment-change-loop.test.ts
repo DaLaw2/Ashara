@@ -337,7 +337,7 @@ beforeAll(async () => {
   db = createDb(DATABASE_URL);
   root = await realpath(await mkdtemp(join(tmpdir(), "ashara-env-change-loop-")));
   base = await loadBaseCell();
-}, 60_000);
+});
 
 afterAll(async () => {
   for (const projectId of projectIds) {
@@ -361,7 +361,7 @@ afterAll(async () => {
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
   vi.restoreAllMocks();
-}, 120_000);
+});
 
 describe("an implementer's environment change, through the contractor loop", () => {
   it("becomes a platform task whose new version the implementation's next dispatch runs on", async () => {
@@ -410,7 +410,7 @@ describe("an implementer's environment change, through the contractor loop", () 
     expect(await sessionVersions(impl)).toEqual([v1.version, v2]);
     expect(await readFile(join(h.target, "hello.txt"), "utf8")).toBe("hello\n");
     expect((await itemsOf(h.projectId)).filter((item) => item.status !== "Completed")).toEqual([]);
-  }, 900_000);
+  });
 
   it("whose definition fails to build leaves the prior version current; the implementation never runs on it and its plan is repaired", async () => {
     const h = await harness("refused");
@@ -472,5 +472,5 @@ describe("an implementer's environment change, through the contractor loop", () 
     expect(after.tasksProcessed).toBe(0);
     expect((await itemsOf(h.projectId)).find((item) => item.id === impl)).toMatchObject({ status: "Pending" });
     expect(await sessionVersions(impl)).toEqual([v1.version]);
-  }, 900_000);
+  });
 });

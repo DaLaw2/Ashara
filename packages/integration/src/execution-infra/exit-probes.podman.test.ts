@@ -44,14 +44,14 @@ beforeAll(async () => {
     instance: testCellInstance(),
     mount: { hostPath: tree },
   });
-}, 120_000);
+});
 
 afterAll(async () => {
   delete process.env.ASHARA_PROBE_DATABASE_URL;
   await substrate.teardownAll();
   await rm(mountRoot, { recursive: true, force: true });
   await rm(keyDir, { recursive: true, force: true });
-}, 120_000);
+});
 
 describe("exit 6 probes from inside a real cell", () => {
   it("the cell's cgroup holds the configured memory, swap, CPU and pids caps; other caps do not match", async () => {

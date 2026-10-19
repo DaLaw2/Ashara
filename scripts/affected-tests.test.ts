@@ -33,6 +33,7 @@ describe("the whole-suite rules", () => {
     "package-lock.json",
     "vitest.config.ts",
     "packages/integration/src/cell-leak-guard.ts",
+    "packages/integration/src/podman-test-load.ts",
     "config/models.toml",
   ];
 

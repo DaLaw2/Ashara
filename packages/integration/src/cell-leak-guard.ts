@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { TestProject } from "vitest/node";
 import { z } from "zod";
 import { parseJson } from "@ashara/shared";
+import { GUARD_PODMAN_TIMEOUT_MS, killedAtTimeout, podmanTimeoutDetail } from "./podman-test-load.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -23,7 +24,7 @@ declare module "vitest" {
 // them to the next run's reaper.
 
 const run = promisify(execFile);
-const PODMAN_TIMEOUT_MS = 60_000;
+const PODMAN_TIMEOUT_MS = GUARD_PODMAN_TIMEOUT_MS;
 const LABEL_INSTANCE = "ashara.instance";
 /** test-<pid of the vitest process>x<8 hex>-: the pid says whether the run that made a cell is alive. */
 const RUN_INSTANCE = /^test-(\d+)x[0-9a-f]{8}-/;
@@ -34,9 +35,9 @@ const TEARDOWN_SHARE = 0.8;
  * What the guard's podman work needs at worst, at a run's end or on a signal: one listing and one
  * removal, each bounded by PODMAN_TIMEOUT_MS. vitest.config.ts's teardownTimeout gives the end-of-run
  * check at least this through TEARDOWN_SHARE, and `just test` waits at least this before its SIGKILL.
- * @testseam cell-leak-guard.test.ts checks vitest.config.ts and the justfile against it; the guard's own calls read PODMAN_TIMEOUT_MS
+ * @testseam cell-leak-guard.test.ts checks vitest.config.ts and the justfile against it, podman-test-load.test.ts its per-call bound; the guard's own calls read PODMAN_TIMEOUT_MS
  */
-export const GUARD_PODMAN_BUDGET = { teardownShare: TEARDOWN_SHARE, worstCaseMs: 2 * PODMAN_TIMEOUT_MS } as const;
+export const GUARD_PODMAN_BUDGET = { teardownShare: TEARDOWN_SHARE, podmanTimeoutMs: PODMAN_TIMEOUT_MS, worstCaseMs: 2 * PODMAN_TIMEOUT_MS } as const;
 
 /** Time left until `deadline`, at least 1 ms: execFile reads a timeout of 0 as none. */
 function remainingMs(deadline: number): number {
@@ -97,7 +98,8 @@ async function podman(args: readonly string[], timeoutMs: number = PODMAN_TIMEOU
   try {
     return (await run("podman", [...args], { timeout: timeoutMs })).stdout;
   } catch (err) {
-    throw new TestCellGuardFailed(`podman ${args.join(" ")}`, err instanceof Error ? err.message : String(err), { cause: err });
+    const call = `podman ${args.join(" ")}`;
+    throw new TestCellGuardFailed(call, killedAtTimeout(err) ? podmanTimeoutDetail(call, timeoutMs) : message(err), { cause: err });
   }
 }
 
@@ -183,7 +185,8 @@ function removeOwnCellsNow(cellRun: string): string {
     // eslint-disable-next-line no-restricted-syntax -- policy default: a container without the instance label is no cell this run labelled
     own = parsePs(stdout).filter((c) => (c.labels[LABEL_INSTANCE] ?? "").startsWith(prefix));
   } catch (err) {
-    return `listing its cells failed, so a later run's reaper removes them: ${message(err)}`;
+    const detail = killedAtTimeout(err) ? podmanTimeoutDetail(`podman ${PS_LABELLED.join(" ")}`, PODMAN_TIMEOUT_MS) : message(err);
+    return `listing its cells failed, so a later run's reaper removes them: ${detail}`;
   }
   if (own.length === 0) return "no cell of it was present";
   const names = own.map((c) => c.name).join(", ");
@@ -194,7 +197,8 @@ function removeOwnCellsNow(cellRun: string): string {
     });
     return `removed ${own.length} cell(s): ${names}`;
   } catch (err) {
-    return `removing ${names} failed, so a later run's reaper removes them: ${message(err)}`;
+    const detail = killedAtTimeout(err) ? podmanTimeoutDetail("podman rm -f --ignore -t 0 <its cells>", PODMAN_TIMEOUT_MS) : message(err);
+    return `removing ${names} failed, so a later run's reaper removes them: ${detail}`;
   }
 }
 

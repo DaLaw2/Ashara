@@ -299,7 +299,7 @@ describe("a task that draws its whole work budget", () => {
     // Nothing dispatches it again.
     expect((await loop.runCycle()).tasksProcessed).toBe(0);
     expect(mock.doGenerateCalls).toHaveLength(2);
-  }, 60_000);
+  });
 });
 
 describe("a project that draws its whole work budget", () => {
@@ -363,6 +363,5 @@ describe("a project that draws its whole work budget", () => {
       const last = await db.execute(sql`SELECT work FROM project_blocks WHERE project_id = ${at.projectId} AND ended_at IS NULL`);
       expect(last.rows).toEqual([{ work: expect.objectContaining({ budgetRequests: 3, grantedRequests: 1, spentRequests: 3 }) }]);
     },
-    60_000,
   );
 });

@@ -88,7 +88,7 @@ beforeAll(async () => {
   clientId = (await new ClientRepository(db).create(`iso-exec-${randomUUID()}`)).id;
   projectId = (await new ProjectRepository(db).create(`iso-exec-${randomUUID().slice(0, 8)}`, clientId)).id;
   root = await realpath(await mkdtemp(join(tmpdir(), "ashara-iso-exec-")));
-}, 60_000);
+});
 
 afterAll(async () => {
   const { stdout } = await run("podman", ["images", "-q", "--filter", `label=ashara.project=${projectId}`]);
@@ -100,7 +100,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
-}, 60_000);
+});
 
 describe("a task runs on cells end to end", () => {
   it("runs the attempt and its stored checks on the merge in cells, one llm_calls row per turn, and leaves no cell", async () => {
@@ -266,5 +266,5 @@ describe("a task runs on cells end to end", () => {
     } finally {
       await substrate.teardownAll();
     }
-  }, 180_000);
+  });
 });

@@ -69,7 +69,7 @@ beforeAll(async () => {
   await mkdir(repo);
   await git("init", "-q", "-b", "main");
   substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: root });
-}, 60_000);
+});
 
 afterAll(async () => {
   await substrate.teardownAll();
@@ -81,7 +81,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
-}, 120_000);
+});
 
 describe("environment image build", () => {
   it("builds from the recipe and the existing inputs only, records it, reuses it, and a cell runs from it", async () => {

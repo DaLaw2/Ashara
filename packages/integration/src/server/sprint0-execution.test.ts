@@ -295,7 +295,7 @@ beforeAll(async () => {
   projectId = (await new ProjectRepository(db).create(`sprint0-${randomUUID().slice(0, 8)}`, clientId)).id;
   root = await realpath(await mkdtemp(join(tmpdir(), "ashara-sprint0-")));
   base = await loadBaseCell();
-}, 60_000);
+});
 
 afterAll(async () => {
   const { stdout } = await run("podman", ["images", "-q", "--filter", `label=ashara.project=${projectId}`]);
@@ -312,7 +312,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
-}, 120_000);
+});
 
 describe("Sprint 0", () => {
   // The gate builds the image and runs the probe on a tree that holds no
@@ -348,7 +348,7 @@ describe("Sprint 0", () => {
     expect(await readFile(join(target, "environment", "environment.toml"), "utf8")).toBe(recipe);
     expect(await statementOf(taskId)).toBe(STATEMENT);
     expect(await statementOf(taskId)).not.toContain("environment/");
-  }, 300_000);
+  });
 
   it.each([
     ["product code outside environment/", "src/x"],
@@ -367,7 +367,7 @@ describe("Sprint 0", () => {
     expect(result.detail).toContain(`- ${path}`);
     expect(existsSync(join(target, "environment"))).toBe(false);
     expect(await statementOf(taskId)).toBeNull();
-  }, 300_000);
+  });
 
   it("a definition whose probe fails fails the gate with its output, merges nothing and records no statement", async () => {
     const { result, target, taskId } = await runSprint0("broken", [
@@ -382,7 +382,7 @@ describe("Sprint 0", () => {
     expect(result.detail).toContain("broken-test-output");
     expect(existsSync(join(target, "environment"))).toBe(false);
     expect(await statementOf(taskId)).toBeNull();
-  }, 300_000);
+  });
 
   it("after Sprint 0 merges, the next task's cells run from the environment image, and the stack choice reaches the vision and the client once", async () => {
     await new VisionRepository(db).create(projectId, {
@@ -476,7 +476,7 @@ describe("Sprint 0", () => {
       .parse((await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND reports_on = 'stack-choice'`)).rows);
     expect(reports).toHaveLength(1);
     expect(reports[0]?.body).toContain(STATEMENT);
-  }, 600_000);
+  });
 
   // The statement is the one of the version on main, never the project's latest.
   it("the statement is the one recorded for the version on main; a version no environment task recorded is environment_undefined", async () => {
@@ -525,7 +525,7 @@ describe("Sprint 0", () => {
     expect(moved.result.detail).toContain("recorded a statement for that version: no merge Ashara verified produced it");
     expect(moved.result.detail).not.toContain(build.version);
     expect(moved.mock.doGenerateCalls).toHaveLength(0);
-  }, 600_000);
+  });
 
   // An input the recipe reads is the product's, versioned, not fenced;
   // only the recipe is protected, and a change there is requested, not parked.
@@ -591,7 +591,7 @@ describe("Sprint 0", () => {
     expect(next.result.status, next.result.detail).toBe("completed");
     expect(next.events.find((e) => e.event === "environment_resolved")).toMatchObject({ version, reused: true });
     expect(next.events.some((e) => e.event === "environment_rebuilt")).toBe(false);
-  }, 600_000);
+  });
 
   // The product scaffold asking for an environment change opens one whose
   // merge lands on a main with no product; running the product's build and test there fails it and
@@ -623,7 +623,7 @@ describe("Sprint 0", () => {
     expect(verify).toMatchObject({ verdict: "passed" });
     expect(String(verify?.["details"])).not.toContain("The product's build and test");
     expect(await readFile(join(absent.target, "environment", "Containerfile"), "utf8")).toBe(`FROM ${base.image}\nRUN true\n`);
-  }, 600_000);
+  });
 
   it("an implementation changing a recipe file requests an environment change: nothing merged, its branch deleted", async () => {
     const { stdout: mainBefore } = await run("git", ["-C", join(root, "owned", "projects", "p"), "rev-parse", "main"]);
@@ -650,5 +650,5 @@ describe("Sprint 0", () => {
     expect(branches.trim()).toBe("");
     const { stdout: mainAfter } = await run("git", ["-C", target, "rev-parse", "main"]);
     expect(mainAfter).toBe(mainBefore);
-  }, 600_000);
+  });
 });

@@ -23,7 +23,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await substrate.teardownAll();
   await rm(mountRoot, { recursive: true, force: true });
-}, 60_000);
+});
 
 describe("environment-file write without the grant", () => {
   it("lands in the cell's tree, and the ownership gate keeps it from main", async () => {

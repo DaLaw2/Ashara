@@ -376,7 +376,7 @@ describe("a task whose dispatch dies with the process at every restart", () => {
     expect((await serverProcess(at, AMPLE_BUDGETS).runCycle()).tasksProcessed).toBe(0);
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(await requestsOf(at.projectId)).toBe(2);
-  }, 60_000);
+  });
 
   test("is requeued, not given up, when a dispatch of it ended in its process between the two crashes", async () => {
     const at = await fixture("crash-apart");
@@ -396,7 +396,7 @@ describe("a task whose dispatch dies with the process at every restart", () => {
     await crashMidDispatch(serverProcess(at, AMPLE_BUDGETS), at, 3);
     expect(await startup(at)).toMatchObject({ orphansRequeued: 1, orphansGivenUp: 0 });
     expect(await itemOf(at.itemId)).toMatchObject({ status: "Pending", crashOrphans: 1 });
-  }, 60_000);
+  });
 
   test("is given up as work_budget_spent when its crashed dispatches drew its whole work budget first", async () => {
     const at = await fixture("crash-ledger");
@@ -413,7 +413,7 @@ describe("a task whose dispatch dies with the process at every restart", () => {
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(await requestsOf(at.projectId)).toBe(1);
     expect(await itemOf(at.itemId)).toMatchObject({ status: "Abandoned", source: "work_budget_spent", repairs: 1 });
-  }, 60_000);
+  });
 });
 
 // An interrupted dispatch is requeued with its dispatch refunded and no counter of its own; the work ledger ends it.
@@ -439,5 +439,5 @@ describe("a task whose every dispatch a shutdown interrupts", () => {
     expect(await itemOf(at.itemId)).toMatchObject({ status: "Abandoned", source: "work_budget_spent", repairs: 1 });
     expect(await requestsOf(at.projectId)).toBe(3);
     expect((await serverProcess(at, budgets).runCycle()).tasksProcessed).toBe(0);
-  }, 60_000);
+  });
 });

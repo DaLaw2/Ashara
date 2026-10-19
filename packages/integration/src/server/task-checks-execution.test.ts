@@ -279,7 +279,7 @@ beforeAll(async () => {
             'implementation', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
   substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
-}, 60_000);
+});
 
 afterAll(async () => {
   await substrate.teardownAll();
@@ -296,7 +296,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
-}, 120_000);
+});
 
 /** "Write hello.txt" and its check task: stored and merged by the first describe, a regression set for the second. */
 let hello: { readonly implementation: TaskDescriptor; readonly check: TaskDescriptor };
@@ -345,7 +345,7 @@ describe("independent verification", () => {
     expect(await git("branch", "--list", `check/${hello.check.id}`)).toBe("");
     expect(existsSync(join(target, "checks"))).toBe(false);
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
-  }, 300_000);
+  });
 
   // A check in bash-only syntax fails under dash with a syntax error, which the red
   // run would accept, so the author sees why at once and can replace it.
@@ -383,7 +383,7 @@ describe("independent verification", () => {
       expect.objectContaining({ name: "says hi", command: `sh ${hiSh}`, files: [{ path: hiSh, content: "grep hi hi.txt || exit 99\n" }] }),
     ]);
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
-  }, 300_000);
+  });
 
   // A look around the foundation is never stored as an acceptance check.
   it("probe_foundation shows the foundation and stores nothing; only the checks defined reach the set", async () => {
@@ -403,7 +403,7 @@ describe("independent verification", () => {
     expect(events.filter((e) => e.event === "check_defined").map((e) => e["name"])).toEqual(["says hey"]);
     expect((await checkRowsOf(greeting.implementation.id)).map((row) => row.name)).toEqual(["says hey"]);
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
-  }, 300_000);
+  });
 
   it("a vacuous set, none of whose checks fails on the foundation, is rejected and nothing is stored", async () => {
     const vacuous = await plannedPair("Write a page");
@@ -442,7 +442,7 @@ describe("independent verification", () => {
     // The only 64-hex string a brief may hold is the environment's version, a content hash, never a commit.
     const withoutVersion = brief.replace(/environment, version [0-9a-f]{64}\b/g, "environment, version <v>");
     expect(withoutVersion.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/g)).toBeNull();
-  }, 300_000);
+  });
 
   // A cited item no stored check decides would be accepted unchecked, whatever line cites it.
   it("a set that leaves one cited item decided by no check is rejected before its red run, and nothing is stored", async () => {
@@ -460,7 +460,7 @@ describe("independent verification", () => {
     expect(JSON.stringify(mock.doGenerateCalls[2]?.prompt ?? null)).toContain("decides names [S9], which the task does not cite");
     expect(events.find((e) => e.event === "check_red_run")).toBeUndefined();
     expect(await checkRowsOf(pair.implementation.id)).toEqual([]);
-  }, 300_000);
+  });
 
   it("a check whose command the environment cannot run is rejected, though it fails on main", async () => {
     const unrunnable = await plannedPair("Write a form");
@@ -473,7 +473,7 @@ describe("independent verification", () => {
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("cannot be run in the project environment (exit 127)");
     expect(await checkRowsOf(unrunnable.implementation.id)).toEqual([]);
-  }, 300_000);
+  });
 
   // One set rule for every authoring. A check that passes on the foundation
   // guards behaviour that already holds; the set is kept when another fails there.
@@ -491,7 +491,7 @@ describe("independent verification", () => {
     expect(JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null)).toContain("kept as a guard of behaviour that already holds");
     expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [], holdsAlready: ["already there"], setRejected: false });
     expect((await checkRowsOf(pair.implementation.id)).map((row) => row.name)).toEqual(["already there", "says bye"]);
-  }, 300_000);
+  });
 
   it("an implementation task whose stored check passes on its merge completes, and the check files are not merged", async () => {
     const { result, mock, events } = await runTask(hello.implementation, [
@@ -512,7 +512,7 @@ describe("independent verification", () => {
     });
     expect(await readFile(join(target, "hello.txt"), "utf8")).toBe("hello\n");
     expect(existsSync(join(target, "checks"))).toBe(false);
-  }, 300_000);
+  });
 
   it("an implementation that rewrites its check file to pass is refused by the ownership gate before the merge", async () => {
     const goodbye = await plannedPair("Write bye.txt");
@@ -549,7 +549,7 @@ describe("independent verification", () => {
     })).toMatchObject({ action: "replan", attempt: 2 });
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await git("branch", "--list", `task/${goodbye.implementation.id}`)).not.toBe("");
-  }, 300_000);
+  });
 
   it("an implementation task with no stored checks fails before any model call", async () => {
     const unchecked = await plannedPair("Write nothing.txt");
@@ -559,7 +559,7 @@ describe("independent verification", () => {
     expect(result.status).toBe("failed");
     expect(result.errorEnvelope?.chain.operation).toBe("loadTaskChecks");
     expect(mock.doGenerateCalls).toHaveLength(0);
-  }, 300_000);
+  });
 });
 
 // A merge is checked against every stored suite, not only its own task's checks.
@@ -615,7 +615,7 @@ describe("post-merge regression suite", () => {
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await readFile(join(target, "hello.txt"), "utf8")).toBe("hello\n");
     expect(existsSync(join(target, "greet.txt"))).toBe(false);
-  }, 300_000);
+  });
 
   it("a merge that fails the environment's test fails naming it; nothing merged", async () => {
     const notes = await checkedPair("Write notes.txt", { name: "notes", command: "grep note notes.txt || exit 99" });
@@ -633,7 +633,7 @@ describe("post-merge regression suite", () => {
     expect(result.detail).not.toContain("REGRESSION");
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(existsSync(join(target, "BROKEN"))).toBe(false);
-  }, 300_000);
+  });
 
   // The task's own stored check failing on its merge fails it; Z0 merges nothing.
   it("a merge on which the task's own stored check fails fails the task, not as a regression; nothing merged", async () => {
@@ -655,7 +655,7 @@ describe("post-merge regression suite", () => {
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await git("status", "--porcelain")).toBe("");
     expect(existsSync(join(target, "sun.txt"))).toBe(false);
-  }, 300_000);
+  });
 
   it("a merge that passes the environment's test, every earlier task's checks and its own is merged", async () => {
     const wave = await checkedPair("Write wave.txt", { name: "waves", command: "grep wave wave.txt || exit 99" });
@@ -674,7 +674,7 @@ describe("post-merge regression suite", () => {
     expect(await readFile(join(target, "wave.txt"), "utf8")).toBe("wave\n");
     // The earlier task's check file was written over the checkout, never merged.
     expect(existsSync(join(target, "checks"))).toBe(false);
-  }, 300_000);
+  });
 
   // A completed task with no stored check must never block every later merge with no exit.
   it("an earlier task Completed with no stored check is named as not re-run, never a block; the merge is decided by the rest", async () => {
@@ -696,7 +696,7 @@ describe("post-merge regression suite", () => {
     expect(verify?.["details"]).toContain(
       `Not re-run, no check is stored for them (completed before checks existed): ${foundationTaskId}, ${legacy.implementation.id}`,
     );
-  }, 300_000);
+  });
 
   // A wrong check has an exit (a dispute), and a retry is never judged only on its own uncommitted diff.
   it("a disputed check ends the attempt as disputed with the work kept; a re-dispatch that finds it done on the branch runs the gates", async () => {
@@ -734,7 +734,7 @@ describe("post-merge regression suite", () => {
       details: expect.stringContaining('Check "reefs": PASSED'),
     });
     expect(await readFile(join(target, "reef.txt"), "utf8")).toBe("reef\n");
-  }, 300_000);
+  });
 
   it("a re-dispatch whose branch holds no change against main and that edits nothing still fails as no changes", async () => {
     const empty = await checkedPair("Write empty.txt", { name: "empties", command: "grep empty empty.txt || exit 99" });
@@ -744,7 +744,7 @@ describe("post-merge regression suite", () => {
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("the task branch holds no change against main");
     expect(result.detail).toContain('check "empties" FAILED: exited 99');
-  }, 300_000);
+  });
 
   // When an earlier task delivered beyond its scope, the sweep
   // before dispatch closes the later task with no implementer, never parking it for the operator.
@@ -766,7 +766,7 @@ describe("post-merge regression suite", () => {
     expect(verify?.["details"]).toContain('Check "waves again": PASSED');
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await git("branch", "--list", `task/${again.implementation.id}`)).toBe("");
-  }, 300_000);
+  });
 
   // Checks re-authored for work an earlier task already delivered
   // would all pass on main, so they are red-run on the foundation, where they fail; the set is kept,
@@ -802,7 +802,7 @@ describe("post-merge regression suite", () => {
     if (implemented.result.status !== "completed") return;
     expect(implemented.result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
     expect(await git("rev-parse", "main")).toBe(mainBefore);
-  }, 600_000);
+  });
 
   it("a check author finishing blocked because its task is delivered completes when Z0 finds that task's checks and every suite pass on main", async () => {
     const delivered = await checkedPair("Say hello", { name: "hello again", command: "grep hello hello.txt || exit 99" });
@@ -817,7 +817,7 @@ describe("post-merge regression suite", () => {
     expect(result.delivered).toEqual({ kind: "checked-task-delivered", checkedTaskId: delivered.implementation.id, mainCommit: mainBefore, revision: 1 });
     expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "passed", checkedTaskId: delivered.implementation.id });
     expect((await checkRowsOf(delivered.implementation.id)).map((row) => row.revision)).toEqual([1]);
-  }, 300_000);
+  });
 
   it("a check author finishing blocked whose task is not on main stays blocked, with what Z0 found", async () => {
     const missing = await checkedPair("Write missing.txt", { name: "missing", command: "grep missing missing.txt || exit 99" });
@@ -829,7 +829,7 @@ describe("post-merge regression suite", () => {
     expect(result.status).toBe("blocked");
     expect(result.detail).toContain("Z0 does not find it delivered");
     expect(result.detail).toContain('check "missing" FAILED');
-  }, 300_000);
+  });
 
   // A merged task's check blocking this merge is not read only as this
   // task's regression: the implementer may dispute it, which reopens that check's own check task.
@@ -849,7 +849,7 @@ describe("post-merge regression suite", () => {
       revision: 1,
       check: { name: "says hello", command: `sh checks/${hello.implementation.id}/hello.sh` },
     });
-  }, 300_000);
+  });
 
   // The scaffold's own build and test failing on its merge is no tree regression to abandon
   // at once: it is the scaffold's own work, retried.
@@ -887,7 +887,7 @@ describe("post-merge regression suite", () => {
       attempt: 2,
     });
     expect(await git("rev-parse", "main")).toBe(mainBefore);
-  }, 300_000);
+  });
 });
 
 // Quality's dispute record: the count per check task survives in the table; past

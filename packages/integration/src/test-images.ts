@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { loadBaseCell } from "@ashara/execution-infra";
 import { describeErrorChain, parseJson } from "@ashara/shared";
+import { GUARD_PODMAN_TIMEOUT_MS, killedAtTimeout, podmanTimeoutDetail } from "./podman-test-load.js";
 
 // The container images the podman tests run, beside the BaseCell config/base-cell.toml names. Every
 // one is pinned by digest and run with --pull=never, so a run finds each in local podman storage or
@@ -13,7 +14,6 @@ import { describeErrorChain, parseJson } from "@ashara/shared";
 
 /** Module-anchored, so the cwd of a run cannot change which file is read. */
 const TEST_IMAGES_PATH = fileURLToPath(new URL("../test-images.json", import.meta.url));
-const PODMAN_TIMEOUT_MS = 30_000;
 /** `podman image exists` exits 1 for an image that is absent, 125 when podman itself fails. */
 const IMAGE_ABSENT_EXIT = 1;
 
@@ -70,11 +70,12 @@ const run = promisify(execFile);
 
 async function imagePresent(image: string): Promise<boolean> {
   try {
-    await run("podman", ["image", "exists", image], { timeout: PODMAN_TIMEOUT_MS });
+    await run("podman", ["image", "exists", image], { timeout: GUARD_PODMAN_TIMEOUT_MS });
     return true;
   } catch (err) {
     if (err instanceof Error && "code" in err && err.code === IMAGE_ABSENT_EXIT) return false;
-    throw new TestImagesCheckFailed(image, describeErrorChain(err), { cause: err });
+    const detail = killedAtTimeout(err) ? podmanTimeoutDetail(`podman image exists ${image}`, GUARD_PODMAN_TIMEOUT_MS) : describeErrorChain(err);
+    throw new TestImagesCheckFailed(image, detail, { cause: err });
   }
 }
 

@@ -53,12 +53,12 @@ let substrate: PodmanSubstrate;
 beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "ashara-workplace-"));
   substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: tmpdir() });
-}, 60_000);
+});
 
 afterAll(async () => {
   await substrate.teardownAll();
   await rm(workspace, { recursive: true, force: true });
-}, 60_000);
+});
 
 describe("runAttempt on a real cell", () => {
   it("writes a file and runs a command inside the cell, one recorded call per turn", async () => {

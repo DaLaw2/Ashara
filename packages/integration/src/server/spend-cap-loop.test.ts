@@ -669,5 +669,5 @@ describe("a turn refused at the project's spend cap", () => {
 
     // The blocked project's item waits: the next cycle dispatches nothing.
     expect((await loop.runCycle()).tasksProcessed).toBe(0);
-  }, 60_000);
+  });
 });

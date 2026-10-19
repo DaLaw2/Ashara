@@ -196,5 +196,5 @@ describe("a project whose workspace path is refused", () => {
     expect(rows.rows).toEqual([{ n: 0 }]);
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(podmanCalls).toEqual([]);
-  }, 60_000);
+  });
 });

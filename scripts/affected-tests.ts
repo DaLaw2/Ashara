@@ -97,6 +97,10 @@ export const WHOLE_SUITE_RULES: readonly PathRule[] = [
   { pattern: /(^|\/)package(-lock)?\.json$/, reason: "it changes which dependency and which workspace module every import resolves to" },
   { pattern: /^vitest\.config\.ts$/, reason: "it changes which files are tests and how every test runs" },
   { pattern: /^packages\/integration\/src\/cell-leak-guard\.ts$/, reason: "vitest.config.ts runs it as globalSetup around every test run" },
+  {
+    pattern: /^packages\/integration\/src\/podman-test-load\.ts$/,
+    reason: "vitest.config.ts reads it for which files are podman tests, how many run at once and their timeouts, and the globalSetup guards for their podman bound",
+  },
   { pattern: /^config\//, reason: "the runtime configuration the composition root and the test harness read by a configured path" },
 ];
 

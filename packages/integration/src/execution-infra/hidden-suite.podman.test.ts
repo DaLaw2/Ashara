@@ -114,7 +114,7 @@ beforeAll(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "ashara-hidden-suite-test-")));
   good = await product("good", "42");
   bad = await product("bad", "41");
-}, 60_000);
+});
 
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
@@ -128,7 +128,7 @@ describe("hidden-suite runner on real podman", () => {
     expect(verdict.guarantees.map((entry) => [entry.id, entry.verdict])).toEqual([["G1", "pass"], ["G2", "pass"]]);
     expect(verdict.problems).toEqual([]);
     expect(status).toBe(0);
-  }, 120_000);
+  });
 
   it("a product the honest suite fails reads fail on that guarantee and overall", async () => {
     const { status, verdict } = await runner("honest", bad);
@@ -136,7 +136,7 @@ describe("hidden-suite runner on real podman", () => {
     expect(verdictOf(verdict, "G2")).toBe("pass");
     expect(verdict.overall).toBe("fail");
     expect(status).toBe(1);
-  }, 120_000);
+  });
 
   it("a suite that writes a passing verdict and then crashes reads incomplete, every guarantee unjudged", async () => {
     const { status, verdict } = await runner("crashes", good);
@@ -144,7 +144,7 @@ describe("hidden-suite runner on real podman", () => {
     expect(verdict.guarantees.map((entry) => entry.verdict)).toEqual(["unjudged", "unjudged"]);
     expect(verdict.problems.join("\n")).toContain("exited 1");
     expect(status).toBe(3);
-  }, 120_000);
+  });
 
   it("a guarantee the verdict omits is unjudged, and the run is not a pass", async () => {
     const { status, verdict } = await runner("omits", good);
@@ -152,7 +152,7 @@ describe("hidden-suite runner on real podman", () => {
     expect(verdictOf(verdict, "G2")).toBe("unjudged");
     expect(verdict.overall).toBe("incomplete");
     expect(status).toBe(3);
-  }, 120_000);
+  });
 
   it.each([
     ["garbage", "the verdict file is invalid"],
@@ -164,7 +164,7 @@ describe("hidden-suite runner on real podman", () => {
     expect(verdict.guarantees.every((entry) => entry.verdict === "unjudged")).toBe(true);
     expect(verdict.problems.join("\n")).toContain(problem);
     expect(status).toBe(3);
-  }, 120_000);
+  });
 
   it("a suite that outlives its bound reads incomplete even though its verdict says pass", async () => {
     const { status, verdict } = await runner("hangs", good, 3);
@@ -172,5 +172,5 @@ describe("hidden-suite runner on real podman", () => {
     expect(verdict.guarantees.every((entry) => entry.verdict === "unjudged")).toBe(true);
     expect(verdict.problems.join("\n")).toContain("did not finish within 3 s");
     expect(status).toBe(3);
-  }, 120_000);
+  });
 });

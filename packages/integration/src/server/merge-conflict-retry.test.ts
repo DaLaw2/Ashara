@@ -231,7 +231,7 @@ beforeAll(async () => {
             'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
   substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
-}, 60_000);
+});
 
 afterAll(async () => {
   await substrate.teardownAll();
@@ -247,7 +247,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
-}, 120_000);
+});
 
 describe("a merge conflict between two tasks of one batch", () => {
   it("the second task's next attempt starts with main merged in and the conflict named; resolved, it merges", async () => {
@@ -298,7 +298,7 @@ describe("a merge conflict between two tasks of one batch", () => {
     expect(attempt2.events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed" });
     expect(await readFile(join(target, "notes.txt"), "utf8")).toBe("alpha\nbeta\n");
     expect(await git("rev-parse", "main~1")).toBe(mainBefore);
-  }, 600_000);
+  });
 
   it("a conflict that cannot be prepared is never dispatched on the branch as it is: blocked as Ashara's fault", async () => {
     const third = await checkedTask("Write gamma into notes.txt", { name: "has gamma", command: "grep -x gamma notes.txt || exit 99" });
@@ -331,7 +331,7 @@ describe("a merge conflict between two tasks of one batch", () => {
     expect(result.errorEnvelope.chain.operation).toBe("prepareConflictRetry");
     expect(result.detail).toContain("merge-tree: simulated failure");
     expect(await git("rev-parse", `task/${third.id}`)).toBe(branchBefore);
-  }, 300_000);
+  });
 
   it("an attempt handed a conflict that ends without done says its merge is discarded, never that its work is kept", async () => {
     const fourth = await checkedTask("Write delta into notes.txt", { name: "has delta", command: "grep -x delta notes.txt || exit 99" });
@@ -352,5 +352,5 @@ describe("a merge conflict between two tasks of one batch", () => {
     expect(result.detail).toContain("the attempt's merge of main is discarded uncommitted");
     expect(result.detail).not.toContain("kept on the task branch");
     expect(await git("rev-parse", `task/${fourth.id}`)).toBe(branchBefore);
-  }, 300_000);
+  });
 });

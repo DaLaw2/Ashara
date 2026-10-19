@@ -53,7 +53,7 @@ test-images:
 # Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.ts globalSetup)
 # answers by removing the run's cells before vitest exits; SIGKILL only if the run is still alive
 # 150 s later. That grace outlasts the guard's signal-time removal at its worst, one podman listing
-# and one podman rm of 60 s each (cell-leak-guard.ts PODMAN_TIMEOUT_MS): a SIGKILL inside it would
+# and one podman rm, each bounded by cell-leak-guard.ts PODMAN_TIMEOUT_MS: a SIGKILL inside it would
 # cut the listing short and leave the cells to the next run's reaper.
 #
 # timeout runs vitest in a process group of its own, which a terminal's Ctrl+C does not reach, so

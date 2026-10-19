@@ -46,7 +46,7 @@ beforeAll(async () => {
   mountRoot = await realpath(await mkdtemp(join(tmpdir(), "ashara-cell-root-")));
   workspace = await mkdtemp(join(mountRoot, "ws-"));
   substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot });
-}, 60_000);
+});
 
 afterAll(async () => {
   delete process.env.ASHARA_PROBE_SECRET;
@@ -57,7 +57,7 @@ afterAll(async () => {
     if (strayIds.length > 0) await run("podman", ["rm", "-f", "--ignore", "-t", "0", ...strayIds]);
     await rm(mountRoot, { recursive: true, force: true });
   }
-}, 60_000);
+});
 
 describe("cell on real podman", () => {
   it("runs every tool inside a labelled, network-less, env-free cell and tears it down", async () => {
@@ -131,7 +131,7 @@ describe("cell on real podman", () => {
     } finally {
       await traced.teardownAll();
     }
-  }, 60_000);
+  });
 
   it("a cell sees a throwaway repository of its own: one commit, no remote, nothing of the host's; what it does there never reaches Z0's diff", async () => {
     const git = async (cwd: string, ...args: string[]): Promise<string> =>
@@ -200,7 +200,7 @@ describe("cell on real podman", () => {
     expect(existsSync(join(tree, "fsmonitor-ran"))).toBe(false);
     // The repository went with the cell.
     expect(await readdir(join(mountRoot, ".ashara-cell-state", instance))).toEqual([]);
-  }, 60_000);
+  });
 
   // A recipe must not leave a root-owned cache the cell's user cannot write.
   it("every cell runs as the host's uid with a writable HOME of its own, the probe's as the task's", async () => {
@@ -254,7 +254,7 @@ describe("cell on real podman", () => {
     } finally {
       await cell.teardown();
     }
-  }, 120_000);
+  });
 
   it("a command's own exit 125 is its result; a cell removed under a running exec is CellExecFailed", async () => {
     const base = await loadBaseCell();
@@ -292,7 +292,7 @@ describe("cell on real podman", () => {
     } finally {
       await cell.teardown();
     }
-  }, 60_000);
+  });
 
   // busybox's timeout signals only its direct child, so without the sweep
   // `sh -c "sleep 30; echo after"` times out on alpine while sleep stays in the cell.
@@ -334,7 +334,7 @@ describe("cell on real podman", () => {
     } finally {
       await cell.teardown();
     }
-  }, 60_000);
+  });
 
   // CI's podman 4.9.3 (crun) starts an exec in the caller's session, outside the cell, where
   // podman 5.8.2 (crun 1.27) starts it in a session of its own; a wrapper must run under both. Here
@@ -382,7 +382,7 @@ describe("cell on real podman", () => {
     } finally {
       await cell.teardown();
     }
-  }, 60_000);
+  });
 
   // `kill -9 $(pgrep -f '<pattern from the command>')` must not match
   // the wrapper, and a lost status in a cell that still answers is not a lost cell.
@@ -418,7 +418,7 @@ describe("cell on real podman", () => {
     } finally {
       await cell.teardown();
     }
-  }, 60_000);
+  });
 
   it("reconciles a leaked cell of this instance and leaves every other container alone", async () => {
     const base = await loadBaseCell();
