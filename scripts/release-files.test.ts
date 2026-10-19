@@ -25,10 +25,23 @@ const workflowSchema = z.object({
       steps: z.array(stepSchema).min(1),
     }),
     test: z.object({ steps: z.array(stepSchema).min(1) }),
+    "ci-result": z.object({ needs: z.array(z.string()) }),
   }),
 });
 
-const workflow = workflowSchema.parse(parse(fs.readFileSync(".github/workflows/ci.yml", "utf8")));
+const anyJobSchema = z.object({
+  "runs-on": z.string(),
+  strategy: z.object({ matrix: z.record(z.string(), z.unknown()).optional() }).optional(),
+  steps: z.array(stepSchema).min(1),
+});
+
+const allJobsSchema = z.object({ jobs: z.record(z.string(), anyJobSchema) });
+
+const ciText = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+const workflow = workflowSchema.parse(parse(ciText));
+const allJobs = Object.entries(allJobsSchema.parse(parse(ciText)).jobs);
+// The version comment is read from the raw text: a YAML parse drops comments.
+const usesLines = ciText.split("\n").filter((line) => /^\s*(?:-\s+)?uses:/.test(line));
 
 describe("ci.yml", () => {
   test("every job's token is read-only by default", () => {
@@ -50,6 +63,31 @@ describe("ci.yml", () => {
   test("the podman step fails unless README.md names the runner's podman version", () => {
     const prepare = workflow.jobs.test.steps.find((step) => step.name === "Prepare podman and the pinned test images");
     expect(prepare?.run).toContain('grep -qF "podman ${podman_version}" README.md');
+  });
+
+  // A moving label such as ubuntu-latest lets GitHub change the runner, and the podman it tests on,
+  // without a commit.
+  test("every job names an explicit Ubuntu image", () => {
+    expect(allJobs.filter(([, job]) => !/^ubuntu-\d+\.\d+$/.test(job["runs-on"])).map(([name]) => name)).toEqual([]);
+  });
+
+  test("the suite runs as one job, never sharded", () => {
+    expect(allJobs.filter(([, job]) => job.strategy?.matrix?.["shard"] !== undefined).map(([name]) => name)).toEqual(
+      [],
+    );
+    const sharded = allJobs.flatMap(([, job]) => job.steps).filter((step) => step.run?.includes("--shard") === true);
+    expect(sharded).toEqual([]);
+  });
+
+  test("every action is pinned by full commit SHA with its version", () => {
+    expect(usesLines.length).toBeGreaterThan(0);
+    expect(usesLines.filter((line) => !/@[0-9a-f]{40} # v\S+$/.test(line))).toEqual([]);
+    const parsedUses = allJobs.flatMap(([, job]) => job.steps).filter((step) => step.uses !== undefined);
+    expect(parsedUses).toHaveLength(usesLines.length);
+  });
+
+  test("the required status needs the secret scan and the test suite", () => {
+    expect(workflow.jobs["ci-result"].needs).toEqual(expect.arrayContaining(["secret-scan", "check", "test"]));
   });
 });
 

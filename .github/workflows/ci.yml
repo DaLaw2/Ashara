@@ -19,7 +19,7 @@ concurrency:
 jobs:
   secret-scan:
     name: Secret scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
@@ -34,7 +34,7 @@ jobs:
         run: |
           echo "::notice::Pull request from a fork: repository secrets are withheld, so the secret scan is skipped. It runs on the push to master after merge."
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.FORK_PR != 'true'
         with:
           fetch-depth: 0
@@ -63,14 +63,14 @@ jobs:
 
   check:
     name: Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A cap, not a budget: 20 minutes so a growing codebase hits a red gate, never this timeout.
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -95,16 +95,11 @@ jobs:
         run: just check
 
   test:
-    name: Test suite (shard ${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
-    # A cap, not a budget: one shard runs a third of the suite after its setup, and 20 minutes
-    # leaves room for the suite to grow before this cap, rather than the suite, ends the run.
+    name: Test suite
+    runs-on: ubuntu-24.04
+    # A cap, not a budget: about twice the measured time of the whole suite plus its setup on this
+    # runner, so a hung run ends here while a suite that has merely grown still finishes.
     timeout-minutes: 20
-    strategy:
-      # Every shard reports, so one shard's failure never hides another's.
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
 
     services:
       postgres:
@@ -133,9 +128,9 @@ jobs:
       TEST_DATABASE_URL: postgresql://ashara_ci@localhost:5432/ashara_ci
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -148,7 +143,7 @@ jobs:
       - name: Install headless Chromium
         run: npx playwright install --with-deps --only-shell chromium
 
-      # The podman tests run real cells, never skipped, on the podman of ubuntu-latest's runner image;
+      # The podman tests run real cells, never skipped, on the podman of the runner image runs-on names;
       # catatonit backs `podman run --init` and is installed explicitly rather than assumed. README.md
       # names every podman version the suite passes on, so a runner image that moves to an unnamed
       # version fails here until README.md names it. Cells run with --pull=never, so every pinned image
@@ -171,10 +166,8 @@ jobs:
       - name: Run migrations
         run: npx tsx scripts/migrate.ts
 
-      # vitest assigns each file to exactly one shard by a hash of its path, so the three shards
-      # together run every file once.
       - name: Test suite
-        run: npx vitest run --shard=${{ matrix.shard }}/3 --reporter=default --reporter=json --outputFile=vitest-results.json
+        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
 
       # vitest exits non-zero on a failed test, a suite that fails to collect,
       # or zero test files, but exits 0 with skipped tests; this step closes that.
@@ -186,18 +179,18 @@ jobs:
             if (r.numPendingTests !== 0) throw new Error(r.numPendingTests + ' skipped test(s); a skipped test is a silent hole');
           "
 
-  # The one status to require: green only when the secret scan, the gate and every shard report
-  # success. A failed, cancelled or skipped job, or a missing result, turns it red. The secret scan
+  # The one status to require: green only when the secret scan, the gate and the test suite
+  # report success. A failed, cancelled or skipped job, or a missing result, turns it red. The secret scan
   # on a fork pull request ends in success with a notice, so a fork pull request can still go green.
   ci-result:
     name: CI result
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs: [secret-scan, check, test]
     if: always()
 
     steps:
-      - name: Require success from the secret scan, the gate and every shard
+      - name: Require success from the secret scan, the gate and the test suite
         env:
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           CHECK_RESULT: ${{ needs.check.result }}
