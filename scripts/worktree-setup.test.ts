@@ -38,10 +38,9 @@ function setup(...args: string[]): Run {
   return run(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", SCRIPT, ...args], REPO);
 }
 
-// The fixture worktree checks out HEAD, whose lockfile is this checkout's, not necessarily the main
-// checkout's: a change to dependencies is installed here before the main checkout runs npm ci. So
-// the linking tests take this checkout's install as the source; the lockfile refusal test keeps the
-// default source, the main checkout.
+// This checkout's install is the only one the tests rely on: the fixture main checkout links it, and
+// the linking tests take it as the source; the lockfile refusal test keeps the default source, the
+// fixture main checkout.
 function setupFromRepo(dir: string): Run {
   return setup(dir, "--source", REPO);
 }
@@ -96,21 +95,35 @@ function isSymlink(file: string): boolean {
   }
 }
 
+function git(cwd: string, ...args: string[]): void {
+  const result = run("git", args, cwd);
+  expect(result.status, `git ${args.join(" ")}: ${result.stderr}`).toBe(0);
+}
+
+// The records are gitignored, so a checkout of this repository may have none (CI never does): the
+// tests own a main checkout of HEAD holding fixture records, and the worktree under test is its.
+function writeFixtureRecords(checkout: string): void {
+  for (const { rel, kind } of SCAN_SOURCES.filter((source) => RECORD_RELS.includes(source.rel))) {
+    const file = kind === "file" ? path.join(checkout, rel) : path.join(checkout, rel, "fixture.md");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `fixture ${rel}\n`);
+  }
+}
+
 beforeAll(() => {
-  const common = run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], REPO);
-  expect(common.status, common.stderr).toBe(0);
-  mainCheckout = path.dirname(common.stdout.trim());
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ashara-worktree-setup-")));
+  mainCheckout = path.join(tmp, "main");
   worktree = path.join(tmp, "wt");
-  const add = run("git", ["worktree", "add", "--detach", worktree, "HEAD"], REPO);
-  expect(add.status, add.stderr).toBe(0);
+  git(tmp, "init", "--quiet", mainCheckout);
+  git(mainCheckout, "fetch", "--quiet", "--depth=1", REPO, "HEAD");
+  git(mainCheckout, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+  writeFixtureRecords(mainCheckout);
+  const install = setupFromRepo(mainCheckout);
+  expect(install.status, install.stderr).toBe(0);
+  git(mainCheckout, "worktree", "add", "--quiet", "--detach", worktree, "HEAD");
 });
 
 afterAll(() => {
-  if (worktree !== "" && fs.existsSync(worktree)) {
-    const removed = run("git", ["worktree", "remove", "--force", worktree], REPO);
-    expect(removed.status, removed.stderr).toBe(0);
-  }
   if (tmp !== "") fs.rmSync(tmp, { recursive: true, force: true });
 });
 
