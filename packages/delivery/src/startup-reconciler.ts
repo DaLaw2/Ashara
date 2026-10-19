@@ -22,7 +22,7 @@ import type { SettledTargets } from "./settled-branches.js";
 
 // Delivery's reconcile at startup: its work items, and the branches of those settled. Each other context reconciles its own
 // resources in its own call (Workplace its sessions, Execution Infrastructure its cells and task
-// worktrees), ordered by the composition root (S9).
+// worktrees), ordered by the composition root.
 
 interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;

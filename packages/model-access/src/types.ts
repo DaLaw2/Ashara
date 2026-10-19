@@ -2,7 +2,7 @@ import type { ZodType } from "zod";
 import type { CapabilityLevel } from "./capability-level.js";
 
 /**
- * Per-capability model table for a single site (routing-profiles story). Used
+ * Per-capability model table for a single site. Used
  * when one site's requests legitimately vary in REQUESTED capability across
  * calls — e.g. agent-runner tags every request `site: "agent-runner"` but the
  * per-task capability ranges over Light/Strong/Frontier (taskSpec.capability)
@@ -27,7 +27,7 @@ type RoutingProfileCapabilityTable = Partial<Record<CapabilityLevel, string>> & 
 export type RoutingProfileEntry = string | RoutingProfileCapabilityTable;
 
 /**
- * Static per-site model playbooks (routing-profiles story). Outer key is the
+ * Static per-site model playbooks. Outer key is the
  * "combo" — the deployment's enabled provider names, sorted and joined by
  * "+" (see `computeProviderCombo` in routing-profiles.ts). Inner map is
  * site -> `RoutingProfileEntry` to route that site to under this combo.

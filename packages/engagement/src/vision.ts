@@ -112,7 +112,7 @@ interface ClientAnswer {
 
 /** One assumption of a vision version, as every reader of the vision sees it. */
 export interface VisionAssumption {
-  /** Its key in the vision (A1, A2, ...), or A<n> by its place when the record holds none. */
+  /** Its key in the vision, or A<n> by its place when the record holds none. */
   readonly id: string;
   /** Whether the record holds its key; false for a record keyed by its place. */
   readonly keyed: boolean;

@@ -4,7 +4,7 @@ import type { ScopeSide } from "./vision-assumption.js";
 
 /**
  * One item of the vision a plan derives from, as a task cites it: a
- * scope line (S1..) with its side, or an assumption, by its key, with its status, what the client has
+ * scope line (S<n>) with its side, or an assumption, by its key, with its status, what the client has
  * seen of it and its kind. `id` is the item's id in the vision version the plan was decomposed from.
  * A scope source stored before sides were recorded reads as "unclassified".
  */

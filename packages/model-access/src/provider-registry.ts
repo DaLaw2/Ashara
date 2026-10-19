@@ -127,7 +127,7 @@ export class ProviderRegistry {
   private readonly config: GatewayConfig;
   private readonly routingProfiles: RoutingProfiles | undefined;
   /**
-   * The deployment's enabled-provider combo (routing-profiles story), fixed
+   * The deployment's enabled-provider combo, fixed
    * at construction: it names WHICH providers are turned on for this
    * deployment, not which are excluded for a particular resolve() call
    * (fallback/degrade never changes which playbook applies; when it excludes
@@ -155,7 +155,7 @@ export class ProviderRegistry {
       (p) => p.enabled && !excludeProviders.includes(p.name),
     );
 
-    // 0. Routing profile (site playbook, routing-profiles story): a static
+    // 0. Routing profile (site playbook): a static
     // per-site override that PRECEDES capability logic entirely. Only
     // consulted when the caller tagged the request with a site — a site-less
     // request is the documented exception that always uses capability logic.
@@ -348,7 +348,7 @@ export class ProviderRegistry {
   }
 
   /**
-   * Static per-site routing lookup (routing-profiles story). Returns `null`,
+   * Static per-site routing lookup. Returns `null`,
    * so the caller uses capability logic, in exactly three cases: no profile
    * registered for the enabled-provider combo; an explicitly empty profile
    * (`[routing.profiles."deepseek"]`), which maps no site; or the mapped model

@@ -6,7 +6,7 @@ import { KNOWN_LLM_SITES } from "./types.js";
 import type { RoutingProfileEntry, RoutingProfiles } from "./types.js";
 
 // ---------------------------------------------------------------------------
-// Routing profiles (routing-profiles story): static per-site model playbooks
+// Routing profiles: static per-site model playbooks
 // keyed by the deployment's enabled-provider combo, e.g.
 //
 //   [routing.profiles."anthropic+deepseek"]

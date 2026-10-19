@@ -1,9 +1,10 @@
 /**
  * Fails on a comment that carries something that can go stale (records rule 5 of the governance
  * rules): a decision record id, a decision number, a board story or task id, a design-review label, a
- * migration number, a date, a path into the governance documents, a run name, a commit hash, or a
- * history marker. A comment states the rule the code keeps and why; the provenance of that rule
- * lives in the governance records, which cite the code, never the reverse.
+ * record label, a migration number, a date in any form, a path into the governance documents, a run
+ * name, a story named in words, a commit hash, or a history marker. A comment states the rule the
+ * code keeps and why; the provenance of that rule lives in the governance records, which cite the
+ * code, never the reverse.
  *
  * What is read, over every file `git ls-files` lists outside COMMENT_LINT_EXCLUDES:
  * - .ts, .mjs and .js files: every comment, found by the TypeScript parser so a `//` inside a string,
@@ -19,10 +20,19 @@
  * path or holds a date is data the code acts on.
  *
  * A design label is any capital letter and one or two digits, with an optional lowercase suffix
- * (`W1`, or `W1` followed by a lowercase letter), plus an option label (a capital and digits, a space, a lowercase letter), `mig-` and `r9f-`
- * ids, and a milestone label followed by `exit`.
- * Such a label passes when some script holds it as a whole string literal: then it is an id the code
- * itself defines (an invariant's name), and a comment naming it names code. It also passes when it is
+ * (`W<n>`, or `W<n>` followed by a lowercase letter), plus an option label (a capital and digits, a
+ * space, a lowercase letter), `mig-` and `r9f-` ids, and a milestone label followed by `exit`. A
+ * record label is two to four capitals, one to three digits and an optional lowercase suffix
+ * (`AR<n>`); one whose capitals are a STANDARD_PREFIXES entry names a standard and passes.
+ * A run name is an `m<n>final` name, or `run` or `w` and digits with a letter suffix. A story by name
+ * is a hyphenated name next to the word story, or the word story before the word decision. A non-ISO
+ * date is a month name and a day in either order, or two slash-separated day and month numbers; a
+ * fraction written with a slash reads as one too, so a comment spells a fraction out.
+ * Either kind of label passes in a file that holds it as a whole string literal, and in every file of
+ * a package (`packages/<name>`, or a top-level directory) whose non-test code holds it so: there it
+ * is an id the code defines (an invariant's name), and a comment naming it names code. A literal in a
+ * test file is a fixture and exempts the label in that test file alone; a literal in another package
+ * exempts nothing. A design label also passes when it is
  * one of DOMAIN_NAMES, a word of the domain that happens to have the label's shape. Likewise a
  * numbered SQL file name passes when a tracked file has that name: the comment names a file that
  * exists, not one a checkout no longer holds. A migration number is also caught bare: a zero-padded
@@ -36,11 +46,10 @@
  * - A count or line number of other code ("the three callers", "see line 40") has no shape a pattern
  *   can tell apart from a rule stating a quantity.
  * - A measurement ("about ten seconds today") goes stale without carrying any id.
- * - An id written in a shape no pattern lists (a two-letter label such as `IN3`, a new label scheme)
- *   passes until a pattern names it.
+ * - An id written in a shape no pattern lists (a new label scheme) passes until a pattern names it.
  * - A bare migration number in any other wording ("the rows 046 wrote") or without its leading zero
  *   ("before 58") passes.
- * - A design label that some string literal happens to equal passes everywhere.
+ * - A label that a string literal in the same file or package happens to equal passes there.
  * - A string literal that is prose for a human (a log message, a fixture description) is not read.
  *
  * Exits 0 when no comment matches, 1 on a match or when a file cannot be read.
@@ -85,7 +94,17 @@ interface StalePattern {
 const DESIGN_LABEL_CLASS = "design label";
 const MIGRATION_CLASS = "migration number";
 const NUMBERED_SQL_FILE = /^\d{3}_[a-z0-9_]+\.sql$/;
-const LABEL_SHAPE = /^[A-Z]\d{1,2}[a-z]?$/;
+const RECORD_LABEL_CLASS = "record label";
+const LABEL_SHAPE = /^(?:[A-Z]\d{1,2}[a-z]?|[A-Z]{2,4}\d{1,3}[a-z]?)$/;
+const MONTH =
+  "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
+
+/**
+ * Letter prefixes of published standards and formats whose names carry a number (SQL92, UTF8,
+ * SHA256, ES2022, HTTP2, MD5, AES256, IPV4, BASE64): a capitals-and-digits word with one of these
+ * prefixes names the standard, not a record.
+ */
+const STANDARD_PREFIXES: ReadonlySet<string> = new Set(["SQL", "UTF", "SHA", "ES", "HTTP", "MD", "AES", "IPV", "BASE"]);
 
 /**
  * Names in the label shape that are the domain's own words, not labels: Z0 is the host zone Ashara
@@ -108,7 +127,19 @@ const STALE_PATTERNS: readonly StalePattern[] = [
   },
   { patternClass: "date", regex: /\b20\d{2}-[01]\d-[0-3]\d\b/g },
   { patternClass: "governance path", regex: /(?<![\w./-])docs\/[\w.-]/g },
-  { patternClass: "run name", regex: /\bm\d+final\d*\b/g },
+  { patternClass: "run name", regex: /\b(?:m\d+final\d*|run\d+[a-z]+|w\d+[a-z])\b/g },
+  {
+    patternClass: "story by name",
+    regex: /\b[a-z0-9]+(?:-[a-z0-9]+)+ stor(?:y|ies)\b|\bstor(?:y|ies) (?:decision|[a-z0-9]+(?:-[a-z0-9]+)+)\b/gi,
+  },
+  {
+    patternClass: "non-ISO date",
+    regex: new RegExp(
+      `\\b${MONTH}\\.? \\d{1,2}(?:st|nd|rd|th)?\\b|\\b\\d{1,2} ${MONTH}\\b|(?<![\\w/.])\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?(?![\\w/]|\\.\\d)`,
+      "g",
+    ),
+  },
+  { patternClass: RECORD_LABEL_CLASS, regex: /\b[A-Z]{2,4}\d{1,3}[a-z]?\b/g },
   { patternClass: "commit hash", regex: /\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/g },
   { patternClass: "history marker", regex: /\b(?:previously|formerly|used to be|was changed)\b/gi },
 ];
@@ -174,7 +205,7 @@ function scriptComments(relPath: string, content: string): CommentLine[] {
 }
 
 /**
- * The short labels (`W1`) a script holds as a whole string literal: ids the code itself defines.
+ * The short labels (`W<n>`, `AR<n>`) a script holds as a whole string literal: ids the code itself defines.
  * @testseam check-comments.test.ts exercises the label exemption without running the CLI
  */
 export function definedLabels(relPath: string, content: string): Set<string> {
@@ -276,9 +307,15 @@ export function isExcluded(relPath: string, excludes: readonly string[] = COMMEN
   return excludes.some((prefix) => relPath.startsWith(prefix));
 }
 
+function isStandardName(word: string): boolean {
+  const prefix = /^[A-Z]+/.exec(word);
+  return prefix !== null && STANDARD_PREFIXES.has(prefix[0]);
+}
+
 function firstMatch(pattern: StalePattern, text: string, labels: ReadonlySet<string>): string | null {
   for (const match of text.matchAll(pattern.regex)) {
     if (pattern.patternClass === DESIGN_LABEL_CLASS && (labels.has(match[0]) || DOMAIN_NAMES.has(match[0]))) continue;
+    if (pattern.patternClass === RECORD_LABEL_CLASS && (labels.has(match[0]) || isStandardName(match[0]))) continue;
     if (pattern.patternClass === MIGRATION_CLASS && NUMBERED_SQL_FILE.test(match[0]) && labels.has(match[0])) continue;
     return match[0];
   }
@@ -287,15 +324,17 @@ function firstMatch(pattern: StalePattern, text: string, labels: ReadonlySet<str
 
 /**
  * The stale patterns in one file's comments and test titles, one finding per line and pattern class.
- * `labels` holds the names the tree defines (definedLabels over every tracked script, and the
- * numbered SQL files trackedSqlNames finds); a comment may name those.
+ * `names` holds what a comment here may name besides this file's own labels (definedLabels over it):
+ * the numbered SQL files trackedSqlNames finds and the labels packageLabels gives this file's
+ * package. A literal anywhere else, such as another file's test fixture id, exempts nothing.
  * @testseam check-comments.test.ts plants one comment per pattern class without running the CLI
  */
 export function findStaleComments(
   relPath: string,
   content: string,
-  labels: ReadonlySet<string>,
+  names: ReadonlySet<string>,
 ): StaleCommentFinding[] {
+  const labels = new Set([...names, ...definedLabels(relPath, content)]);
   const findings: StaleCommentFinding[] = [];
   for (const { line, text } of extractCommentLines(relPath, content)) {
     for (const pattern of STALE_PATTERNS) {
@@ -326,6 +365,35 @@ export function trackedSqlNames(relPaths: readonly string[]): Set<string> {
   return new Set(relPaths.map((relPath) => path.posix.basename(relPath)).filter((base) => NUMBERED_SQL_FILE.test(base)));
 }
 
+function packageOf(relPath: string): string {
+  const parts = relPath.split("/");
+  if (parts[0] === "packages" && parts.length > 2) return `packages/${parts[1]}`;
+  return parts.length > 1 ? parts[0] : "";
+}
+
+function isTestFile(relPath: string): boolean {
+  return /\.test\.[cm]?[jt]s$/.test(relPath);
+}
+
+/**
+ * The labels each package's production code defines (definedLabels over its non-test scripts),
+ * answered for any file by the package it sits in. A test file's literals are fixtures, not
+ * definitions: they exempt a label in that test file alone (findStaleComments reads its own file).
+ * @testseam check-comments.test.ts exercises the package scope without running the CLI
+ */
+export function packageLabels(files: ReadonlyMap<string, string>): (relPath: string) => ReadonlySet<string> {
+  const byPackage = new Map<string, Set<string>>();
+  for (const [file, content] of files) {
+    if (isTestFile(file)) continue;
+    const key = packageOf(file);
+    const labels = byPackage.get(key) ?? new Set<string>();
+    for (const label of definedLabels(file, content)) labels.add(label);
+    byPackage.set(key, labels);
+  }
+  const none: ReadonlySet<string> = new Set();
+  return (relPath) => byPackage.get(packageOf(relPath)) ?? none;
+}
+
 function trackedFiles(root: string): string[] {
   return execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" })
     .split("\0")
@@ -347,10 +415,12 @@ function main(): void {
       throw new CommentLintReadError(file, { cause: err });
     }
   }
-  const labels = trackedSqlNames(tracked);
-  for (const [file, content] of files) for (const label of definedLabels(file, content)) labels.add(label);
+  const sqlNames = trackedSqlNames(tracked);
+  const byPackage = packageLabels(files);
   const findings: StaleCommentFinding[] = [];
-  for (const [file, content] of files) findings.push(...findStaleComments(file, content, labels));
+  for (const [file, content] of files) {
+    findings.push(...findStaleComments(file, content, new Set([...sqlNames, ...byPackage(file)])));
+  }
   for (const finding of findings) {
     console.error(`${finding.file}:${finding.line}: ${finding.patternClass} "${finding.match}": ${finding.text}`);
   }

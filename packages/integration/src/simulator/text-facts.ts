@@ -298,7 +298,7 @@ export function checkTextFacts(records: TextFactRecords): TextViolation[] {
 /**
  * Every brief a session recorded (implementer, check author, environment): its vision version is
  * the latest one written before the session was recorded, its assumptions are that version's, and
- * every assumption line its goal or context states (`- A1 (assumption; <standing>; <kind>): <text>`)
+ * every assumption line its goal or context states (`- A<n> (assumption; <standing>; <kind>): <text>`)
  * states that version's standing, kind and text for it, since a standing written into a task's
  * description at plan time goes stale once an answer changes it; and its task section states the
  * goal, end state, scope and deliverables its work item's task_spec records, a brief of a work item

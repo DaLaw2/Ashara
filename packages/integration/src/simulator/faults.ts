@@ -378,7 +378,7 @@ class TerminationUnseen extends Error {
 const CHECKOUT_LABELS = 8;
 
 /**
- * The pool factory of one instance (S5): `application_name` names the instance so a crash can
+ * The pool factory of one instance: `application_name` names the instance so a crash can
  * terminate exactly its backends, and every query and connect takes a ticket.
  */
 export function faultingPools(context: SeamContext, applicationName: string, plant: QueryPlant | null = null): PoolFactory {
@@ -485,7 +485,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
   };
 }
 
-/** The git runner of one instance (S4): git stays real; a fault rejects like execFile on exit 128. */
+/** The git runner of one instance: git stays real; a fault rejects like execFile on exit 128. */
 export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
   const guarded = async <T>(args: readonly string[], cwd: string, run: () => Promise<T>): Promise<T> => {
     // The subcommand alone: the next argument may be a commit, whose id varies from run to run, and
@@ -524,7 +524,7 @@ const PODMAN_FAULT_OF: Readonly<Partial<Record<string, FaultKind>>> = {
   build: "image-build-failed",
 };
 
-/** The container runtime of one instance (S3): each subcommand's own fault answers like podman would. */
+/** The container runtime of one instance: each subcommand's own fault answers like podman would. */
 export function faultingPodman(context: SeamContext, inner: ProcessRunner): ProcessRunner {
   return async (request) => {
     // eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, a request with no subcommand keys no specific fault; no oracle reads it
@@ -585,7 +585,7 @@ class TransportResponseMissing extends Error {
   }
 }
 
-/** The model transport of one instance (S2): a provider error throws before the stand-in answers. */
+/** The model transport of one instance: a provider error throws before the stand-in answers. */
 export function faultingModels(context: SeamContext, inner: LanguageModelFactory): LanguageModelFactory {
   return (provider, model) => {
     const resolved = inner(provider, model);

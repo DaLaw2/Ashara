@@ -84,7 +84,7 @@ export type TaskSpec =
     | (TaskSpecCore & Sourced & { readonly origin: "review" });
 
 /**
- * One item of the vision a plan is decomposed from: a scope boundary (S1..) or an assumption work
+ * One item of the vision a plan is decomposed from: a scope boundary (S<n>) or an assumption work
  * proceeds on, by its key in the vision. A scope line and every assumption not classed internal
  * design may be cited by a deliverable or an acceptance line;
  * every one a check decides (checkDecides) must be; an internal-design one is guidance for the

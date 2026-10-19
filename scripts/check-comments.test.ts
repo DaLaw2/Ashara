@@ -9,6 +9,7 @@ import {
   extractCommentLines,
   findStaleComments,
   isExcluded,
+  packageLabels,
   trackedSqlNames,
 } from "./check-comments.js";
 
@@ -27,7 +28,7 @@ const PLANTED: readonly (readonly [string, string])[] = [
   ["decision number", "// The guard holds (d89)."],
   ["decision number", "// The guard holds, as addendum 2 says."],
   ["board id", "// The guard holds (t-comment-lint)."],
-  ["board id", "// The guard holds (story s-loop-never-stop-m1)."],
+  ["board id", "// The guard holds (s-loop-never-stop-m1)."],
   ["board id", "// The guard holds (kl-t2)."],
   ["design label", "// The halt is Delivery's (O3 c)."],
   ["design label", "// Quality's verdict on it (G4)."],
@@ -52,6 +53,16 @@ const PLANTED: readonly (readonly [string, string])[] = [
   ["date", "// Measured on 2026-10-14."],
   ["governance path", "// See docs/rules/records.md."],
   ["run name", "// The m25final5 product fails here."],
+  ["run name", "// The retry storm, see run45b."],
+  ["run name", "// The wave that stalled (w11c)."],
+  ["story by name", "// Kept per the routing-profiles story."],
+  ["story by name", "// The lesson is not distilled (deferred by story decision)."],
+  ["non-ISO date", "// Measured on Oct 14."],
+  ["non-ISO date", "// Measured on 14 October."],
+  ["non-ISO date", "// Measured on 14/10."],
+  ["record label", "// The bound holds (AR15)."],
+  ["record label", "// Ranked first (QA3b)."],
+  ["design label", "// Ranked first (P14)."],
   ["commit hash", "// The hardening of 31aefa1d added a query."],
   ["history marker", "// This previously threw."],
   ["history marker", "// The status was changed to Blocked by hand."],
@@ -63,6 +74,11 @@ describe("each planted stale comment fails with its class", () => {
       expect(classesIn("packages/x/src/a.ts", `${comment}\nexport const a = 1;\n`)).toEqual([patternClass]);
     });
   }
+});
+
+test("a story named by its board id is caught as both", () => {
+  expect(classesIn("packages/x/src/a.ts", "// Kept per t-foo-bar story.\n")).toEqual(["board id", "story by name"]);
+  expect(classesIn("packages/x/src/a.ts", "// The guard holds (story s-loop-never-stop-m1).\n")).toEqual(["board id", "story by name"]);
 });
 
 describe("clean samples pass", () => {
@@ -79,6 +95,13 @@ describe("clean samples pass", () => {
     ["a regular expression literal", "export const re = /\\/\\/ ADR-074/;\n"],
     ["plain words that look like labels", "// A Z0 cell, a sha256 digest, UTF8 text, an E2E run and an es2022 target.\nexport const a = 1;\n"],
     ["legitimate state words", "// A client that is no longer live is ignored; the key used to sign it is kept.\nexport const a = 1;\n"],
+    [
+      "standard names, identifiers and plain story words",
+      "// SQL92 ordering, UTF8 text, SHA256 and AES256 digests, IPV4 hosts, BASE64 and an ES2022 target;\n" +
+        "// runCount and w11Count stay counters, a run of 45 runs, a user story is prose, a May review.\n" +
+        "export const runCount = 1;\n",
+    ],
+    ["a path and a version with slashes", "// Under src/a and 1.2/3 of node 22/x.\nexport const a = 1;\n"],
   ];
   for (const [name, content] of clean) {
     test(name, () => {
@@ -104,12 +127,38 @@ describe("test titles are read as comments", () => {
   });
 });
 
-describe("a label the code defines as a string passes", () => {
-  test("a label held as a whole string literal anywhere is code vocabulary, and only that label", () => {
-    const labels = definedLabels("packages/x/src/ids.ts", 'export const IDS = ["W1", "W2"] as const;\nexport const key = "W3:x";\n');
-    expect([...labels].sort()).toEqual(["W1", "W2"]);
-    expect(classesIn("packages/x/src/b.ts", "// W1 and W2 judge a busy loop.\n", labels)).toEqual([]);
+describe("a label the code defines as a string passes where it is defined", () => {
+  test("a label held as a whole string literal is code vocabulary, and only that label", () => {
+    const labels = definedLabels("packages/x/src/ids.ts", 'export const IDS = ["W1", "W2", "AR15"] as const;\nexport const key = "W3:x";\n');
+    expect([...labels].sort()).toEqual(["AR15", "W1", "W2"]);
+    expect(classesIn("packages/x/src/b.ts", "// W1, W2 and AR15 judge a busy loop.\n", labels)).toEqual([]);
     expect(classesIn("packages/x/src/b.ts", "// W3 judges a busy loop.\n", labels)).toEqual(["design label"]);
+  });
+
+  test("a file's own literal exempts the label in that file; nothing outside it does by itself", () => {
+    expect(classesIn("packages/x/src/a.ts", '// Ordered by the composition root (S9).\nexport const id = "S9";\n')).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// Ordered by the composition root (S9).\nexport const a = 1;\n")).toEqual([
+      "design label",
+    ]);
+  });
+
+  test("a package's production literal exempts it package-wide; a test fixture or another package does not", () => {
+    const labelsOf = packageLabels(
+      new Map([
+        ["packages/x/src/ids.ts", 'export const IDS = ["I4"] as const;\n'],
+        ["packages/x/src/a.test.ts", 'expect(read("S9")).toBe(1);\n'],
+        ["packages/y/src/ids.ts", 'export const IDS = ["P14"] as const;\n'],
+      ]),
+    );
+    expect([...labelsOf("packages/x/src/b.ts")]).toEqual(["I4"]);
+    expect(classesIn("packages/x/src/b.ts", "// What I4 judges.\n", labelsOf("packages/x/src/b.ts"))).toEqual([]);
+    expect(classesIn("packages/x/src/b.ts", "// Ordered by the root (S9).\n", labelsOf("packages/x/src/b.ts"))).toEqual([
+      "design label",
+    ]);
+    expect(classesIn("packages/x/src/b.ts", "// Ranked (P14).\n", labelsOf("packages/x/src/b.ts"))).toEqual([
+      "design label",
+    ]);
+    expect([...labelsOf("scripts/a.ts")]).toEqual([]);
   });
 });
 
@@ -192,6 +241,17 @@ describe("the script over a repository", () => {
     expect(run.status).toBe(1);
     expect(run.stderr).toContain('src/a.ts:2: design label "O3 c"');
     expect(run.stderr).not.toContain("src/a.ts:3");
+  });
+
+  test("a label a test fixture holds as a string still fails in another file's comment", () => {
+    repoWith({
+      "packages/x/src/a.ts": "// Ordered by the composition root (S9).\nexport const a = 1;\n",
+      "packages/x/src/a.test.ts": 'expect(read("S9")).toBe(1);\n',
+      "packages/y/src/ids.ts": 'export const IDS = ["S9"] as const;\n',
+    });
+    const run = lint();
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('packages/x/src/a.ts:1: design label "S9"');
   });
 
   test("a clean repository passes", () => {

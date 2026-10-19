@@ -78,7 +78,7 @@ function northStarOf(vision: VisionVersion): string {
 
 /**
  * Every item of the vision a planned task can trace to: each scope
- * boundary (S1..), then each assumption work proceeds on, by its key in the vision, a Stated one by
+ * boundary (S<n>), then each assumption work proceeds on, by its key in the vision, a Stated one by
  * the decision the client's answer made, each with its status, standing with the client and kind.
  * The summary is not an item: it restates the whole tender, so a task tracing to it would trace to
  * nothing in particular.

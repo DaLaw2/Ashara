@@ -81,7 +81,7 @@ interface FailedDispatch {
  * Captures a deterministic lesson for a non-completed terminal outcome:
  * `result.detail` already carries the blocking/failure reason (an agent-reported
  * failure/block, a gate/smoke failure, or a verification failure), so no LLM
- * distillation is needed to make it a usable lesson (deferred by story decision).
+ * distillation is needed to make it a usable lesson.
  * Stored as a `finding` tagged `task-failure`, so it can be filtered separately. Fail-soft: a write failure is logged and must
  * never affect the result already being returned to the caller.
  */

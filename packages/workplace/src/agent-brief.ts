@@ -19,7 +19,7 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
 
 /**
  * An assumption of the project's current vision: what work proceeds on until the client says
- * otherwise. `key` is its id within the vision (A1, A2, ...); `note` is what the vision records of
+ * otherwise. `key` is its id within the vision (A<n>); `note` is what the vision records of
  * it, in words Delivery rendered, so the brief carries no other context's vocabulary.
  */
 const VisionAssumptionSchema = z.strictObject({

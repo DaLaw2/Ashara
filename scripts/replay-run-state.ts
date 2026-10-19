@@ -2,8 +2,8 @@
  * Run-state replay: loads a kept run's plain pg
  * dump into a scratch database, migrates it forward, re-runs today's brief and report composers over
  * its records with no model call, and judges what they state with the simulator's text-against-fact
- * oracle (I9, packages/integration/src/simulator/text-facts.ts) and its report oracle (I4,
- * client-reports.ts). $0: nothing here calls a model, a cell or git.
+ * oracle (packages/integration/src/simulator/text-facts.ts) and its report oracle
+ * (client-reports.ts). $0: nothing here calls a model, a cell or git.
  *
  *   npx tsx scripts/replay-run-state.ts --dump FILE --psql "COMMAND" [--keep]
  *
