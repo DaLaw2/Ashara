@@ -17,7 +17,8 @@
 #                               declares any, every .ts file under its src/ belongs to exactly one
 #                               (a test file to its subject's), and a glob matching no file fails
 # module-allow.<name> = [...]   the other modules <name> may import, type-only imports included;
-#                               a module without one imports none, and a cycle is a parse error
+#                               a module without one imports none, and a cycle is a parse error;
+#                               an item "<module>:<glob>" lets <name> import only those files of it
 # module-entry.<name> = [glob, ...] the only files of <name> another module may import
 #                               The module `entry` (the barrel) may import every module; none may import it.
 #
@@ -59,6 +60,19 @@ importers = ["server", "integration"]
 [execution-infra]
 # Execution Infrastructure: cells on the container substrate. Imports no other context.
 allow = ["shared"]
+# Its modules by business purpose: the cells on the container substrate, the target checkout and task
+# worktrees on the host, the environment versions (a cell on a checkout), and the package's typed errors,
+# its kernel. A cell reads the host only to snapshot a repository into itself; checkout's lock and tree
+# reads stay behind its worktree and repository entry files.
+module.cells       = ["src/podman.ts", "src/cell-probes.ts", "src/process-runner.ts", "src/cell-backend.ts", "src/cell-limits.ts", "src/cells.ts", "src/base-cell.ts", "src/workspace-path.ts"]
+module.checkout    = ["src/worktree.ts", "src/tree-read.ts", "src/checkout-lock.ts", "src/host-git.ts", "src/target-repo.ts", "src/worktree-boundary.test.ts"]
+module.environment = ["src/environment-build.ts", "src/environment.ts", "src/current-environment.ts", "src/checkout-cell.ts", "src/environment-report.ts"]
+module.errors      = ["src/errors.ts"]
+module.entry       = ["src/index.ts"]
+module-allow.environment = ["cells", "checkout", "errors"]
+module-allow.cells       = ["checkout:src/host-git.ts", "errors"]
+module-allow.checkout    = ["errors"]
+module-entry.checkout    = ["src/host-git.ts", "src/target-repo.ts", "src/worktree.ts"]
 
 [knowledge]
 # Knowledge: findings and failed approaches. It owns its repositories; db supplies the

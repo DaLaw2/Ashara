@@ -113,6 +113,13 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
     acl: { allow: [], host: "src/acl/engagement-acl.ts", target: "src/acl/delivery-acl.ts" },
     [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
   },
+  "execution-infra": {
+    cells: { allow: ["checkout", "errors"], host: "src/podman.ts", target: "src/cells.ts" },
+    checkout: { allow: ["errors"], host: "src/host-git.ts", target: "src/host-git.ts" },
+    environment: { allow: ["cells", "checkout", "errors"], host: "src/environment.ts", target: "src/current-environment.ts" },
+    errors: { allow: [], host: "src/errors.ts", target: "src/errors.ts" },
+    [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
+  },
   engagement: {
     vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
     intake: { allow: ["vision", "inbound"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
@@ -138,6 +145,23 @@ const MODULE_EXTRAS: Readonly<Record<string, Readonly<Record<string, readonly Mo
         name: "quality: the verdict module takes VerificationInfrastructureFault from no verification file",
         line: 'import { VerificationInfrastructureFault } from "./gates/finalize.js";',
         reason: "module verdict may not import module verification (module-allow.verdict: [checks, environment, acl])",
+      },
+    ],
+  },
+  "execution-infra": {
+    // A cell snapshots a repository from the host; it never holds a worktree or the checkout lock.
+    cells: [
+      {
+        name: "execution-infra: cells import no checkout file but host-git.ts",
+        line: 'import type * as probe from "./worktree.js";',
+        reason: "module cells may import only [src/host-git.ts] of module checkout (module-allow.cells)",
+      },
+    ],
+    environment: [
+      {
+        name: "execution-infra: environment reads checkout only through its module-entry",
+        line: 'import type * as probe from "./tree-read.js";',
+        reason: "module checkout admits imports only of module-entry.checkout: [src/host-git.ts, src/target-repo.ts, src/worktree.ts]",
       },
     ],
   },

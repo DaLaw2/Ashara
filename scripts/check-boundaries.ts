@@ -24,7 +24,8 @@
  *                                   nothing at all, no other package's symbol and no other file,
  *                                   so no bound in them can be a production constant
  *   module.<name>    = [glob, ...]  the package-relative files of one internal module of the package
- *   module-allow.<name> = [...]     the other modules of the package <name> may import; none when absent
+ *   module-allow.<name> = [...]     the other modules of the package <name> may import; none when absent.
+ *                                   An item `<module>:<glob>` allows only those files of <module> to <name>
  *   module-entry.<name> = [glob, ...] the only files of <name> another module may import
  *
  * A package that declares `module.*` is checked inside, against its modules. Every .ts file under
@@ -32,8 +33,8 @@
  * `x.<tag>.test.ts` to `x.ts`), any other file to the one module whose glob it matches. A file that
  * matches none, or two, is a violation, and so is a module glob that matches no file. Every relative
  * specifier between two of its modules is checked, `import type` included (a type is language): the
- * importer's `module-allow` must list the target, and a target with `module-entry` admits only those
- * files. The module named `entry` (the barrel) may import every module, and no module may import it.
+ * importer's `module-allow` must list the target, a target it lists by `<module>:<glob>` admits only
+ * those files to it, and a target with `module-entry` admits only those files to any module. The module named `entry` (the barrel) may import every module, and no module may import it.
  * A `module-allow` graph with a cycle is a parse error, so a cycle between modules cannot return.
  * Blind spots: a computed dynamic import, and what is placed inside one file, are not seen.
  *
@@ -126,6 +127,8 @@ interface PackageRule {
   readonly modules: ReadonlyMap<string, readonly string[]>;
   /** module -> the other modules it may import; a module absent here imports none. */
   readonly moduleAllow: ReadonlyMap<string, readonly string[]>;
+  /** module -> imported module -> the only files of it the module may import; absent admits all of them. */
+  readonly moduleAllowFiles: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
   /** module -> the only files of it another module may import; a module absent here admits all its files. */
   readonly moduleEntry: ReadonlyMap<string, readonly string[]>;
 }
@@ -155,6 +158,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       boundsTables: string[];
       modules: Map<string, string[]>;
       moduleAllow: Map<string, string[]>;
+      moduleAllowFiles: Map<string, Map<string, string[]>>;
       moduleEntry: Map<string, string[]>;
     }
   >();
@@ -175,7 +179,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleEntry: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map() });
       }
       continue;
     }
@@ -272,7 +276,27 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `${key} list is empty${key === "module-allow" ? " (omit it: a module with none imports no other module)" : ""}`);
       }
       if (target.has(name)) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `${key}.${name} is stated twice`);
-      target.set(name, list);
+      if (key !== "module-allow") {
+        target.set(name, list);
+        continue;
+      }
+      const whole = new Set<string>();
+      const narrowed = new Map<string, string[]>();
+      for (const item of list) {
+        const colon = item.indexOf(":");
+        if (colon === -1) {
+          if (whole.has(item) || narrowed.has(item)) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `lists "${item}" twice, or both whole and by its files`);
+          whole.add(item);
+          continue;
+        }
+        const [imported, glob] = [item.slice(0, colon), item.slice(colon + 1)];
+        if (whole.has(imported) || glob === "") throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `"${item}" names no file, or "${imported}" is also listed whole`);
+        const globs = narrowed.get(imported);
+        if (globs === undefined) narrowed.set(imported, [glob]);
+        else globs.push(glob);
+      }
+      target.set(name, [...new Set(list.map((item) => item.split(":")[0]))]);
+      rule.moduleAllowFiles.set(name, narrowed);
       continue;
     }
 
@@ -337,6 +361,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       boundsTables: rule.boundsTables,
       modules: rule.modules,
       moduleAllow: rule.moduleAllow,
+      moduleAllowFiles: rule.moduleAllowFiles,
       moduleEntry: rule.moduleEntry,
     });
   }
@@ -719,11 +744,22 @@ function moduleViolations(scope: ModuleScope): Violation[] {
       }
     }
   }
+  const membersOf = (name: string): string[] => [...moduleOf].filter(([, owner]) => owner === name).map(([filePath]) => relativeTo(filePath));
   for (const [name, globs] of rule.moduleEntry) {
-    const members = [...moduleOf].filter(([, owner]) => owner === name).map(([filePath]) => relativeTo(filePath));
+    const members = membersOf(name);
     for (const glob of globs) {
       if (!members.some((member) => matchesAnyGlob(member, [glob]))) {
         violations.push({ file: rulesRelative, line: 0, fromPkg: pkgName, specifier: `module-entry.${name}`, reason: `"${glob}" matches no file of module ${name}` });
+      }
+    }
+  }
+  for (const [from, narrowed] of rule.moduleAllowFiles) {
+    for (const [to, globs] of narrowed) {
+      const members = membersOf(to);
+      for (const glob of globs) {
+        if (!members.some((member) => matchesAnyGlob(member, [glob]))) {
+          violations.push({ file: rulesRelative, line: 0, fromPkg: pkgName, specifier: `module-allow.${from}`, reason: `"${to}:${glob}" matches no file of module ${to}` });
+        }
       }
     }
   }
@@ -753,6 +789,11 @@ function moduleViolations(scope: ModuleScope): Violation[] {
       const allowed = rule.moduleAllow.get(from) ?? [];
       if (!allowed.includes(to)) {
         report(filePath, line, specifier, `module ${from} may not import module ${to} (module-allow.${from}: [${allowed.join(", ")}])`);
+        continue;
+      }
+      const allowedFiles = rule.moduleAllowFiles.get(from)?.get(to);
+      if (allowedFiles !== undefined && !matchesAnyGlob(relativeTo(resolved), allowedFiles)) {
+        report(filePath, line, specifier, `module ${from} may import only [${allowedFiles.join(", ")}] of module ${to} (module-allow.${from})`);
         continue;
       }
       const entryFiles = rule.moduleEntry.get(to);
