@@ -17,6 +17,7 @@ const RECORD_RELS = SCAN_SOURCES.map((source) => source.rel).filter(
 
 const RootManifest = z.object({ workspaces: z.array(z.string()).nonempty() });
 const PackageManifest = z.object({ name: z.string().min(1) });
+const LockFile = z.looseObject({ packages: z.record(z.string(), z.record(z.string(), z.unknown())) });
 
 let tmp = "";
 let worktree = "";
@@ -179,15 +180,34 @@ describe("worktree-setup", () => {
     }
   });
 
-  test("refuses with WorktreeSetupError and names npm ci when the lockfiles differ", () => {
+  test("refuses with WorktreeSetupError naming the package and npm ci when the lockfiles lock a package differently", () => {
     const lockfile = path.join(worktree, "package-lock.json");
     const original = fs.readFileSync(lockfile);
     try {
-      fs.writeFileSync(lockfile, Buffer.concat([original, Buffer.from("\n")]));
+      const lock = LockFile.parse(JSON.parse(original.toString("utf8")));
+      const key = Object.keys(lock.packages).find((name) => name.startsWith("node_modules/"));
+      if (key === undefined) throw new TypeError(`${lockfile} locks no node_modules package`);
+      lock.packages[key] = { ...lock.packages[key], version: "0.0.0-drifted" };
+      fs.writeFileSync(lockfile, JSON.stringify(lock, null, 2));
       const refused = setup(worktree);
       expect(refused.status).not.toBe(0);
       expect(refused.stderr).toContain("WorktreeSetupError");
+      expect(refused.stderr).toContain(key);
       expect(refused.stderr).toContain("npm ci");
+    } finally {
+      fs.writeFileSync(lockfile, original);
+    }
+  });
+
+  test("accepts lockfiles that differ only in the root project's own entry and formatting", () => {
+    const lockfile = path.join(worktree, "package-lock.json");
+    const original = fs.readFileSync(lockfile);
+    try {
+      const lock = LockFile.parse(JSON.parse(original.toString("utf8")));
+      lock.packages[""] = { ...lock.packages[""], engines: { node: ">=0.0.1-root-only" } };
+      fs.writeFileSync(lockfile, JSON.stringify(lock));
+      const accepted = setup(worktree);
+      expect(accepted.status, accepted.stderr).toBe(0);
     } finally {
       fs.writeFileSync(lockfile, original);
     }

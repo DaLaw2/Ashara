@@ -80,7 +80,7 @@ after the money is gone.
 
 You need:
 
-- Node.js 22 with npm (the version CI runs).
+- Node.js 24 with npm (the version CI runs; `.nvmrc` names it).
 - [just](https://github.com/casey/just).
 - podman, plus a compose provider for `podman compose` (podman-compose or docker-compose), which `just dev` uses
   to start the database. The full test suite, real containers included, passes on podman 4.9.3 and podman 5.8.2.

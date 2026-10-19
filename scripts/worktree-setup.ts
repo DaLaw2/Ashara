@@ -128,6 +128,23 @@ function lockEntries(text: string, file: string, worktree: string, fix: string):
   return entries;
 }
 
+// The root entry ("") holds the project's own manifest fields (engines, dependency ranges), which
+// select nothing on disk; every other entry is an installed package, compared in full.
+function lockedPackageDiff(sourceLock: Buffer, source: string, worktreeLock: Buffer, worktree: string): string[] {
+  const fix = `run npm ci in ${worktree}`;
+  const ours = lockEntries(sourceLock.toString("utf8"), path.join(source, "package-lock.json"), worktree, fix);
+  const theirs = lockEntries(worktreeLock.toString("utf8"), path.join(worktree, "package-lock.json"), worktree, fix);
+  const keys = new Set([...ours.keys(), ...theirs.keys()]);
+  keys.delete("");
+  return [...keys].filter((key) => JSON.stringify(canonical(ours.get(key))) !== JSON.stringify(canonical(theirs.get(key))));
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+}
+
 const IDENTITY_FIELDS = ["version", "resolved", "integrity", "link"] as const;
 
 // npm records what it installed in node_modules/.package-lock.json. Every installed entry must
@@ -321,8 +338,11 @@ function setup(cli: Cli, recordRels: readonly string[]): void {
   }
   const sourceModules = fs.realpathSync(sourceModulesPath);
   const sourceLock = readLockfile(source, worktree);
-  if (!sourceLock.equals(readLockfile(worktree, worktree))) {
-    throw new WorktreeSetupError("lockfile", worktree, `package-lock.json differs from ${path.join(source, "package-lock.json")}, so the source's installed packages are not this worktree's; run npm ci in ${worktree}`);
+  const lockDiff = lockedPackageDiff(sourceLock, source, readLockfile(worktree, worktree), worktree);
+  if (lockDiff.length > 0) {
+    const shown = lockDiff.slice(0, 5).join(", ");
+    const more = lockDiff.length > 5 ? ` (and ${lockDiff.length - 5} more)` : "";
+    throw new WorktreeSetupError("lockfile", worktree, `package-lock.json locks different packages than ${path.join(source, "package-lock.json")} (${shown}${more}), so the source's installed packages are not this worktree's; run npm ci in ${worktree}`);
   }
   checkInstall(source, sourceModules, sourceLock, worktree);
   const recordsCheckout = cli.source === undefined ? source : mainCheckoutOf(worktree);
