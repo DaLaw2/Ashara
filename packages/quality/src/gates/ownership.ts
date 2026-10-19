@@ -89,7 +89,7 @@ export async function checkBranchOwnership(
       kind: "environment_change",
       paths: recipeHits,
       diff: await recipeDiff(targetProjectPath, taskId, branch, recipeHits),
-      reason: `${recipeRule}. Nothing was merged; an environment task is requested for the change (ADR-074 addendum 2 d66 b)`,
+      reason: `${recipeRule}. Nothing was merged; an environment task is requested for the change`,
     };
   }
   const checkRule =

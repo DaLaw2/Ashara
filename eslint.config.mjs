@@ -81,7 +81,7 @@ const PRODUCTION_SYNTAX = [
     // `Response.json()`, and a JSON module import.
     selector: "MemberExpression[object.name='JSON'][property.name='parse']",
     message:
-      "JSON.parse outside parseJson (CLAUDE.md: Zod at every boundary). Use parseJson(schema, text, source) from @ashara/shared, which validates the value and throws a typed error.",
+      "JSON.parse outside parseJson (every boundary validates its input with Zod). Use parseJson(schema, text, source) from @ashara/shared, which validates the value and throws a typed error.",
   },
   {
     // Typed errors only (CLAUDE.md). Blind spots: other built-in classes (`new TypeError(`), a
@@ -89,7 +89,7 @@ const PRODUCTION_SYNTAX = [
     // through an alias or `Reflect.construct`.
     selector: ":matches(NewExpression, CallExpression)[callee.type='Identifier'][callee.name='Error']",
     message:
-      "Bare Error (CLAUDE.md: typed errors only). Throw a class extending Error whose fields carry the structured context; the message alone must say what, where and why.",
+      "Bare Error (typed errors only). Throw a class extending Error whose fields carry the structured context; the message alone must say what, where and why.",
   },
 ];
 

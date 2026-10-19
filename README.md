@@ -39,7 +39,7 @@ Both products survived a hard kill and restart with their data intact, and rejec
 - **Tests by someone else.** No agent grades its own work.
 - **Honest reports.** If something failed or was skipped, the report says so in plain words.
 - **A hard spending limit.** Every model call is recorded with its cost, and the limit you set is enforced before
-  each call. Ashara's records matched the provider's billing in our checks.
+  each call.
 - **Isolation.** Agents run every command in a sealed container with no network and no access to your keys. These
   guarantees are tested by probes that try to break them.
 - **Any stack.** Ashara has no built-in list of languages. The environment for each project is written as part of
@@ -78,41 +78,60 @@ after the money is gone.
 
 ## Getting started
 
-You need: Node.js with npm, [just](https://github.com/casey/just), podman, and an API key for Anthropic (Claude)
-and/or DeepSeek. The full test suite, real containers included, passes on podman 4.9.3 and podman 5.8.2.
+You need:
+
+- Node.js 22 with npm (the version CI runs).
+- [just](https://github.com/casey/just).
+- podman, plus a compose provider for `podman compose` (podman-compose or docker-compose), which `just dev` uses
+  to start the database. The full test suite, real containers included, passes on podman 4.9.3 and podman 5.8.2.
+- An API key for Anthropic (Claude) and/or DeepSeek.
 
 ```bash
 just install                  # install dependencies
 just dev                      # start the database (in a container)
 just migrate                  # set up the database
 
+# Every `just` recipe reads a .env file at the repository root. The example sets the resource caps
+# of the containers agents work in, which Ashara requires; adjust them to your machine.
+cp config/env.example .env
+
 npx tsx scripts/secret-key-init.ts        # create the key that encrypts stored secrets
 
 # Store your model provider key. You'll be prompted to paste it; it is never shown or logged.
 read -rs K && printf '%s' "$K" | npx tsx scripts/secret.ts put provider/anthropic/api_key
 
-# Create your client login. Type an access code of your choice at the prompt.
+# Store the token the server's API requires: any long random string, such as `openssl rand -base64 24`.
+read -rs T && printf '%s' "$T" | npx tsx scripts/secret.ts put server/api_token
+
+# Create your client login. Type an access code of your choice, at least 20 characters, at the prompt.
 read -rs C && printf '%s' "$C" | npx tsx scripts/client.ts add "Your Name"
 
 # Start Ashara with a spending limit, in US dollars, and a folder to keep projects in.
 ASHARA_BUDGET_LIMIT_USD=5 WORKDIR_BASE=~/ashara-work just server
 ```
 
-Open http://localhost:3000, sign in with your access code, and send your request.
+Open http://localhost:3000, sign in with your access code, and send your request. `http://localhost:3000/health`
+answers `ok` once the server is up.
 
 **Useful settings:**
 
 | Variable | Purpose |
 |---|---|
 | `ASHARA_BUDGET_LIMIT_USD` | Required. The most Ashara may spend on model calls. |
+| `ASHARA_CELL_MEMORY` | Required. The memory cap of each container an agent works in, such as `4g`. |
+| `ASHARA_CELL_CPUS` | Required. The CPU cap of each such container, such as `4`. |
+| `ASHARA_CELL_PIDS_LIMIT` | Required. The most processes one such container may hold, such as `1024`. |
 | `ASHARA_PROJECT_BUDGET_LIMIT_USD` | Optional. A smaller limit for each project. |
 | `ASHARA_TASK_WORK_BUDGET_REQUESTS` | Optional. The most model requests one task may make (default 60); past it the task is given up. |
 | `ASHARA_PROJECT_WORK_BUDGET_REQUESTS` | Optional. The most model requests one project may make (default 600); past it the project pauses until you grant more with `npx tsx scripts/project.ts grant`. |
 | `ASHARA_WORK_RESERVE_PERCENT` | Optional. The share of each project's request budget, a whole percent from 0 to 99 (default 25), that only verification and acceptance may draw; planning, check authoring, review and implementation pause the project when only this share is left. |
 | `ASHARA_PORT` | The web client's port (default 3000). A value that is not a port stops Ashara from starting. |
 | `WORKDIR_BASE` | Required. Where projects are kept. Ashara will not start without it. |
+| `DATABASE_URL` | Optional. The database to use (default `postgresql://ashara@localhost:5432/ashara`, the one `just dev` starts). |
+| `ASHARA_SECRET_KEY_FILE` | Optional. Where the key that encrypts stored secrets is kept (default `~/.config/ashara/secret.key`). |
 
-Each project is a git repository under `WORKDIR_BASE/projects/`; the delivered product is on its `main` branch.
+Any of these can go in `.env` instead of on the command line; `config/env.example` explains the container
+caps. Each project is a git repository under `WORKDIR_BASE/projects/`; the delivered product is on its `main` branch.
 Model choices are in `config/models.toml`.
 
 ## Limitations

@@ -37,7 +37,7 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     if (err instanceof NoLLMProvidersConfigured) {
-      console.error("FATAL: LLM gateway refused to start (ADR-030) -- server will not boot.");
+      console.error("FATAL: LLM gateway refused to start: no model provider is configured -- server will not boot.");
       console.error(`  checked sources: ${err.checkedSources.join(", ") || "none"}`);
       console.error(`  how to fix: ${err.howToFix}`);
       console.error(`  ${err.message}`);

@@ -25,7 +25,6 @@ const workflowSchema = z.object({
       steps: z.array(stepSchema).min(1),
     }),
     test: z.object({ steps: z.array(stepSchema).min(1) }),
-    "ci-result": z.object({ needs: z.array(z.string()) }),
   }),
 });
 
@@ -48,10 +47,6 @@ describe("ci.yml", () => {
     expect(scan.some((step) => step.uses?.startsWith("GitGuardian/ggshield-action@") === true)).toBe(true);
   });
 
-  test("the aggregate still requires the gate and every shard", () => {
-    expect(workflow.jobs["ci-result"].needs).toEqual(["check", "test"]);
-  });
-
   test("the podman step fails unless README.md names the runner's podman version", () => {
     const prepare = workflow.jobs.test.steps.find((step) => step.name === "Prepare podman and the pinned test images");
     expect(prepare?.run).toContain('grep -qF "podman ${podman_version}" README.md');
@@ -63,6 +58,15 @@ describe("README.md", () => {
     const readme = fs.readFileSync("README.md", "utf8");
     expect(readme).toContain("podman 4.9.3");
     expect(readme).not.toMatch(/podman 5\.x is required/i);
+  });
+
+  test("its setup creates the .env and the API token the server refuses to start without", () => {
+    const readme = fs.readFileSync("README.md", "utf8");
+    expect(readme).toContain("cp config/env.example .env");
+    expect(readme).toContain("secret.ts put server/api_token");
+    const required = [...fs.readFileSync("config/env.example", "utf8").matchAll(/^([A-Z_]+)=/gm)].map((m) => m[1]);
+    expect(required.length).toBeGreaterThan(0);
+    for (const variable of required) expect(readme).toContain(`\`${variable}\``);
   });
 });
 

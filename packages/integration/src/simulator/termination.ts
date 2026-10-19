@@ -279,7 +279,7 @@ export function checkLoops(step: number, records: LoopRecords, previous: LoopRec
     add("W3", "unfounded:requests", `the project has ${WORK_BOUNDS.requestsPerProject.value - records.requests} model requests left: the measure left its well-founded order`);
   }
   for (const review of records.grownAfterFreeze) {
-    add("W3", `grew-after-freeze:${review.title}`, `"${review.title}" recorded ${review.findings} finding(s) after a task depending on it was dispatched: the open blockers grew after the check set froze (ADR-084 decision 3)`);
+    add("W3", `grew-after-freeze:${review.title}`, `"${review.title}" recorded ${review.findings} finding(s) after a task depending on it was dispatched: the open blockers grew after the check set froze, and a frozen check set only shrinks`);
   }
   if (previous !== null && rounds(records) > rounds(previous)) {
     const before = measureOf(previous);
