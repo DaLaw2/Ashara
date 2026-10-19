@@ -23,7 +23,7 @@ const model: ResolvedModel = {
   provider: "none",
   modelId: "unused-model",
   modelConfig: {
-    id: "unused-model", apiModelId: "unused-model", provider: "none", capabilityLevel: "Strong",
+    id: "unused-model", apiModelId: "unused-model", provider: "none", capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 0, outputCostPer1M: 0, cacheReadCostPer1M: null, cacheWriteCostPer1M: null, maxContextTokens: 1, priceWindows: [], priceTiers: [], datedPrices: [],
   },
   effectiveCapability: "Strong",

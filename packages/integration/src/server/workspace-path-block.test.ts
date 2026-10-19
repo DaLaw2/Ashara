@@ -97,7 +97,7 @@ describe("a project whose workspace path is refused", () => {
               id: "workspace-block-model",
               apiModelId: "workspace-block-model",
               provider: "deepseek",
-              capabilityLevel: "Strong",
+              capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
               inputCostPer1M: 1,
               outputCostPer1M: 10,
               maxContextTokens: 100_000,

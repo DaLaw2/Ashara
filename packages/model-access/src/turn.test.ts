@@ -10,7 +10,7 @@ describe("Anthropic prompt caching on agent turns", () => {
     id: "sonnet-like",
     apiModelId: "claude-sonnet-like",
     provider: "anthropic",
-    capabilityLevel: "Strong",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 3,
     outputCostPer1M: 15,
     maxContextTokens: 200_000,

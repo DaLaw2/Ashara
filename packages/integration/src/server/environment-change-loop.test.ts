@@ -40,7 +40,7 @@ const modelConfig: ModelConfig = {
   id: "mock-model",
   apiModelId: "mock-model-api",
   provider: "anthropic",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 3,
   outputCostPer1M: 15,
   maxContextTokens: 100_000,
@@ -254,6 +254,7 @@ async function sprint0(h: Harness): Promise<void> {
     deliverables: ["environment/environment.toml"],
     origin: "sprint0",
     checkedBy: "substrate",
+    capability: "Strong",
   } as const;
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
@@ -275,7 +276,7 @@ async function implementationTask(h: Harness, title: string, check: string, vers
   const checkTaskId = createWorkItemId();
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
-    VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify({ goal: title, endState: `${title} is done`, scope: title, deliverables: [] })}::jsonb,
+    VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify({ goal: title, endState: `${title} is done`, scope: title, deliverables: [], capability: "Strong" })}::jsonb,
             ${h.projectId}, 'implementation', ${randomUUID()}),
            (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, NULL, ${h.projectId}, 'check', ${randomUUID()})`);
   await new TaskCheckRepository(db).append({

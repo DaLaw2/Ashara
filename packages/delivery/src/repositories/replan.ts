@@ -2,8 +2,10 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } f
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
+import { clientMessages, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, replanRequests, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
+import { CapabilityLevelSchema, higherCapability } from "../acl/finance-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
+import type { AttemptGrade } from "../replan.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
@@ -180,6 +182,39 @@ export async function decidedByLatestChecks(db: DbHandle, projectId: string): Pr
     decided.set(row.taskId, items);
   }
   return decided;
+}
+
+/**
+ * The catalog grade of the model each of the project's tasks last completed an attempt on
+ * (dev_sessions.attempt_model, model_configs). The thinking mode an attempt was called in is not
+ * recorded, so its grade is the higher of the model's two: the work's tier is never understated. A
+ * task with no completed attempt that names its model is absent; one whose model the catalog no
+ * longer holds is unrecorded, naming the model.
+ */
+export async function completedAttemptGrades(db: DbHandle, projectId: string): Promise<Map<string, AttemptGrade>> {
+  const rows = await db
+    .selectDistinctOn([devSessions.taskId], {
+      taskId: devSessions.taskId,
+      model: devSessions.attemptModel,
+      thinkingOn: modelConfigs.capability,
+      thinkingOff: modelConfigs.capabilityThinkingOff,
+    })
+    .from(devSessions)
+    .innerJoin(workItems, eq(workItems.id, devSessions.taskId))
+    .leftJoin(modelConfigs, and(eq(modelConfigs.modelId, devSessions.attemptModel), eq(modelConfigs.providerName, devSessions.attemptProvider)))
+    .where(and(eq(workItems.projectId, projectId), eq(devSessions.phase, "Completed"), isNotNull(devSessions.attemptModel)))
+    .orderBy(asc(devSessions.taskId), desc(devSessions.updatedAt), desc(devSessions.id));
+  const grades = new Map<string, AttemptGrade>();
+  for (const row of rows) {
+    const model = z.string().min(1).parse(row.model);
+    if (row.thinkingOn === null || row.thinkingOff === null) {
+      grades.set(row.taskId, { kind: "unrecorded", why: `its last completed attempt ran on ${model}, which the model catalog does not hold` });
+      continue;
+    }
+    const grade = higherCapability(CapabilityLevelSchema.parse(row.thinkingOn), CapabilityLevelSchema.parse(row.thinkingOff));
+    grades.set(row.taskId, { kind: "graded", model, grade });
+  }
+  return grades;
 }
 
 /** How many client answers the revision took in (replan_requests), as a selected column. */

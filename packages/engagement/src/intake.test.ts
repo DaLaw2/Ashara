@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { BudgetExceeded, PreCallRefusal, ProviderError } from "@ashara/finance";
-import type { ContextualLlm } from "@ashara/finance";
+import type { CapabilityLevel, ContextualLlm } from "@ashara/finance";
 import { SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
 import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
@@ -619,20 +619,23 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
     assumptions: [{ statement: "Times are shown in the studio's zone.", rationale: "One studio.", kind: "client-visible" }],
   };
   type Sent = Parameters<ReturnType<ContextualLlm["forCall"]>["generateStructured"]>[0];
-  type Request = { readonly secondOpinion: NonNullable<Sent["secondOpinion"]>; readonly capability: NonNullable<Sent["capability"]> };
+  type Request = { readonly secondOpinion: NonNullable<Sent["secondOpinion"]>; readonly judges: NonNullable<Sent["judges"]> };
   type Answer = { readonly data: unknown; readonly provider: string; readonly model: string };
 
-  async function intakeWith(first: unknown, second: (request: Request) => Answer) {
+  /** The intake of one tender whose first reading answers `first`, by a model graded `firstGrade` as called. */
+  async function intakeWith(first: unknown, second: (request: Request) => Answer, firstGrade: CapabilityLevel = "Strong") {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const asked: Array<{ readonly strength: string | null; readonly prompt: string }> = [];
+    const sent: Array<{ readonly judges: CapabilityLevel | undefined; readonly capability: CapabilityLevel | undefined }> = [];
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
           asked.push({ strength: request.secondOpinion?.strength ?? null, prompt: request.prompt });
-          if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet", grade: "Strong" };
-          if (request.capability === undefined) throw new Error("the second reading asks a capability, not a judge");
-          const answer = second({ secondOpinion: request.secondOpinion, capability: request.capability });
-          return { ...answer, data: request.schema.parse(answer.data), grade: "Strong" };
+          if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet", grade: firstGrade };
+          sent.push({ judges: request.judges, capability: request.capability });
+          if (request.judges === undefined) throw new Error("the second reading asks a capability, not a judge");
+          const answer = second({ secondOpinion: request.secondOpinion, judges: request.judges });
+          return { ...answer, grade: request.judges, data: request.schema.parse(answer.data) };
         },
       }),
     };
@@ -656,18 +659,30 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
       },
     };
     const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
-    return { outcome, asked, write: writes[0] };
+    return { outcome, asked, sent, write: writes[0] };
   }
 
   const unavailable = (request: Request): never => {
-    throw new SecondOpinionUnavailable(request.secondOpinion, { capability: request.capability }, []);
+    throw new SecondOpinionUnavailable(request.secondOpinion, { judges: request.judges }, []);
   };
+
+  test.each(["Light", "Frontier"] as const)(
+    "the second reading asks for a judge of work at the first reading's grade as called (%s), never a capability",
+    async (firstGrade) => {
+      const { sent, write } = await intakeWith(lazy, () => ({ data: { questions: [] }, provider: "openai", model: "gpt" }), firstGrade);
+      expect(sent).toEqual([{ judges: firstGrade, capability: undefined }]);
+      expect(write?.reading.first.grade).toBe(firstGrade);
+      const confirmation = write?.reading.confirmation;
+      if (confirmation?.kind !== "confirmed") return expect.unreachable(`confirmation is ${confirmation?.kind}`);
+      expect(confirmation.second.model.grade).toBe(firstGrade);
+    },
+  );
 
   test("a reading that asks questions is not put to a second reading", async () => {
     const { outcome, asked, write } = await intakeWith({ ...lazy, questions: [QUESTION] }, () => expect.unreachable("no second reading"));
     expect(asked.map((a) => a.strength)).toEqual([null]);
     expect(outcome).toMatchObject({ kind: "recorded", questions: 1, confirmation: "not-needed" });
-    expect(write?.reading).toEqual({ first: { provider: "anthropic", model: "sonnet" }, firstQuestions: 1, confirmation: { kind: "not-needed" } });
+    expect(write?.reading).toEqual({ first: { provider: "anthropic", model: "sonnet", grade: "Strong" }, firstQuestions: 1, confirmation: { kind: "not-needed" } });
     expect(write?.readingReport).toBeNull();
   });
 
@@ -680,7 +695,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
     expect(outcome).toMatchObject({ kind: "recorded", questions: 0, confirmation: "confirmed" });
     expect(write?.reading.confirmation).toEqual({
       kind: "confirmed",
-      second: { strength: "other-family", model: { provider: "openai", model: "gpt" }, questions: [] },
+      second: { strength: "other-family", model: { provider: "openai", model: "gpt", grade: "Strong" }, questions: [] },
       passedOver: [],
     });
     expect(write?.readingReport).toContain("A second reading of it, by another model family, found nothing to ask either.");

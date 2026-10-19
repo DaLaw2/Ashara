@@ -14,7 +14,7 @@ const MODEL: ModelConfig = {
   id: "mistral-large",
   apiModelId: "mistral-large-latest",
   provider: "mistral",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 2,
   outputCostPer1M: 6,
   maxContextTokens: 128_000,
@@ -192,8 +192,8 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
       providers: [{
         name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", enabled: true,
         models: [
-          { ...MODEL, id: "dear-medium", provider: "deepseek", capabilityLevel: "Medium", inputCostPer1M: 1.32, outputCostPer1M: 3.96 },
-          { ...MODEL, id: "cheap-strong", provider: "deepseek", capabilityLevel: "Strong", inputCostPer1M: 0.3, outputCostPer1M: 1.2 },
+          { ...MODEL, id: "dear-medium", provider: "deepseek", capabilityLevel: "Medium", thinkingOffCapabilityLevel: "Medium", inputCostPer1M: 1.32, outputCostPer1M: 3.96 },
+          { ...MODEL, id: "cheap-strong", provider: "deepseek", capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong", inputCostPer1M: 0.3, outputCostPer1M: 1.2 },
         ],
       }],
       defaultProvider: "deepseek",
@@ -241,7 +241,7 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
 
 // A second opinion is chosen by strength from the catalog alone.
 describe("ProviderRegistry.resolveSecondOpinion", () => {
-  const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, inputCostPer1M });
+  const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, thinkingOffCapabilityLevel: capabilityLevel, inputCostPer1M });
   const deployment = (...providers: ReadonlyArray<readonly [string, readonly ModelConfig[]]>): ProviderRegistry =>
     registryOf({
       providers: providers.map(([name, models]) => ({ name, providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [...models], enabled: true })),
@@ -286,7 +286,7 @@ describe("a model whose context window is larger than one overflowed", () => {
   const small: ModelConfig = { ...MODEL, id: "small", inputCostPer1M: 0.5, maxContextTokens: 32_000 };
   const wideDear: ModelConfig = { ...MODEL, id: "wide-dear", inputCostPer1M: 9, maxContextTokens: 1_000_000 };
   const wideCheap: ModelConfig = { ...MODEL, id: "wide-cheap", inputCostPer1M: 3, maxContextTokens: 200_000 };
-  const wideWeak: ModelConfig = { ...MODEL, id: "wide-weak", capabilityLevel: "Light", inputCostPer1M: 0.1, maxContextTokens: 400_000 };
+  const wideWeak: ModelConfig = { ...MODEL, id: "wide-weak", capabilityLevel: "Light", thinkingOffCapabilityLevel: "Light", inputCostPer1M: 0.1, maxContextTokens: 400_000 };
   const config = (models: ModelConfig[], routingProfiles?: GatewayConfig["routingProfiles"]): GatewayConfig => ({
     providers: [{ name: "mistral", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models, enabled: true }],
     defaultProvider: "mistral",
@@ -296,9 +296,9 @@ describe("a model whose context window is larger than one overflowed", () => {
 
   test("the registry: the cheapest model graded for the capability whose window is larger; none, null", () => {
     const registry = registryOf(config([small, wideDear, wideCheap, wideWeak]));
-    expect(registry.resolveWithWindowAbove("Strong", 32_000)?.modelConfig.id).toBe("wide-cheap");
-    expect(registry.resolveWithWindowAbove("Strong", 200_000)?.modelConfig.id).toBe("wide-dear");
-    expect(registry.resolveWithWindowAbove("Strong", 1_000_000)).toBeNull();
+    expect(registry.resolveWithWindowAbove("Strong", 32_000, "agent-runner")?.modelConfig.id).toBe("wide-cheap");
+    expect(registry.resolveWithWindowAbove("Strong", 200_000, "agent-runner")?.modelConfig.id).toBe("wide-dear");
+    expect(registry.resolveWithWindowAbove("Strong", 1_000_000, "agent-runner")).toBeNull();
   });
 
   test("the gateway: the routed model when its window is larger, else a larger one, never the routed one again", () => {
@@ -311,7 +311,7 @@ describe("a model whose context window is larger than one overflowed", () => {
 
 // A judge is chosen by the judged tier and the catalog's grades alone: one tier above, else equal, else refused.
 describe("ProviderRegistry.resolveJudge", () => {
-  const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, inputCostPer1M });
+  const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, thinkingOffCapabilityLevel: capabilityLevel, inputCostPer1M });
   const deployment = (
     providers: ReadonlyArray<readonly [string, readonly ModelConfig[]]>,
     routingProfiles?: GatewayConfig["routingProfiles"],

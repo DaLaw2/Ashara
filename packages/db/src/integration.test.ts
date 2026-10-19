@@ -139,6 +139,7 @@ describe("ConfigRepository", () => {
       modelId: testModelId,
       providerName: testProviderName,
       capability: "Strong",
+      capabilityThinkingOff: "Strong",
       inputCostPer1m: 3.0,
       outputCostPer1m: 0,
       maxContextTokens: 128000,

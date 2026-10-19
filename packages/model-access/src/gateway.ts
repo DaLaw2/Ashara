@@ -419,8 +419,10 @@ export class LLMGateway {
     // provider; a same-family or same-model one is pinned to its one model. Moving to a weaker
     // strength is the caller's explicit step, never a failover here.
     const resolved = this.registry.resolveSecondOpinion(request, opinion, request.site);
-    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request, this.registry.enabledModels());
-    if (request.judges !== undefined) this.reportEqualJudge(request.judges, { ...resolved, relation: judgeRelation(request.judges, resolved.modelConfig.capabilityLevel) }, request.site);
+    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request, this.registry.enabledModels(request.site));
+    if (request.judges !== undefined) {
+      this.reportEqualJudge(request.judges, { ...resolved, relation: judgeRelation(request.judges, this.registry.gradeAt(resolved.modelConfig, request.site)) }, request.site);
+    }
     try {
       return opinion.strength === "other-family"
         ? await this.withFallback(request, resolved, execute, "structured request", rethrown, [opinion.avoid.provider])
@@ -451,7 +453,7 @@ export class LLMGateway {
     if (resolved.relation !== "equal") return;
     console.warn(
       `[LLMGateway] the judge of work at ${judges} (site=${site ?? "none"}) is ${resolved.providerName}/${resolved.modelConfig.id}, ` +
-        `graded ${resolved.modelConfig.capabilityLevel}: no stronger than the work, since no model one tier above it is routed there`,
+        `graded ${this.registry.gradeAt(resolved.modelConfig, site)} as called there: no stronger than the work, since no model one tier above it is routed there`,
     );
   }
 
@@ -617,7 +619,7 @@ export class LLMGateway {
       usage: extraction.usage,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,
-      grade: resolved.modelConfig.capabilityLevel,
+      grade: this.registry.gradeAt(resolved.modelConfig, site),
     };
   }
 
@@ -681,7 +683,7 @@ export class LLMGateway {
         usage: extraction.usage,
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
-        grade: resolved.modelConfig.capabilityLevel,
+        grade: this.registry.gradeAt(resolved.modelConfig, site),
       };
     }
 
@@ -693,7 +695,7 @@ export class LLMGateway {
   }
 
   resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
-    return resolvedModelOf(this.registry.resolve(capability, [], site));
+    return this.resolvedModelOf(this.registry.resolve(capability, [], site), site);
   }
 
   /**
@@ -704,20 +706,20 @@ export class LLMGateway {
    */
   resolveModelWithWindowAbove(capability: CapabilityLevel, site: KnownLLMSite, windowTokens: number): ResolvedModel | null {
     const routed = this.registry.resolve(capability, [], site);
-    if (routed.modelConfig.maxContextTokens > windowTokens) return resolvedModelOf(routed);
-    const wider = this.registry.resolveWithWindowAbove(capability, windowTokens);
-    return wider === null ? null : resolvedModelOf(wider);
+    if (routed.modelConfig.maxContextTokens > windowTokens) return this.resolvedModelOf(routed, site);
+    const wider = this.registry.resolveWithWindowAbove(capability, windowTokens, site);
+    return wider === null ? null : this.resolvedModelOf(wider, site);
   }
-}
 
-function resolvedModelOf(resolved: ResolvedProvider): ResolvedModel {
-  return {
-    model: resolved.provider,
-    modelId: resolved.modelConfig.id,
-    provider: resolved.providerName,
-    modelConfig: resolved.modelConfig,
-    effectiveCapability: resolved.modelConfig.capabilityLevel,
-  };
+  private resolvedModelOf(resolved: ResolvedProvider, site: KnownLLMSite): ResolvedModel {
+    return {
+      model: resolved.provider,
+      modelId: resolved.modelConfig.id,
+      provider: resolved.providerName,
+      modelConfig: resolved.modelConfig,
+      effectiveCapability: this.registry.gradeAt(resolved.modelConfig, site),
+    };
+  }
 }
 
 /**

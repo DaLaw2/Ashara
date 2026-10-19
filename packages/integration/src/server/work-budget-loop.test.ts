@@ -42,7 +42,7 @@ const MODEL: ModelConfig = {
   id: "work-budget-loop-model",
   apiModelId: "work-budget-loop-model",
   provider: "deepseek",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 1,
   outputCostPer1M: 10,
   maxContextTokens: 100_000,

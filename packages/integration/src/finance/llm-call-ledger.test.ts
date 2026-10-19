@@ -36,7 +36,7 @@ function model(overrides: Partial<ModelConfig>): ModelConfig {
     id: "test-model",
     apiModelId: "test-model-api",
     provider: "anthropic",
-    capabilityLevel: "Strong",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 3,
     outputCostPer1M: 15,
     maxContextTokens: 100_000,
@@ -507,7 +507,7 @@ describe("one llm_calls row per provider call", () => {
     expect(await ask(twoModels, "same-family-other-model")).toBe("anthropic/sibling-strong");
     expect(await ask(twoModels, "same-model")).toBeInstanceOf(SecondOpinionUnavailable);
     // One provider key and one model at the capability: only the same model answers a second time.
-    const oneModel = single([model({ id: "too-light", capabilityLevel: "Light", inputCostPer1M: 0.1 })]);
+    const oneModel = single([model({ id: "too-light", capabilityLevel: "Light", thinkingOffCapabilityLevel: "Light", inputCostPer1M: 0.1 })]);
     expect(await ask(oneModel, "same-family-other-model")).toBeInstanceOf(SecondOpinionUnavailable);
     expect(await ask(oneModel, "same-model")).toBe("anthropic/only-strong");
     // A refused strength sends nothing and records nothing: only the three answered requests are rows.
@@ -953,7 +953,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     const mock = stubModel({ doGenerate: result("not json", "stop", 5, DEEPSEEK_RAW) });
     const attempts: LadderAttemptEvent[] = [];
     // Frontier serves both the Strong base tier and the Frontier escalation tier.
-    const gw = gateway("deepseek", model({ id: "ds-ladder", capabilityLevel: "Frontier", cacheWriteCostPer1M: null }));
+    const gw = gateway("deepseek", model({ id: "ds-ladder", capabilityLevel: "Frontier", thinkingOffCapabilityLevel: "Frontier", cacheWriteCostPer1M: null }));
     const laddered = withStructuredLadder(gw.forCall({ projectId, taskId: null, callSite: "decomposition" }), {
       site: "decomposition",
       attempts: 2,
@@ -979,7 +979,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     // Closing the brace would make this valid against GreetingSchema.
     const mock = stubModel({ doGenerate: result('{"greeting":"hi"', "length", 512, DEEPSEEK_RAW) });
     const attempts: LadderAttemptEvent[] = [];
-    const gw = gateway("deepseek", model({ id: "ds-cut", capabilityLevel: "Frontier", cacheWriteCostPer1M: null }));
+    const gw = gateway("deepseek", model({ id: "ds-cut", capabilityLevel: "Frontier", thinkingOffCapabilityLevel: "Frontier", cacheWriteCostPer1M: null }));
     const laddered = withStructuredLadder(gw.forCall({ projectId, taskId: null, callSite: "decomposition" }), {
       site: "decomposition",
       attempts: 2,

@@ -32,7 +32,7 @@ const deepseek: ModelConfig = {
   id: "deepseek-scripted",
   apiModelId: "deepseek-scripted-api",
   provider: "deepseek",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 0.27,
   outputCostPer1M: 1.1,
   maxContextTokens: 100_000,

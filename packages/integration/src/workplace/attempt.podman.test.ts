@@ -24,7 +24,7 @@ const modelConfig: ModelConfig = {
   id: "mock-model",
   apiModelId: "mock-model-api",
   provider: "anthropic",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 3,
   outputCostPer1M: 15,
   maxContextTokens: 100_000,

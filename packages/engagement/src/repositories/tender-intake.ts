@@ -52,6 +52,8 @@ async function insertIntakeReading(db: DbHandle, write: TenderIntakeWrite): Prom
     secondProvider: second === null ? null : second.model.provider,
     secondModel: second === null ? null : second.model.model,
     secondQuestions: second === null ? null : second.questions.length,
+    judgedTier: reading.first.grade,
+    judgeTier: second === null ? null : second.model.grade,
     passedOver: confirmation.kind === "not-needed" ? [] : confirmation.passedOver,
   });
 }

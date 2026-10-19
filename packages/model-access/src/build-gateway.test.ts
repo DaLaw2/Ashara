@@ -10,7 +10,7 @@ const MODEL: ModelConfig = {
   id: "deepseek-flash",
   apiModelId: "deepseek-chat",
   provider: "deepseek",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 1,
   outputCostPer1M: 2,
   maxContextTokens: 100_000,

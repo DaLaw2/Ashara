@@ -10,6 +10,7 @@ import {
   buildGatewayConfig,
   LLMGateway,
   loadRoutingProfilesFromToml,
+  loadThinkingPolicyFromToml,
   resolveModelsConfigPath,
   sdkLanguageModels,
   StructuredOutputExhausted,
@@ -58,9 +59,9 @@ describe("the model catalog", () => {
 
   test("a model's price windows load with it and set the rate at the call's instant", async () => {
     await db.execute(sql`
-      INSERT INTO model_configs (model_id, provider_name, capability, input_cost_per_1m, output_cost_per_1m,
+      INSERT INTO model_configs (model_id, provider_name, capability, capability_thinking_off, input_cost_per_1m, output_cost_per_1m,
                                  cache_read_cost_per_1m, max_context_tokens)
-      VALUES (${MODEL_ID}, 'deepseek', 'Strong', 0.30, 1.20, 0.006, 1000000)`);
+      VALUES (${MODEL_ID}, 'deepseek', 'Strong', 'Strong', 0.30, 1.20, 0.006, 1000000)`);
     await db.execute(sql`
       INSERT INTO model_price_windows (model_id, iso_weekday, utc_start_minute, utc_end_minute,
                                        input_cost_per_1m, output_cost_per_1m, cache_read_cost_per_1m)
@@ -153,6 +154,15 @@ const CATALOG_047: readonly (readonly [string, string, string, number, number, n
   ["codestral-2508", "mistral", "Light", 0.3, 0.9, 0.03, null, 128_000],
 ];
 
+describe("the catalog's grade per thinking mode", () => {
+  test("deepseek-flash is Strong only when it reasons, Light called without reasoning; every other model is graded the same in both modes", async () => {
+    const differ = (await repo.listModelConfigs())
+      .filter((m) => m.capability !== m.capabilityThinkingOff)
+      .map((m) => [m.modelId, m.capability, m.capabilityThinkingOff]);
+    expect(differ).toEqual([["deepseek-flash", "Strong", "Light"]]);
+  });
+});
+
 describe("the migrated catalog's current models", () => {
   test("holds exactly the record's eighteen models, each with its level, base-tier prices, context and API id", async () => {
     // The price-window test above adds one row of its own until afterAll.
@@ -223,6 +233,7 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
         defaultProvider: providerNames.length > 0 ? providerNames[0] : null,
         contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
         routingProfiles: withProfiles ? loadRoutingProfilesFromToml(resolveModelsConfigPath()) : {},
+        thinking: loadThinkingPolicyFromToml(resolveModelsConfigPath()),
       },
       checkedSources: ["test"],
       clock: () => new Date(),
@@ -241,10 +252,11 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
     Object.fromEntries(SITES.map((site) => [site, LEVELS.map((level) => resolvedAt(gateway, site, level))]));
   const everySite = (levels: readonly string[]) => Object.fromEntries(SITES.map((site) => [site, levels]));
 
-  test('"deepseek": every level up to Strong is deepseek-flash; Frontier has no model and fails closed', async () => {
-    expect(table(await gatewayFor(["deepseek"], true))).toEqual(
-      everySite(["deepseek-flash", "deepseek-flash", "deepseek-flash", "NoProviderAvailableError"]),
-    );
+  test('"deepseek": every level up to Strong is deepseek-flash where it reasons; at suite-review, which calls it without reasoning, only Light', async () => {
+    expect(table(await gatewayFor(["deepseek"], true))).toEqual({
+      ...everySite(["deepseek-flash", "deepseek-flash", "deepseek-flash", "NoProviderAvailableError"]),
+      "suite-review": ["deepseek-flash", "NoProviderAvailableError", "NoProviderAvailableError", "NoProviderAvailableError"],
+    });
   });
 
   test('"deepseek": a Strong structured call whose attempts all fail ends in StructuredOutputExhausted, with no Frontier tier to escalate to', async () => {
@@ -283,12 +295,13 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
     );
   });
 
-  test('"anthropic+deepseek": agent-runner goes to the Claude model of each level; planning sites to deepseek-flash', async () => {
+  test('"anthropic+deepseek": agent-runner goes to the Claude model of each level; planning sites to deepseek-flash, a judge above Strong to claude-opus-5-5', async () => {
     const flash = ["deepseek-flash", "deepseek-flash", "deepseek-flash", "deepseek-flash"];
+    const judged = ["deepseek-flash", "deepseek-flash", "deepseek-flash", "claude-opus-5-5"];
     expect(table(await gatewayFor(["anthropic", "deepseek"], true))).toEqual({
       "agent-runner": ["claude-haiku-5-5", "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
-      decomposition: flash,
-      "liaison-intake": flash,
+      decomposition: judged,
+      "liaison-intake": judged,
       roster: flash,
       "suite-review": ["deepseek-flash", "deepseek-flash", "deepseek-flash", "claude-opus-5-5"],
       escalation: ["claude-opus-5-5", "claude-opus-5-5", "claude-opus-5-5", "claude-opus-5-5"],
@@ -301,7 +314,7 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
     );
     const profiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
     const credential = (name: string) => ({ name, providerType: name === "anthropic" ? "anthropic" : "deepseek", apiKey: "unused", baseUrl: "https://stub.invalid/v1" });
-    const thinking = { default: "off" as const, sites: {} };
+    const thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
     const overflow = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
     for (const combo of [["deepseek"], ["anthropic"], ["anthropic", "deepseek"]]) {
       expect(buildGatewayConfig(catalog, profiles, combo.map(credential), overflow, thinking).providers.map((p) => p.name)).toEqual(combo);

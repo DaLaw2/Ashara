@@ -322,7 +322,7 @@ const unusedModel: AssignmentStaff["model"] = {
     id: "unused-model",
     apiModelId: "unused-model",
     provider: "none",
-    capabilityLevel: "Strong",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 0,
     outputCostPer1M: 0,
     cacheReadCostPer1M: null,

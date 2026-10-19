@@ -60,7 +60,9 @@
 [routing.profiles."deepseek"]
 # Intentionally empty: a deepseek-only deployment gets pure capability-level
 # routing. Its one model is deepseek-flash, graded Strong with thinking
-# on (below): Light, Medium and Strong requests resolve to it. Nothing lower is
+# on (below): Light, Medium and Strong requests resolve to it. At suite-review,
+# where thinking is off, it is graded Light, so no judge of Strong check work is
+# offered there and the review is not made. Nothing lower is
 # substituted for Frontier: a task the planner grades Frontier fails with
 # NoProviderAvailableError, and a Strong structured call whose attempts all
 # fail has no tier to escalate to, so it ends in StructuredOutputExhausted with
@@ -81,23 +83,29 @@
 
 [routing.profiles."anthropic+deepseek"]
 # DeepSeek serves planning and intake; Claude serves every agent-runner task
-# (below) and every ladder escalation.
+# (below), every ladder escalation, and every judgement asked one tier above
+# Strong work.
 # Each agent-runner level goes to the Claude model graded at that level as called:
 # Frontier claude-opus-5-5, Strong claude-sonnet-5-5, Medium claude-haiku-5-5.
 # No Claude model is graded Light; a Light task takes claude-haiku-5-5, the
 # cheapest Claude model above it. So every agent-runner task in this combo
 # spends Anthropic credit.
 "agent-runner" = { Frontier = "claude-opus-5-5", Strong = "claude-sonnet-5-5", Medium = "claude-haiku-5-5", Light = "claude-haiku-5-5" }
-"decomposition" = "deepseek-flash"
-# The Liaison's tender intake.
-"liaison-intake" = "deepseek-flash"
+# Planning, and the revision's judgement of whether the environment still
+# serves, which asks for a judge one tier above the environment work: Frontier
+# goes to claude-opus-5-5, every lower tier to deepseek-flash (Strong as called).
+"decomposition" = { Frontier = "claude-opus-5-5", default = "deepseek-flash" }
+# The Liaison's tender intake, and its second reading, which asks for a judge
+# one tier above the first reading's grade, routed as decomposition is.
+"liaison-intake" = { Frontier = "claude-opus-5-5", default = "deepseek-flash" }
 # Roster derivation: one structured call per tender, the
 # same shape and size as decomposition's.
 "roster" = "deepseek-flash"
 # The review of a plan revision's check suites: one structured
 # call per review, reading every stored suite with the vision. A review judges
 # the check work, so it asks for a judge one tier above the judged tier, else
-# at it: Frontier goes to claude-opus-5-5, every lower tier to deepseek-flash.
+# at it: Frontier goes to claude-opus-5-5, every lower tier to deepseek-flash,
+# which thinking off at this site grades Light, so it judges only Light work.
 # A flat entry here would apply whatever tier is judged, and the gateway refuses
 # to start on one graded below the catalog's top tier.
 "suite-review" = { Frontier = "claude-opus-5-5", default = "deepseek-flash" }

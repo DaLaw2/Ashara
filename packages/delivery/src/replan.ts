@@ -2,8 +2,8 @@ import { z } from "zod";
 import { isGoalTask } from "@ashara/db";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { DomainEvent, Logger, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
-import { withStructuredLadder } from "./acl/finance-acl.js";
-import type { LadderAttemptEvent } from "./acl/finance-acl.js";
+import { higherCapability, withStructuredLadder } from "./acl/finance-acl.js";
+import type { CapabilityLevel, LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
@@ -55,11 +55,21 @@ const MAX_REPAIRS_PER_REVIEW = 2;
 /** Longest part of a given-up task's recorded failure the planner is shown. */
 const MAX_ABANDONMENT_EVIDENCE_CHARS = 3000;
 
+/**
+ * The catalog grade of the model that last completed an attempt of a task, as the store reads it,
+ * or why none is on record.
+ */
+export type AttemptGrade =
+  | { readonly kind: "graded"; readonly model: string; readonly grade: CapabilityLevel }
+  | { readonly kind: "unrecorded"; readonly why: string };
+
 /** One of the project's work items as the store reads it, with what was merged for it. */
 interface PlannedItem {
   readonly item: WorkItem;
   /** The merge commit on the target's main; null when none is recorded. */
   readonly mergeCommit: string | null;
+  /** The grade of the model its completed work was done on. */
+  readonly attemptGrade: AttemptGrade;
   /** A Sprint 0 task's statement of the environment it set up; null when none is recorded. */
   readonly environmentStatement: string | null;
   /**
@@ -285,6 +295,24 @@ class ReplanFailureUnrecorded extends Error {
   ) {
     super(`project ${projectId} has ${attempts} failed plan revision attempts but no recorded error`);
     this.name = "ReplanFailureUnrecorded";
+  }
+}
+
+/**
+ * A completed task whose work a revision judges carries no capability level in its task_spec: no
+ * judge can be asked at or above work whose tier is unknown, so nothing is judged.
+ */
+class JudgedTaskUngraded extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly taskId: string,
+    readonly origin: string | undefined,
+  ) {
+    super(
+      `project ${projectId}: task ${taskId} (origin ${origin ?? "unrecorded"}) carries no capability level in its task_spec; ` +
+        `the revision cannot ask a judge of its work at or above it`,
+    );
+    this.name = "JudgedTaskUngraded";
   }
 }
 
@@ -714,7 +742,8 @@ export class Replanner implements Replanning {
 
   /**
    * The environment the revision builds on: the latest completed environment task, unless the
-   * cause needs an environment change; a new environment task when none is completed.
+   * cause needs an environment change; a new environment task when none is completed. Whether it
+   * still serves judges the environment task's work, so a judge of work at that work's tier is asked.
    */
   private async environmentOf(
     project: ProjectAwaitingReplan,
@@ -729,7 +758,7 @@ export class Replanner implements Replanning {
       { site: "decomposition", attempts: 2, onAttempt: this.deps.onAttempt, reask: judgmentReask },
     );
     const response = await provider.generateStructured({
-      capability: "Strong",
+      judges: this.judgedTierOf(project.projectId, current),
       prompt: environmentPrompt(cause, current.environmentStatement),
       schema: EnvironmentJudgmentSchema,
       maxTokens: 512,
@@ -739,6 +768,24 @@ export class Replanner implements Replanning {
       environmentChange: response.data.environmentChange,
     });
     return response.data.environmentChange ? { kind: "new" } : { kind: "existing", taskId: current.item.id };
+  }
+
+  /**
+   * The tier of a completed task's work: the higher of the grade it was planned at and the grade of
+   * the model that did it, since either alone can understate the work. With no model on record the
+   * planned grade stands alone, and the record says so.
+   */
+  private judgedTierOf(projectId: ProjectId, done: PlannedItem): CapabilityLevel {
+    const planned = done.item.taskSpec?.capability;
+    if (planned === undefined) throw new JudgedTaskUngraded(projectId, done.item.id, done.item.taskSpec?.origin);
+    const attempt = done.attemptGrade;
+    if (attempt.kind === "graded") return higherCapability(planned, attempt.grade);
+    this.deps.logger.warn(
+      "delivery.judged-tier-unrecorded",
+      `task ${done.item.id} is judged at its planned grade ${planned} alone: ${attempt.why}`,
+      { projectId, taskId: done.item.id, plannedGrade: planned },
+    );
+    return planned;
   }
 
   private async decompose(

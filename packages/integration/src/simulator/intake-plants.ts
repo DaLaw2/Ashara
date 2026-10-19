@@ -16,7 +16,8 @@ const SECOND_READING = "secondReading";
 /**
  * A reading of a tender that asks the client nothing goes on with no second reading asked, as when the
  * empty question list was read as the tender being unambiguous: TenderIntake's second reading is
- * replaced by one that asks no model and reports another family's agreement. Returns what undoes it.
+ * replaced by one that asks no model and reports another family's agreement, at the grade it judges.
+ * Returns what undoes it.
  */
 export function intakeSecondReadingDropped(): () => void {
   const original = Object.getOwnPropertyDescriptor(TenderIntake.prototype, SECOND_READING);
@@ -24,9 +25,9 @@ export function intakeSecondReadingDropped(): () => void {
   Object.defineProperty(TenderIntake.prototype, SECOND_READING, {
     configurable: true,
     writable: true,
-    value: async () => ({
+    value: async <Grade>(_tender: unknown, first: { readonly grade: Grade }) => ({
       kind: "confirmed",
-      second: { strength: "other-family", model: { provider: "planted", model: "unasked" }, questions: [] },
+      second: { strength: "other-family", model: { provider: "planted", model: "unasked", grade: first.grade }, questions: [] },
       passedOver: [],
     }),
   });

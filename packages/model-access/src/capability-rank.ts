@@ -1,5 +1,5 @@
 import type { CapabilityLevel } from "./capability-level.js";
-import type { JudgeRelation, TierAsk } from "./types.js";
+import type { JudgeRelation, ModelConfig, ThinkingMode, TierAsk } from "./types.js";
 
 export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
   Light: 0,
@@ -23,4 +23,14 @@ export function tierOf(ask: TierAsk): CapabilityLevel {
 /** How a judge graded `judgeGrade` stands to work at `judged`; called only on a judge graded at or above it. */
 export function judgeRelation(judged: CapabilityLevel, judgeGrade: CapabilityLevel): JudgeRelation {
   return CAPABILITY_RANK[judgeGrade] > CAPABILITY_RANK[judged] ? "above" : "equal";
+}
+
+/** The catalog grade of `model` called in thinking mode `mode`: the grade every comparison of tiers reads. */
+export function gradeAsCalled(model: ModelConfig, mode: ThinkingMode): CapabilityLevel {
+  return mode === "on" ? model.capabilityLevel : model.thinkingOffCapabilityLevel;
+}
+
+/** The stronger of two tiers. */
+export function higherCapability(a: CapabilityLevel, b: CapabilityLevel): CapabilityLevel {
+  return CAPABILITY_RANK[b] > CAPABILITY_RANK[a] ? b : a;
 }

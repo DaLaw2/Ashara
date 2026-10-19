@@ -75,6 +75,7 @@ interface LadderResult<T> {
   readonly capability: CapabilityLevel;
   readonly model: string;
   readonly provider: string;
+  /** The answering model's catalog grade as it was called. */
   readonly grade: CapabilityLevel;
   /** Total attempts across all tiers until a valid result. */
   readonly attempts: number;
@@ -312,7 +313,7 @@ interface StructuredProviderResult<T> {
   readonly data: T;
   readonly model: string;
   readonly provider: string;
-  /** The catalog grade of the model that answered. */
+  /** The answering model's catalog grade as it was called (StructuredResponse.grade). */
   readonly grade: CapabilityLevel;
 }
 

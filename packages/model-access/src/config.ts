@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { parseCapabilityLevel } from "./capability-level.js";
-import { CAPABILITY_RANK } from "./capability-rank.js";
+import { CAPABILITY_RANK, gradeAsCalled } from "./capability-rank.js";
 import { InvalidGatewayCatalog, JudgePinnedBelowTop } from "./errors.js";
 import { resolveModelsConfigPath } from "./paths.js";
 import { computeProviderCombo } from "./routing-profiles.js";
-import { widestTurnOutputReserve } from "./thinking.js";
+import { thinkingModeFor, widestTurnOutputReserve } from "./thinking.js";
 import { JUDGEMENT_SITES, PROVIDER_TYPES } from "./types.js";
+import type { CapabilityLevel } from "./capability-level.js";
 import type {
   ContextOverflowSignatures,
   GatewayConfig,
@@ -106,7 +107,7 @@ export function buildGatewayConfig(
     });
   }
   if (reserve.length > 0) throw new InvalidGatewayCatalog("model_configs", reserve);
-  assertNoJudgePinnedBelowTop(providers, routingProfiles);
+  assertNoJudgePinnedBelowTop(providers, routingProfiles, thinking);
 
   return {
     providers,
@@ -119,30 +120,33 @@ export function buildGatewayConfig(
 
 /**
  * Refuses the deployment's routing profile when it pins a judgement site (JUDGEMENT_SITES) flatly to
- * a model graded below the top tier the enabled providers' catalog offers. A flat entry applies
- * whatever tier a request asks, so below the top it would judge work graded above its model, or
- * deny the judge one tier above the work that the catalog has; at the top tier it is neither, and
+ * a model graded below the top tier the enabled providers' catalog offers at that site. A flat entry
+ * applies whatever tier a request asks, so below the top it would judge work graded above its model,
+ * or deny the judge one tier above the work that the catalog has; at the top tier it is neither, and
  * a per-capability table is held to each judged tier per request (ProviderRegistry.resolveJudge).
- * Grades are the catalog's (model_configs), never a model's name.
+ * Grades are the catalog's (model_configs) as the site calls each model, in its thinking mode,
+ * never a model's name.
  */
-function assertNoJudgePinnedBelowTop(providers: readonly ProviderConfig[], routingProfiles: RoutingProfiles): void {
+function assertNoJudgePinnedBelowTop(providers: readonly ProviderConfig[], routingProfiles: RoutingProfiles, thinking: ThinkingPolicy): void {
   const combo = computeProviderCombo(providers.map((p) => p.name));
   const profile = routingProfiles[combo];
   if (profile === undefined) return;
   const offered = providers.flatMap((p) => p.models);
-  const [top] = offered.map((m) => m.capabilityLevel).sort((a, b) => CAPABILITY_RANK[b] - CAPABILITY_RANK[a]);
-  if (top === undefined) return;
   const pins: string[] = [];
+  let topTier: CapabilityLevel | null = null;
   for (const site of JUDGEMENT_SITES) {
+    const mode = thinkingModeFor(thinking, site);
+    const [top] = offered.map((m) => gradeAsCalled(m, mode)).sort((a, b) => CAPABILITY_RANK[b] - CAPABILITY_RANK[a]);
     const entry = profile[site];
-    if (typeof entry !== "string") continue;
+    if (top === undefined || typeof entry !== "string") continue;
     // A model no enabled provider offers is buildGateway's refusal (RoutingProfileModelMissing).
     const model = offered.find((m) => m.id === entry);
-    if (model !== undefined && CAPABILITY_RANK[model.capabilityLevel] < CAPABILITY_RANK[top]) {
-      pins.push(`"${site}" -> "${entry}" (${model.capabilityLevel})`);
+    if (model !== undefined && CAPABILITY_RANK[gradeAsCalled(model, mode)] < CAPABILITY_RANK[top]) {
+      pins.push(`"${site}" -> "${entry}" (${gradeAsCalled(model, mode)} as called there)`);
+      topTier = top;
     }
   }
-  if (pins.length > 0) throw new JudgePinnedBelowTop({ combo, pins, topTier: top, configPath: resolveModelsConfigPath() });
+  if (topTier !== null) throw new JudgePinnedBelowTop({ combo, pins, topTier, configPath: resolveModelsConfigPath() });
 }
 
 /**
@@ -197,6 +201,7 @@ interface CatalogModel {
   readonly providerName: string;
   readonly apiModelId: string | null;
   readonly capability: string;
+  readonly capabilityThinkingOff: string;
   readonly inputCostPer1m: number;
   readonly outputCostPer1m: number;
   readonly cacheReadCostPer1m: number | null;
@@ -357,6 +362,7 @@ export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
     apiModelId: m.apiModelId ?? m.modelId,
     provider: m.providerName,
     capabilityLevel: parseCapabilityLevel(m.capability),
+    thinkingOffCapabilityLevel: parseCapabilityLevel(m.capabilityThinkingOff),
     maxContextTokens: m.maxContextTokens,
     ...toTokenRates(m),
     priceWindows: m.priceWindows.map((w) => ({

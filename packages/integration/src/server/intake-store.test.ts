@@ -41,6 +41,7 @@ function model(id: string, capabilityLevel: ModelConfig["capabilityLevel"]): Mod
     apiModelId: `${id}-api`,
     provider: "deepseek",
     capabilityLevel,
+    thinkingOffCapabilityLevel: capabilityLevel,
     inputCostPer1M: 1,
     outputCostPer1M: 2,
     maxContextTokens: 100_000,
@@ -166,13 +167,15 @@ const ReadingRowSchema = z.object({
   secondModel: z.string().nullable(),
   secondQuestions: z.number().nullable(),
   passedOver: z.array(z.object({ strength: z.string(), outcome: z.string(), reason: z.string() })),
+  judgedTier: z.string().nullable(),
+  judgeTier: z.string().nullable(),
 });
 
 /** The project's intake_readings row. */
 async function readingOf(projectId: ProjectId): Promise<z.infer<typeof ReadingRowSchema>> {
   const result = await db.execute(sql`
     SELECT confirmation, first_questions AS "firstQuestions", second_strength AS "secondStrength", second_model AS "secondModel",
-           second_questions AS "secondQuestions", passed_over AS "passedOver"
+           second_questions AS "secondQuestions", passed_over AS "passedOver", judged_tier AS "judgedTier", judge_tier AS "judgeTier"
     FROM intake_readings WHERE project_id = ${projectId}`);
   const [row, ...more] = z.array(ReadingRowSchema).parse(result.rows);
   if (row === undefined || more.length > 0) throw new Error(`expected one intake_readings row of ${projectId}, got ${result.rows.length}`);
@@ -194,7 +197,7 @@ beforeAll(async () => {
         providerType: "deepseek",
         apiKey: "test-key",
         baseUrl: "https://stub.invalid/v1",
-        models: [model("intake-strong", "Strong"), model("intake-frontier", "Frontier")],
+        models: [model("intake-strong", "Strong"), model("intake-frontier", "Frontier"), model("intake-frontier-b", "Frontier")],
         enabled: true,
       },
     ],
@@ -280,13 +283,15 @@ describe("Liaison tender intake", () => {
 
     expect(await callSitesOf(projectId)).toEqual(["liaison-intake"]);
     // A reading that asked questions needs no second reading, and is recorded so.
-    expect(await readingOf(projectId)).toEqual({ confirmation: "not-needed", firstQuestions: 3, secondStrength: null, secondModel: null, secondQuestions: null, passedOver: [] });
+    expect(await readingOf(projectId)).toEqual({
+      confirmation: "not-needed", firstQuestions: 3, secondStrength: null, secondModel: null, secondQuestions: null, passedOver: [], judgedTier: "Frontier", judgeTier: null,
+    });
   });
 
   // A reading of a tender that asks nothing is a claim. The catalog holds
-  // one provider whose two models are priced alike, so the first reading goes to intake-frontier (the
-  // id breaks the tie) and the second to intake-strong, from the ambiguity angle, through the
-  // real gateway and ledger; the question it raises is the one posted, and the reading is recorded with
+  // one provider whose models are priced alike, so the first reading goes to intake-frontier (the
+  // id breaks the tie) and the second, which may not be graded below it, to intake-frontier-b, from
+  // the ambiguity angle, through the real gateway and ledger; the question it raises is the one posted, and the reading is recorded with
   // its strength and told to the client, in the intake's one transaction.
   const SECOND_READING_MARKER = "Find the questions the client must be asked instead";
   function readingWith(second: unknown) {
@@ -294,13 +299,17 @@ describe("Liaison tender intake", () => {
       jsonResult(JSON.stringify(options.prompt).includes(SECOND_READING_MARKER) ? second : intakeResponse(0));
   }
 
-  test("a reading that asks nothing is put to another model of the family, whose question is posted and whose strength is recorded and told", async () => {
+  test("a reading that asks nothing is put to another model of the family graded at or above it, whose question is posted and whose strength is recorded and told", async () => {
     stubModel({ doGenerate: readingWith({ questions: intakeResponse(1).questions }) });
     const { projectId, tenderId } = await tender("Booking page for one studio.");
 
     expect(await intake().runPending()).toEqual([{ kind: "recorded", tenderId, projectId, questions: 1, confirmation: "questions-raised" }]);
     const reading = await readingOf(projectId);
-    expect(reading).toMatchObject({ confirmation: "questions-raised", firstQuestions: 0, secondStrength: "same-family-other-model", secondModel: "intake-strong", secondQuestions: 1 });
+    // The first reading was a Frontier model's: the Strong one of the family may not judge it.
+    expect(reading).toMatchObject({
+      confirmation: "questions-raised", firstQuestions: 0, secondStrength: "same-family-other-model", secondModel: "intake-frontier-b", secondQuestions: 1,
+      judgedTier: "Frontier", judgeTier: "Frontier",
+    });
     expect(reading.passedOver).toEqual([{ strength: "other-family", outcome: "unavailable", reason: expect.stringContaining("SecondOpinionUnavailable") }]);
     const messages = await messagesOf(projectId);
     expect(messages.filter((m) => m.kind === "question").map((q) => q.body.split("\n")[0])).toEqual(["Question 1 about the pottery studios?"]);

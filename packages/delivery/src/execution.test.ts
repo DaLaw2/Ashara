@@ -1251,10 +1251,13 @@ describe("an environment change requested: an environment task is opened and the
   const need = "the greeter needs the jq package in the image";
   const diff = "--- a/environment/Containerfile\n+++ b/environment/Containerfile\n+RUN apk add jq\n";
 
+  // A dispatched task carries the grade it was dispatched at; the environment task judging its request is graded from it.
+  const GRADED: Pick<WorkItem, "taskSpec"> = { taskSpec: { capability: "Strong" } };
+
   function buildEnvironmentChangeDeps(
     priorChanges: number,
     owner: Awaited<ReturnType<CoreLoopDeps["environmentOwner"]>>,
-    requester: Pick<WorkItem, "taskSpec"> = {},
+    requester: Pick<WorkItem, "taskSpec"> = GRADED,
     completed: readonly WorkItem[] = [],
   ) {
     const rows = new Map<string, WorkItem>([[ITEM_ID, { ...freshPendingItem(), ...requester }]]);
@@ -1353,7 +1356,7 @@ describe("an environment change requested: an environment task is opened and the
   test("within the bound: a Pending environment task owned by the environment role, with the need and the diff; the item waits on it, its dispatch given back", async () => {
     const { deps, item, opened, edges, routed, approaches } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID });
 
-    const result = await processTask(deps, freshPendingItem());
+    const result = await processTask(deps, { ...freshPendingItem(), ...GRADED });
 
     expect(result.status).toBe("blocked");
     expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0, blockedReason: undefined });
@@ -1366,7 +1369,7 @@ describe("an environment change requested: an environment task is opened and the
       repairsTaskId: ITEM_ID,
       projectId: TEST_PROJECT_ID,
       title: `Environment change 1 for task ${ITEM_ID}`,
-      taskSpec: { origin: "environment-change", checkedBy: "substrate" },
+      taskSpec: { origin: "environment-change", checkedBy: "substrate", capability: "Strong" },
     });
     expect(environment?.taskSpec?.scope).toContain(need);
     expect(environment?.taskSpec?.scope).toContain("+RUN apk add jq");
@@ -1379,7 +1382,7 @@ describe("an environment change requested: an environment task is opened and the
   // The scaffold's own environment change must not run the product's build and test on a main with
   // no product, where it fails and stalls every task behind the scaffold.
   test("asked by the product scaffold before any scaffold completed: the environment task records no product on main", async () => {
-    const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate" } };
+    const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate", capability: "Strong" } };
     const { deps, opened } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID }, scaffold);
 
     await processTask(deps, { ...freshPendingItem(), ...scaffold });
@@ -1389,7 +1392,7 @@ describe("an environment change requested: an environment task is opened and the
   });
 
   test("asked by the product scaffold after an earlier scaffold completed: the product is on main", async () => {
-    const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate" } };
+    const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate", capability: "Strong" } };
     const earlier: WorkItem = { ...freshPendingItem(), id: createWorkItemId(), status: "Completed", ...scaffold };
     const { deps, opened } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID }, scaffold, [earlier]);
 

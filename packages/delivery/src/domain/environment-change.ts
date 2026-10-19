@@ -1,4 +1,6 @@
 import { createDomainEvent } from "@ashara/shared";
+import { higherCapability } from "../acl/finance-acl.js";
+import type { CapabilityLevel } from "../acl/finance-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
 import type { WorkItem } from "./work-item.js";
 import { createPendingWorkItem, giveUpWorkItem } from "./work-item.js";
@@ -10,6 +12,30 @@ import { createPendingWorkItem, giveUpWorkItem } from "./work-item.js";
  * team settles it.
  */
 const ENVIRONMENT_CHANGE_BOUND = 2;
+
+/**
+ * The least level environment work is done at, Sprint 0's: changing the recipe every later task
+ * builds on is environment work of the same kind, whatever the requester's grade.
+ */
+const ENVIRONMENT_WORK_FLOOR: CapabilityLevel = "Strong";
+
+/**
+ * An implementation task asked for an environment change with no capability level on its stored
+ * spec: the environment task judges its request, and no level can be set for a judge of work
+ * whose level is unknown.
+ */
+class EnvironmentRequesterUngraded extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly origin: string | undefined,
+  ) {
+    super(
+      `task ${taskId} (origin ${origin ?? "unrecorded"}) asked for an environment change but carries no capability level in its ` +
+        `task_spec: the environment task that judges its request cannot be graded at or above it`,
+    );
+    this.name = "EnvironmentRequesterUngraded";
+  }
+}
 
 /** An implementer's finished work that changed environment recipe files, as Z0 refused it. */
 interface EnvironmentChangeRequest {
@@ -44,6 +70,16 @@ type EnvironmentChangeExit =
   /** The implementation is given up with an environment_change_needed reason: no owner. */
   | { readonly kind: "unowned"; readonly why: string };
 
+/**
+ * The environment task's level: it decides what of the requester's need the recipe provides, so it
+ * judges the requester's work and is graded at or above it, and never below environment work's floor.
+ */
+function environmentLevelFor(task: WorkItem): CapabilityLevel {
+  const requester = task.taskSpec?.capability;
+  if (requester === undefined) throw new EnvironmentRequesterUngraded(task.id, task.taskSpec?.origin);
+  return higherCapability(requester, ENVIRONMENT_WORK_FLOOR);
+}
+
 /** The environment task's goal and scope as the platform role's brief states them. */
 function environmentTaskSpec(
   task: WorkItem,
@@ -67,9 +103,7 @@ function environmentTaskSpec(
       `Its diff of the recipe (${request.paths.join(", ")}):\n${request.diff.trim() === "" ? "(empty)" : request.diff}`,
     ].join("\n\n"),
     deliverables: [`the recipe changed as the request needs, with build_environment reporting PASSED`],
-    // A fixed level, Sprint 0's: no planner sees this task, and changing the
-    // recipe every later task builds on is environment work of the same kind.
-    capability: "Strong",
+    capability: environmentLevelFor(task),
     origin: "environment-change",
     checkedBy: "substrate",
     product,

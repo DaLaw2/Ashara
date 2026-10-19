@@ -63,6 +63,7 @@ function model(id: string, capabilityLevel: ModelConfig["capabilityLevel"]): Mod
     apiModelId: `${id}-api`,
     provider: "deepseek",
     capabilityLevel,
+    thinkingOffCapabilityLevel: capabilityLevel,
     inputCostPer1M: 1,
     outputCostPer1M: 2,
     maxContextTokens: 100_000,

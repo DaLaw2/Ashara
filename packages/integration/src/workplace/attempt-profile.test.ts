@@ -36,7 +36,7 @@ const model: ResolvedModel = {
     id: "fake-model",
     apiModelId: "fake-model",
     provider: "fake",
-    capabilityLevel: "Strong",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 1,
     outputCostPer1M: 2,
     maxContextTokens: 100_000,

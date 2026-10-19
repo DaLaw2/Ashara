@@ -96,6 +96,8 @@ export const intakeReadings = pgTable("intake_readings", {
   secondProvider: text("second_provider"),
   secondModel: text("second_model"),
   secondQuestions: integer("second_questions"),
+  judgedTier: text("judged_tier"),
+  judgeTier: text("judge_tier"),
   passedOver: jsonb("passed_over").notNull().default(sql`'[]'::jsonb`),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });

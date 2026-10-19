@@ -27,7 +27,7 @@ export { UnpricedModel } from "./errors.js";
 // Finance is Model Access's only customer: every other context reads the model
 // language its calls through the guarded port speak (the structured-output ladder, the capability
 // tier, a resolved model, the provider failures) here, never from model-access itself.
-export { CAPABILITY_RANK, CapabilityLevelSchema, judgeRelation, SECOND_OPINION_STRENGTHS, StructuredOutputExhausted, withStructuredLadder } from "@ashara/model-access";
+export { CAPABILITY_RANK, CapabilityLevelSchema, judgeRelation, SECOND_OPINION_STRENGTHS, StructuredOutputExhausted, higherCapability, withStructuredLadder } from "@ashara/model-access";
 export type {
   CapabilityLevel,
   JudgeRelation,

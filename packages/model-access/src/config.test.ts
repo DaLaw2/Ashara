@@ -11,6 +11,7 @@ function validCatalog() {
             providerName: "anthropic",
             apiModelId: null,
             capability: "Strong",
+            capabilityThinkingOff: "Strong",
             inputCostPer1m: 3,
             outputCostPer1m: 15,
             cacheReadCostPer1m: 0.3,
@@ -147,21 +148,30 @@ describe("buildGatewayConfig reads the provider type, not the name", () => {
 
 // A flat entry applies whatever tier a judging request asks, so at a judgement site it must be graded at the catalog's top tier.
 describe("buildGatewayConfig: a judgement site is never pinned flatly below the catalog's top tier", () => {
-    const graded = (modelId: string, capability: string) => toModelConfig("model_configs", { ...validCatalog().models[0]!, modelId, capability });
+    const graded = (modelId: string, capability: string, capabilityThinkingOff = capability) =>
+        toModelConfig("model_configs", { ...validCatalog().models[0]!, modelId, capability, capabilityThinkingOff });
     const catalog = { "model-strong": graded("model-strong", "Strong"), "model-frontier": graded("model-frontier", "Frontier") };
     const build = (profile: Parameters<typeof buildGatewayConfig>[1][string]) =>
         buildGatewayConfig(catalog, { anthropic: profile }, [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: null }], OVERFLOW, THINKING_OFF);
 
     test("refuses a flat judgement-site pin graded below the top tier, naming the site, the model and its grade", () => {
         expect(() => build({ "suite-review": "model-strong" })).toThrow(JudgePinnedBelowTop);
-        expect(() => build({ "suite-review": "model-strong" })).toThrow(/top tier "Frontier": "suite-review" -> "model-strong" \(Strong\)/);
+        expect(() => build({ "suite-review": "model-strong" })).toThrow(/top tier "Frontier": "suite-review" -> "model-strong" \(Strong as called there\)/);
         expect(() => build({ "suite-review": { default: "model-frontier" }, escalation: "model-strong" })).toThrow(/"escalation" -> "model-strong"/);
     });
 
     test("boots a per-capability table, a flat pin at the top tier, and a flat pin at a site that judges nothing", () => {
         expect(build({ "suite-review": { Frontier: "model-frontier", default: "model-strong" } }).providers).toHaveLength(1);
         expect(build({ "suite-review": "model-frontier", escalation: "model-frontier" }).providers).toHaveLength(1);
-        expect(build({ decomposition: "model-strong" }).providers).toHaveLength(1);
+        expect(build({ roster: "model-strong" }).providers).toHaveLength(1);
+    });
+
+    test("grades a pin as its site calls it: graded at the top only with thinking on, it is refused where thinking is off", () => {
+        const reasoner = { "model-reasoner": graded("model-reasoner", "Frontier", "Strong"), "model-frontier": graded("model-frontier", "Frontier") };
+        const withThinking = (thinking: ThinkingPolicy) =>
+            buildGatewayConfig(reasoner, { anthropic: { "suite-review": "model-reasoner" } }, [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: null }], OVERFLOW, thinking);
+        expect(() => withThinking(THINKING_OFF)).toThrow(/"suite-review" -> "model-reasoner" \(Strong as called there\)/);
+        expect(withThinking({ default: "off", sites: { "suite-review": "on" } }).providers).toHaveLength(1);
     });
 });
 

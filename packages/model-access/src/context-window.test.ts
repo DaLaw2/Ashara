@@ -133,7 +133,7 @@ describe("an agent turn that does not fit its window", () => {
     id: "any-model",
     apiModelId: "any-model",
     provider: "any",
-    capabilityLevel: "Strong",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 1,
     outputCostPer1M: 2,
     maxContextTokens: 40_000,

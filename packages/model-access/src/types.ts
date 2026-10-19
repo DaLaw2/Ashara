@@ -181,7 +181,13 @@ export interface ModelConfig extends TokenRates {
   id: string;
   apiModelId: string;
   provider: string;
+  /**
+   * The model's grade as Ashara calls it with thinking on (ThinkingMode "on"). A model with no
+   * thinking switch is called the same way in both modes and graded the same in both.
+   */
   capabilityLevel: CapabilityLevel;
+  /** Its grade called with thinking off: a reasoning model that does not reason can grade lower. */
+  readonly thinkingOffCapabilityLevel: CapabilityLevel;
   maxContextTokens: number;
   readonly priceWindows: readonly PriceWindow[];
   /** Prompt-length tiers; empty when the model bills one rate at every prompt length. */
@@ -239,7 +245,7 @@ export type JudgeRelation = "above" | "equal";
  * applies whatever tier is asked, so at these sites one is refused at boot unless its model is
  * graded at the top tier the deployment's catalog offers (buildGatewayConfig).
  */
-export const JUDGEMENT_SITES: readonly KnownLLMSite[] = ["suite-review", "escalation"];
+export const JUDGEMENT_SITES: readonly KnownLLMSite[] = ["suite-review", "liaison-intake", "decomposition", "escalation"];
 
 interface StructuredRequestFields<T> {
   prompt: string;
@@ -287,7 +293,7 @@ export interface StructuredResponse<T> {
   usage: TokenUsage;
   provider: string;
   model: string;
-  /** The catalog grade of the model that answered: what a judging caller holds against the judged tier. */
+  /** The answering model's catalog grade as it was called: with the thinking mode of the request's site. */
   grade: CapabilityLevel;
 }
 

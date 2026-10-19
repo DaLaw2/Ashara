@@ -33,7 +33,7 @@ const MODEL: ModelConfig = {
   id: "spend-cap-model",
   apiModelId: "spend-cap-model",
   provider: "deepseek",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 1,
   outputCostPer1M: 10,
   maxContextTokens: 100_000,

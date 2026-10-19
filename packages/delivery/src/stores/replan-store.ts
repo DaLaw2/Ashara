@@ -3,8 +3,8 @@ import type { createDb } from "@ashara/db";
 import { parseWorkItemId, readEach, type Logger, type ProjectId } from "@ashara/shared";
 import { createBulkPlan } from "../bulk-plan.js";
 import { PlanningService } from "../domain/index.js";
-import type { ReplanStore } from "../replan.js";
-import { decidedByLatestChecks, listProjectsAwaitingReplan, recordReplanFailure, withPlanRevisionTransaction } from "../repositories/replan.js";
+import type { AttemptGrade, ReplanStore } from "../replan.js";
+import { completedAttemptGrades, decidedByLatestChecks, listProjectsAwaitingReplan, recordReplanFailure, withPlanRevisionTransaction } from "../repositories/replan.js";
 import { ProjectHaltRepository } from "../repositories/project-halt.js";
 import { adaptWorkItemRepo, rowToWorkItem } from "../repositories/work-item-adapter.js";
 import { WorkItemRowRepository } from "../repositories/work-item.js";
@@ -21,6 +21,13 @@ class RevisionItemNotPlanned extends Error {
   }
 }
 
+/** A task's grade from the project's completed attempts; unrecorded when none of them names its model. */
+function attemptGradeOf(grades: ReadonlyMap<string, AttemptGrade>, taskId: string): AttemptGrade {
+  const graded = grades.get(taskId);
+  if (graded !== undefined) return graded;
+  return { kind: "unrecorded", why: "no completed attempt of it records the model it ran on" };
+}
+
 /** Delivery's plan revision store over projects, vision_documents, roster_roles, work_items, task_checks and plan_revisions. */
 export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logger): ReplanStore {
   const projects = new ProjectHaltRepository(db);
@@ -34,6 +41,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logge
         (row) => ({ id: row.projectId, projectId: row.projectId }),
         async (row) => {
           const decided = await decidedByLatestChecks(db, row.projectId);
+          const grades = await completedAttemptGrades(db, row.projectId);
           return {
           projectId: row.projectId,
           projectName: row.projectName,
@@ -50,6 +58,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logge
           items: (await workItems.listByProject(row.projectId)).map((item) => ({
             item: rowToWorkItem(item),
             mergeCommit: item.mergeCommit,
+            attemptGrade: attemptGradeOf(grades, item.id),
             environmentStatement: item.environmentStatement,
             // eslint-disable-next-line no-restricted-syntax -- policy default: a task with no stored checks decides no item (decidedByLatestChecks), the reading that counts none of its items as covered
             decided: decided.get(item.id) ?? [],

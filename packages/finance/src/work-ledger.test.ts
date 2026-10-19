@@ -20,7 +20,7 @@ const MODEL: ModelConfig = {
   id: "m",
   apiModelId: "m",
   provider: "stub",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 1,
   outputCostPer1M: 1,
   maxContextTokens: 1000,

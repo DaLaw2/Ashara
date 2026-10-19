@@ -31,6 +31,7 @@ export const modelConfigs = pgTable("model_configs", {
     .references(() => providerConfigs.name),
   apiModelId: text("api_model_id"),
   capability: text().notNull(),
+  capabilityThinkingOff: text("capability_thinking_off").notNull(),
   // No defaults: a forgotten price would read as a free model, a forgotten window as a measured one.
   inputCostPer1m: doublePrecision("input_cost_per_1m").notNull(),
   outputCostPer1m: doublePrecision("output_cost_per_1m").notNull(),

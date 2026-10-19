@@ -8,7 +8,7 @@ import {
   modelCallFailureOf,
   withStructuredLadder,
 } from "@ashara/finance";
-import type { LadderAttemptEvent, SecondOpinion, SecondOpinionStrength } from "@ashara/finance";
+import type { CapabilityLevel, LadderAttemptEvent, SecondOpinion, SecondOpinionStrength } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
@@ -92,10 +92,11 @@ type IntakeQuestion = IntakeResponse["questions"][number];
 /** A second reading's answer: the questions it would put to the client; none confirms the first reading. */
 export const SecondReadingSchema = z.strictObject({ questions: QuestionsSchema });
 
-/** The model a reading's answer came from, as the response named it. */
+/** The model a reading's answer came from, as the response named it, with its catalog grade as it was called. */
 interface ReadingModel {
   readonly provider: string;
   readonly model: string;
+  readonly grade: CapabilityLevel;
 }
 
 /** The first reading's answer and the model that gave it. */
@@ -620,7 +621,7 @@ export class TenderIntake implements LiaisonIntake {
       schema: IntakeResponseSchema,
       maxTokens: 4096,
     });
-    return { response: response.data, model: { provider: response.provider, model: response.model } };
+    return { response: response.data, model: { provider: response.provider, model: response.model, grade: response.grade } };
   }
 
   /**
@@ -631,21 +632,23 @@ export class TenderIntake implements LiaisonIntake {
    * answers, the reading is unconfirmed: work proceeds on it and the client is told, so the bound is
    * the three strengths and the tender is never held. Any other throw (a spend-cap refusal, a
    * misrouted answer) is not the second reading's failure and fails the intake as Ashara's.
+   * The second reading judges the first, so it asks for a judge of work at the first reading's grade
+   * as called: never a model weaker than the one whose reading it judges.
    */
   private async secondReading(tender: OpenTender, first: ReadingModel): Promise<ReadingConfirmation> {
     const provider = this.ladder(tender);
     const passedOver: PassedOver[] = [];
     for (const strength of SECOND_OPINION_STRENGTHS) {
-      const secondOpinion: SecondOpinion = { avoid: first, strength };
+      const secondOpinion: SecondOpinion = { avoid: { provider: first.provider, model: first.model }, strength };
       try {
         const response = await provider.generateStructured({
-          capability: "Strong",
+          judges: first.grade,
           prompt: secondReadingPrompt(tender.body, ANGLE_OF[strength]),
           schema: SecondReadingSchema,
           maxTokens: 4096,
           secondOpinion,
         });
-        const model = { provider: response.provider, model: response.model };
+        const model = { provider: response.provider, model: response.model, grade: response.grade };
         if (strengthBetween(first, model) !== strength) throw new SecondReadingMisrouted(tender.id, strength, first, model);
         const second: SecondReading = { strength, model, questions: response.data.questions };
         return { kind: second.questions.length > 0 ? "questions-raised" : "confirmed", second, passedOver };

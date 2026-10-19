@@ -77,7 +77,7 @@ describe("server startup secrets", () => {
       id: "m",
       apiModelId: "m",
       provider: "deepseek",
-      capabilityLevel: "Strong",
+      capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
       inputCostPer1M: 1,
       outputCostPer1M: 1,
       maxContextTokens: 200_000,

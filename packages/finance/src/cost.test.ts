@@ -7,7 +7,7 @@ function model(overrides: Partial<ModelConfig>): ModelConfig {
     id: "m",
     apiModelId: "m",
     provider: "p",
-    capabilityLevel: "Strong",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
     inputCostPer1M: 2,
     outputCostPer1M: 8,
     maxContextTokens: 100_000,

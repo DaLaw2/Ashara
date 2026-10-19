@@ -22,7 +22,7 @@ const MODEL: ModelConfig = {
   id: "durable-admission-model",
   apiModelId: "durable-admission-model",
   provider: "deepseek",
-  capabilityLevel: "Strong",
+  capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Strong",
   inputCostPer1M: 1,
   outputCostPer1M: 10,
   maxContextTokens: 100_000,

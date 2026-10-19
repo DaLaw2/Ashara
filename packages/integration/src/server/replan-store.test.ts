@@ -56,6 +56,7 @@ function model(id: string, capabilityLevel: ModelConfig["capabilityLevel"]): Mod
     apiModelId: `${id}-api`,
     provider: "deepseek",
     capabilityLevel,
+    thinkingOffCapabilityLevel: capabilityLevel,
     inputCostPer1M: 1,
     outputCostPer1M: 2,
     maxContextTokens: 100_000,
@@ -327,6 +328,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM task_checks WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (SELECT id FROM work_items WHERE project_id IN (${projects}))`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${projects})`);
@@ -629,6 +631,28 @@ describe("a late client change is planned", () => {
     const added = items.find((i) => i.title === "Open hill studio bookings");
     if (added === undefined) throw new Error("the revision planned no task");
     expect(await dependenciesOf(added.id)).not.toContain(sprint0.id);
+  });
+
+  test("the store grades a completed task by the model its last completed attempt ran on, the higher of its two grades; a task with none is unrecorded", async () => {
+    const { projectId, questionId } = await plannedProject();
+    const sprint0 = (await itemsOf(projectId)).find((i) => i.origin === "sprint0");
+    if (sprint0 === undefined) throw new Error("the first plan has no Sprint 0");
+    await startTask(sprint0.id);
+    await completeTask(sprint0.id);
+    await db.execute(sql`
+      INSERT INTO dev_sessions (id, task_id, phase, attempt_prompt_digest, attempt_terminal, attempt_turns, attempt_provider, attempt_model, attempt_cell)
+      VALUES (${randomUUID()}, ${sprint0.id}, 'Completed', ${"a".repeat(64)}, 'finished:done', 3, 'deepseek', 'deepseek-flash', 'base-cell')`);
+    await contradict(projectId, questionId);
+
+    const store = createReplanStore(db, recordingLogger());
+    const project = (await store.projectsAwaitingReplan()).find((p) => p.projectId === projectId);
+    if (project === undefined || !("items" in project)) throw new Error("the project does not await a revision");
+    const gradeOf = (id: string) => project.items.find(({ item }) => item.id === id)?.attemptGrade;
+    // deepseek-flash is Strong reasoning and Light without: the mode the attempt ran in is not recorded.
+    expect(gradeOf(sprint0.id)).toEqual({ kind: "graded", model: "deepseek-flash", grade: "Strong" });
+    const unstarted = project.items.find(({ item }) => item.level === "Task" && item.id !== sprint0.id);
+    if (unstarted === undefined) throw new Error("the first plan has no other task");
+    expect(unstarted.attemptGrade).toMatchObject({ kind: "unrecorded" });
   });
 
   test("one project whose work items do not read is that project's fault alone: every other project is still revised", async () => {

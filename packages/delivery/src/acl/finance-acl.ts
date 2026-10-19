@@ -16,7 +16,7 @@ export { SPEND_CAP_ERROR_CLASS, WORK_BUDGET_ERROR_CLASS } from "@ashara/finance"
 export type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 
 // The model language Delivery's planning calls speak, published by Finance in front of Model Access.
-export { CapabilityLevelSchema, withStructuredLadder } from "@ashara/finance";
+export { CapabilityLevelSchema, higherCapability, withStructuredLadder } from "@ashara/finance";
 export type {
   CapabilityLevel,
   LadderAttemptEvent,

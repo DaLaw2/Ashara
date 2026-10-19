@@ -21,6 +21,7 @@ export {
   failedApproaches,
   intakeReadings,
   knowledgeEntries,
+  modelConfigs,
   planRepairs,
   planRevisions,
   projectBlocks,
