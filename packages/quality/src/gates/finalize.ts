@@ -2,7 +2,7 @@ import { CheckoutHolderOverran, ensureTargetGitInit, mergeInProgress, runHostGit
 import type { CheckoutLease } from "@ashara/execution-infra";
 import type { ErrorLayer, Logger } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
-import { environmentErrorOf } from "../fault-class.js";
+import { environmentErrorOf, VerificationInfrastructureFault } from "../fault-class.js";
 import type { EnvironmentError } from "../fault-class.js";
 import type { DispatchRef } from "../dispatch-result.js";
 import {
@@ -17,24 +17,6 @@ import {
 } from "../merge.js";
 import { MERGE_CONFLICTED, TREE_REGRESSED, WORK_FAILED } from "../task-verdict.js";
 import type { FailureVerdict } from "../task-verdict.js";
-
-/**
- * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
- * into the checkout), after the merge, in a red run on main or in an implementer's run_checks; not
- * the substrate and not a check:
- * no verdict exists, so the failure belongs to no party the task could answer for.
- */
-export class VerificationInfrastructureFault extends Error {
-  constructor(
-    readonly taskId: string,
-    /** What Z0 was doing when it failed, e.g. "stored-check run". */
-    readonly step: string,
-    options: { readonly cause: unknown },
-  ) {
-    super(`verification of task ${taskId} could not run: ${step} failed: ${describeErrorChain(options.cause)}`, { cause: options.cause });
-    this.name = "VerificationInfrastructureFault";
-  }
-}
 
 /** The operation an infrastructure fault of the post-merge check is recorded under. */
 const POST_MERGE_CHECK_RUN = "postMergeCheckRun";

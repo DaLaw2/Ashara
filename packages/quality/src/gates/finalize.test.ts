@@ -8,8 +8,9 @@ import { CheckoutHolderOverran, ensureTargetGitInit, mergeInProgress, targetRepo
 import { createWorkItemId, observeContendedWaits, recordingLogger } from "@ashara/shared";
 import type { Logger } from "@ashara/shared";
 import type { DispatchRef } from "../dispatch-result.js";
+import { VerificationInfrastructureFault } from "../fault-class.js";
 import { recoverOrphanedMerge, resetCheckoutToHead, taskBranchName, tentativeMerge } from "../merge.js";
-import { VerificationInfrastructureFault, finalizeSuccess } from "./finalize.js";
+import { finalizeSuccess } from "./finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./finalize.js";
 
 // ---------------------------------------------------------------------------

@@ -67,9 +67,8 @@ import {
   formatEnvironmentProbe,
   environmentProbePassed,
 } from "./environment-verdict.js";
-import { environmentErrorOf } from "./fault-class.js";
+import { environmentErrorOf, VerificationInfrastructureFault } from "./fault-class.js";
 import type { EnvironmentError } from "./fault-class.js";
-import { VerificationInfrastructureFault } from "./gates/finalize.js";
 import type { PostMergeVerdict } from "./gates/finalize.js";
 import { checkBranchOwnership } from "./gates/ownership.js";
 import { deleteSettledTaskBranch, discardTaskBranch, taskBranchName } from "./merge.js";

@@ -30,11 +30,11 @@ export type {
 export { environmentCheckPort } from "./environment-check.js";
 export type { EnvironmentStatementStore } from "./environment-check.js";
 export { parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment-definition.js";
-export { environmentErrorOf, unavailableOf } from "./fault-class.js";
+export { environmentErrorOf, unavailableOf, VerificationInfrastructureFault } from "./fault-class.js";
 /** @testseam the integration fault-classifiers.test.ts feeds it an unknown error; dispatch-result.ts is its production caller */
 export { thrownFaultOf } from "./fault-class.js";
 export type { FaultClass } from "./fault-class.js";
-export { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
+export { finalizeSuccess } from "./gates/finalize.js";
 export type { FinalizeDeps } from "./gates/finalize.js";
 export { branchChangedPaths } from "./gates/ownership.js";
 export { probeEnvironmentWrite } from "./gates/environment-write-probe.js";

@@ -11,6 +11,10 @@
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
+ *
+ * MODULES does the same inside each package that declares internal modules: one type-only relative
+ * import per ordered pair of its modules, a file that belongs to no module, a module glob that
+ * matches nothing, and, in a scratch copy of the rules, a module-allow cycle the parser must refuse.
  */
 
 import { spawnSync } from "node:child_process";
@@ -84,6 +88,155 @@ const MAP: Readonly<Record<string, PackageMap>> = {
     importers: [],
   },
 };
+
+interface ModuleSpec {
+  /** The other modules of the package this one may import. */
+  readonly allow: readonly string[];
+  /** An existing file of the module, package-relative, at whose head its probes are planted. */
+  readonly host: string;
+  /** The file of the module a probe into it imports: one of its module-entry files when it states them. */
+  readonly target: string;
+}
+
+const ENTRY = "entry";
+
+/** Per package, its internal modules; `entry` may import every module and none may import it. */
+const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = {
+  quality: {
+    verification: { allow: ["verdict", "checks", "environment", "suite-review"], host: "src/verification.ts", target: "src/gates/finalize.ts" },
+    verdict: { allow: ["checks", "environment", "acl"], host: "src/dispatch-result.ts", target: "src/fault-class.ts" },
+    checks: { allow: ["acl"], host: "src/task-checks.ts", target: "src/public-interface.ts" },
+    "suite-review": { allow: ["checks", "acl"], host: "src/suite-review.ts", target: "src/repositories/suite-review.ts" },
+    environment: { allow: [], host: "src/environment-check.ts", target: "src/environment-definition.ts" },
+    acceptance: { allow: ["verification"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
+    acl: { allow: [], host: "src/acl/engagement-acl.ts", target: "src/acl/delivery-acl.ts" },
+    [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
+  },
+  engagement: {
+    vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
+    intake: { allow: ["vision", "inbound"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
+    inbound: { allow: ["vision"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
+    reports: { allow: ["vision"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
+    [ENTRY]: { allow: [], host: "src/model-schemas.ts", target: "src/index.ts" },
+  },
+};
+
+interface ModuleProbeLine {
+  readonly name: string;
+  readonly line: string;
+  /** The checker's reason for the line; null when it must draw no report. */
+  readonly reason: string | null;
+}
+
+/** Lines planted after the pair probes in a module's host. */
+const MODULE_EXTRAS: Readonly<Record<string, Readonly<Record<string, readonly ModuleProbeLine[]>>>> = {
+  quality: {
+    // The class lives in the verdict module so that the verdict module needs no edge into verification.
+    verdict: [
+      {
+        name: "quality: the verdict module takes VerificationInfrastructureFault from no verification file",
+        line: 'import { VerificationInfrastructureFault } from "./gates/finalize.js";',
+        reason: "module verdict may not import module verification (module-allow.verdict: [checks, environment, acl])",
+      },
+    ],
+  },
+  engagement: {
+    intake: [
+      {
+        name: "engagement: intake reads inbound only through its module-entry",
+        line: 'import type { AnswerStore } from "./answers.js";',
+        reason: "module inbound admits imports only of module-entry.inbound: [src/repositories/client-message.ts]",
+      },
+    ],
+  },
+};
+
+/** The other probes' own files are in no module, so the probed run's rules give them one. */
+const PROBE_MODULE = 'module.probe = ["src/__boundary_probe__/**"]';
+const UNASSIGNED_FILE = "src/__module_probe__.ts";
+const EMPTY_MODULE = { name: "probe-empty", glob: "src/__no_such_module_file__.ts" };
+const CYCLE_RULE = { pkg: "engagement", line: 'module-allow.vision = ["reports"]', reason: "a cycle between modules: vision -> reports -> vision" };
+
+function relativeSpecifier(fromFile: string, toFile: string): string {
+  const rel = path.posix.relative(path.posix.dirname(fromFile), toFile).replace(/\.ts$/, ".js");
+  return rel.startsWith(".") ? rel : `./${rel}`;
+}
+
+function moduleProbes(pkg: string): PlannedProbe[] {
+  const modules = MODULES[pkg];
+  const probes: PlannedProbe[] = [];
+  for (const [from, spec] of Object.entries(modules)) {
+    const file = `packages/${pkg}/${spec.host}`;
+    const planned: ModuleProbeLine[] = [];
+    for (const [to, target] of Object.entries(modules)) {
+      if (to === from) continue;
+      const reason =
+        from === ENTRY ? null
+        : to === ENTRY ? `module ${from} may not import the entry module`
+        : spec.allow.includes(to) ? null
+        : `module ${from} may not import module ${to} (module-allow.${from}: [${spec.allow.join(", ")}])`;
+      planned.push({
+        name: `${pkg}: module ${from} -> ${to} is ${reason === null ? "permitted" : "refused"}`,
+        line: `import type * as probe from "${relativeSpecifier(spec.host, target.target)}";`,
+        reason,
+      });
+    }
+    planned.push(...(MODULE_EXTRAS[pkg]?.[from] ?? []));
+    const block = planned.map((probe) => `${probe.line}\n`).join("");
+    planned.forEach((probe, i) => {
+      const specifier = /"([^"]+)";$/.exec(probe.line)?.[1];
+      if (specifier === undefined) throw new ProbeTreeError("module probe", `no specifier in ${probe.line}`);
+      probes.push({
+        name: probe.name,
+        file,
+        // The whole block goes in with the first line's probe; the others add nothing to the file.
+        content: i === 0 ? block : "",
+        line: i + 1,
+        violation: probe.reason === null ? null : `${file}:${i + 1}  ${pkg} -> "${specifier}"  (${probe.reason})`,
+        prepend: true,
+      });
+    });
+  }
+  const unassigned = `packages/${pkg}/${UNASSIGNED_FILE}`;
+  probes.push({
+    name: `${pkg}: a file in no module is refused`,
+    file: unassigned,
+    content: "export {};\n",
+    violation: `${unassigned}:0  ${pkg} -> "module"  (belongs to no module of [${pkg}]; add it to one module's glob)`,
+  });
+  probes.push({
+    name: `${pkg}: a module glob that matches no file is refused`,
+    file: `packages/${pkg}/${EMPTY_MODULE.glob}`,
+    content: null,
+    violation: `boundary-rules.toml:0  ${pkg} -> "module.${EMPTY_MODULE.name}"  ("${EMPTY_MODULE.glob}" matches no file; a module rule that holds nothing passes everything)`,
+  });
+  return probes;
+}
+
+/** The rules with `lines` added at the head of each named package's section. */
+function withSectionLines(toml: string, lines: Readonly<Record<string, readonly string[]>>): string {
+  let out = toml;
+  for (const [pkg, added] of Object.entries(lines)) {
+    const header = `\n[${pkg}]\n`;
+    if (!out.includes(header)) throw new ProbeTreeError("rules copy", `no [${pkg}] section`);
+    out = out.replace(header, `${header}${added.map((line) => `${line}\n`).join("")}`);
+  }
+  return out;
+}
+
+/** Each section of the rules that declares modules, with the module names it declares. */
+function declaredModules(toml: string): Record<string, string[]> {
+  const found: Record<string, string[]> = {};
+  let section = "";
+  for (const raw of toml.split("\n")) {
+    const line = raw.trim();
+    const header = /^\[([a-z][a-z0-9-]*)\]$/.exec(line);
+    if (header !== null) section = header[1];
+    const declared = /^module\.([a-z][a-z0-9-]*)\s*=/.exec(line);
+    if (declared !== null) found[section] = [...(found[section] ?? []), declared[1]];
+  }
+  return found;
+}
 
 const NAMED_ONLY_PROBE = {
   file: "packages/integration/src/simulator/__boundary_probe__.ts",
@@ -163,11 +316,14 @@ class ProbeTreeError extends Error {
 interface PlannedProbe {
   readonly name: string;
   readonly file: string;
-  readonly content: string;
+  /** null: a probe of the rules alone, which plants no file. */
+  readonly content: string | null;
   /** The checker's report line for it; null for a permitted import, which must report nothing. */
   readonly violation: string | null;
   /** Planted at the head of an existing file, which the clean run passed, so it is reported at :1. */
   readonly prepend?: boolean;
+  /** The line it is planted on, when one file holds several probes; a permitted one draws no report there. */
+  readonly line?: number;
 }
 
 function reportLine(file: string, fromPkg: string, toPkg: string, reason: string): string {
@@ -221,6 +377,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
   probes.push(...STAND_IN_PROBES);
   probes.push(...BOUNDS_TABLE_PROBES);
+  for (const pkg of Object.keys(MODULES)) probes.push(...moduleProbes(pkg));
   return probes;
 }
 
@@ -246,6 +403,7 @@ function copyTree(packages: readonly string[], into: string): void {
 }
 
 function plant(root: string, probe: PlannedProbe): void {
+  if (probe.content === null) return;
   const target = path.join(root, probe.file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   if (!fs.existsSync(target)) {
@@ -279,14 +437,21 @@ describe("boundary-rules.toml against the context map", () => {
   let scratch = "";
   let clean: { status: number | null; output: string } = { status: null, output: "" };
   let probed: { status: number | null; output: string } = { status: null, output: "" };
+  let cyclic: { status: number | null; output: string } = { status: null, output: "" };
   let reported = new Set<string>();
 
   beforeAll(() => {
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-boundary-probes-"));
     copyTree(packages, scratch);
     clean = runChecker(scratch);
+    const rulesFile = path.join(scratch, "boundary-rules.toml");
+    const rules = fs.readFileSync(rulesFile, "utf-8");
+    const probeModules = Object.fromEntries(Object.keys(MODULES).map((pkg) => [pkg, [PROBE_MODULE, `module.${EMPTY_MODULE.name} = ["${EMPTY_MODULE.glob}"]`]]));
+    fs.writeFileSync(rulesFile, withSectionLines(rules, probeModules));
     for (const probe of probes) plant(scratch, probe);
     probed = runChecker(scratch);
+    fs.writeFileSync(rulesFile, withSectionLines(rules, { [CYCLE_RULE.pkg]: [CYCLE_RULE.line] }));
+    cyclic = runChecker(scratch);
     reported = new Set(probed.output.split("\n").flatMap((line) => {
       const match = VIOLATION_LINE.exec(line);
       return match === null ? [] : [match[1]];
@@ -301,6 +466,18 @@ describe("boundary-rules.toml against the context map", () => {
     expect(Object.keys(MAP).sort()).toEqual(packages);
   });
 
+  test("MODULES names every package that declares modules, and each module it declares", () => {
+    const declared = declaredModules(fs.readFileSync(path.join(REPO, "boundary-rules.toml"), "utf-8"));
+    const sorted = (map: Record<string, readonly string[]>): Record<string, string[]> =>
+      Object.fromEntries(Object.entries(map).map(([pkg, names]) => [pkg, [...names].sort()]));
+    expect(sorted(declared)).toEqual(sorted(Object.fromEntries(Object.entries(MODULES).map(([pkg, modules]) => [pkg, Object.keys(modules)]))));
+  });
+
+  test("a module-allow cycle fails the rules' parse", () => {
+    expect(cyclic.status).toBe(1);
+    expect(cyclic.output).toContain(CYCLE_RULE.reason);
+  });
+
   test("the unprobed tree passes", () => {
     expect(clean.output).toContain("0 violations");
     expect(clean.status).toBe(0);
@@ -312,7 +489,8 @@ describe("boundary-rules.toml against the context map", () => {
 
   test.each(probes)("$name", (probe) => {
     if (probe.violation === null) {
-      expect([...reported].filter((line) => line.startsWith(`${probe.file}:`))).toEqual([]);
+      const at = probe.line === undefined ? `${probe.file}:` : `${probe.file}:${probe.line}  `;
+      expect([...reported].filter((line) => line.startsWith(at))).toEqual([]);
     } else {
       expect(reported).toContain(probe.violation);
     }

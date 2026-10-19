@@ -23,6 +23,19 @@
  *   bounds-tables    = [glob, ...]  named-only files that hold an oracle's own bounds: they import
  *                                   nothing at all, no other package's symbol and no other file,
  *                                   so no bound in them can be a production constant
+ *   module.<name>    = [glob, ...]  the package-relative files of one internal module of the package
+ *   module-allow.<name> = [...]     the other modules of the package <name> may import; none when absent
+ *   module-entry.<name> = [glob, ...] the only files of <name> another module may import
+ *
+ * A package that declares `module.*` is checked inside, against its modules. Every .ts file under
+ * its src/ belongs to exactly one module: a test file to its subject's (`x.test.ts` and
+ * `x.<tag>.test.ts` to `x.ts`), any other file to the one module whose glob it matches. A file that
+ * matches none, or two, is a violation, and so is a module glob that matches no file. Every relative
+ * specifier between two of its modules is checked, `import type` included (a type is language): the
+ * importer's `module-allow` must list the target, and a target with `module-entry` admits only those
+ * files. The module named `entry` (the barrel) may import every module, and no module may import it.
+ * A `module-allow` graph with a cycle is a parse error, so a cycle between modules cannot return.
+ * Blind spots: a computed dynamic import, and what is placed inside one file, are not seen.
  *
  * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
  * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
@@ -109,7 +122,16 @@ interface PackageRule {
   readonly standInNames: ReadonlyMap<string, readonly string[]>;
   /** Named-only file globs holding an oracle's own bounds, which import nothing; empty when the section states none. */
   readonly boundsTables: readonly string[];
+  /** module -> its package-relative file globs; empty when the package declares no internal modules. */
+  readonly modules: ReadonlyMap<string, readonly string[]>;
+  /** module -> the other modules it may import; a module absent here imports none. */
+  readonly moduleAllow: ReadonlyMap<string, readonly string[]>;
+  /** module -> the only files of it another module may import; a module absent here admits all its files. */
+  readonly moduleEntry: ReadonlyMap<string, readonly string[]>;
 }
+
+/** The module that may import every other module and that none may import: the package's barrel. */
+const ENTRY_MODULE = "entry";
 
 type BoundaryRules = ReadonlyMap<string, PackageRule>;
 
@@ -131,6 +153,9 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       standIns: string[];
       standInNames: Map<string, string[]>;
       boundsTables: string[];
+      modules: Map<string, string[]>;
+      moduleAllow: Map<string, string[]>;
+      moduleEntry: Map<string, string[]>;
     }
   >();
   let currentSection: string | null = null;
@@ -150,7 +175,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [] });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleEntry: new Map() });
       }
       continue;
     }
@@ -238,6 +263,19 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
+    const moduleMatch = /^(module|module-allow|module-entry)\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (moduleMatch) {
+      const [, key, name, inner] = moduleMatch;
+      const list = parseList(inner);
+      const target = key === "module" ? rule.modules : key === "module-allow" ? rule.moduleAllow : rule.moduleEntry;
+      if (list.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `${key} list is empty${key === "module-allow" ? " (omit it: a module with none imports no other module)" : ""}`);
+      }
+      if (target.has(name)) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `${key}.${name} is stated twice`);
+      target.set(name, list);
+      continue;
+    }
+
     // Fail closed: a typo in a rule key must not silently disable the gate.
     throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
   }
@@ -287,6 +325,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
       }
     }
+    checkModuleRules(rulesPath, pkg, rule.modules, rule.moduleAllow, rule.moduleEntry);
     result.set(pkg, {
       allow: rule.allow,
       restrict: rule.restrict,
@@ -296,10 +335,50 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       standIns: rule.standIns,
       standInNames: rule.standInNames,
       boundsTables: rule.boundsTables,
+      modules: rule.modules,
+      moduleAllow: rule.moduleAllow,
+      moduleEntry: rule.moduleEntry,
     });
   }
 
   return result;
+}
+
+/** A module rule naming no declared module, naming the entry where it cannot, or a module-allow cycle. */
+function checkModuleRules(
+  rulesPath: string,
+  pkg: string,
+  modules: ReadonlyMap<string, readonly string[]>,
+  moduleAllow: ReadonlyMap<string, readonly string[]>,
+  moduleEntry: ReadonlyMap<string, readonly string[]>,
+): void {
+  const refuse = (key: string, reason: string): never => {
+    throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] ${key}`, reason);
+  };
+  for (const [name, targets] of moduleAllow) {
+    if (!modules.has(name)) refuse(`module-allow.${name}`, `"${name}" is no module of the section`);
+    if (name === ENTRY_MODULE) refuse(`module-allow.${name}`, `the ${ENTRY_MODULE} module may import every module; it takes no module-allow`);
+    for (const target of targets) {
+      if (!modules.has(target)) refuse(`module-allow.${name}`, `lists "${target}", which is no module of the section`);
+      if (target === ENTRY_MODULE) refuse(`module-allow.${name}`, `lists the ${ENTRY_MODULE} module, which no module may import`);
+      if (target === name) refuse(`module-allow.${name}`, "lists the module itself");
+    }
+  }
+  for (const name of moduleEntry.keys()) {
+    if (!modules.has(name)) refuse(`module-entry.${name}`, `"${name}" is no module of the section`);
+    if (name === ENTRY_MODULE) refuse(`module-entry.${name}`, `no module may import the ${ENTRY_MODULE} module, so it has no entry files`);
+  }
+  // Depth-first search over module-allow: a back edge is a cycle, which fails closed here so it cannot return.
+  const state = new Map<string, "open" | "done">();
+  const visit = (name: string, trail: readonly string[]): void => {
+    if (state.get(name) === "done") return;
+    if (state.get(name) === "open") refuse("module-allow", `a cycle between modules: ${[...trail.slice(trail.indexOf(name)), name].join(" -> ")}`);
+    state.set(name, "open");
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a module with no module-allow imports no other module (header)
+    for (const target of moduleAllow.get(name) ?? []) visit(target, [...trail, name]);
+    state.set(name, "done");
+  };
+  for (const name of moduleAllow.keys()) visit(name, []);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +644,124 @@ function checkStandIns(scope: StandInScope): Map<string, Set<string>> {
     }
   }
   return used;
+}
+
+// ---------------------------------------------------------------------------
+// Internal modules
+// ---------------------------------------------------------------------------
+
+interface ModuleScope {
+  readonly rule: PackageRule;
+  readonly pkgName: string;
+  readonly pkgRoot: string;
+  readonly root: string;
+  readonly rulesRelative: string;
+  /** Every scanned file of the package, by absolute path. */
+  readonly contents: ReadonlyMap<string, string>;
+  readonly relativeTo: (filePath: string) => string;
+}
+
+/** `x.test.ts` and `x.<tag>.test.ts` name `x.ts`, package-relative; the candidates in that order. */
+function testSubjects(pkgRelative: string): string[] {
+  const stem = pkgRelative.slice(0, -".test.ts".length);
+  const untagged = stem.replace(/\.[^./]+$/, "");
+  return untagged === stem ? [`${stem}.ts`] : [`${stem}.ts`, `${untagged}.ts`];
+}
+
+/**
+ * The package's internal module rules (header): every src/ file in exactly one module, every module
+ * glob matching a file, and every relative edge between two modules one the rules allow.
+ */
+function moduleViolations(scope: ModuleScope): Violation[] {
+  const { rule, pkgName, pkgRoot, root, rulesRelative, contents, relativeTo } = scope;
+  const violations: Violation[] = [];
+  const srcFiles = [...contents.keys()].filter((filePath) => relativeTo(filePath).startsWith("src/"));
+  const globsMatched = new Set<string>();
+  const globMatches = (pkgRelative: string): string[] =>
+    [...rule.modules].flatMap(([name, globs]) => {
+      const hits = globs.filter((glob) => matchesAnyGlob(pkgRelative, [glob]));
+      for (const glob of hits) globsMatched.add(`${name}\0${glob}`);
+      return hits.length > 0 ? [name] : [];
+    });
+
+  const moduleOf = new Map<string, string>();
+  const report = (filePath: string, line: number, specifier: string, reason: string): void => {
+    violations.push({ file: path.relative(root, filePath), line, fromPkg: pkgName, specifier, reason });
+  };
+  const assign = (filePath: string): void => {
+    const pkgRelative = relativeTo(filePath);
+    const matched = globMatches(pkgRelative);
+    if (matched.length === 1) {
+      moduleOf.set(filePath, matched[0]);
+    } else if (matched.length === 0) {
+      report(filePath, 0, "module", `belongs to no module of [${pkgName}]; add it to one module's glob`);
+    } else {
+      report(filePath, 0, "module", `belongs to modules ${matched.join(", ")}; a file belongs to exactly one`);
+    }
+  };
+  const tests = srcFiles.filter((filePath) => filePath.endsWith(".test.ts"));
+  for (const filePath of srcFiles) if (!filePath.endsWith(".test.ts")) assign(filePath);
+  for (const filePath of tests) {
+    const subject = testSubjects(relativeTo(filePath)).map((candidate) => path.join(pkgRoot, candidate)).find((candidate) => contents.has(candidate));
+    if (subject === undefined) {
+      assign(filePath);
+      continue;
+    }
+    const subjectModule = moduleOf.get(subject);
+    // An unassigned subject is already reported; its test then has no module to be checked against.
+    if (subjectModule !== undefined) moduleOf.set(filePath, subjectModule);
+  }
+
+  for (const [name, globs] of rule.modules) {
+    for (const glob of globs) {
+      if (!globsMatched.has(`${name}\0${glob}`)) {
+        violations.push({ file: rulesRelative, line: 0, fromPkg: pkgName, specifier: `module.${name}`, reason: `"${glob}" matches no file; a module rule that holds nothing passes everything` });
+      }
+    }
+  }
+  for (const [name, globs] of rule.moduleEntry) {
+    const members = [...moduleOf].filter(([, owner]) => owner === name).map(([filePath]) => relativeTo(filePath));
+    for (const glob of globs) {
+      if (!members.some((member) => matchesAnyGlob(member, [glob]))) {
+        violations.push({ file: rulesRelative, line: 0, fromPkg: pkgName, specifier: `module-entry.${name}`, reason: `"${glob}" matches no file of module ${name}` });
+      }
+    }
+  }
+
+  const scanned = new Set(contents.keys());
+  for (const [filePath, content] of contents) {
+    const from = moduleOf.get(filePath);
+    // A file in no module is reported above, and test/ is outside the module rule.
+    if (from === undefined) continue;
+    for (const match of content.matchAll(RELATIVE_LITERAL_RE)) {
+      const specifier = match[2];
+      const line = lineAt(content, match.index + match[0].length - match[1].length);
+      const target = path.relative(pkgRoot, path.resolve(path.dirname(filePath), specifier)).split(path.sep).join("/");
+      // A path out of the package is a cross-package import, checked against the context map.
+      if (target.startsWith("../") || path.isAbsolute(target)) continue;
+      const resolved = resolveRelative(filePath, specifier, scanned);
+      // No scanned .ts file: the match is text in a string (a fixture's source), since an import that
+      // resolves to no module fails the typecheck gate.
+      if (resolved === null) continue;
+      const to = moduleOf.get(resolved);
+      if (to === undefined || to === from || from === ENTRY_MODULE) continue;
+      if (to === ENTRY_MODULE) {
+        report(filePath, line, specifier, `module ${from} may not import the ${ENTRY_MODULE} module`);
+        continue;
+      }
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a module with no module-allow imports no other module (header)
+      const allowed = rule.moduleAllow.get(from) ?? [];
+      if (!allowed.includes(to)) {
+        report(filePath, line, specifier, `module ${from} may not import module ${to} (module-allow.${from}: [${allowed.join(", ")}])`);
+        continue;
+      }
+      const entryFiles = rule.moduleEntry.get(to);
+      if (entryFiles !== undefined && !matchesAnyGlob(relativeTo(resolved), entryFiles)) {
+        report(filePath, line, specifier, `module ${to} admits imports only of module-entry.${to}: [${entryFiles.join(", ")}]`);
+      }
+    }
+  }
+  return violations;
 }
 
 // ---------------------------------------------------------------------------
@@ -841,6 +1038,7 @@ function main(): void {
         });
       }
     }
+    if (rule.modules.size > 0) violations.push(...moduleViolations({ rule, pkgName, pkgRoot, root, rulesRelative, contents, relativeTo }));
     const standInNamesUsed = checkStandIns({ rule, pkgName, pkgRoot, root, contents, standInFiles, relativeTo, violations });
     for (const glob of rule.standIns) {
       if (!standInFiles.some((filePath) => matchesAnyGlob(relativeTo(filePath), [glob]))) {

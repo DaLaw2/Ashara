@@ -54,7 +54,7 @@ export function unavailableOf(e: EnvironmentError, cell: string): string {
 
 /**
  * Ashara's own Z0 machinery failed while it dispatched a task (a store, git on the host, a bug in
- * it), outside the verification of the work (gates/finalize.ts VerificationInfrastructureFault):
+ * it), outside the verification of the work (VerificationInfrastructureFault):
  * nothing is known of the agent's work, so the task is blocked under class `ashara`.
  */
 export class DispatchFault extends Error {
@@ -66,6 +66,24 @@ export class DispatchFault extends Error {
   ) {
     super(`Ashara's own machinery failed dispatching task ${taskId}: ${step} failed: ${describeErrorChain(options.cause)}`, { cause: options.cause });
     this.name = "DispatchFault";
+  }
+}
+
+/**
+ * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
+ * into the checkout), after the merge, in a red run on main or in an implementer's run_checks; not
+ * the substrate and not a check:
+ * no verdict exists, so the failure belongs to no party the task could answer for.
+ */
+export class VerificationInfrastructureFault extends Error {
+  constructor(
+    readonly taskId: string,
+    /** What Z0 was doing when it failed, e.g. "stored-check run". */
+    readonly step: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(`verification of task ${taskId} could not run: ${step} failed: ${describeErrorChain(options.cause)}`, { cause: options.cause });
+    this.name = "VerificationInfrastructureFault";
   }
 }
 

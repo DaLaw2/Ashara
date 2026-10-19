@@ -13,6 +13,13 @@
 # importers      = [...]        the only packages that may import this one, checked even against a
 #                               wildcard `allow`; `[]` means none may
 # named-only, names.<pkg>       see [integration]
+# module.<name>  = [glob, ...]  the files of one internal module of the package; once a section
+#                               declares any, every .ts file under its src/ belongs to exactly one
+#                               (a test file to its subject's), and a glob matching no file fails
+# module-allow.<name> = [...]   the other modules <name> may import, type-only imports included;
+#                               a module without one imports none, and a cycle is a parse error
+# module-entry.<name> = [glob, ...] the only files of <name> another module may import
+#                               The module `entry` (the barrel) may import every module; none may import it.
 #
 # [stack-literals] is no package's section: it holds the stack-literal denylist (see its comment).
 
@@ -75,6 +82,18 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # language, only in the files listed.
 allow = ["shared", "db", "finance", "delivery"]
 restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/stack-choice.ts"]
+# Its modules by business purpose: the vision (the contract, its published language), the intake that
+# reads a tender into the first vision, the client's inbound messages after it, and the reports back.
+# Every module reads the vision; intake reads only the tender message inbound recorded.
+module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories/vision.ts"]
+module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
+module.inbound = ["src/answers.ts", "src/client-*.ts", "src/project-lifecycle.ts", "src/repositories/client-*.ts"]
+module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts"]
+module.entry   = ["src/index.ts", "src/model-schemas.ts"]
+module-allow.intake  = ["vision", "inbound"]
+module-allow.inbound = ["vision"]
+module-allow.reports = ["vision"]
+module-entry.inbound = ["src/repositories/client-message.ts"]
 
 [organization]
 # Organization: roster, role and the capability-class vocabulary, upstream of Delivery.
@@ -97,6 +116,23 @@ restrict.workplace = ["src/acl/*.ts"]
 allow = ["shared", "db", "finance", "execution-infra", "workplace", "delivery", "engagement"]
 restrict.delivery = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
+# Its modules by business purpose: the merge gate and its verification, the verdict Delivery routes a
+# dispatch on, a task's stored checks, the suite review, the environment definition and its gate, and
+# the acceptance sweep's records (the sweep itself still runs inside src/verification.ts).
+module.verification   = ["src/verification.ts", "src/merge.ts", "src/gates/*.ts", "src/settled-branches.ts", "src/host-git.test.ts", "src/merge-queue.test.ts", "src/workspace-*.test.ts"]
+module.verdict        = ["src/dispatch-result.ts", "src/fault-class.ts", "src/task-verdict.ts"]
+module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
+module.suite-review   = ["src/suite-review.ts", "src/repositories/suite-review.ts"]
+module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts", "src/environment-definition.ts"]
+module.acceptance     = ["src/repositories/acceptance.ts"]
+module.acl            = ["src/acl/*.ts"]
+module.entry          = ["src/index.ts"]
+module-allow.verification = ["verdict", "checks", "environment", "suite-review"]
+module-allow.verdict      = ["checks", "environment", "acl"]
+module-allow.suite-review = ["checks", "acl"]
+module-allow.checks       = ["acl"]
+module-allow.acceptance   = ["verification"]
+module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/*.ts"]
 
 [delivery]
 # Delivery: the board, decomposition, routing and the contractor loop (its process manager).
