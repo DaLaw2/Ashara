@@ -34,7 +34,7 @@ const idSchema = z.string().regex(/^[A-Za-z0-9._-]+$/, "an id is letters, digits
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/, "a digest is sha256: and 64 lowercase hex digits");
 const commitSchema = z.string().regex(/^[0-9a-f]{40}$/, "a commit is a full 40-digit lowercase hex sha");
 const createdAtSchema = z.iso.datetime({ offset: true });
-const armSchema = z.enum(["ashara", "baseline", "qa3"]);
+export const armSchema = z.enum(["ashara", "baseline", "qa3"]);
 export type Arm = z.infer<typeof armSchema>;
 
 const preregSchema = z.strictObject({
