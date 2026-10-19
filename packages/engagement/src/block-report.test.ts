@@ -16,6 +16,7 @@ function reportsFor(due: readonly Due[]) {
       posted.push({ key: `${episodeId}:${on}`, body });
       return "posted";
     },
+    riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
   };
   return { reports: new BlockReports(store, memoryStepContainment(() => true)), posted };
 }

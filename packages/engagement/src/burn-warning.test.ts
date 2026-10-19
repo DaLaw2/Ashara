@@ -21,6 +21,7 @@ function storeOf(initial: Omit<ProjectBurn, "reported" | "projectId">) {
       posted.push(warning);
       return "posted";
     },
+    riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
   };
   return { store, posted, set: (next: Partial<typeof initial>) => (burn = { ...burn, ...next }) };
 }
@@ -51,7 +52,8 @@ describe("the work ledger's early warning", () => {
         "requests of its budget are set aside for checking and accepting the finished work, and only that checking may use them. 1 of the 4 " +
         "building tasks of the current plan are finished.\n\n" +
         "Ashara goes on with the plan as it stands. If the model requests this project's work may use are used up before it is finished, " +
-        "work on it pauses until the operator grants more, and you are told when it does.",
+        "work on it pauses until the operator grants more, and you are told when it does.\n\n" +
+        "No guarantee is at risk on the records.",
     );
   });
 

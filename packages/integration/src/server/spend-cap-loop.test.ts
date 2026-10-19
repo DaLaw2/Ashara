@@ -306,6 +306,7 @@ describe("the deployment cap halts two projects", () => {
         }
         return store.postProjectReport(episodeId, on, body);
       },
+      riskRecords: (projectId) => store.riskRecords(projectId),
     };
     const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
     const spend = { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null };

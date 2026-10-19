@@ -1,5 +1,5 @@
 import type { createDb } from "@ashara/db";
-import { listDueBlockReports, postProjectBlockReport } from "@ashara/engagement";
+import { listDueBlockReports, postProjectBlockReport, readRiskRecords } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { blockingReview } from "@ashara/quality";
 
@@ -10,5 +10,6 @@ export function createBlockReportStore(db: Db): BlockReportStore {
   return {
     dueReports: () => listDueBlockReports(db, blockingReview),
     postProjectReport: (episodeId, on, body) => postProjectBlockReport(db, episodeId, on, body),
+    riskRecords: (projectId) => readRiskRecords(db, projectId),
   };
 }

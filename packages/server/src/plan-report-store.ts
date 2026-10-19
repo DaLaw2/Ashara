@@ -6,6 +6,7 @@ import {
   postPlanReport,
   postPlanRevisionReport,
 } from "@ashara/delivery";
+import { readRiskRecords } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
 
 /**
@@ -20,5 +21,6 @@ export function createPlanReportStore(db: ReturnType<typeof createDb> | DbTransa
     dueRevisionReports: () => listDuePlanRevisionReports(db),
     postRevisionReport: (revisionId, body) => postPlanRevisionReport(db, revisionId, body),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
+    riskRecords: (projectId) => readRiskRecords(db, projectId),
   };
 }

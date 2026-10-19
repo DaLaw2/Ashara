@@ -3,6 +3,8 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
+import { registerOf, registerParagraph } from "./early-warning.js";
+import type { RiskRecordReader } from "./early-warning.js";
 
 // The Liaison's report on a project's first plan: Delivery records the planning outcome on the project, and the
 // Liaison, the only writer to the client, tells the client about it. Reports are
@@ -72,8 +74,8 @@ interface DuePlanRevisionReport {
 
 type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unreadable" }>;
 
-/** Engagement's persistence port for planning reports. */
-export interface PlanReportStore {
+/** Engagement's persistence port for planning reports; each report reissues the register of guarantees at risk. */
+export interface PlanReportStore extends RiskRecordReader {
   /** Each due report read on its own: one whose rows do not read is its UnreadSubject. */
   dueReports(): Promise<ReadonlyArray<DuePlanReport | UnreadSubject>>;
   /**
@@ -375,7 +377,7 @@ export class PlanReports implements LiaisonPlanReports {
           return this.block(due.projectId, projectBlockCause(err));
         }
         const revisionIds = due.subject === "first-plan" ? due.revisions.map((r) => r.revisionId) : [];
-        const kind = await this.store.postReport(due.projectId, due.subject, body, revisionIds);
+        const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), revisionIds);
         return { kind, projectId: due.projectId, subject: due.subject };
       },
     );
@@ -396,11 +398,17 @@ export class PlanReports implements LiaisonPlanReports {
           if (!(err instanceof PlanRevisionSummaryUnreadable) && !(err instanceof RevisionChangesUnrecorded)) throw err;
           return this.block(due.projectId, projectBlockCause(err));
         }
-        const kind = await this.store.postRevisionReport(due.revisionId, planRevisionReport(summary));
+        const kind = await this.store.postRevisionReport(due.revisionId, await this.withRegister(due.projectId, planRevisionReport(summary)));
         return { kind, projectId: due.projectId, subject: "plan-revision" };
       },
     );
     return [...outcomes, ...revised];
+  }
+
+  /** The report's body with the register of guarantees at risk as its last paragraph. */
+  private async withRegister(projectId: ProjectId, body: string): Promise<string> {
+    const register = registerOf(await this.store.riskRecords(projectId));
+    return `${body}\n\n${registerParagraph(projectId, register)}`;
   }
 
   private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<PlanReportOutcome> {

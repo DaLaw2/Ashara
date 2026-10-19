@@ -49,6 +49,7 @@ function reportsFor(
       blocked.push(cause);
       return "blocked";
     },
+    riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
   };
   return { reports: new PlanReports(store, memoryStepContainment(() => true)), posted, folded, revisionPosts, blocked };
 }
@@ -202,6 +203,7 @@ describe("plan revision report", () => {
         blocked.push(cause);
         return "blocked";
       },
+      riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
     };
     return { reports: new PlanReports(store, memoryStepContainment(() => true)), posted, blocked };
   }

@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
-import { BurnWarnings, listProjectBurns, postBurnWarning } from "@ashara/engagement";
+import { BurnWarnings, listProjectBurns, postBurnWarning, readRiskRecords } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
 import { createWorkItemId, memoryStepContainment } from "@ashara/shared";
 import { checkReports, readReportRecords } from "../simulator/client-reports.js";
@@ -28,6 +28,7 @@ function restarted(): BurnWarnings {
   const store: ConstructorParameters<typeof BurnWarnings>[0] = {
     projectBurns: async () => (await listProjectBurns(db)).filter((burn) => ourProjects.has(burn.projectId)),
     postWarning: (warning) => postBurnWarning(db, warning),
+    riskRecords: (projectId) => readRiskRecords(db, projectId),
   };
   return new BurnWarnings(store, BUDGETS, memoryStepContainment(() => false));
 }

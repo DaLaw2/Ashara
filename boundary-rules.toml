@@ -91,18 +91,18 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # Engagement, upstream of Delivery; its structured reads of client input go through
 # Finance's guarded port. It owns its repositories; db supplies the connection and
 # the schema. A project's halt is Delivery's; Engagement's steps that ask for one
-# read its cause in Delivery's published language (project-halt), and its block and delivered
-# reports read the work item's recorded cause and task specification in Delivery's work-item
+# read its cause in Delivery's published language (project-halt), and its block and delivered reports and the early-warning register
+# read the work item's recorded cause and task specification in Delivery's work-item
 # language, only in the files listed.
 allow = ["shared", "db", "finance", "delivery"]
-restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/stack-choice.ts"]
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/stack-choice.ts"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it, and the reports back.
 # Every module reads the vision; intake reads only the tender message inbound recorded.
 module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories/vision.ts"]
 module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
 module.inbound = ["src/answers.ts", "src/client-*.ts", "src/project-lifecycle.ts", "src/repositories/client-*.ts"]
-module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts"]
+module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts"]
 module.entry   = ["src/index.ts", "src/model-schemas.ts"]
 module-allow.intake  = ["vision", "inbound"]
 module-allow.inbound = ["vision"]

@@ -715,6 +715,8 @@ describe("tender to first plan", () => {
     expect(report[0]?.body).toMatch(/split into 2 tasks for what you asked for\./);
     expect(report[0]?.body).toContain("First, the team sets up the project environment");
     expect(report[0]?.body).toContain("(2 check tasks)");
+    // The report reissues the register from the stored records: G1 rests on assumptions the client has not confirmed.
+    expect(report[0]?.body.split("\n\n").at(-1)).toMatch(/^Guarantees at risk, as Ashara's records stand now:\n- G1 \(.*\): it rests on assumptions A\d(, A\d)*, which you have not confirmed, and work on it is not finished/);
     expect(outbound).toHaveLength(4);
   });
 });

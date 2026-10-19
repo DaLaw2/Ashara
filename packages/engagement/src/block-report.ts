@@ -3,6 +3,8 @@ import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
+import { registerOf, registerParagraph } from "./early-warning.js";
+import type { RiskRecordReader } from "./early-warning.js";
 
 // The Liaison's reports on project halts: the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
@@ -106,8 +108,8 @@ type DueBlockReport =
   /** `how` the halt ended: an owner's unblock, or the substrate probe passing after an infrastructure halt. */
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
 
-/** Engagement's persistence port for block reports. */
-export interface BlockReportStore {
+/** Engagement's persistence port for block reports; each report reissues the register of guarantees at risk. */
+export interface BlockReportStore extends RiskRecordReader {
   /** Every report due, each read on its own: one whose record does not read as a report is its UnreadSubject. */
   dueReports(): Promise<ReadonlyArray<DueBlockReport | UnreadSubject>>;
   /** Posts the report on a project's block episode, `on` the block or its resumption, unless one exists. */
@@ -446,15 +448,25 @@ export class BlockReports implements LiaisonBlockReports {
       async (report): Promise<BlockReportOutcome> => {
         switch (report.subject) {
           case "project-blocked": {
-            const kind = await this.store.postProjectReport(report.episodeId, "blocked", blockedBody(report));
+            const kind = await this.store.postProjectReport(report.episodeId, "blocked", await this.withRegister(report.projectId, blockedBody(report)));
             return { kind, projectId: report.projectId, subject: report.subject };
           }
           case "project-resumed": {
-            const kind = await this.store.postProjectReport(report.episodeId, "resumed", projectResumedReport(report.how));
+            const kind = await this.store.postProjectReport(
+              report.episodeId,
+              "resumed",
+              await this.withRegister(report.projectId, projectResumedReport(report.how)),
+            );
             return { kind, projectId: report.projectId, subject: report.subject };
           }
         }
       },
     );
+  }
+
+  /** The report's body with the register of guarantees at risk as its last paragraph. */
+  private async withRegister(projectId: ProjectId, body: string): Promise<string> {
+    const register = registerOf(await this.store.riskRecords(projectId));
+    return `${body}\n\n${registerParagraph(projectId, register)}`;
   }
 }

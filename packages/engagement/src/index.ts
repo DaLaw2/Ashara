@@ -33,6 +33,7 @@ export type { CreatedTender } from "./repositories/client-message.js";
 export { recordTenderIntake } from "./repositories/tender-intake.js";
 export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
 export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.js";
+export { readRiskRecords } from "./repositories/early-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
 export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";

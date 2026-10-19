@@ -2,6 +2,8 @@ import { burnZoneOf, projectWorkBudget } from "@ashara/finance";
 import type { BurnZone, WorkBudgets } from "@ashara/finance";
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import { registerOf, registerParagraph } from "./early-warning.js";
+import type { RiskRecordReader, RiskRecords } from "./early-warning.js";
 
 // The Liaison's early warning on a project's work ledger: when the
 // model requests a project has drawn run ahead of the implementation of its current plan revision,
@@ -46,8 +48,8 @@ export interface BurnWarning {
   readonly operatorText: string | null;
 }
 
-/** Engagement's persistence port for burn warnings. */
-export interface BurnWarningStore {
+/** Engagement's persistence port for burn warnings; each warning reissues the register of guarantees at risk. */
+export interface BurnWarningStore extends RiskRecordReader {
   /** Every project at work, each read on its own: one whose rows do not read is its UnreadSubject. */
   projectBurns(): Promise<ReadonlyArray<ProjectBurn | UnreadSubject>>;
   /** Records the warning and posts its report, unless its zone, or a higher one, is already recorded for its revision. */
@@ -120,6 +122,11 @@ function dueZone(burn: ProjectBurn, figures: BurnFigures): BurnZone | null {
   return zone;
 }
 
+/** The register's records once the zone this warning reports is entered, which is recorded only with the warning. */
+function atZone(records: RiskRecords, zone: BurnZone): RiskRecords {
+  return records.kind === "read" ? { ...records, standing: { ...records.standing, burnZone: zone } } : records;
+}
+
 export class BurnWarnings implements LiaisonBurnWarnings {
   constructor(
     private readonly store: BurnWarningStore,
@@ -150,12 +157,13 @@ export class BurnWarnings implements LiaisonBurnWarnings {
         const zone = dueZone(burn, figures);
         if (zone === null) return null;
         const operatorText = zone === "red" ? operatorBurnReport(burn.projectId, burn.planRevision, figures) : null;
+        const register = registerOf(atZone(await this.store.riskRecords(burn.projectId), zone));
         const kind = await this.store.postWarning({
           projectId: burn.projectId,
           planRevision: burn.planRevision,
           zone,
           figures,
-          body: burnWarningReport(zone, figures),
+          body: `${burnWarningReport(zone, figures)}\n\n${registerParagraph(burn.projectId, register)}`,
           operatorText,
         });
         // The operator's channel is the server's log and the recorded row (work_burn_warnings.operator_report).

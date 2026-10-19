@@ -38,6 +38,7 @@ import {
   createProjectWithTender,
   listProjectBurns,
   postBurnWarning,
+  readRiskRecords,
 } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import {
@@ -498,7 +499,11 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     checkDisputes: new CheckDisputeRepository(db),
     blockReports,
     burnWarnings: new BurnWarnings(
-      { projectBurns: () => listProjectBurns(db), postWarning: (warning) => postBurnWarning(db, warning) },
+      {
+        projectBurns: () => listProjectBurns(db),
+        postWarning: (warning) => postBurnWarning(db, warning),
+        riskRecords: (projectId) => readRiskRecords(db, projectId),
+      },
       config.workBudgets,
       containment,
     ),
