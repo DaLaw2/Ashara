@@ -9,7 +9,7 @@ import {
   StructuredOutputExhausted,
   withStructuredLadder,
 } from "@ashara/finance";
-import type { LadderAttemptEvent, SecondOpinion, SecondOpinionStrength, StructuredValidation } from "@ashara/finance";
+import type { CapabilityLevel, LadderAttemptEvent, SecondOpinion, SecondOpinionStrength, StructuredValidation } from "@ashara/finance";
 import type { Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
 import type { StoredTaskSpec } from "./acl/delivery-acl.js";
@@ -170,6 +170,12 @@ interface PassedOver {
 function modelName(model: ReviewModel): string {
   return `${model.provider}/${model.model}`;
 }
+
+/**
+ * The tier of the check work a review judges, as the judged tier it asks a judge for: a check suite
+ * is never authored below Strong, so its work is at least that strong.
+ */
+const CHECK_WORK_FLOOR: CapabilityLevel = "Strong";
 
 /** Each strength in words, as the client and the operator read it: a weaker one says what it shares. */
 const STRENGTH_TEXT: Readonly<Record<SecondOpinionStrength, string>> = {
@@ -1017,7 +1023,7 @@ export class SuiteReviewer implements SuiteReviewing {
     const maxTokens = reviewOutputBound(suites);
     const ask = (secondOpinion?: SecondOpinion) =>
       provider.generateStructured({
-        capability: "Strong",
+        judges: CHECK_WORK_FLOOR,
         prompt: reviewPrompt(items, interfaces, suites, secondOpinion === undefined ? "direct" : ANGLE_OF[secondOpinion.strength]),
         schema: ReviewResponseSchema,
         validate: (value) => verdictValidation(value, bySuite),

@@ -1,6 +1,7 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, test } from "vitest";
-import { NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
+import { z } from "zod";
+import { JudgeUnavailable, NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
 import { LLMGateway } from "./gateway.js";
 import { ProviderRegistry, sdkLanguageModels } from "./provider-registry.js";
 import type { GatewayConfig, ModelConfig } from "./types.js";
@@ -249,7 +250,7 @@ describe("ProviderRegistry.resolveSecondOpinion", () => {
     });
   const avoid = { provider: "alpha", model: "alpha-strong" };
   const chosen = (registry: ProviderRegistry, strength: "other-family" | "same-family-other-model" | "same-model", capability: ModelConfig["capabilityLevel"] = "Strong") => {
-    const resolved = registry.resolveSecondOpinion(capability, { avoid, strength });
+    const resolved = registry.resolveSecondOpinion({ capability }, { avoid, strength });
     return resolved === null ? null : `${resolved.providerName}/${resolved.modelConfig.id}`;
   };
 
@@ -305,5 +306,121 @@ describe("a model whose context window is larger than one overflowed", () => {
     expect(pinned("small").resolveModelWithWindowAbove("Strong", "agent-runner", 32_000)?.modelId).toBe("wide-cheap");
     expect(pinned("wide-cheap").resolveModelWithWindowAbove("Strong", "agent-runner", 32_000)?.modelId).toBe("wide-cheap");
     expect(pinned("small").resolveModelWithWindowAbove("Strong", "agent-runner", 200_000)).toBeNull();
+  });
+});
+
+// A judge is chosen by the judged tier and the catalog's grades alone: one tier above, else equal, else refused.
+describe("ProviderRegistry.resolveJudge", () => {
+  const model = (provider: string, id: string, capabilityLevel: ModelConfig["capabilityLevel"], inputCostPer1M = 2): ModelConfig => ({ ...MODEL, id, provider, capabilityLevel, inputCostPer1M });
+  const deployment = (
+    providers: ReadonlyArray<readonly [string, readonly ModelConfig[]]>,
+    routingProfiles?: GatewayConfig["routingProfiles"],
+  ): ProviderRegistry =>
+    registryOf({
+      providers: providers.map(([name, models]) => ({ name, providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [...models], enabled: true })),
+      defaultProvider: providers[0]?.[0] ?? "none",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
+      ...(routingProfiles === undefined ? {} : { routingProfiles }),
+    });
+  const LADDER = [model("alpha", "alpha-light", "Light", 0.1), model("alpha", "alpha-medium", "Medium", 0.5), model("alpha", "alpha-strong", "Strong", 2)];
+  const judged = (registry: ProviderRegistry, judges: ModelConfig["capabilityLevel"], site?: "suite-review") => {
+    const judge = registry.resolveJudge(judges, [], site);
+    return [judge.modelConfig.id, judge.relation];
+  };
+  const refusal = (run: () => unknown): unknown => {
+    try {
+      run();
+    } catch (err) {
+      return err;
+    }
+    return expect.unreachable("the judge was not refused");
+  };
+
+  test("work at Medium is judged by a Strong model, reported above, though a cheaper Medium one is offered", () => {
+    expect(judged(deployment([["alpha", LADDER]]), "Medium")).toEqual(["alpha-strong", "above"]);
+  });
+
+  test("work at the top tier the catalog offers is judged at that tier, reported equal", () => {
+    const registry = deployment([["alpha", [...LADDER, model("alpha", "alpha-frontier", "Frontier", 9)]]]);
+    expect(judged(registry, "Frontier")).toEqual(["alpha-frontier", "equal"]);
+    expect(judged(deployment([["alpha", LADDER]]), "Strong")).toEqual(["alpha-strong", "equal"]);
+  });
+
+  test("no model at or above the judged tier is a typed refusal naming the judged tier and the candidates; none weaker is substituted", () => {
+    const err = refusal(() => deployment([["alpha", LADDER]]).resolveJudge("Frontier"));
+    if (!(err instanceof JudgeUnavailable)) return expect.unreachable(`not JudgeUnavailable: ${String(err)}`);
+    expect(err).toBeInstanceOf(NoProviderAvailableError);
+    expect(err.judgedTier).toBe("Frontier");
+    expect(err.candidates).toEqual(["alpha/alpha-light (Light)", "alpha/alpha-medium (Medium)", "alpha/alpha-strong (Strong)"]);
+    expect(err.message).toContain('no judge for work at "Frontier"');
+  });
+
+  test("a routing profile's flat pin graded below the judged tier is refused, never used", () => {
+    const registry = deployment([["alpha", LADDER]], { alpha: { "suite-review": "alpha-light" } });
+    const err = refusal(() => registry.resolveJudge("Medium", [], "suite-review"));
+    if (!(err instanceof JudgeUnavailable)) return expect.unreachable(`not JudgeUnavailable: ${String(err)}`);
+    expect(err.site).toBe("suite-review");
+    expect(err.steps.join("; ")).toContain("alpha/alpha-light, graded Light");
+    // A capability request keeps the pin whatever its grade.
+    expect(registry.resolve("Strong", [], "suite-review").modelConfig.id).toBe("alpha-light");
+  });
+
+  test("a routing profile's table is asked one tier above the judged tier, then at it", () => {
+    const table = { alpha: { "suite-review": { Strong: "alpha-strong", default: "alpha-medium" } } };
+    expect(judged(deployment([["alpha", LADDER]], table), "Medium", "suite-review")).toEqual(["alpha-strong", "above"]);
+    // Frontier takes the Medium default, graded below one tier above Strong work, so the Strong entry judges it.
+    expect(judged(deployment([["alpha", LADDER]], table), "Strong", "suite-review")).toEqual(["alpha-strong", "equal"]);
+  });
+
+  test("a second opinion on judged work follows the same ladder within its strength, and none below the judged tier", () => {
+    const registry = deployment([
+      ["alpha", [model("alpha", "alpha-medium", "Medium", 0.5), model("alpha", "alpha-strong", "Strong", 2), model("alpha", "alpha-strong-2", "Strong", 3)]],
+      ["beta", [model("beta", "beta-medium", "Medium", 0.1), model("beta", "beta-strong", "Strong", 4)]],
+    ]);
+    const avoid = { provider: "alpha", model: "alpha-strong" };
+    const second = (strength: "other-family" | "same-family-other-model" | "same-model", judges: ModelConfig["capabilityLevel"]) => {
+      const resolved = registry.resolveSecondOpinion({ judges }, { avoid, strength }, "suite-review");
+      return resolved === null ? null : resolved.modelConfig.id;
+    };
+    expect(second("other-family", "Medium")).toBe("beta-strong");
+    expect(second("other-family", "Strong")).toBe("beta-strong");
+    expect(second("same-family-other-model", "Medium")).toBe("alpha-strong-2");
+    expect(second("other-family", "Frontier")).toBeNull();
+    expect(second("same-family-other-model", "Frontier")).toBeNull();
+    expect(second("same-model", "Medium")).toBeNull();
+    // A capability request keeps the cheapest model at or above the capability.
+    expect(registry.resolveSecondOpinion({ capability: "Medium" }, { avoid, strength: "other-family" }, "suite-review")?.modelConfig.id).toBe("beta-medium");
+  });
+
+  test("a same-model second opinion on judged work is never asked while another model at or above the judged tier is offered", () => {
+    const top = model("alpha", "alpha-top", "Frontier", 9);
+    const avoid = { provider: "alpha", model: "alpha-top" };
+    const sameModel = (registry: ProviderRegistry) => registry.resolveSecondOpinion({ judges: "Strong" }, { avoid, strength: "same-model" }, "suite-review")?.modelConfig.id ?? null;
+    expect(sameModel(deployment([["alpha", [top, model("alpha", "alpha-strong", "Strong", 2)]]]))).toBeNull();
+    expect(sameModel(deployment([["alpha", [top, model("alpha", "alpha-medium", "Medium", 0.5)]]]))).toBe("alpha-top");
+  });
+
+  test("the gateway sends a judging request to the judge, not to the cheapest model at the judged tier", async () => {
+    const answered = new MockLanguageModelV4({
+      doGenerate: {
+        content: [{ type: "text" as const, text: '{"ok":true}' }],
+        usage: {
+          inputTokens: { total: 1, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+          raw: undefined,
+        },
+        finishReason: { unified: "stop" as const, raw: "stop" },
+        warnings: [],
+      },
+    });
+    const config: GatewayConfig = {
+      providers: [{ name: "alpha", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: LADDER, enabled: true }],
+      defaultProvider: "alpha",
+      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
+    };
+    const gated = new LLMGateway(config, () => new Date(), () => answered).gated("suite-review", { admit: async () => {}, settle: async () => {} });
+    const response = await gated.generateStructured({ judges: "Medium", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, site: "suite-review" });
+    expect(response.model).toBe("alpha-strong");
+    await expect(gated.generateStructured({ judges: "Frontier", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10 })).rejects.toBeInstanceOf(JudgeUnavailable);
   });
 });

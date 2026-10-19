@@ -1,8 +1,8 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "./capability-level.js";
 import { GatewayError, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
-import { CAPABILITY_RANK } from "./capability-rank.js";
-import type { KnownLLMSite, SecondOpinion } from "./types.js";
+import { CAPABILITY_RANK, nextCapability, tierOf } from "./capability-rank.js";
+import type { KnownLLMSite, SecondOpinion, TierAsk } from "./types.js";
 
 /**
  * Routing-profiles site tag stamped on every ladder attempt run at an
@@ -37,19 +37,6 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 
 const RAW_EXCERPT_LENGTH = 400;
 
-const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong", "Frontier"];
-
-/**
- * The next capability tier up, or null when already at the top. Escalation is a
- * SINGLE step (escalate at most one tier per site invocation — no
- * unbounded climb burning budget).
- */
-function nextCapability(capability: CapabilityLevel): CapabilityLevel | null {
-  const i = CAPABILITY_ORDER.indexOf(capability);
-  if (i < 0 || i >= CAPABILITY_ORDER.length - 1) return null;
-  return CAPABILITY_ORDER[i + 1];
-}
-
 function excerpt(raw: string): string {
   return raw.length <= RAW_EXCERPT_LENGTH ? raw : raw.slice(0, RAW_EXCERPT_LENGTH);
 }
@@ -61,7 +48,10 @@ function excerpt(raw: string): string {
 interface LadderRequest {
   /** Stable identifier for the call site — surfaces in logs and errors. */
   readonly site: KnownLLMSite;
+  /** The tier asked: the capability, or the judged tier of a judging request. */
   readonly capability: CapabilityLevel;
+  /** A judging request: its escalation keeps the judged tier and is routed by the escalation site. */
+  readonly judging: boolean;
   readonly prompt: string;
   readonly systemPrompt?: string;
   readonly maxTokens: number;
@@ -71,6 +61,7 @@ export interface LadderAttemptEvent {
   readonly site: string;
   /** 1-based across the whole ladder (all tiers). */
   readonly attempt: number;
+  /** The tier asked: the capability, or the judged tier of a judging request. */
   readonly capability: CapabilityLevel;
   /** Null for an invalid attempt whose failure named no model. */
   readonly model: string | null;
@@ -175,17 +166,30 @@ type LadderAttemptOutcome<T> =
 interface LadderCoreDeps<T> {
   /** Validated attempts PER capability tier (>= 1). */
   readonly attempts: number;
-  readonly attempt: (capability: CapabilityLevel, attemptNo: number) => Promise<LadderAttemptOutcome<T>>;
+  readonly attempt: (tier: LadderTier, attemptNo: number) => Promise<LadderAttemptOutcome<T>>;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
 }
 
-function resolveTiers(request: LadderRequest): CapabilityLevel[] {
-  const tiers: CapabilityLevel[] = [request.capability];
+/** One tier of the ladder: the tier asked, and whether it is the escalation. */
+interface LadderTier {
+  readonly capability: CapabilityLevel;
+  readonly escalated: boolean;
+}
+
+/**
+ * The base tier, then one escalation: a SINGLE step, never an unbounded climb burning budget. A
+ * capability request escalates one capability tier. A judging request is already asked one tier
+ * above the work it judges, so its escalation keeps the judged tier and goes to the judge the
+ * escalation site routes it to.
+ */
+function resolveTiers(request: LadderRequest): LadderTier[] {
+  const base: LadderTier = { capability: request.capability, escalated: false };
+  if (request.judging) return [base, { capability: request.capability, escalated: true }];
   const escalate = nextCapability(request.capability);
   if (escalate && CAPABILITY_RANK[escalate] > CAPABILITY_RANK[request.capability]) {
-    tiers.push(escalate);
+    return [base, { capability: escalate, escalated: true }];
   }
-  return tiers;
+  return [base];
 }
 
 async function runLadderCore<T>(
@@ -204,16 +208,17 @@ async function runLadderCore<T>(
   let lastRawExcerpt = "";
   let lastErrors: readonly string[] = [];
 
-  for (const [tierIndex, capability] of tiers.entries()) {
+  for (const tier of tiers) {
+    const { capability } = tier;
     let tierModel: string | null = null;
     let tierErrors: readonly string[] = [];
 
     for (let i = 0; i < deps.attempts; i++) {
       attemptNo++;
-      const outcome = await deps.attempt(capability, attemptNo);
+      const outcome = await deps.attempt(tier, attemptNo);
 
       if ("tierUnavailable" in outcome) {
-        if (tierIndex === 0) {
+        if (!tier.escalated) {
           throw new GatewayError(
             `reliability-ladder: the requested tier ${capability} at site "${request.site}" was reported ` +
               `unavailable; only an escalation tier may be (${outcome.tierUnavailable})`,
@@ -282,8 +287,7 @@ export type StructuredValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly errors: readonly string[] };
 
-interface StructuredProviderRequest<T> {
-  readonly capability: CapabilityLevel;
+type StructuredProviderRequest<T> = TierAsk & {
   readonly prompt: string;
   readonly schema: ZodType<T>;
   readonly systemPrompt?: string;
@@ -300,7 +304,7 @@ interface StructuredProviderRequest<T> {
    * exactly like a schema failure — never a hard throw into the caller.
    */
   readonly validate?: (value: T) => StructuredValidation;
-}
+};
 
 interface StructuredProviderResult<T> {
   readonly data: T;
@@ -357,14 +361,15 @@ export function withStructuredLadder(
   const { attempts } = options;
   return {
     async generateStructured<T>(request: StructuredProviderRequest<T>): Promise<StructuredProviderResult<T>> {
-      const { validate, ...providerRequest } = request;
+      const { validate, capability: _asked, judges, ...providerRequest } = request;
       // Per-call site (rare) wins over this wrapper's own default.
       const baseSite = request.site ?? options.site;
       let lastErrors: readonly string[] = [];
       const result = await runLadderCore<T>(
         {
           site: baseSite,
-          capability: request.capability,
+          capability: tierOf(request),
+          judging: judges !== undefined,
           prompt: request.prompt,
           systemPrompt: request.systemPrompt,
           maxTokens: request.maxTokens,
@@ -372,17 +377,18 @@ export function withStructuredLadder(
         {
           attempts,
           onAttempt: options.onAttempt,
-          attempt: async (capability, attemptNo) => {
+          attempt: async (tier, attemptNo) => {
             const prompt =
               attemptNo > 1 && options.reask
                 ? request.prompt + options.reask({ errors: lastErrors })
                 : request.prompt;
             try {
+              const ask: TierAsk = judges === undefined ? { capability: tier.capability } : { judges: tier.capability };
               const response = await provider.generateStructured<T>({
                 ...providerRequest,
+                ...ask,
                 prompt,
-                capability,
-                site: capability === request.capability ? baseSite : ESCALATION_SITE,
+                site: tier.escalated ? ESCALATION_SITE : baseSite,
               });
               if (validate) {
                 const verdict = validate(response.data);
@@ -416,7 +422,7 @@ export function withStructuredLadder(
               // escalation tier exhausts here, rather than throwing a routing
               // error past every caller's exhaustion handling. Routing refuses
               // before any request is sent, so nothing was spent on it.
-              if (err instanceof NoProviderAvailableError && capability !== request.capability) {
+              if (err instanceof NoProviderAvailableError && tier.escalated) {
                 return { ok: false, tierUnavailable: err.message };
               }
               throw err;

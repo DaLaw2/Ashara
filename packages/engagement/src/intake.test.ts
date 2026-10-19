@@ -60,7 +60,7 @@ describe("TenderIntake failure accounting", () => {
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          capabilities.push(request.capability);
+          capabilities.push(String(request.capability));
           throw new SchemaValidationError(["scripted failure"], null);
         },
       }),
@@ -619,7 +619,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
     assumptions: [{ statement: "Times are shown in the studio's zone.", rationale: "One studio.", kind: "client-visible" }],
   };
   type Sent = Parameters<ReturnType<ContextualLlm["forCall"]>["generateStructured"]>[0];
-  type Request = { readonly secondOpinion: NonNullable<Sent["secondOpinion"]>; readonly capability: Sent["capability"] };
+  type Request = { readonly secondOpinion: NonNullable<Sent["secondOpinion"]>; readonly capability: NonNullable<Sent["capability"]> };
   type Answer = { readonly data: unknown; readonly provider: string; readonly model: string };
 
   async function intakeWith(first: unknown, second: (request: Request) => Answer) {
@@ -630,6 +630,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
         generateStructured: async (request) => {
           asked.push({ strength: request.secondOpinion?.strength ?? null, prompt: request.prompt });
           if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet" };
+          if (request.capability === undefined) throw new Error("the second reading asks a capability, not a judge");
           const answer = second({ secondOpinion: request.secondOpinion, capability: request.capability });
           return { ...answer, data: request.schema.parse(answer.data) };
         },
@@ -659,7 +660,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
   }
 
   const unavailable = (request: Request): never => {
-    throw new SecondOpinionUnavailable(request.secondOpinion, request.capability, []);
+    throw new SecondOpinionUnavailable(request.secondOpinion, { capability: request.capability }, []);
   };
 
   test("a reading that asks questions is not put to a second reading", async () => {

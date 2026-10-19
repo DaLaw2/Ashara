@@ -36,6 +36,12 @@
 # Frontier task to whatever the flat entry names. A table maps only the
 # levels it names; every other level takes its "default".
 #
+# A request that judges work (it carries the judged tier) is routed one tier
+# above the judged tier, else at it, and never to a model graded below it. At
+# the sites such requests use (model-access JUDGEMENT_SITES) a bare model id
+# must be graded at the top tier the deployment's catalog offers, or the
+# gateway refuses to start (JudgePinnedBelowTop).
+#
 # A combo with no table below, or an explicitly EMPTY table, is not an error:
 # every site falls through to capability-level logic. A NON-EMPTY table is a
 # curated allocation and must map every known site -- a hole in it would
@@ -88,8 +94,12 @@
 # same shape and size as decomposition's.
 "roster" = "deepseek-flash"
 # The review of a plan revision's check suites: one structured
-# call per review, reading every stored suite with the vision.
-"suite-review" = "deepseek-flash"
+# call per review, reading every stored suite with the vision. A review judges
+# the check work, so it asks for a judge one tier above the judged tier, else
+# at it: Frontier goes to claude-opus-5-5, every lower tier to deepseek-flash.
+# A flat entry here would apply whatever tier is judged, and the gateway refuses
+# to start on one graded below the catalog's top tier.
+"suite-review" = { Frontier = "claude-opus-5-5", default = "deepseek-flash" }
 # An escalation goes up a level: the base sites run deepseek-flash (Strong as called), so the
 # escalation is the Frontier Claude model, never a lateral Strong one.
 "escalation" = "claude-opus-5-5"

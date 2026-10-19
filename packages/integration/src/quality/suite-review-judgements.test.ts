@@ -28,11 +28,11 @@ const FIRST = { provider: "first", model: "strong-a" };
  * The model each strength of second opinion goes to in a stub catalog, as the gateway resolves it:
  * a strength the catalog lacks is refused unsent with SecondOpinionUnavailable.
  */
-function secondBy(request: { readonly capability: "Light" | "Medium" | "Strong" | "Frontier"; readonly secondOpinion?: { readonly avoid: { readonly provider: string; readonly model: string }; readonly strength: SecondOpinionStrength } }, catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>) {
+function secondBy(request: ConstructorParameters<typeof SecondOpinionUnavailable>[1] & { readonly secondOpinion?: { readonly avoid: { readonly provider: string; readonly model: string }; readonly strength: SecondOpinionStrength } }, catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>) {
   const opinion = request.secondOpinion;
   if (opinion === undefined) return FIRST;
   const by = catalog[opinion.strength];
-  if (by === undefined) throw new SecondOpinionUnavailable(opinion, request.capability, []);
+  if (by === undefined) throw new SecondOpinionUnavailable(opinion, request, []);
   return by;
 }
 

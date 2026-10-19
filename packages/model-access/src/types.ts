@@ -10,7 +10,7 @@ import type { CapabilityLevel } from "./capability-level.js";
  * for the site would silently downgrade a Frontier-classified task. `default`
  * covers any requested capability without its own entry; a request for a
  * capability with neither its own entry nor `default` throws
- * `RoutingProfileUnresolved` (see `ProviderRegistry.resolveFromProfile`). Only
+ * `RoutingProfileUnresolved` (see `ProviderRegistry.routeFromProfile`). Only
  * the SITE dimension is boot-enforced; the capability dimension fails per call.
  */
 type RoutingProfileCapabilityTable = Partial<Record<CapabilityLevel, string>> & {
@@ -208,8 +208,29 @@ export interface ReportedTokens {
   readonly cacheWriteTokens: number | null;
 }
 
-export interface StructuredRequest<T> {
-  capability: CapabilityLevel;
+/**
+ * What a structured request asks the catalog for, exactly one of: a model graded at or above
+ * `capability`, or a judge of work done at the tier `judges`. A judge is graded one tier above the
+ * judged work, else at the same tier when the catalog has nothing above it (JudgeRelation), else
+ * the request is refused unsent (JudgeUnavailable): a judge is never weaker than the work it judges,
+ * and a routing profile cannot pin one below it.
+ */
+export type TierAsk =
+  | { readonly capability: CapabilityLevel; readonly judges?: never }
+  | { readonly judges: CapabilityLevel; readonly capability?: never };
+
+/** How a judge's catalog grade stands to the tier of the work it judges. */
+export type JudgeRelation = "above" | "equal";
+
+/**
+ * The sites a request that carries `judges` is sent to: the judgement sites, and the escalation
+ * site a judging request's escalated ladder attempt is routed by. A routing profile's flat entry
+ * applies whatever tier is asked, so at these sites one is refused at boot unless its model is
+ * graded at the top tier the deployment's catalog offers (buildGatewayConfig).
+ */
+export const JUDGEMENT_SITES: readonly KnownLLMSite[] = ["suite-review", "escalation"];
+
+interface StructuredRequestFields<T> {
   prompt: string;
   schema: ZodType<T>;
   systemPrompt?: string;
@@ -218,15 +239,17 @@ export interface StructuredRequest<T> {
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
   /**
-   * A second opinion of one strength (SecondOpinionStrength), chosen from the catalog by capability
+   * A second opinion of one strength (SecondOpinionStrength), chosen from the catalog by tier
    * and provider: no request ever reaches a model of another strength. An other-family opinion and
    * its failover never go to the avoided provider; a same-family or same-model one is pinned to the
-   * one model the catalog offers for it. A strength the catalog does not serve at the capability is
+   * one model the catalog offers for it. A strength the catalog does not serve at the tier asked is
    * SecondOpinionUnavailable, before anything is sent; no answer from the model it went to is
    * SecondOpinionUnanswered.
    */
   secondOpinion?: SecondOpinion;
 }
+
+export type StructuredRequest<T> = StructuredRequestFields<T> & TierAsk;
 
 /** One model of the catalog, as a response names the model that answered it. */
 export interface ModelIdentity {

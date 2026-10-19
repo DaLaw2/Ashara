@@ -1,4 +1,5 @@
 import type { CapabilityLevel } from "./capability-level.js";
+import type { JudgeRelation, TierAsk } from "./types.js";
 
 export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
   Light: 0,
@@ -6,3 +7,20 @@ export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
   Strong: 2,
   Frontier: 3,
 };
+
+const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong", "Frontier"];
+
+/** The next capability tier up, or null at the top. */
+export function nextCapability(capability: CapabilityLevel): CapabilityLevel | null {
+  return CAPABILITY_ORDER[CAPABILITY_RANK[capability] + 1] ?? null;
+}
+
+/** The tier a request asks at: its capability, or the judged tier of a judging request. */
+export function tierOf(ask: TierAsk): CapabilityLevel {
+  return ask.judges === undefined ? ask.capability : ask.judges;
+}
+
+/** How a judge graded `judgeGrade` stands to work at `judged`; called only on a judge graded at or above it. */
+export function judgeRelation(judged: CapabilityLevel, judgeGrade: CapabilityLevel): JudgeRelation {
+  return CAPABILITY_RANK[judgeGrade] > CAPABILITY_RANK[judged] ? "above" : "equal";
+}

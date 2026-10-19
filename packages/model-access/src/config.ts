@@ -1,8 +1,11 @@
 import { z } from "zod";
 import { parseCapabilityLevel } from "./capability-level.js";
-import { InvalidGatewayCatalog } from "./errors.js";
+import { CAPABILITY_RANK } from "./capability-rank.js";
+import { InvalidGatewayCatalog, JudgePinnedBelowTop } from "./errors.js";
+import { resolveModelsConfigPath } from "./paths.js";
+import { computeProviderCombo } from "./routing-profiles.js";
 import { widestTurnOutputReserve } from "./thinking.js";
-import { PROVIDER_TYPES } from "./types.js";
+import { JUDGEMENT_SITES, PROVIDER_TYPES } from "./types.js";
 import type {
   ContextOverflowSignatures,
   GatewayConfig,
@@ -103,6 +106,7 @@ export function buildGatewayConfig(
     });
   }
   if (reserve.length > 0) throw new InvalidGatewayCatalog("model_configs", reserve);
+  assertNoJudgePinnedBelowTop(providers, routingProfiles);
 
   return {
     providers,
@@ -111,6 +115,34 @@ export function buildGatewayConfig(
     contextOverflow,
     thinking,
   };
+}
+
+/**
+ * Refuses the deployment's routing profile when it pins a judgement site (JUDGEMENT_SITES) flatly to
+ * a model graded below the top tier the enabled providers' catalog offers. A flat entry applies
+ * whatever tier a request asks, so below the top it would judge work graded above its model, or
+ * deny the judge one tier above the work that the catalog has; at the top tier it is neither, and
+ * a per-capability table is held to each judged tier per request (ProviderRegistry.resolveJudge).
+ * Grades are the catalog's (model_configs), never a model's name.
+ */
+function assertNoJudgePinnedBelowTop(providers: readonly ProviderConfig[], routingProfiles: RoutingProfiles): void {
+  const combo = computeProviderCombo(providers.map((p) => p.name));
+  const profile = routingProfiles[combo];
+  if (profile === undefined) return;
+  const offered = providers.flatMap((p) => p.models);
+  const [top] = offered.map((m) => m.capabilityLevel).sort((a, b) => CAPABILITY_RANK[b] - CAPABILITY_RANK[a]);
+  if (top === undefined) return;
+  const pins: string[] = [];
+  for (const site of JUDGEMENT_SITES) {
+    const entry = profile[site];
+    if (typeof entry !== "string") continue;
+    // A model no enabled provider offers is buildGateway's refusal (RoutingProfileModelMissing).
+    const model = offered.find((m) => m.id === entry);
+    if (model !== undefined && CAPABILITY_RANK[model.capabilityLevel] < CAPABILITY_RANK[top]) {
+      pins.push(`"${site}" -> "${entry}" (${model.capabilityLevel})`);
+    }
+  }
+  if (pins.length > 0) throw new JudgePinnedBelowTop({ combo, pins, topTier: top, configPath: resolveModelsConfigPath() });
 }
 
 /**

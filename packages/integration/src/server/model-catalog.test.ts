@@ -7,6 +7,7 @@ import { ConfigRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import { measureCost } from "@ashara/finance";
 import {
   buildGateway,
+  buildGatewayConfig,
   LLMGateway,
   loadRoutingProfilesFromToml,
   resolveModelsConfigPath,
@@ -289,9 +290,22 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
       decomposition: flash,
       "liaison-intake": flash,
       roster: flash,
-      "suite-review": flash,
+      "suite-review": ["deepseek-flash", "deepseek-flash", "deepseek-flash", "claude-opus-5-5"],
       escalation: ["claude-opus-5-5", "claude-opus-5-5", "claude-opus-5-5", "claude-opus-5-5"],
     });
+  });
+
+  test("config/models.toml boots on the migrated catalog for every keyed combo: no judgement site is pinned flatly below its top tier", async () => {
+    const catalog = Object.fromEntries(
+      (await repo.listModelConfigs()).filter((m) => m.modelId !== MODEL_ID).map((m) => [m.modelId, toModelConfig("model_configs", m)]),
+    );
+    const profiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
+    const credential = (name: string) => ({ name, providerType: name === "anthropic" ? "anthropic" : "deepseek", apiKey: "unused", baseUrl: "https://stub.invalid/v1" });
+    const thinking = { default: "off" as const, sites: {} };
+    const overflow = { statuses: [400], codes: ["context_length_exceeded"], phrases: [] };
+    for (const combo of [["deepseek"], ["anthropic"], ["anthropic", "deepseek"]]) {
+      expect(buildGatewayConfig(catalog, profiles, combo.map(credential), overflow, thinking).providers.map((p) => p.name)).toEqual(combo);
+    }
   });
 
   test("capability logic over Anthropic alone picks the cheapest model at or above each level", async () => {

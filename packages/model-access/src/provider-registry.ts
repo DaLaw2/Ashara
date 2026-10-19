@@ -6,21 +6,24 @@ import { describeErrorChain } from "@ashara/shared";
 import type { CapabilityLevel } from "./capability-level.js";
 import {
   InvalidGatewayCatalog,
+  JudgeUnavailable,
   NoProviderAvailableError,
   ProviderMissingBaseUrl,
   RoutingProfileUnresolved,
   UnknownProvider,
 } from "./errors.js";
-import { CAPABILITY_RANK } from "./capability-rank.js";
+import { CAPABILITY_RANK, judgeRelation, nextCapability } from "./capability-rank.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import type {
   GatewayConfig,
+  JudgeRelation,
   KnownLLMSite,
   ModelConfig,
   ProviderConfig,
   ProviderType,
   RoutingProfiles,
   SecondOpinion,
+  TierAsk,
 } from "./types.js";
 
 export interface ResolvedProvider {
@@ -28,6 +31,23 @@ export interface ResolvedProvider {
   modelConfig: ModelConfig;
   providerName: string;
   providerType: ProviderType;
+}
+
+/** A judge as resolved, with how its grade stands to the tier of the work it judges. */
+export interface ResolvedJudge extends ResolvedProvider {
+  readonly relation: JudgeRelation;
+}
+
+/** A model of a provider that a request is routed to, before its language model is made. */
+interface Route {
+  readonly providerConfig: ProviderConfig;
+  readonly model: ModelConfig;
+}
+
+/** The tiers a judge of work at `judged` is asked at, strongest first: one above it, then it. */
+function judgeTiers(judged: CapabilityLevel): CapabilityLevel[] {
+  const above = nextCapability(judged);
+  return above === null ? [judged] : [above, judged];
 }
 
 /** Makes the model a resolved route sends its requests to; the composition root chooses it. */
@@ -112,7 +132,7 @@ export class ProviderRegistry {
    * deployment, not which are excluded for a particular resolve() call
    * (fallback/degrade never changes which playbook applies; when it excludes
    * the provider of the profile-mapped model, that one call uses capability
-   * logic over the remaining providers — see resolveFromProfile).
+   * logic over the remaining providers — see routeFromProfile).
    */
   private readonly enabledCombo: string;
   private readonly createLanguageModel: LanguageModelFactory;
@@ -140,12 +160,28 @@ export class ProviderRegistry {
     // consulted when the caller tagged the request with a site — a site-less
     // request is the documented exception that always uses capability logic.
     if (site) {
-      const fromProfile = this.resolveFromProfile(enabledProviders, excludeProviders, site, capability);
-      if (fromProfile) return fromProfile;
+      const fromProfile = this.routeFromProfile(enabledProviders, excludeProviders, site, capability);
+      if (fromProfile) return this.resolvedOf(fromProfile);
     }
 
     // Fallback: default provider first, then cheapest
-    return this.resolveDefault(enabledProviders, capability);
+    const route = this.defaultRoute(enabledProviders, capability);
+    if (route === null) {
+      throw new NoProviderAvailableError(
+        capability,
+        enabledProviders.flatMap((p) => p.models.map((m) => `${m.id} (${m.capabilityLevel})`)),
+      );
+    }
+    return this.resolvedOf(route);
+  }
+
+  private resolvedOf(route: Route): ResolvedProvider {
+    return {
+      provider: this.createLanguageModel(route.providerConfig, route.model),
+      modelConfig: route.model,
+      providerName: route.providerConfig.name,
+      providerType: route.providerConfig.providerType,
+    };
   }
 
   /** The adapter type of a configured provider, by name. */
@@ -175,15 +211,96 @@ export class ProviderRegistry {
   }
 
   /**
-   * The model a second opinion of `opinion.strength` goes to at `capability` and `site`, chosen from
-   * the catalog by provider and graded capability alone; null when the catalog offers none:
+   * The judge of work at `judges` at `site`: a model graded one tier above it, else one graded at
+   * it, by the same routing as any request at `site` asked at that tier. A routing profile's entry
+   * is held to the tier it is asked at like any candidate: one graded below it is passed over, never
+   * used. Throws JudgeUnavailable, naming the judged tier and the candidates, when neither tier finds
+   * a model: no weaker one is substituted.
+   */
+  resolveJudge(judges: CapabilityLevel, excludeProviders: readonly string[] = [], site?: KnownLLMSite): ResolvedJudge {
+    const enabledProviders = this.config.providers.filter((p) => p.enabled && !excludeProviders.includes(p.name));
+    const steps: string[] = [];
+    for (const tier of judgeTiers(judges)) {
+      const route = this.judgeRouteAt(enabledProviders, excludeProviders, site, tier);
+      if ("refused" in route) {
+        steps.push(`at ${tier}: ${route.refused}`);
+        continue;
+      }
+      return { ...this.resolvedOf(route), relation: judgeRelation(judges, route.model.capabilityLevel) };
+    }
+    throw new JudgeUnavailable({
+      judgedTier: judges,
+      site: site ?? null,
+      candidates: enabledProviders.flatMap((p) => p.models.map((m) => `${p.name}/${m.id} (${m.capabilityLevel})`)),
+      steps,
+    });
+  }
+
+  /** A judge of work at `judges` on a provider other than every one of `excluded`; null when none may judge it. */
+  resolveJudgeFallback(judges: CapabilityLevel, excluded: readonly string[], site?: KnownLLMSite): ResolvedJudge | null {
+    try {
+      return this.resolveJudge(judges, excluded, site);
+    } catch (err) {
+      if (!(err instanceof JudgeUnavailable)) throw err;
+      console.warn(`[ProviderRegistry] no fallback judge for work at ${judges} (excluding ${excluded.join(", ")}):`, describeErrorChain(err));
+      return null;
+    }
+  }
+
+  /**
+   * The model `site` routes a request at `tier` to, held to `tier`: a profile's entry graded below
+   * it is refused, and so is a table with no entry covering it. Capability logic applies only where
+   * the profile does not (routeFromProfile's null).
+   */
+  private judgeRouteAt(
+    enabledProviders: ProviderConfig[],
+    excludeProviders: readonly string[],
+    site: KnownLLMSite | undefined,
+    tier: CapabilityLevel,
+  ): Route | { readonly refused: string } {
+    let route: Route | null = null;
+    if (site) {
+      try {
+        route = this.routeFromProfile(enabledProviders, excludeProviders, site, tier);
+      } catch (err) {
+        // A table with no entry for this tier offers no judge at it; a mapped model no provider offers is a configuration fault.
+        if (!(err instanceof RoutingProfileUnresolved) || err.mappedModel !== null) throw err;
+        return { refused: `routing profile "${this.enabledCombo}" maps site="${site}" at no model for it` };
+      }
+      if (route !== null && CAPABILITY_RANK[route.model.capabilityLevel] < CAPABILITY_RANK[tier]) {
+        return {
+          refused: `routing profile "${this.enabledCombo}" maps site="${site}" to ${route.providerConfig.name}/${route.model.id}, graded ${route.model.capabilityLevel}`,
+        };
+      }
+    }
+    return route ?? this.defaultRoute(enabledProviders, tier) ?? { refused: "no enabled provider offers a model graded at or above it" };
+  }
+
+  /**
+   * The model a second opinion of `opinion.strength` goes to for `ask` at `site`, chosen from the
+   * catalog by provider and graded tier alone; null when the catalog offers none. A judging request's
+   * second opinion is held to the judged tier as its first is: one tier above, else equal, never
+   * below. A same-model one has a single candidate, so it is held to the judged tier alone: the
+   * model is re-asked only when no other enabled model is graded at or above the judged tier, never
+   * because none is graded one tier above it. At a tier:
    * - other-family: another provider's model, by the same routing as any request at `site`;
    * - same-family-other-model: the cheapest other model of the avoided provider graded at or above
-   *   `capability`;
-   * - same-model: the avoided model itself, graded at or above `capability`, and only when no other
+   *   the tier;
+   * - same-model: the avoided model itself, graded at or above the tier, and only when no other
    *   enabled model is: a deployment that offers another model never re-asks the same one.
    */
-  resolveSecondOpinion(capability: CapabilityLevel, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
+  resolveSecondOpinion(ask: TierAsk, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
+    if (ask.judges === undefined) return this.secondOpinionAt(ask.capability, opinion, site);
+    if (opinion.strength === "other-family") return this.resolveJudgeFallback(ask.judges, [opinion.avoid.provider], site);
+    if (opinion.strength === "same-model") return this.secondOpinionAt(ask.judges, opinion, site);
+    for (const tier of judgeTiers(ask.judges)) {
+      const resolved = this.secondOpinionAt(tier, opinion, site);
+      if (resolved !== null) return resolved;
+    }
+    return null;
+  }
+
+  private secondOpinionAt(capability: CapabilityLevel, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
     const { avoid } = opinion;
     if (opinion.strength === "other-family") return this.resolveFallback(capability, [avoid.provider], site);
     const same = this.config.providers.find((p) => p.enabled && p.name === avoid.provider);
@@ -201,12 +318,7 @@ export class ProviderRegistry {
       modelConfig = others.length === 0 && itself !== undefined && CAPABILITY_RANK[itself.capabilityLevel] >= targetRank ? itself : undefined;
     }
     if (!modelConfig) return null;
-    return {
-      provider: this.createLanguageModel(same, modelConfig),
-      modelConfig,
-      providerName: same.name,
-      providerType: same.providerType,
-    };
+    return this.resolvedOf({ providerConfig: same, model: modelConfig });
   }
 
   /**
@@ -248,18 +360,19 @@ export class ProviderRegistry {
    * this point: `buildGateway` refuses to start on it
    * (`RoutingProfileIncomplete`).
    *
-   * Deliberately does NOT enforce "the mapped model must meet or exceed
-   * `capability`" — a flat string entry (e.g. escalation -> claude-sonnet-5-5)
-   * is an intentional PINNED override that wins regardless of the nominal
-   * capability the caller asked for; only a table entry consults `capability`
-   * at all, and only to pick WHICH pinned model applies.
+   * A capability request takes the mapped model whatever its grade: a flat
+   * string entry (e.g. escalation -> claude-opus-5-5) is a pinned override that
+   * wins regardless of the capability asked, and a table entry consults
+   * `capability` only to pick which pinned model applies. A judging request is
+   * held to its tier by `resolveJudge`, which passes over a mapped model graded
+   * below the tier asked.
    */
-  private resolveFromProfile(
+  private routeFromProfile(
     enabledProviders: ProviderConfig[],
     excludeProviders: readonly string[],
     site: KnownLLMSite,
     capability: CapabilityLevel,
-  ): ResolvedProvider | null {
+  ): Route | null {
     const profile = this.routingProfiles?.[this.enabledCombo];
     if (!profile) {
       console.warn(
@@ -300,14 +413,7 @@ export class ProviderRegistry {
 
     for (const providerConfig of enabledProviders) {
       const model = providerConfig.models.find((m) => m.id === modelId);
-      if (model) {
-        return {
-          provider: this.createLanguageModel(providerConfig, model),
-          modelConfig: model,
-          providerName: providerConfig.name,
-          providerType: providerConfig.providerType,
-        };
-      }
+      if (model) return { providerConfig, model };
     }
 
     const excludedHolder = this.config.providers.find(
@@ -331,10 +437,8 @@ export class ProviderRegistry {
     });
   }
 
-  private resolveDefault(
-    enabledProviders: ProviderConfig[],
-    capability: CapabilityLevel,
-  ): ResolvedProvider {
+  /** Capability logic: the default provider first, then the others, each offering its cheapest model at or above `capability`. */
+  private defaultRoute(enabledProviders: ProviderConfig[], capability: CapabilityLevel): Route | null {
     const defaultFirst = [...enabledProviders].sort((a, b) => {
       if (a.name === this.config.defaultProvider) return -1;
       if (b.name === this.config.defaultProvider) return 1;
@@ -342,20 +446,9 @@ export class ProviderRegistry {
     });
 
     for (const providerConfig of defaultFirst) {
-      const modelConfig = findBestModel(providerConfig.models, capability);
-      if (modelConfig) {
-        return {
-          provider: this.createLanguageModel(providerConfig, modelConfig),
-          modelConfig,
-          providerName: providerConfig.name,
-          providerType: providerConfig.providerType,
-        };
-      }
+      const model = findBestModel(providerConfig.models, capability);
+      if (model) return { providerConfig, model };
     }
-
-    throw new NoProviderAvailableError(
-      capability,
-      enabledProviders.flatMap((p) => p.models.map((m) => `${m.id} (${m.capabilityLevel})`)),
-    );
+    return null;
   }
 }

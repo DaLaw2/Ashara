@@ -91,7 +91,7 @@ function bounds(into: number[]): ContextualLlm {
     forCall: () => ({
       generateStructured: async (request) => {
         const opinion = request.secondOpinion;
-        if (opinion !== undefined && opinion.strength !== "same-model") throw new SecondOpinionUnavailable(opinion, request.capability, []);
+        if (opinion !== undefined && opinion.strength !== "same-model") throw new SecondOpinionUnavailable(opinion, request, []);
         into.push(request.maxTokens);
         return { data: request.schema.parse({ problems: [] }), provider: "stub", model: "stub-model" };
       },
@@ -114,7 +114,7 @@ function scripted(answers: readonly unknown[], prompts: string[] = [], catalog: 
         let by: { readonly provider: string; readonly model: string } = { provider: "stub", model: "stub-model" };
         if (opinion !== undefined) {
           const served = catalog[opinion.strength];
-          if (served === undefined) throw new SecondOpinionUnavailable(opinion, request.capability, []);
+          if (served === undefined) throw new SecondOpinionUnavailable(opinion, request, []);
           by = served;
         }
         prompts.push(request.prompt);
@@ -169,6 +169,26 @@ describe("SuiteReviewer", () => {
     for (const text of [...VISION, `## Check task ${CHECK_A}`, `## Check task ${CHECK_B}`, "sh checks/count.sh", "sh checks/empty.sh", "--- file checks/t.sh"]) {
       expect(prompts[0]).toContain(text);
     }
+  });
+
+  test("the first review and its second opinion each ask for a judge of the check work's tier, never a capability", async () => {
+    const sent: unknown[] = [];
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          sent.push({ judges: request.judges, capability: request.capability, strength: request.secondOpinion?.strength });
+          const by = request.secondOpinion === undefined ? STUB : OTHER_FAMILY;
+          return { data: request.schema.parse({ problems: [] }), ...by };
+        },
+      }),
+    };
+    const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm, source: source(), publicInterface: INTERFACE, judgements: keep() });
+
+    expect((await reviewer.review(TASK, PROJECT_PATH)).kind).toBe("clean");
+    expect(sent).toEqual([
+      { judges: "Strong", capability: undefined, strength: undefined },
+      { judges: "Strong", capability: undefined, strength: "other-family" },
+    ]);
   });
 
   // An empty problem list is a claim about the checks, as a finding

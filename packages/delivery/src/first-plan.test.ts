@@ -97,7 +97,7 @@ describe("FirstPlanner decomposition ladder", () => {
     const failing: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          capabilities.push(request.capability);
+          capabilities.push(String(request.capability));
           throw new SchemaValidationError(["scripted failure"], null);
         },
       }),

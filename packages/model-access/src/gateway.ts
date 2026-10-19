@@ -13,6 +13,7 @@ import { z } from "zod";
 import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
 import type { CapabilityLevel } from "./capability-level.js";
+import { judgeRelation } from "./capability-rank.js";
 import { contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
 import {
   ContextBudgetExceeded,
@@ -25,7 +26,7 @@ import {
   TurnResponseInvalid,
 } from "./errors.js";
 import type { ProviderFailure } from "./errors.js";
-import type { ResolvedProvider } from "./provider-registry.js";
+import type { ResolvedJudge, ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
@@ -48,6 +49,7 @@ import type {
   StructuredRequest,
   StructuredResponse,
   ThinkingPolicy,
+  TierAsk,
   TokenUsage,
 } from "./types.js";
 
@@ -190,7 +192,7 @@ export class LLMGateway {
    * the fallback retry and propagate it immediately instead —
    * SchemaValidationError and whatever the gate throws.
    */
-  private async withFallback<TRequest extends { capability: CapabilityLevel; site?: KnownLLMSite }, TResult>(
+  private async withFallback<TRequest extends TierAsk & { site?: KnownLLMSite }, TResult>(
     request: TRequest,
     resolved: ResolvedProvider,
     execute: (request: TRequest, resolved: ResolvedProvider) => Promise<TResult>,
@@ -205,7 +207,7 @@ export class LLMGateway {
 
       let fallback: ResolvedProvider | null;
       try {
-        fallback = this.registry.resolveFallback(request.capability, [resolved.providerName, ...excluded], request.site);
+        fallback = this.fallbackFor(request, [resolved.providerName, ...excluded]);
       } catch (resolutionError) {
         // The configuration fault propagates; the call failure that led here is not lost.
         console.error(
@@ -409,14 +411,16 @@ export class LLMGateway {
     const execute = (req: StructuredRequest<T>, r: ResolvedProvider) => this.executeStructuredCall(req, r, scope);
     const opinion = request.secondOpinion;
     if (opinion === undefined) {
-      return this.withFallback(request, this.registry.resolve(request.capability, [], request.site), execute, "structured request", rethrown, []);
+      const routed = request.judges === undefined ? this.registry.resolve(request.capability, [], request.site) : this.judge(request.judges, [], request.site);
+      return this.withFallback(request, routed, execute, "structured request", rethrown, []);
     }
     // A second opinion goes only to a model of the strength it asks for: the catalog has one or the
     // request is refused unsent. An other-family opinion's failover never returns to the avoided
     // provider; a same-family or same-model one is pinned to its one model. Moving to a weaker
     // strength is the caller's explicit step, never a failover here.
-    const resolved = this.registry.resolveSecondOpinion(request.capability, opinion, request.site);
-    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request.capability, this.registry.enabledModels());
+    const resolved = this.registry.resolveSecondOpinion(request, opinion, request.site);
+    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request, this.registry.enabledModels());
+    if (request.judges !== undefined) this.reportEqualJudge(request.judges, { ...resolved, relation: judgeRelation(request.judges, resolved.modelConfig.capabilityLevel) }, request.site);
     try {
       return opinion.strength === "other-family"
         ? await this.withFallback(request, resolved, execute, "structured request", rethrown, [opinion.avoid.provider])
@@ -425,6 +429,30 @@ export class LLMGateway {
       if (!(error instanceof ProviderError)) throw error;
       throw new SecondOpinionUnanswered(opinion, { provider: resolved.providerName, model: resolved.modelConfig.id }, { cause: error });
     }
+  }
+
+  /** The judge of work at `judges`: one tier above it, else at it, else JudgeUnavailable. */
+  private judge(judges: CapabilityLevel, excluded: readonly string[], site: KnownLLMSite | undefined): ResolvedProvider {
+    const resolved = this.registry.resolveJudge(judges, excluded, site);
+    this.reportEqualJudge(judges, resolved, site);
+    return resolved;
+  }
+
+  /** A failover for `request` that avoids `excluded`, asked at the same tier: a judging request's is a judge too. */
+  private fallbackFor(request: TierAsk & { site?: KnownLLMSite }, excluded: readonly string[]): ResolvedProvider | null {
+    if (request.judges === undefined) return this.registry.resolveFallback(request.capability, excluded, request.site);
+    const fallback = this.registry.resolveJudgeFallback(request.judges, excluded, request.site);
+    if (fallback !== null) this.reportEqualJudge(request.judges, fallback, request.site);
+    return fallback;
+  }
+
+  /** A judge no stronger than the work it judges is named: no model one tier above it is routed there. */
+  private reportEqualJudge(judges: CapabilityLevel, resolved: ResolvedJudge, site: KnownLLMSite | undefined): void {
+    if (resolved.relation !== "equal") return;
+    console.warn(
+      `[LLMGateway] the judge of work at ${judges} (site=${site ?? "none"}) is ${resolved.providerName}/${resolved.modelConfig.id}, ` +
+        `graded ${resolved.modelConfig.capabilityLevel}: no stronger than the work, since no model one tier above it is routed there`,
+    );
   }
 
   /** One request to `resolved` with no fallback; a failure not opted out by `shouldRethrow` is a ProviderError naming whose it was. */
