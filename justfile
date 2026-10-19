@@ -149,6 +149,16 @@ pool-select *ARGS:
 hidden-suite *ARGS:
     npx tsx scripts/hidden-suite.ts {{ARGS}}
 
+# Makes a git worktree's node_modules usable offline in seconds, from the main checkout's install:
+# external packages are linked to it, workspace packages (@ashara/*) to the worktree's own. Refuses,
+# naming npm ci, when the main checkout has no node_modules, its package-lock.json differs, or its
+# installed tree does not match its own package-lock.json. External packages are the main checkout's
+# own directories, so a tool writing inside one writes there. Plain node, not tsx: the worktree has
+# no node_modules to load tsx from yet.
+# Example: just worktree-setup .claude/worktrees/<name>
+worktree-setup dir:
+    node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/worktree-setup.ts {{dir}}
+
 install:
     npm install
 
