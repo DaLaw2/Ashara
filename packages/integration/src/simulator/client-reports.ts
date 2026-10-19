@@ -772,9 +772,13 @@ type CoverageOnRecord =
       readonly notAsked: readonly VisionSource[];
     };
 
-/** An item is the same across a plan's revisions only when its type, id and text all match (as acceptance.ts compares them). */
-function identityOf(source: Pick<VisionSource, "type" | "id" | "text">): string {
-  return JSON.stringify([source.type, source.id, source.text]);
+/**
+ * An item is the same across a plan's revisions only when its id and text both match (as the
+ * delivered report compares them): a version written before guarantees reads a scope line or an
+ * assumption as the guarantee of the same key and statement.
+ */
+function identityOf(source: Pick<VisionSource, "id" | "text">): string {
+  return JSON.stringify([source.id, source.text]);
 }
 
 /**
@@ -841,16 +845,16 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
   }
   const swept = decidedByStoredChecks(sweep.storedChecks);
   if (swept.kind !== "decided") return [{ key: "coverage-unreadable", statement: `which items the checks ${at} ran decide is not on record: ${swept.detail}` }];
-  const missed = (type: "scope" | "assumption", id: string, text: string): boolean => !swept.decided.has(identityOf({ type, id, text }));
+  const missed = (id: string, text: string): boolean => !swept.decided.has(identityOf({ id, text }));
   const scopeFindings = scope.data.flatMap((line, i) => {
     const id = `S${i + 1}`;
     const { text, side } = typeof line === "string" ? { text: line, side: "of no recorded side" } : line;
-    if (side === "out" || !missed("scope", id, text)) return [];
+    if (side === "out" || !missed(id, text)) return [];
     return [{ key: id, statement: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, is decided by no stored check ${at} ran` }];
   });
   const assumptionFindings = inferences.data.flatMap((record, i) => {
     const key = record.key ?? `A${i + 1}`;
-    if (record.kind === "internal-design" || !missed("assumption", key, record.statement)) return [];
+    if (record.kind === "internal-design" || !missed(key, record.statement)) return [];
     return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is decided by no stored check ${at} ran` }];
   });
   return [...scopeFindings, ...assumptionFindings, ...undecidedAtSweep(sweep, scope.data, inferences.data, at)];
@@ -949,7 +953,7 @@ export function unconfirmedAtPassedSweeps(records: Pick<ReportRecords, "passedSw
       for (const id of decides.data) {
         const source = sources.find((each) => each.id === id);
         if (source === undefined || found.has(id) || left.has(JSON.stringify([source.id, source.text]))) continue;
-        if (source.type === "scope" ? source.side === "out" : source.kind === "internal-design") continue;
+        if (!askedFor(source)) continue;
         const confirmed = rounds.some((round) => {
           const first = round[0]?.provider;
           return round.some((review) => (review.provider !== first || review.blindSpots) && !review.problems.some((problem) => namesItem(problem, check.checkTaskId, id)));
@@ -982,8 +986,8 @@ function roundsOf(reviews: readonly ObservedReview[]): ObservedReview[][] {
 /**
  * The coverage the delivered report must state, from the records alone: the review task's
  * sources are every item of the vision; an item is checked when a check of a goal task's latest
- * stored revision records that it decides it; an out-of-scope line, or an assumption
- * recorded as the team's own design choice, is not part of what the client asked for and is never
+ * stored revision records that it decides it; an out-of-scope line, or an assumption, which is
+ * decided through what rests on it, is not an item of what the client asked for and is never
  * listed. Unrecorded when the review holds no traced items or one such check records none it decides.
  */
 function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalChecks" | "goalUndecided">): CoverageOnRecord {
@@ -993,8 +997,7 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
   const swept = decidedByStoredChecks(records.goalChecks);
   if (swept.kind !== "decided") return swept.kind === "unrecorded" ? { kind: "unrecorded" } : { kind: "unreadable", detail: swept.detail };
   const decided = swept.decided;
-  const isAsked = (source: VisionSource): boolean => (source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design");
-  const asked = items.filter(isAsked);
+  const asked = items.filter(askedFor);
   const left = new Map<string, UndecidedReason>();
   for (const item of records.goalUndecided) {
     const key = JSON.stringify([item.id, item.text]);
@@ -1009,8 +1012,17 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
       const reason = left.get(JSON.stringify([source.id, source.text]));
       return decided.has(identityOf(source)) && reason !== undefined ? [{ source, reason }] : [];
     }),
-    notAsked: items.filter((source) => !isAsked(source)),
+    notAsked: items.filter((source) => !askedFor(source)),
   };
+}
+
+/**
+ * Whether an item is part of what the client asked for, which a check decides, worded apart from the
+ * report it judges: a guarantee, or a scope line not out of scope. An assumption is decided through
+ * what rests on it, never on its own.
+ */
+function askedFor(source: VisionSource): boolean {
+  return source.type === "guarantee" || (source.type === "scope" && source.side !== "out");
 }
 
 const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
@@ -1131,7 +1143,7 @@ function undecidedProblems(body: string, undecided: CoverageUndecided): string[]
  * as not verified by Ashara, and nothing else there; none at all when there is no such assumption.
  */
 function unverifiedProblems(body: string, notAsked: readonly VisionSource[]): string[] {
-  const expected = notAsked.flatMap((source) => (source.type === "assumption" ? [`- ${source.id}: ${source.text}`] : []));
+  const expected = notAsked.flatMap((source) => (source.type === "assumption" && source.kind === "internal-design" ? [`- ${source.id}: ${source.text}`] : []));
   const section = paragraph(body, UNVERIFIED_HEAD);
   if (expected.length === 0) return section === null ? [] : ["the delivered report names assumptions as not verified by Ashara; the records hold no internal-design assumption"];
   if (section === null) return [`the delivered report does not name the ${expected.length} internal-design assumption(s) as not verified by Ashara`];

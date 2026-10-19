@@ -320,20 +320,23 @@ describe("acceptance on main", () => {
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store keys".`);
     // The items of what the client asked for that no stored check of a passing task decides, and
-    // only those; the exclusion is never listed, and the team's design choice is named
-    // apart as not verified by Ashara.
+    // only those; the exclusion is never listed, an assumption a client could observe is listed as
+    // what the work rests on, and the team's design choice is named apart as not verified by Ashara.
     expect(body).toContain(
       "These items of what you asked for are decided by no stored check of a task whose stored checks passed on main, " +
-        "so nothing confirms them either way:\n- Two writers never corrupt the store\n" +
-        "- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
+        "so nothing confirms them either way:\n- Two writers never corrupt the store\n\n",
+    );
+    expect(body).toContain(
+      "The work rests on these assumptions. None is counted above as an item of what you asked for: each is decided only through what you asked for that rests on it.\n" +
+        "- A missing key exits 3 (your answer)\n- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
     );
     expect(body).toContain("they are not verified by Ashara.\n- A2: The log file is kv.log\n\n");
     // No suite review is on record, so the decided items are listed
     // as unconfirmed and none is counted.
     expect(body).toContain(
-      "None of the 5 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.\n\n" +
+      "None of the 3 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.\n\n" +
         "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review of those checks is on record as confirming that: " +
-        "they are not verified by Ashara.\n- Keys can be stored and read\n- Keys can be deleted\n- A missing key exits 3 (your answer)\n\n",
+        "they are not verified by Ashara.\n- Keys can be stored and read\n- Keys can be deleted\n\n",
     );
     expect(body).not.toContain("Any network service");
   });

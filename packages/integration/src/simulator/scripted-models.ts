@@ -228,7 +228,7 @@ const taskRowSchema = z.object({
 const taskSpecShape = z.object({
   origin: z.string().optional(),
   checksFor: z.string().optional(),
-  sources: z.array(z.object({ id: z.string() })).optional(),
+  sources: z.array(z.object({ id: z.string(), text: z.string() })).optional(),
 });
 
 const checkRowSchema = z.object({
@@ -304,10 +304,51 @@ function itemsToCheck(prompt: string): string[] {
   return listed === undefined ? [] : listed.split(", ");
 }
 
+/** The guarantees the planner's prompt lists, each by its id with its whole line, in the prompt's order. */
+function guaranteesListed(prompt: string): Array<{ readonly id: string; readonly line: string }> {
+  return [...prompt.matchAll(/^- ([A-Za-z0-9_-]+) \(guarantee[;)].*$/gm)].flatMap((match) => (match[1] === undefined ? [] : [{ id: match[1], line: match[0] }]));
+}
+
+/** Whether `text` names behaviour `b` as a word of its own, so b1 is never read in b10. */
+function namesBehaviour(text: string, b: string): boolean {
+  return new RegExp(String.raw`(^|[^A-Za-z0-9_])${b}($|[^A-Za-z0-9_])`).test(text);
+}
+
+/**
+ * The id of the guarantee the planner's prompt lists for behaviour `b`, as an honest planner reads
+ * the vision: the guarantee whose line names it. A prompt that lists none is unanswerable.
+ */
+function guaranteeOf(prompt: string, b: string): string {
+  const found = guaranteesListed(prompt).find((guarantee) => namesBehaviour(guarantee.line, b));
+  if (found === undefined) throw new StandInUnanswerable("decomposition.tasks", `the planner's prompt lists no guarantee naming ${b}`);
+  return found.id;
+}
+
+/** The repair task that writes the public interface file, citing the first guarantee the planner's prompt lists. */
+function interfaceTaskCiting(prompt: string): ScriptedTask {
+  const first = guaranteesListed(prompt)[0];
+  if (first === undefined) throw new StandInUnanswerable("decomposition.tasks", "the planner's prompt lists no guarantee");
+  return {
+    ref: INTERFACE_TASK_REF,
+    title: INTERFACE_TASK_TITLE,
+    description: `Updates ${PUBLIC_INTERFACE_PATH} to describe the delivered product.`,
+    dependsOn: [],
+    goal: `${PUBLIC_INTERFACE_PATH} describes the delivered product`,
+    endState: `${PUBLIC_INTERFACE_PATH} is no longer the scaffold's.`,
+    scope: `${PUBLIC_INTERFACE_PATH} only.`,
+    deliverables: [{ text: `${PUBLIC_INTERFACE_PATH} describes the product.`, sources: [first.id] }],
+    acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: [first.id] }],
+    capability: "Medium",
+    capabilityReason: "One file.",
+  };
+}
+
 type ScriptedLine = { readonly text: string; readonly sources: readonly string[] };
 
+type ScriptedTask = Record<string, unknown> & { readonly acceptance: readonly ScriptedLine[] };
+
 interface ScriptedPlan {
-  readonly tasks: ReadonlyArray<Record<string, unknown> & { readonly acceptance: readonly ScriptedLine[] }>;
+  readonly tasks: readonly ScriptedTask[];
 }
 
 /**
@@ -591,21 +632,7 @@ export class StandIns {
     const { universe } = this.context;
     const toCheck = itemsToCheck(prompt);
     const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE) || prompt.includes(MISSING_INTERFACE_EVIDENCE)
-      ? [
-          {
-            ref: INTERFACE_TASK_REF,
-            title: INTERFACE_TASK_TITLE,
-            description: `Updates ${PUBLIC_INTERFACE_PATH} to describe the delivered product.`,
-            dependsOn: [],
-            goal: `${PUBLIC_INTERFACE_PATH} describes the delivered product`,
-            endState: `${PUBLIC_INTERFACE_PATH} is no longer the scaffold's.`,
-            scope: `${PUBLIC_INTERFACE_PATH} only.`,
-            deliverables: [{ text: `${PUBLIC_INTERFACE_PATH} describes the product.`, sources: ["S1"] }],
-            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: ["S1"] }],
-            capability: "Medium",
-            capabilityReason: "One file.",
-          },
-        ]
+      ? [interfaceTaskCiting(prompt)]
       : [];
     // Answering that evidence, it plans only what is still to do: a done task planned again could
     // never have a check fail on its foundation.
@@ -620,8 +647,8 @@ export class StandIns {
         goal: `Deliver ${task.behaviours.join(", ")}`,
         endState: `${task.behaviours.join(", ")} can be used end to end.`,
         scope: `The ${task.behaviours.join(", ")} part of the product.`,
-        deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
-        acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
+        deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [guaranteeOf(prompt, b)] })),
+        acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [guaranteeOf(prompt, b)] })),
         capability: "Medium",
         capabilityReason: "One small behaviour.",
       })), ...interfaceTask], toCheck),
@@ -963,7 +990,7 @@ export class StandIns {
     } else if (tools.has("define_check")) {
       work = "checks";
       // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a task spec with no sources cites none; no oracle reads it
-      steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined, spec.success ? (spec.data.sources ?? []).map((item) => item.id) : []);
+      steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined, spec.success ? (spec.data.sources ?? []) : []);
     } else if (origin === "product-scaffold") {
       work = "scaffold";
       steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], ...this.publicInterfaceWork(task.projectId), finished("Set up the product layout.")];
@@ -1056,11 +1083,12 @@ export class StandIns {
 
   /**
    * A check task's turns. Each check names the cited items it decides: a behaviour's check
-   * decides its scope line, and every cited item no such check decides gets a check of its own, so the
-   * set decides every item its task cites, as an honest author writes it.
+   * decides the cited guarantee that names it, and every cited item no such check decides gets a check
+   * of its own, so the set decides every item its task cites, as an honest author writes it.
    */
-  private async checkWork(checksFor: string | undefined, cited: readonly string[]): Promise<ToolStep[]> {
+  private async checkWork(checksFor: string | undefined, sources: ReadonlyArray<{ readonly id: string; readonly text: string }>): Promise<ToolStep[]> {
     const { tape, rates, universe } = this.context;
+    const cited = sources.map((source) => source.id);
     if (checksFor === undefined) throw new StandInUnanswerable("agent-runner", "a check task names no task it checks");
     const [firstCited] = cited;
     if (firstCited === undefined) throw new StandInUnanswerable("agent-runner", `the check task for ${checksFor} cites no vision item`);
@@ -1077,8 +1105,8 @@ export class StandIns {
     const checked = taskOfTitle(universe, checkedTitle);
     if (checked === null) throw new StandInUnanswerable("agent-runner", `check task for ${checksFor}: its title carries no simulator marker`);
     const decidedBy = (b: string): readonly string[] => {
-      const line = `S${universe.behaviours.indexOf(b) + 1}`;
-      return cited.includes(line) ? [line] : [firstCited];
+      const naming = sources.find((source) => namesBehaviour(source.text, b));
+      return naming === undefined ? [firstCited] : [naming.id];
     };
     const checks: Array<{ readonly name: string; readonly spec: CheckSpec; readonly decides: readonly string[] }> = checked.behaviours.map((b) => ({
       name: `has-${b}`,

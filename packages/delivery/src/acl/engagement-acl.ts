@@ -2,7 +2,7 @@ import { VisionUnreadable, readVisionVersion } from "@ashara/engagement";
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
 import type { AgentBrief } from "@ashara/workplace";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
-import type { ScopeSide } from "./engagement-vision-acl.js";
+import type { InterfaceEntry, VisionGuarantee } from "./engagement-vision-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 
 /**
@@ -46,14 +46,14 @@ export interface PlanningVision {
   readonly visionText: string;
   readonly northStar: string;
   readonly items: VisionItem[];
+  /** The product's public interface as the vision states it, each entry by its key; empty on a version that recorded none. */
+  readonly interface: ReadonlyArray<{ readonly id: string; readonly text: string }>;
 }
 
-const SCOPE_SIDE_LEAD: Readonly<Record<ScopeSide, string>> = { in: "In scope: ", out: "Out of scope: ", unclassified: "" };
-
 /**
- * The north star decomposition plans toward: the vision's summary, its scope, the client's answers
- * and the assumptions work proceeds on. The decomposition prompt itself stays in DecompositionEngine;
- * this is only its input.
+ * The north star decomposition plans toward: the vision's summary, its guarantees and exclusions, the
+ * client's answers and the assumptions work proceeds on. The decomposition prompt itself stays in
+ * DecompositionEngine; this is only its input.
  */
 function northStarOf(vision: VisionVersion): string {
   const answers = vision.assumptions.flatMap((a) =>
@@ -63,7 +63,8 @@ function northStarOf(vision: VisionVersion): string {
     a.status === "Stated" ? [] : [a.status === null ? a.statement : `${a.statement} (${a.status})`],
   );
   const sections = [vision.summary];
-  if (vision.scope.length > 0) sections.push(`Scope:\n${vision.scope.map((s) => `- ${SCOPE_SIDE_LEAD[s.side]}${s.text}`).join("\n")}`);
+  if (vision.guarantees.length > 0) sections.push(`Guarantees:\n${vision.guarantees.map((g) => `- ${g.id}: ${g.statement}`).join("\n")}`);
+  if (vision.exclusions.length > 0) sections.push(`Exclusions:\n${vision.exclusions.map((x) => `- ${x.id}: ${x.text}`).join("\n")}`);
   if (answers.length > 0) {
     sections.push(
       `Client clarifications (Stated by the client; these override any assumption):\n` +
@@ -77,16 +78,26 @@ function northStarOf(vision: VisionVersion): string {
 }
 
 /**
- * Every item of the vision a planned task can trace to: each scope
- * boundary (S<n>), then each assumption work proceeds on, by its key in the vision, a Stated one by
- * the decision the client's answer made, each with its status, standing with the client and kind.
+ * Every item of the vision a planned task can trace to: each guarantee, by its key, with where it is
+ * observed and what would refute it, then each assumption work proceeds on, by its key, a Stated one
+ * by the decision the client's answer made, each with its status, standing with the client and kind.
+ * A version written before guarantees reads each assumption a client could observe as a guarantee
+ * under the assumption's own key, so that one item stands for it, a guarantee every plan must cite.
  * The summary is not an item: it restates the whole tender, so a task tracing to it would trace to
  * nothing in particular.
  */
 function visionItemsOf(vision: VisionVersion): VisionItem[] {
+  const guaranteeIds = new Set(vision.guarantees.map((g) => g.id));
   return [
-    ...vision.scope.map((line, i): VisionItem => ({ type: "scope", id: `S${i + 1}`, text: line.text, side: line.side })),
-    ...vision.assumptions.map((a): VisionItem => ({
+    ...vision.guarantees.map((g: VisionGuarantee): VisionItem => ({
+      type: "guarantee",
+      id: g.id,
+      text: g.statement,
+      observation: g.observation,
+      interface: [...g.interface],
+      refutedBy: [...g.refutedBy],
+    })),
+    ...vision.assumptions.filter((a) => !guaranteeIds.has(a.id)).map((a): VisionItem => ({
       type: "assumption",
       id: a.id,
       text: a.statement,
@@ -100,7 +111,13 @@ function visionItemsOf(vision: VisionVersion): VisionItem[] {
 /** The stored vision as planning input; throws VisionUnreadable, the project's own record. */
 export function planningVisionOf(stored: StoredVision): PlanningVision {
   const vision = readVisionVersion(stored);
-  return { version: vision.version, visionText: vision.visionText, northStar: northStarOf(vision), items: visionItemsOf(vision) };
+  return {
+    version: vision.version,
+    visionText: vision.visionText,
+    northStar: northStarOf(vision),
+    items: visionItemsOf(vision),
+    interface: vision.interface.map((entry: InterfaceEntry) => ({ id: entry.id, text: entry.text })),
+  };
 }
 
 /** A change the client's answer made: their question, their words and what work now proceeds on. */

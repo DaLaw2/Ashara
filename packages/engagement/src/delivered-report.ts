@@ -3,8 +3,8 @@ import type { SecondOpinionStrength } from "@ashara/finance";
 import { describeErrorChain, faultBackoffSeconds, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
-import { checkDecides } from "./vision-language/vision-source.js";
-import type { VisionSource } from "./vision-language/vision-source.js";
+import { checkDecides } from "./vision-language/index.js";
+import type { VisionSource } from "./vision-language/index.js";
 
 // The Liaison's delivered report:
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
@@ -28,19 +28,25 @@ type GoalClose =
   | { readonly kind: "unrecorded-kind"; readonly commit: string }
   | { readonly kind: "no-record" };
 
+/** An assumption with where it stood with the client at acceptance, never as the plan's copy of the vision recorded it. */
+interface AcceptedAssumption {
+  readonly type: "assumption";
+  readonly id: string;
+  readonly text: string;
+  readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
+  readonly standing: AcceptedAssumptionStanding;
+}
+
 /**
- * An item of the vision the plan was reviewed against: a scope line, or an assumption with where it
- * stood with the client at acceptance, never as the plan's copy of the vision recorded it.
+ * An item of the vision the plan was reviewed against: a guarantee, a scope line of a plan reviewed
+ * before guarantees were recorded, or an assumption as it stood at acceptance. A guarantee a version
+ * written before guarantees reads from an assumption carries that assumption, so the client is told
+ * it was Ashara's and where it stood; null on every other guarantee.
  */
 type AcceptedVisionItem =
+  | (Extract<VisionSource, { readonly type: "guarantee" }> & { readonly assumed: AcceptedAssumption | null })
   | Extract<VisionSource, { readonly type: "scope" }>
-  | {
-      readonly type: "assumption";
-      readonly id: string;
-      readonly text: string;
-      readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
-      readonly standing: AcceptedAssumptionStanding;
-    };
+  | AcceptedAssumption;
 
 /**
  * Whether a review of the checks left an item undecided, and why. A finding that no check really
@@ -351,9 +357,9 @@ function closeLine(title: string, close: GoalClose): string {
 }
 
 /**
- * Whether the item is part of what the client asked for: a line the vision records as out
- * of scope is not, nor is an assumption recorded as the team's own design choice, which the client
- * was told their acceptance does not depend on. Everything else is, an unclassified one included.
+ * Whether the item is part of what the client asked for, which a check decides: a guarantee, or a
+ * scope line not recorded as out of scope. An assumption is not: it is decided through what the
+ * client asked for that rests on it.
  */
 function askedFor(source: AcceptedVisionItem): boolean {
   return checkDecides(source);
@@ -365,13 +371,31 @@ function askedFor(source: AcceptedVisionItem): boolean {
  */
 function unverifiedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
-  const design = vision.items.flatMap(({ source }) => (source.type === "assumption" && !checkDecides(source) ? [source] : []));
+  const design = vision.items.flatMap(({ source }) => (source.type === "assumption" && source.kind === "internal-design" ? [source] : []));
   if (design.length === 0) return [];
   return [
     [
       `These assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no ` +
         `check decides them: they are not verified by Ashara.`,
       ...design.map((source) => `- ${source.id}: ${source.text}`),
+    ].join("\n"),
+  ];
+}
+
+/**
+ * The assumptions a client could observe that the work rests on, each worded by where it stood with
+ * the client at acceptance. None is an item of what the client asked for, since each is decided only
+ * through what rests on it, so none is counted among them. Empty when there are none.
+ */
+function restingSection(vision: VisionCoverage): string[] {
+  if (vision.kind === "unrecorded") return [];
+  const resting = vision.items.flatMap(({ source }) => (source.type === "assumption" && source.kind !== "internal-design" ? [source] : []));
+  if (resting.length === 0) return [];
+  return [
+    [
+      `The work rests on these assumptions. None is counted above as an item of what you asked for: each is decided ` +
+        `only through what you asked for that rests on it.`,
+      ...resting.map(coverageLine),
     ].join("\n"),
   ];
 }
@@ -429,6 +453,7 @@ function isStated(standing: AcceptedAssumptionStanding): standing is StatedStand
 }
 
 function coverageLine(source: AcceptedVisionItem): string {
+  if (source.type === "guarantee") return source.assumed === null ? `- ${source.id}: ${source.text}` : coverageLine(source.assumed);
   if (source.type === "scope") {
     return source.side === "unclassified"
       ? `- ${source.text} (recorded without saying whether it is in or out of scope)`
@@ -611,6 +636,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
     coverageSection(due.vision),
     ...confirmedSection(due.vision),
     ...undecidedSection(due.vision),
+    ...restingSection(due.vision),
     ...unverifiedSection(due.vision),
     ...readingSection(due.reading),
     `Nothing more is built on this project; it waits until you stop it.`,

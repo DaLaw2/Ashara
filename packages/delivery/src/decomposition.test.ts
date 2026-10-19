@@ -1,5 +1,8 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { ZodType } from "zod";
+import { planningVisionOf } from "./acl/engagement-acl.js";
+import type { StoredVision } from "./acl/engagement-acl.js";
+import { checkDecides } from "./acl/engagement-vision-acl.js";
 import { SchemaValidationError, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { StructuredProvider, StructuredValidation } from "./acl/finance-acl.js";
 import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UncitedVisionItemsError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
@@ -27,6 +30,7 @@ const INPUT: DecompositionInput = {
     environment: { kind: "new" },
     layout: { kind: "new" },
     checkedItems: [A1],
+    interface: [],
     visionItems: [
         { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio", side: "in" },
         A1,
@@ -365,14 +369,13 @@ describe("DecompositionEngine", () => {
         expect(prompt).not.toContain('"visionItems"');
     });
 
-    // An assumption whose breach the client could observe gets a check; a plan cannot leave it to chance.
-    test("a plan in which no task cites a client-visible assumption is rejected through the ladder, never written", async () => {
+    // An assumption is decided through what rests on it; the plan must cite only what a check decides.
+    test("a plan in which no task cites a client-visible assumption is accepted; only what a check decides must be cited", async () => {
         const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
 
-        await expect(new DecompositionEngine(llm).decompose({ ...INPUT, checkedItems: [] })).rejects.toBeInstanceOf(UncitedVisionItemsError);
-        expect(seen.prompts[0]).toContain('Every one of these items must be cited in "sources" by a line of the task whose work it is, whose checks then decide it; a plan that leaves one uncited is rejected: S1, A1.');
-        const errors = seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "";
-        expect(errors).toContain('No task cites A1 ("A class holds at most twenty members")');
+        await new DecompositionEngine(llm).decompose({ ...INPUT, checkedItems: [] });
+        expect(seen.verdicts).toEqual([{ ok: true }]);
+        expect(seen.prompts[0]).toContain('Every one of these items must be cited in "sources" by a line of the task whose work it is, whose checks then decide it; a plan that leaves one uncited is rejected: S1.');
     });
 
     // Citing gives the item a task whose check set must decide it; no line's text is read as checking it.
@@ -389,11 +392,16 @@ describe("DecompositionEngine", () => {
         }
     });
 
-    test("work already done checks an assumption only as the vision states it now", async () => {
-        const changed = scriptedLlm({ tasks: [task("t1")] }, seen);
-        const earlier: VisionItem = { ...A1, text: "A class holds at most ten members" };
-        await expect(new DecompositionEngine(changed).decompose({ ...INPUT, checkedItems: [earlier] })).rejects.toBeInstanceOf(UncitedVisionItemsError);
-        expect(seen.prompts[0]).toContain("a plan that leaves one uncited is rejected: S1, A1.");
+    test("work already done checks an item only as the vision states it now", async () => {
+        const noneCite = { tasks: [task("t1", {}, ["A1"])] };
+        const S1: VisionItem = { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio", side: "in" };
+        await new DecompositionEngine(scriptedLlm(noneCite, seen)).decompose({ ...INPUT, checkedItems: [S1] });
+        expect(seen.verdicts).toEqual([{ ok: true }]);
+        resetIdCounter();
+        const changed: Seen = { prompts: [], verdicts: [] };
+        const earlier: VisionItem = { ...S1, text: "In: booking a seat in a class of one studio" };
+        await expect(new DecompositionEngine(scriptedLlm(noneCite, changed)).decompose({ ...INPUT, checkedItems: [earlier] })).rejects.toBeInstanceOf(UncitedVisionItemsError);
+        expect(changed.prompts[0]).toContain("a plan that leaves one uncited is rejected: S1.");
     });
 
     // Every in-scope line becomes a check; whether one does is not the planner's choice.
@@ -417,10 +425,10 @@ describe("DecompositionEngine", () => {
     });
 
     // An assumption of no recorded kind is not evidence that no client could observe it.
-    test("an unclassified assumption is citable and must be checked like a client-visible one", async () => {
+    test("an unclassified assumption is citable like a client-visible one", async () => {
         const unclassified: VisionItem = { type: "assumption", id: "A3", text: "Empty names are refused", status: "Inferred", standing: "unrecorded", kind: "unclassified" };
         const input = { ...INPUT, visionItems: [...INPUT.visionItems, unclassified] };
-        await expect(new DecompositionEngine(scriptedLlm({ tasks: [task("t1")] }, seen)).decompose(input)).rejects.toBeInstanceOf(UncitedVisionItemsError);
+        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1")] }, seen)).decompose(input);
         expect(seen.prompts[0]).toContain("- A3 (assumption; Inferred; whether the client was shown it is not on record; not classified): Empty names are refused");
         resetIdCounter();
         const verdicts: StructuredValidation[] = [];
@@ -428,9 +436,10 @@ describe("DecompositionEngine", () => {
         expect(verdicts).toEqual([{ ok: true }]);
     });
 
-    test("a vision with no item is refused before any model call", async () => {
+    test("a vision with no item, or with assumptions and no guarantee, is refused before any model call", async () => {
         const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
         await expect(new DecompositionEngine(llm).decompose({ ...INPUT, visionItems: [] })).rejects.toBeInstanceOf(VisionItemsMissing);
+        await expect(new DecompositionEngine(llm).decompose({ ...INPUT, visionItems: INPUT.visionItems.filter((item) => item.type === "assumption") })).rejects.toBeInstanceOf(VisionItemsMissing);
         expect(seen.prompts).toEqual([]);
     });
 
@@ -557,5 +566,106 @@ describe("DecompositionEngine", () => {
         await expect(
             new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT),
         ).rejects.toSatisfy((err: unknown) => modelCallFailureOf(err) === "model");
+    });
+});
+
+const CONTRACT_TENDER = "A key-value store. Clients put and get values from the command line. Deleted keys are gone.";
+const PUT_QUOTE = { kind: "tender", quote: "Clients put and get values from the command line." };
+
+/** A stored vision version in the guarantees form: two interface entries, two guarantees, a client-visible and an internal-design assumption. */
+const CONTRACT_VISION: StoredVision = {
+    projectId: "00000000-0000-4000-8000-0000000000d1",
+    version: 1,
+    visionText: CONTRACT_TENDER,
+    summary: "A key-value store.",
+    scopeBoundaries: [],
+    inferences: [
+        { key: "A1", statement: "Values are text.", rationale: "tender", status: "Inferred", kind: "client-visible", disclosed: "asked", underpins: ["G1"] },
+        { key: "A2", statement: "The data lives in one file.", rationale: "simplest", status: "Inferred", kind: "internal-design", disclosed: "reported" },
+    ],
+    openQuestions: [],
+    contractForm: "guarantees",
+    interface: [
+        { id: "I1", text: "put KEY VALUE stores VALUE under KEY and exits 0", source: PUT_QUOTE },
+        { id: "I2", text: "get KEY prints the value stored under KEY, or exits 1 when none is", source: PUT_QUOTE },
+    ],
+    guarantees: [
+        {
+            id: "G1",
+            statement: "A get prints the value of the last put of its key.",
+            observable: { interface: ["I1", "I2"], observation: "output" },
+            refutedBy: ["a get after a put prints another value"],
+            source: PUT_QUOTE,
+        },
+        {
+            id: "G2",
+            statement: "A get of a deleted key finds nothing.",
+            observable: { interface: ["I2"], observation: "exit-status" },
+            refutedBy: ["a get of a deleted key exits 0"],
+            source: { kind: "tender", quote: "Deleted keys are gone." },
+        },
+    ],
+    exclusions: [],
+};
+
+describe("a plan against a vision stated as guarantees", () => {
+    beforeEach(() => resetIdCounter());
+
+    const contractInput = (): DecompositionInput => {
+        const vision = planningVisionOf(CONTRACT_VISION);
+        return { ...INPUT, epicNorthStar: vision.northStar, visionItems: vision.items, interface: vision.interface, checkedItems: [] };
+    };
+
+    test("its vision items are its guarantees by key, never lines numbered by position, and a plan citing them is accepted", async () => {
+        const input = contractInput();
+        expect(input.visionItems.map((item) => [item.type, item.id])).toEqual([
+            ["guarantee", "G1"],
+            ["guarantee", "G2"],
+            ["assumption", "A1"],
+            ["assumption", "A2"],
+        ]);
+        expect(input.epicNorthStar).toContain("Guarantees:\n- G1: A get prints the value of the last put of its key.\n- G2: A get of a deleted key finds nothing.");
+        const seen: Seen = { prompts: [], verdicts: [] };
+        const result = await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["G1", "A1"]), task("t2", {}, ["G2"])] }, seen)).decompose(input);
+        expect(seen.verdicts).toEqual([{ ok: true }]);
+        expect(seen.prompts[0]).toContain("- G2 (guarantee; observed in its exit-status at I2): A get of a deleted key finds nothing. Refuted by: a get of a deleted key exits 0");
+        const cited = result.tasks.flatMap((t) => (t.taskSpec.origin === "decomposition" ? [t.taskSpec.sources.map((s) => s.id)] : []));
+        expect(cited).toEqual([["G1", "A1"], ["G2"]]);
+        // The check author's brief carries each cited guarantee's refuting observations.
+        const check = result.tasks.find((t) => t.taskSpec.origin === "check");
+        expect(check?.taskSpec.goal).toContain("Refuted by: a get after a put prints another value");
+    });
+
+    test("a plan leaving a guarantee uncited is refused with UncitedVisionItemsError naming that guarantee", async () => {
+        const seen: Seen = { prompts: [], verdicts: [] };
+        const refused: unknown = await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["G1", "A1"])] }, seen))
+            .decompose(contractInput())
+            .catch((err: unknown) => err);
+        expect(refused).toBeInstanceOf(UncitedVisionItemsError);
+        expect(refused instanceof UncitedVisionItemsError ? refused.uncited : []).toEqual([{ id: "G2", text: "A get of a deleted key finds nothing." }]);
+        expect(seen.prompts[0]).toContain("a plan that leaves one uncited is rejected: G1, G2.");
+    });
+
+    test("an assumption is no item a check decides: a plan citing every guarantee and no assumption is accepted", async () => {
+        expect(checkDecides({ type: "assumption", kind: "client-visible" })).toBe(false);
+        expect(checkDecides({ type: "assumption", kind: "unclassified" })).toBe(false);
+        expect(checkDecides({ type: "guarantee" })).toBe(true);
+        const seen: Seen = { prompts: [], verdicts: [] };
+        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, seen)).decompose(contractInput());
+        expect(seen.verdicts).toEqual([{ ok: true }]);
+    });
+
+    test("the scaffold's brief carries every interface entry verbatim and its success criterion names each", async () => {
+        const result = await new DecompositionEngine(
+            scriptedLlm({ tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, { prompts: [], verdicts: [] }),
+        ).decompose(contractInput());
+        const scaffold = result.tasks.find((t) => t.taskSpec.origin === "product-scaffold");
+        for (const entry of ["put KEY VALUE stores VALUE under KEY and exits 0", "get KEY prints the value stored under KEY, or exits 1 when none is"]) {
+            expect(scaffold?.description).toContain(entry);
+            expect(scaffold?.taskSpec.goal).toContain(entry);
+        }
+        expect(scaffold?.description).toContain("- I1: put KEY VALUE stores VALUE under KEY and exits 0\n- I2: get KEY prints");
+        expect(scaffold?.successCriteria).toContainEqual(expect.stringContaining("names every interface entry I1, I2 as the vision states it"));
+        expect(scaffold?.description).not.toContain("Choose one form for each");
     });
 });

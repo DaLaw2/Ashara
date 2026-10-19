@@ -55,9 +55,9 @@ export class DecompositionEngine {
         this.config = DEFAULT_DECOMPOSITION_CONFIG;
     }
 
-    /** Throws VisionItemsMissing, before any model call, for a vision no task could trace to. */
+    /** Throws VisionItemsMissing, before any model call, for a vision that holds no guarantee. */
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
-        if (input.visionItems.length === 0) throw new VisionItemsMissing(input.epicTitle);
+        if (itemsToCheck(input.visionItems).length === 0) throw new VisionItemsMissing(input.epicTitle);
         return this.decomposeInternal(input);
     }
 
@@ -98,7 +98,7 @@ export class DecompositionEngine {
         // environment task of the revision lands on that state, so it is the foundation then.
         const foundationId =
             input.layout.kind === "new"
-                ? addProductScaffold(epic.id, environmentId, allTasks, dependencyEdges)
+                ? addProductScaffold(epic.id, environmentId, input.interface, allTasks, dependencyEdges)
                 : input.environment.kind === "new"
                   ? environmentId
                   : input.layout.taskId;
@@ -366,7 +366,7 @@ export class DecompositionEngine {
         visionItems: readonly VisionItem[],
         checkedItems: readonly VisionItem[],
     ): string {
-        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["S1"]}], "acceptance": [{"text": "...", "sources": ["S1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
+        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["G1"]}], "acceptance": [{"text": "...", "sources": ["G1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
 
         const lines = [
             `${instruction}.`,
@@ -389,7 +389,7 @@ export class DecompositionEngine {
 
         lines.push(
             ``,
-            `Vision items (what the client asked for, each with its id). A scope line or an assumption not marked "not citable" may be cited; an internal-design assumption is how the team builds the product, guidance for its implementer that no deliverable or acceptance line cites:`,
+            `Vision items (what the client asked for, each with its id). A guarantee or an assumption not marked "not citable" may be cited; cite an assumption on every line whose work rests on it. An internal-design assumption is how the team builds the product, guidance for its implementer that no deliverable or acceptance line cites:`,
             ...visionItems.map((item) => `- ${visionSourceLine(item)}`),
         );
         const toCheck = itemsToCheck(visionItems).filter((item) => !alreadyChecked(item, checkedItems));
@@ -501,17 +501,41 @@ const SPRINT0_DESCRIPTION =
 
 const SCAFFOLD_TITLE = "Set up the product's layout";
 
-const SCAFFOLD_DESCRIPTION =
+type InterfaceEntries = DecompositionInput["interface"];
+
+const SCAFFOLD_SETUP =
     "Set up the product's skeleton in the environment the platform role defined: its module root, its manifests " +
     "and its entry point, laid out so that the environment's build and test commands pass from the repository root " +
-    "on a fresh checkout and leave it clean. " +
+    "on a fresh checkout and leave it clean. ";
+
+/** For a vision that recorded no interface: the scaffold names one form for each way the vision says the product is used. */
+const SCAFFOLD_CHOSEN_INTERFACE =
     `Write down the product's public interface in ${PUBLIC_INTERFACE_FILE} at the repository root: the one interface ` +
     "the product commits to, which every later task implements and every check tests. Name each way the vision says " +
     "the product is used, in the terms its kind has (each command with its arguments and exit statuses, each network " +
     "route with its request and response shapes and statuses, each function or type of a library's API, or whatever " +
     "else the product exposes), how it is started and configured (arguments, environment variables, the files it " +
     "reads and writes, a port), and the error each entry gives for input it refuses. Choose one form for each: never " +
-    "alternatives. Where an assumption marked internal design fixes part of what the product exposes (a command's " +
+    "alternatives. ";
+
+/**
+ * For a vision that states the interface the client agreed to: every entry is written down as stated,
+ * and a form is chosen only for what an entry leaves open.
+ */
+function agreedInterface(entries: InterfaceEntries): string {
+    return (
+        `Write down the product's public interface in ${PUBLIC_INTERFACE_FILE} at the repository root: the one interface ` +
+        "the product commits to, which every later task implements and every check tests. It is the interface the " +
+        "client's contract states; write every one of these entries into it under its key, with its text exactly as " +
+        `stated here:\n${entries.map((entry) => `- ${entry.id}: ${entry.text}`).join("\n")}\n` +
+        "Where an entry leaves part of its form open (a spelling, an argument, a status, a request or response shape, " +
+        "how the product is started and configured, the error it gives for input it refuses), choose one form for that " +
+        "part and write it beside the entry: never alternatives, and never a change to what the entry states. "
+    );
+}
+
+const SCAFFOLD_PLACEHOLDER =
+    "Where an assumption marked internal design fixes part of what the product exposes (a command's " +
     "name, a file the client reads), write it into the interface as that assumption states it; the other " +
     "internal-design assumptions are how later tasks build the product, not part of its interface. Implement none " +
     "of the behaviour the vision asks for: each later task delivers its own, and its checks are written against " +
@@ -531,23 +555,33 @@ type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
  * review and every decomposed task depend on it. It traces to the vision items of every decomposed
  * task, whose work it enables, and delivers none of them alone. Z0 checks it by the definition's own
  * build and test on its merge: a check task could only be written against a layout that does not
- * exist yet. Returns its id.
+ * exist yet. Its brief carries every entry of the interface the vision states, verbatim, to write
+ * down as stated; only for a vision that recorded none does it choose the interface. Returns its id.
  */
 function addProductScaffold(
     epicId: string,
     sprint0Id: string,
+    interfaceEntries: InterfaceEntries,
     tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>,
     dependencyEdges: Array<{ from: string; to: string }>,
 ): string {
     const decomposed = tasks.filter(isDecomposed);
     const visionItems = [...new Set(decomposed.flatMap((task) => task.taskSpec.visionItems))];
+    const agreed = interfaceEntries.length > 0;
+    const description =
+        SCAFFOLD_SETUP + (agreed ? agreedInterface(interfaceEntries) : SCAFFOLD_CHOSEN_INTERFACE) + SCAFFOLD_PLACEHOLDER;
+    const entryIds = interfaceEntries.map((entry) => entry.id).join(", ");
     const successCriteria = [
         "the environment's build then test commands pass on a fresh checkout of the merge, test printing output",
         "build and test leave the checkout clean",
         "the work changes no recipe file",
         "no behaviour a vision item asks for is implemented yet",
-        `${PUBLIC_INTERFACE_FILE} at the repository root names one form for each entry of the product's public interface, ` +
-            "how the product is started and configured, and the error each entry gives",
+        agreed
+            ? `${PUBLIC_INTERFACE_FILE} at the repository root names every interface entry ${entryIds} as the vision ` +
+              "states it, one form for whatever an entry leaves open, how the product is started and configured, and the " +
+              "error each entry gives"
+            : `${PUBLIC_INTERFACE_FILE} at the repository root names one form for each entry of the product's public ` +
+              "interface, how the product is started and configured, and the error each entry gives",
         "the product starts as the interface says and answers every entry of it with a refusal (an error response or " +
             "a non-zero exit status), never failing to start",
     ];
@@ -555,17 +589,19 @@ function addProductScaffold(
         id: generateId("task"),
         level: "task",
         title: SCAFFOLD_TITLE,
-        description: SCAFFOLD_DESCRIPTION,
+        description,
         successCriteria,
         parentId: epicId,
         dependsOn: [sprint0Id],
         taskSpec: {
-            goal: SCAFFOLD_DESCRIPTION,
+            goal: description,
             endState: successCriteria.join("; "),
             scope: `the product's module root, manifests, entry point and ${PUBLIC_INTERFACE_FILE}; no behaviour of the vision`,
             deliverables: [
                 "the product's skeleton, on which the environment's build and test commands pass",
-                `${PUBLIC_INTERFACE_FILE}: the product's public interface, one form for each entry`,
+                agreed
+                    ? `${PUBLIC_INTERFACE_FILE}: the product's public interface, every entry ${entryIds} as the vision states it`
+                    : `${PUBLIC_INTERFACE_FILE}: the product's public interface, one form for each entry`,
                 "a placeholder that starts as the interface says and refuses every entry of it",
                 "a finish summary naming the entry point and how the product is run",
             ],
@@ -732,7 +768,9 @@ type VisionTrace =
  * decided an earlier statement of it decided that statement, not this one.
  */
 function alreadyChecked(item: VisionItem, checkedItems: readonly VisionItem[]): boolean {
-    return checkedItems.some((checked) => checked.type === item.type && checked.id === item.id && checked.text === item.text);
+    // By id and text, not by kind: a version written before guarantees reads a scope line or an
+    // assumption a completed task cited as the guarantee of the same key and statement.
+    return checkedItems.some((checked) => checked.id === item.id && checked.text === item.text);
 }
 
 /**

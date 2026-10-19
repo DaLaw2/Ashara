@@ -431,7 +431,7 @@ describe("the delivered report", () => {
   // Exclusions and internal-design assumptions are never unchecked items of what the client asked
   // for; every internal-design assumption is named apart, by id and text, as not verified by Ashara.
   // The vision below has scope lines on both sides and assumptions of every kind.
-  test("a vision with exclusions and design choices: exclusions are never listed, design choices are listed as not verified by Ashara; an uncited assumption is Ashara's, as the client saw it", async () => {
+  test("a vision with exclusions and design choices: exclusions are never listed, design choices are listed as not verified by Ashara; an assumption a client could observe is listed as what the work rests on, as the client saw it", async () => {
     const body = await render({
       sweepId: "s6",
       projectId,
@@ -458,10 +458,12 @@ describe("the delivered report", () => {
         ],
       },
     });
-    const coverage = body.split("\n\n").find((section) => section.includes("decided by no stored check"));
-    expect(coverage).toBe(
+    // An assumption is decided through what rests on it, never counted as an item of what was asked for.
+    expect(body).not.toContain("decided by no stored check");
+    expect(body.split("\n\n").find((section) => section.startsWith("The work rests on these assumptions"))).toBe(
       [
-        "These items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:",
+        "The work rests on these assumptions. None is counted above as an item of what you asked for: each is decided only through what you asked for that rests on it.",
+        "- Commands wait for the data-directory lock. (your answer)",
         "- Keys and values are UTF-8 text. (your answer)",
         "- Ashara's assumption, which was reported to you: No artificial limit is imposed on key or value size.",
         "- Ashara's assumption, which you were asked about and have not answered: Values print with a trailing newline.",
@@ -490,6 +492,54 @@ describe("the delivered report", () => {
     });
     expect(visible).not.toContain("not verified by Ashara");
     expect(await render({ ...fields, vision: { kind: "unrecorded" } })).not.toContain("not verified by Ashara");
+  });
+
+  test("a guarantee is an item of what the client asked for, named by its key, whether a check decides it or not", async () => {
+    const guarantee = (id: string, text: string): Item => ({ type: "guarantee", id, text, observation: "output", interface: ["I1"], refutedBy: [`${id} broken`], assumed: null });
+    const body = await render({
+      ...BASE,
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: guarantee("G1", "Totals print last."), checked: true, undecided: false, review: "other-family", judges: "above" },
+          { source: guarantee("G2", "Missing files exit 1."), checked: false, undecided: false, review: null, judges: null },
+        ],
+      },
+    });
+    expect(body).toContain("decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n- G2: Missing files exit 1.");
+    expect(body).toContain("found no problem with that:\n- G1: Totals print last.");
+    expect(body).toContain("1 of the 2 items of what you asked for");
+  });
+
+  // A version written before guarantees reads a client-visible assumption as a guarantee; the client is
+  // still told it was Ashara's assumption and where it stood at acceptance, never that they asked for it.
+  test("a guarantee read from an assumption is worded by where that assumption stood at acceptance", async () => {
+    const text = "Messages are in English.";
+    const body = await render({
+      ...BASE,
+      vision: {
+        kind: "recorded",
+        items: [
+          {
+            source: {
+              type: "guarantee",
+              id: "A1",
+              text,
+              observation: "unclassified",
+              interface: [],
+              refutedBy: [],
+              assumed: { type: "assumption", id: "A1", text, kind: "client-visible", standing: "asked" },
+            },
+            checked: false,
+            undecided: false,
+            review: null,
+            judges: null,
+          },
+        ],
+      },
+    });
+    expect(body).toContain(`so nothing confirms them either way:\n- Ashara's assumption, which you were asked about and have not answered: ${text}`);
+    expect(body).not.toContain(`- A1: ${text}`);
   });
 
   // Each uncited assumption is worded by where it stood at acceptance, an answer included.

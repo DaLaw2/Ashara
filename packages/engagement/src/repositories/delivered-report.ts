@@ -26,19 +26,25 @@ type GoalClose =
   /** Completed with no commit recorded at all. */
   | { readonly kind: "no-record" };
 
+/** An assumption with where it stands with the client at acceptance. */
+interface AcceptedAssumption {
+  readonly type: "assumption";
+  readonly id: string;
+  readonly text: string;
+  readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
+  readonly standing: AcceptedAssumptionStanding;
+}
+
 /**
- * An item of the vision as the delivered report names it: a scope line as the plan's review recorded
- * it, or an assumption with where it stands with the client at acceptance.
+ * An item of the vision as the delivered report names it: a guarantee or a scope line as the plan's
+ * review recorded it, or an assumption with where it stands with the client at acceptance. A
+ * guarantee a version written before guarantees reads from an assumption carries that assumption as
+ * it stood at acceptance, so the client is told it was Ashara's; null on every other guarantee.
  */
 type AcceptedVisionItem =
+  | (Extract<VisionSource, { readonly type: "guarantee" }> & { readonly assumed: AcceptedAssumption | null })
   | Extract<VisionSource, { readonly type: "scope" }>
-  | {
-      readonly type: "assumption";
-      readonly id: string;
-      readonly text: string;
-      readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
-      readonly standing: AcceptedAssumptionStanding;
-    };
+  | AcceptedAssumption;
 
 /**
  * Every item of the vision the delivered plan was reviewed against, each with whether an acceptance
@@ -231,9 +237,13 @@ class CheckDecisionUnreadable extends ReportRecordUnreadable {
   }
 }
 
-/** An item is the same across the plan's revisions only when its type, id and text all match. */
+/**
+ * An item is the same across the plan's revisions only when its id and text both match. Its kind is
+ * not compared: a version written before guarantees reads a scope line or an assumption an earlier
+ * revision cited as the guarantee of the same key and statement.
+ */
 function sourceIdentity(source: VisionSource): string {
-  return JSON.stringify([source.type, source.id, source.text]);
+  return JSON.stringify([source.id, source.text]);
 }
 
 /** task_checks.decides: the ids of the vision items one stored check decides; null on a row written before it. */
@@ -310,8 +320,6 @@ class AcceptedStandingUnreadable extends ReportRecordUnreadable {
   }
 }
 
-type AcceptedAssumption = Extract<AcceptedVisionItem, { readonly type: "assumption" }>;
-
 /** The vision version current at acceptance, read through the Vision's reader; any read failure is unreadable. */
 function visionAtAcceptance(sweep: { readonly id: string; readonly projectId: string }, stored: StoredVision): VisionVersion {
   const unreadable = (detail: string) => new AcceptedStandingUnreadable(sweep.id, sweep.projectId, stored.version, detail);
@@ -336,12 +344,13 @@ function visionAtAcceptance(sweep: { readonly id: string; readonly projectId: st
  * Each assumption of the vision version current at acceptance, by id, with where it then stood with
  * the client: a confirming answer asks for no replan, so the plan's own copy of the vision
  * can predate it. A reply counts only if it was sent by acceptance, and as read only if
- * it was read by then. Throws AcceptedStandingUnreadable when any of it cannot be read.
+ * it was read by then. A guarantee that version reads from an assumption, by the guarantee's id,
+ * with that assumption. Throws AcceptedStandingUnreadable when any of it cannot be read.
  */
 async function assumptionsAtAcceptance(
   db: DbHandle,
   sweep: { readonly id: string; readonly projectId: string; readonly acceptedAt: Date },
-): Promise<ReadonlyMap<string, AcceptedAssumption>> {
+): Promise<{ readonly assumptions: ReadonlyMap<string, AcceptedAssumption>; readonly assumedGuarantees: ReadonlyMap<string, AcceptedAssumption> }> {
   const [stored] = await db
     .select()
     .from(visionDocuments)
@@ -383,12 +392,20 @@ async function assumptionsAtAcceptance(
     return reply.consumedAt !== null && reply.consumedAt <= sweep.acceptedAt ? "answered" : "answer-unread";
   };
 
-  return new Map(
+  const assumptions = new Map(
     vision.assumptions.map((assumption): [string, AcceptedAssumption] => [
       assumption.id,
       { type: "assumption", id: assumption.id, text: assumption.statement, kind: assumption.kind, standing: standingOf(assumption) },
     ]),
   );
+  const assumedGuarantees = new Map<string, AcceptedAssumption>();
+  for (const guarantee of vision.guarantees) {
+    if (guarantee.source.kind !== "legacy" || guarantee.source.from !== "assumption") continue;
+    const assumption = assumptions.get(guarantee.source.id);
+    if (assumption === undefined) throw unreadable(`guarantee ${guarantee.id} is read from assumption ${guarantee.source.id}, which the version does not hold`);
+    assumedGuarantees.set(guarantee.id, assumption);
+  }
+  return { assumptions, assumedGuarantees };
 }
 
 /**
@@ -432,7 +449,9 @@ async function visionCoverage(
       else by.add(check.checkTaskId);
     }
   }
-  const current = items.some((source) => source.type === "assumption") ? await assumptionsAtAcceptance(db, sweep) : new Map<string, AcceptedAssumption>();
+  const current = items.some((source) => source.type !== "scope")
+    ? await assumptionsAtAcceptance(db, sweep)
+    : { assumptions: new Map<string, AcceptedAssumption>(), assumedGuarantees: new Map<string, AcceptedAssumption>() };
   const undecided = goalIds.length === 0 ? new Map<string, UndecidedRecord>() : await undecidedOf(db, projectId, goalIds);
   const confirmations = await claimStrengths(db, projectId);
   return {
@@ -448,7 +467,19 @@ async function visionCoverage(
       const review = record !== undefined ? record.strength : confirmed === null ? null : confirmed.strength;
       const judges = confirmed === null ? null : confirmed.judges;
       if (source.type === "scope") return { source, checked, undecided: left, review, judges };
-      const now = current.get(source.id);
+      if (source.type === "guarantee") {
+        const assumed = current.assumedGuarantees.get(source.id);
+        if (assumed !== undefined && assumed.text !== source.text) {
+          throw new AcceptedStandingUnreadable(
+            sweep.id,
+            projectId,
+            null,
+            `guarantee ${source.id} is read from assumption ${assumed.id}, which reads "${assumed.text}" at acceptance, not "${source.text}" as the plan's review recorded it`,
+          );
+        }
+        return { source: { ...source, assumed: assumed === undefined ? null : assumed }, checked, undecided: left, review, judges };
+      }
+      const now = current.assumptions.get(source.id);
       if (now === undefined) {
         throw new AcceptedStandingUnreadable(sweep.id, projectId, null, `the vision at acceptance holds no assumption ${source.id}, which the plan's review recorded`);
       }

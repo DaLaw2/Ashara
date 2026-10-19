@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import { CapabilityLevelSchema } from "./acl/finance-acl.js";
-import { checkDecides } from "./acl/engagement-vision-acl.js";
+import { checkDecides, taskMayCite } from "./acl/engagement-vision-acl.js";
 import type { VisionSource } from "./acl/engagement-vision-acl.js";
 
 export interface WorkItemSpec {
@@ -84,22 +84,20 @@ export type TaskSpec =
     | (TaskSpecCore & Sourced & { readonly origin: "review" });
 
 /**
- * One item of the vision a plan is decomposed from: a scope boundary (S<n>) or an assumption work
- * proceeds on, by its key in the vision. A scope line and every assumption not classed internal
- * design may be cited by a deliverable or an acceptance line;
- * every one a check decides (checkDecides) must be; an internal-design one is guidance for the
- * implementer.
+ * One item of the vision a plan is decomposed from: a guarantee or an assumption work proceeds on,
+ * by its key in the vision. A guarantee and every assumption not classed internal design may be
+ * cited by a deliverable or an acceptance line; every guarantee must be (checkDecides); an
+ * internal-design assumption is guidance for the implementer.
  */
 export type VisionItem = VisionSource;
 
-/** Whether a deliverable or an acceptance line may cite the item: any scope line, and an assumption a check decides. */
+/** Whether a deliverable or an acceptance line may cite the item (taskMayCite). */
 export function citable(item: VisionItem): boolean {
-    return item.type === "scope" || checkDecides(item);
+    return taskMayCite(item);
 }
 
 /**
- * The items a plan must check: every in-scope line and every assumption a check
- * decides, whether the planner chose to cite it or not. Each is cited by a task of the plan, or by a
+ * The items a plan must check: every guarantee, whether the planner chose to cite it or not. Each is cited by a task of the plan, or by a
  * completed task that cited it as the vision states it now, and is decided by that task's stored checks.
  */
 export function itemsToCheck(items: readonly VisionItem[]): VisionItem[] {
@@ -145,8 +143,13 @@ export interface DecompositionInput {
     readonly priorEpicResults?: PriorEpicResult[];
     readonly environment: EnvironmentPlanning;
     readonly layout: LayoutPlanning;
-    /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
+    /** Every item of the vision; each planned task names those it delivers. One with no guarantee is refused, never planned on. */
     readonly visionItems: readonly VisionItem[];
+    /**
+     * The product's public interface as the vision states it, each entry by its key: a new product
+     * scaffold writes every entry down as stated. Empty for a vision that recorded none.
+     */
+    readonly interface: ReadonlyArray<{ readonly id: string; readonly text: string }>;
     /**
      * The vision items the stored checks of a completed task decide (task_checks.decides), each as
      * its check task cites it, so an item here whose text is the vision's now needs no new task to
@@ -312,23 +315,24 @@ export class UncitedVisionItemsError extends Error {
         readonly uncited: ReadonlyArray<{ readonly id: string; readonly text: string }>,
     ) {
         super(
-            `No task cites ${uncited.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every in-scope line and every ` +
-                `assumption not marked "not citable" must be named in "sources" by a deliverable or an acceptance line of a ` +
-                `task whose work it is, so that task's checks decide it (decomposition of ${parentId})`,
+            `No task cites ${uncited.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every guarantee must be ` +
+                `named in "sources" by a deliverable or an acceptance line of a task whose work it is, so that task's ` +
+                `checks decide it (decomposition of ${parentId})`,
         );
         this.name = "UncitedVisionItemsError";
     }
 }
 
 /**
- * The vision holds no item a task could trace to (no scope boundary, no assumption): nothing could
- * be planned without inventing what the client asked for, so no decomposition is attempted.
+ * The vision holds no guarantee: nothing a delivery is judged against, so a plan would be accepted
+ * with no check deciding anything, and nothing could be planned without inventing what the client
+ * asked for. No decomposition is attempted.
  */
 export class VisionItemsMissing extends Error {
     constructor(readonly epicTitle: string) {
         super(
-            `the vision of "${epicTitle}" states no scope boundary and no assumption: no task could trace to it, ` +
-                `so nothing is planned`,
+            `the vision of "${epicTitle}" states no guarantee: no task could trace to what a delivery is judged ` +
+                `against, so nothing is planned`,
         );
         this.name = "VisionItemsMissing";
     }

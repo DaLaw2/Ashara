@@ -631,19 +631,28 @@ function acceptedLine(assumption: Assumption, standing: AcceptedStanding): strin
 }
 
 const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
+const RESTING_HEAD = "The work rests on these assumptions.";
+
+/** The item lines of the delivered report's paragraph that opens with the head; none when it has no such paragraph. */
+function listedUnder(body: string, head: string): string[] {
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item whose standing to judge; client-reports coverageProblems judges the section itself
+  return (body.split("\n\n").find((part) => part.startsWith(head)) ?? "").split("\n").filter((line) => line.startsWith("- "));
+}
 
 /**
- * Each assumption the delivered report lists stands with the client as the vision current at
- * acceptance and the client's replies by then say.
+ * Each assumption the delivered report lists, among the items no stored check decides or among those
+ * the work rests on, stands with the client as the vision current at acceptance and the client's
+ * replies by then say. A version written before guarantees reads a client-visible assumption as the
+ * guarantee of its own key, so a reviewed guarantee whose key names an assumption at acceptance is
+ * that assumption; one that names none is the client's own and states no standing.
  */
 function checkDeliveredStandings(records: TextFactRecords, add: Add, versions: Versions): void {
   if (records.delivered.length === 0) return;
   // A corrupt task_spec throws TaskSpecCorrupt: the run fails, never passes unjudged.
   // eslint-disable-next-line no-restricted-syntax -- policy default: an unrecorded review spec leaves no reviewed assumption whose standing to recompute; client-reports coverageOnRecord judges it as unrecorded
-  const reviewed = (parseStoredTaskSpec(records.reviewSpec)?.sources ?? []).filter((source) => source.type === "assumption");
+  const reviewed = (parseStoredTaskSpec(records.reviewSpec)?.sources ?? []).filter((source) => source.type !== "scope");
   for (const report of records.delivered) {
-    // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item whose standing to judge; client-reports coverageProblems judges the section itself
-    const listed = (report.body.split("\n\n").find((part) => part.startsWith(UNCOVERED_HEAD)) ?? "").split("\n").filter((line) => line.startsWith("- "));
+    const listed = [...listedUnder(report.body, UNCOVERED_HEAD), ...listedUnder(report.body, RESTING_HEAD)];
     if (reviewed.length === 0 || listed.length === 0) continue;
     const vision = report.visionAtAcceptance === null ? undefined : versions.get(report.visionAtAcceptance);
     if (vision === undefined || vision.kind === "unreadable") {
@@ -655,6 +664,7 @@ function checkDeliveredStandings(records: TextFactRecords, add: Add, versions: V
       const line = listed.find((each) => each.includes(source.text));
       if (line === undefined) continue;
       const assumption = vision.assumptions.find((a) => a.key === source.id);
+      if (assumption === undefined && source.type === "guarantee") continue;
       if (assumption === undefined) {
         add(`delivered-standing:${source.id}`, `the delivered report lists assumption ${source.id}, which the vision at acceptance (v${report.visionAtAcceptance ?? "?"}) does not hold`);
         continue;
@@ -834,6 +844,8 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/delivered-report.ts#readingSection`, judges: [i9(checkIntakeReading)] },
   { source: `${ENGAGEMENT}/plan-report.ts#firstPlanReport`, judges: [i9(checkFirstPlan)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#coverageSection`, judges: [i9(checkDeliveredStandings), i4("delivered-coverage")] },
+  // Each assumption the work rests on, worded by where it stood with the client at acceptance.
+  { source: `${ENGAGEMENT}/delivered-report.ts#restingSection`, judges: [i9(checkDeliveredStandings)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#interfaceSection`, judges: [i9(checkDeliveredInterface)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#deliveredReport`, judges: [i4("delivered-close")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#uncheckedSection`, judges: [i4("delivered-unchecked")] },

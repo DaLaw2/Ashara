@@ -172,7 +172,8 @@ describe("checkReports, a delivered report", () => {
     const sources = [
       { type: "scope", id: "S1", text: "The product greets.", side: "in" },
       { type: "scope", id: "S2", text: "Any network service.", side: "out" },
-      { type: "assumption", id: "A1", text: "Messages are in English.", status: "Inferred", standing: "unrecorded", kind: "client-visible" },
+      // A version written before guarantees reads a client-visible assumption as the guarantee of its key.
+      { type: "guarantee", id: "A1", text: "Messages are in English.", observation: "unclassified", interface: [], refutedBy: [] },
       { type: "assumption", id: "A2", text: "State lives in memory.", status: "Inferred", standing: "unrecorded", kind: "internal-design" },
     ];
     const traced = {
@@ -192,13 +193,13 @@ describe("checkReports, a delivered report", () => {
 
     // A1 is cited by an acceptance line, yet no stored check decides it: it is not covered.
     it("accepts exactly the undecided asked-for items", () => {
-      expect(keysOf(delivered(merged, traced, section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."])), "accepted", [mergedGoal])).toEqual([]);
+      expect(keysOf(delivered(merged, traced, section(["- A1: Messages are in English."])), "accepted", [mergedGoal])).toEqual([]);
     });
 
     it("refuses an out-of-scope line or an internal-design assumption listed as not covered", () => {
-      const listed = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English.", "- Any network service."];
+      const listed = ["- A1: Messages are in English.", "- Any network service."];
       expect(keysOf(delivered(merged, traced, section(listed)), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
-      const internal = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English.", "- Ashara's assumption, which Ashara has no record of showing you: State lives in memory."];
+      const internal = ["- A1: Messages are in English.", "- Ashara's assumption, which Ashara has no record of showing you: State lives in memory."];
       expect(keysOf(delivered(merged, traced, section(internal)), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
     });
 
@@ -211,7 +212,7 @@ describe("checkReports, a delivered report", () => {
 
     // Only decided items a second review confirmed are counted, and none is said as none.
     it("holds the count to the decided items listed as confirmed, saying none when none is", () => {
-      const uncovered = "\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n- Ashara's assumption, which Ashara has no record of showing you: Messages are in English.";
+      const uncovered = "\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n- A1: Messages are in English.";
       const tail = unverified(["- A2: State lives in memory."]);
       const unreviewed = "\n\nThese items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review of those checks is on record as confirming that: they are not verified by Ashara.\n- The product greets.";
       const none = `\n\nNone of the 2 items of what you asked for is ${confirmedBy}.`;
@@ -225,7 +226,7 @@ describe("checkReports, a delivered report", () => {
 
     // Every internal-design assumption is named, by id and text, as not verified by Ashara.
     it("refuses a report that leaves an internal-design assumption out of what Ashara did not verify, or names another there", () => {
-      const uncovered = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."];
+      const uncovered = ["- A1: Messages are in English."];
       const head =
         `\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n${uncovered.join("\n")}` +
         `\n\n1 of the 2 items of what you asked for are ${confirmedBy}; how independent that review was is said below.${confirmedHead(["- The product greets."])}`;
@@ -240,7 +241,7 @@ describe("checkReports, a delivered report", () => {
       `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n${lines.join("\n")}`;
     it("holds an item a review left undecided to being named as not verified, never counted covered", () => {
       const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason: "unsettled" as const }] };
-      const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."], "undecided");
+      const uncovered = section(["- A1: Messages are in English."], "undecided");
       expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, left, uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
       // Named undecided while the records hold it decided: neither listed as confirmed nor counted.
@@ -252,7 +253,7 @@ describe("checkReports, a delivered report", () => {
       const failedHead = (lines: readonly string[]): string =>
         `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n${lines.join("\n")}`;
       const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason: "review-failed" as const }] };
-      const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."], "undecided");
+      const uncovered = section(["- A1: Messages are in English."], "undecided");
       expect(keysOf(delivered(merged, left, `${uncovered}${failedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
@@ -264,7 +265,7 @@ describe("checkReports, a delivered report", () => {
         `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but the review that found no problem in their checks was not confirmed: ${why}. They are not verified by Ashara.\n${lines.join("\n")}`;
       const unanswered = head("no second review of those checks answered", ["- The product greets."]);
       const contradicted = head("a second review, by another model of the same family as the first review, found a problem there", ["- The product greets."]);
-      const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."], "undecided");
+      const uncovered = section(["- A1: Messages are in English."], "undecided");
       const left = (reason: "clean-unconfirmed" | "clean-contradicted") => ({ ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason }] });
       expect(keysOf(delivered(merged, left("clean-unconfirmed"), `${uncovered}${unanswered}`), "accepted", [mergedGoal])).toEqual([]);
       expect(keysOf(delivered(merged, left("clean-contradicted"), `${uncovered}${contradicted}`), "accepted", [mergedGoal])).toEqual([]);
@@ -296,7 +297,8 @@ describe("uncheckedAtPassedSweeps", () => {
   const A1: Cite = { type: "assumption", id: "A1", text: visible.statement };
   const spec = (cites: readonly Cite[]) => ({
     origin: "check",
-    sources: cites.map((cite) => (cite.type === "scope" ? { ...cite, side: "in" } : { ...cite, status: "Inferred", standing: "reported", kind: "client-visible" })),
+    // A plan made from a version written before guarantees cites a client-visible assumption as the guarantee of its key.
+    sources: cites.map((cite) => (cite.type === "scope" ? { ...cite, side: "in" } : { id: cite.id, text: cite.text, type: "guarantee", observation: "unclassified", interface: [], refutedBy: [] })),
     acceptance: [{ line: "A user is greeted.", sources: cites.map((cite) => cite.id) }],
   });
   /** One passed sweep whose one check task cites `cited` and whose one stored check decides `decided`. */

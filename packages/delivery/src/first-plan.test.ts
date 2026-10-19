@@ -123,7 +123,7 @@ const visionItemsOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vi
 const northStarOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vision).northStar;
 
 describe("the vision items a plan traces to", () => {
-  test("each scope boundary and each assumption is an item; a Stated one by the decision the answer made", () => {
+  test("a version written before guarantees: each line not out of scope and each assumption not internal design is a legacy guarantee", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000024", "test");
     const items = visionItemsOf(
       stored(projectId, 2, "A booking page.", ["In: booking", "Out: payments"], [
@@ -132,12 +132,14 @@ describe("the vision items a plan traces to", () => {
       ]),
     );
 
-    // Records written before kinds: placed by order, unclassified, standing with the client unrecorded.
+    // Records written before kinds and sides: each read as a guarantee under the key the vision gives
+    // it, a Stated one by the decision the answer made, none checkable as written.
+    const legacy = { observation: "unclassified", interface: [], refutedBy: [] };
     expect(items).toEqual([
-      { type: "scope", id: "S1", text: "In: booking", side: "unclassified" },
-      { type: "scope", id: "S2", text: "Out: payments", side: "unclassified" },
-      { type: "assumption", id: "A1", text: "Classes hold twenty", status: "Inferred", standing: "unrecorded", kind: "unclassified" },
-      { type: "assumption", id: "A2", text: "Bookings close an hour before", status: "Stated", standing: "stated", kind: "unclassified" },
+      { type: "guarantee", id: "S1", text: "In: booking", ...legacy },
+      { type: "guarantee", id: "S2", text: "Out: payments", ...legacy },
+      { type: "guarantee", id: "A1", text: "Classes hold twenty", ...legacy },
+      { type: "guarantee", id: "A2", text: "Bookings close an hour before", ...legacy },
     ]);
   });
 
@@ -153,8 +155,8 @@ describe("the vision items a plan traces to", () => {
         ]),
       ),
     ).toEqual([
-      { type: "scope", id: "S1", text: "In: put", side: "unclassified" },
-      { type: "assumption", id: "A1", text: "Values are one word", status: "Inferred", standing: "asked", kind: "client-visible" },
+      { type: "guarantee", id: "S1", text: "In: put", observation: "unclassified", interface: [], refutedBy: [] },
+      { type: "guarantee", id: "A1", text: "Values are one word", observation: "unclassified", interface: [], refutedBy: [] },
       { type: "assumption", id: "A7", text: "The log is wal.log", status: "Inferred", standing: "reported", kind: "internal-design" },
     ]);
     expect(() =>
@@ -169,15 +171,12 @@ describe("the vision items a plan traces to", () => {
 
   // A scope line keeps the side intake recorded, and a disclosure that
   // is neither value is an unreadable vision, never an assumption the client was not shown.
-  test("a scope line carries its recorded side, and a malformed disclosure makes the vision unreadable", () => {
+  test("an out-of-scope line is an exclusion, never an item, and a malformed disclosure makes the vision unreadable", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
     const reading = (inferences: unknown) =>
       stored(projectId, 2, "A store.", [{ text: "put and get", side: "in" }, { text: "any network service", side: "out" }], inferences);
-    expect(visionItemsOf(reading([])).map((item) => (item.type === "scope" ? [item.id, item.side] : []))).toEqual([
-      ["S1", "in"],
-      ["S2", "out"],
-    ]);
-    expect(northStarOf(reading([]))).toContain("- In scope: put and get\n- Out of scope: any network service");
+    expect(visionItemsOf(reading([])).map((item) => [item.type, item.id])).toEqual([["guarantee", "S1"]]);
+    expect(northStarOf(reading([]))).toContain("Guarantees:\n- S1: put and get\n\nExclusions:\n- S2: any network service");
     expect(() =>
       visionItemsOf(reading([{ key: "A1", statement: "x", status: "Inferred", kind: "client-visible", disclosed: "emailed" }])),
     ).toThrow(/inferences is not in a readable shape/);

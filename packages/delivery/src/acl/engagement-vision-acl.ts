@@ -6,5 +6,5 @@
  * is built on them, so loading Engagement's services here would make the two load each other.
  */
 
-export type { ScopeSide, VisionSource } from "@ashara/engagement/vision";
-export { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, VisionSourceSchema, checkDecides, visionSourceCitation, visionSourceLine } from "@ashara/engagement/vision";
+export type { InterfaceEntry, VisionGuarantee, VisionSource } from "@ashara/engagement/vision";
+export { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, VisionSourceSchema, checkDecides, taskMayCite, visionSourceCitation, visionSourceLine } from "@ashara/engagement/vision";

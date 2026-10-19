@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { ContractDraftSchema, StoredContractSchema, basisOf, collapseWhitespace, visionGuaranteeOf } from "./vision-language/guarantee.js";
-import type { ContractDraft, InterfaceEntry, StoredContract, VisionExclusion, VisionGuarantee } from "./vision-language/guarantee.js";
+import { ContractDraftSchema, StoredContractSchema, collapseWhitespace, visionGuaranteeOf } from "./vision-language/guarantee.js";
+import type { ContractDraft, StoredContract, VisionExclusion } from "./vision-language/guarantee.js";
+import { basisOf } from "./vision-language/index.js";
+import type { InterfaceEntry, VisionGuarantee } from "./vision-language/index.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-language/vision-assumption.js";
 

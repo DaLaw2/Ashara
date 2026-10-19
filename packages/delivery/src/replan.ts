@@ -820,6 +820,7 @@ export class Replanner implements Replanning {
       layout: layoutOf(completed),
       // The same rule as a first plan: every new task traces to the current vision.
       visionItems: vision.items,
+      interface: vision.interface,
       checkedItems: checkedByDone(completed),
     };
     return new DecompositionEngine(llm).decompose(input);
