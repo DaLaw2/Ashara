@@ -207,6 +207,7 @@ beforeAll(async () => {
 afterAll(async () => {
   const pool = db.$client;
   const ours = "SELECT id FROM projects WHERE client_id = ANY($1)";
+  await pool.query(`DELETE FROM vision_documents WHERE project_id IN (${ours})`, [ourClientIds]);
   // Replies first: in_reply_to references another row of the same table.
   await pool.query(`DELETE FROM client_messages WHERE in_reply_to IS NOT NULL AND project_id IN (${ours})`, [
     ourClientIds,
@@ -792,18 +793,56 @@ describe("recorded web-client session", () => {
       step("answered the question; the answer appears and the question shows as answered");
 
       // A report through the intake store the server composes (createIntakeStore), the
-      // path the Liaison takes when it gives up on a tender: tender consumed, report posted.
+      // path the Liaison takes when it has read a tender: tender consumed, vision v1 written,
+      // its contract draft posted.
       const intakeStore = createIntakeStore(db);
       const tender = (await intakeStore.openTenders()).find((t) => t.projectId === project.id);
       if (tender === undefined) throw new Error(`no open tender for project ${project.id}`);
-      const reportBody = "Ashara could not process your tender after 3 attempts, so this request has been stopped.";
-      await intakeStore.closeFailedTender(tender, reportBody);
+      const reportBody = "This is the contract we are working to, drafted from your tender.";
+      const quoted = (quote: string) => ({ kind: "tender" as const, quote });
+      await intakeStore.recordIntake({
+        tender,
+        questions: [],
+        contractDraft: reportBody,
+        readingReport: null,
+        reading: {
+          first: { provider: "stub", model: "stub-model", grade: "Strong" },
+          firstQuestions: 0,
+          confirmation: {
+            kind: "unconfirmed",
+            passedOver: [
+              { strength: "other-family", outcome: "unavailable", reason: "no other family in the test catalog" },
+              { strength: "same-family-other-model", outcome: "unavailable", reason: "no other model in the test catalog" },
+              { strength: "same-model", outcome: "unavailable", reason: "no second reading in the test" },
+            ],
+          },
+        },
+        vision: () => ({
+          visionText: tenderBody,
+          summary: "A word counter.",
+          contract: {
+            interface: [{ id: "I1", text: "wordcount FILE prints the count.", source: quoted("command-line tool") }],
+            guarantees: [
+              {
+                id: "G1",
+                statement: "It prints how many words the file holds.",
+                observable: { interface: ["I1"], observation: "output" },
+                refutedBy: ["It prints another count."],
+                source: quoted("counts words in a file"),
+              },
+            ],
+            exclusions: [],
+          },
+          inferences: [],
+          openQuestions: [],
+        }),
+      });
       const reportItem = page.locator("#timeline li.kind-report", { hasText: reportBody });
       await reportItem.waitFor({ timeout: 15_000 });
       expect(await reportItem.locator(".msg-meta").textContent()).toContain("Report from Ashara");
       expect(await reportItem.locator(".msg-body").textContent()).toBe(reportBody);
       step(
-        `posted an outbound report through the intake store's closeFailedTender; it appeared by polling as ` +
+        `posted an outbound contract draft through the intake store's recordIntake; it appeared by polling as ` +
           `"${(await reportItem.innerText()).replace(/\s+/g, " ")}"`,
       );
 

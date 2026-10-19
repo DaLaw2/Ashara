@@ -295,6 +295,11 @@ interface AttemptScript {
   readonly cut: ToolStep | null;
 }
 
+/** The key of the guarantee the scripted intake drafts naming no behaviour: after every behaviour's. */
+function messagesGuarantee(behaviours: number): string {
+  return `G${behaviours + 1}`;
+}
+
 /**
  * The vision items the planner's prompt says a task must cite, as an honest planner
  * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
@@ -484,7 +489,7 @@ export class StandIns {
     const format = options.responseFormat;
     if (format?.type !== "json") throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
     const keys = schemaKeys(format.schema);
-    if (keys.includes("inScope")) {
+    if (keys.includes("guarantees")) {
       const projectId = await this.intakeProject();
       const model = modelId.slice(providerOf(modelId).length + 1);
       return this.structured(options, "liaison-intake", () => this.intake(), (answer) => {
@@ -496,7 +501,7 @@ export class StandIns {
       const projectId = await this.intakeProject();
       const model = modelId.slice(providerOf(modelId).length + 1);
       this.intakeReadings.push({ projectId, kind: "second-asked", provider: providerOf(modelId), model, questions: 0 });
-      return this.structured(options, "liaison-intake.second", () => ({ questions: this.intakeQuestions() }), (answer) => {
+      return this.structured(options, "liaison-intake.second", () => ({ questions: this.intakeQuestions(false) }), (answer) => {
         this.intakeReadings.push({ projectId, kind: "second-answered", provider: providerOf(modelId), model, questions: answer.questions.length });
       });
     }
@@ -565,33 +570,60 @@ export class StandIns {
   }
 
   /**
-   * A tender reading's answer: the one question the tender leaves open; or none, when the lazy intake
-   * persona fires (sticky: it asks nothing whatever the tender leaves open) or a reading misses the
-   * open decision (`unaskedReading`, per reading).
+   * A tender reading's answer, in the contract form: one guarantee per behaviour, keyed G<n> by the
+   * behaviour's place and quoting it from the tender, and one more naming no behaviour; the one
+   * question the tender leaves open, or none, when the lazy intake persona fires (sticky: it asks
+   * nothing whatever the tender leaves open) or a reading misses the open decision
+   * (`unaskedReading`, per reading).
    */
   private intake(): { readonly questions: readonly unknown[] } & Record<string, unknown> {
     const { universe, personas, tape, rates } = this.context;
     const persona = personas.of("intake") === "lazy" && personas.fires("intake");
     const lazy = persona || tape.chance("model.liaison-intake.unasked", rates.unaskedReading);
     if (lazy) this.context.onModelCall({ site: "liaison-intake", action: persona ? "persona lazy: no question asked" : "unasked: no question asked" });
+    const tender = (quote: string) => ({ kind: "tender", quote });
+    const guarantee = (id: string, statement: string, quote: string) => ({
+      id,
+      statement,
+      observable: { interface: ["I1"], observation: "output" },
+      refutedBy: [`The product does not hold that ${statement.charAt(0).toLowerCase()}${statement.slice(1)}`],
+      source: tender(quote),
+    });
     return {
       summary: `A product with ${universe.behaviours.length} behaviours.`,
-      // The last line names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that line's check decides it.
-      inScope: [...universe.behaviours.map((b) => `The product does ${b}.`), "Every message reads the same on every run."],
-      outOfScope: ["Any network service."],
-      questions: lazy ? [] : this.intakeQuestions(),
-      assumptions: [{ statement: "The product keeps no state between runs.", rationale: "The tender names no stored data.", kind: "internal-design" }],
+      interface: [{ id: "I1", text: "The product, run as the tender asks.", source: tender("Build a product") }],
+      guarantees: [
+        ...universe.behaviours.map((b, i) => guarantee(`G${i + 1}`, `The product does ${b}.`, b)),
+        // It names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that line's check decides it.
+        guarantee(messagesGuarantee(universe.behaviours.length), "Every message reads the same on every run.", "Build a product"),
+      ],
+      questions: lazy ? [] : this.intakeQuestions(true),
+      assumptions: [
+        { id: "A2", statement: "The product keeps no state between runs.", rationale: "The tender names no stored data.", kind: "internal-design", underpins: [] },
+        // A design choice, so no check decides it and the asked assumption stays the last item a check set decides.
+        { id: "A3", statement: "The product runs as one local program.", rationale: "The tender names no service to run.", kind: "internal-design", underpins: [] },
+      ],
+      exclusions: [{ id: "X1", text: "Any network service.", source: { kind: "assumption", id: "A3" } }],
     };
   }
 
-  /** The questions an honest reading of the tender asks: the one decision it leaves open that the client would see. */
-  private intakeQuestions(): readonly unknown[] {
+  /**
+   * The questions an honest reading of the tender asks: the one decision it leaves open that the
+   * client would see, keyed A1 by a first reading (`keyed`) and by intake after a second reading's.
+   */
+  private intakeQuestions(keyed: boolean): readonly unknown[] {
     return [
       {
         text: "Which language should messages use?",
         whyItMatters: "It decides what every message shows.",
         // A model that cannot tell answers "undecided": the vision records it client-visible, so it is checked.
-        assumption: { statement: "Messages are in English.", rationale: "The tender is written in English.", kind: "undecided" },
+        assumption: {
+          ...(keyed ? { id: "A1" } : {}),
+          statement: "Messages are in English.",
+          rationale: "The tender is written in English.",
+          kind: "undecided",
+          underpins: [messagesGuarantee(this.context.universe.behaviours.length)],
+        },
       },
     ];
   }

@@ -505,11 +505,12 @@ export function checkSnapshot(
   }
   if (snapshot.unrecordedCalls > 0) add("I5", "unpriced", `${snapshot.unrecordedCalls} llm_calls row(s) carry no cost`);
 
-  // I6: no Done without its evidence. A passed sweep accepted the project: every item a check must
-  // decide (an in-scope line, an assumption not recorded as internal design) is decided by a
-  // stored check that sweep ran, as its recorded decides names it, and every such
-  // item a suite review left undecided is named unverified in the sweep's delivered report, never
-  // covered, and every such item the report calls decided had its suite's
+  // I6: no Done without its evidence. A passed sweep accepted the project: every guarantee of the
+  // version in force (on a version written before guarantees, an in-scope line or an assumption not
+  // recorded as internal design) is decided by a stored check that sweep ran, as its recorded decides
+  // names it, while an assumption of a guarantees-form version is never held to a check; every such
+  // guarantee a suite review left undecided is named unverified in the sweep's delivered report, never
+  // covered, and every asked-for item the report calls decided had its suite's
   // review found clean on it by a second model family, as the stand-ins answered it.
   // Judged on every passed sweep once the run ends, whatever the project's status then.
   if (context.final) {

@@ -30,7 +30,7 @@ export { ClientMessageRepository, createProjectWithTender } from "./repositories
 /** @testseam the integration client-message.test.ts asserts markConsumed's typed rejection */
 export { ClientMessageNotConsumable } from "./repositories/client-message.js";
 export type { CreatedTender } from "./repositories/client-message.js";
-export { recordTenderIntake, closeTenderAfterFailedIntake } from "./repositories/tender-intake.js";
+export { recordTenderIntake } from "./repositories/tender-intake.js";
 export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
 export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";

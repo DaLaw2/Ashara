@@ -67,21 +67,30 @@ function jsonResult(value: unknown) {
 
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  inScope: ["Class booking for both studios"],
-  outOfScope: ["Payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
+  interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender", quote: "Booking page" } }],
+  guarantees: [
+    {
+      id: "G1",
+      statement: "A client books a class at either studio.",
+      observable: { interface: ["I1"], observation: "output" },
+      refutedBy: ["A booking at either studio is refused."],
+      source: { kind: "tender", quote: "Booking page for my two pottery studios." },
+    },
+  ],
+  assumptions: [{ id: "A3", statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible", underpins: ["G1"] }],
   questions: [
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
-      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible" },
+      assumption: { id: "A1", statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible", underpins: ["G1"] },
     },
     {
       text: "How many seats does a class have?",
       whyItMatters: "It sets the booking limit.",
-      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels.", kind: "client-visible" },
+      assumption: { id: "A2", statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels.", kind: "client-visible", underpins: ["G1"] },
     },
   ],
+  exclusions: [],
 };
 
 const ROSTER = {
@@ -97,7 +106,7 @@ const TASKS = {
   tasks: [
     {
       ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [], goal: "",
-      endState: "Classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
+      endState: "Classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["G1"] }], acceptance: [{ text: "a client uses the class list", sources: ["G1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -434,9 +443,10 @@ describe("the client's answers", () => {
           // Another writer appends a version that leaves this question and its assumption as they were.
           await db.execute(sql`
             INSERT INTO vision_documents (project_id, version, vision_text, summary, inferences, scope_boundaries,
-                                          confirmed_directions, open_questions, change_reason)
+                                          confirmed_directions, open_questions, change_reason,
+                                          contract_form, "interface", guarantees, exclusions)
             SELECT project_id, version + 1, vision_text, summary, inferences, scope_boundaries, confirmed_directions,
-                   open_questions, 'a concurrent writer'
+                   open_questions, 'a concurrent writer', contract_form, "interface", guarantees, exclusions
               FROM vision_documents WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`);
         }
         return store.recordAnswer(write);

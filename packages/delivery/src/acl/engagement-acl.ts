@@ -63,6 +63,7 @@ function northStarOf(vision: VisionVersion): string {
     a.status === "Stated" ? [] : [a.status === null ? a.statement : `${a.statement} (${a.status})`],
   );
   const sections = [vision.summary];
+  if (vision.interface.length > 0) sections.push(`Interface:\n${vision.interface.map((entry) => `- ${entry.id}: ${entry.text}`).join("\n")}`);
   if (vision.guarantees.length > 0) sections.push(`Guarantees:\n${vision.guarantees.map((g) => `- ${g.id}: ${g.statement}`).join("\n")}`);
   if (vision.exclusions.length > 0) sections.push(`Exclusions:\n${vision.exclusions.map((x) => `- ${x.id}: ${x.text}`).join("\n")}`);
   if (answers.length > 0) {

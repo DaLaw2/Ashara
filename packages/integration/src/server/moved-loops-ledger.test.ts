@@ -87,16 +87,25 @@ function jsonResult(value: unknown) {
 
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  inScope: ["Class booking for both studios"],
-  outOfScope: ["Payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
+  interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender", quote: "Booking page" } }],
+  guarantees: [
+    {
+      id: "G1",
+      statement: "A client books a class at either studio.",
+      observable: { interface: ["I1"], observation: "output" },
+      refutedBy: ["A booking at either studio is refused."],
+      source: { kind: "tender", quote: "Booking page for my two pottery studios." },
+    },
+  ],
+  assumptions: [{ id: "A2", statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible", underpins: ["G1"] }],
   questions: [
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
-      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible" },
+      assumption: { id: "A1", statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible", underpins: ["G1"] },
     },
   ],
+  exclusions: [],
 };
 
 const ROSTER = {
@@ -112,7 +121,7 @@ const FIRST_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [], goal: "",
-      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["S1"] }],
+      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -122,7 +131,7 @@ const REVISED_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [], goal: "",
-      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["S1"] }],
+      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["G1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
   ],

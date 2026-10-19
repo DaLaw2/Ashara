@@ -283,8 +283,8 @@ describe("checkReports, a delivered report", () => {
   });
 });
 
-// No passed sweep leaves an in-scope line, or an assumption a client
-// could observe, unchecked.
+// No passed sweep leaves a guarantee of the version in force unchecked; a version written before
+// guarantees reads each in-scope line and each assumption a client could observe as one.
 describe("uncheckedAtPassedSweeps", () => {
   const visible = { key: "A1", statement: "Messages are in English.", kind: "client-visible" };
   const design = { key: "A2", statement: "State lives in memory.", kind: "internal-design" };
@@ -301,12 +301,17 @@ describe("uncheckedAtPassedSweeps", () => {
     sources: cites.map((cite) => (cite.type === "scope" ? { ...cite, side: "in" } : { id: cite.id, text: cite.text, type: "guarantee", observation: "unclassified", interface: [], refutedBy: [] })),
     acceptance: [{ line: "A user is greeted.", sources: cites.map((cite) => cite.id) }],
   });
-  /** One passed sweep whose one check task cites `cited` and whose one stored check decides `decided`. */
-  const sweep = (inferences: unknown, decided: readonly Cite[], scopeBoundaries: unknown = [greets, network], cited: readonly Cite[] = decided) => ({
+  /**
+   * One passed sweep whose one check task cites `cited` and whose one stored check decides `decided`;
+   * its version is in the guarantees form when it holds guarantees, else written before guarantees were.
+   */
+  const sweep = (inferences: unknown, decided: readonly Cite[], scopeBoundaries: unknown = [greets, network], cited: readonly Cite[] = decided, guarantees: unknown = []) => ({
     id: "sweep-1",
     version: 2,
     inferences,
     scopeBoundaries,
+    contractForm: Array.isArray(guarantees) && guarantees.length > 0 ? "guarantees" : "scope-lines",
+    guarantees,
     storedChecks: decided.length === 0 ? [] : [{ checkTaskId: "c1", taskSpec: spec(cited), name: "greets", decides: decided.map((cite) => cite.id), taskId: "t1", revision: 1 }],
     reportBody: null,
     undecided: [],
@@ -332,6 +337,25 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf(sweep([visible], [A1], ["The product greets."]))).toEqual(["S1"]);
   });
 
+  it("names a guarantee no swept check decides as the sweep's vision states it", () => {
+    const g1 = { id: "G1", statement: greets.text, observable: { interface: ["I1"], observation: "output" } };
+    const g2 = { id: "G2", statement: counts.text, observable: { interface: ["I1"], observation: "output" } };
+    const G1: Cite = { type: "scope", id: "G1", text: greets.text };
+    expect(keysOf(sweep([visible], [G1, A1], [], [G1, A1], [g1]))).toEqual([]);
+    expect(keysOf(sweep([visible], [G1, A1], [], [G1, A1], [g1, g2]))).toEqual(["G2"]);
+    expect(keysOf(sweep([visible], [G1, A1], [], [G1, A1], [{ ...g1, statement: "The product greets twice." }]))).toEqual(["G1"]);
+    expect(keysOf(sweep([visible], [A1], [], [A1], [{ id: "G1" }]))).toEqual(["vision-unreadable"]);
+  });
+
+  // An assumption underpins guarantees and is reported as an assumption; the checks of what it
+  // underpins decide it, so a guarantees-form version never holds one to a check of its own.
+  it("never holds an assumption of a guarantees-form version to a check, client-visible or not", () => {
+    const g1 = { id: "G1", statement: greets.text, observable: { interface: ["I1"], observation: "output" } };
+    const G1: Cite = { type: "scope", id: "G1", text: greets.text };
+    expect(keysOf(sweep([visible, design, undecidedLegacy], [G1], [], [G1], [g1]))).toEqual([]);
+    expect(keysOf(sweep([visible], [], [], [], [g1]))).toEqual(["G1"]);
+  });
+
   it("holds an assumption of no recorded kind to a check, keyed by its place", () => {
     expect(keysOf(sweep([visible, undecidedLegacy], [S1, A1]))).toEqual(["A2"]);
   });
@@ -355,6 +379,7 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf({ ...sweep([], []), version: null })).toEqual(["no-vision"]);
     expect(keysOf(sweep({ planning: "a map" }, []))).toEqual(["vision-unreadable"]);
     expect(keysOf(sweep([visible], [S1], [{ text: "" }]))).toEqual(["vision-unreadable"]);
+    expect(keysOf({ ...sweep([visible], [S1, A1]), contractForm: "prose" })).toEqual(["vision-unreadable"]);
     const check = { checkTaskId: "c1", taskSpec: spec([S1]), name: "greets", decides: ["S1"], taskId: "t1", revision: 1 };
     expect(keysOf({ ...sweep([visible], []), storedChecks: [{ ...check, taskSpec: { origin: "check" } }] })).toEqual(["coverage-unreadable"]);
     // A check stored with no record of what it decides decides nothing on record.

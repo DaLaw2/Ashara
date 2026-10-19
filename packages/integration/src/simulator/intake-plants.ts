@@ -25,9 +25,9 @@ export function intakeSecondReadingDropped(): () => void {
   Object.defineProperty(TenderIntake.prototype, SECOND_READING, {
     configurable: true,
     writable: true,
-    value: async <Grade>(_tender: unknown, first: { readonly grade: Grade }) => ({
+    value: async <Grade>(_tender: unknown, first: { readonly model: { readonly grade: Grade } }) => ({
       kind: "confirmed",
-      second: { strength: "other-family", model: { provider: "planted", model: "unasked", grade: first.grade }, questions: [] },
+      second: { strength: "other-family", model: { provider: "planted", model: "unasked", grade: first.model.grade }, questions: [] },
       passedOver: [],
     }),
   });

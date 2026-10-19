@@ -11,8 +11,12 @@ import { directed, draw, keys, statements, useSimulatorDatabase } from "./simula
  */
 useSimulatorDatabase();
 
-/** What I6 names when a check set of the stand-ins is stored with its last decided item undecided (check-set-skips-item). */
-const SKIPPED_ITEM = ["I6:unchecked-item:A1"];
+/**
+ * What I6 names when a check set of the stand-ins is stored with its last decided item undecided
+ * (check-set-skips-item): the guarantee naming no behaviour, the last the scripted intake drafts for
+ * the directed tier's two behaviours.
+ */
+const SKIPPED_ITEM = ["I6:unchecked-item:G3"];
 
 describe("lifecycle simulator, directed", () => {
   // With no adversary the stand-ins drive the project to Accepted on one passed sweep of main;
@@ -36,9 +40,10 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed(ctx, [], { mutation: "delivered-report-misstates-unchecked" }))).toEqual(["I4:delivered-unchecked"]);
   }, 90_000);
 
-  // Every in-scope line and the asked assumption (classed undecided, so client-visible) must be
-  // decided by a stored check. A check set stored with one cited item decided by none of its checks
-  // leaves it unchecked, though an acceptance line still cites it: I6 names it.
+  // Every guarantee of the version in force must be decided by a stored check; the asked assumption
+  // underpins a guarantee and is never held to a check of its own. A check set stored with one cited
+  // guarantee decided by none of its checks leaves it unchecked, though an acceptance line still
+  // cites it: I6 names it.
   it("catches a check set stored with a cited item no check decides", async (ctx) => {
     expect(keys(await directed(ctx, [], { mutation: "check-set-skips-item" }))).toEqual(SKIPPED_ITEM);
   }, 90_000);

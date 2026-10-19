@@ -8,22 +8,24 @@ import {
   modelCallFailureOf,
   withStructuredLadder,
 } from "@ashara/finance";
-import type { CapabilityLevel, LadderAttemptEvent, SecondOpinion, SecondOpinionStrength } from "@ashara/finance";
+import type { CapabilityLevel, LadderAttemptEvent, ModelCallFailure, SecondOpinion, SecondOpinionStrength } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
-import { projectBlockCause } from "@ashara/delivery/project-halt";
+import { modelCallBlockCategory, projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
-import type { AssumptionKind, ScopeLine } from "./vision-language/vision-assumption.js";
+import { AssumptionKeySchema, ContractDraftSchema, GuaranteeKeySchema, basisOf } from "./vision-language/guarantee.js";
+import type { GuaranteeBasis } from "./vision-language/guarantee.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
+import { VisionWriteRefused, visionWritable } from "./vision.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 
-// The Liaison's intake of a tender.
-// Proceed on silence at once: the questions
-// go out, the assumptions work proceeds on are recorded as Inferred, and vision v1
-// is written in the same intake. A later answer is a change request, not a rewrite.
-// The assumptions no question carries are reported to the client in one message of the
-// same intake, without waiting, so every Inferred
-// assumption intake writes is one the client was asked about or told of.
+// The Liaison's intake of a tender: it drafts the contract a delivery is judged against, the
+// product's interface as Ashara reads it, the guarantees, the assumptions each rests on and the
+// exclusions. Proceed on silence at once: the questions go out, the assumptions work proceeds on
+// are recorded as Inferred, vision v1 is written, and one contract draft tells the client every
+// record of it, in the same intake. A later answer or correction is a change request, not a rewrite.
+// Every Inferred assumption intake writes is one the client was asked about or told of in the draft.
+// A tender is never refused: one Ashara cannot read blocks its project, and the tender is kept.
 // A reading that asks the client nothing is a claim that the tender leaves nothing open worth asking,
 // as a clean suite review is a claim about its checks:
 // it is put to a second reading at the strongest independence the catalog offers. The questions a
@@ -34,7 +36,7 @@ import type { FirstVision, InferredAssumption } from "./vision.js";
 const MAX_QUESTIONS_PER_TENDER = 5;
 
 /**
- * Failed reads of a tender after which the Liaison stops retrying and reports to the client. Only the
+ * Failed reads of a tender after which the Liaison stops retrying and blocks the project. Only the
  * read counts, the model's failure or its provider's (modelCallFailureOf): Ashara's own faults never
  * use up the client's tender.
  */
@@ -61,36 +63,57 @@ const AssumptionStatementSchema = z.string().min(1).transform(withoutLabelLeadIn
 
 // "kind": behaviour the client could observe, or the team's own design choice no
 // client could observe. The Liaison classifies each assumption when it writes it; "undecided" is
-// recorded as client-visible, and only a client-visible one may become the source of an acceptance line.
-const AssumptionSchema = z.strictObject({
+// recorded as client-visible. "underpins": the guarantees that would change were it wrong; whether
+// those keys resolve, and whether a client-visible one names any, the vision's own rules judge.
+const assumptionFields = {
   statement: AssumptionStatementSchema,
   rationale: z.string().min(1),
   kind: ClassifiedAssumptionKindSchema,
-});
+  underpins: z.array(GuaranteeKeySchema),
+};
+
+// The first reading keys each assumption it drafts, so a guarantee or an exclusion can cite it.
+const DraftedAssumptionSchema = z.strictObject({ id: AssumptionKeySchema, ...assumptionFields });
+
+// A second reading cites nothing by key: its questions' assumptions are keyed after the first reading's.
+const RaisedAssumptionSchema = z.strictObject(assumptionFields);
 
 // Over the cap is rejected, never truncated: a dropped question would be a question the client was
 // never asked and no record says was cut. Each question carries the assumption adopted until it is
 // answered: a later answer is a change request against that assumption, so a question without one has
 // nothing to change. An empty list is a claim, which a second reading confirms or answers.
-const QuestionsSchema = z
-  .array(z.strictObject({ text: z.string().min(1), whyItMatters: z.string().min(1), assumption: AssumptionSchema }))
-  .max(MAX_QUESTIONS_PER_TENDER);
+const questionsWith = <A extends z.ZodType>(assumption: A) =>
+  z.array(z.strictObject({ text: z.string().min(1), whyItMatters: z.string().min(1), assumption })).max(MAX_QUESTIONS_PER_TENDER);
 
 export const IntakeResponseSchema = z.strictObject({
   summary: z.string().min(1),
-  // Kept apart so the vision records each line's side, and no report has to read it from the wording.
-  inScope: z.array(z.string().min(1)).min(1),
-  outOfScope: z.array(z.string().min(1)),
-  questions: QuestionsSchema,
+  interface: ContractDraftSchema.shape.interface,
+  guarantees: ContractDraftSchema.shape.guarantees,
+  questions: questionsWith(DraftedAssumptionSchema),
   /** Assumptions work proceeds on without asking the client. */
-  assumptions: z.array(AssumptionSchema),
+  assumptions: z.array(DraftedAssumptionSchema),
+  exclusions: ContractDraftSchema.shape.exclusions,
 });
 
 type IntakeResponse = z.infer<typeof IntakeResponseSchema>;
-type IntakeQuestion = IntakeResponse["questions"][number];
 
 /** A second reading's answer: the questions it would put to the client; none confirms the first reading. */
-export const SecondReadingSchema = z.strictObject({ questions: QuestionsSchema });
+export const SecondReadingSchema = z.strictObject({ questions: questionsWith(RaisedAssumptionSchema) });
+
+type RaisedQuestion = z.infer<typeof SecondReadingSchema>["questions"][number];
+
+/** What the client reads of a question, from either reading. */
+interface QuestionText {
+  readonly text: string;
+  readonly whyItMatters: string;
+  readonly assumption: { readonly statement: string; readonly rationale: string };
+}
+
+/** A question the client is sent, with the key of the assumption adopted until it is answered. */
+interface AskedQuestion {
+  readonly question: QuestionText;
+  readonly key: string;
+}
 
 /** The model a reading's answer came from, as the response named it, with its catalog grade as it was called. */
 interface ReadingModel {
@@ -119,7 +142,7 @@ interface PassedOver {
 interface SecondReading {
   readonly strength: SecondOpinionStrength;
   readonly model: ReadingModel;
-  readonly questions: readonly IntakeQuestion[];
+  readonly questions: readonly RaisedQuestion[];
 }
 
 /**
@@ -152,8 +175,8 @@ interface IntakeWrite {
   readonly tender: OpenTender;
   /** Question bodies as posted to the client, most impactful first; the store keeps this order. */
   readonly questions: readonly string[];
-  /** The report of the assumptions no question carries; null when every assumption is a question's. */
-  readonly assumptionsReport: string | null;
+  /** The contract draft: every record of vision v1, as the client reads it. */
+  readonly contractDraft: string;
   /** The report of how a reading that asked nothing was confirmed; null when the first reading asked questions. */
   readonly readingReport: string | null;
   readonly reading: IntakeReading;
@@ -168,14 +191,18 @@ type IntakeCommit =
 export interface IntakeStore {
   openTenders(): Promise<readonly OpenTender[]>;
   currentVisionVersion(projectId: ProjectId): Promise<number | null>;
-  /** Consumes the tender, posts the questions and both reports, records the reading and writes vision v1, together. */
+  /** Consumes the tender, posts the questions, the contract draft and the reading report, records the reading and writes vision v1, together. */
   recordIntake(write: IntakeWrite): Promise<IntakeCommit>;
   /** Consumes the tender and writes nothing else. */
   consumeTender(tenderId: string): Promise<void>;
   /** Counts a failed attempt with its error; returns the count after it. */
   recordFailedAttempt(tenderId: string, error: string): Promise<number>;
-  /** Posts the report and consumes the tender together. */
-  closeFailedTender(tender: OpenTender, report: string): Promise<void>;
+  /**
+   * Blocks the project for a tender intake could not read and sets the tender's count of failed
+   * reads back to none, together: the tender stays unconsumed with its last error, so the
+   * operator's unblock lets the next cycle read it again.
+   */
+  blockUnreadTender(tender: OpenTender, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
   /**
    * Blocks the project and records why; a project already
    * blocked keeps its first cause. A blocked project's tenders are not open.
@@ -195,7 +222,6 @@ export type IntakeOutcome =
   | { readonly kind: "failed"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
   /** The tender's intake failed on Ashara's side: recorded on it and taken in again after the backoff; the other tenders go on. */
   | StepFaulted
-  | { readonly kind: "abandoned"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempts: number }
   | { readonly kind: "project-blocked"; readonly tenderId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 /** What the core loop asks of the Liaison each cycle. */
@@ -214,6 +240,22 @@ class IntakeFailureUnrecorded extends Error {
   ) {
     super(`tender ${tenderId} has ${attempts} failed intake attempts but no recorded error`);
     this.name = "IntakeFailureUnrecorded";
+  }
+}
+
+/**
+ * A tender failed every read intake makes of it. The project is blocked on Ashara's side and the
+ * tender kept: it is never refused, and the operator's unblock has it read again.
+ */
+class IntakeReadExhausted extends Error {
+  constructor(
+    readonly tenderId: string,
+    readonly attempts: number,
+    readonly lastError: string,
+    readonly failure: ModelCallFailure,
+  ) {
+    super(`tender ${tenderId} could not be read after ${attempts} attempts; last error: ${lastError}`);
+    this.name = "IntakeReadExhausted";
   }
 }
 
@@ -303,27 +345,55 @@ const QUESTION_RULES = [
   `  not name. If the tender names one, record it as stated, not as an assumption.`,
 ];
 
+/** What an assumption's "underpins" names, as both readings of a tender are told. */
+const UNDERPINS_RULE = [
+  `  "underpins" lists the keys of the guarantees that would change if the assumption were wrong.`,
+  `  An assumption a client could observe underpins at least one guarantee, unless an exclusion`,
+  `  cites it as its source; one of the team's own design choices may underpin none.`,
+];
+
 function buildIntakePrompt(tender: string): string {
   return [
     `You are the Liaison of a software contractor. A client has sent the tender below.`,
-    `Read it and prepare the first version of the project's vision. Work starts now on what`,
-    `you record here; the client may answer your questions later, and an answer then changes`,
-    `the plan through a change request against the assumption that question names.`,
+    `Read it and prepare the first version of the project's vision: the contract the delivery is`,
+    `judged against. Work starts now on what you record here; the client may correct any line of`,
+    `it at any time, and may answer your questions later, and an answer then changes the plan`,
+    `through a change request against the assumption that question names.`,
     ``,
     `Tender:`,
     JSON.stringify(tender),
     ``,
     `Return:`,
     `- "summary": what the client wants built, in a few sentences, in the tender's own terms.`,
-    `- "inScope": what the client asks to be built, one item per string, each grounded in the`,
-    `  tender. Write each as the item itself, without a label such as "In scope:".`,
-    `- "outOfScope": what the tender explicitly leaves out, one item per string, in the same`,
-    `  form; an empty list when it leaves nothing out.`,
+    `- "interface": the product's public interface as you read it from the tender, keyed "I1",`,
+    `  "I2", and so on: one entry for each way the product is used, in the terms its kind has (a`,
+    `  command with its arguments and exit statuses, a network route with its request and response,`,
+    `  a function or type of a library's interface, or whatever else the product exposes), with`,
+    `  "text" saying what the entry is and "source" where it comes from. Where the tender leaves an`,
+    `  entry's form open, choose one form, never alternatives, and record the choice as an`,
+    `  assumption the entry cites as its source.`,
+    `- "guarantees": every promise a delivery of this tender is judged against, keyed "G1", "G2",`,
+    `  and so on, together covering everything the tender asks to be built. Each has: "statement",`,
+    `  the promise in one sentence; "observable", with "interface", the keys of the interface entries`,
+    `  where it is seen (at least one), and "observation", where a client sees it hold or break:`,
+    `  "output" (what the product outputs), "errors" (how it reports an error), "exit-status" (the`,
+    `  status it ends with), "stored-data" (the data the client stores with it), or "undecided" when`,
+    `  you cannot tell; "refutedBy", at least one concrete observation at the interface that would`,
+    `  show the promise broken; and "source".`,
+    `- "exclusions": what the tender leaves out, keyed "X1", "X2", and so on, each with "text" and`,
+    `  "source", so the absence of a guarantee is never read as a promise; an empty list when it`,
+    `  leaves nothing out.`,
+    `- Every "source" is {"kind": "tender", "quote": "..."}, a sentence or phrase copied word for`,
+    `  word from the tender, or {"kind": "assumption", "id": "A<n>"}, the key of one of your`,
+    `  assumptions that the record rests on.`,
     `- "questions": at most ${MAX_QUESTIONS_PER_TENDER} questions to the client, most impactful first.`,
     ...QUESTION_FORM,
     `- "assumptions": every other decision the tender leaves open that work must proceed on,`,
     `  each with the same "statement" and "rationale". Do not repeat a question's assumption.`,
     `  The client is told of each of them, and work proceeds on them unless the client objects.`,
+    `- Every assumption, a question's included, has an "id", "A1", "A2" and so on, no two alike,`,
+    `  and "underpins":`,
+    ...UNDERPINS_RULE,
     `- Every assumption, a question's included, has a "kind":`,
     ...ASSUMPTION_KIND_RULE,
     `  When one decision fixes both a behaviour and the mechanism behind it, record two`,
@@ -333,10 +403,14 @@ function buildIntakePrompt(tender: string): string {
     ...QUESTION_RULES,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
-    `Use exactly this format: {"summary": "...", "inScope": ["..."], "outOfScope": ["..."], ` +
+    `Use exactly this format: {"summary": "...", ` +
+      `"interface": [{"id": "I1", "text": "...", "source": {"kind": "tender", "quote": "..."}}], ` +
+      `"guarantees": [{"id": "G1", "statement": "...", "observable": {"interface": ["I1"], "observation": "output"}, ` +
+      `"refutedBy": ["..."], "source": {"kind": "tender", "quote": "..."}}], ` +
       `"questions": [{"text": "...", "whyItMatters": "...", ` +
-      `"assumption": {"statement": "...", "rationale": "...", "kind": "client-visible"}}], ` +
-      `"assumptions": [{"statement": "...", "rationale": "...", "kind": "undecided"}]}`,
+      `"assumption": {"id": "A1", "statement": "...", "rationale": "...", "kind": "client-visible", "underpins": ["G1"]}}], ` +
+      `"assumptions": [{"id": "A2", "statement": "...", "rationale": "...", "kind": "undecided", "underpins": ["G1"]}], ` +
+      `"exclusions": [{"id": "X1", "text": "...", "source": {"kind": "assumption", "id": "A2"}}]}`,
   ].join("\n");
 }
 
@@ -365,10 +439,12 @@ function readingAngleSection(angle: ReadingAngle): string[] {
 }
 
 /**
- * The second reading's prompt: the tender alone, never the first reading's answer, so the second
- * reading is not anchored on it; asked only for the questions the client must be sent.
+ * The second reading's prompt: the tender and the guarantees drafted from it, never the first
+ * reading's questions or assumptions, so the second reading is not anchored on what the first chose
+ * to ask or assume; asked only for the questions the client must be sent, each assumption naming
+ * the guarantees it underpins.
  */
-function secondReadingPrompt(tender: string, angle: ReadingAngle): string {
+function secondReadingPrompt(tender: string, angle: ReadingAngle, guarantees: IntakeResponse["guarantees"]): string {
   return [
     `You are the Liaison of a software contractor. A client has sent the tender below. Work on it starts`,
     `now; every decision the tender leaves open is settled by an assumption the team records and tells`,
@@ -378,9 +454,14 @@ function secondReadingPrompt(tender: string, angle: ReadingAngle): string {
     `Tender:`,
     JSON.stringify(tender),
     ``,
+    `The delivery is judged against these guarantees, drafted from the tender:`,
+    ...guarantees.map((g) => `- ${g.id}: ${g.statement}`),
+    ``,
     ...readingAngleSection(angle),
     `Return "questions": at most ${MAX_QUESTIONS_PER_TENDER} questions to the client, most impactful first.`,
     ...QUESTION_FORM,
+    `Every question's assumption has "underpins", naming guarantees listed above:`,
+    ...UNDERPINS_RULE,
     `Every question's assumption has a "kind":`,
     ...ASSUMPTION_KIND_RULE,
     ``,
@@ -389,7 +470,7 @@ function secondReadingPrompt(tender: string, angle: ReadingAngle): string {
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
     `Use exactly this format: {"questions": [{"text": "...", "whyItMatters": "...", ` +
-      `"assumption": {"statement": "...", "rationale": "...", "kind": "client-visible"}}]}`,
+      `"assumption": {"statement": "...", "rationale": "...", "kind": "client-visible", "underpins": ["G1"]}}]}`,
   ].join("\n");
 }
 
@@ -403,7 +484,7 @@ function intakeReask(ctx: { readonly errors: readonly string[] }): string {
 }
 
 /** What the client reads: the question, why it matters, and what Ashara does if they stay silent. */
-function questionBody(question: IntakeQuestion): string {
+function questionBody(question: QuestionText): string {
   return [
     question.text,
     `Why it matters: ${question.whyItMatters}`,
@@ -412,54 +493,119 @@ function questionBody(question: IntakeQuestion): string {
   ].join("\n\n");
 }
 
-/** Question i's assumption is A(i+1); the unasked assumptions are numbered after the questions'. */
-function assumptionKey(index: number): string {
-  return `A${index + 1}`;
+/** The assumptions vision v1 records and the questions the client is sent, each with its assumption's key. */
+interface IntakeRecords {
+  readonly inferences: readonly InferredAssumption[];
+  readonly asked: readonly AskedQuestion[];
 }
 
 /**
- * The questions the client is sent: the first reading's, or the second reading's when the first asked
- * none and the second raised some.
+ * The intake's assumptions, keyed: the first reading's under the keys it drafted them with, its
+ * questions' asked and the rest reported in the contract draft; then the questions a second reading
+ * raised, asked, keyed after the highest key the first reading drafted, so no record of the first
+ * reading that cites an assumption comes to name another.
  */
-function questionsAsked(first: IntakeResponse, confirmation: ReadingConfirmation): readonly IntakeQuestion[] {
-  return confirmation.kind === "questions-raised" ? confirmation.second.questions : first.questions;
-}
-
-/**
- * Every assumption of the intake, keyed: the asked questions' first, in question order, then the
- * unasked ones, which the assumptions report tells the client of.
- */
-function inferencesOf(questions: readonly IntakeQuestion[], response: IntakeResponse): InferredAssumption[] {
-  const asked = questions.map((q) => ({ ...q.assumption, disclosed: "asked" as const }));
-  const reported = response.assumptions.map((a) => ({ ...a, disclosed: "reported" as const }));
-  return [...asked, ...reported].map((a, i) => ({
-    key: assumptionKey(i),
+function recordsOf(first: IntakeResponse, raised: readonly RaisedQuestion[]): IntakeRecords {
+  const inferred = (key: string, a: z.infer<typeof RaisedAssumptionSchema>, disclosed: InferredAssumption["disclosed"]): InferredAssumption => ({
+    key,
     statement: a.statement,
     rationale: a.rationale,
     status: "Inferred",
     kind: a.kind,
-    disclosed: a.disclosed,
-    underpins: [],
-  }));
+    disclosed,
+    underpins: a.underpins,
+  });
+  const drafted = [
+    ...first.questions.map((q) => inferred(q.assumption.id, q.assumption, "asked")),
+    ...first.assumptions.map((a) => inferred(a.id, a, "reported")),
+  ];
+  const highest = Math.max(0, ...drafted.map((a) => Number(a.key.slice(1))));
+  const raisedAsked = raised.map((question, i) => ({ question, key: `A${highest + i + 1}` }));
+  return {
+    inferences: [...drafted, ...raisedAsked.map(({ question, key }) => inferred(key, question.assumption, "asked"))],
+    asked: [...first.questions.map((question) => ({ question, key: question.assumption.id })), ...raisedAsked],
+  };
 }
 
 /**
- * What the client reads of the assumptions no question asked about: the
- * decisions work proceeds on unless they object, behaviour first, then the team's design choices.
- * Nothing waits on a reply. Null when there are none.
+ * Why the vision would refuse the contract these records make, as the reading that drafted it is
+ * told when it is asked again; null when it would take it. The vision's own rules decide, so what a
+ * reading is held to and what is stored are the one definition.
  */
-function assumptionsReport(inferences: readonly InferredAssumption[]): string | null {
-  const reported = inferences.filter((a) => a.disclosed === "reported");
-  if (reported.length === 0) return null;
-  const listed = (kind: AssumptionKind) =>
-    reported.filter((a) => a.kind === kind).map((a) => `- ${a.key}: ${a.statement} (why: ${a.rationale})`);
-  const behaviour = listed("client-visible");
-  const design = listed("internal-design");
+function contractRefusal(tender: OpenTender, first: IntakeResponse, inferences: readonly InferredAssumption[]): string | null {
+  try {
+    visionWritable(tender.projectId, {
+      visionText: tender.body,
+      scopeBoundaries: [],
+      inferences,
+      openQuestions: [],
+      contract: { form: "guarantees", interface: first.interface, guarantees: first.guarantees, exclusions: first.exclusions },
+    });
+    return null;
+  } catch (err) {
+    if (!(err instanceof VisionWriteRefused)) throw err;
+    return `${err.field}: ${err.issues}`;
+  }
+}
+
+/** The first reading's schema for one tender: an answer whose contract the vision would refuse is asked again, with why. */
+function firstReadingSchema(tender: OpenTender) {
+  return IntakeResponseSchema.superRefine((response, ctx) => {
+    const refusal = contractRefusal(tender, response, recordsOf(response, []).inferences);
+    if (refusal !== null) ctx.addIssue({ code: "custom", message: refusal });
+  });
+}
+
+/** A second reading's schema: the questions it raises must leave the first reading's contract one the vision takes. */
+function secondReadingSchema(tender: OpenTender, first: IntakeResponse) {
+  return SecondReadingSchema.superRefine((second, ctx) => {
+    const refusal = contractRefusal(tender, first, recordsOf(first, second.questions).inferences);
+    if (refusal !== null) ctx.addIssue({ code: "custom", message: refusal });
+  });
+}
+
+/** A guarantee's basis in the client's words. */
+const BASIS_WORDS: Readonly<Record<GuaranteeBasis, string>> = {
+  "client-stated": "what your tender states",
+  "assumed-unconfirmed": "an assumption you have not confirmed",
+  derived: "our reading of your tender",
+};
+
+/**
+ * The contract draft the client reads with vision v1: the interface as Ashara reads it, the first
+ * thing they may correct; every guarantee with its basis, one resting on an assumption they have
+ * not confirmed marked at risk until they confirm it; the assumptions they could observe, each
+ * with the guarantees it underpins; the exclusions, so silence is never read as a promise; and the
+ * team's own design choices, which acceptance does not depend on. Nothing waits on a reply.
+ */
+function contractDraftReport(first: IntakeResponse, inferences: readonly InferredAssumption[]): string {
+  const footing = inferences.map((a) => ({ id: a.key, status: a.status, underpins: a.underpins }));
+  const guarantees = first.guarantees.map((g) => {
+    const resting = inferences.filter((a) => a.underpins.includes(g.id) || (g.source.kind === "assumption" && g.source.id === a.key)).map((a) => a.key);
+    const risk = resting.length === 0 ? "" : `; at risk until you confirm ${resting.join(", ")}`;
+    return `- ${g.id}: ${g.statement} (basis: ${BASIS_WORDS[basisOf(g, footing)]}${risk})`;
+  });
+  const excludedBy = (key: string): string[] => first.exclusions.filter((x) => x.source.kind === "assumption" && x.source.id === key).map((x) => x.id);
+  const visible = inferences.flatMap((a) => {
+    if (a.kind === "internal-design") return [];
+    const grounds = [
+      ...(a.underpins.length === 0 ? [] : [`underpins ${a.underpins.join(", ")}`]),
+      ...excludedBy(a.key).map((x) => `the ground of exclusion ${x}`),
+      ...(a.disclosed === "asked" ? ["asked in a question"] : []),
+    ];
+    return [`- ${a.key}: ${a.statement} (${grounds.join("; ")})`];
+  });
+  const design = inferences.filter((a) => a.kind === "internal-design").map((a) => `- ${a.key}: ${a.statement}`);
   return [
-    `Besides the questions we asked, the tender leaves these decisions open, and we proceed on them unless you object. Work does not wait for a reply.`,
-    ...(behaviour.length === 0 ? [] : [`What the product will do:\n${behaviour.join("\n")}`]),
-    ...(design.length === 0 ? [] : [`How we will build it (our own design choices, which your acceptance does not depend on):\n${design.join("\n")}`]),
-    `If any of these does not fit what you need, send a change naming it and saying what should be different.`,
+    `This is the contract we are working to, drafted from your tender.`,
+    `The interface, as we read it; it is the first thing you may correct:\n${first.interface.map((entry) => `- ${entry.id}: ${entry.text}`).join("\n")}`,
+    `What we guarantee, each with what it rests on:\n${guarantees.join("\n")}`,
+    ...(visible.length === 0 ? [] : [`The assumptions the guarantees rest on:\n${visible.join("\n")}`]),
+    first.exclusions.length === 0
+      ? `What is left out: nothing is excluded on record.`
+      : `What is left out, so that silence is never read as a promise:\n${first.exclusions.map((x) => `- ${x.id}: ${x.text}`).join("\n")}`,
+    ...(design.length === 0 ? [] : [`Basis of Design, our own design choices, which your acceptance does not depend on:\n${design.join("\n")}`]),
+    `Work has started on this list; correct any line at any time; nothing waits for your reply.`,
   ].join("\n\n");
 }
 
@@ -501,20 +647,6 @@ function readingReport(confirmation: ReadingConfirmation): string | null {
   }
 }
 
-/**
- * What the client reads when intake gives up: only what is recorded, the count of failed reads.
- * The error chain stays in intake_last_error and the warn log: provider and validation text is internal,
- * and it can carry another party's error detail. No operator alert exists beyond
- * the warn log, so the report does not promise one.
- */
-function failureReport(attempts: number): string {
-  return [
-    `Ashara could not process your tender after ${attempts} attempts, so this request has been stopped.`,
-    `Nothing was built for this project.`,
-    `You can send the tender again to start a new request.`,
-  ].join("\n\n");
-}
-
 interface TenderIntakeDeps {
   readonly llm: ContextualLlm;
   readonly store: IntakeStore;
@@ -527,15 +659,15 @@ interface TenderIntakeDeps {
  * The Liaison's tender intake. Each unconsumed tender is read by one structured
  * call; a reading that asks nothing is put to a second reading; the result is
  * recorded whole or not at all. A failed read leaves the tender unconsumed with the
- * failure counted; at the cap the client gets a report saying intake failed and the
- * tender is consumed, so the loop does not spin. Nothing but a failed read is counted.
+ * failure counted; at the cap the project is blocked on Ashara's side and the tender kept,
+ * so the loop does not spin and the client's tender is never refused. Nothing but a failed read is counted.
  */
 export class TenderIntake implements LiaisonIntake {
   constructor(private readonly deps: TenderIntakeDeps) {}
 
   /**
-   * A tender whose own record is inconsistent, or whose questions the store posts
-   * wrongly, blocks its project, and the other tenders are still taken in. Any other
+   * A tender no read of which succeeded, whose own record is inconsistent, or whose questions the
+   * store posts wrongly, blocks its project, and the other tenders are still taken in. Any other
    * failure that is not the read's own (a price refusal, a ledger or store failure, a
    * provider rejecting what Ashara sent, a misrouted second reading, an error nothing
    * names) is that tender's, contained to it (containEach), never counted against it;
@@ -547,14 +679,19 @@ export class TenderIntake implements LiaisonIntake {
       try {
         return await this.intake(tender);
       } catch (err) {
+        if (err instanceof IntakeReadExhausted) {
+          return this.block(tender, { ...projectBlockCause(err), category: modelCallBlockCategory(err.failure) }, "unread");
+        }
         if (!(err instanceof IntakeFailureUnrecorded || err instanceof QuestionIdsMismatch)) throw err;
-        return this.block(tender, projectBlockCause(err));
+        return this.block(tender, projectBlockCause(err), "record");
       }
     });
   }
 
-  private async block(tender: OpenTender, cause: ProjectBlockCause): Promise<IntakeOutcome> {
-    const result = await this.deps.store.blockProject(tender.projectId, cause);
+  /** An unread tender's block also sets its count of failed reads back to none, so the unblock reads it again. */
+  private async block(tender: OpenTender, cause: ProjectBlockCause, why: "unread" | "record"): Promise<IntakeOutcome> {
+    const { store } = this.deps;
+    const result = why === "unread" ? await store.blockUnreadTender(tender, cause) : await store.blockProject(tender.projectId, cause);
     console.warn(
       `[liaison-intake] tender ${tender.id} (project ${tender.projectId}): ${cause.errorClass}; ` +
         `project ${result}: ${cause.reason}`,
@@ -566,11 +703,11 @@ export class TenderIntake implements LiaisonIntake {
     const { store } = this.deps;
     const base = { tenderId: tender.id, projectId: tender.projectId };
 
-    // A previous cycle reached the cap but did not close the tender.
+    // A previous cycle reached the cap but did not block the project. The tender's record names no
+    // party to the last failure, so it is Ashara's to look into, never the model's or the provider's.
     if (tender.intakeAttempts >= MAX_INTAKE_ATTEMPTS) {
       if (tender.intakeLastError === null) throw new IntakeFailureUnrecorded(tender.id, tender.intakeAttempts);
-      await store.closeFailedTender(tender, failureReport(tender.intakeAttempts));
-      return { kind: "abandoned", ...base, attempts: tender.intakeAttempts };
+      throw new IntakeReadExhausted(tender.id, tender.intakeAttempts, tender.intakeLastError, "ashara");
     }
 
     const visionVersion = await store.currentVisionVersion(tender.projectId);
@@ -587,11 +724,12 @@ export class TenderIntake implements LiaisonIntake {
     try {
       first = await this.read(tender);
     } catch (err) {
-      if (modelCallFailureOf(err) === "ashara") throw err;
-      return this.fail(tender, err);
+      const failure = modelCallFailureOf(err);
+      if (failure === "ashara") throw err;
+      return this.fail(tender, err, failure);
     }
     const confirmation: ReadingConfirmation =
-      first.response.questions.length > 0 ? { kind: "not-needed" } : await this.secondReading(tender, first.model);
+      first.response.questions.length > 0 ? { kind: "not-needed" } : await this.secondReading(tender, first);
     const commit = await store.recordIntake(this.toWrite(tender, first, confirmation));
     if (commit.kind === "vision-exists") {
       return { kind: "vision-exists", ...base, visionVersion: commit.visionVersion };
@@ -618,7 +756,7 @@ export class TenderIntake implements LiaisonIntake {
     const response = await this.ladder(tender).generateStructured({
       capability: "Strong",
       prompt: buildIntakePrompt(tender.body),
-      schema: IntakeResponseSchema,
+      schema: firstReadingSchema(tender),
       maxTokens: 4096,
     });
     return { response: response.data, model: { provider: response.provider, model: response.model, grade: response.grade } };
@@ -635,16 +773,18 @@ export class TenderIntake implements LiaisonIntake {
    * The second reading judges the first, so it asks for a judge of work at the first reading's grade
    * as called: never a model weaker than the one whose reading it judges.
    */
-  private async secondReading(tender: OpenTender, first: ReadingModel): Promise<ReadingConfirmation> {
+  private async secondReading(tender: OpenTender, reading: FirstReading): Promise<ReadingConfirmation> {
+    const first = reading.model;
     const provider = this.ladder(tender);
+    const schema = secondReadingSchema(tender, reading.response);
     const passedOver: PassedOver[] = [];
     for (const strength of SECOND_OPINION_STRENGTHS) {
       const secondOpinion: SecondOpinion = { avoid: { provider: first.provider, model: first.model }, strength };
       try {
         const response = await provider.generateStructured({
           judges: first.grade,
-          prompt: secondReadingPrompt(tender.body, ANGLE_OF[strength]),
-          schema: SecondReadingSchema,
+          prompt: secondReadingPrompt(tender.body, ANGLE_OF[strength], reading.response.guarantees),
+          schema,
           maxTokens: 4096,
           secondOpinion,
         });
@@ -674,46 +814,36 @@ export class TenderIntake implements LiaisonIntake {
 
   private toWrite(tender: OpenTender, first: FirstReading, confirmation: ReadingConfirmation): IntakeWrite {
     const { response } = first;
-    const questions = questionsAsked(response, confirmation);
-    const inferences = inferencesOf(questions, response);
+    const { inferences, asked } = recordsOf(response, confirmation.kind === "questions-raised" ? confirmation.second.questions : []);
     return {
       tender,
-      questions: questions.map(questionBody),
-      assumptionsReport: assumptionsReport(inferences),
+      questions: asked.map((a) => questionBody(a.question)),
+      contractDraft: contractDraftReport(response, inferences),
       readingReport: readingReport(confirmation),
       reading: { first: first.model, firstQuestions: response.questions.length, confirmation },
       vision: (questionMessageIds) => ({
         visionText: tender.body,
         summary: response.summary,
-        scopeBoundaries: [
-          ...response.inScope.map((text): ScopeLine => ({ text, side: "in" })),
-          ...response.outOfScope.map((text): ScopeLine => ({ text, side: "out" })),
-        ],
+        contract: { interface: response.interface, guarantees: response.guarantees, exclusions: response.exclusions },
         inferences,
-        openQuestions: questions.map((q, i) => {
+        openQuestions: asked.map(({ question, key }, i) => {
           const messageId = questionMessageIds[i];
-          if (questionMessageIds.length !== questions.length || messageId === undefined) {
-            throw new QuestionIdsMismatch(tender.id, questions.length, questionMessageIds.length);
+          if (questionMessageIds.length !== asked.length || messageId === undefined) {
+            throw new QuestionIdsMismatch(tender.id, asked.length, questionMessageIds.length);
           }
-          return { messageId, text: q.text, whyItMatters: q.whyItMatters, assumptionKey: assumptionKey(i) };
+          return { messageId, text: question.text, whyItMatters: question.whyItMatters, assumptionKey: key };
         }),
       }),
     };
   }
 
-  private async fail(tender: OpenTender, err: unknown): Promise<IntakeOutcome> {
+  private async fail(tender: OpenTender, err: unknown, failure: ModelCallFailure): Promise<IntakeOutcome> {
     const error = describeErrorChain(err);
     const attempt = await this.deps.store.recordFailedAttempt(tender.id, error);
     console.warn(
       `[liaison-intake] tender ${tender.id} (project ${tender.projectId}): attempt ${attempt}/${MAX_INTAKE_ATTEMPTS} failed: ${error}`,
     );
-    const base = { tenderId: tender.id, projectId: tender.projectId };
-    if (attempt < MAX_INTAKE_ATTEMPTS) return { kind: "failed", ...base, attempt, error };
-
-    await this.deps.store.closeFailedTender(tender, failureReport(attempt));
-    console.warn(
-      `[liaison-intake] tender ${tender.id}: intake abandoned after ${attempt} attempts; failure reported to the client`,
-    );
-    return { kind: "abandoned", ...base, attempts: attempt };
+    if (attempt < MAX_INTAKE_ATTEMPTS) return { kind: "failed", tenderId: tender.id, projectId: tender.projectId, attempt, error };
+    throw new IntakeReadExhausted(tender.id, attempt, error, failure);
   }
 }

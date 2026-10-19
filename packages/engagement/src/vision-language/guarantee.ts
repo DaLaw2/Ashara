@@ -9,13 +9,19 @@ const GUARANTEE_ID = /^G[1-9]\d*$/;
 const EXCLUSION_ID = /^X[1-9]\d*$/;
 const ASSUMPTION_ID = /^A[1-9]\d*$/;
 
+/** An assumption's key: "A" and its number. */
+export const AssumptionKeySchema = z.string().regex(ASSUMPTION_ID);
+
+/** A guarantee's key: "G" and its number. */
+export const GuaranteeKeySchema = z.string().regex(GUARANTEE_ID);
+
 /**
  * Where a contract record comes from: a sentence of the client's tender, quoted verbatim, or an
  * assumption of the same vision version, by its key.
  */
 const ContractSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("tender"), quote: z.string().trim().min(1) }),
-  z.strictObject({ kind: z.literal("assumption"), id: z.string().regex(ASSUMPTION_ID) }),
+  z.strictObject({ kind: z.literal("assumption"), id: AssumptionKeySchema }),
 ]);
 
 type ContractSource = z.infer<typeof ContractSourceSchema>;
@@ -45,7 +51,7 @@ const InterfaceEntrySchema = z.strictObject({
 
 const guaranteeShape = <O extends z.ZodType<Observation, unknown>>(observation: O) =>
   z.strictObject({
-    id: z.string().regex(GUARANTEE_ID),
+    id: GuaranteeKeySchema,
     statement: z.string().trim().min(1),
     observable: z.strictObject({
       interface: z.array(z.string().regex(INTERFACE_ID)).min(1),

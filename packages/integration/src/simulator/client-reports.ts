@@ -71,7 +71,15 @@ const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), titl
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
-const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown(), reportBody: z.string().nullable() });
+const passedSweepRow = z.object({
+  id: z.string(),
+  version: z.number().nullable(),
+  inferences: z.unknown(),
+  scopeBoundaries: z.unknown(),
+  contractForm: z.unknown(),
+  guarantees: z.unknown(),
+  reportBody: z.string().nullable(),
+});
 /**
  * Why a suite review left an item undecided, as the delivered report must say it: a finding that
  * did not act, its second review not agreeing (unsettled) or failing; or a clean
@@ -220,10 +228,10 @@ async function passedSweepsOf(
 ): Promise<ReportRecords["passedSweeps"]> {
   const sweeps = await rows(
     passedSweepRow,
-    sql`SELECT s.id, v.version, v.inferences, v.scope_boundaries AS "scopeBoundaries",
+    sql`SELECT s.id, v.version, v.inferences, v.scope_boundaries AS "scopeBoundaries", v.contract_form AS "contractForm", v.guarantees,
                (SELECT m.body FROM client_messages m WHERE m.id = s.report_id) AS "reportBody"
         FROM acceptance_sweeps s
-        LEFT JOIN LATERAL (SELECT version, inferences, scope_boundaries FROM vision_documents d
+        LEFT JOIN LATERAL (SELECT version, inferences, scope_boundaries, contract_form, guarantees FROM vision_documents d
                            WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
         WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
   );
@@ -809,6 +817,8 @@ function decidedByStoredChecks(
 const sweptAssumption = z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), kind: z.enum(["client-visible", "internal-design"]).optional() });
 /** A scope line as stored: with its side, or a bare string written before sides were recorded (no side on record). */
 const sweptScopeLine = z.union([z.looseObject({ text: z.string().min(1), side: z.enum(["in", "out"]) }), z.string().min(1)]);
+/** A guarantee as stored: its key and its statement, what a plan cites it by. */
+const sweptGuarantee = z.looseObject({ id: z.string().min(1), statement: z.string().min(1) });
 
 /** One finding of the guard, keyed by the item (or the record that could not be read). */
 interface UncheckedFinding {
@@ -818,12 +828,12 @@ interface UncheckedFinding {
 
 /**
  * The evidence guard, judged on every passed acceptance sweep, whatever the project did
- * after it: every item of the vision current when the sweep passed that a check must decide (an
- * in-scope line or one of no recorded side, an assumption not recorded as internal design) is
- * decided, as that vision states it, by a stored check the sweep ran: one whose recorded `decides`
- * names it. A line citing it is no check of it. It is something the client asked for or could
- * observe, so accepting with no check on it delivers it unverified. One finding per item, keyed by
- * its id, at the first sweep that misses it.
+ * after it: every guarantee of the vision version in force when the sweep passed is decided, as that
+ * version states it, by a stored check the sweep ran: one whose recorded `decides` names it. A line
+ * citing it is no check of it. A guarantee is what a delivery is judged against, so accepting with
+ * no check on it delivers it unverified. An assumption is never expected to be decided by a check: it
+ * underpins guarantees, and the checks of those decide it. One finding per guarantee, keyed by its id,
+ * at the first sweep that misses it.
  */
 export function uncheckedAtPassedSweeps(records: Pick<ReportRecords, "passedSweeps">): UncheckedFinding[] {
   const found = new Map<string, string>();
@@ -835,48 +845,72 @@ export function uncheckedAtPassedSweeps(records: Pick<ReportRecords, "passedSwee
   return [...found].map(([key, statement]) => ({ key, statement }));
 }
 
+/** One guarantee of the version in force: its id, its statement and how a finding names it. */
+interface GuaranteeInForce {
+  readonly id: string;
+  readonly text: string;
+  readonly named: string;
+}
+
+const sweptContractForm = z.enum(["scope-lines", "guarantees"]);
+
+/**
+ * The guarantees of a version as the Vision reads them: a guarantees-form version's own; a version
+ * written before guarantees were holds each scope line not out of scope, keyed by its place, and each
+ * assumption not recorded as internal design, under its own key, as a guarantee.
+ */
+function guaranteesInForce(
+  form: z.infer<typeof sweptContractForm>,
+  scope: ReadonlyArray<z.infer<typeof sweptScopeLine>>,
+  guarantees: ReadonlyArray<z.infer<typeof sweptGuarantee>>,
+  inferences: ReadonlyArray<z.infer<typeof sweptAssumption>>,
+): GuaranteeInForce[] {
+  if (form === "guarantees") return guarantees.map((g) => ({ id: g.id, text: g.statement, named: `guarantee ${g.id} ("${g.statement.slice(0, 120)}")` }));
+  return [
+    ...scope.flatMap((line, i) => {
+      const id = `S${i + 1}`;
+      const { text, side } = typeof line === "string" ? { text: line, side: "of no recorded side" } : line;
+      return side === "out" ? [] : [{ id, text, named: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, read as a guarantee` }];
+    }),
+    ...inferences.flatMap((record, i) => {
+      const id = record.key ?? `A${i + 1}`;
+      if (record.kind === "internal-design") return [];
+      return [{ id, text: record.statement, named: `assumption ${id} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, read as a guarantee` }];
+    }),
+  ];
+}
+
 function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: string): UncheckedFinding[] {
   if (sweep.version === null) return [{ key: "no-vision", statement: `${at} passed with no vision version on record` }];
+  const form = sweptContractForm.safeParse(sweep.contractForm);
   const inferences = z.array(sweptAssumption).safeParse(sweep.inferences);
   const scope = z.array(sweptScopeLine).safeParse(sweep.scopeBoundaries);
-  if (!inferences.success || !scope.success) {
-    const error = inferences.error ?? scope.error;
-    return [{ key: "vision-unreadable", statement: `vision v${sweep.version} at ${at} cannot be read as keyed assumptions and scope lines: ${error === undefined ? "" : z.prettifyError(error).slice(0, 200)}` }];
+  const guarantees = z.array(sweptGuarantee).safeParse(sweep.guarantees);
+  if (!form.success || !inferences.success || !scope.success || !guarantees.success) {
+    const error = form.error ?? inferences.error ?? scope.error ?? guarantees.error;
+    return [
+      {
+        key: "vision-unreadable",
+        statement: `vision v${sweep.version} at ${at} cannot be read as a contract form, keyed assumptions, scope lines and guarantees: ${error === undefined ? "" : z.prettifyError(error).slice(0, 200)}`,
+      },
+    ];
   }
   const swept = decidedByStoredChecks(sweep.storedChecks);
   if (swept.kind !== "decided") return [{ key: "coverage-unreadable", statement: `which items the checks ${at} ran decide is not on record: ${swept.detail}` }];
-  const missed = (id: string, text: string): boolean => !swept.decided.has(identityOf({ id, text }));
-  const scopeFindings = scope.data.flatMap((line, i) => {
-    const id = `S${i + 1}`;
-    const { text, side } = typeof line === "string" ? { text: line, side: "of no recorded side" } : line;
-    if (side === "out" || !missed(id, text)) return [];
-    return [{ key: id, statement: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, is decided by no stored check ${at} ran` }];
-  });
-  const assumptionFindings = inferences.data.flatMap((record, i) => {
-    const key = record.key ?? `A${i + 1}`;
-    if (record.kind === "internal-design" || !missed(key, record.statement)) return [];
-    return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is decided by no stored check ${at} ran` }];
-  });
-  return [...scopeFindings, ...assumptionFindings, ...undecidedAtSweep(sweep, scope.data, inferences.data, at)];
+  const inForce = guaranteesInForce(form.data, scope.data, guarantees.data, inferences.data);
+  const findings = inForce.flatMap((g) => (swept.decided.has(identityOf(g)) ? [] : [{ key: g.id, statement: `${g.named} is decided by no stored check ${at} ran` }]));
+  return [...findings, ...undecidedAtSweep(sweep, inForce, at)];
 }
 
 /**
- * An item of what the client asked for that a suite review left undecided is
- * unverified, never covered, whatever a stored check records it decides. Once the sweep's delivered
- * report is posted, it names every such item apart as not verified and never says every item is
- * decided. Judged per item, keyed by its id.
+ * A guarantee of the version in force that a suite review left undecided is unverified, never
+ * covered, whatever a stored check records it decides. Once the sweep's delivered report is posted,
+ * it names every such guarantee apart as not verified and never says every item is decided. Judged
+ * per guarantee, keyed by its id.
  */
-function undecidedAtSweep(
-  sweep: ReportRecords["passedSweeps"][number],
-  scope: ReadonlyArray<z.infer<typeof sweptScopeLine>>,
-  inferences: ReadonlyArray<z.infer<typeof sweptAssumption>>,
-  at: string,
-): UncheckedFinding[] {
+function undecidedAtSweep(sweep: ReportRecords["passedSweeps"][number], inForce: readonly GuaranteeInForce[], at: string): UncheckedFinding[] {
   if (sweep.reportBody === null) return [];
-  const asked = new Set([
-    ...scope.flatMap((line, i) => (typeof line !== "string" && line.side === "out" ? [] : [`S${i + 1}`])),
-    ...inferences.flatMap((record, i) => (record.kind === "internal-design" ? [] : [record.key ?? `A${i + 1}`])),
-  ]);
+  const asked = new Set(inForce.map((g) => g.id));
   const undecided = sweep.undecided.filter((item) => asked.has(item.id));
   if (undecided.length === 0) return [];
   const listed = paragraphs(sweep.reportBody, UNDECIDED_HEAD).flatMap((part) => part.split("\n").filter((line) => line.startsWith("- ")));

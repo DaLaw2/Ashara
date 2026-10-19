@@ -1,4 +1,4 @@
-import { ClientMessageRepository, VisionRepository, closeTenderAfterFailedIntake, recordTenderIntake } from "@ashara/engagement";
+import { ClientMessageRepository, VisionRepository, recordTenderIntake } from "@ashara/engagement";
 import type { createDb } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import type { IntakeStore } from "@ashara/engagement";
@@ -29,7 +29,7 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
         tenderId: write.tender.id,
         projectId: write.tender.projectId,
         questions: write.questions,
-        assumptionsReport: write.assumptionsReport,
+        contractDraft: write.contractDraft,
         readingReport: write.readingReport,
         reading: write.reading,
         vision: write.vision,
@@ -42,8 +42,12 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
       await messages.markConsumed(tenderId);
     },
     recordFailedAttempt: (tenderId, error) => messages.recordIntakeFailure(tenderId, error),
-    closeFailedTender: (tender, report) =>
-      closeTenderAfterFailedIntake(db, { tenderId: tender.id, projectId: tender.projectId }, report),
+    blockUnreadTender: (tender, cause) =>
+      db.transaction(async (tx) => {
+        const blocked = await new ProjectHaltRepository(tx).block(tender.projectId, cause);
+        await new ClientMessageRepository(tx).resetIntakeAttempts(tender.id);
+        return blocked;
+      }),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }

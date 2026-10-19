@@ -5,7 +5,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { stepContainment } from "@ashara/delivery";
+import { ProjectHaltRepository, stepContainment } from "@ashara/delivery";
 import { TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -69,20 +69,40 @@ function jsonResult(value: unknown) {
   };
 }
 
+/** The questions a reading raises: their assumptions keyed by the first reading (`keyed`) or by intake after it. */
+function questionsOf(questionCount: number, keyed: boolean) {
+  return Array.from({ length: questionCount }, (_, i) => ({
+    text: `Question ${i + 1} about the pottery studios?`,
+    whyItMatters: `It changes booking rule ${i + 1}.`,
+    assumption: {
+      ...(keyed ? { id: `A${i + 1}` } : {}),
+      statement: `Booking rule ${i + 1} is the studio's usual one.`,
+      rationale: `The tender implies rule ${i + 1}.`,
+      kind: "client-visible",
+      underpins: ["G1"],
+    },
+  }));
+}
+
+/**
+ * A first reading in the contract form. Each test's tender differs, so the contract rests on the
+ * capacity assumption rather than quoting the tender.
+ */
 function intakeResponse(questionCount: number) {
+  const capacity = `A${questionCount + 1}`;
+  const source = { kind: "assumption", id: capacity };
   return {
     summary: "A booking page for the client's two pottery studios.",
-    inScope: ["Class booking for both studios"],
-    outOfScope: ["Payments"],
-    assumptions: [
-      { statement: "Each class has a fixed capacity set by the studio.", rationale: "The tender mentions full classes.", kind: "client-visible" },
-      { statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "internal-design" },
+    interface: [{ id: "I1", text: "The booking page.", source }],
+    guarantees: [
+      { id: "G1", statement: "A client books a seat in a class with room.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["A class with room refuses the booking."], source },
     ],
-    questions: Array.from({ length: questionCount }, (_, i) => ({
-      text: `Question ${i + 1} about the pottery studios?`,
-      whyItMatters: `It changes booking rule ${i + 1}.`,
-      assumption: { statement: `Booking rule ${i + 1} is the studio's usual one.`, rationale: `The tender implies rule ${i + 1}.`, kind: "client-visible" },
-    })),
+    assumptions: [
+      { id: capacity, statement: "Each class has a fixed capacity set by the studio.", rationale: "The tender mentions full classes.", kind: "client-visible", underpins: ["G1"] },
+      { id: `A${questionCount + 2}`, statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "internal-design", underpins: [] },
+    ],
+    questions: questionsOf(questionCount, true),
+    exclusions: [],
   };
 }
 
@@ -264,14 +284,16 @@ describe("Liaison tender intake", () => {
       expect(questions[i]?.body).toContain(`we proceed on this assumption: ${adopted?.statement}`);
     }
 
-    // The two unasked assumptions reach the client in one report, posted with the questions.
+    // One contract draft, posted with the questions on its own subject, tells the client every record of v1.
     const reports = messages.filter((m) => m.direction === "outbound" && m.kind === "report");
     expect(reports).toHaveLength(1);
     expect(reports[0]?.inReplyTo).toBe(tenderId);
-    expect(reports[0]?.body).toContain("we proceed on them unless you object");
-    expect(reports[0]?.body).toContain("Each class has a fixed capacity set by the studio.");
-    expect(reports[0]?.body).toContain("Bookings need no account.");
-    expect(reports[0]?.body).not.toContain("Booking rule 1");
+    expect(reports[0]?.reportsOn).toBe("contract-draft");
+    expect(reports[0]?.body).toContain("- I1: The booking page.");
+    expect(reports[0]?.body).toContain("- G1: A client books a seat in a class with room. (basis: an assumption you have not confirmed; at risk until you confirm A1, A2, A3, A4)");
+    expect(reports[0]?.body).toContain("- A1: Booking rule 1 is the studio's usual one. (underpins G1; asked in a question)");
+    expect(reports[0]?.body).toContain("- A4: Each class has a fixed capacity set by the studio. (underpins G1)");
+    expect(reports[0]?.body).toContain("Basis of Design, our own design choices, which your acceptance does not depend on:\n- A5: Bookings need no account.");
     expect(vision?.inferences.map((a) => a.disclosed)).toEqual(["asked", "asked", "asked", "reported", "reported"]);
     expect(vision?.inferences.map((a) => a.kind)).toEqual([
       "client-visible",
@@ -300,7 +322,7 @@ describe("Liaison tender intake", () => {
   }
 
   test("a reading that asks nothing is put to another model of the family graded at or above it, whose question is posted and whose strength is recorded and told", async () => {
-    stubModel({ doGenerate: readingWith({ questions: intakeResponse(1).questions }) });
+    stubModel({ doGenerate: readingWith({ questions: questionsOf(1, false) }) });
     const { projectId, tenderId } = await tender("Booking page for one studio.");
 
     expect(await intake().runPending()).toEqual([{ kind: "recorded", tenderId, projectId, questions: 1, confirmation: "questions-raised" }]);
@@ -370,7 +392,7 @@ describe("Liaison tender intake", () => {
     expect(new Set(sites)).toEqual(new Set(["liaison-intake"]));
   });
 
-  test("three provider failures post one report, consume the tender and write no vision", async () => {
+  test("three provider failures block the project and keep the tender, which the operator's unblock has read again", async () => {
     stubModel({
       doGenerate: async () => {
         throw new APICallError({ message: "stub provider unavailable", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode: 503, isRetryable: true });
@@ -383,21 +405,23 @@ describe("Liaison tender intake", () => {
     for (let i = 0; i < 3; i++) {
       for (const outcome of await liaison.runPending()) kinds.push(outcome.kind);
     }
-    expect(kinds).toEqual(["failed", "failed", "abandoned"]);
+    expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
     expect(await liaison.runPending()).toEqual([]);
 
     expect(await visions(projectId)).toHaveLength(0);
     const messages = await messagesOf(projectId);
-    const outbound = messages.filter((m) => m.direction === "outbound");
-    expect(outbound).toHaveLength(1);
-    expect(outbound[0]?.kind).toBe("report");
-    expect(outbound[0]?.body).toMatch(/could not process your tender after 3 attempts/);
-    expect(outbound[0]?.body).not.toMatch(/stub provider unavailable/);
-    expect(outbound[0]?.body).not.toMatch(/caused by|Error:/);
+    expect(messages.filter((m) => m.direction === "outbound")).toHaveLength(0);
     const tenderRow = messages.find((m) => m.id === tenderId);
-    expect(tenderRow?.consumedAt).toBeInstanceOf(Date);
-    expect(tenderRow?.intakeAttempts).toBe(3);
+    expect(tenderRow?.consumedAt).toBeNull();
+    expect(tenderRow?.intakeAttempts).toBe(0);
     expect(tenderRow?.intakeLastError).toMatch(/stub provider unavailable/);
+    const blocks = await db.execute(sql`SELECT kind, error_class AS "errorClass", ended_at AS "endedAt" FROM project_blocks WHERE project_id = ${projectId}`);
+    expect(blocks.rows).toEqual([{ kind: "provider_failed", errorClass: "IntakeReadExhausted", endedAt: null }]);
+
+    await new ProjectHaltRepository(db).unblock(projectId, "intake-store test", "the provider answers again");
+    stubModel({ doGenerate: jsonResult(intakeResponse(1)) });
+    expect((await liaison.runPending()).map((outcome) => outcome.kind)).toEqual(["recorded"]);
+    expect(await visions(projectId)).toHaveLength(1);
   });
 
   // Ashara's own faults never use up the client's tender. One tender's fault is that tender's:
@@ -565,7 +589,7 @@ describe("Liaison tender intake", () => {
     expect(await visions(projectId)).toHaveLength(1);
     const messages = await messagesOf(projectId);
     expect(messages.filter((m) => m.kind === "question")).toHaveLength(1);
-    // The assumptions report is posted once, with the first intake, and never again.
+    // The contract draft is posted once, with the first intake, and never again.
     expect(messages.filter((m) => m.kind === "report")).toHaveLength(1);
     expect(await callSitesOf(projectId)).toEqual(["liaison-intake"]);
   });

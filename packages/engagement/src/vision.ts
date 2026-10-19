@@ -6,7 +6,7 @@ import type { ContractDraft, StoredContract, VisionExclusion } from "./vision-la
 import { basisOf } from "./vision-language/index.js";
 import type { InterfaceEntry, VisionGuarantee } from "./vision-language/index.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
-import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-language/vision-assumption.js";
+import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeSide } from "./vision-language/vision-assumption.js";
 
 // The Vision: a project's vision, versioned and
 // append-only. Engagement alone writes it: intake writes v1, a client's answer and the team's stack
@@ -529,7 +529,7 @@ export class Vision {
 }
 
 /** A vision version about to be written does not read back as one: nothing is written. */
-class VisionWriteRefused extends Error {
+export class VisionWriteRefused extends Error {
   constructor(
     readonly projectId: string,
     readonly field: string,
@@ -594,18 +594,9 @@ export function readVisionVersion(stored: StoredVision): VisionVersion {
   return Vision.read(stored).current;
 }
 
-/**
- * Vision v1 as intake writes it: in the scope-lines form, what the client asked for, then what the
- * tender leaves out, each with its side; in the guarantees form, the interface, the guarantees and the
- * exclusions drafted from the tender.
- */
-export type FirstVision = FirstVisionRecords &
-  (
-    | { readonly scopeBoundaries: readonly ScopeLine[]; readonly contract?: never }
-    | { readonly contract: ContractDraft; readonly scopeBoundaries?: never }
-  );
-
-interface FirstVisionRecords {
+/** Vision v1 as intake writes it: the interface, the guarantees and the exclusions drafted from the tender, with its assumptions. */
+export interface FirstVision {
+  readonly contract: ContractDraft;
   readonly visionText: string;
   readonly summary: string;
   readonly inferences: readonly InferredAssumption[];
@@ -626,8 +617,8 @@ export interface InferredAssumption {
   readonly rationale: string;
   readonly status: "Inferred";
   readonly kind: AssumptionKind;
-  /** How the client learned of it: the question that asked about it, or the assumptions report. */
+  /** How the client learned of it: the question that asked about it, or the contract draft. */
   readonly disclosed: AssumptionDisclosure;
-  /** The keys of the guarantees it underpins; none in a scope-lines version, which holds no guarantees. */
+  /** The keys of the guarantees it underpins. */
   readonly underpins: readonly string[];
 }

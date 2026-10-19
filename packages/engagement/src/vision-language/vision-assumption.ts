@@ -104,9 +104,3 @@ export const ASSUMPTION_KIND_LABEL: Readonly<Record<AssumptionKind | "unclassifi
 export const ScopeSideSchema = z.enum(["in", "out", "unclassified"]);
 
 export type ScopeSide = z.infer<typeof ScopeSideSchema>;
-
-/** A scope line as intake writes it into vision_documents.scope_boundaries. */
-export interface ScopeLine {
-  readonly text: string;
-  readonly side: Exclude<ScopeSide, "unclassified">;
-}

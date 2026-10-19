@@ -129,12 +129,19 @@ export function directed(test: TestScope, directions: readonly Direction[], scen
 }
 
 /**
+ * A liveness run has no wall clock of its own: what it judges is whether a loop ends within its
+ * cycles, and a wall clock would read a loaded host as a loop that never ends. A run that hangs
+ * inside a cycle is stopped by its test's timeout, which aborts it through runSignal.
+ */
+const LIVENESS_WALL_CLOCK_MS = Number.POSITIVE_INFINITY;
+
+/**
  * A directed tape under the liveness profile, each persona it forces permanent from the first
- * cycle, with a longer bound than a directed run: a persona's loop runs to its own bound.
+ * cycle: a persona's loop runs to its own bound, and the run ends by cycles alone.
  * @testseam the termination test files run each persona and plant through it
  */
 export function liveness(test: TestScope, directions: readonly Direction[], scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles">> = {}): Promise<RunResult> {
-  return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, scratchRoot, timeoutMs: 90_000, maxCycles: MAX_CYCLES, ...scenario });
+  return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, scratchRoot, timeoutMs: LIVENESS_WALL_CLOCK_MS, maxCycles: MAX_CYCLES, ...scenario });
 }
 
 /** @testseam the termination test files force a role's persona by name through it */

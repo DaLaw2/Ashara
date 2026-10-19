@@ -16,10 +16,11 @@ describe("lifecycle simulator, directed", () => {
   // Two implementations run in one batch and one finalize waits on the other's checkout. Skipping
   // that wait lets one finalize reset, merge into or clean the checkout while the other's merge is
   // staged there, which I7's merge-queue clause names; which of its git calls meets the staged merge
-  // first is the schedule's, not the clause's. The turn is handed on at every host git call, so each
-  // finalize is entered while the other is part way through its own. A directed run is a function
-  // of its directions alone: run twice, its trace is byte-identical.
-  const CHECKOUT_RACE = [...BATCH_OF_TWO, switchAtEvery(/^interleave:git:/)];
+  // first is the schedule's, not the clause's. The turn is handed on after every host git call
+  // returns, so each finalize is entered while the other is part way through its own, and the other's
+  // reset and clean come after this one's merge is staged. A directed run is a function of its
+  // directions alone: run twice, its trace is byte-identical.
+  const CHECKOUT_RACE = [...BATCH_OF_TWO, switchAtEvery(/^interleave:git:.*:returned$/)];
   it("runs two finalizes contending on one checkout clean, to the same trace twice", async (ctx) => {
     const clean = await directed(ctx, CHECKOUT_RACE);
     expect(keys(clean), statements(clean)).toEqual([]);

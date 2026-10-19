@@ -20,8 +20,8 @@ const none: TextFactRecords = {
 
 const asked = { key: "A1", statement: "Commands wait for the lock.", status: "Inferred", kind: "client-visible", disclosed: "asked" };
 const confirmed = { ...asked, status: "Stated", clientAnswer: { messageId: "ans1", verdict: "confirms" } };
-const v1 = { version: 1, inferences: [asked], openQuestions: [{ messageId: "q1", text: "Should commands wait?", assumptionKey: "A1" }] };
-const v2 = { version: 2, inferences: [confirmed], openQuestions: [] };
+const v1 = { version: 1, inferences: [asked], openQuestions: [{ messageId: "q1", text: "Should commands wait?", assumptionKey: "A1" }], guarantees: [] };
+const v2 = { version: 2, inferences: [confirmed], openQuestions: [], guarantees: [] };
 
 const keysOf = (records: Partial<TextFactRecords>): string[] => checkTextFacts({ ...none, ...records }).map((each) => each.key);
 
@@ -93,14 +93,31 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
     expect(keysOf({ visions: [v1, v2], answerReplies: [reply] })).toEqual(["answer-reply:A1"]);
   });
 
-  it("holds the assumptions report to exactly the assumptions reported, each under its kind", () => {
-    const reported = { key: "A2", statement: "Keys are short.", status: "Inferred", kind: "internal-design", disclosed: "reported" };
-    const vision = { ...v1, inferences: [asked, reported] };
-    const opening = "Besides the questions we asked, the tender leaves these decisions open, and we proceed on them unless you object.";
-    const under = (head: string) => ({ id: "r1", body: `${opening}\n\n${head}\n- A2: Keys are short. (why: z)\n\nIf any of these does not fit, send a change.` });
-    expect(keysOf({ visions: [vision], tenderReports: [under("How we will build it (our own design choices):")] })).toEqual([]);
-    expect(keysOf({ visions: [vision], tenderReports: [under("What the product will do:")] })).toEqual(["assumptions-report:A2"]);
-    expect(keysOf({ visions: [vision], tenderReports: [] })).toEqual(["assumptions-report"]);
+  it("holds the one contract draft to every guarantee of the first vision with its basis, and every assumption", () => {
+    const design = { key: "A2", statement: "Keys are short.", status: "Inferred", kind: "internal-design", disclosed: "reported", underpins: [] };
+    const vision = {
+      ...v1,
+      inferences: [{ ...asked, underpins: ["G1"] }, design],
+      guarantees: [
+        { id: "G1", statement: "put waits for the lock.", source: { kind: "tender", quote: "put" } },
+        { id: "G2", statement: "get prints the value.", source: { kind: "tender", quote: "get" } },
+      ],
+    };
+    const draft = (g1: string) => ({
+      id: "r1",
+      body: [
+        "This is the contract we are working to, drafted from your tender.",
+        `What we guarantee, each with what it rests on:\n- G1: put waits for the lock. (basis: ${g1})\n- G2: get prints the value. (basis: what your tender states)`,
+        "The assumptions the guarantees rest on:\n- A1: Commands wait for the lock. (underpins G1; asked in a question)",
+        "Basis of Design, our own design choices, which your acceptance does not depend on:\n- A2: Keys are short.",
+      ].join("\n\n"),
+    });
+    const atRisk = "an assumption you have not confirmed; at risk until you confirm A1";
+    expect(keysOf({ visions: [vision], tenderReports: [draft(atRisk)] })).toEqual([]);
+    expect(keysOf({ visions: [vision], tenderReports: [draft("what your tender states")] })).toEqual(["contract-draft:G1"]);
+    expect(keysOf({ visions: [vision], tenderReports: [] })).toEqual(["contract-draft"]);
+    expect(keysOf({ visions: [vision], tenderReports: [draft(atRisk), { ...draft(atRisk), id: "r2" }] })).toEqual(["contract-draft"]);
+    expect(keysOf({ visions: [v1], tenderReports: [draft(atRisk)] })).toEqual(["contract-draft"]);
   });
 });
 

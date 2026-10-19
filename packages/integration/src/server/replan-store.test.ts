@@ -80,16 +80,25 @@ function jsonResult(value: unknown) {
 
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  inScope: ["Class booking for both studios"],
-  outOfScope: ["Payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
+  interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender", quote: "Booking page" } }],
+  guarantees: [
+    {
+      id: "G1",
+      statement: "A client books a class at either studio.",
+      observable: { interface: ["I1"], observation: "output" },
+      refutedBy: ["A booking at either studio is refused."],
+      source: { kind: "tender", quote: "Booking page for my two pottery studios." },
+    },
+  ],
+  assumptions: [{ id: "A2", statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible", underpins: ["G1"] }],
   questions: [
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
-      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible" },
+      assumption: { id: "A1", statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible", underpins: ["G1"] },
     },
   ],
+  exclusions: [],
 };
 
 const ROSTER = {
@@ -105,7 +114,7 @@ const FIRST_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [], goal: "",
-      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["S1"] }],
+      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -114,7 +123,7 @@ const REVISED_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [], goal: "",
-      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["S1"] }],
+      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["G1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
   ],
@@ -124,7 +133,7 @@ const REPAIRED_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Book a harbour class by its date", description: "Harbour bookings, smaller.", dependsOn: [], goal: "",
-      endState: "A harbour class can be booked by its date", scope: "harbour bookings by date", deliverables: [{ text: "harbour booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["S1"] }],
+      endState: "A harbour class can be booked by its date", scope: "harbour bookings by date", deliverables: [{ text: "harbour booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -138,7 +147,7 @@ const TWO_QUESTION_INTAKE = {
     {
       text: "Do classes need a teacher named?",
       whyItMatters: "It decides what a booking shows.",
-      assumption: { statement: "A class shows no teacher.", rationale: "The tender names none.", kind: "client-visible" },
+      assumption: { id: "A3", statement: "A class shows no teacher.", rationale: "The tender names none.", kind: "client-visible", underpins: ["G1"] },
     },
   ],
 };
@@ -608,9 +617,9 @@ describe("a late client change is planned", () => {
     const revision = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("changed what is built after work began"));
     if (revision === undefined) throw new Error("no revision prompt was sent");
     const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(revision)?.[1]?.split(", ") ?? [];
-    // S1, the scope line the answer leaves as it was: a revision plans it again unless a stored check decides it.
-    expect(cited.map((item) => item.id)).toContain("S1");
-    expect(listed.includes("S1")).toBe(decides !== "cited");
+    // G1, the guarantee the answer leaves as it was: a revision plans it again unless a stored check decides it.
+    expect(cited.map((item) => item.id)).toContain("G1");
+    expect(listed.includes("G1")).toBe(decides !== "cited");
   });
 
   test("an environment change plans a new environment task, and the old one stays Completed", async () => {

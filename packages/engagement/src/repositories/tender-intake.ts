@@ -1,4 +1,4 @@
-import { intakeReadings } from "@ashara/db";
+import { clientMessages, intakeReadings } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { IntakeReading } from "../intake.js";
@@ -26,9 +26,9 @@ interface TenderIntakeWrite {
   readonly projectId: ProjectId;
   /** Outbound question bodies, posted with their positions in this order. */
   readonly questions: readonly string[];
-  /** The report of the assumptions no question carries, posted after the questions; null when there is none. */
-  readonly assumptionsReport: string | null;
-  /** The report of how a reading that asked nothing was confirmed, posted after the assumptions report; null when there is none. */
+  /** The contract draft, posted after the questions as the project's one 'contract-draft' report. */
+  readonly contractDraft: string;
+  /** The report of how a reading that asked nothing was confirmed, posted after the contract draft; null when there is none. */
   readonly readingReport: string | null;
   /** The tender's reading, recorded in intake_readings. */
   readonly reading: IntakeReading;
@@ -63,7 +63,7 @@ type TenderIntakeCommit =
   | { readonly kind: "vision-exists"; readonly visionVersion: number };
 
 /**
- * One tender's intake, in one transaction: the tender consumed, its questions, its assumptions report
+ * One tender's intake, in one transaction: the tender consumed, its questions, its contract draft
  * and its reading report posted, its reading recorded, vision v1 written. The tender is consumed first so its row lock
  * serialises two intakes of it; a project that already has a vision gets only
  * the consumption and nothing new.
@@ -79,11 +79,18 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
 
     const questions = await messages.insertQuestions(write.projectId, write.tenderId, write.questions);
     const questionIds = questions.map((q) => q.id);
+    // A second contract draft for the project fails the unique index on (project_id, reports_on) and
+    // rolls the intake back: vision v1 and its draft are written once, together.
+    await tx.insert(clientMessages).values({
+      projectId: write.projectId,
+      direction: "outbound",
+      kind: "report",
+      body: write.contractDraft,
+      inReplyTo: write.tenderId,
+      reportsOn: "contract-draft",
+    });
     // Once per project with no reports_on subject of its own: it commits only with vision v1, which
     // UNIQUE (project_id, version) lets exactly one intake write.
-    if (write.assumptionsReport !== null) {
-      await messages.insertOutbound({ projectId: write.projectId, kind: "report", body: write.assumptionsReport, inReplyTo: write.tenderId });
-    }
     if (write.readingReport !== null) {
       await messages.insertOutbound({ projectId: write.projectId, kind: "report", body: write.readingReport, inReplyTo: write.tenderId });
     }
@@ -91,23 +98,5 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
     const vision = await visions.create(write.projectId, write.vision(questionIds));
     if (vision.version !== 1) throw new IntakeVisionNotFirst(write.projectId, write.tenderId, vision.version);
     return { kind: "recorded", visionId: vision.id, questionIds };
-  });
-}
-
-/** A tender whose intake was given up on: the report to the client posted and the tender consumed, together. */
-export async function closeTenderAfterFailedIntake(
-  db: Database,
-  tender: { readonly tenderId: string; readonly projectId: ProjectId },
-  report: string,
-): Promise<void> {
-  await db.transaction(async (tx) => {
-    const messages = new ClientMessageRepository(tx);
-    await messages.markConsumed(tender.tenderId);
-    await messages.insertOutbound({
-      projectId: tender.projectId,
-      kind: "report",
-      body: report,
-      inReplyTo: tender.tenderId,
-    });
   });
 }

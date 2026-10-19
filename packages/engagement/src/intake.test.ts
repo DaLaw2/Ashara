@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { z } from "zod";
 import { BudgetExceeded, PreCallRefusal, ProviderError } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm } from "@ashara/finance";
 import { SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
@@ -6,6 +7,89 @@ import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
 import type { IntakeStore } from "./intake.js";
 import { ASSUMPTION_KIND_RULE } from "./vision-language/vision-assumption.js";
+
+type Tender = Awaited<ReturnType<IntakeStore["openTenders"]>>[number];
+type Write = Parameters<IntakeStore["recordIntake"]>[0];
+type Sent = Parameters<ReturnType<ContextualLlm["forCall"]>["generateStructured"]>[0];
+type ProjectBlockCause = Parameters<IntakeStore["blockUnreadTender"]>[1];
+
+function tenderOf(id: string, body: string, project: number, attempts = 0, lastError: string | null = null): Tender {
+  return {
+    id,
+    projectId: parseProjectId(`00000000-0000-4000-8000-${String(project).padStart(12, "0")}`, "test"),
+    body,
+    intakeAttempts: attempts,
+    intakeLastError: lastError,
+  };
+}
+
+/** A store over `tenders` whose every write throws unless the test gives it. */
+function storeOf(tenders: readonly Tender[], given: Partial<IntakeStore> = {}): IntakeStore {
+  const unreached = (name: string) => async (): Promise<never> => {
+    throw new Error(`${name} must not be reached`);
+  };
+  return {
+    openTenders: async () => tenders,
+    currentVisionVersion: async () => null,
+    recordIntake: unreached("recordIntake"),
+    consumeTender: unreached("consumeTender"),
+    recordFailedAttempt: unreached("recordFailedAttempt"),
+    blockUnreadTender: unreached("blockUnreadTender"),
+    blockProject: unreached("blockProject"),
+    ...given,
+  };
+}
+
+/** A store that records the one intake write it is given. */
+function recordingStore(tender: Tender): { readonly store: IntakeStore; readonly writes: Write[] } {
+  const writes: Write[] = [];
+  const store = storeOf([tender], {
+    recordIntake: async (write) => {
+      writes.push(write);
+      return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
+    },
+  });
+  return { store, writes };
+}
+
+/**
+ * A model that answers the n-th first reading with `reply(n)`, and a second reading, from another
+ * family, with no question; each answer validated as a provider validates it, a reply the schema
+ * refuses a SchemaValidationError.
+ */
+function answering(reply: (call: number) => unknown, prompts: string[] = []): ContextualLlm {
+  let call = 0;
+  return {
+    forCall: () => ({
+      generateStructured: async (request) => {
+        prompts.push(request.prompt);
+        const second = request.secondOpinion !== undefined;
+        const parsed = request.schema.safeParse(second ? { questions: [] } : reply(call++));
+        if (!parsed.success) throw new SchemaValidationError([z.prettifyError(parsed.error)], "stub-model");
+        return { data: parsed.data, model: second ? "other-model" : "stub-model", provider: second ? "other" : "stub", grade: "Strong" };
+      },
+    }),
+  };
+}
+
+const RATIONALE = "The tender implies it.";
+
+/** An assumption as a first reading drafts it. */
+function drafted(id: string, statement: string, kind: string, underpins: readonly string[] = ["G1"]) {
+  return { id, statement, rationale: RATIONALE, kind, underpins };
+}
+
+/** The contract a first reading of `tender` drafts: one interface entry and one guarantee, each quoting it. */
+function contractOf(tender: string) {
+  const source = { kind: "tender", quote: tender };
+  return {
+    interface: [{ id: "I1", text: "The page a visitor uses.", source }],
+    guarantees: [
+      { id: "G1", statement: "A visitor gets what the tender asks for.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["The page does not do it."], source },
+    ],
+    exclusions: [],
+  };
+}
 
 describe("TenderIntake failure accounting", () => {
   test("an error nothing names, a thrown circular non-Error, is Ashara's: recorded on the tender with a backoff, never counted against it", async () => {
@@ -19,28 +103,7 @@ describe("TenderIntake failure accounting", () => {
         },
       }),
     };
-    const tender = {
-      id: "tender-1",
-      projectId: parseProjectId("00000000-0000-4000-8000-000000000001", "test"),
-      body: "A booking page.",
-      intakeAttempts: 0,
-      intakeLastError: null,
-    };
-    const store: IntakeStore = {
-      openTenders: async () => [tender],
-      currentVisionVersion: async () => null,
-      recordIntake: async () => {
-        throw new Error("recordIntake must not be reached");
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => {
-        throw new Error("recordFailedAttempt must not be reached: the client's tender is not at fault");
-      },
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
+    const store = storeOf([tenderOf("tender-1", "A booking page.", 1)]);
     const containment = memoryStepContainment(() => false);
 
     const [outcome] = await new TenderIntake({ containment, llm, store }).runPending();
@@ -65,27 +128,7 @@ describe("TenderIntake failure accounting", () => {
         },
       }),
     };
-    const store: IntakeStore = {
-      openTenders: async () => [
-        {
-          id: "tender-ladder",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000004", "test"),
-          body: "A booking page.",
-          intakeAttempts: 0,
-          intakeLastError: null,
-        },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake: async () => {
-        throw new Error("recordIntake must not be reached");
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => 1,
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
+    const store = storeOf([tenderOf("tender-ladder", "A booking page.", 4)], { recordFailedAttempt: async () => 1 });
 
     const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
@@ -94,36 +137,93 @@ describe("TenderIntake failure accounting", () => {
   });
 });
 
+// A tender is never refused: one no read of which succeeds blocks its project on Ashara's side and
+// stays unconsumed, so the operator's unblock has it read again.
+describe("TenderIntake that cannot read a tender", () => {
+  test("three failed reads block the project and leave the tender unconsumed, its count set back for the unblock", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async () => {
+          throw new SchemaValidationError(["scripted failure"], null);
+        },
+      }),
+    };
+    let tender = tenderOf("tender-unread", "A booking page.", 7);
+    const consumed: string[] = [];
+    const blocked: Array<{ readonly tenderId: string; readonly cause: ProjectBlockCause }> = [];
+    let projectBlocked = false;
+    const store = storeOf([], {
+      openTenders: async () => (projectBlocked ? [] : [tender]),
+      consumeTender: async (id) => void consumed.push(id),
+      recordFailedAttempt: async (_id, error) => {
+        tender = { ...tender, intakeAttempts: tender.intakeAttempts + 1, intakeLastError: error };
+        return tender.intakeAttempts;
+      },
+      blockUnreadTender: async (unread, cause) => {
+        blocked.push({ tenderId: unread.id, cause });
+        projectBlocked = true;
+        tender = { ...tender, intakeAttempts: 0 };
+        return "blocked";
+      },
+    });
+    const intake = new TenderIntake({ containment: memoryStepContainment(() => false), llm, store });
+
+    const outcomes = [...(await intake.runPending()), ...(await intake.runPending()), ...(await intake.runPending())];
+
+    expect(outcomes.map((o) => o.kind)).toEqual(["failed", "failed", "project-blocked"]);
+    expect(blocked).toEqual([
+      {
+        tenderId: "tender-unread",
+        cause: { category: "model_failed", errorClass: "IntakeReadExhausted", reason: expect.stringMatching(/^IntakeReadExhausted: tender tender-unread could not be read after 3 attempts/) },
+      },
+    ]);
+    expect(consumed).toEqual([]);
+    expect(tender).toMatchObject({ intakeAttempts: 0, intakeLastError: expect.stringContaining("scripted failure") });
+    // The blocked project's tender is not taken in; once unblocked, it is read again from no attempts.
+    expect(await intake.runPending()).toEqual([]);
+    projectBlocked = false;
+    expect((await intake.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+  });
+
+  test("a tender a previous cycle left at its cap blocks the project as Ashara's to look into, never consumed or read again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const causes: ProjectBlockCause[] = [];
+    const store = storeOf([tenderOf("tender-capped", "A booking page.", 8, 3, "an earlier read failed")], {
+      blockUnreadTender: async (_tender, cause) => {
+        causes.push(cause);
+        return "blocked";
+      },
+    });
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async () => {
+          throw new Error("no read expected");
+        },
+      }),
+    };
+
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+
+    expect(outcome?.kind).toBe("project-blocked");
+    expect(causes).toEqual([{ category: "fault", errorClass: "IntakeReadExhausted", reason: expect.stringContaining("last error: an earlier read failed") }]);
+  });
+});
+
 describe("TenderIntake per-project failure", () => {
   test("a tender at its cap with no recorded error blocks its project and the next tender is still taken in", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const lying = {
-      id: "tender-lying",
-      projectId: parseProjectId("00000000-0000-4000-8000-000000000002", "test"),
-      body: "A booking page.",
-      intakeAttempts: 3,
-      intakeLastError: null,
-    };
-    const next = { ...lying, id: "tender-next", projectId: parseProjectId("00000000-0000-4000-8000-000000000003", "test"), intakeAttempts: 0 };
+    const lying = tenderOf("tender-lying", "A booking page.", 2, 3);
+    const next = tenderOf("tender-next", "A booking page.", 3);
     const blocked: Array<{ projectId: string; category: string; errorClass: string; reason: string }> = [];
-    const store: IntakeStore = {
-      openTenders: async () => [lying, next],
+    const store = storeOf([lying, next], {
       currentVisionVersion: async (projectId) => (projectId === next.projectId ? 1 : null),
-      recordIntake: async () => {
-        throw new Error("recordIntake must not be reached");
-      },
       consumeTender: async () => {},
-      recordFailedAttempt: async () => {
-        throw new Error("recordFailedAttempt must not be reached");
-      },
-      closeFailedTender: async () => {
-        throw new Error("closeFailedTender must not be reached");
-      },
       blockProject: async (projectId, cause) => {
         blocked.push({ projectId, ...cause });
         return "blocked";
       },
-    };
+    });
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async () => {
@@ -142,54 +242,68 @@ describe("TenderIntake per-project failure", () => {
 });
 
 describe("TenderIntake response schema", () => {
+  const TENDER = "A booking page.";
+  const response = (question: Record<string, unknown>) => ({ summary: TENDER, ...contractOf(TENDER), questions: [question], assumptions: [] });
+
   test("a question that does not carry the assumption adopted until it is answered is rejected", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const response = (question: Record<string, unknown>) => ({
-      summary: "A booking page.",
-      inScope: ["booking"],
-      outOfScope: [],
-      questions: [question],
-      assumptions: [],
-    });
     const question = { text: "Which studio?", whyItMatters: "It sets the rules." };
-    const assumption = { statement: "The larger studio.", rationale: "The tender names it first.", kind: "client-visible" };
+    const assumption = drafted("A1", "The larger studio.", "client-visible");
     const verdicts: boolean[] = [];
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          verdicts.push(
-            request.schema.safeParse(response(question)).success,
-            request.schema.safeParse(response({ ...question, assumption })).success,
-          );
+          verdicts.push(request.schema.safeParse(response(question)).success, request.schema.safeParse(response({ ...question, assumption })).success);
           throw new Error("stop after the schema check");
         },
       }),
     };
-    const store: IntakeStore = {
-      openTenders: async () => [
-        {
-          id: "tender-2",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000002", "test"),
-          body: "A booking page.",
-          intakeAttempts: 0,
-          intakeLastError: null,
-        },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake: async () => {
-        throw new Error("recordIntake must not be reached");
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => 1,
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
+
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-2", TENDER, 2)]) }).runPending();
+
+    expect(verdicts.slice(0, 2)).toEqual([false, true]);
+  });
+
+  // A reply the vision would refuse is asked again with why, never accepted: a guarantee
+  // nothing could show broken, a quote the client never wrote, an assumption a client could observe that
+  // underpins nothing.
+  test.each([
+    {
+      name: "a guarantee without refutedBy",
+      broken: (valid: ReturnType<typeof contractOf>) => ({ ...valid, guarantees: valid.guarantees.map(({ refutedBy: _refutedBy, ...g }) => g) }),
+      error: "refutedBy",
+    },
+    {
+      name: "a guarantee quoting words the tender does not contain",
+      broken: (valid: ReturnType<typeof contractOf>) => ({ ...valid, guarantees: valid.guarantees.map((g) => ({ ...g, source: { kind: "tender", quote: "A payment page." } })) }),
+      error: 'quotes "A payment page.", which the tender does not contain',
+    },
+  ])("a scripted reply with $name is re-asked, never accepted", async ({ broken, error }) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const valid = { summary: TENDER, ...contractOf(TENDER), questions: [], assumptions: [drafted("A1", "Classes are shown by day.", "client-visible")] };
+    const prompts: string[] = [];
+    const llm = answering((call) => (call === 0 ? { ...valid, ...broken(contractOf(TENDER)) } : valid), prompts);
+    const { store, writes } = recordingStore(tenderOf("tender-reask", TENDER, 9));
+
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+
+    expect(outcome?.kind).toBe("recorded");
+    expect(prompts[1]).toContain("Your previous response was REJECTED");
+    expect(prompts[1]).toContain(error);
+    expect(writes[0]?.vision([]).contract.guarantees.map((g) => g.refutedBy)).toEqual([["The page does not do it."]]);
+  });
+
+  test("a client-visible assumption that underpins no guarantee and no exclusion cites is re-asked, never accepted", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reply = (underpins: readonly string[]) => ({ summary: TENDER, ...contractOf(TENDER), questions: [], assumptions: [drafted("A1", "Classes are shown by day.", "client-visible", underpins)] });
+    const prompts: string[] = [];
+    const llm = answering((call) => reply(call === 0 ? [] : ["G1"]), prompts);
+    const { store, writes } = recordingStore(tenderOf("tender-underpins", TENDER, 10));
 
     await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
 
-    expect(verdicts.slice(0, 2)).toEqual([false, true]);
+    expect(prompts[1]).toContain("client-visible assumption A1 underpins no guarantee and no exclusion cites it");
+    expect(writes[0]?.vision([]).inferences.map((a) => a.underpins)).toEqual([["G1"]]);
   });
 });
 
@@ -199,50 +313,24 @@ describe("TenderIntake assumption label", () => {
   test("a statement that repeats the label's lead-in is posted and recorded once, without it", async () => {
     const raw = {
       summary: "A command-line tool.",
-      inScope: ["merging the exports"],
-      outOfScope: [],
+      ...contractOf("A tool."),
       questions: [
         {
           text: "Which Windows version?",
           whyItMatters: "The build must start there.",
-          assumption: { statement: "Until you answer, we build one standalone executable.", rationale: "No installer.", kind: "client-visible" },
+          assumption: drafted("A1", "Until you answer, we build one standalone executable.", "client-visible"),
         },
         {
           text: "Which encoding?",
           whyItMatters: "Names must read correctly.",
-          assumption: { statement: `${LABEL} the files are UTF-8.`, rationale: "The common default.", kind: "client-visible" },
+          assumption: drafted("A2", `${LABEL} the files are UTF-8.`, "client-visible"),
         },
       ],
-      assumptions: [{ statement: "Until you answered nothing changes.", rationale: "Kept as written.", kind: "internal-design" }],
+      assumptions: [drafted("A3", "Until you answered nothing changes.", "internal-design", [])],
     };
-    const llm: ContextualLlm = {
-      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(raw), model: "stub-model", provider: "stub", grade: "Strong" }) }),
-    };
-    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
-    const store: IntakeStore = {
-      openTenders: async () => [
-        {
-          id: "tender-3",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000003", "test"),
-          body: "A tool.",
-          intakeAttempts: 0,
-          intakeLastError: null,
-        },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake: async (write) => {
-        writes.push(write);
-        return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => 1,
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
+    const { store, writes } = recordingStore(tenderOf("tender-3", "A tool.", 3));
 
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm: answering(() => raw), store }).runPending();
 
     expect(outcome?.kind).toBe("recorded");
     const [write] = writes;
@@ -258,13 +346,7 @@ describe("TenderIntake assumption label", () => {
 
   test("a statement that is only the label is rejected, never stored empty", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const response = (statement: string) => ({
-      summary: "A tool.",
-      inScope: ["a tool"],
-      outOfScope: [],
-      questions: [],
-      assumptions: [{ statement, rationale: "None given.", kind: "client-visible" }],
-    });
+    const response = (statement: string) => ({ summary: "A tool.", ...contractOf("A tool."), questions: [], assumptions: [drafted("A1", statement, "client-visible")] });
     const verdicts: boolean[] = [];
     const llm: ContextualLlm = {
       forCall: () => ({
@@ -274,111 +356,93 @@ describe("TenderIntake assumption label", () => {
         },
       }),
     };
-    const store: IntakeStore = {
-      openTenders: async () => [
-        {
-          id: "tender-4",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000004", "test"),
-          body: "A tool.",
-          intakeAttempts: 0,
-          intakeLastError: null,
-        },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake: async () => {
-        throw new Error("recordIntake must not be reached");
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => 1,
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
 
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-4", "A tool.", 4)]) }).runPending();
 
     expect(verdicts[0]).toBe(false);
   });
 });
 
-describe("TenderIntake assumptions report", () => {
-  const raw = (assumptions: readonly Record<string, unknown>[]) => ({
+// One contract draft goes out with vision v1: the interface, every guarantee with its basis, the
+// assumptions each names the guarantees it underpins, the exclusions and the Basis of Design.
+describe("TenderIntake contract draft", () => {
+  const TENDER = "A key-value store with put, get and list. It needs no network service.";
+  const source = (quote: string) => ({ kind: "tender", quote });
+  const reply = {
     summary: "A key-value store.",
-    inScope: ["put, get, list"],
-    outOfScope: [],
+    interface: [
+      { id: "I1", text: "put KEY VALUE stores the value.", source: source("put") },
+      { id: "I2", text: "list prints every key, one per line.", source: { kind: "assumption", id: "A3" } },
+    ],
+    guarantees: [
+      { id: "G1", statement: "get prints the value put stored.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["get prints another value."], source: source("put, get") },
+      { id: "G2", statement: "list prints the keys sorted.", observable: { interface: ["I2"], observation: "undecided" }, refutedBy: ["list prints keys out of order."], source: source("list") },
+      { id: "G3", statement: "A value may hold spaces.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["A spaced value is cut."], source: { kind: "assumption", id: "A1" } },
+    ],
     questions: [
       {
         text: "May values hold spaces?",
         whyItMatters: "It decides how a value is read.",
-        assumption: { statement: "Values are one word.", rationale: "The tender's examples.", kind: "client-visible" },
+        assumption: drafted("A1", "Values may hold spaces.", "client-visible", ["G3"]),
       },
     ],
-    assumptions,
-  });
-
-  function storeOf(id: string, recordIntake: IntakeStore["recordIntake"]): IntakeStore {
-    return {
-      openTenders: async () => [
-        { id, projectId: parseProjectId("00000000-0000-4000-8000-000000000005", "test"), body: "A store.", intakeAttempts: 0, intakeLastError: null },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake,
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => 1,
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
-  }
+    assumptions: [
+      drafted("A2", "list prints keys sorted.", "client-visible", ["G2"]),
+      drafted("A3", "The commands are put, get and list.", "client-visible", ["G1"]),
+      drafted("A4", "The log file is wal.log.", "internal-design", []),
+      drafted("A5", "Keys are case-sensitive.", "client-visible", []),
+    ],
+    exclusions: [
+      { id: "X1", text: "Any network service.", source: source("It needs no network service.") },
+      { id: "X2", text: "Case-insensitive keys.", source: { kind: "assumption", id: "A5" } },
+    ],
+  };
 
   async function intakeOf(response: unknown) {
-    const llm: ContextualLlm = {
-      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(response), model: "stub-model", provider: "stub", grade: "Strong" }) }),
-    };
-    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
-    const store = storeOf("tender-r", async (write) => {
-      writes.push(write);
-      return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
-    });
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const { store, writes } = recordingStore(tenderOf("tender-r", TENDER, 5));
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm: answering(() => response), store }).runPending();
     const [write, ...more] = writes;
     if (write === undefined || more.length > 0) throw new Error(`expected one intake write, got ${writes.length}`);
     return write;
   }
 
-  test("one report lists the unasked assumptions, behaviour apart from design, and none a question carries", async () => {
-    const write = await intakeOf(
-      raw([
-        { statement: "list prints keys sorted.", rationale: "Predictable output.", kind: "client-visible" },
-        { statement: "The log file is wal.log.", rationale: "A plain name.", kind: "internal-design" },
-      ]),
-    );
-    const report = write.assumptionsReport ?? "";
-    expect(report).toContain("we proceed on them unless you object");
-    expect(report).toContain("What the product will do:\n- A2: list prints keys sorted.");
-    expect(report).toContain("How we will build it");
-    expect(report).toContain("- A3: The log file is wal.log.");
-    expect(report).not.toContain("Values are one word.");
-    expect(write.vision(["q0"]).inferences.map((a) => [a.key, a.kind, a.disclosed])).toEqual([
-      ["A1", "client-visible", "asked"],
-      ["A2", "client-visible", "reported"],
-      ["A3", "internal-design", "reported"],
-    ]);
+  test("the contract draft lists every guarantee with its basis, at risk until the assumption it rests on is confirmed", async () => {
+    const draft = (await intakeOf(reply)).contractDraft;
+    expect(draft).toContain("- G1: get prints the value put stored. (basis: an assumption you have not confirmed; at risk until you confirm A3)");
+    expect(draft).toContain("- G2: list prints the keys sorted. (basis: an assumption you have not confirmed; at risk until you confirm A2)");
+    expect(draft).toContain("- G3: A value may hold spaces. (basis: an assumption you have not confirmed; at risk until you confirm A1)");
+    for (const g of reply.guarantees) expect(draft).toContain(`- ${g.id}: ${g.statement} (basis: `);
+    expect(draft).toContain("- I1: put KEY VALUE stores the value.\n- I2: list prints every key, one per line.");
+    expect(draft).toContain("- A1: Values may hold spaces. (underpins G3; asked in a question)");
+    expect(draft).toContain("- A5: Keys are case-sensitive. (the ground of exclusion X2)");
+    expect(draft).toContain("- X1: Any network service.\n- X2: Case-insensitive keys.");
+    expect(draft).toContain("Basis of Design, our own design choices, which your acceptance does not depend on:\n- A4: The log file is wal.log.");
+    expect(draft).toContain("Work has started on this list; correct any line at any time; nothing waits for your reply.");
   });
 
-  // The vision records which side of the scope each line is on, so no report reads it from the wording.
-  test("the vision records each scope line with its side, in scope first", async () => {
-    const write = await intakeOf({ ...raw([]), inScope: ["put and get"], outOfScope: ["any network service"] });
-    expect(write.vision(["q0"]).scopeBoundaries).toEqual([
-      { text: "put and get", side: "in" },
-      { text: "any network service", side: "out" },
-    ]);
+  test("a guarantee resting on no assumption reads as what the tender states", async () => {
+    const draft = (await intakeOf({ summary: "A key-value store.", ...contractOf(TENDER), questions: [], assumptions: [] })).contractDraft;
+    expect(draft).toContain("- G1: A visitor gets what the tender asks for. (basis: what your tender states)");
+    expect(draft).toContain("What is left out: nothing is excluded on record.");
   });
 
-  test("no report when every assumption is a question's", async () => {
-    expect((await intakeOf(raw([]))).assumptionsReport).toBeNull();
+  test("vision v1 records the contract as drafted, an undecided observation as stored-data, and every assumption under its own key", async () => {
+    const vision = (await intakeOf(reply)).vision(["q0"]);
+    expect(vision.contract.interface.map((entry) => entry.id)).toEqual(["I1", "I2"]);
+    expect(vision.contract.guarantees.map((g) => [g.id, g.observable.observation])).toEqual([
+      ["G1", "output"],
+      ["G2", "stored-data"],
+      ["G3", "output"],
+    ]);
+    expect(vision.contract.exclusions.map((x) => x.id)).toEqual(["X1", "X2"]);
+    expect(vision.inferences.map((a) => [a.key, a.kind, a.disclosed, a.underpins])).toEqual([
+      ["A1", "client-visible", "asked", ["G3"]],
+      ["A2", "client-visible", "reported", ["G2"]],
+      ["A3", "client-visible", "reported", ["G1"]],
+      ["A4", "internal-design", "reported", []],
+      ["A5", "client-visible", "reported", []],
+    ]);
+    expect(vision.openQuestions).toEqual([{ messageId: "q0", text: "May values hold spaces?", whyItMatters: "It decides how a value is read.", assumptionKey: "A1" }]);
   });
 
   test("an assumption with no kind is rejected, never stored unclassified", async () => {
@@ -387,15 +451,12 @@ describe("TenderIntake assumptions report", () => {
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          verdicts.push(request.schema.safeParse(raw([{ statement: "Sorted.", rationale: "Predictable." }])).success);
+          verdicts.push(request.schema.safeParse({ ...reply, assumptions: [{ id: "A2", statement: "Sorted.", rationale: "Predictable.", underpins: ["G2"] }] }).success);
           throw new Error("stop after the schema check");
         },
       }),
     };
-    const store = storeOf("tender-k", async () => {
-      throw new Error("recordIntake must not be reached");
-    });
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-k", TENDER, 5)]) }).runPending();
     expect(verdicts[0]).toBe(false);
   });
 });
@@ -403,59 +464,32 @@ describe("TenderIntake assumptions report", () => {
 describe("TenderIntake failure classes", () => {
   const valid = {
     summary: "A booking page.",
-    inScope: ["booking"],
-    outOfScope: [],
-    questions: [
-      {
-        text: "Which studio?",
-        whyItMatters: "It sets the rules.",
-        assumption: { statement: "The larger studio.", rationale: "Named first.", kind: "client-visible" },
-      },
-    ],
+    ...contractOf("A booking page."),
+    questions: [{ text: "Which studio?", whyItMatters: "It sets the rules.", assumption: drafted("A1", "The larger studio.", "client-visible") }],
     assumptions: [],
   };
 
   function storeWith(recordIntake: IntakeStore["recordIntake"], counted: string[], blocked: string[]): IntakeStore {
-    return {
-      openTenders: async () => [
-        {
-          id: "tender-c",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000006", "test"),
-          body: "A booking page.",
-          intakeAttempts: 2,
-          intakeLastError: "an earlier read failed",
-        },
-      ],
-      currentVisionVersion: async () => null,
+    return storeOf([tenderOf("tender-c", "A booking page.", 6, 2, "an earlier read failed")], {
       recordIntake,
-      consumeTender: async () => {
-        throw new Error("consumeTender must not be reached");
-      },
       recordFailedAttempt: async (_id, error) => {
         counted.push(error);
         return 3;
-      },
-      closeFailedTender: async () => {
-        throw new Error("closeFailedTender must not be reached");
       },
       blockProject: async (_projectId, cause) => {
         blocked.push(cause.errorClass);
         return "blocked";
       },
-    };
+    });
   }
 
   test("questions the store posts wrongly block the project after one read, never counted as a read", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     let reads = 0;
-    const llm: ContextualLlm = {
-      forCall: () => ({
-        generateStructured: async (request) => {
-          reads++;
-          return { data: request.schema.parse(valid), model: "stub-model", provider: "stub", grade: "Strong" };
-        },
-      }),
-    };
+    const llm = answering(() => {
+      reads++;
+      return valid;
+    });
     const counted: string[] = [];
     const blocked: string[] = [];
     const store = storeWith(async (write) => {
@@ -541,41 +575,21 @@ describe("TenderIntake assumption kinds fail safe", () => {
     const prompts: string[] = [];
     const response = {
       summary: "A command-line key-value store.",
-      inScope: ["put, get, delete"],
-      outOfScope: [],
+      ...contractOf(TENDER),
       questions: [],
-      assumptions: [
-        { statement: REPLAY, rationale: "The tender asks for recovery after a crash.", kind: kinds.replay },
-        { statement: FORMAT, rationale: "A common log format.", kind: kinds.format },
-      ],
+      assumptions: [drafted("A1", REPLAY, kinds.replay), drafted("A2", FORMAT, kinds.format, [])],
     };
+    // The reading asks nothing, so another family's second reading confirms it.
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
           prompts.push(request.prompt);
-          // The reading asks nothing, so another family's second reading confirms it.
           if (request.secondOpinion !== undefined) return { data: request.schema.parse({ questions: [] }), model: "other-model", provider: "other", grade: "Strong" };
           return { data: request.schema.parse(response), model: "stub-model", provider: "stub", grade: "Strong" };
         },
       }),
     };
-    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
-    const store: IntakeStore = {
-      openTenders: async () => [
-        { id: "tender-kv", projectId: parseProjectId("00000000-0000-4000-8000-000000000083", "test"), body: TENDER, intakeAttempts: 0, intakeLastError: null },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake: async (write) => {
-        writes.push(write);
-        return { kind: "recorded", questionIds: [] };
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => 1,
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
+    const { store, writes } = recordingStore(tenderOf("tender-kv", TENDER, 83));
     await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
     const [write] = writes;
     if (write === undefined) throw new Error("expected one intake write");
@@ -606,27 +620,27 @@ describe("TenderIntake assumption kinds fail safe", () => {
 // the catalog offers; the second reading's questions are the ones the client is sent; a reading no
 // second reading answered is recorded unconfirmed and the client is told, never held.
 describe("TenderIntake second reading of a reading that asks nothing", () => {
+  const TENDER = "A booking page.";
   const QUESTION = {
     text: "Must a booking be cancellable online?",
     whyItMatters: "It decides whether the page has a cancel flow.",
-    assumption: { statement: "Bookings are cancelled by phone.", rationale: "The tender names no cancel flow.", kind: "client-visible" },
+    assumption: { statement: "Bookings are cancelled by phone.", rationale: "The tender names no cancel flow.", kind: "client-visible", underpins: ["G1"] },
   };
   const lazy = {
     summary: "A booking page.",
-    inScope: ["booking"],
-    outOfScope: [],
+    ...contractOf(TENDER),
     questions: [],
-    assumptions: [{ statement: "Times are shown in the studio's zone.", rationale: "One studio.", kind: "client-visible" }],
+    assumptions: [drafted("A1", "Times are shown in the studio's zone.", "client-visible")],
   };
-  type Sent = Parameters<ReturnType<ContextualLlm["forCall"]>["generateStructured"]>[0];
   type Request = { readonly secondOpinion: NonNullable<Sent["secondOpinion"]>; readonly judges: NonNullable<Sent["judges"]> };
   type Answer = { readonly data: unknown; readonly provider: string; readonly model: string };
 
   /** The intake of one tender whose first reading answers `first`, by a model graded `firstGrade` as called. */
-  async function intakeWith(first: unknown, second: (request: Request) => Answer, firstGrade: CapabilityLevel = "Strong") {
+  async function intakeWith(first: unknown, second: (request: Request, call: number) => Answer, firstGrade: CapabilityLevel = "Strong") {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const asked: Array<{ readonly strength: string | null; readonly prompt: string }> = [];
     const sent: Array<{ readonly judges: CapabilityLevel | undefined; readonly capability: CapabilityLevel | undefined }> = [];
+    let seconds = 0;
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
@@ -634,30 +648,14 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
           if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet", grade: firstGrade };
           sent.push({ judges: request.judges, capability: request.capability });
           if (request.judges === undefined) throw new Error("the second reading asks a capability, not a judge");
-          const answer = second({ secondOpinion: request.secondOpinion, judges: request.judges });
-          return { ...answer, grade: request.judges, data: request.schema.parse(answer.data) };
+          const answer = second({ secondOpinion: request.secondOpinion, judges: request.judges }, seconds++);
+          const parsed = request.schema.safeParse(answer.data);
+          if (!parsed.success) throw new SchemaValidationError([z.prettifyError(parsed.error)], answer.model);
+          return { ...answer, grade: request.judges, data: parsed.data };
         },
       }),
     };
-    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
-    const store: IntakeStore = {
-      openTenders: async () => [
-        { id: "tender-s", projectId: parseProjectId("00000000-0000-4000-8000-000000000084", "test"), body: "A booking page.", intakeAttempts: 0, intakeLastError: null },
-      ],
-      currentVisionVersion: async () => null,
-      recordIntake: async (write) => {
-        writes.push(write);
-        return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
-      },
-      consumeTender: async () => {},
-      recordFailedAttempt: async () => {
-        throw new Error("recordFailedAttempt must not be reached: no read failed");
-      },
-      closeFailedTender: async () => {},
-      blockProject: async () => {
-        throw new Error("blockProject must not be reached");
-      },
-    };
+    const { store, writes } = recordingStore(tenderOf("tender-s", TENDER, 84));
     const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
     return { outcome, asked, sent, write: writes[0] };
   }
@@ -679,7 +677,10 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
   );
 
   test("a reading that asks questions is not put to a second reading", async () => {
-    const { outcome, asked, write } = await intakeWith({ ...lazy, questions: [QUESTION] }, () => expect.unreachable("no second reading"));
+    const { outcome, asked, write } = await intakeWith(
+      { ...lazy, questions: [{ ...QUESTION, assumption: { ...QUESTION.assumption, id: "A2" } }] },
+      () => expect.unreachable("no second reading"),
+    );
     expect(asked.map((a) => a.strength)).toEqual([null]);
     expect(outcome).toMatchObject({ kind: "recorded", questions: 1, confirmation: "not-needed" });
     expect(write?.reading).toEqual({ first: { provider: "anthropic", model: "sonnet", grade: "Strong" }, firstQuestions: 1, confirmation: { kind: "not-needed" } });
@@ -689,9 +690,11 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
   test("another family's second reading that asks nothing confirms the reading, and the client is told at that strength", async () => {
     const { outcome, asked, write } = await intakeWith(lazy, () => ({ data: { questions: [] }, provider: "openai", model: "gpt" }));
     expect(asked.map((a) => a.strength)).toEqual([null, "other-family"]);
-    // Another family reads the tender alone, as the first did: no angle, never the first reading's answer.
+    // Another family reads the tender alone, as the first did: no angle, never the first reading's questions or assumptions.
     expect(asked[1]?.prompt).not.toContain("ambiguous or assumed");
     expect(asked[1]?.prompt).not.toContain("Times are shown in the studio's zone.");
+    // It is told the guarantees, so each assumption it would ask about can name what it underpins.
+    expect(asked[1]?.prompt).toContain("- G1: A visitor gets what the tender asks for.");
     expect(outcome).toMatchObject({ kind: "recorded", questions: 0, confirmation: "confirmed" });
     expect(write?.reading.confirmation).toEqual({
       kind: "confirmed",
@@ -701,22 +704,30 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
     expect(write?.readingReport).toContain("A second reading of it, by another model family, found nothing to ask either.");
   });
 
-  test("the questions a second reading raises are the ones the client is sent, with their assumptions asked", async () => {
+  test("the questions a second reading raises are the ones the client is sent, their assumptions keyed after the first reading's", async () => {
     const { outcome, write } = await intakeWith(lazy, () => ({ data: { questions: [QUESTION] }, provider: "openai", model: "gpt" }));
     expect(outcome).toMatchObject({ kind: "recorded", questions: 1, confirmation: "questions-raised" });
     expect(write?.questions[0]).toContain("Must a booking be cancellable online?");
     const vision = write?.vision(["q0"]);
-    expect(vision?.openQuestions).toEqual([{ messageId: "q0", text: QUESTION.text, whyItMatters: QUESTION.whyItMatters, assumptionKey: "A1" }]);
-    expect(vision?.inferences.map((a) => [a.key, a.statement, a.disclosed])).toEqual([
-      ["A1", "Bookings are cancelled by phone.", "asked"],
-      ["A2", "Times are shown in the studio's zone.", "reported"],
+    expect(vision?.openQuestions).toEqual([{ messageId: "q0", text: QUESTION.text, whyItMatters: QUESTION.whyItMatters, assumptionKey: "A2" }]);
+    expect(vision?.inferences.map((a) => [a.key, a.statement, a.disclosed, a.underpins])).toEqual([
+      ["A1", "Times are shown in the studio's zone.", "reported", ["G1"]],
+      ["A2", "Bookings are cancelled by phone.", "asked", ["G1"]],
     ]);
     expect(write?.readingReport).toContain("found the question we have sent you");
   });
 
+  test("a raised question whose client-visible assumption underpins no guarantee is asked again, never recorded", async () => {
+    const orphan = { ...QUESTION, assumption: { ...QUESTION.assumption, underpins: [] } };
+    const { asked, write } = await intakeWith(lazy, (_request, call) => ({ data: { questions: [call === 0 ? orphan : QUESTION] }, provider: "openai", model: "gpt" }));
+    expect(asked.map((a) => a.strength)).toEqual([null, "other-family", "other-family"]);
+    expect(asked[2]?.prompt).toContain("client-visible assumption A2 underpins no guarantee and no exclusion cites it");
+    expect(write?.vision(["q0"]).inferences.find((a) => a.key === "A2")?.underpins).toEqual(["G1"]);
+  });
+
   test("with no other family, another model of the family is asked from the ambiguity angle, and the passed-over strength is recorded", async () => {
     const { asked, write } = await intakeWith(lazy, (request) =>
-      request.secondOpinion?.strength === "other-family" ? unavailable(request) : { data: { questions: [] }, provider: "anthropic", model: "haiku" },
+      request.secondOpinion.strength === "other-family" ? unavailable(request) : { data: { questions: [] }, provider: "anthropic", model: "haiku" },
     );
     expect(asked.map((a) => a.strength)).toEqual([null, "other-family", "same-family-other-model"]);
     expect(asked[2]?.prompt).toContain("Work out what in it is ambiguous or assumed");
@@ -729,7 +740,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
 
   test("a second reading failing at every strength is bounded: recorded unconfirmed, the client told, the tender never held", async () => {
     const { outcome, write } = await intakeWith(lazy, (request) => {
-      if (request.secondOpinion?.strength === "other-family") return unavailable(request);
+      if (request.secondOpinion.strength === "other-family") return unavailable(request);
       throw new SchemaValidationError(["scripted failure"], null);
     });
     expect(outcome).toMatchObject({ kind: "recorded", questions: 0, confirmation: "unconfirmed" });

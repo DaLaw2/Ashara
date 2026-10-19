@@ -82,12 +82,12 @@ const TASKS = {
   tasks: [
     {
       ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [], goal: "",
-      endState: "Both studios' classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
+      endState: "Both studios' classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["G1"] }], acceptance: [{ text: "a client uses the class list", sources: ["G1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
     {
       ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"], goal: "",
-      endState: "A member books a seat", scope: "booking", deliverables: [{ text: "booking form", sources: ["S1"] }], acceptance: [{ text: "a client uses the booking form", sources: ["S1"] }],
+      endState: "A member books a seat", scope: "booking", deliverables: [{ text: "booking form", sources: ["G1"] }], acceptance: [{ text: "a client uses the booking form", sources: ["G1"] }],
       capability: "Frontier", capabilityReason: "graded for the test",
     },
   ],
@@ -116,26 +116,42 @@ function intake(): TenderIntake {
   return new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
+/** The contract a reading of "Booking page for my two pottery studios." drafts. */
+const INTAKE_CONTRACT = {
+  interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender" as const, quote: "Booking page" } }],
+  guarantees: [
+    {
+      id: "G1",
+      statement: "A client books a class at either studio.",
+      observable: { interface: ["I1"], observation: "output" as const },
+      refutedBy: ["A booking at either studio is refused."],
+      source: { kind: "tender" as const, quote: "Booking page for my two pottery studios." },
+    },
+  ],
+  exclusions: [],
+};
+
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  inScope: ["Class booking for both studios"],
-  outOfScope: ["Payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
+  ...INTAKE_CONTRACT,
+  assumptions: [{ id: "A3", statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible", underpins: ["G1"] }],
   questions: [
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
       // The lead-in repeats the label the client reads before it; intake drops it.
       assumption: {
+        id: "A1",
         statement: "Until you answer, the harbour studio opens first.",
         rationale: "The tender names it first.",
         kind: "client-visible",
+        underpins: ["G1"],
       },
     },
     {
       text: "How many seats does a class have?",
       whyItMatters: "It sets the booking limit.",
-      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels.", kind: "client-visible" },
+      assumption: { id: "A2", statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels.", kind: "client-visible", underpins: ["G1"] },
     },
   ],
 };
@@ -178,16 +194,16 @@ function rosterStep(): RosterDerivation {
   return new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
-const NO_ACCOUNT = { statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred" };
+const NO_ACCOUNT = { statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred", underpins: ["G1"] };
 
-/** A project with vision v1 and, unless told otherwise, a roster recorded without a model call. */
+/** A project with vision v1 in the contract form intake writes and, unless told otherwise, a roster recorded without a model call. */
 async function projectWithVision(withRoster = true, inferences: unknown[] = [NO_ACCOUNT]): Promise<ProjectId> {
   const project = await new ProjectRepository(db).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
   ourProjects.add(project.id);
   await new VisionRepository(db).create(project.id, {
     visionText: "Booking page for my two pottery studios.",
     summary: "A booking page for two pottery studios.",
-    scopeBoundaries: ["In: class booking", "Out: payments"],
+    contract: INTAKE_CONTRACT,
     inferences,
   });
   if (withRoster) {
@@ -512,6 +528,7 @@ describe("first plan", () => {
         rationale: "The client confirmed this.",
         status: "Stated",
         clientAnswer: { messageId: randomUUID(), questionMessageId: randomUUID(), question: "Which studio opens first?", answer: "The harbour studio" },
+        underpins: ["G1"],
       },
     ]);
 
@@ -687,11 +704,12 @@ describe("tender to first plan", () => {
       expect(question.body.match(/until you answer/gi)).toHaveLength(1);
     }
     expect(questions[0]?.body).toContain("Until you answer, we proceed on this assumption: The harbour studio opens first.");
-    // Intake told the client of the assumption no question carries, in reply to the tender.
-    const assumptionsReport = outbound.filter((m) => m.kind === "report" && m.inReplyTo === created.message.id);
-    expect(assumptionsReport).toHaveLength(1);
-    expect(assumptionsReport[0]?.body).toContain("Bookings need no account.");
-    expect(assumptionsReport[0]?.body).not.toContain("The harbour studio opens first.");
+    // Intake told the client the contract it drafted, in reply to the tender: the assumption no question carries among them.
+    const contractDraft = outbound.filter((m) => m.kind === "report" && m.inReplyTo === created.message.id);
+    expect(contractDraft).toHaveLength(1);
+    expect(contractDraft[0]?.reportsOn).toBe("contract-draft");
+    expect(contractDraft[0]?.body).toContain("- A3: Bookings need no account. (underpins G1)");
+    expect(contractDraft[0]?.body).toContain("- A1: The harbour studio opens first. (underpins G1; asked in a question)");
     const report = outbound.filter((m) => m.kind === "report" && m.inReplyTo !== created.message.id);
     expect(report).toHaveLength(1);
     expect(report[0]?.body).toMatch(/split into 2 tasks for what you asked for\./);

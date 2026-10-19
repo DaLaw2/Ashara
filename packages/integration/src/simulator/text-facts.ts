@@ -21,7 +21,7 @@ import { PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
  * what to expect can never find production wrong (boundary-rules.toml [integration] `named-only`).
  */
 
-const visionRow = z.object({ version: z.number(), inferences: z.unknown(), openQuestions: z.unknown() });
+const visionRow = z.object({ version: z.number(), inferences: z.unknown(), openQuestions: z.unknown(), guarantees: z.unknown() });
 const briefRow = z.object({ title: z.string(), visionAtCreation: z.number().nullable(), brief: z.unknown(), taskSpec: z.unknown() });
 const messageRow = z.object({ id: z.string(), body: z.string() });
 const replyRow = z.object({ answerId: z.string(), body: z.string() });
@@ -41,7 +41,7 @@ export interface TextFactRecords {
   readonly questions: ReadonlyArray<z.infer<typeof messageRow>>;
   /** Outbound reports posted in reply to a client answer, other than the plan revision's report (which replies to the answer that asked for it). */
   readonly answerReplies: ReadonlyArray<z.infer<typeof replyRow>>;
-  /** Outbound reports posted in reply to the tender: the assumptions report and the reading report. */
+  /** Outbound reports posted in reply to the tender: the contract draft and the reading report. */
   readonly tenderReports: ReadonlyArray<z.infer<typeof messageRow>>;
   /** The tender's reading as intake_readings records it, or null when none is. */
   readonly intakeReading: z.infer<typeof intakeReadingRow> | null;
@@ -121,7 +121,7 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
     intakeReading: intakeReading === undefined ? null : intakeReading,
     visions: await rows(
       visionRow,
-      sql`SELECT version, inferences, open_questions AS "openQuestions" FROM vision_documents WHERE project_id = ${projectId} ORDER BY version`,
+      sql`SELECT version, inferences, open_questions AS "openQuestions", guarantees FROM vision_documents WHERE project_id = ${projectId} ORDER BY version`,
     ),
     briefs: await rows(
       briefRow,
@@ -452,48 +452,52 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
   }
 }
 
-/** How the assumptions report opens, as the oracle words it. */
-const ASSUMPTIONS_OPENING = "Besides the questions we asked, the tender leaves these decisions open";
+/** How the contract draft opens, as the oracle words it. */
+const CONTRACT_OPENING = "This is the contract we are working to";
 
-/** The assumptions report: exactly the assumptions intake recorded as reported, each under its kind. */
-function checkAssumptionsReport(records: TextFactRecords, add: Add, versions: Versions): void {
+const draftedGuarantee = z.looseObject({ id: z.string().min(1), statement: z.string().min(1), source: z.looseObject({ kind: z.string(), id: z.string().optional() }) });
+const draftedAssumption = z.looseObject({ key: z.string().min(1), statement: z.string().min(1), kind: z.string(), underpins: z.array(z.string()) });
+
+/**
+ * The contract draft: exactly one, posted with a first vision that holds guarantees, and none
+ * otherwise. It lists every guarantee of that vision with its basis as the oracle computes it there
+ * (every assumption of a first vision is Inferred, so a guarantee sourced from one or underpinned by
+ * one is at risk until each is confirmed; one quoting the tender and resting on none is what the
+ * tender states), every assumption a client could observe, and every design choice on its own line.
+ */
+function checkContractDraft(records: TextFactRecords, add: Add): void {
   const first = records.visions[0];
-  const vision = first === undefined ? undefined : versions.get(first.version);
-  // A failed intake's report and the reading report reply to the tender too: the assumptions report is told by its opening.
-  const reports = records.tenderReports.filter((report) => report.body.startsWith(ASSUMPTIONS_OPENING));
-  if (vision === undefined) {
-    if (reports.length > 0) add("assumptions-report", "an assumptions report was posted for a project with no vision on record");
+  // The reading report replies to the tender too: the contract draft is told by its opening.
+  const reports = records.tenderReports.filter((report) => report.body.startsWith(CONTRACT_OPENING));
+  const guarantees = z.array(draftedGuarantee).safeParse(first?.guarantees);
+  if (first === undefined || !guarantees.success || guarantees.data.length === 0) {
+    if (reports.length > 0) add("contract-draft", "a contract draft was posted for a project whose first vision holds no guarantees");
     return;
   }
-  if (vision.kind === "unreadable") {
-    add("assumptions-report-unreadable", `the first vision cannot be read, so no assumptions report can be judged: ${vision.detail.slice(0, 200)}`);
+  const [report, ...more] = reports;
+  if (report === undefined || more.length > 0) {
+    add("contract-draft", `vision v${first.version} holds ${guarantees.data.length} guarantee(s), told in ${reports.length} contract draft(s); expected exactly one`);
     return;
   }
-  const reported = vision.assumptions.filter((a) => a.standing === "reported");
-  if (reported.length === 0) {
-    if (reports.length > 0) add("assumptions-report", `an assumptions report was posted, but vision v${first?.version ?? 1} records no assumption as reported`);
+  const inferences = z.array(draftedAssumption).safeParse(first.inferences);
+  if (!inferences.success) {
+    add("contract-draft-unreadable", `vision v${first.version} assumptions cannot be read with what each underpins: ${z.prettifyError(inferences.error).slice(0, 200)}`);
     return;
   }
-  if (reports.length !== 1) {
-    add("assumptions-report", `vision v${first?.version ?? 1} records ${reported.length} assumption(s) as reported, told in ${reports.length} report(s); expected exactly one`);
-    return;
+  const lines = report.body.split("\n");
+  for (const g of guarantees.data) {
+    const resting = inferences.data.filter((a) => a.underpins.includes(g.id) || (g.source.kind === "assumption" && g.source.id === a.key)).map((a) => a.key);
+    const basis =
+      resting.length > 0
+        ? `an assumption you have not confirmed; at risk until you confirm ${resting.join(", ")}`
+        : g.source.kind === "tender" ? "what your tender states" : "our reading of your tender";
+    const line = `- ${g.id}: ${g.statement} (basis: ${basis})`;
+    if (!lines.includes(line)) add(`contract-draft:${g.id}`, `the contract draft does not list ${g.id} with its basis as v${first.version} records it ("${line.slice(0, 200)}")`);
   }
-  const [report] = reports;
-  if (report === undefined) return;
-  const parts = report.body.split("\n\n");
-  const listed = report.body.split("\n").filter((line) => /^- \S+: /.test(line));
-  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no assumption, so each one expected under it is reported below
-  const behaviour = parts.find((part) => part.startsWith("What the product will do:")) ?? "";
-  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no assumption, so each one expected under it is reported below
-  const design = parts.find((part) => part.startsWith("How we will build it")) ?? "";
-  for (const assumption of reported) {
-    const under = assumption.kind === "client-visible" ? behaviour : assumption.kind === "internal-design" ? design : null;
-    const line = `- ${assumption.key}: ${assumption.statement} (why: `;
-    if (under === null || !under.split("\n").some((each) => each.startsWith(line))) {
-      add(`assumptions-report:${assumption.key}`, `the assumptions report does not list ${assumption.key} ("${assumption.statement.slice(0, 120)}") under its kind, ${assumption.kind}`);
-    }
+  for (const a of inferences.data) {
+    const listed = a.kind === "internal-design" ? lines.includes(`- ${a.key}: ${a.statement}`) : lines.some((each) => each.startsWith(`- ${a.key}: ${a.statement} (`));
+    if (!listed) add(`contract-draft:${a.key}`, `the contract draft does not list assumption ${a.key} ("${a.statement.slice(0, 120)}"), ${a.kind}`);
   }
-  if (listed.length !== reported.length) add("assumptions-report", `the assumptions report lists ${listed.length} assumption(s); the vision records ${reported.length} as reported`);
 }
 
 /** How a reading report opens, as the oracle words it: the first reading asked the client nothing. */
@@ -838,7 +842,7 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${WORKPLACE}/prompt.ts#assumptionsSection`, judges: [i9(checkBriefs)] },
   { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions)] },
   { source: `${ENGAGEMENT}/answers.ts#replanReport`, judges: [i9(checkAnswerReplies)] },
-  { source: `${ENGAGEMENT}/intake.ts#assumptionsReport`, judges: [i9(checkAssumptionsReport)] },
+  { source: `${ENGAGEMENT}/intake.ts#contractDraftReport`, judges: [i9(checkContractDraft)] },
   // A reading that asked nothing: its confirmation's strength and what it found, against intake_readings.
   { source: `${ENGAGEMENT}/intake.ts#readingReport`, judges: [i9(checkIntakeReading)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#readingSection`, judges: [i9(checkIntakeReading)] },
@@ -906,7 +910,6 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
   { source: `${ENGAGEMENT}/block-report.ts#projectResumedReport`, kind: "unjudged", reason: "states how the halt ended; I4 judges only that it is its episode's one report" },
   { source: `${ENGAGEMENT}/plan-report.ts#planRevisionReport`, kind: "unjudged", reason: "states the revision's task counts and what it set aside; I4 judges only that it is its revision's one report" },
   { source: `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`, kind: "unjudged", reason: "states the count of failed planning attempts" },
-  { source: `${ENGAGEMENT}/intake.ts#failureReport`, kind: "unjudged", reason: "states the count of failed intake attempts" },
   { source: `${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`, kind: "unjudged", reason: "quotes the environment's recorded statement" },
   { source: `${ENGAGEMENT}/delivered-report.ts#executedSection`, kind: "unjudged", reason: "quotes the stored checks the acceptance sweep records it ran on main; no oracle compares them with the sweep's record" },
   { source: `${DELIVERY}/domain/stale-checks.ts#disputeBrief`, kind: "unjudged", reason: "states the dispute a reopened check task's brief carries" },
@@ -943,14 +946,10 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   { source: `${ENGAGEMENT}/repositories/client-answer.ts#writeClientAnswer`, posts: [`${ENGAGEMENT}/answers.ts#replanReport`], clientWords: false },
   {
     source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insert`,
-    posts: [
-      `${ENGAGEMENT}/intake.ts#assumptionsReport`,
-      `${ENGAGEMENT}/intake.ts#readingReport`,
-      `${ENGAGEMENT}/intake.ts#failureReport`,
-      `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`,
-    ],
+    posts: [`${ENGAGEMENT}/intake.ts#readingReport`, `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`],
     clientWords: true,
   },
+  { source: `${ENGAGEMENT}/repositories/tender-intake.ts#recordTenderIntake`, posts: [`${ENGAGEMENT}/intake.ts#contractDraftReport`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`, posts: [`${ENGAGEMENT}/intake.ts#questionBody`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-stop.ts#recordClientStop`, posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`], clientWords: false },
   {

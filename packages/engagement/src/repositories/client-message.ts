@@ -150,6 +150,26 @@ export class ClientMessageRepository {
     return row.intakeAttempts;
   }
 
+  /**
+   * Sets an unconsumed tender's count of failed intake attempts back to none, keeping the last
+   * error on record: the tender is read again from no attempts once its project is unblocked.
+   */
+  async resetIntakeAttempts(id: string): Promise<void> {
+    const [row] = await this.db
+      .update(clientMessages)
+      .set({ intakeAttempts: 0 })
+      .where(
+        and(
+          eq(clientMessages.id, id),
+          eq(clientMessages.direction, "inbound"),
+          eq(clientMessages.kind, "tender"),
+          isNull(clientMessages.consumedAt),
+        ),
+      )
+      .returning({ id: clientMessages.id });
+    if (!row) throw new TenderNotOpen(id, "reset its failed intake attempts");
+  }
+
   /** The answer already given to this question, or null when it has none. */
   async findAnswerTo(questionId: string): Promise<ClientMessageRow | null> {
     const [row] = await this.db

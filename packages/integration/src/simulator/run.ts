@@ -56,7 +56,7 @@ export interface RunOptions {
   readonly template: string;
   readonly maxCycles: number;
   readonly mutation?: Mutation;
-  /** Hard wall clock of the run; past it the run ends as an I1 violation. */
+  /** Hard wall clock of the run; past it the run ends as an I1 violation. Infinite: none, the run ends by `maxCycles` or its `signal`. */
   readonly timeoutMs: number;
   /**
    * Projects on the one deployment (policy default 1). Two share the deployment's spend cap, so

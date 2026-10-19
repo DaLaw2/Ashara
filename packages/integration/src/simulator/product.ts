@@ -90,7 +90,7 @@ export interface Universe {
 /** How often a seed's plan has independent tasks. */
 const INDEPENDENT_PLAN_RATE = 0.5;
 
-/** 2-4 behaviours, each named by one item of the scripted intake, cut into 1-3 vertical tasks, in order or independent. */
+/** 2-4 behaviours, one guarantee each (keyed by its place, as the scripted intake drafts them), cut into 1-3 vertical tasks, in order or independent. */
 export function drawUniverse(tape: Tape): Universe {
   const count = 2 + tape.pick("universe.extra-behaviours", 3);
   const behaviours = Array.from({ length: count }, (_, i) => `b${i + 1}`);
