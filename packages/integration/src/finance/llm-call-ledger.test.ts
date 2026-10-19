@@ -42,7 +42,7 @@ function model(overrides: Partial<ModelConfig>): ModelConfig {
     maxContextTokens: 100_000,
     cacheReadCostPer1M: 0.3,
     cacheWriteCostPer1M: 3.75,
-    priceWindows: [], priceTiers: [],
+    priceWindows: [], priceTiers: [], datedPrices: [],
     ...overrides,
   };
 }

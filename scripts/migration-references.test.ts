@@ -5,14 +5,17 @@ import { describe, expect, test } from "vitest";
 
 const REPO = join(import.meta.dirname, "..");
 
-// migrations/ holds only the init, so a numbered migration named in source points at a file no
-// checkout has. The frozen manifest lists those files by name as data the baseline check reads.
+// The numbered files before the init were squashed into it, so a numbered migration named in source
+// points at a file no checkout has, or at a later file by a number that goes stale. The frozen
+// manifest lists the squashed files by name as data the baseline check reads.
 const NUMBERED_MIGRATION = "[Mm]igrations? [0-9]{3}|migrations/[0-9]{3}_";
 const MANIFEST = "packages/db/src/legacy-migrations.ts";
 
 describe("numbered migrations", () => {
-  test("migrations/ holds the init alone", () => {
-    expect(readdirSync(join(REPO, "migrations"))).toEqual(["000_init.sql"]);
+  test("migrations/ starts from the init, and every file is a numbered SQL migration", () => {
+    const files = readdirSync(join(REPO, "migrations")).sort();
+    expect(files[0]).toBe("000_init.sql");
+    expect(files.filter((file) => !/^[0-9]{3}_[a-z0-9_]+\.sql$/.test(file))).toEqual([]);
   });
 
   test("no tracked source under packages/ or scripts/ names one, outside the frozen manifest", () => {

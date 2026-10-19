@@ -119,7 +119,7 @@ const model: ResolvedModel = {
     maxContextTokens: 100_000,
     cacheReadCostPer1M: null,
     cacheWriteCostPer1M: null,
-    priceWindows: [], priceTiers: [],
+    priceWindows: [], priceTiers: [], datedPrices: [],
   },
 };
 

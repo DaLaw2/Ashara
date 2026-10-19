@@ -17,7 +17,7 @@ describe("Anthropic prompt caching on agent turns", () => {
     cacheReadCostPer1M: 0.3,
     cacheWriteCostPer1M: 3.75,
     priceWindows: [],
-    priceTiers: [],
+    priceTiers: [], datedPrices: [],
   };
   const CacheControlSchema = z.object({ type: z.literal("ephemeral") });
   const BlockSchema = z.looseObject({ cache_control: CacheControlSchema.optional() });

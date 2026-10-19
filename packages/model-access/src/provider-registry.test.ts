@@ -20,7 +20,7 @@ const MODEL: ModelConfig = {
   maxContextTokens: 128_000,
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
-  priceWindows: [], priceTiers: [],
+  priceWindows: [], priceTiers: [], datedPrices: [],
 };
 
 describe("ProviderRegistry base_url guard", () => {

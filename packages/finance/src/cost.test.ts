@@ -13,7 +13,7 @@ function model(overrides: Partial<ModelConfig>): ModelConfig {
     maxContextTokens: 100_000,
     cacheReadCostPer1M: 0.5,
     cacheWriteCostPer1M: null,
-    priceWindows: [], priceTiers: [],
+    priceWindows: [], priceTiers: [], datedPrices: [],
     ...overrides,
   };
 }
@@ -98,6 +98,47 @@ describe("measureCost", () => {
       expect(priced(199)).toMatchObject({ measured: true, totalCost: (199 * 2) / 1_000_000 });
       expect(priced(200)).toMatchObject({ measured: true, totalCost: (200 * 3) / 1_000_000 });
       expect(priced(500)).toMatchObject({ measured: true, totalCost: (500 * 4) / 1_000_000 });
+    });
+  });
+
+  describe("a dated price replaces the base rates from its effective instant on", () => {
+    // gemini-4-argon as the seeded catalog schedules it: base 2 / 10 / 0.1, dated 4 / 20 / 0.2.
+    const argon = model({
+      id: "gemini-4-argon", apiModelId: "gemini-4-argon", provider: "google",
+      inputCostPer1M: 2, outputCostPer1M: 10, cacheReadCostPer1M: 0.1, cacheWriteCostPer1M: null,
+      datedPrices: [{
+        effectiveFrom: new Date("2026-12-01T00:00:00Z"),
+        rates: { inputCostPer1M: 4, outputCostPer1M: 20, cacheReadCostPer1M: 0.2, cacheWriteCostPer1M: null },
+      }],
+    });
+    const costAt = (at: string): number => {
+      const cost = measureCost({ inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 4_000, cacheWriteTokens: null }, argon, new Date(at));
+      if (!cost.measured) return expect.unreachable("every count is reported");
+      return cost.totalCost;
+    };
+
+    test("a call one minute before the date pays the base rates; a call at the date pays the dated rates", () => {
+      const before = costAt("2026-11-30T23:59:00Z");
+      const after = costAt("2026-12-01T00:00:00Z");
+      expect(before).toBeCloseTo((6_000 * 2 + 4_000 * 0.1 + 2_000 * 10) / 1_000_000, 12);
+      expect(after).toBeCloseTo((6_000 * 4 + 4_000 * 0.2 + 2_000 * 20) / 1_000_000, 12);
+      expect(after).not.toBeCloseTo(before, 12);
+    });
+
+    test("of several dated prices already in force, the latest one applies whatever their listed order", () => {
+      const rate = (input: number) => ({ inputCostPer1M: input, outputCostPer1M: 1, cacheReadCostPer1M: null, cacheWriteCostPer1M: null });
+      const twoChanges = model({
+        cacheReadCostPer1M: null,
+        datedPrices: [
+          { effectiveFrom: new Date("2027-06-01T00:00:00Z"), rates: rate(7) },
+          { effectiveFrom: new Date("2027-01-01T00:00:00Z"), rates: rate(5) },
+        ],
+      });
+      const priced = (at: string) =>
+        measureCost({ inputTokens: 1_000, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null }, twoChanges, new Date(at));
+      expect(priced("2026-12-31T23:59:59Z")).toMatchObject({ measured: true, totalCost: (1_000 * 2) / 1_000_000 });
+      expect(priced("2027-03-01T00:00:00Z")).toMatchObject({ measured: true, totalCost: (1_000 * 5) / 1_000_000 });
+      expect(priced("2027-06-01T00:00:00Z")).toMatchObject({ measured: true, totalCost: (1_000 * 7) / 1_000_000 });
     });
   });
 });

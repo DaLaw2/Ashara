@@ -43,7 +43,7 @@ const model: ResolvedModel = {
     cacheReadCostPer1M: null,
     cacheWriteCostPer1M: null,
     priceWindows: [],
-    priceTiers: [],
+    priceTiers: [], datedPrices: [],
   },
 };
 

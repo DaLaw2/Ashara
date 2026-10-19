@@ -328,7 +328,7 @@ const unusedModel: AssignmentStaff["model"] = {
     cacheReadCostPer1M: null,
     cacheWriteCostPer1M: null,
     maxContextTokens: 1,
-    priceWindows: [], priceTiers: [],
+    priceWindows: [], priceTiers: [], datedPrices: [],
   },
   effectiveCapability: "Strong",
 };

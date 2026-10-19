@@ -163,7 +163,7 @@ function reserveIssues(models: readonly ModelConfig[], providerType: ProviderTyp
 }
 
 // ---------------------------------------------------------------------------
-// Catalog model rows (model_configs with their model_price_windows and model_price_tiers)
+// Catalog model rows (model_configs with their model_price_windows, model_price_tiers and model_dated_prices)
 // ---------------------------------------------------------------------------
 
 interface CatalogPriceWindow {
@@ -184,6 +184,14 @@ interface CatalogPriceTier {
   readonly cacheWriteCostPer1m: number | null;
 }
 
+interface CatalogDatedPrice {
+  readonly effectiveFrom: Date;
+  readonly inputCostPer1m: number;
+  readonly outputCostPer1m: number;
+  readonly cacheReadCostPer1m: number | null;
+  readonly cacheWriteCostPer1m: number | null;
+}
+
 interface CatalogModel {
   readonly modelId: string;
   readonly providerName: string;
@@ -196,6 +204,7 @@ interface CatalogModel {
   readonly maxContextTokens: number;
   readonly priceWindows: readonly CatalogPriceWindow[];
   readonly priceTiers: readonly CatalogPriceTier[];
+  readonly datedPrices: readonly CatalogDatedPrice[];
 }
 
 /**
@@ -257,6 +266,58 @@ function priceTierIssues(model: CatalogModel): string[] {
   return issues;
 }
 
+function isPositiveRate(rate: number): boolean {
+  return Number.isFinite(rate) && rate > 0;
+}
+
+function instantText(instant: Date): string {
+  return Number.isNaN(instant.getTime()) ? "(invalid instant)" : instant.toISOString();
+}
+
+function isCacheRate(rate: number | null): boolean {
+  return rate === null || (Number.isFinite(rate) && rate >= 0);
+}
+
+/**
+ * Why a model's dated prices cannot be applied: an effective date that is not a
+ * valid instant, dates not strictly increasing (two prices in force at one
+ * instant, or an order the reader cannot trust), a rate that is not a positive
+ * price, a cache class billed differently from the base rates, or dated prices
+ * together with price windows or tiers, which no catalog model has and no rule
+ * combines.
+ */
+function datedPriceIssues(model: CatalogModel): string[] {
+  const issues: string[] = [];
+  const prices = model.datedPrices;
+  if (prices.length > 0 && (model.priceWindows.length > 0 || model.priceTiers.length > 0)) {
+    issues.push(
+      `${model.modelId}: has datedPrices with priceWindows or priceTiers; no rule combines an effective date with a time window or a prompt-length tier`,
+    );
+  }
+  for (const [i, p] of prices.entries()) {
+    const where = `${model.modelId}.datedPrices[${i}]`;
+    const from = p.effectiveFrom.getTime();
+    if (Number.isNaN(from)) issues.push(`${where}: effectiveFrom is not a valid instant`);
+    const previous = prices[i - 1];
+    if (previous !== undefined && !(previous.effectiveFrom.getTime() < from)) {
+      issues.push(
+        `${where}: effectiveFrom ${instantText(p.effectiveFrom)} is not after datedPrices[${i - 1}]'s ${instantText(previous.effectiveFrom)}`,
+      );
+    }
+    if (!isPositiveRate(p.inputCostPer1m)) issues.push(`${where}: input rate ${p.inputCostPer1m} is not a positive price`);
+    if (!isPositiveRate(p.outputCostPer1m)) issues.push(`${where}: output rate ${p.outputCostPer1m} is not a positive price`);
+    if (!isCacheRate(p.cacheReadCostPer1m)) issues.push(`${where}: cache read rate ${p.cacheReadCostPer1m} is not a price`);
+    if (!isCacheRate(p.cacheWriteCostPer1m)) issues.push(`${where}: cache write rate ${p.cacheWriteCostPer1m} is not a price`);
+    if ((p.cacheReadCostPer1m === null) !== (model.cacheReadCostPer1m === null)) {
+      issues.push(`${where}: cache read rate ${p.cacheReadCostPer1m} vs base ${model.cacheReadCostPer1m}`);
+    }
+    if ((p.cacheWriteCostPer1m === null) !== (model.cacheWriteCostPer1m === null)) {
+      issues.push(`${where}: cache write rate ${p.cacheWriteCostPer1m} vs base ${model.cacheWriteCostPer1m}`);
+    }
+  }
+  return issues;
+}
+
 /**
  * Why a model's context window cannot be used: it is not a positive integer. The window has no
  * default anywhere: a model whose window is unknown cannot have its turns guarded
@@ -272,7 +333,7 @@ function windowIssues(model: CatalogModel): string[] {
   return [];
 }
 
-function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogModel): TokenRates {
+function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogDatedPrice | CatalogModel): TokenRates {
   return {
     inputCostPer1M: rates.inputCostPer1m,
     outputCostPer1M: rates.outputCostPer1m,
@@ -282,14 +343,14 @@ function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogMode
 }
 
 /**
- * One catalog model (a model_configs row with its model_price_windows and
- * model_price_tiers) as the gateway's {@link ModelConfig}. Throws
- * {@link InvalidGatewayCatalog} naming `source` and the model when its context
- * window is not a positive integer, or its price windows or tiers cannot be
- * applied unambiguously.
+ * One catalog model (a model_configs row with its model_price_windows,
+ * model_price_tiers and model_dated_prices) as the gateway's
+ * {@link ModelConfig}. Throws {@link InvalidGatewayCatalog} naming `source` and
+ * the model when its context window is not a positive integer, or its price
+ * windows, tiers or dated prices cannot be applied unambiguously.
  */
 export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
-  const issues = [...windowIssues(m), ...priceWindowIssues(m), ...priceTierIssues(m)];
+  const issues = [...windowIssues(m), ...priceWindowIssues(m), ...priceTierIssues(m), ...datedPriceIssues(m)];
   if (issues.length > 0) throw new InvalidGatewayCatalog(source, issues);
   return {
     id: m.modelId,
@@ -305,5 +366,6 @@ export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
       rates: toTokenRates(w),
     })),
     priceTiers: m.priceTiers.map((t) => ({ minInputTokens: t.minInputTokens, rates: toTokenRates(t) })),
+    datedPrices: m.datedPrices.map((p) => ({ effectiveFrom: new Date(p.effectiveFrom.getTime()), rates: toTokenRates(p) })),
   };
 }

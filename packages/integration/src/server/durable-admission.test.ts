@@ -29,7 +29,7 @@ const MODEL: ModelConfig = {
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
   priceWindows: [],
-  priceTiers: [],
+  priceTiers: [], datedPrices: [],
 };
 
 type Db = ReturnType<typeof createDb>;

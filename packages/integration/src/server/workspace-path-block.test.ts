@@ -103,7 +103,7 @@ describe("a project whose workspace path is refused", () => {
               maxContextTokens: 100_000,
               cacheReadCostPer1M: null,
               cacheWriteCostPer1M: null,
-              priceWindows: [], priceTiers: [],
+              priceWindows: [], priceTiers: [], datedPrices: [],
             }],
             enabled: true,
           },

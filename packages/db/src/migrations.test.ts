@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
@@ -278,14 +278,19 @@ describe("baseline onto 000_init.sql", () => {
   });
 });
 
-describe("migrations/ holds one init equal to the numbered files it stands in for", () => {
-  test("000_init.sql is the only file in migrations/", () => {
-    expect(readdirSync(MIGRATIONS_DIR)).toEqual(["000_init.sql"]);
+describe("migrations/ starts from one init equal to the numbered files it stands in for", () => {
+  test("000_init.sql is the first file, and no later file takes a name the init stands in for", () => {
+    const files = readdirSync(MIGRATIONS_DIR).sort();
+    expect(files[0]).toBe("000_init.sql");
+    const legacy = new Set(LEGACY_MIGRATIONS.map((m) => m.filename));
+    expect(files.filter((f) => legacy.has(f))).toEqual([]);
   });
 
   // The fingerprint file was taken from a database built by running every numbered file in order;
   // a database built from 000_init.sql alone must match it object for object and row for row.
   test("a database built from 000_init.sql alone has the schema and seeded rows of the numbered files", async () => {
+    const initOnly = mkdtempSync(join(tmpdir(), "ashara-init-"));
+    copyFileSync(join(MIGRATIONS_DIR, "000_init.sql"), join(initOnly, "000_init.sql"));
     const base = new URL(DATABASE_URL);
     const name = `${base.pathname.slice(1)}_init_${randomBytes(6).toString("hex")}`;
     const fresh = new URL(DATABASE_URL);
@@ -295,7 +300,7 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
     try {
       await server.query(`CREATE DATABASE ${name}`);
       try {
-        const result = await runMigrations(fresh.toString(), MIGRATIONS_DIR);
+        const result = await runMigrations(fresh.toString(), initOnly);
         expect(result.applied).toEqual(["000_init.sql"]);
         const client = new pg.Client({ connectionString: fresh.toString() });
         await client.connect();
@@ -314,6 +319,7 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
       }
     } finally {
       await server.end();
+      rmSync(initOnly, { recursive: true, force: true });
     }
   }, 60_000);
 });

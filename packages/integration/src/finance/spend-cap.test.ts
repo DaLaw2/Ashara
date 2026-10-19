@@ -39,7 +39,7 @@ const MODEL: ModelConfig = {
   maxContextTokens: 100_000,
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
-  priceWindows: [], priceTiers: [],
+  priceWindows: [], priceTiers: [], datedPrices: [],
 };
 
 function stubModel(usage: { input: number | undefined; output: number | undefined }): MockLanguageModelV4 {
@@ -137,6 +137,17 @@ describe("worstCaseCostUsd", () => {
     // 1,000 bytes plus 1,024 framing tokens of input, 100 output tokens.
     expect(worstCaseCostUsd(tiered, 1_000, 100)).toBeCloseTo((2_024 * 2 + 100 * 15) / 1_000_000, 12);
     expect(worstCaseCostUsd(MODEL, 1_000, 100)).toBeCloseTo((2_024 * 1 + 100 * 10) / 1_000_000, 12);
+  });
+
+  test("prices at the highest dated price: a cap taken before a price rise still covers a call after it", () => {
+    const rising: ModelConfig = {
+      ...MODEL,
+      datedPrices: [{
+        effectiveFrom: new Date("2026-12-01T00:00:00Z"),
+        rates: { inputCostPer1M: 4, outputCostPer1M: 20, cacheReadCostPer1M: null, cacheWriteCostPer1M: null },
+      }],
+    };
+    expect(worstCaseCostUsd(rising, 1_000, 100)).toBeCloseTo((2_024 * 4 + 100 * 20) / 1_000_000, 12);
   });
 });
 

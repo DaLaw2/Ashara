@@ -16,7 +16,7 @@ function validCatalog() {
             cacheReadCostPer1m: 0.3,
             cacheWriteCostPer1m: 3.75,
             maxContextTokens: 200000,
-            priceWindows: [], priceTiers: [],
+            priceWindows: [], priceTiers: [], datedPrices: [],
         }],
     };
 }
@@ -60,6 +60,52 @@ describe("toModelConfig", () => {
             .toThrow(/cache read rate/);
         expect(() => toModelConfig("catalog.json", { ...base, priceTiers: [longPrompt, longPrompt] }))
             .toThrow(/share the threshold 200000/);
+    });
+
+    const priceFrom = (iso: string, inputCostPer1m = 6) => ({
+        effectiveFrom: new Date(iso), inputCostPer1m, outputCostPer1m: 30, cacheReadCostPer1m: 0.6, cacheWriteCostPer1m: 7.5,
+    });
+
+    test("loads dated prices in effective order with their rates", () => {
+        const model = toModelConfig("catalog.json", {
+            ...validCatalog().models[0]!, datedPrices: [priceFrom("2026-12-01T00:00:00Z"), priceFrom("2027-01-01T00:00:00Z", 8)],
+        });
+        expect(model.datedPrices).toEqual([
+            { effectiveFrom: new Date("2026-12-01T00:00:00Z"), rates: { inputCostPer1M: 6, outputCostPer1M: 30, cacheReadCostPer1M: 0.6, cacheWriteCostPer1M: 7.5 } },
+            { effectiveFrom: new Date("2027-01-01T00:00:00Z"), rates: { inputCostPer1M: 8, outputCostPer1M: 30, cacheReadCostPer1M: 0.6, cacheWriteCostPer1M: 7.5 } },
+        ]);
+    });
+
+    test("refuses two dated prices at one instant: the rate in force there would be ambiguous", () => {
+        const model = { ...validCatalog().models[0]!, datedPrices: [priceFrom("2026-12-01T00:00:00Z"), priceFrom("2026-12-01T00:00:00Z", 8)] };
+        expect(() => toModelConfig("catalog.json", model)).toThrow(InvalidGatewayCatalog);
+        expect(() => toModelConfig("catalog.json", model)).toThrow(/datedPrices\[1\]: effectiveFrom 2026-12-01T00:00:00.000Z is not after/);
+    });
+
+    test("refuses dated prices out of effective order", () => {
+        const model = { ...validCatalog().models[0]!, datedPrices: [priceFrom("2027-01-01T00:00:00Z"), priceFrom("2026-12-01T00:00:00Z")] };
+        expect(() => toModelConfig("catalog.json", model)).toThrow(/datedPrices\[1\]: effectiveFrom 2026-12-01T00:00:00.000Z is not after/);
+    });
+
+    test("refuses an invalid effective instant, a rate that is not a price, or a cache class the base rates do not bill", () => {
+        const base = validCatalog().models[0]!;
+        expect(() => toModelConfig("catalog.json", { ...base, datedPrices: [priceFrom("not a date")] }))
+            .toThrow(/effectiveFrom is not a valid instant/);
+        expect(() => toModelConfig("catalog.json", { ...base, datedPrices: [priceFrom("2026-12-01T00:00:00Z", 0)] }))
+            .toThrow(/input rate 0 is not a positive price/);
+        expect(() => toModelConfig("catalog.json", { ...base, datedPrices: [{ ...priceFrom("2026-12-01T00:00:00Z"), outputCostPer1m: Number.NaN }] }))
+            .toThrow(/output rate NaN is not a positive price/);
+        expect(() => toModelConfig("catalog.json", { ...base, cacheWriteCostPer1m: null, datedPrices: [priceFrom("2026-12-01T00:00:00Z")] }))
+            .toThrow(/cache write rate 7.5 vs base null/);
+    });
+
+    test("refuses dated prices beside a tier or a window: no rule combines them", () => {
+        const base = validCatalog().models[0]!;
+        const dated = [priceFrom("2026-12-01T00:00:00Z")];
+        expect(() => toModelConfig("catalog.json", { ...base, datedPrices: dated, priceTiers: [longPrompt] }))
+            .toThrow(/has datedPrices with priceWindows or priceTiers/);
+        expect(() => toModelConfig("catalog.json", { ...base, datedPrices: dated, priceWindows: [offPeak(0, 60)] }))
+            .toThrow(/has datedPrices with priceWindows or priceTiers/);
     });
 });
 

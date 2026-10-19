@@ -45,7 +45,7 @@ const modelConfig: ModelConfig = {
   cacheReadCostPer1M: 0.3,
   cacheWriteCostPer1M: 3.75,
   priceWindows: [],
-  priceTiers: [],
+  priceTiers: [], datedPrices: [],
 };
 
 function toolCallTurn(toolName: string, input: unknown): LanguageModelV4GenerateResult {

@@ -2,7 +2,8 @@
 #
 # The model catalog is DB-authoritative: the migrations seed and refresh the
 # model_configs table (prices, cache rates, time-of-day windows, each model's
-# level as Ashara calls it, and prompt-length tiers). This file contains only deployment-specific configuration: routing profiles,
+# level as Ashara calls it, prompt-length tiers and scheduled price changes).
+# This file contains only deployment-specific configuration: routing profiles,
 # the thinking policy and the context-overflow signatures.
 #
 # To add/update models, create a new migration or use the model_configs DB table.

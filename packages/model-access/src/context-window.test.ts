@@ -140,7 +140,7 @@ describe("an agent turn that does not fit its window", () => {
     cacheReadCostPer1M: null,
     cacheWriteCostPer1M: null,
     priceWindows: [],
-    priceTiers: [],
+    priceTiers: [], datedPrices: [],
   };
 
   function gatewayWith(model: MockLanguageModelV4) {

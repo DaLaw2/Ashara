@@ -168,6 +168,15 @@ interface PriceTier {
   readonly rates: TokenRates;
 }
 
+/**
+ * Rates that replace the model's base rates for a call made at or after
+ * `effectiveFrom`, until the next dated price takes over.
+ */
+interface DatedPrice {
+  readonly effectiveFrom: Date;
+  readonly rates: TokenRates;
+}
+
 export interface ModelConfig extends TokenRates {
   id: string;
   apiModelId: string;
@@ -177,6 +186,8 @@ export interface ModelConfig extends TokenRates {
   readonly priceWindows: readonly PriceWindow[];
   /** Prompt-length tiers; empty when the model bills one rate at every prompt length. */
   readonly priceTiers: readonly PriceTier[];
+  /** Scheduled price changes in effective order; empty when the base rates hold at every instant. */
+  readonly datedPrices: readonly DatedPrice[];
 }
 
 export interface TokenUsage {

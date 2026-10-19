@@ -24,10 +24,25 @@ export type CostMeasurement =
     };
 
 /**
+ * The base rates in force at `at`: the dated price with the latest
+ * `effectiveFrom` not after `at`, else the model's undated base rates.
+ */
+function baseRatesAt(model: ModelConfig, at: Date): TokenRates {
+  const instant = at.getTime();
+  const inForce = model.datedPrices
+    .filter((p) => p.effectiveFrom.getTime() <= instant)
+    .reduce<ModelConfig["datedPrices"][number] | undefined>(
+      (latest, p) => (latest === undefined || p.effectiveFrom.getTime() > latest.effectiveFrom.getTime() ? p : latest),
+      undefined,
+    );
+  return inForce ? inForce.rates : model;
+}
+
+/**
  * The rates a call is billed at: the highest prompt-length tier its input
- * count reaches, else the price window covering `at`, else the model's base
- * rates. The catalog refuses a model with both tiers and windows
- * (`toModelConfig`), so the two never combine.
+ * count reaches, else the price window covering `at`, else the base rates in
+ * force at `at`. The catalog refuses a model with both tiers and windows, or
+ * with dated prices beside either (`toModelConfig`), so none of them combine.
  */
 function ratesFor(model: ModelConfig, at: Date, inputTokens: number | null): TokenRates {
   // An unreported input count leaves the call unmeasured (measureCost), so no tier is ever chosen for it.
@@ -43,7 +58,7 @@ function ratesFor(model: ModelConfig, at: Date, inputTokens: number | null): Tok
   const window = model.priceWindows.find(
     (w) => w.isoWeekday === isoWeekday && minute >= w.utcStartMinute && minute < w.utcEndMinute,
   );
-  return window ? window.rates : model;
+  return window ? window.rates : baseRatesAt(model, at);
 }
 
 type CachePrice = { readonly tokens: number; readonly rate: number } | "missing-count" | "missing-rate";
