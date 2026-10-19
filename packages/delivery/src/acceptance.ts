@@ -41,6 +41,8 @@ interface SweepRecord {
   readonly checkedTasks: readonly string[];
   /** Completed implementation tasks with no stored check, which the sweep could not re-run. */
   readonly uncheckedTasks: readonly string[];
+  /** Every stored check the sweep could run, with how it ended; none when it ran nothing. */
+  readonly checkOutcomes: Extract<Sweep, { readonly kind: "ran" }>["checkOutcomes"];
   readonly details: string;
 }
 
@@ -48,15 +50,15 @@ interface SweepRecord {
 export interface AcceptanceStore {
   readyForAcceptance(): Promise<readonly ReadyProject[]>;
   /**
-   * Records a passed sweep, with the stored checks it ran and saw pass, and moves the project to
-   * accepted, together; "moved" when it is no longer ready.
+   * Records a passed sweep, with the outcome of every stored check it ran and each guarantee's
+   * evidence, and moves the project to accepted, together; "moved" when it is no longer ready.
    */
-  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string; readonly executedChecks: Extract<Sweep, { readonly kind: "ran" }>["executedChecks"] }): Promise<"accepted" | "moved">;
+  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved">;
   /** Counts one sweep that could not run on the project (projects.acceptance_faults); returns the count with it. */
   recordSweepFault(projectId: ProjectId): Promise<number>;
   /**
-   * Records a failed sweep, with the stored checks it saw fail, and the defect `writeDefect` writes, in the same
-   * transaction; "moved" when no longer ready.
+   * Records a failed sweep, with the outcome of every stored check it ran and each guarantee's
+   * evidence, and the defect `writeDefect` writes, in the same transaction; "moved" when no longer ready.
    */
   recordDefect(sweep: FailedSweepRecord, writeDefect: (workItems: WorkItemRepository) => Promise<string>): Promise<"recorded" | "moved">;
 }
@@ -181,6 +183,7 @@ async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep
     environmentVersion: null,
     checkedTasks: [],
     uncheckedTasks: [],
+    checkOutcomes: [],
     failedChecks: [],
     details: `The acceptance run could not be carried out (${why}): ${describeErrorChain(sweep.error)}`,
   }, null);
@@ -236,10 +239,11 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
     environmentVersion: sweep.environmentVersion,
     checkedTasks: sweep.checkedTasks,
     uncheckedTasks: sweep.uncheckedTasks,
+    checkOutcomes: sweep.checkOutcomes,
     details: sweep.details,
   };
   if (sweep.passed) {
-    const outcome = await deps.acceptance.recordAccepted({ ...record, executedChecks: sweep.executedChecks });
+    const outcome = await deps.acceptance.recordAccepted(record);
     deps.logger.info("delivery.acceptance-passed", `sweep on main ${sweep.mainCommit} passed; ${outcome}`, {
       projectId: ready.projectId,
       mainCommit: sweep.mainCommit,

@@ -1,7 +1,7 @@
 import { pgTable, uuid, boolean, text, jsonb, integer, primaryKey, unique } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
-import { workItems } from "./delivery.js";
+import { projectBlocks, workItems } from "./delivery.js";
 import { clientMessages } from "./engagement.js";
 import { projects } from "./project.js";
 
@@ -245,8 +245,10 @@ export const checkSetFreezes = pgTable("check_set_freezes", {
 });
 
 // ---------------------------------------------------------------------------
-// acceptance_sweeps: one row per acceptance sweep Z0 ran on main HEAD; a passed
-// one made its project 'accepted', a failed one opened its defect item.
+// acceptance_sweeps: one row per sweep Z0 ran on main HEAD. An acceptance sweep
+// that passed made its project 'accepted', a failed one opened its defect item. A
+// terminal sweep ran once when the project reached a terminal short of acceptance
+// (the client's stop, or a halt episode): it is never passed and opens nothing.
 // ---------------------------------------------------------------------------
 
 export const acceptanceSweeps = pgTable("acceptance_sweeps", {
@@ -273,9 +275,45 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   reportRetryAt: timestamptz("report_retry_at"),
   /** Failed attempts whose records are on file but do not read as a report; only these count toward the substitute notice. */
   reportRecordFailures: integer("report_record_failures").notNull().default(0),
-  /** The stored checks a passed sweep ran and saw pass, [{taskId, name, command}]; null on a failed sweep or one recorded before the column existed. */
-  executedChecks: jsonb("executed_checks"),
+  /** Every stored check the sweep ran, [{taskCheckId, taskId, name, command, outcome}] with outcome passed, failed or not-run; null on a row recorded before the column existed. */
+  checkOutcomes: jsonb("check_outcomes"),
+  /** "acceptance" or "terminal" (the acceptance_sweeps_purpose_known CHECK). */
+  purpose: text().notNull().default("acceptance"),
+  /** A terminal sweep's consumed client stop; null on every other sweep. */
+  stopId: uuid("stop_id").references(() => clientMessages.id, { onDelete: "cascade" }),
+  /** A terminal sweep's halt episode; null on every other sweep. */
+  blockId: uuid("block_id").references(() => projectBlocks.id, { onDelete: "cascade" }),
 });
+
+// ---------------------------------------------------------------------------
+// guarantee_evidence (Quality): one row per guarantee of the vision version in
+// force per sweep, each stored check deciding it with its outcome and evidence
+// class, an empty list when no check decides it. Append-only.
+// ---------------------------------------------------------------------------
+
+export const guaranteeEvidence = pgTable(
+  "guarantee_evidence",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sweepId: uuid("sweep_id")
+      .notNull()
+      .references(() => acceptanceSweeps.id, { onDelete: "cascade" }),
+    visionVersion: integer("vision_version").notNull(),
+    guaranteeId: text("guarantee_id").notNull(),
+    /** The sweep's main commit; null when the sweep ran on no commit, which then holds no check. */
+    mainCommit: text("main_commit"),
+    /** [{taskCheckId, outcome, class}], parsed by the repository. */
+    checks: jsonb().notNull(),
+    reviewLowers: boolean("review_lowers").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    onePerSweep: unique("guarantee_evidence_one_per_sweep").on(t.sweepId, t.guaranteeId),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // reviewer_outcomes (Quality): one row per piece of later evidence about one

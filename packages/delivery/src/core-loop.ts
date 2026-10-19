@@ -9,6 +9,7 @@ import { PlanningService } from "./domain/index.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
+import { runTerminalSweeps } from "./terminal-sweep.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import { deploymentCapCause, projectBlockCause, projectCapCause, projectWorkCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
@@ -130,6 +131,11 @@ export class CoreLoop {
     // is reported below first, and resumes from the next cycle on.
     const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe, deps.containment, deps.logger));
     if (resumed.kind === "stop") return this.haltAtCap(resumed.stop);
+
+    // Each stop and halt episode still owed one gets its terminal sweep on main (no LLM call), before
+    // the halt's report, so each guarantee's evidence on the last commit is on record when it is told.
+    const terminal = await this.sweepTerminals();
+    if (terminal !== null) return this.haltAtCap(terminal);
 
     // Halts recorded in an earlier cycle (or before a restart) and a project's return to work: one
     // plain report each to the client. No LLM call, so before the spend-cap check: a project the
@@ -278,6 +284,9 @@ export class CoreLoop {
     await this.takeClientStops();
     await this.answerClientChanges();
     await this.releaseHeld();
+    // A stop taken here, and a halt recorded at the cap, is owed its terminal sweep (no LLM call)
+    // before its report; no full cycle runs again in this process to sweep it.
+    await this.sweepTerminals();
     // A report whose post faulted is contained to its project and retried after a backoff, and a plan
     // written in the cycle that reached the cap is reported after its block report; no full cycle runs
     // again in this process, so both are here. No report makes an LLM call.
@@ -314,6 +323,18 @@ export class CoreLoop {
       if (stop.kind !== "step-faulted") this.deps.logger.info("delivery.client-stop", `stop ${stop.stopId}: ${stop.kind}`, { projectId: stop.projectId, stopId: stop.stopId, outcome: stop.kind });
     }
     return null;
+  }
+
+  /**
+   * The terminal sweep of each stop and halt episode owed one, each contained to its terminal; the
+   * deployment cap's stop when a refusal named it, else null.
+   */
+  private async sweepTerminals(): Promise<LoopStop | null> {
+    const { deps } = this;
+    const swept = await this.step("terminal-sweep", () =>
+      runTerminalSweeps({ terminalSweeps: deps.terminalSweeps, terminalSweeper: deps.terminalSweeper, containment: deps.containment, logger: deps.logger }),
+    );
+    return swept.kind === "stop" ? swept.stop : null;
   }
 
   /** The client's changes, each answered once; the deployment cap's stop when a refusal named it, else null. */
@@ -394,7 +415,8 @@ export class CoreLoop {
     if (halted.length > 0) {
       this.deps.logger.info("delivery.deployment-cap-halt", `${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`, { projects: halted });
     }
-    // The loop stops here on `stop`: a stop the reports' step returns is the cap's too.
+    // The loop stops here on `stop`: a stop the sweeps' or the reports' step returns is the cap's too.
+    await this.sweepTerminals();
     await this.postBlockReports();
     return stopped(stop);
   }

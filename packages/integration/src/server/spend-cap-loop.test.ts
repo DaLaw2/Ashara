@@ -143,6 +143,8 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: concurrentTaskLanes,
     acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
+    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
+    terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
     acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
     deliveredReports: { runPending: async () => [] },
     ...parts,

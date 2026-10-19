@@ -211,11 +211,12 @@ export type AcceptanceSweep =
       /** The public interface file on main against the product scaffold's: a scaffold's byte for byte, or none, is not accepted. */
       readonly publicInterface: InterfaceStanding;
       /**
-       * Every stored check this sweep ran that passed, in the order run, with the command it ran:
-       * the only ways of running the product acceptance saw work, which the delivered report
-       * presents as verified (the public interface file's entries are never run).
+       * Every stored check of the checked tasks with how it ended on main, passed, failed or not
+       * run, task by task in the order run: the evidence each guarantee the checks decide is
+       * recorded with. The passed ones are the only ways of running the product the sweep saw work
+       * (the public interface file's entries are never run).
        */
-      readonly executedChecks: readonly ExecutedCheck[];
+      readonly checkOutcomes: readonly SweptCheck[];
       /** Every stored check this sweep ran that failed on main, in the order run: the witnesses a failed sweep rests on. */
       readonly failedChecks: readonly FailedCheck[];
       readonly details: string;
@@ -223,11 +224,21 @@ export type AcceptanceSweep =
   | { readonly kind: "unrunnable"; readonly error: EnvironmentError }
   | { readonly kind: "faulted"; readonly mainCommit: string | null; readonly error: AcceptanceSweepFault };
 
-/** One stored check an acceptance sweep ran and saw pass: whose it is, and the command run. */
-export interface ExecutedCheck {
+/**
+ * One stored check of a sweep: whose it is (its task's checks revision, by name), the command it
+ * runs, the vision items it decides (null on a check stored before they were recorded, which
+ * decides none), and how it ended. "not-run" when its suite reached no verdict (its files
+ * refused, or the product changed under it) or never reached it: nothing it ran there is a
+ * witness either way.
+ */
+export interface SweptCheck {
   readonly taskId: string;
+  readonly revision: number;
+  readonly checkTaskId: string;
   readonly name: string;
   readonly command: string;
+  readonly decides: readonly string[] | null;
+  readonly outcome: "passed" | "failed" | "not-run";
 }
 
 /** One stored check an acceptance sweep ran and saw fail: whose it is, and the check task that wrote it. */
@@ -249,13 +260,25 @@ function failedChecksOf(stored: ReadonlyArray<{ readonly taskId: string; readonl
   });
 }
 
-/** Each task's stored checks that ran in `runs` and passed, in run order; a check that failed or never ran is none of them. */
-function executedChecksOf(stored: ReadonlyArray<{ readonly taskId: string; readonly suite: CheckSuite }>, runs: readonly SuiteRun[]): ExecutedCheck[] {
-  return stored.flatMap(({ taskId, suite }) => {
+/** Every stored check of each task in `stored`, with how it ended in `runs`; one its suite's report does not name as run is not run. */
+function checkOutcomesOf(stored: readonly StoredSuite[], runs: readonly SuiteRun[]): SweptCheck[] {
+  return stored.flatMap(({ taskId, revision, checkTaskId, checks, suite }) => {
     const report = runs.find((run) => run.suite === suite)?.report;
-    if (report?.kind !== "ran") return [];
-    return report.runs.filter(checkPassed).map((run) => ({ taskId, name: run.name, command: run.command }));
+    return checks.map((check): SweptCheck => {
+      const run = report?.kind === "ran" ? report.runs.find((each) => each.name === check.name) : undefined;
+      const outcome = run === undefined ? "not-run" : checkPassed(run) ? "passed" : "failed";
+      return { taskId, revision, checkTaskId, name: check.name, command: check.command, decides: check.decides, outcome };
+    });
   });
+}
+
+/** A completed task's latest stored checks as one suite of a sweep, each check with what it decides. */
+interface StoredSuite {
+  readonly taskId: string;
+  readonly revision: number;
+  readonly checkTaskId: string;
+  readonly checks: ReadonlyArray<{ readonly name: string; readonly command: string; readonly decides: readonly string[] | null }>;
+  readonly suite: CheckSuite;
 }
 
 /** A step of an acceptance sweep failed on something other than the substrate: no verdict exists. */
@@ -710,8 +733,8 @@ export class TaskVerification {
    * passed. A main whose public interface file is byte for byte the one a product scaffold in
    * `scaffolds` wrote, or that holds no such file, fails the sweep, its details opening with what to
    * update or restore. Passing that comparison verifies nothing the file says: the delivered report
-   * quotes the file as unverified, and presents as verified only `executedChecks`, the stored
-   * checks this sweep ran and saw pass. A main with no environment its cells can be built from fails the sweep, with the
+   * quotes the file as unverified, and presents as verified only the stored checks this sweep ran
+   * and saw pass (`checkOutcomes`). A main with no environment its cells can be built from fails the sweep, with the
    * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or
    * an EnvironmentError); any other error is `faulted`, with the step it stopped at. The caller
    * bounds both (orchestrator acceptance.ts).
@@ -722,6 +745,26 @@ export class TaskVerification {
     goalTaskIds: readonly string[],
     scaffolds: readonly ScaffoldMerge[],
   ): Promise<AcceptanceSweep> {
+    return observed(await this.sweepMain(projectId, targetProjectPath, { goalTaskIds, scaffolds }));
+  }
+
+  /**
+   * The terminal sweep: the same commands-only run of every Completed implementation task's latest
+   * checks on main HEAD, with no model called, for a project that stopped or halted short of
+   * acceptance, so each guarantee's evidence on its last commit is on record. It judges no
+   * acceptance: no goal task or public interface file is held against it, and its `passed` accepts
+   * nothing. Neither the acceptance event nor the sweep observer sees it.
+   */
+  async sweepForTerminal(projectId: ProjectId, targetProjectPath: string): Promise<AcceptanceSweep> {
+    return this.sweepMain(projectId, targetProjectPath, null);
+  }
+
+  /** A sweep of main, judged for acceptance against `acceptance`, or for no verdict when null. */
+  private async sweepMain(
+    projectId: ProjectId,
+    targetProjectPath: string,
+    acceptance: { readonly goalTaskIds: readonly string[]; readonly scaffolds: readonly ScaffoldMerge[] } | null,
+  ): Promise<AcceptanceSweep> {
     const label = `acceptance-${projectId}`;
     let step = "probe the substrate";
     let main: string | null = null;
@@ -729,24 +772,21 @@ export class TaskVerification {
       await this.deps.cells.substrate.probeSubstrate();
       step = "read main";
       main = await mainCommit(targetProjectPath, label);
-      return observed(
-        await this.runAcceptanceSweep(projectId, targetProjectPath, goalTaskIds, scaffolds, main, (next) => {
-          step = next;
-        }),
-      );
+      return await this.runSweep(projectId, targetProjectPath, acceptance, main, (next) => {
+        step = next;
+      });
     } catch (e) {
       const substrate = environmentErrorOf(e);
-      if (substrate !== null) return observed({ kind: "unrunnable", error: substrate });
-      return observed({ kind: "faulted", mainCommit: main, error: new AcceptanceSweepFault(projectId, step, { cause: e }) });
+      if (substrate !== null) return { kind: "unrunnable", error: substrate };
+      return { kind: "faulted", mainCommit: main, error: new AcceptanceSweepFault(projectId, step, { cause: e }) };
     }
   }
 
   /** The sweep once the substrate answered and main was read; `at` names each step, for a fault. */
-  private async runAcceptanceSweep(
+  private async runSweep(
     projectId: ProjectId,
     targetProjectPath: string,
-    goalTaskIds: readonly string[],
-    scaffolds: readonly ScaffoldMerge[],
+    acceptance: { readonly goalTaskIds: readonly string[]; readonly scaffolds: readonly ScaffoldMerge[] } | null,
     main: string,
     at: (step: string) => void,
   ): Promise<AcceptanceSweep> {
@@ -769,21 +809,26 @@ export class TaskVerification {
         checkedTasks: [],
         uncheckedTasks: [],
         publicInterface: { kind: "not-compared" },
-        executedChecks: [],
+        checkOutcomes: [],
         failedChecks: [],
         details: `no environment its cells can be built from: ${resolution.reason}`,
       };
     }
     const environment: CurrentEnvironment<EnvironmentDefinition> = resolution.environment;
-    at(`compare ${PUBLIC_INTERFACE_FILE} on main with the product scaffold's`);
-    const publicInterface = await interfaceStandingOnMain(targetProjectPath, main, scaffolds);
+    let publicInterface: InterfaceStanding = { kind: "not-compared" };
+    if (acceptance !== null) {
+      at(`compare ${PUBLIC_INTERFACE_FILE} on main with the product scaffold's`);
+      publicInterface = await interfaceStandingOnMain(targetProjectPath, main, acceptance.scaffolds);
+    }
     at("read the stored checks of the completed tasks");
     const completed = await this.deps.checks.completedOf(projectId, null);
     const checkedIds = new Set(completed.checked.map((prior) => prior.taskId));
-    const neverChecked = goalTaskIds.filter((id) => !checkedIds.has(id));
-    const stored = completed.checked.map((prior) => ({
+    const neverChecked = acceptance === null ? [] : acceptance.goalTaskIds.filter((id) => !checkedIds.has(id));
+    const stored: StoredSuite[] = completed.checked.map((prior) => ({
       taskId: prior.taskId,
+      revision: prior.revision,
       checkTaskId: prior.checkTaskId,
+      checks: prior.checks,
       suite: {
         label: `task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
         checks: prior.checks,
@@ -809,20 +854,22 @@ export class TaskVerification {
       ...(neverChecked.length === 0 ? [] : [`Goal task(s) with no stored checks, so never checked: ${neverChecked.join(", ")}`]),
       ...(completed.unchecked.length === 0 ? [] : [`Not re-run, no check is stored for them: ${completed.unchecked.join(", ")}`]),
     ];
-    const interfaceDefect = interfaceDefectLine(publicInterface);
+    const interfaceDefect = publicInterface.kind === "not-compared" ? null : interfaceDefectLine(publicInterface);
     const passed = ran.passed && neverChecked.length === 0 && interfaceDefect === null;
     // The interface line comes first: a repair reads the start of these details when they are long.
     const details = [...(interfaceDefect === null ? [] : [interfaceDefect]), ran.details, ...gaps].join("\n");
     const checkedTasks = completed.checked.map((prior) => prior.taskId);
-    eventSink?.emit({
-      event: "acceptance_sweep",
-      projectId,
-      mainCommit: main,
-      verdict: passed ? "passed" : "failed",
-      checkedTasks,
-      neverChecked,
-      details,
-    });
+    if (acceptance !== null) {
+      eventSink?.emit({
+        event: "acceptance_sweep",
+        projectId,
+        mainCommit: main,
+        verdict: passed ? "passed" : "failed",
+        checkedTasks,
+        neverChecked,
+        details,
+      });
+    }
     return {
       kind: "ran",
       passed,
@@ -831,7 +878,7 @@ export class TaskVerification {
       checkedTasks,
       uncheckedTasks: completed.unchecked,
       publicInterface,
-      executedChecks: executedChecksOf(stored, runs),
+      checkOutcomes: checkOutcomesOf(stored, runs),
       failedChecks: failedChecksOf(stored, runs),
       details,
     };

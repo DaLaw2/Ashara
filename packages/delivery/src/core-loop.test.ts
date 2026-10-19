@@ -156,6 +156,8 @@ function buildDeps(
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: concurrentTaskLanes,
     acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
+    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
+    terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
     acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
     deliveredReports: { runPending: async () => [] },
   };
@@ -417,6 +419,7 @@ describe("CoreLoop first plan", () => {
       "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
       "parked-exits": { excluded: "it moves Blocked tasks toward dispatch, and a halted cycle dispatches nothing" },
       "acceptance": { excluded: "it sweeps main on cells, which is work, not a report" },
+      "terminal-sweep": "halted",
       "gate": { excluded: "it selects tasks to dispatch, and a halted cycle dispatches nothing" },
       "burn-warning": { excluded: "it warns before the budget halts a project; a project halted at the cap is told so by its block report" },
     };

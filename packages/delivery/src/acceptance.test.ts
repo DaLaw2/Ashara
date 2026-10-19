@@ -10,7 +10,8 @@ const projectId = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test")
 const MAIN = "f".repeat(40);
 const SCAFFOLD_MERGE = "a".repeat(40);
 const SCAFFOLDS = [{ taskId: "s1", mergeCommit: SCAFFOLD_MERGE }];
-const EXECUTED = [{ taskId: "g1", name: "put then get", command: "./kv set a 1 && ./kv get a" }];
+const OUTCOMES = [{ taskId: "g1", revision: 1, checkTaskId: "c1", name: "put then get", command: "./kv set a 1 && ./kv get a", decides: ["G1"], outcome: "passed" as const }];
+const FAILED_OUTCOMES = [{ taskId: "g2", revision: 1, checkTaskId: "c2", name: "delete", command: "./kv delete a", decides: ["G2"], outcome: "failed" as const }];
 
 type AcceptanceDeps = Parameters<typeof runAcceptanceSweeps>[0];
 
@@ -66,7 +67,7 @@ function harness(
 ) {
   const accepted: string[] = [];
   const executed: unknown[] = [];
-  const defects: Array<{ details: string; failedChecks: readonly unknown[]; writes: Array<{ op: string; status: string; source?: string }> }> = [];
+  const defects: Array<{ details: string; failedChecks: readonly unknown[]; checkOutcomes?: readonly unknown[]; writes: Array<{ op: string; status: string; source?: string }> }> = [];
   const created: WorkItem[] = [];
   const blocks: Array<{ projectId: ProjectId; cause: ProjectBlockCause }> = [];
   let faults = 0;
@@ -76,14 +77,14 @@ function harness(
       blocked ? [] : [{ projectId, workspacePath, goalTaskIds: ["g1", "g2"], scaffoldMerges }],
     recordAccepted: async (record) => {
       accepted.push(record.mainCommit);
-      executed.push(record.executedChecks);
+      executed.push(record.checkOutcomes);
       return "accepted";
     },
     recordSweepFault: async () => ++faults,
     recordDefect: async (record, writeDefect) => {
       const writes: Array<{ op: string; status: string; source?: string }> = [];
       await writeDefect(defectRepo(writes, created));
-      defects.push({ details: record.details, failedChecks: record.failedChecks, writes });
+      defects.push({ details: record.details, failedChecks: record.failedChecks, ...(record.checkOutcomes.length > 0 ? { checkOutcomes: record.checkOutcomes } : {}), writes });
       return "recorded";
     },
   };
@@ -146,7 +147,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
-      executedChecks: EXECUTED,
+      checkOutcomes: OUTCOMES,
       failedChecks: [],
       details: "all passed",
     });
@@ -155,7 +156,7 @@ describe("the acceptance sweep", () => {
     expect(scaffoldsSwept).toEqual([SCAFFOLDS]);
     expect(accepted).toEqual([MAIN]);
     // What the delivered report presents as verified is what the sweep ran: recorded with the acceptance.
-    expect(executed).toEqual([EXECUTED]);
+    expect(executed).toEqual([OUTCOMES]);
     expect(defects).toEqual([]);
     expect(blocks).toEqual([]);
     expect(logger.records.map((r) => [r.level, r.event, r.fields?.["projectId"]])).toEqual([["info", "delivery.acceptance-passed", projectId]]);
@@ -171,7 +172,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
-      executedChecks: [],
+      checkOutcomes: FAILED_OUTCOMES,
       failedChecks: [{ taskId: "g2", checkTaskId: "c2", name: "delete" }],
       details,
     });
@@ -184,6 +185,8 @@ describe("the acceptance sweep", () => {
       {
         details,
         failedChecks: [{ taskId: "g2", checkTaskId: "c2", name: "delete" }],
+        // Every check's outcome is recorded with a failed sweep too: the evidence of the guarantee it decides.
+        checkOutcomes: FAILED_OUTCOMES,
         writes: [
           { op: "create", status: "Pending" },
           { op: "save", status: "Abandoned", source: "acceptance_failed" },
@@ -203,7 +206,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "scaffold-placeholder", file: "PUBLIC_INTERFACE.md", scaffoldTaskId: "s1", scaffoldCommit: SCAFFOLD_MERGE },
-      executedChecks: [],
+      checkOutcomes: [],
       failedChecks: [],
       details,
     });
@@ -226,7 +229,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "absent", file: "PUBLIC_INTERFACE.md" },
-      executedChecks: [],
+      checkOutcomes: [],
       failedChecks: [],
       details,
     });

@@ -1,20 +1,41 @@
 import type { createDb } from "@ashara/db";
 import { WorkItemRowRepository, adaptWorkItemRepo } from "@ashara/delivery";
-import type { AcceptanceStore } from "@ashara/delivery";
-import { DeliveredReports, acceptProject, listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "@ashara/engagement";
+import type { AcceptanceStore, TerminalSweepStore } from "@ashara/delivery";
+import { DeliveredReports, acceptProject, guaranteesInForce, listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
-import { PUBLIC_INTERFACE_FILE, gitPublicInterface, listProjectsReadyForAcceptance, recordAcceptance, recordAcceptanceDefect, recordAcceptanceSweepFault } from "@ashara/quality";
+import {
+  PUBLIC_INTERFACE_FILE,
+  gitPublicInterface,
+  listDueTerminalSweeps,
+  listProjectsReadyForAcceptance,
+  recordAcceptance,
+  recordAcceptanceDefect,
+  recordAcceptanceSweepFault,
+  recordTerminalSweep,
+} from "@ashara/quality";
 
 type Db = ReturnType<typeof createDb>;
 
-/** Delivery's acceptance store over projects, work_items and acceptance_sweeps. */
+/**
+ * Delivery's acceptance store over projects, work_items, acceptance_sweeps and guarantee_evidence. The
+ * guarantees each sweep's evidence is recorded for are Engagement's, read by its vision reader in the
+ * sweep's transaction.
+ */
 export function createAcceptanceStore(db: Db): AcceptanceStore {
   return {
     readyForAcceptance: () => listProjectsReadyForAcceptance(db),
     // The move to 'accepted' is Engagement's lifecycle guard, in the sweep's transaction.
-    recordAccepted: (sweep) => recordAcceptance(db, sweep, acceptProject),
+    recordAccepted: (sweep) => recordAcceptance(db, sweep, acceptProject, guaranteesInForce),
     recordSweepFault: (projectId) => recordAcceptanceSweepFault(db, projectId),
-    recordDefect: (sweep, writeDefect) => recordAcceptanceDefect(db, sweep, (tx) => writeDefect(adaptWorkItemRepo(new WorkItemRowRepository(tx)))),
+    recordDefect: (sweep, writeDefect) => recordAcceptanceDefect(db, sweep, (tx) => writeDefect(adaptWorkItemRepo(new WorkItemRowRepository(tx))), guaranteesInForce),
+  };
+}
+
+/** Delivery's terminal sweep store over projects, client_messages, project_blocks, acceptance_sweeps and guarantee_evidence. */
+export function createTerminalSweepStore(db: Db): TerminalSweepStore {
+  return {
+    dueTerminalSweeps: () => listDueTerminalSweeps(db),
+    recordTerminalSweep: (sweep) => recordTerminalSweep(db, sweep, guaranteesInForce),
   };
 }
 

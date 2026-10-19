@@ -25,7 +25,7 @@ export {
 } from "./client-message.js";
 export { VisionUnreadable, readVisionVersion } from "./vision.js";
 export type { StoredVision, VisionVersion } from "./vision.js";
-export { VisionRepository } from "./repositories/vision.js";
+export { VisionRepository, guaranteesInForce } from "./repositories/vision.js";
 export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
 /** @testseam the integration client-message.test.ts asserts markConsumed's typed rejection */
 export { ClientMessageNotConsumable } from "./repositories/client-message.js";

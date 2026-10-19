@@ -89,7 +89,7 @@ interface DueDeliveredReportRow {
   readonly reading: ReadingTold;
 }
 
-/** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before executed checks were recorded. */
+/** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before check outcomes were recorded. */
 type ExecutedChecks =
   | { readonly kind: "recorded"; readonly checks: ReadonlyArray<{ readonly task: string; readonly name: string; readonly command: string }> }
   | { readonly kind: "unrecorded" };
@@ -172,31 +172,34 @@ async function sweepTaskTitles(db: DbHandle, sweepId: string, column: "checked_t
   });
 }
 
-/** acceptance_sweeps.executed_checks: the stored checks a passed sweep ran and saw pass; null on a row written before it. */
-const ExecutedChecksSchema = z.array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1) })).nullable();
+/** acceptance_sweeps.check_outcomes: every stored check the sweep ran, with the command it ran and how it ended; null on a row written before it. */
+const CheckOutcomesSchema = z
+  .array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1), outcome: z.enum(["passed", "failed", "not-run"]) }))
+  .nullable();
 
-/** A passed sweep's stored executed_checks is neither null nor a list of executed checks. */
-class SweepExecutedChecksUnreadable extends ReportRecordUnreadable {
+/** A passed sweep's stored check_outcomes is neither null nor a list of check outcomes. */
+class SweepCheckOutcomesUnreadable extends ReportRecordUnreadable {
   constructor(
     readonly sweepId: string,
     readonly detail: string,
   ) {
-    super(`acceptance sweep ${sweepId}: executed_checks is not a list of {taskId, name, command}: ${detail}`);
-    this.name = "SweepExecutedChecksUnreadable";
+    super(`acceptance sweep ${sweepId}: check_outcomes is not a list of {taskId, name, command, outcome}: ${detail}`);
+    this.name = "SweepCheckOutcomesUnreadable";
   }
 }
 
-/** The stored checks the sweep records it ran and saw pass, each with its task's title; unrecorded on a sweep from before executed checks were recorded. */
-async function executedChecksOf(db: DbHandle, sweepId: string, raw: unknown): Promise<ExecutedChecks> {
-  const parsed = ExecutedChecksSchema.safeParse(raw);
-  if (!parsed.success) throw new SweepExecutedChecksUnreadable(sweepId, z.prettifyError(parsed.error));
+/** The stored checks the sweep records it ran and saw pass, each with its task's title; unrecorded on a sweep from before check outcomes were recorded. */
+async function passedChecksOf(db: DbHandle, sweepId: string, raw: unknown): Promise<ExecutedChecks> {
+  const parsed = CheckOutcomesSchema.safeParse(raw);
+  if (!parsed.success) throw new SweepCheckOutcomesUnreadable(sweepId, z.prettifyError(parsed.error));
   if (parsed.data === null) return { kind: "unrecorded" };
-  const ids = [...new Set(parsed.data.map((check) => check.taskId))];
+  const passed = parsed.data.filter((check) => check.outcome === "passed");
+  const ids = [...new Set(passed.map((check) => check.taskId))];
   const rows = ids.length === 0 ? [] : await db.select({ id: workItems.id, title: workItems.title }).from(workItems).where(inArray(workItems.id, ids));
   const titles = new Map(rows.map((row) => [row.id, row.title]));
   return {
     kind: "recorded",
-    checks: parsed.data.map((check) => {
+    checks: passed.map((check) => {
       const task = titles.get(check.taskId);
       if (task === undefined) throw new SweepTaskMissing(sweepId, check.taskId);
       return { task, name: check.name, command: check.command };
@@ -805,7 +808,7 @@ interface DueSweep {
   readonly mainCommit: string | null;
   readonly checkedTasks: unknown;
   readonly uncheckedTasks: unknown;
-  readonly executedChecks: unknown;
+  readonly checkOutcomes: unknown;
   readonly acceptedAt: Date;
   readonly workspacePath: string | null;
   readonly failures: number;
@@ -832,7 +835,7 @@ async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredRep
     checked: await sweepTaskTitles(db, row.id, "checked_tasks", row.checkedTasks),
     unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),
     givenUp: await givenUpGoalTitles(db, row.projectId),
-    executed: await executedChecksOf(db, row.id, row.executedChecks),
+    executed: await passedChecksOf(db, row.id, row.checkOutcomes),
     vision: await visionCoverage(db, { id: row.id, projectId: row.projectId, acceptedAt: row.acceptedAt }, goalIds),
     reading: await readingOf(db, row.projectId),
   };
@@ -853,7 +856,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDe
       mainCommit: acceptanceSweeps.mainCommit,
       checkedTasks: acceptanceSweeps.checkedTasks,
       uncheckedTasks: acceptanceSweeps.uncheckedTasks,
-      executedChecks: acceptanceSweeps.executedChecks,
+      checkOutcomes: acceptanceSweeps.checkOutcomes,
       acceptedAt: acceptanceSweeps.createdAt,
       workspacePath: projects.workspacePath,
       failures: acceptanceSweeps.reportFailures,

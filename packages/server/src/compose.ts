@@ -99,7 +99,7 @@ import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createPlanReportStore } from "./plan-report-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
-import { createAcceptanceStore, createDeliveredReportStore, createDeliveredReports } from "./acceptance-store.js";
+import { createAcceptanceStore, createDeliveredReportStore, createDeliveredReports, createTerminalSweepStore } from "./acceptance-store.js";
 import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
@@ -453,6 +453,8 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     dispatchService,
     acceptanceSweeper: dispatchService.verification,
     acceptance: createAcceptanceStore(db),
+    terminalSweeper: dispatchService.verification,
+    terminalSweeps: createTerminalSweepStore(db),
     deliveredReports: createDeliveredReports(createDeliveredReportStore(db)),
     failureRouter,
     spendCap,

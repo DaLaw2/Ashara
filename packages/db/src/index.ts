@@ -19,6 +19,7 @@ export {
   domainEvents,
   devSessions,
   failedApproaches,
+  guaranteeEvidence,
   intakeReadings,
   knowledgeEntries,
   modelConfigs,

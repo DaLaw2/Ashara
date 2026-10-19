@@ -79,8 +79,10 @@ export { reviewerRecordOf } from "./repositories/reviewer-outcome.js";
 export type { ReviewerRecordLine } from "./repositories/reviewer-outcome.js";
 export {
   latestAcceptanceSweepOf,
+  listDueTerminalSweeps,
   listProjectsReadyForAcceptance,
   recordAcceptance,
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
+  recordTerminalSweep,
 } from "./repositories/acceptance.js";

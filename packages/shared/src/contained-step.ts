@@ -29,6 +29,7 @@ export type CycleStep =
   | "client-stop"
   | "client-change"
   | "acceptance"
+  | "terminal-sweep"
   | "gate"
   | "parked-exits"
   | "infrastructure-resume";

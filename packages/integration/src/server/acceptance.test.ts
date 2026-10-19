@@ -202,7 +202,8 @@ function sweepDeps(
   failedChecks: ReadonlyArray<{ readonly taskId: string; readonly checkTaskId: string; readonly name: string }> = [],
 ) {
   const projects = new ProjectHaltRepository(db);
-  const executedChecks = ran.checked.map((taskId) => ({ taskId, name: "works", command: "sh checks/run.sh" }));
+  // The stand-in names each checked task's stored check ("works", revision 1, as storeCheck writes it) without what it decides.
+  const checkOutcomes = ran.checked.map((taskId) => ({ taskId, revision: 1, checkTaskId: taskId, name: "works", command: "sh checks/run.sh", decides: null, outcome: "passed" as const }));
   return {
     acceptance: acceptanceStore(),
     containment: memoryStepContainment(() => true),
@@ -215,7 +216,7 @@ function sweepDeps(
         checkedTasks: ran.checked,
         uncheckedTasks: ran.unchecked,
         publicInterface: { kind: "not-placeholder" as const },
-        executedChecks,
+        checkOutcomes,
         failedChecks,
         details,
       }),
@@ -510,13 +511,13 @@ describe("acceptance on main", () => {
     const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     const unrecorded = await deliveredProject();
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: unrecorded.goals, unchecked: [unrecorded.scaffold] }))).toBe(1);
-    await db.execute(sql`UPDATE acceptance_sweeps SET executed_checks = NULL WHERE project_id = ${unrecorded.projectId}`);
+    await db.execute(sql`UPDATE acceptance_sweeps SET check_outcomes = NULL WHERE project_id = ${unrecorded.projectId}`);
     expect(await due(unrecorded.projectId)).toMatchObject({ kind: "due", executed: { kind: "unrecorded" } });
 
     const malformed = await deliveredProject();
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: malformed.goals, unchecked: [malformed.scaffold] }))).toBe(1);
-    await db.execute(sql`UPDATE acceptance_sweeps SET executed_checks = '[{"taskId": "x"}]'::jsonb WHERE project_id = ${malformed.projectId}`);
-    expect(await due(malformed.projectId)).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "SweepExecutedChecksUnreadable" }) });
+    await db.execute(sql`UPDATE acceptance_sweeps SET check_outcomes = '[{"taskId": "x"}]'::jsonb WHERE project_id = ${malformed.projectId}`);
+    expect(await due(malformed.projectId)).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "SweepCheckOutcomesUnreadable" }) });
 
     await deliveredReports().runPending();
     const [body] = await reportsOf(unrecorded.projectId);

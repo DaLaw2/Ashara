@@ -149,6 +149,8 @@ function coreLoopDeps(
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: notExercised("taskLanes"),
     acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
+    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
+    terminalSweeps: { dueTerminalSweeps: notExercised("dueTerminalSweeps"), recordTerminalSweep: notExercised("recordTerminalSweep") },
     acceptance: { readyForAcceptance: notExercised("readyForAcceptance"), recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
     deliveredReports: { runPending: notExercised("deliveredReports") },
     ...parts,

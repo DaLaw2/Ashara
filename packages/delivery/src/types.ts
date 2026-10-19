@@ -22,6 +22,7 @@ import type {
   LiaisonStackChoices,
 } from "./acl/engagement-acl.js";
 import type { AcceptanceStore } from "./acceptance.js";
+import type { TerminalSweepStore } from "./terminal-sweep.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
@@ -154,6 +155,10 @@ export interface CoreLoopDeps {
   readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
   /** The acceptance sweeps recorded on main: which projects are ready, and their verdicts. */
   readonly acceptance: AcceptanceStore;
+  /** Z0's terminal sweep of a stopped or halted project on main HEAD (Quality; no model is called). */
+  readonly terminalSweeper: Pick<TaskVerification, "sweepForTerminal">;
+  /** The terminal sweeps recorded: which stops and halt episodes are owed one, and each one's record. */
+  readonly terminalSweeps: TerminalSweepStore;
   /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */
   readonly deliveredReports: LiaisonDeliveredReports;
   readonly failureRouter: FailureRecoveryDeps["failureRouter"];

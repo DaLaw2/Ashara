@@ -2,7 +2,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { visionDocuments } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { visionWritable } from "../vision.js";
+import { readVisionVersion, visionWritable } from "../vision.js";
 import type { ContractDraft } from "../vision-language/guarantee.js";
 import type { VisionAppend } from "../vision.js";
 
@@ -105,4 +105,19 @@ export class VisionRepository {
     });
     return { kind: "appended" };
   }
+}
+
+/**
+ * The guarantees of the project's current vision version, by key, as every reader of the vision
+ * reads them (a version written before guarantees reads its legacy ones); none when the project has
+ * no vision. Throws VisionUnreadable when the version does not read.
+ */
+export async function guaranteesInForce(
+  db: DbHandle,
+  projectId: ProjectId,
+): Promise<{ readonly kind: "none" } | { readonly kind: "version"; readonly version: number; readonly guaranteeIds: readonly string[] }> {
+  const current = await new VisionRepository(db).getCurrent(projectId);
+  if (current === null) return { kind: "none" };
+  const vision = readVisionVersion(current);
+  return { kind: "version", version: vision.version, guaranteeIds: vision.guarantees.map((guarantee) => guarantee.id) };
 }

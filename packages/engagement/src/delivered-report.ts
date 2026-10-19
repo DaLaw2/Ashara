@@ -129,7 +129,7 @@ interface DueDeliveredReport {
   readonly unchecked: readonly string[];
   /** Goal tasks given up, which the plan was repaired around, by title. */
   readonly givenUp: readonly string[];
-  /** The stored checks the sweep ran and saw pass (acceptance_sweeps.executed_checks). */
+  /** The stored checks the sweep ran and saw pass (acceptance_sweeps.check_outcomes, those passed). */
   readonly executed: ExecutedChecks;
   readonly vision: VisionCoverage;
   readonly reading: ReadingTold;
