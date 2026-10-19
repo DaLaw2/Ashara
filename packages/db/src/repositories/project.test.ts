@@ -78,6 +78,25 @@ describe("project_id is required", () => {
   });
 });
 
+describe("vision_documents holds a guarantees-form contract whole", () => {
+  const entry = JSON.stringify([{ id: "I1", text: "the entry", source: { kind: "tender", quote: "a tender" } }]);
+  const guarantee = JSON.stringify([{ id: "G1", statement: "it holds" }]);
+  const insert = (projectId: string, version: number, guarantees: string, scope = "[]") =>
+    db.execute(sql`
+      INSERT INTO vision_documents (project_id, version, vision_text, summary, contract_form, interface, guarantees, scope_boundaries)
+      VALUES (${projectId}, ${version}, 'a tender', 'a tender', 'guarantees', ${entry}::jsonb, ${guarantees}::jsonb, ${scope}::jsonb)`);
+
+  test("a guarantees row with an empty guarantee list, or with scope lines, is refused by the CHECK; a whole one is stored", async () => {
+    const p = await projects.create(`project-test-${NONCE}-contract`, clientId);
+    expect(await failureOf(() => insert(p.id, 1, "[]"))).toMatch(/vision_documents_contract_form_records/);
+    expect(await failureOf(() => insert(p.id, 1, guarantee, JSON.stringify(["In: put"])))).toMatch(/vision_documents_contract_form_records/);
+    await insert(p.id, 1, guarantee);
+    expect(await failureOf(() =>
+      db.execute(sql`INSERT INTO vision_documents (project_id, version, vision_text, summary, guarantees) VALUES (${p.id}, 2, 'v', 'v', ${guarantee}::jsonb)`),
+    )).toMatch(/vision_documents_contract_form_records/);
+  });
+});
+
 describe("Project workspace path", () => {
   test("a new project has no workspace path; the first recorded path wins and is never rewritten", async () => {
     const p = await projects.create(`project-test-${NONCE}-ws`, clientId);

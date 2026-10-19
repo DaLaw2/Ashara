@@ -438,6 +438,7 @@ function inferencesOf(questions: readonly IntakeQuestion[], response: IntakeResp
     status: "Inferred",
     kind: a.kind,
     disclosed: a.disclosed,
+    underpins: [],
   }));
 }
 

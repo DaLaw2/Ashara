@@ -10,7 +10,7 @@ describe("stack-choice report", () => {
   test("states what the environment's test covers and promises no extension of it", async () => {
     const reports: string[] = [];
     const store: StackChoiceStore = {
-      dueStackChoices: async () => [{ projectId, taskId: "t1", statement: STATEMENT, vision: { projectId, version: 1, visionText: "A tender.", summary: "A tender.", scopeBoundaries: [], inferences: [], openQuestions: [] } }],
+      dueStackChoices: async () => [{ projectId, taskId: "t1", statement: STATEMENT, vision: { projectId, version: 1, visionText: "A tender.", summary: "A tender.", scopeBoundaries: [], inferences: [], openQuestions: [], contractForm: "scope-lines", interface: [], guarantees: [], exclusions: [] } }],
       recordStackChoice: async (write) => {
         reports.push(write.report);
         return "recorded";

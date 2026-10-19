@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { ContractDraftSchema, StoredContractSchema, basisOf, collapseWhitespace, visionGuaranteeOf } from "./vision-language/guarantee.js";
+import type { ContractDraft, InterfaceEntry, StoredContract, VisionExclusion, VisionGuarantee } from "./vision-language/guarantee.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-language/vision-assumption.js";
 
@@ -18,6 +20,10 @@ export interface StoredVision {
   readonly scopeBoundaries: unknown;
   readonly inferences: unknown;
   readonly openQuestions: unknown;
+  readonly contractForm: unknown;
+  readonly interface: unknown;
+  readonly guarantees: unknown;
+  readonly exclusions: unknown;
 }
 
 /** A stored vision version that does not read as a vision: the project's own record, which no retry changes. */
@@ -67,12 +73,25 @@ const AssumptionRecordSchema = z
     kind: AssumptionKindSchema.optional(),
     disclosed: AssumptionDisclosureSchema.optional(),
     clientAnswer: ClientAnswerRecordSchema.optional(),
+    // The keys of the guarantees it underpins; absent on a record written before guarantees were.
+    underpins: z.array(z.string().min(1)).optional(),
   })
   .refine((record) => record.status !== "Stated" || record.clientAnswer !== undefined, {
     message: "a Stated assumption carries the client answer that stated it",
   });
 
 type AssumptionRecord = z.infer<typeof AssumptionRecordSchema>;
+
+/**
+ * Which records a version's contract is written in: the scope lines of a version written before
+ * guarantees were, or the interface, guarantees and exclusions.
+ */
+const ContractFormSchema = z.enum(["scope-lines", "guarantees"]);
+
+type ContractForm = z.infer<typeof ContractFormSchema>;
+
+/** The contract columns of a scope-lines version: each holds nothing. */
+const NoContractSchema = z.strictObject({ interface: z.tuple([]), guarantees: z.tuple([]), exclusions: z.tuple([]) });
 
 /**
  * vision_documents.inferences: the keyed records intake, the answers and the stack choice write, or
@@ -125,6 +144,8 @@ export interface VisionAssumption {
   readonly standing: AssumptionStanding;
   /** The client's answer that stated it; null on an Inferred assumption. */
   readonly clientAnswer: ClientAnswer | null;
+  /** The keys of the guarantees it underpins. */
+  readonly underpins: readonly string[];
 }
 
 /** A question asked of the client and not yet answered; the deleted CLI path's bare strings carry no ids. */
@@ -144,6 +165,18 @@ export interface VisionVersion {
   readonly scope: ReadonlyArray<{ readonly text: string; readonly side: ScopeSide }>;
   readonly assumptions: readonly VisionAssumption[];
   readonly openQuestions: readonly OpenQuestion[];
+  /** "scope-lines" on a version written before guarantees were: its guarantees are read from its scope and assumptions. */
+  readonly contractForm: ContractForm;
+  /** The product's public interface; empty on a scope-lines version, which recorded none. */
+  readonly interface: readonly InterfaceEntry[];
+  /**
+   * What a delivery is judged against. On a scope-lines version, every line not out of scope and
+   * every assumption not internal design, each with a legacy source, no interface, no refuting
+   * observation and its observation unclassified: not checkable as written.
+   */
+  readonly guarantees: readonly VisionGuarantee[];
+  /** What the tender leaves out; on a scope-lines version, its out-of-scope lines. */
+  readonly exclusions: readonly VisionExclusion[];
 }
 
 function standingOf(record: AssumptionRecord): AssumptionStanding {
@@ -160,6 +193,8 @@ function assumptionOf(record: AssumptionRecord, index: number): VisionAssumption
     kind: record.kind ?? "unclassified",
     disclosed: record.disclosed ?? null,
     standing: standingOf(record),
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a record written before guarantees were underpins none on record, and a guarantees-form version refuses a client-visible one that underpins none unless an exclusion cites it
+    underpins: record.underpins ?? [],
     clientAnswer:
       record.clientAnswer === undefined
         ? null
@@ -182,7 +217,116 @@ function legacyAssumptionOf([category, inference]: [string, string], index: numb
     disclosed: null,
     standing: "unrecorded",
     clientAnswer: null,
+    underpins: [],
   };
+}
+
+/**
+ * The guarantees and exclusions of a scope-lines version: each line keyed by its place (as a plan
+ * cites it), an out-of-scope line an exclusion and every other line a guarantee, then every
+ * assumption not internal design a guarantee under its own key. None names an interface entry or a
+ * refuting observation, and none is classified, so none can be judged better than unjudged.
+ */
+function legacyContractOf(
+  scope: ReadonlyArray<{ readonly text: string; readonly side: ScopeSide }>,
+  assumptions: readonly VisionAssumption[],
+): { readonly guarantees: readonly VisionGuarantee[]; readonly exclusions: readonly VisionExclusion[] } {
+  const guarantees: VisionGuarantee[] = [];
+  const exclusions: VisionExclusion[] = [];
+  scope.forEach((line, i) => {
+    const id = `S${i + 1}`;
+    const source = { kind: "legacy", from: "scope" } as const;
+    if (line.side === "out") exclusions.push({ id, text: line.text, source });
+    else guarantees.push(legacyGuarantee(id, line.text, source, assumptions));
+  });
+  for (const assumption of assumptions) {
+    if (assumption.kind === "internal-design") continue;
+    guarantees.push(legacyGuarantee(assumption.id, assumption.statement, { kind: "legacy", from: "assumption", id: assumption.id }, assumptions));
+  }
+  return { guarantees, exclusions };
+}
+
+function legacyGuarantee(
+  id: string,
+  statement: string,
+  source: Extract<VisionGuarantee["source"], { readonly kind: "legacy" }>,
+  assumptions: readonly VisionAssumption[],
+): VisionGuarantee {
+  return { id, statement, interface: [], observation: "unclassified", refutedBy: [], source, basis: basisOf({ id, source }, assumptions) };
+}
+
+/** A version's contract breaks one of the rules the Vision keeps; the caller names the version. */
+class ContractBroken extends Error {
+  constructor(
+    readonly field: string,
+    readonly detail: string,
+  ) {
+    super(`${field}: ${detail}`);
+    this.name = "ContractBroken";
+  }
+}
+
+function assertUniqueIds(field: string, records: string, ids: readonly string[]): void {
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) throw new ContractBroken(field, `two ${records} share the key ${id}`);
+    seen.add(id);
+  }
+}
+
+/**
+ * The rules a version's contract keeps, each a refusal: every quote is the client's own words, every
+ * key named resolves in the same version, a guarantees-form version holds no scope lines, and every
+ * assumption a client could observe underpins a guarantee or is excluded. A scope-lines version has no
+ * guarantee keys, so an assumption naming one names a key that does not resolve.
+ */
+function assertContractHolds(
+  visionText: string,
+  scopeLines: number,
+  contract: StoredContract | null,
+  assumptions: readonly VisionAssumption[],
+): void {
+  const guaranteeIds = new Set(contract === null ? [] : contract.guarantees.map((g) => g.id));
+  for (const assumption of assumptions) {
+    const unknown = assumption.underpins.filter((id) => !guaranteeIds.has(id));
+    if (unknown.length > 0) {
+      throw new ContractBroken("inferences", `assumption ${assumption.id} underpins ${unknown.join(", ")}, which the version does not hold`);
+    }
+  }
+  if (contract === null) return;
+  if (scopeLines > 0) throw new ContractBroken("scopeBoundaries", "a guarantees-form version holds scope lines");
+  assertUniqueIds("interface", "interface entries", contract.interface.map((entry) => entry.id));
+  assertUniqueIds("guarantees", "guarantees", contract.guarantees.map((g) => g.id));
+  assertUniqueIds("exclusions", "exclusions", contract.exclusions.map((x) => x.id));
+  const tender = collapseWhitespace(visionText);
+  const assumptionIds = new Set(assumptions.map((a) => a.id));
+  const interfaceIds = new Set(contract.interface.map((entry) => entry.id));
+  const sourced = [
+    ...contract.interface.map((entry) => ["interface", entry.id, entry.source] as const),
+    ...contract.guarantees.map((g) => ["guarantees", g.id, g.source] as const),
+    ...contract.exclusions.map((x) => ["exclusions", x.id, x.source] as const),
+  ];
+  for (const [field, id, source] of sourced) {
+    if (source.kind === "tender" && !tender.includes(collapseWhitespace(source.quote))) {
+      throw new ContractBroken(field, `${id} quotes "${source.quote}", which the tender does not contain`);
+    }
+    if (source.kind === "assumption" && !assumptionIds.has(source.id)) {
+      throw new ContractBroken(field, `${id} cites assumption ${source.id}, which the version does not hold`);
+    }
+  }
+  for (const guarantee of contract.guarantees) {
+    const unknown = guarantee.observable.interface.filter((id) => !interfaceIds.has(id));
+    if (unknown.length > 0) {
+      throw new ContractBroken("guarantees", `${guarantee.id} is observed at ${unknown.join(", ")}, which the interface does not hold`);
+    }
+  }
+  const excluded = new Set(contract.exclusions.flatMap((x) => (x.source.kind === "assumption" ? [x.source.id] : [])));
+  for (const assumption of assumptions) {
+    // An unclassified kind is not evidence that no client could observe it, so it is held as client-visible.
+    if (assumption.kind !== "internal-design" && assumption.underpins.length === 0 && !excluded.has(assumption.id)) {
+      throw new ContractBroken("inferences", `client-visible assumption ${assumption.id} underpins no guarantee and no exclusion cites it`);
+    }
+  }
 }
 
 /** A vision version appended after `basedOnVersion`: every field but these is the base version's. */
@@ -217,6 +361,8 @@ export class Vision {
     /** null when the inferences are the deleted CLI path's map, which no keyed change can extend. */
     private readonly records: readonly AssumptionRecord[] | null,
     private readonly questions: readonly StoredOpenQuestion[],
+    /** null on a scope-lines version. */
+    private readonly contract: StoredContract | null,
   ) {}
 
   /** Reads one stored version; throws VisionUnreadable naming the field that does not read. */
@@ -229,15 +375,31 @@ export class Vision {
     const scope = field(z.array(StoredScopeLineSchema), stored.scopeBoundaries, "scopeBoundaries");
     const inferences = field(StoredInferencesSchema, stored.inferences, "inferences");
     const questions = field(StoredOpenQuestionsSchema, stored.openQuestions, "openQuestions");
+    const contractForm = field(ContractFormSchema, stored.contractForm, "contractForm");
+    const columns = { interface: stored.interface, guarantees: stored.guarantees, exclusions: stored.exclusions };
+    let contract: StoredContract | null = null;
+    if (contractForm === "guarantees") contract = field(StoredContractSchema, columns, "contract");
+    else field(NoContractSchema, columns, "contract");
     const records = Array.isArray(inferences) ? inferences : null;
-    const assumptions = records === null ? Object.entries(inferences).map(legacyAssumptionOf) : records.map(assumptionOf);
-    const ids = new Set<string>();
-    for (const assumption of assumptions) {
-      if (ids.has(assumption.id)) {
-        throw new VisionUnreadable(stored.projectId, stored.version, "inferences", `two assumptions share the key ${assumption.id}`);
-      }
-      ids.add(assumption.id);
+    if (records === null && contract !== null) {
+      throw new VisionUnreadable(stored.projectId, stored.version, "inferences", "a guarantees-form version holds the unkeyed direction map");
     }
+    const assumptions = records === null ? Object.entries(inferences).map(legacyAssumptionOf) : records.map(assumptionOf);
+    try {
+      assertUniqueIds("inferences", "assumptions", assumptions.map((a) => a.id));
+      assertContractHolds(stored.visionText, scope.length, contract, assumptions);
+    } catch (err) {
+      if (!(err instanceof ContractBroken)) throw err;
+      throw new VisionUnreadable(stored.projectId, stored.version, err.field, err.detail);
+    }
+    const read =
+      contract === null
+        ? { interface: [], ...legacyContractOf(scope, assumptions) }
+        : {
+            interface: contract.interface,
+            guarantees: contract.guarantees.map((g) => visionGuaranteeOf(g, assumptions)),
+            exclusions: contract.exclusions,
+          };
     const current: VisionVersion = {
       projectId: parseProjectId(stored.projectId, "vision_documents.project_id"),
       version: stored.version,
@@ -250,8 +412,23 @@ export class Vision {
           ? { messageId: null, text: question, assumptionKey: null }
           : { messageId: question.messageId, text: question.text, assumptionKey: question.assumptionKey },
       ),
+      contractForm,
+      ...read,
     };
-    return new Vision(current, records, questions);
+    return new Vision(current, records, questions, contract);
+  }
+
+  /** Holds the next version's assumptions to this version's contract; throws VisionChangeRefused. */
+  private composed(records: readonly AssumptionRecord[]): readonly AssumptionRecord[] {
+    try {
+      const assumptions = records.map(assumptionOf);
+      assertUniqueIds("inferences", "assumptions", assumptions.map((a) => a.id));
+      assertContractHolds(this.current.visionText, this.current.scope.length, this.contract, assumptions);
+    } catch (err) {
+      if (!(err instanceof ContractBroken)) throw err;
+      throw new VisionChangeRefused(this.current.projectId, this.current.version, err.message);
+    }
+    return records;
   }
 
   private keyedRecords(): readonly AssumptionRecord[] {
@@ -270,6 +447,8 @@ export class Vision {
     readonly rationale: string;
     readonly kind: AssumptionKind;
     readonly disclosed: AssumptionDisclosure;
+    /** The keys of the guarantees it underpins; each must be one this version holds. */
+    readonly underpins: readonly string[];
     readonly changeReason: (key: string) => string;
   }): VisionAppend & { readonly key: string } {
     const records = this.keyedRecords();
@@ -286,11 +465,12 @@ export class Vision {
       status: "Inferred",
       kind: assumption.kind,
       disclosed: assumption.disclosed,
+      underpins: [...assumption.underpins],
     };
     return {
       key,
       basedOnVersion: this.current.version,
-      inferences: [...records, appended],
+      inferences: this.composed([...records, appended]),
       openQuestions: this.questions,
       changeReason: assumption.changeReason(key),
     };
@@ -338,7 +518,8 @@ export class Vision {
     };
     return {
       basedOnVersion: this.current.version,
-      inferences: records.map((other, i) => (i === index ? stated : other)),
+      // A guarantee resting on it reads client-stated from the next version on: its basis is computed there, never rewritten.
+      inferences: this.composed(records.map((other, i) => (i === index ? stated : other))),
       openQuestions: this.questions.filter((question) => typeof question === "string" || question.messageId !== answer.questionMessageId),
       changeReason: answer.changeReason,
     };
@@ -357,20 +538,53 @@ class VisionWriteRefused extends Error {
   }
 }
 
-/** Holds a version about to be written to the reader's own schemas, so nothing is stored that the reader refuses. */
-export function assertVisionWritable(
+/** The contract columns of a version about to be written, as they are stored. */
+interface WritableContract {
+  readonly contractForm: ContractForm;
+  readonly interface: StoredContract["interface"] | [];
+  readonly guarantees: StoredContract["guarantees"] | [];
+  readonly exclusions: StoredContract["exclusions"];
+}
+
+/**
+ * Holds a version about to be written to the reader's own schemas and to the contract's rules, so
+ * nothing is stored that the reader refuses; returns the contract columns to store, an undecided
+ * observation recorded as stored-data. Throws VisionWriteRefused.
+ */
+export function visionWritable(
   projectId: string,
-  fields: { readonly scopeBoundaries: unknown; readonly inferences: unknown; readonly openQuestions: unknown },
-): void {
-  const checks: ReadonlyArray<readonly [string, z.ZodType, unknown]> = [
-    ["scopeBoundaries", z.array(StoredScopeLineSchema), fields.scopeBoundaries],
-    ["inferences", z.array(AssumptionRecordSchema), fields.inferences],
-    ["openQuestions", StoredOpenQuestionsSchema, fields.openQuestions],
-  ];
-  for (const [field, schema, value] of checks) {
+  fields: {
+    readonly visionText: string;
+    readonly scopeBoundaries: unknown;
+    readonly inferences: unknown;
+    readonly openQuestions: unknown;
+    readonly contract: { readonly form: unknown; readonly interface: unknown; readonly guarantees: unknown; readonly exclusions: unknown };
+  },
+): WritableContract {
+  const field = <T>(schema: z.ZodType<T>, value: unknown, name: string): T => {
     const parsed = schema.safeParse(value);
-    if (!parsed.success) throw new VisionWriteRefused(projectId, field, z.prettifyError(parsed.error));
+    if (!parsed.success) throw new VisionWriteRefused(projectId, name, z.prettifyError(parsed.error));
+    return parsed.data;
+  };
+  const scope = field(z.array(StoredScopeLineSchema), fields.scopeBoundaries, "scopeBoundaries");
+  const records = field(z.array(AssumptionRecordSchema), fields.inferences, "inferences");
+  field(StoredOpenQuestionsSchema, fields.openQuestions, "openQuestions");
+  const form = field(ContractFormSchema, fields.contract.form, "contractForm");
+  const columns = { interface: fields.contract.interface, guarantees: fields.contract.guarantees, exclusions: fields.contract.exclusions };
+  let contract: StoredContract | null = null;
+  if (form === "guarantees") contract = field(ContractDraftSchema, columns, "contract");
+  else field(NoContractSchema, columns, "contract");
+  try {
+    const assumptions = records.map(assumptionOf);
+    assertUniqueIds("inferences", "assumptions", assumptions.map((a) => a.id));
+    assertContractHolds(fields.visionText, scope.length, contract, assumptions);
+  } catch (err) {
+    if (!(err instanceof ContractBroken)) throw err;
+    throw new VisionWriteRefused(projectId, err.field, err.detail);
   }
+  return contract === null
+    ? { contractForm: form, interface: [], guarantees: [], exclusions: [] }
+    : { contractForm: form, interface: contract.interface, guarantees: contract.guarantees, exclusions: contract.exclusions };
 }
 
 /** Engagement's published reader: one stored version, read whole; throws VisionUnreadable. */
@@ -378,12 +592,20 @@ export function readVisionVersion(stored: StoredVision): VisionVersion {
   return Vision.read(stored).current;
 }
 
-/** Vision v1 as intake writes it. */
-export interface FirstVision {
+/**
+ * Vision v1 as intake writes it: in the scope-lines form, what the client asked for, then what the
+ * tender leaves out, each with its side; in the guarantees form, the interface, the guarantees and the
+ * exclusions drafted from the tender.
+ */
+export type FirstVision = FirstVisionRecords &
+  (
+    | { readonly scopeBoundaries: readonly ScopeLine[]; readonly contract?: never }
+    | { readonly contract: ContractDraft; readonly scopeBoundaries?: never }
+  );
+
+interface FirstVisionRecords {
   readonly visionText: string;
   readonly summary: string;
-  /** What the client asked for, then what the tender leaves out, each with its side. */
-  readonly scopeBoundaries: readonly ScopeLine[];
   readonly inferences: readonly InferredAssumption[];
   readonly openQuestions: ReadonlyArray<{
     readonly messageId: string;
@@ -404,4 +626,6 @@ export interface InferredAssumption {
   readonly kind: AssumptionKind;
   /** How the client learned of it: the question that asked about it, or the assumptions report. */
   readonly disclosed: AssumptionDisclosure;
+  /** The keys of the guarantees it underpins; none in a scope-lines version, which holds no guarantees. */
+  readonly underpins: readonly string[];
 }

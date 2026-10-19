@@ -25,6 +25,13 @@ export const visionDocuments = pgTable(
     scopeBoundaries: jsonb("scope_boundaries").notNull().default(sql`'[]'`),
     confirmedDirections: jsonb("confirmed_directions").notNull().default(sql`'[]'`),
     openQuestions: jsonb("open_questions").notNull().default(sql`'[]'`),
+    // 'scope-lines' or 'guarantees': which records hold the contract. A CHECK in the migration keeps
+    // a guarantees row's interface and guarantees non-empty and its scope lines empty, and a
+    // scope-lines row's contract lists empty.
+    contractForm: text("contract_form").notNull().default("scope-lines"),
+    interface: jsonb("interface").notNull().default(sql`'[]'`),
+    guarantees: jsonb().notNull().default(sql`'[]'`),
+    exclusions: jsonb().notNull().default(sql`'[]'`),
     changeReason: text("change_reason"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },

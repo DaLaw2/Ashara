@@ -70,6 +70,10 @@ const visionAt = z.object({
   scopeBoundaries: z.unknown(),
   inferences: z.unknown(),
   openQuestions: z.unknown(),
+  contractForm: z.unknown(),
+  interface: z.unknown(),
+  guarantees: z.unknown(),
+  exclusions: z.unknown(),
 });
 
 /** The vision current when one session was recorded: today's intent composer reads it as the run's composer then would. */
@@ -80,7 +84,8 @@ function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
         (
           await db.execute(sql`
             SELECT v.project_id AS "projectId", v.version, v.vision_text AS "visionText", v.summary,
-                   v.scope_boundaries AS "scopeBoundaries", v.inferences, v.open_questions AS "openQuestions"
+                   v.scope_boundaries AS "scopeBoundaries", v.inferences, v.open_questions AS "openQuestions",
+                   v.contract_form AS "contractForm", v.interface, v.guarantees, v.exclusions
             FROM vision_documents v JOIN work_items w ON w.project_id = v.project_id
             WHERE w.id = ${taskId} AND v.created_at <= (SELECT created_at FROM dev_sessions WHERE id = ${sessionId})
             ORDER BY v.version DESC LIMIT 1`)

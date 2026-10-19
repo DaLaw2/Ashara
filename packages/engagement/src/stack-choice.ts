@@ -112,6 +112,7 @@ export class StackChoiceReports implements LiaisonStackChoices {
         // choice's own report tells the client of it.
         kind: "internal-design",
         disclosed: "reported",
+        underpins: [],
         changeReason: (key) => `stack chosen by Sprint 0 task ${due.taskId}, recorded as Inferred assumption ${key}`,
       });
       return { projectId: due.projectId, vision, report: stackChoiceReport(due.statement) };

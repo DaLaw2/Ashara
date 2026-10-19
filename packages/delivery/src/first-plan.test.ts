@@ -30,7 +30,7 @@ function awaiting(
   return {
     projectId,
     projectName: "Studio booking",
-    vision: { projectId, version: 1, visionText: "A booking page.", summary: "A booking page.", scopeBoundaries, inferences, openQuestions: [] },
+    vision: { projectId, version: 1, visionText: "A booking page.", summary: "A booking page.", scopeBoundaries, inferences, openQuestions: [], contractForm: "scope-lines", interface: [], guarantees: [], exclusions: [] },
     planAttempts,
     planLastError,
     rosterRows,
@@ -116,7 +116,7 @@ describe("FirstPlanner decomposition ladder", () => {
 
 /** A stored vision version, as the store hands it over, with what planning reads of it varied. */
 function stored(projectId: ProjectId, version: number, summary: string, scopeBoundaries: unknown, inferences: unknown) {
-  return { projectId, version, visionText: summary, summary, scopeBoundaries, inferences, openQuestions: [] };
+  return { projectId, version, visionText: summary, summary, scopeBoundaries, inferences, openQuestions: [], contractForm: "scope-lines", interface: [], guarantees: [], exclusions: [] };
 }
 
 const visionItemsOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vision).items;

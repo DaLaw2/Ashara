@@ -32,16 +32,7 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
         assumptionsReport: write.assumptionsReport,
         readingReport: write.readingReport,
         reading: write.reading,
-        vision: (questionIds) => {
-          const vision = write.vision(questionIds);
-          return {
-            visionText: vision.visionText,
-            summary: vision.summary,
-            scopeBoundaries: vision.scopeBoundaries,
-            inferences: vision.inferences,
-            openQuestions: vision.openQuestions,
-          };
-        },
+        vision: write.vision,
       });
       return commit.kind === "recorded"
         ? { kind: "recorded", questionIds: commit.questionIds }
