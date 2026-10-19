@@ -2,6 +2,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
@@ -194,6 +195,51 @@ export class RunAborted extends Error {
   ) {
     super(`seed ${seed}: the run was aborted at cycle ${cycle}: ${describeErrorChain(reason)}`, { cause: reason });
     this.name = "RunAborted";
+  }
+}
+
+/** One step of a run's cleanup threw; the step is named, its error kept as the cause. */
+class CleanupStepFailed extends Error {
+  constructor(
+    readonly step: string,
+    readonly failure: unknown,
+  ) {
+    super(`${step} failed: ${describeErrorChain(failure)}`, { cause: failure });
+    this.name = "CleanupStepFailed";
+  }
+}
+
+/**
+ * A run's body ended, but its cleanup did not: a scratch database or a pool may outlive it. Its
+ * process-wide state was put back all the same.
+ * @testseam the simulator's run-wiring test tells a run whose cleanup threw by it
+ */
+export class RunCleanupFailed extends Error {
+  constructor(
+    readonly seed: number,
+    readonly failures: readonly CleanupStepFailed[],
+    /** The run's last log lines, each cleanup failure among them at warn. */
+    readonly log: readonly string[],
+  ) {
+    super(`seed ${seed}: the run's cleanup failed at ${failures.length} step(s): ${failures.map((failure) => failure.message).join("; ")}`, { cause: failures[0] });
+    this.name = "RunCleanupFailed";
+  }
+}
+
+/** Runs one cleanup step and adds its throw, logged at warn with its chain, to `failures`; the next step still runs. */
+async function cleanUp(failures: CleanupStepFailed[], step: string, work: () => unknown): Promise<void> {
+  const failed = await cleanupFailure(step, work);
+  if (failed === null) return;
+  failures.push(failed);
+  console.warn(`[simulator] run cleanup: ${describeErrorChain(failed)}`);
+}
+
+async function cleanupFailure(step: string, work: () => unknown): Promise<CleanupStepFailed | null> {
+  try {
+    await work();
+    return null;
+  } catch (err) {
+    return new CleanupStepFailed(step, err);
   }
 }
 
@@ -583,8 +629,106 @@ function standing(snapshot: Snapshot): string {
   return `${snapshot.project.status}(${snapshot.project.blockedCategory ?? ""})#${snapshot.episodes.length}`;
 }
 
-/** The settling of the run started last in this module instance; the next one waits on it. */
-let lastRun: Promise<void> = Promise.resolve();
+/**
+ * How long past its bound a run may take to settle: the step in flight when it was aborted or
+ * passed its wall clock, then its cleanup. Three times the settle bound simulator-abort.test.ts
+ * holds an aborted run to.
+ */
+const RUN_SETTLE_GRACE_MS = 15_000;
+const PRIOR_POLL_MS = 250;
+
+/**
+ * A run in this module instance, from its call until it settles. A run that never started (it
+ * waits on the one before it) has no bound of its own; one that gave up on a stuck run before it
+ * stands for that run, so every later run is refused by name until the stuck run settles.
+ */
+class PendingRun {
+  readonly settled: Promise<void>;
+  private release: () => void = () => undefined;
+  private done = false;
+  private startedAt: number | null = null;
+  private abortedAt: number | null = null;
+  private inherited: PendingRun | null = null;
+
+  constructor(
+    readonly seed: number,
+    private readonly timeoutMs: number,
+    signal: AbortSignal | undefined,
+  ) {
+    this.settled = new Promise<void>((resolve) => {
+      this.release = resolve;
+    });
+    if (signal?.aborted === true) this.abortedAt = Date.now();
+    else signal?.addEventListener("abort", () => (this.abortedAt = Date.now()), { once: true });
+  }
+
+  /** The run before any run of this module instance: settled from the start. */
+  static none(): PendingRun {
+    const run = new PendingRun(0, 0, undefined);
+    run.settle();
+    return run;
+  }
+
+  get isSettled(): boolean {
+    return this.done;
+  }
+
+  start(): void {
+    this.startedAt = Date.now();
+  }
+
+  settle(): void {
+    this.done = true;
+    this.release();
+  }
+
+  inherit(stuck: PendingRun): void {
+    this.inherited = stuck;
+    void stuck.settled.then(() => this.settle());
+  }
+
+  /** When the run must have settled by: its wall clock, or its abort if earlier, plus the grace. */
+  deadline(): number {
+    if (this.inherited !== null) return this.inherited.deadline();
+    if (this.startedAt === null) return Number.POSITIVE_INFINITY;
+    const wallClock = this.startedAt + this.timeoutMs;
+    const stopped = this.abortedAt === null ? wallClock : Math.min(wallClock, Math.max(this.abortedAt, this.startedAt));
+    return stopped + RUN_SETTLE_GRACE_MS;
+  }
+
+  describe(): string {
+    if (this.inherited !== null) return this.inherited.describe();
+    const started = this.startedAt === null ? "never started" : `started ${new Date(this.startedAt).toISOString()} with a ${this.timeoutMs} ms wall clock`;
+    const aborted = this.abortedAt === null ? "never aborted" : `aborted ${new Date(this.abortedAt).toISOString()}`;
+    return `the run of seed ${this.seed} (${started}, ${aborted})`;
+  }
+}
+
+/**
+ * The run before this one has not settled within its bound: the process-wide state it set may still
+ * be in place, so no later run of this module instance starts until it does.
+ * @testseam the simulator's run-wiring test tells a refused run's rejection by it
+ */
+export class PriorRunUnsettled extends Error {
+  constructor(
+    readonly seed: number,
+    readonly stuck: string,
+    readonly graceMs: number,
+  ) {
+    super(`seed ${seed}: ${stuck} has not settled ${graceMs} ms past its wall clock or its abort; this run does not start over the state it may still hold`);
+    this.name = "PriorRunUnsettled";
+  }
+}
+
+async function settledWithin(prior: PendingRun, seed: number): Promise<void> {
+  while (!prior.isSettled) {
+    if (Date.now() > prior.deadline()) throw new PriorRunUnsettled(seed, prior.describe(), RUN_SETTLE_GRACE_MS);
+    await Promise.race([prior.settled, sleep(PRIOR_POLL_MS)]);
+  }
+}
+
+/** The run called last in this module instance; the next one waits on it. */
+let lastRun: PendingRun = PendingRun.none();
 
 /**
  * One seed, start to end: the real system composed over a private scratch
@@ -593,19 +737,26 @@ let lastRun: Promise<void> = Promise.resolve();
  *
  * A run sets process-wide state (the environment, the id source, production's code plants) and puts
  * it back as it ends, so it starts only once the run before it has settled: a run its caller gave
- * up on, still stopping, never has its state restored over the next one's. Its console output is
+ * up on, still stopping, never has its state restored over the next one's. One that has not settled
+ * within its bound is named in a PriorRunUnsettled, never waited on past it. Its console output is
  * captured by async context, so even a run that outlives its caller writes only into its own log.
  */
 export async function runSeed(options: RunOptions): Promise<RunResult> {
   const prior = lastRun;
-  const releases: Array<() => void> = [];
-  lastRun = new Promise<void>((resolve) => releases.push(resolve));
+  const own = new PendingRun(options.seed, options.timeoutMs, options.signal);
+  lastRun = own;
   try {
-    await prior;
+    await settledWithin(prior, options.seed);
+  } catch (err) {
+    own.inherit(prior);
+    throw err;
+  }
+  try {
+    own.start();
     const log: string[] = [];
     return await capturingConsole(logSink(log), () => runAlone(options, log));
   } finally {
-    for (const release of releases) release();
+    own.settle();
   }
 }
 
@@ -715,6 +866,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
   // An abort also stops the live instance, so a cycle in flight ends at its next await, not its end.
   const abortInstance = (): void => instance?.ashara.abort();
   signal?.addEventListener("abort", abortInstance, { once: true });
+  const cleanupFailures: CleanupStepFailed[] = [];
   try {
     stopIfAborted();
     database = await createRunDatabase(options.databaseUrl, options.template, options.seed);
@@ -1251,23 +1403,31 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     throw err;
   } finally {
     signal?.removeEventListener("abort", abortInstance);
-    const live: Live | null = instance;
-    if (live !== null) {
-      live.handle.dead = true;
-      live.ashara.abort();
-      for (const violation of leakedConnections(live.handle, cycles)) violations.set(violation.key, violation);
-      await live.ashara.closeDatabase().catch((err: unknown) => log.push(`close: ${describeErrorChain(err)}`));
+    // Process-wide state is put back whatever the cleanup throws, and each step runs whatever the one before it threw.
+    try {
+      const live: Live | null = instance;
+      if (live !== null) {
+        live.handle.dead = true;
+        live.ashara.abort();
+        for (const violation of leakedConnections(live.handle, cycles)) violations.set(violation.key, violation);
+        await live.ashara.closeDatabase().catch((err: unknown) => log.push(`close: ${describeErrorChain(err)}`));
+      }
+      const pool = observer;
+      if (pool !== null) await cleanUp(cleanupFailures, "the observer's pool end", () => pool.$client.end());
+      const scratch = database;
+      if (scratch !== null) await cleanUp(cleanupFailures, "the run database's drop", () => scratch.drop());
+      await cleanUp(cleanupFailures, "the git broker's close", () => gitBroker.close());
+    } finally {
+      restoreCode?.();
+      restoreSweeps();
+      restoreWaits();
+      restoreEnv();
+      restoreIds();
     }
-    if (observer !== null) await observer.$client.end();
-    if (database !== null) await database.drop();
-    gitBroker.close();
-    restoreCode?.();
-    restoreSweeps();
-    restoreWaits();
-    restoreEnv();
-    restoreIds();
-    await rm(workdir, { recursive: true, force: true });
+    await cleanUp(cleanupFailures, "the workdir's removal", () => rm(workdir, { recursive: true, force: true }));
   }
+  // Reached only by a run whose body ended on its own terms: a body's own error is not replaced by its cleanup's.
+  if (cleanupFailures.length > 0) throw new RunCleanupFailed(options.seed, cleanupFailures, log);
   const untaken = tape.untaken();
   if (untaken.length > 0) throw new DirectionsNotTaken(options.seed, untaken);
   return {

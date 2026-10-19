@@ -142,7 +142,8 @@ importers = []
 # table (schemaRefusalsFor, PROVIDER_TYPES) at a run's start (model-schemas.ts): the gateway refuses
 # such a schema before any stand-in sees it, so the oracle judges the sent schemas themselves.
 # TenderIntake is the class a code plant patches (plants.ts intake-second-reading-dropped): the plant
-# replaces its second reading, and no oracle reads anything of it.
+# replaces its second reading, and no oracle reads anything of it. contendedWait is read only to see
+# that a run put the process's wait observer back: with none installed it returns its argument.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
 names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "DELIVERY_MODEL_SCHEMAS", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
@@ -154,7 +155,7 @@ names.organization = ["ORGANIZATION_MODEL_SCHEMAS"]
 names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "QUALITY_MODEL_SCHEMAS", "observeAcceptanceSweeps"]
 names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
-names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "parseJson"]
+names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "contendedWait", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "parseJson"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchemas"]
 # A stand-in model answers the product's model calls, so one that imports the rule judging
 # its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the
