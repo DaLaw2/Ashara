@@ -5,7 +5,7 @@
   "ignoreBinaries": ["podman", "setsid"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/check-boundaries.ts", "scripts/check-comments.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts", "scripts/client.ts", "scripts/project.ts", "scripts/probes.ts", "scripts/run-report.ts", "scripts/simulate.ts", "scripts/replay-run-state.ts", "scripts/affected-tests.ts", "scripts/hidden-suite.ts", "scripts/pool-select.ts", "scripts/worktree-setup.ts", "scripts/test-db-ready.ts"],
+      "entry": ["scripts/check-boundaries.ts", "scripts/check-comments.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts", "scripts/client.ts", "scripts/project.ts", "scripts/probes.ts", "scripts/run-report.ts", "scripts/simulate.ts", "scripts/replay-run-state.ts", "scripts/affected-tests.ts", "scripts/hidden-suite.ts", "scripts/pool-select.ts", "scripts/tree-digest.ts", "scripts/worktree-setup.ts", "scripts/test-db-ready.ts"],
       "project": ["scripts/**/*.ts", "!scripts/**/*.test.ts"],
       "vitest": false,
       "ignoreDependencies": ["yaml"]

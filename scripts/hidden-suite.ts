@@ -22,8 +22,8 @@
  * --out. Exit status: 0 pass, 1 fail, 3 incomplete, 2 a usage or runner error (then no verdict is written).
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -32,6 +32,7 @@ import { PodmanSubstrate, WORKSPACE_ROOT, type Cell, type ExecResult } from "@as
 import { parseEnvironmentDefinition } from "@ashara/quality";
 import { JsonParseFailed, createLogger, describeErrorChain, parseJson, stdoutSink, systemClock } from "@ashara/shared";
 import { evidenceSchema, guaranteeIdSchema, guaranteeVerdictSchema, overallOf, overallSchema, type JudgedGuarantee, type JudgedVerdict, type Overall, type RunRecord } from "./hidden-verdict.js";
+import { treeDigest } from "./tree-digest.js";
 
 const USAGE =
   "Usage: npx tsx scripts/hidden-suite.ts --suite <suite dir> --product <product dir> --image <image> --out <verdict.json>\n" +
@@ -200,33 +201,6 @@ function judge(manifest: SuiteManifest, outcome: SuiteOutcome): { guarantees: Ju
 }
 
 // --- Staging and the cell ---------------------------------------------------------------------------------------
-
-/** A digest of a directory tree: every entry's path, kind, executable bit and content, in sorted order. */
-async function treeDigest(root: string): Promise<string> {
-  const hash = createHash("sha256");
-  async function walk(relative: string): Promise<void> {
-    const names = (await readdir(join(root, relative))).sort();
-    for (const name of names) {
-      const path = relative === "" ? name : `${relative}/${name}`;
-      const full = join(root, path);
-      const entry = await lstat(full);
-      if (entry.isSymbolicLink()) {
-        hash.update(`l\0${path}\0${await readlink(full)}\0`);
-      } else if (entry.isDirectory()) {
-        hash.update(`d\0${path}\0`);
-        await walk(path);
-      } else if (entry.isFile()) {
-        hash.update(`f\0${path}\0${(entry.mode & 0o111) === 0 ? "-" : "x"}\0`);
-        hash.update(await readFile(full));
-        hash.update("\0");
-      } else {
-        hash.update(`o\0${path}\0`);
-      }
-    }
-  }
-  await walk("");
-  return `sha256:${hash.digest("hex")}`;
-}
 
 async function requireDirectory(path: string, what: string): Promise<void> {
   try {
