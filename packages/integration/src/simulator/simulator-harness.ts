@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import type { TestContext } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
@@ -119,6 +122,18 @@ export function directed(test: TestScope, directions: readonly Direction[], scen
   });
 }
 
+/**
+ * A directed tape under the liveness profile, each persona it forces permanent from the first
+ * cycle, with a longer bound than a directed run: a persona's loop runs to its own bound.
+ * @testseam the termination test files run each persona and plant through it
+ */
+export function liveness(test: TestScope, directions: readonly Direction[], scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles">> = {}): Promise<RunResult> {
+  return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, timeoutMs: 90_000, maxCycles: MAX_CYCLES, ...scenario });
+}
+
+/** @testseam the termination test files force a role's persona by name through it */
+export const persona = (role: string, value: number): Direction => ({ kind: "draw", site: `persona.${role}`, nth: 1, value });
+
 /** @testseam the directed tier's test files name a draw's value through it */
 export const draw = (site: string | RegExp, nth: number | "every", value = 1, scope?: string): Direction => ({
   kind: "draw",
@@ -150,7 +165,7 @@ export function keys(result: RunResult): string[] {
   return result.violations.map((v) => v.key).sort();
 }
 
-/** @testseam simulator-plants.test.ts reads a run's failed invariants through it */
+/** @testseam simulator-plants-halts.test.ts reads a run's failed invariants through it */
 export function failed(result: RunResult): string[] {
   return [...new Set(result.violations.map((v) => v.invariant))].sort();
 }
@@ -158,4 +173,53 @@ export function failed(result: RunResult): string[] {
 /** @testseam the simulator's test files print a run's violations as an assertion's message through it */
 export function statements(result: RunResult): string {
   return result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n");
+}
+
+/** @testseam the termination test files print a run's violations and its outcome as an assertion's message through it */
+export function statementsAndOutcome(result: RunResult): string {
+  return [...result.violations.map((v) => `${v.key}: ${v.statement}`), `outcome ${JSON.stringify(result.outcome)}`].join("\n");
+}
+
+const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
+const execFileAsync = promisify(execFile);
+
+/** @testseam the soak test files read a `scripts/simulate.ts` run through it */
+export interface Soak {
+  readonly exitCode: number;
+  /**
+   * stdout without what is not a function of the seeds: each run's `ms`, the stale-database notice,
+   * and the migration notices of a template build, which only the run that finds no template prints.
+   */
+  readonly lines: readonly string[];
+}
+
+function canonical(stdout: string): string[] {
+  return stdout
+    .split("\n")
+    .filter((line) => !line.startsWith("dropped ") && !line.trimStart().startsWith("[migrate] "))
+    .map((line) => line.replace(/, \d+ ms$/, ""));
+}
+
+/** A run that exited non-zero: execFile rejects with its exit code and output. */
+function failedSoak(err: unknown): Soak | null {
+  if (!(err instanceof Error) || !("code" in err) || typeof err.code !== "number" || !("stdout" in err) || typeof err.stdout !== "string") return null;
+  return { exitCode: err.code, lines: canonical(err.stdout) };
+}
+
+/**
+ * The soak tier as a reader runs it: scripts/simulate.ts in its own process, on the test's database server.
+ * @testseam the soak test files run `scripts/simulate.ts --jobs` through it
+ */
+export async function soak(jobs: number, args: readonly string[]): Promise<Soak> {
+  try {
+    const { stdout } = await execFileAsync("npx", ["tsx", "scripts/simulate.ts", ...args, "--jobs", String(jobs)], {
+      cwd: REPO_ROOT,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return { exitCode: 0, lines: canonical(stdout) };
+  } catch (err) {
+    const failed = failedSoak(err);
+    if (failed === null) throw err;
+    return failed;
+  }
 }

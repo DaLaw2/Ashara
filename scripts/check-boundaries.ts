@@ -38,7 +38,9 @@
  * no module the server's main reaches supplies (scripts/optional-deps.ts), and on a stack literal
  * (a manifest, language, extension or toolchain name) in a non-test packages/<pkg>/src module,
  * against the tokens and exemptions of the rules file's [stack-literals] section, which is no
- * package's section (scripts/stack-literals.ts states what that scan reads and its blind spots).
+ * package's section (scripts/stack-literals.ts states what that scan reads and its blind spots),
+ * and on a packages/integration/src/simulator test file over its budget of simulator runs
+ * (scripts/simulator-run-budget.ts).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -51,6 +53,7 @@ import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
 import { OPTIONAL_MEMBER_ALLOWLIST, findUnsuppliedOptionalMembers } from "./optional-deps.js";
 import { findPriceColumnDefaults } from "./price-defaults.js";
+import { findRunBudgetFindings } from "./simulator-run-budget.js";
 import { findStackLiterals, parseStackLiteralRules, STACK_LITERALS_SECTION } from "./stack-literals.js";
 
 // ---------------------------------------------------------------------------
@@ -565,7 +568,7 @@ function checkStandIns(scope: StandInScope): Map<string, Set<string>> {
 }
 
 // ---------------------------------------------------------------------------
-// Stack literals (not an import rule; run here so `just check` keeps its four steps)
+// Stack literals (not an import rule; run here so it needs no gate of its own in `just check`)
 // ---------------------------------------------------------------------------
 
 /**
@@ -623,6 +626,35 @@ function stackLiteralViolations(
     }
   }
   return violations;
+}
+
+// ---------------------------------------------------------------------------
+// Simulator run budget (not an import rule; run here so it needs no gate of its own in `just check`)
+// ---------------------------------------------------------------------------
+
+const SIMULATOR_RUN_BUDGET = "simulator-run-budget";
+
+/** Each simulator test file over its budget of runs (scripts/simulator-run-budget.ts), and a scan of no file. */
+function simulatorRunBudgetViolations(root: string): Violation[] {
+  const dir = path.join(root, "packages", "integration", "src", "simulator");
+  const files = fs.readdirSync(dir).filter((name) => name.endsWith(".test.ts"));
+  if (files.length === 0) {
+    return [{ file: path.relative(root, dir), line: 0, fromPkg: "integration", specifier: SIMULATOR_RUN_BUDGET, reason: "no simulator test file to count runs in; a scan of nothing would pass" }];
+  }
+  const readModule = (specifier: string, fromFile: string): string | null => {
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null;
+    const target = path.resolve(path.dirname(path.join(dir, fromFile)), specifier.replace(/\.js$/, ".ts"));
+    return fs.existsSync(target) ? fs.readFileSync(target, "utf-8") : null;
+  };
+  return files.flatMap((name) =>
+    findRunBudgetFindings(fs.readFileSync(path.join(dir, name), "utf-8"), name, readModule).map((finding) => ({
+      file: path.relative(root, path.join(dir, finding.file)).split(path.sep).join("/"),
+      line: finding.line,
+      fromPkg: "integration",
+      specifier: SIMULATOR_RUN_BUDGET,
+      reason: finding.reason,
+    })),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -850,7 +882,7 @@ function main(): void {
     }
   }
 
-  // Not an import rule, run here so `just check` keeps its four steps: a price column with a
+  // Not an import rule, run here so it needs no gate of its own in `just check`: a price column with a
   // default reads an insert that forgot the rate as a free model (scripts/price-defaults.ts).
   const schemaDir = path.join(packagesDir, "db", "src", "schema");
   const schemaModules = fs.readdirSync(schemaDir).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"));
@@ -889,6 +921,7 @@ function main(): void {
   }
 
   violations.push(...stackLiteralViolations(root, packagesDir, packageDirs, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
+  violations.push(...simulatorRunBudgetViolations(root));
 
   // Report
   if (violations.length > 0) {

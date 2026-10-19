@@ -9,10 +9,16 @@ import { seeded, statements, useSimulatorDatabase } from "./simulator-harness.js
  * expected-failures.ts. A seed listed there must fail exactly the violation keys listed; any
  * other seed must pass every invariant. The soak tier is `just simulate`. Every run is a batch of
  * two (production's MAX_BATCH_SIZE default). A test that needs one behaviour forces it on a directed
- * tape (the directed tier, simulator-faults.test.ts and simulator-plants.test.ts), never by a seed
- * found to reach it. The fast tier's determinism tests are simulator-determinism.test.ts.
+ * tape (the directed tier, the simulator-faults*.test.ts and simulator-plants*.test.ts files), never
+ * by a seed found to reach it. The fast tier's determinism tests are the simulator-determinism*.test.ts
+ * files.
+ *
+ * Seeds 1 (typical), 10 (benign) and 14 (hostile) run here, one seed of each of three profiles. Every seed
+ * from 1 to 80 is the merge lane's soak (`just simulate --seeds 80`), which judges each against the
+ * same expected-failures.ts entries (simulate.ts soakSeed, diffExpected), so a seed here is a fast
+ * representative, not the coverage itself.
  */
-const FAST_SEEDS = [1, 2, 4, 10, 14, 41] as const;
+const FAST_SEEDS = [1, 10, 14] as const;
 
 useSimulatorDatabase();
 

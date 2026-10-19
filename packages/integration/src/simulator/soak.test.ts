@@ -1,66 +1,18 @@
-import { execFile } from "node:child_process";
-import { resolve } from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { soak } from "./simulator-harness.js";
 
-const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
-const run = promisify(execFile);
-
-interface Soak {
-  readonly exitCode: number;
-  /**
-   * stdout without what is not a function of the seeds: each run's `ms`, the stale-database notice,
-   * and the migration notices of a template build, which only the run that finds no template prints.
-   */
-  readonly lines: readonly string[];
-}
-
-/** A run that exited non-zero: execFile rejects with its exit code and output. */
-function failedSoak(err: unknown): Soak | null {
-  if (!(err instanceof Error) || !("code" in err) || typeof err.code !== "number" || !("stdout" in err) || typeof err.stdout !== "string") return null;
-  return { exitCode: err.code, lines: canonical(err.stdout) };
-}
-
-function canonical(stdout: string): string[] {
-  return stdout
-    .split("\n")
-    .filter((line) => !line.startsWith("dropped ") && !line.trimStart().startsWith("[migrate] "))
-    .map((line) => line.replace(/, \d+ ms$/, ""));
-}
-
-/** The soak tier as a reader runs it: scripts/simulate.ts in its own process, on the test's database server. */
-async function soak(jobs: number, args: readonly string[] = ["--seeds", "2", "--start", "85"]): Promise<Soak> {
-  try {
-    const { stdout } = await run("npx", ["tsx", "scripts/simulate.ts", ...args, "--jobs", String(jobs)], {
-      cwd: REPO_ROOT,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return { exitCode: 0, lines: canonical(stdout) };
-  } catch (err) {
-    const failed = failedSoak(err);
-    if (failed === null) throw err;
-    return failed;
-  }
-}
-
+/*
+ * simulate.ts --jobs at one project under the seeds' own profiles; the adversarial profile is
+ * soak-adversarial.test.ts, so vitest runs the two on separate workers.
+ */
 describe("simulate.ts --jobs", () => {
   // Seeds 85-86 at one project. A worker's seed is a function of the seed and the mode alone:
   // in two processes at once, every line but the time is the serial run's.
   it("reports every seed as the serial run does, in seed order", async () => {
-    const serial = await soak(1);
-    const parallel = await soak(2);
-    expect(serial.lines.filter((line) => line.startsWith("seed ")).map((line) => line.split(" (")[0])).toEqual(["seed 85", "seed 86"]);
-    expect(parallel).toEqual(serial);
-    expect(serial.exitCode).toBe(0);
-  }, 300_000);
-
-  // The adversarial profile's misbehaviour is drawn from the tape like every other choice, so its
-  // seeds too are a function of the seed alone; the coverage lines (MODEL_PATHS met) are compared too.
-  it("reports every adversarial seed as the serial run does", async () => {
-    const args = ["--seeds", "3", "--start", "11", "--profile", "adversarial"];
+    const args = ["--seeds", "2", "--start", "85"];
     const serial = await soak(1, args);
-    const parallel = await soak(3, args);
-    expect(serial.lines.some((line) => line.startsWith("model misbehaviour met (MODEL_PATHS)"))).toBe(true);
+    const parallel = await soak(2, args);
+    expect(serial.lines.filter((line) => line.startsWith("seed ")).map((line) => line.split(" (")[0])).toEqual(["seed 85", "seed 86"]);
     expect(parallel).toEqual(serial);
     expect(serial.exitCode).toBe(0);
   }, 300_000);

@@ -9,7 +9,7 @@ export interface DeterminismRecheck {
 
 /**
  * The second seed of each determinism scenario, by the project count of the soak that runs it:
- * simulator-determinism.test.ts runs each scenario's
+ * simulator-determinism.test.ts and simulator-determinism-two-projects.test.ts run each scenario's
  * first seed (21 at one project, 18 at two), the soak tier these. A seed's trace is a function of
  * the seed alone, so run twice in one process, the second after the first moved every counter a
  * run can leave behind, it is byte-identical.

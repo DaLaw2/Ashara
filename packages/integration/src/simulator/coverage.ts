@@ -303,7 +303,7 @@ type BehaviourSet = "faults" | "models" | "concurrency" | "plants";
 /**
  * The behaviour keys a soak counts (scripts/simulate.ts): every fault kind at every seam it applies
  * to, every response-level misbehaviour met, every contended wait and every plant's seam. Each is
- * forced directly by a test of the directed tier (simulator-faults.test.ts, simulator-plants.test.ts); the floor keeps the seeded
+ * forced directly by a test of the directed tier (the simulator-faults*.test.ts and simulator-plants*.test.ts files); the floor keeps the seeded
  * soak exploring it too, so a change that stops the soak reaching one is named, not silent.
  */
 const BEHAVIOURS: ReadonlyArray<readonly [set: BehaviourSet, members: readonly string[]]> = [
@@ -331,7 +331,7 @@ export type Floor = keyof typeof FLOORS;
  * 400 that reached it: under 5% of seeds, so at 80 seeds each is expected under 4 times and is at
  * zero more than once in 55 soaks (e^-4), which a re-roll alone would cause, not a lost behaviour.
  * Every key at 5% or more is floored. Each key here is forced by the directed tier instead
- * (simulator-faults.test.ts), and every MODEL_PATHS key is floored in the adversarial soak.
+ * (simulator-faults-rare.test.ts), and every MODEL_PATHS key is floored in the adversarial soak.
  */
 export const RARE_UNDER_OWN_PROFILES: ReadonlyMap<string, number> = new Map([
   ["faults db:db-unreachable", 1],

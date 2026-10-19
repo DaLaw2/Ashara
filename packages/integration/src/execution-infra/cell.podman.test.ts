@@ -282,6 +282,7 @@ describe("cell on real podman", () => {
       expect(left.stdout).not.toContain("sleep 30");
 
       const running = cell.exec(["sleep", "20"], { timeoutSeconds: 30 }).catch((e: unknown) => e);
+      // eslint-disable-next-line no-restricted-syntax -- the exec's process must be running when the cell is removed and nothing reports when it starts; a poll for the process would replace this wait
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await run("podman", ["rm", "-f", "-t", "0", cell.id]);
       const removed = await running;

@@ -93,6 +93,27 @@ const PRODUCTION_SYNTAX = [
   },
 ];
 
+// A test that waits a fixed time for something to happen is slow whenever the thing is quick and
+// flaky whenever it is slow: poll for the condition, or await the event, instead. A wait that is
+// itself what the test judges keeps `// eslint-disable-next-line no-restricted-syntax -- <why>`.
+// Blind spots: a duration held in a variable or a constant (`setTimeout(r, WAIT_MS)`), a callback
+// with a body block (`setTimeout(() => { resolve(); }, 1500)`), a timer
+// reached through a member (`timers.setTimeout`) or another name, a wait under 500 ms repeated in a
+// loop, and a busy-wait on `Date.now()`.
+const FIXED_WAIT_MS = 500;
+const TEST_SYNTAX = [
+  {
+    // `setTimeout(resolve, ms)` and `setTimeout(() => resolve(), ms)` are waits;
+    // `setTimeout(() => reject(new Timeout()), ms)` bounds one and passes.
+    selector: [
+      `CallExpression[callee.name='setTimeout'][arguments.0.type='Identifier'][arguments.1.type='Literal'][arguments.1.value>=${FIXED_WAIT_MS}]`,
+      `CallExpression[callee.name='setTimeout'][arguments.0.type='ArrowFunctionExpression'][arguments.0.body.type='CallExpression'][arguments.0.body.arguments.length=0][arguments.1.type='Literal'][arguments.1.value>=${FIXED_WAIT_MS}]`,
+      `CallExpression:matches([callee.name='sleep'], [callee.name='delay'])[arguments.0.type='Literal'][arguments.0.value>=${FIXED_WAIT_MS}]`,
+    ].join(", "),
+    message: `Fixed wait of ${FIXED_WAIT_MS} ms or more in a test. Poll for the condition the test waits on, or await its event; a wait that is itself under test keeps \`// eslint-disable-next-line no-restricted-syntax -- <why>\`.`,
+  },
+];
+
 // Discipline A: a catch that neither rethrows nor returns continues as if the failed operation
 // succeeded, so a failure that a verdict, a counter, a charge, persisted state or client text
 // depends on is dropped with only a log line to show for it. Every such catch in production source
@@ -360,6 +381,14 @@ export default tseslint.config(
           alphabetize: { order: "ignore" },
         },
       ],
+    },
+  },
+  {
+    // Test files. A config object's rule options replace an earlier object's, so the base selectors
+    // are repeated here.
+    files: ["**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...BASE_SYNTAX, ...TEST_SYNTAX],
     },
   },
   {

@@ -21,12 +21,10 @@ async function order(seed: number, jitter: (task: string, call: number) => numbe
 }
 
 describe("Interleaver", () => {
-  it("runs a batch's seam calls in the seed's order whatever the timing", async () => {
-    for (const seed of [1, 2, 3, 4, 5]) {
-      const quick = await order(seed, () => 0);
-      const slowed = await order(seed, (task, call) => (task === "b" ? 3 * (call + 1) : 1));
-      expect(slowed).toEqual(quick);
-    }
+  it.each([1, 2, 3, 4, 5])("runs a batch's seam calls in seed %i's order whatever the timing", async (seed) => {
+    const quick = await order(seed, () => 0);
+    const slowed = await order(seed, (task, call) => (task === "b" ? 3 * (call + 1) : 1));
+    expect(slowed).toEqual(quick);
   });
 
   it("hands the turn on when a task waits on the other, and takes it back after", async () => {

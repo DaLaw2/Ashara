@@ -18,6 +18,7 @@ const LOG_ERROR = "Log record drops its error";
 const LOG_EVENT_NOT_LITERAL = "Log event name is not a literal";
 const LOG_EVENT_MALFORMED = "Log event name `";
 const DELIVERY_FILE = join(REPO, "packages", "delivery", "src", "planted.ts");
+const FIXED_WAIT = "Fixed wait";
 
 /** The guard each finding of `code`, linted as the file at `filePath` with the repo's config, belongs to. */
 async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<string[]> {
@@ -25,7 +26,7 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
   expect(results).toHaveLength(1);
   return results.flatMap((result) => result.messages).map((message) => {
     if (message.ruleId === ASSERTION) return ASSERTION;
-    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED].find((prefix) => message.message.startsWith(prefix));
+    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
 }
@@ -141,6 +142,24 @@ describe("eslint guards fire on planted instances", () => {
 
   test("the catch-continue rule holds production source only, not tests", async () => {
     expect(await guardsOf(planted("try { await p; } catch (e) { console.warn(e); }"), TEST_FILE)).toEqual([]);
+  });
+
+  test.each([
+    "await new Promise((resolve) => setTimeout(resolve, 1500));",
+    "await new Promise((r) => setTimeout(r, 500));",
+    "await new Promise((resolve) => setTimeout(() => resolve(), 1_000));",
+    "await sleep(2000);",
+  ])("a fixed wait in a test: %s", async (line) => {
+    const code = `import { setTimeout as sleep } from "node:timers/promises";\nexport async function planted(): Promise<void> {\n  ${line}\n}\n`;
+    expect(await guardsOf(code, TEST_FILE)).toEqual([FIXED_WAIT]);
+  });
+
+  test.each([
+    "await new Promise((r) => setTimeout(r, 200));",
+    "await new Promise((_, reject) => setTimeout(() => reject(new Timeout()), 5000));",
+  ])("a short wait or a bound on one in a test passes: %s", async (line) => {
+    const code = `class Timeout extends Error {}\nexport async function planted(): Promise<void> {\n  ${line}\n}\n`;
+    expect(await guardsOf(code, TEST_FILE)).toEqual([]);
   });
 
   test("a typed error class is not a bare Error", async () => {

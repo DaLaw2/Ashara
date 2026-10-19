@@ -226,7 +226,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/price-defaults.ts", "scripts/stack-literals.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.symlinkSync(path.join(REPO, "node_modules"), path.join(into, "node_modules"), "dir");

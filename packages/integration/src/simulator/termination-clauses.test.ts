@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PortCount, checkLiveness, checkLoops, checkWork } from "./termination.js";
 import type { LoopRecords } from "./termination.js";
 
-/** The clauses of W1-W4 on records written here, each one no directed run reaches (termination.test.ts runs the rest). */
+/** The clauses of W1-W4 on records written here, each one no directed run reaches (termination.test.ts, termination-plants.test.ts and termination-unbounded.test.ts run the rest). */
 const task = (over: Partial<LoopRecords["checkTasks"][number]> = {}): LoopRecords["checkTasks"][number] => ({
   id: "ct1", title: "checks", status: "Completed", namings: 0, disputes: 0, reviewReopens: 0, disputeReopens: 0, ...over,
 });
