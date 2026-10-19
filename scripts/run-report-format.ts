@@ -3,6 +3,7 @@
  * database, no environment, nothing that could carry a secret.
  */
 
+import { z } from "zod";
 import { isGoalTask } from "@ashara/db";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
@@ -486,33 +487,57 @@ export interface PoolEvidence {
   readonly pick: PickRecord | null;
 }
 
-/** Ashara's own outcome, read off the project's status: accepted, halted, or no acceptance verdict. */
-type AsharaOutcome = { readonly kind: "accepted" } | { readonly kind: "halted" } | { readonly kind: "none"; readonly status: string };
+/**
+ * One acceptance sweep as stored: its verdict and the commit it ran on. A passed sweep always names its commit, so a
+ * passed row without one is malformed, not an acceptance of an unknown tree. A commit is a full object id.
+ */
+const sweepCommit = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/, "a full commit id");
+const acceptanceSweepSchema = z.discriminatedUnion("passed", [
+  z.object({ passed: z.literal(true), mainCommit: sweepCommit, createdAt: z.date() }),
+  z.object({ passed: z.literal(false), mainCommit: sweepCommit.nullable(), createdAt: z.date() }),
+]);
 
-function asharaOutcome(status: string): AsharaOutcome {
-  if (status === "accepted") return { kind: "accepted" };
-  if (status === "blocked") return { kind: "halted" };
-  return { kind: "none", status };
-}
+/** Ashara's verdict on the project: its most recent acceptance sweep, or none when no sweep is recorded. */
+type AsharaVerdict = z.output<typeof acceptanceSweepSchema> | null;
 
-function asharaText(outcome: AsharaOutcome): string {
-  switch (outcome.kind) {
-    case "accepted":
-      return "Ashara Accepted";
-    case "halted":
-      return "Ashara halted";
-    case "none":
-      return `Ashara gave no acceptance verdict (status ${outcome.status})`;
+/** A stored acceptance sweep that does not read as one; the report would otherwise state a verdict nobody recorded. */
+class AcceptanceSweepUnreadable extends Error {
+  readonly projectId: string;
+  readonly issues: readonly string[];
+
+  constructor(projectId: string, issues: readonly string[], options?: ErrorOptions) {
+    super(`run-report: the latest acceptance_sweeps row of project ${projectId} does not read as a sweep: ${issues.join("; ")}`, options);
+    this.name = "AcceptanceSweepUnreadable";
+    this.projectId = projectId;
+    this.issues = issues;
   }
 }
 
 /**
- * Whether the two verdicts agree. A disagreement is Ashara accepting what the hidden suite does not pass, or halting
- * on what it passes; a pair that cannot disagree but does not agree either is named as not compared, with why.
+ * Ashara's verdict from the project's most recent acceptance sweep row, as read from the database (undefined when it
+ * has none). Throws AcceptanceSweepUnreadable for a row of another shape.
  */
-function comparison(outcome: AsharaOutcome, overall: Overall): string {
-  if (outcome.kind === "none") return "not compared: Ashara gave no acceptance verdict";
-  if (outcome.kind === "accepted") return overall === "pass" ? "agree" : "DISAGREE";
+export function asharaVerdictOf(projectId: string, row: unknown): AsharaVerdict {
+  if (row === undefined) return null;
+  const parsed = acceptanceSweepSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues.map((issue) => `${issue.path.map(String).join(".") || "(root)"}: ${issue.message}`);
+  throw new AcceptanceSweepUnreadable(projectId, issues, { cause: parsed.error });
+}
+
+function asharaText(verdict: AsharaVerdict): string {
+  if (verdict === null) return "Ashara gave no acceptance verdict (no acceptance sweep recorded)";
+  if (verdict.passed) return `Ashara Accepted (sweep on ${verdict.mainCommit})`;
+  return `Ashara Rejected (sweep failed on ${verdict.mainCommit ?? "no recorded commit"})`;
+}
+
+/**
+ * Whether the two verdicts agree. A disagreement is Ashara accepting what the hidden suite does not pass, or rejecting
+ * what it passes; a pair that cannot disagree but does not agree either is named as not compared, with why.
+ */
+function comparison(verdict: AsharaVerdict, overall: Overall): string {
+  if (verdict === null) return "not compared: Ashara gave no acceptance verdict";
+  if (verdict.passed) return overall === "pass" ? "agree" : "DISAGREE";
   if (overall === "pass") return "DISAGREE";
   return overall === "fail" ? "agree" : "not compared: the hidden suite is incomplete";
 }
@@ -522,20 +547,20 @@ function comparison(outcome: AsharaOutcome, overall: Overall): string {
  * beside the hidden suite's, every guarantee named. No verdict file reads "hidden suite: not run", never a pass; a
  * verdict file for another tender than the pick is a violation.
  */
-export function formatPoolVerdicts(status: string, pool: PoolEvidence): { readonly lines: string[]; readonly violation: boolean } {
+export function formatPoolVerdicts(verdict: AsharaVerdict, pool: PoolEvidence): { readonly lines: string[]; readonly violation: boolean } {
   const { hidden, pick } = pool;
   const pickLine =
     pick === null
       ? "tender pick: not recorded (run-report was given no --run)"
       : `tender pick: ${pick.tender} seed ${pick.seed} (${pick.reason}; run ${pick.run}, commit ${pick.commit})`;
-  const ashara = asharaText(asharaOutcome(status));
+  const ashara = asharaText(verdict);
   if (hidden === null) return { lines: [pickLine, `verdicts: ${ashara} | hidden suite: not run`], violation: false };
   const passed = hidden.guarantees.filter((entry) => entry.verdict === "pass").length;
   const guarantees = hidden.guarantees.map((entry) => `${entry.id} ${entry.verdict}`).join(", ");
   const seed = pick === null ? "seed not recorded" : `seed ${pick.seed.slice(0, 12)}`;
   const lines = [
     pickLine,
-    `verdicts: ${ashara} | hidden suite ${hidden.tender} ${seed}: ${hidden.overall.toUpperCase()} ${passed}/${hidden.guarantees.length} pass, ${guarantees} | ${comparison(asharaOutcome(status), hidden.overall)}`,
+    `verdicts: ${ashara} | hidden suite ${hidden.tender} ${seed}: ${hidden.overall.toUpperCase()} ${passed}/${hidden.guarantees.length} pass, ${guarantees} | ${comparison(verdict, hidden.overall)}`,
   ];
   const mismatch = pick !== null && pick.tender !== hidden.tender;
   if (mismatch) lines.push(`VIOLATION: the hidden verdict judges tender ${hidden.tender}, the run picked ${pick.tender}`);

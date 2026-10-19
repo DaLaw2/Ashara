@@ -375,7 +375,7 @@ describe("runReport, the body run-report prints", () => {
     const { text } = await runReport(db, projectId, { hidden: null, pick: null });
 
     expect(text).toContain(`run-report: project ${NAME} (${projectId})`);
-    expect(text.split("\n").slice(1, 3)).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara gave no acceptance verdict (status active) | hidden suite: not run"]);
+    expect(text.split("\n").slice(1, 3)).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara gave no acceptance verdict (no acceptance sweep recorded) | hidden suite: not run"]);
     const equal = "    judge tier: EQUAL: Strong, no stronger than the check work at Strong (no model above it was routed to judge it)";
     expect(text).toContain(
       `Suite review judgements (1):\n  review ${judged}, its undecided-item finding of task ${check}: advisory (second-opinion-disagreed); second review same-model (first p/m, second p/m)\n${equal}`,
@@ -407,5 +407,23 @@ describe("runReport, the body run-report prints", () => {
       "Reviewer record (1):\n  q/judge at suite-review (claim): 1 pass(es) contradicted, 0 finding(s) witnessed, 0 finding(s) refuted, over 2 piece(s) of evidence; " +
         "1 call(s) at suite-review, cost measured on 0: $0.000000; 1 unmeasured",
     );
+  });
+
+  test("a stopped project's verdict is its latest acceptance sweep, never its status", async () => {
+    await db.execute(sql`UPDATE projects SET lifecycle = 'stopped' WHERE id = ${projectId}`);
+    const verdictLine = async () => (await runReport(db, projectId, { hidden: null, pick: null })).text.split("\n")[2];
+    async function sweep(passed: boolean, commit: string, at: string): Promise<void> {
+      const defect = passed ? null : await completedTask("Acceptance defect");
+      await db.execute(sql`
+        INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, defect_item_id, created_at)
+        VALUES (${projectId}, ${commit}, 'env-1', '[]'::jsonb, '[]'::jsonb, ${passed}, 'scripted sweep', ${defect}, ${at})`);
+    }
+    expect(await verdictLine()).toBe("verdicts: Ashara gave no acceptance verdict (no acceptance sweep recorded) | hidden suite: not run");
+    await sweep(false, "b".repeat(40), "2026-10-18T00:01:00Z");
+    expect(await verdictLine()).toBe(`verdicts: Ashara Rejected (sweep failed on ${"b".repeat(40)}) | hidden suite: not run`);
+    await sweep(true, "c".repeat(40), "2026-10-18T00:02:00Z");
+    expect(await verdictLine()).toBe(`verdicts: Ashara Accepted (sweep on ${"c".repeat(40)}) | hidden suite: not run`);
+    await sweep(false, "a".repeat(40), "2026-10-18T00:00:00Z");
+    expect(await verdictLine()).toBe(`verdicts: Ashara Accepted (sweep on ${"c".repeat(40)}) | hidden suite: not run`);
   });
 });

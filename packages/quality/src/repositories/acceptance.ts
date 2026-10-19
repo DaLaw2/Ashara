@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { acceptanceSweeps, completedGoalTasks, goalTaskSql, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
@@ -185,4 +185,21 @@ export async function recordAcceptanceDefect(
     await recordFailedSweepOutcomes(tx, { projectId: sweep.projectId, sweepId: recorded.id, failedCheckTasks: sweep.failedChecks.map((check) => check.checkTaskId) });
     return "recorded";
   });
+}
+
+/**
+ * The verdict of the project's most recent acceptance sweep, by when it was recorded, and the commit it ran on;
+ * undefined when it has none.
+ */
+export async function latestAcceptanceSweepOf(
+  db: DbHandle,
+  projectId: ProjectId,
+): Promise<{ readonly passed: boolean; readonly mainCommit: string | null; readonly createdAt: Date } | undefined> {
+  const [row] = await db
+    .select({ passed: acceptanceSweeps.passed, mainCommit: acceptanceSweeps.mainCommit, createdAt: acceptanceSweeps.createdAt })
+    .from(acceptanceSweeps)
+    .where(eq(acceptanceSweeps.projectId, projectId))
+    .orderBy(desc(acceptanceSweeps.createdAt), desc(acceptanceSweeps.id))
+    .limit(1);
+  return row;
 }

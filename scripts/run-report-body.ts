@@ -1,15 +1,15 @@
 /**
  * The whole run report of one project (scripts/run-report.ts), read from the database: the run's
- * evidence, with the tender pick and the hidden suite's verdict beside Ashara's after its first line,
+ * evidence, with the tender pick and the hidden suite's verdict beside Ashara's (its latest acceptance sweep) after its first line,
  * then the suite reviews' judgements, then their claims, then each reviewer's record, each through its reader. Prints
  * nothing; the caller prints the text and exits 1 when `failed`.
  */
 
 import type { DbHandle } from "@ashara/db";
-import { reviewerRecordOf, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
+import { latestAcceptanceSweepOf, reviewerRecordOf, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
 import { readRunEvidence } from "@ashara/workplace";
-import { formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements, type PoolEvidence } from "./run-report-format.js";
+import { asharaVerdictOf, formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements, type PoolEvidence } from "./run-report-format.js";
 
 /**
  * The report's text, and whether an llm_calls row is priced at $0, the spend does not add up to every row, or the
@@ -18,7 +18,7 @@ import { formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteR
 export async function runReport(db: DbHandle, projectId: ProjectId, pool: PoolEvidence): Promise<{ readonly text: string; readonly failed: boolean }> {
   const evidence = await readRunEvidence(db, projectId);
   const report = formatRunReport(evidence);
-  const verdicts = formatPoolVerdicts(evidence.project.status, pool);
+  const verdicts = formatPoolVerdicts(asharaVerdictOf(projectId, await latestAcceptanceSweepOf(db, projectId)), pool);
   const [head, ...rest] = report.text.split("\n");
   const judgements = formatSuiteReviewJudgements(await suiteReviewJudgementsOf(db, projectId));
   const claims = formatSuiteReviewClaims(await suiteReviewClaimsOf(db, projectId));

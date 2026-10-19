@@ -78,6 +78,7 @@ export type { StoredClaim, StoredJudgement } from "./repositories/suite-review.j
 export { reviewerRecordOf } from "./repositories/reviewer-outcome.js";
 export type { ReviewerRecordLine } from "./repositories/reviewer-outcome.js";
 export {
+  latestAcceptanceSweepOf,
   listProjectsReadyForAcceptance,
   recordAcceptance,
   recordAcceptanceDefect,

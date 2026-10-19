@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { isGoalTask } from "@ashara/db";
 import { judgedVerdictSchema, overallOf, type JudgedVerdict } from "./hidden-verdict.js";
 import type { PickRecord } from "./pool-selection.js";
-import { formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
+import { asharaVerdictOf, formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
 
 const TSX = path.join(import.meta.dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
 
@@ -531,34 +531,59 @@ describe("formatPoolVerdicts: Ashara's verdict beside the hidden suite's", () =>
   const oneFail = verdict([{ id: "G1", verdict: "pass" }, { id: "G2", verdict: "fail" }, { id: "G3", verdict: "unjudged", reason: "no tool" }]);
   const incomplete = verdict([{ id: "G1", verdict: "unjudged", reason: "suite crashed" }], ["the suite exited 1"]);
 
+  const COMMIT = "2f3a563c".padEnd(40, "0");
+  const AT = new Date("2026-10-18T00:02:00.000Z");
+  const accepted = asharaVerdictOf("p1", { passed: true, mainCommit: COMMIT, createdAt: AT });
+  const rejected = asharaVerdictOf("p1", { passed: false, mainCommit: COMMIT, createdAt: AT });
+  const noSweep = asharaVerdictOf("p1", undefined);
+
   test("Accepted and a hidden pass agree, every guarantee named, the pick's tender and seed printed", () => {
-    const { lines, violation } = formatPoolVerdicts("accepted", { hidden: allPass, pick: PICK });
+    const { lines, violation } = formatPoolVerdicts(accepted, { hidden: allPass, pick: PICK });
     expect(lines).toEqual([
       `tender pick: T1 seed ${"c".repeat(64)} (fewest runs (0) among T1, T2; drawn by seed; run pool-1, commit 0e2adaf9)`,
-      `verdicts: Ashara Accepted | hidden suite T1 seed ${"c".repeat(12)}: PASS 2/2 pass, G1 pass, G2 pass | agree`,
+      `verdicts: Ashara Accepted (sweep on ${COMMIT}) | hidden suite T1 seed ${"c".repeat(12)}: PASS 2/2 pass, G1 pass, G2 pass | agree`,
     ]);
     expect(violation).toBe(false);
   });
 
   test("Accepted over a hidden fail, and over a hidden incomplete, is DISAGREE", () => {
-    expect(formatPoolVerdicts("accepted", { hidden: oneFail, pick: PICK }).lines[1]).toBe(
-      `verdicts: Ashara Accepted | hidden suite T1 seed ${"c".repeat(12)}: FAIL 1/3 pass, G1 pass, G2 fail, G3 unjudged | DISAGREE`,
+    expect(formatPoolVerdicts(accepted, { hidden: oneFail, pick: PICK }).lines[1]).toBe(
+      `verdicts: Ashara Accepted (sweep on ${COMMIT}) | hidden suite T1 seed ${"c".repeat(12)}: FAIL 1/3 pass, G1 pass, G2 fail, G3 unjudged | DISAGREE`,
     );
-    expect(formatPoolVerdicts("accepted", { hidden: incomplete, pick: PICK }).lines[1]).toMatch(/: INCOMPLETE 0\/1 pass, G1 unjudged \| DISAGREE$/);
+    expect(formatPoolVerdicts(accepted, { hidden: incomplete, pick: PICK }).lines[1]).toMatch(/: INCOMPLETE 0\/1 pass, G1 unjudged \| DISAGREE$/);
   });
 
-  test("Ashara halting on what the hidden suite passes is DISAGREE; halting on a hidden fail agrees", () => {
-    expect(formatPoolVerdicts("blocked", { hidden: allPass, pick: PICK }).lines[1]).toMatch(/^verdicts: Ashara halted \| .* \| DISAGREE$/);
-    expect(formatPoolVerdicts("blocked", { hidden: oneFail, pick: PICK }).lines[1]).toMatch(/^verdicts: Ashara halted \| .* \| agree$/);
+  test("a failed latest sweep is Rejected: DISAGREE with a hidden pass, agree with a hidden fail, not compared with an incomplete one", () => {
+    expect(formatPoolVerdicts(rejected, { hidden: allPass, pick: PICK }).lines[1]).toMatch(new RegExp(`^verdicts: Ashara Rejected \\(sweep failed on ${COMMIT}\\) \\| .* \\| DISAGREE$`));
+    expect(formatPoolVerdicts(rejected, { hidden: oneFail, pick: PICK }).lines[1]).toMatch(/^verdicts: Ashara Rejected .* \| agree$/);
+    expect(formatPoolVerdicts(rejected, { hidden: incomplete, pick: PICK }).lines[1]).toMatch(/\| not compared: the hidden suite is incomplete$/);
+    expect(formatPoolVerdicts(asharaVerdictOf("p1", { passed: false, mainCommit: null, createdAt: AT }), { hidden: null, pick: null }).lines[1]).toBe(
+      "verdicts: Ashara Rejected (sweep failed on no recorded commit) | hidden suite: not run",
+    );
+  });
+
+  test("no recorded sweep is no verdict and is not compared, whatever the project's status", () => {
+    expect(formatPoolVerdicts(noSweep, { hidden: allPass, pick: PICK }).lines[1]).toMatch(
+      /^verdicts: Ashara gave no acceptance verdict \(no acceptance sweep recorded\) \| .* \| not compared: Ashara gave no acceptance verdict$/,
+    );
+  });
+
+  test("a malformed sweep row fails closed: no verdict is read from it", () => {
+    const read = (row: unknown) => () => asharaVerdictOf("p1", row);
+    expect(read({ passed: "t", mainCommit: COMMIT, createdAt: AT })).toThrow(/latest acceptance_sweeps row of project p1 does not read as a sweep/);
+    expect(read({ passed: true, mainCommit: null, createdAt: AT })).toThrow(/mainCommit/);
+    expect(read({ passed: true, mainCommit: "", createdAt: AT })).toThrow(/mainCommit/);
+    expect(read({ passed: false, mainCommit: COMMIT })).toThrow(/createdAt/);
+    expect(read(null)).toThrow(/does not read as a sweep/);
   });
 
   test("no --hidden prints 'hidden suite: not run', never a pass", () => {
-    const { lines } = formatPoolVerdicts("accepted", { hidden: null, pick: null });
-    expect(lines).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara Accepted | hidden suite: not run"]);
+    const { lines } = formatPoolVerdicts(accepted, { hidden: null, pick: null });
+    expect(lines).toEqual(["tender pick: not recorded (run-report was given no --run)", `verdicts: Ashara Accepted (sweep on ${COMMIT}) | hidden suite: not run`]);
   });
 
   test("a verdict for another tender than the pick is a violation", () => {
-    const { lines, violation } = formatPoolVerdicts("accepted", { hidden: allPass, pick: { ...PICK, tender: "T2" } });
+    const { lines, violation } = formatPoolVerdicts(accepted, { hidden: allPass, pick: { ...PICK, tender: "T2" } });
     expect(violation).toBe(true);
     expect(lines).toContain("VIOLATION: the hidden verdict judges tender T1, the run picked T2");
   });

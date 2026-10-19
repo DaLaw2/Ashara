@@ -5,7 +5,7 @@
  *     (or: just run-report <project-id> [arguments])
  *
  * After the first line: the tender the run picked from the pool (its id, seed and reason, read from the pool's
- * ledger by the run label; the pool directory is --pool, else ASHARA_TENDER_POOL), and Ashara's acceptance outcome
+ * ledger by the run label; the pool directory is --pool, else ASHARA_TENDER_POOL), and Ashara's verdict (its latest acceptance sweep)
  * beside the hidden suite's verdict (the judged file scripts/hidden-suite.ts writes) with every guarantee pass, fail
  * or unjudged, and DISAGREE when they disagree; with no --hidden, "hidden suite: not run". A verdict file or pick that
  * cannot be read or parsed stops the report before the database is read.
