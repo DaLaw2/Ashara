@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, listProjectsAwaitingRoster } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, listProjectsAwaitingRoster, resolveTestDatabaseUrl } from "@ashara/db";
 import { ClientStops, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
@@ -16,7 +16,7 @@ import { projectState } from "../simulator/project-state.js";
 // to a project this suite creates under a unique name, and every step is
 // narrowed to those projects; afterAll deletes them.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `client-stop-test-${randomUUID().slice(0, 8)}`;
 
 let db: ReturnType<typeof createDb>;

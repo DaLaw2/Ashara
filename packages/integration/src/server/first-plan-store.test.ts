@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -30,7 +30,7 @@ import { citingItemsToCheck } from "../simulator/scripted-models.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 // Caps far above anything a stubbed call can cost: these tests are about the calls, not the cap.
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NONCE = randomUUID().slice(0, 8);

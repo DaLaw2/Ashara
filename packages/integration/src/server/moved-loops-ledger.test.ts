@@ -3,7 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import { BlockReports, ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, BlockReportStore, IntakeStore, LiaisonAnswers } from "@ashara/engagement";
@@ -45,7 +45,7 @@ import { citingItemsToCheck } from "../simulator/scripted-models.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `moved-loops-ledger-test-${randomUUID().slice(0, 8)}`;
 const AMPLE_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 /** Model requests the project may draw past what its setup drew: each cycle of a moved loop draws at least one. */

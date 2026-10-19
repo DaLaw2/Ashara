@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { ClientChanges, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientChangeStore } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
@@ -13,7 +13,7 @@ import { createClientChangeStore } from "@ashara/server/client-change-store";
 // Liaison consumes each with one plain reply and a domain event. Every row belongs to a project
 // this suite creates under a unique name, and the Liaison is narrowed to those projects.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `client-change-test-${randomUUID().slice(0, 8)}`;
 
 let db: ReturnType<typeof createDb>;

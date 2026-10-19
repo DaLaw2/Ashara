@@ -9,7 +9,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { DispatchService } from "@ashara/delivery";
 import type { TaskCheckStore } from "@ashara/quality";
 import type { SessionStore } from "@ashara/workplace";
@@ -28,7 +28,7 @@ const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model }));
 
 const run = promisify(execFile);
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 // Caps far above anything a stubbed call can cost: these tests are about the calls, not the cap.
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const psSchema = z.array(z.object({ Id: z.string() }));

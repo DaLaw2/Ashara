@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { ClientRepository, DEFAULT_DATABASE_URL, ProjectRepository, createDb, failedApproaches, knowledgeEntries } from "@ashara/db";
+import { ClientRepository, ProjectRepository, createDb, failedApproaches, knowledgeEntries, resolveTestDatabaseUrl } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { FailedApproachRepository, KnowledgeRepository } from "@ashara/knowledge";
 import type { ProjectId } from "@ashara/shared";
@@ -16,7 +16,7 @@ const createdWorkItemIds: string[] = [];
 const createdKnowledgeIds: string[] = [];
 const createdFailedApproachTaskIds: string[] = [];
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 // Every work item needs a project; this suite owns one.
 let testProjectId: ProjectId;

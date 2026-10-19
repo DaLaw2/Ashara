@@ -9,7 +9,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import {
   DispatchService,
@@ -44,7 +44,7 @@ import { projectState } from "../simulator/project-state.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `dispatch-loops-ledger-test-${randomUUID().slice(0, 8)}`;
 const AMPLE_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const AMPLE_BUDGETS: WorkBudgets = { perTaskRequests: 50, perProjectRequests: 500, verificationReservePercent: 0 };

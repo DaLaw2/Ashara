@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ConfigRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { ConfigRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { measureCost } from "@ashara/finance";
 import {
   buildGateway,
@@ -22,7 +22,7 @@ import type { LanguageModelFactory } from "@ashara/model-access";
 // check only reads the catalog; the price-window test creates one model row with
 // its windows, and afterAll deletes exactly that row (its windows cascade).
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const MODEL_ID = `catalog-test-${randomUUID().slice(0, 8)}`;
 
 let db: ReturnType<typeof createDb>;

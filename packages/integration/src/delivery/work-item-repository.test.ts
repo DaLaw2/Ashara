@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, DEFAULT_DATABASE_URL, ProjectRepository, createDb } from "@ashara/db";
+import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { WorkItemRowRepository } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
@@ -17,7 +17,7 @@ const epicId = randomUUID();
 const taskIds: string[] = [];
 
 beforeAll(async () => {
-  db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+  db = createDb(resolveTestDatabaseUrl(process.env));
   const nonce = randomUUID().slice(0, 8);
   clientId = (await new ClientRepository(db).create(`delivery-wi-${nonce}`)).id;
   projectId = (await new ProjectRepository(db).create(`delivery-wi-${nonce}`, clientId)).id;

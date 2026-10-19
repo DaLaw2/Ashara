@@ -5,7 +5,7 @@ import { join } from "node:path";
 import pg from "pg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { DEFAULT_DATABASE_URL } from "./connection.js";
+import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { LEGACY_MIGRATIONS } from "./legacy-migrations.js";
 import {
   MIGRATIONS_DIR,
@@ -17,7 +17,7 @@ import {
 
 // Each test owns a fresh Postgres schema (search_path pinned through the URL) and a
 // temp migrations dir, so the database's real schema_migrations is never touched.
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 let schema: string;
 let url: string;

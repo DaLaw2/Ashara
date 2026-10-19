@@ -8,7 +8,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4GenerateResult } from "@ai-sdk/provider";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
 import { DispatchService, FailureRouter, PlanningService, failWorkItem, recoverFailedItem, startWorkItem, adaptWorkItemRepo, WorkItemRowRepository } from "@ashara/delivery";
 import type { TaskDescriptor } from "@ashara/delivery";
@@ -31,7 +31,7 @@ const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model }));
 
 const run = promisify(execFile);
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 
 const modelConfig: ModelConfig = {

@@ -10,6 +10,20 @@ db-reset:
     podman compose -f docker/postgres.yml down -v
     podman compose -f docker/postgres.yml up -d
 
+# The test Postgres every test and the simulator use (resolveTestDatabaseUrl, default 127.0.0.1:5433):
+# its data is tmpfs with fsync off, so scratch databases write nothing to disk, and stopping it
+# discards them. The shared database above stays where it is.
+test-db-up:
+    podman compose -f docker/postgres-test.yml up -d
+
+test-db-down:
+    podman compose -f docker/postgres-test.yml down
+
+# Fails closed, naming `just test-db-up`, when the test Postgres does not answer; then migrates it,
+# since it starts empty.
+_test-db-ready:
+    timeout 120 npx tsx scripts/test-db-ready.ts
+
 migrate:
     npx tsx scripts/migrate.ts
 
@@ -60,9 +74,11 @@ test-images:
 # this shell forwards SIGINT, SIGTERM and SIGHUP to that group (to timeout itself if it has not made
 # the group yet) and waits for it to end. `timeout --foreground` would let Ctrl+C through, but on
 # expiry it signals vitest alone and leaves its forks workers running.
-test:
+test: _test-db-ready
     #!/usr/bin/env bash
     set -u
+    # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
+    if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
     timeout -k 150 1200 npx vitest run &
     run=$!
     trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
@@ -78,9 +94,11 @@ test:
 # Example: just test-affected origin/master --list
 #          just test-affected origin/master -- --maxWorkers=2
 # Bounded and signal-forwarding exactly as `test` is, for the same reasons.
-test-affected base *ARGS:
+test-affected base *ARGS: _test-db-ready
     #!/usr/bin/env bash
     set -u
+    # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
+    if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
     timeout -k 150 1200 npx tsx scripts/affected-tests.ts {{base}} {{ARGS}} &
     run=$!
     trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
@@ -92,15 +110,20 @@ test-affected base *ARGS:
     done
 
 # The lifecycle simulator's soak tier: consecutive seeds, each
-# on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default
-# DATABASE_URL), run by `--jobs J` worker processes at once (default: the host's cores, at most 16;
+# on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default the test
+# Postgres, never DATABASE_URL; it fails closed naming `just test-db-up` when that is down), run by
+# `--jobs J` worker processes at once (default: the host's cores, at most 16;
 # at most 20; `--jobs 1` runs them in one process). Output and exit code are the serial run's, each
 # seed's lines in seed order. A soak of at least 80 seeds also reruns its project count's second
 # determinism seed (6 at one project, 59 at two) in one process and fails on a trace that differs.
 # Bounded: at most 500 seeds, 120 cycles and 120 s per seed.
 # Example: just simulate --seeds 50 --start 100 --minimize
 simulate *ARGS:
-    choom -n 1000 -- npx tsx scripts/simulate.ts {{ARGS}}
+    #!/usr/bin/env bash
+    set -u
+    # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
+    if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
+    exec choom -n 1000 -- npx tsx scripts/simulate.ts {{ARGS}}
 
 # Secret scan. Deliberately NOT part of `just check`: it calls the GitGuardian API,
 # and a gate that needs the network is a gate that fails for the wrong reason.

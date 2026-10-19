@@ -8,7 +8,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, EventStoreRepository, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, EnvironmentBuildRepository, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
 import { TaskCheckRepository } from "@ashara/quality";
 import { FailedApproachRepository } from "@ashara/knowledge";
@@ -33,7 +33,7 @@ const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model }));
 
 const run = promisify(execFile);
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `env-change-loop-${randomUUID().slice(0, 8)}`;
 
 const modelConfig: ModelConfig = {

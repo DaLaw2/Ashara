@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
@@ -18,7 +18,7 @@ import { projectState } from "../simulator/project-state.js";
 // probe passing after an infrastructure halt) is recorded and told once. Every row belongs to a project this
 // suite creates; the Liaison's due list is narrowed to them, and afterAll deletes them.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 let db: ReturnType<typeof createDb>;
 let clientId: string;

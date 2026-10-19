@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate } from "@ashara/execution-infra";
@@ -20,7 +20,7 @@ import { testCellInstance } from "../test-cells.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `workspace-path-block-test-${randomUUID().slice(0, 8)}`;
 
 type Db = ReturnType<typeof createDb>;

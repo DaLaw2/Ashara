@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { DEFAULT_DATABASE_URL } from "@ashara/db";
+import { resolveTestDatabaseUrl } from "@ashara/db";
 import { RunAborted } from "./run.js";
 import { directed, implementation, keys, statements, useSimulatorDatabase } from "./simulator-harness.js";
 
@@ -35,7 +35,7 @@ class InstanceNeverComposed extends Error {
 /** Resolves once a composed instance of this process holds a database session: the run is past its setup. */
 async function instanceComposed(waitMs: number): Promise<void> {
   const deadline = Date.now() + waitMs;
-  const client = new pg.Client({ connectionString: process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL });
+  const client = new pg.Client({ connectionString: resolveTestDatabaseUrl(process.env) });
   await client.connect();
   try {
     const counted = z.tuple([z.object({ n: z.number().int() })]);

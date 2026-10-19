@@ -1,14 +1,14 @@
 import { afterAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { createDb, DEFAULT_DATABASE_URL, PROJECT_BLOCK_KINDS, PROJECT_LIFECYCLES } from "@ashara/db";
+import { createDb, PROJECT_BLOCK_KINDS, PROJECT_LIFECYCLES, resolveTestDatabaseUrl } from "@ashara/db";
 import { WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { ATTEMPT_TERMINALS } from "@ashara/workplace";
 
 // The code's lifecycle lists against the CHECK constraints the migrations wrote: a member one
 // side has and the other lacks is either unwritable or unread.
 
-const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+const db = createDb(resolveTestDatabaseUrl(process.env));
 afterAll(() => db.$client.end());
 
 const ConstraintRowSchema = z.object({ definition: z.string() });

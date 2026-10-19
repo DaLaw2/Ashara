@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import type { TestContext } from "vitest";
-import { DEFAULT_DATABASE_URL } from "@ashara/db";
+import { resolveTestDatabaseUrl } from "@ashara/db";
 import { dropStaleRunDatabases, prepareTemplate } from "./database.js";
 import type { FaultKind, SeamKind } from "./faults.js";
 import { profileOfSeed } from "./profile.js";
@@ -20,7 +20,7 @@ import type { Direction } from "./tape.js";
 const MAX_CYCLES = 120;
 const SEED_TIMEOUT_MS = 60_000;
 
-const databaseUrl = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const databaseUrl = resolveTestDatabaseUrl(process.env);
 let template = "";
 
 /**

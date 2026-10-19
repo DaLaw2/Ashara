@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
+import { createDb, type Database } from "../connection.js";
+import { resolveTestDatabaseUrl } from "../test-database-url.js";
 import { ConfigRepository } from "./config.js";
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 let db: Database;
 

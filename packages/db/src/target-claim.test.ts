@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { DEFAULT_DATABASE_URL } from "./connection.js";
+import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { claimTargetCheckouts } from "./target-claim.js";
 
-const databaseUrl = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const databaseUrl = resolveTestDatabaseUrl(process.env);
 
 describe("claimTargetCheckouts", () => {
   test("a second process claiming a held target refuses; the release frees it", async () => {

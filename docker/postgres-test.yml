@@ -1,0 +1,35 @@
+# The test Postgres: every test, the simulator and the gates' database runs use it, never the shared
+# server of postgres.yml. Its data lives in tmpfs with durability off (fsync, synchronous_commit,
+# full_page_writes), so the scratch databases those runs create and drop write nothing to disk; a
+# restart starts it empty, and `just test` migrates it before each run.
+name: ashara-test
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg17
+    container_name: ashara-test-db
+    # max_connections matches the shared server's: the simulator runs up to 20 seed workers at once.
+    command:
+      - postgres
+      - -c
+      - max_connections=400
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    ports:
+      # 127.0.0.1-only binding is the sole access boundary under trust auth, as on the shared server.
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: ashara
+      POSTGRES_DB: ashara
+      POSTGRES_HOST_AUTH_METHOD: trust
+    tmpfs:
+      - /var/lib/postgresql/data:size=4g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ashara"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

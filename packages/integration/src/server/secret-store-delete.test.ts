@@ -3,13 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
+import { createDb, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { SecretStore, createKeyFile, loadMasterKey } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 
 // Every row this suite writes carries a unique prefix; only rows under it are deleted afterwards.
 const PREFIX = `test-${randomUUID()}`;
-const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+const db = createDb(resolveTestDatabaseUrl(process.env));
 let keyDir: string;
 let key: MasterKey;
 let store: SecretStore;

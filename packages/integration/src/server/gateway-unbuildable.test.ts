@@ -6,7 +6,7 @@ import type pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { z } from "zod";
 import { createProjectWithTender } from "@ashara/engagement";
-import { ClientRepository, DEFAULT_DATABASE_URL, SecretRepository, createDb, createPgPool } from "@ashara/db";
+import { ClientRepository, SecretRepository, createDb, createPgPool, resolveTestDatabaseUrl } from "@ashara/db";
 import type { PoolFactory } from "@ashara/db";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured } from "@ashara/model-access";
@@ -27,7 +27,7 @@ import { projectState } from "../simulator/project-state.js";
 // own database made from the simulator's migrated template, so its secret store holds only the
 // keys the test puts there. No model, podman or git call is made: every such port refuses.
 
-const BASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const BASE_URL = resolveTestDatabaseUrl(process.env);
 const ENV_KEYS = ["WORKDIR_BASE", "ASHARA_BUDGET_LIMIT_USD", "ASHARA_BUDGET_TOTAL", "ASHARA_PROJECT_BUDGET_LIMIT_USD"] as const;
 const TENDER = "Build a booking page for our two pottery studios.";
 

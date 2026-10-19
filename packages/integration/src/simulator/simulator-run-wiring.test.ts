@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { DEFAULT_DATABASE_URL } from "@ashara/db";
+import { resolveTestDatabaseUrl } from "@ashara/db";
 import { contendedWait } from "@ashara/shared";
 import type * as CoverageModule from "./coverage.js";
 import { dropStaleRunDatabases, prepareTemplate } from "./database.js";
@@ -97,7 +97,7 @@ vi.mock("./plants.js", async (importOriginal) => {
   };
 });
 
-const databaseUrl = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const databaseUrl = resolveTestDatabaseUrl(process.env);
 let template = "";
 
 beforeAll(async () => {

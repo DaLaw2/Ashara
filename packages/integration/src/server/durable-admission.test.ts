@@ -3,7 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
@@ -15,7 +15,7 @@ import { recordingLogger } from "@ashara/shared";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `durable-admission-test-${randomUUID().slice(0, 8)}`;
 
 const MODEL: ModelConfig = {

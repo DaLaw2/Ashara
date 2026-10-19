@@ -12,10 +12,10 @@ import { z } from "zod";
 import {
   ClientRepository,
   createDb,
-  DEFAULT_DATABASE_URL,
   EnvironmentBuildRepository,
   LlmCallRepository,
   ProjectRepository,
+  resolveTestDatabaseUrl,
 } from "@ashara/db";
 import { CheckDisputeRepository, TaskCheckRepository } from "@ashara/quality";
 import { DispatchService, FailureRouter } from "@ashara/delivery";
@@ -41,7 +41,7 @@ const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model }));
 
 const run = promisify(execFile);
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 // Caps far above anything a stubbed call can cost: these tests are about the checks, not the cap.
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 

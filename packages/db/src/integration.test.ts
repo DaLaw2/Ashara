@@ -2,7 +2,8 @@ import { randomUUID } from "crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL, type Database } from "./connection.js";
+import { createDb, type Database } from "./connection.js";
+import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { EventStoreRepository } from "./repositories/event-store.js";
 import { ConfigRepository } from "./repositories/config.js";
 import { ClientRepository } from "./repositories/client.js";
@@ -28,7 +29,7 @@ const createdEventIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 // Every work item and vision needs a project; this suite owns one.
 let testProjectId: ProjectId;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { ClientMessageRepository, acceptProject, recordClientStop } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
@@ -14,7 +14,7 @@ import { projectState } from "../simulator/project-state.js";
 // lifecycle. Each project here is driven through the guards only, and read three ways: the
 // repository the web client lists from, the single read, and the oracle's own SQL.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `project-state-test-${randomUUID().slice(0, 8)}`;
 
 let db: ReturnType<typeof createDb>;

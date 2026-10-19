@@ -4,7 +4,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable, SpendCap, UnpricedModel } from "@ashara/finance";
 import { SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
@@ -21,7 +21,7 @@ vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model })
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 vi.mock("@ai-sdk/openai", () => ({ createOpenAI: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
 type Db = ReturnType<typeof createDb>;

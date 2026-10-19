@@ -4,7 +4,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -28,7 +28,7 @@ import { citingItemsToCheck } from "../simulator/scripted-models.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NAME_PREFIX = `client-answer-test-${randomUUID().slice(0, 8)}`;
 

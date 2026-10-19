@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, EnvironmentBuildRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import {
   EnvironmentBuildFailed,
   EnvironmentBuildUnrecorded,
@@ -23,7 +23,7 @@ import { testCellInstance } from "../test-cells.js";
 // cell. No network is needed (the base image is local, the Containerfile has no RUN), and no skip.
 
 const run = promisify(execFile);
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
 type Db = ReturnType<typeof createDb>;

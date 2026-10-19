@@ -5,7 +5,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, latestRosterRevision, latestRosterRoles, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, latestRosterRevision, latestRosterRoles, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
 import {
   BlockReports,
@@ -40,7 +40,7 @@ import { citingItemsToCheck } from "../simulator/scripted-models.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NAME_PREFIX = `replan-test-${randomUUID().slice(0, 8)}`;
 const MERGE_COMMIT = "a".repeat(40);

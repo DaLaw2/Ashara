@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
+import { createDb, type Database } from "../connection.js";
+import { resolveTestDatabaseUrl } from "../test-database-url.js";
 import { llmCalls } from "../schema/finance.js";
 import { ClientRepository } from "./client.js";
 import { LlmCallRepository } from "./llm-call.js";
@@ -11,7 +12,7 @@ import { ProjectRepository } from "./project.js";
 // Every row here belongs to a project this suite creates under a unique name; its llm_calls rows go
 // before it.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
 let db: Database;

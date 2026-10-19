@@ -3,10 +3,11 @@ import { describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
-import { createDb, DEFAULT_DATABASE_URL } from "./connection.js";
+import { createDb } from "./connection.js";
+import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { isDatabaseConnectionFault } from "./connection-fault.js";
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 /** What a query through `db` rejects with. */
 async function rejectionOf(query: Promise<unknown>): Promise<unknown> {

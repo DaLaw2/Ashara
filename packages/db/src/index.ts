@@ -1,4 +1,5 @@
 export { DEFAULT_DATABASE_URL, createDb, createPgPool } from "./connection.js";
+export { assertTestDatabaseReachable, resolveTestDatabaseUrl } from "./test-database-url.js";
 export type { Database, DbHandle, DbTransaction, PoolFactory } from "./connection.js";
 
 export type { PgListener } from "./listener.js";

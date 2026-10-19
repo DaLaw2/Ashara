@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { systemClock, type Clock, type ProjectId } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
+import { createDb, type Database } from "../connection.js";
+import { resolveTestDatabaseUrl } from "../test-database-url.js";
 import { ClientRepository } from "./client.js";
 import { ProjectRepository } from "./project.js";
 import { stepFaultLedger } from "./step-fault.js";
@@ -10,7 +11,7 @@ import { stepFaultLedger } from "./step-fault.js";
 // Against the shared dev database: every row here belongs to a project this suite creates under a
 // unique name; deleting the project deletes its step_faults rows.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
 let db: Database;

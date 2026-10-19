@@ -3,10 +3,11 @@ import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
 import { describeErrorChain, serializeError } from "@ashara/shared";
-import { CONFLICT_ATTEMPTS, createDb, DEFAULT_DATABASE_URL } from "./connection.js";
+import { CONFLICT_ATTEMPTS, createDb } from "./connection.js";
+import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import type { PoolFactory } from "./connection.js";
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 const PidRowSchema = z.object({ pid: z.number().int() });
 

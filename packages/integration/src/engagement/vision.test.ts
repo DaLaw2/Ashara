@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
-import { ClientRepository, ProjectRepository, createDb, DEFAULT_DATABASE_URL, type Database } from "@ashara/db";
+import { ClientRepository, ProjectRepository, createDb, type Database, resolveTestDatabaseUrl } from "@ashara/db";
 import { VisionRepository, readVisionVersion } from "@ashara/engagement";
 
 // Against the test database: every row here belongs to a project this suite creates under a
 // unique name, and is deleted in afterAll.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
 let db: Database;

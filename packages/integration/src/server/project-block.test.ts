@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
 import type { DbTransaction } from "@ashara/db";
 import { PlanReports } from "@ashara/engagement";
@@ -22,7 +22,7 @@ import { projectState } from "../simulator/project-state.js";
 // Every step is narrowed to this suite's projects, so no other project is read,
 // reported on or blocked.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `project-block-test-${randomUUID().slice(0, 8)}`;
 
 type Handle = ReturnType<typeof createDb> | DbTransaction;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, isGoalTask, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, isGoalTask, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import {
@@ -31,7 +31,7 @@ import { projectState } from "../simulator/project-state.js";
 // is Quality's and is stood in here; every record is real Postgres. Every row belongs to a
 // project this suite creates under a unique name; afterAll deletes them.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `acceptance-test-${randomUUID().slice(0, 8)}`;
 const MERGE_A = "a1".repeat(20);
 const MAIN = "c3".repeat(20);

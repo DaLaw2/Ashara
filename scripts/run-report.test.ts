@@ -3,7 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository, createAgentBrief, createSessionId, readRunEvidence, toSessionAttempt, withSessionLifecycle, runAttempt } from "@ashara/workplace";
 import type { SessionStore } from "@ashara/workplace";
 import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
@@ -25,7 +25,7 @@ import { formatRunReport } from "./run-report-format.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `run-report-test-${randomUUID().slice(0, 8)}`;
 
 const deepseek: ModelConfig = {

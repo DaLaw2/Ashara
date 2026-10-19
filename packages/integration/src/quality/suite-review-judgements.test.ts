@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
 import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
@@ -14,7 +14,7 @@ import type { ProjectId } from "@ashara/shared";
 // are written whole before its outcome is acted on, and read back only through their schema. Every
 // row belongs to a project this suite creates, and afterAll deletes it.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `suite-review-judgements-test-${randomUUID().slice(0, 8)}`;
 
 let db: ReturnType<typeof createDb>;

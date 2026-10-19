@@ -14,7 +14,7 @@ import type { Hono } from "hono";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository, SecretRepository } from "@ashara/db";
+import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository, createDb, EventStoreRepository, ProjectRepository, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
 import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
@@ -29,7 +29,7 @@ import type { WebClientDeps } from "@ashara/server/web-client";
 import { WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 const API_TOKEN = `web-client-test-${randomUUID()}`;
 const FAILURE_DELAY_MS = 150;

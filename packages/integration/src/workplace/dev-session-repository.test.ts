@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { ClientRepository, DEFAULT_DATABASE_URL, ProjectRepository, createDb, devSessions, workItems } from "@ashara/db";
+import { ClientRepository, ProjectRepository, createDb, devSessions, workItems, resolveTestDatabaseUrl } from "@ashara/db";
 import type { Database, DbTransaction } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { DevSessionRepository, ORPHANED_SESSION_RESOLVER, terminalizeOrphanedSessions } from "@ashara/workplace";
@@ -17,7 +17,7 @@ const crashedTaskId = randomUUID();
 const endedTaskId = randomUUID();
 
 beforeAll(async () => {
-  db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+  db = createDb(resolveTestDatabaseUrl(process.env));
   const nonce = randomUUID().slice(0, 8);
   testClientId = (await new ClientRepository(db).create(`dev-session-intg-${nonce}`)).id;
   testProjectId = (await new ProjectRepository(db).create(`dev-session-intg-${nonce}`, testClientId)).id;

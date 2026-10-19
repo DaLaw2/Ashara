@@ -1,12 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
+import { createDb, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { EmptySecretValue, InvalidSecretName, MasterKey, SecretKeyMismatch, SecretNotFound, SecretStore } from "@ashara/security";
 
 // Runs against the shared dev database: every row this suite writes carries a
 // unique prefix, and only rows under that prefix are deleted afterwards.
 const PREFIX = `test-${randomUUID()}`;
-const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
+const db = createDb(resolveTestDatabaseUrl(process.env));
 const repository = new SecretRepository(db);
 const key = new MasterKey(randomBytes(32));
 const store = new SecretStore(repository, key);

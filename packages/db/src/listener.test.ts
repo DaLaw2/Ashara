@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from "vitest";
 import pg from "pg";
 import { z } from "zod";
-import { DEFAULT_DATABASE_URL } from "./connection.js";
+import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { listenForEvents } from "./listener.js";
 import type { PgListener } from "./listener.js";
 
@@ -9,7 +9,7 @@ import type { PgListener } from "./listener.js";
 // LISTEN connections in parallel, so the assertions follow this listener's backend
 // pid, never a count of all listeners.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 const CountRowSchema = z.object({ n: z.number().int() });
 

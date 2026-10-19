@@ -2,14 +2,15 @@ import { randomUUID } from "node:crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import { parseProjectId } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
+import { createDb, type Database } from "../connection.js";
+import { resolveTestDatabaseUrl } from "../test-database-url.js";
 import { ClientRepository } from "./client.js";
 import { ProjectRepository } from "./project.js";
 
 // Against the shared dev database: every row here is created by this suite under
 // a unique name and deleted in afterAll; nothing else is read or written.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
 let db: Database;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { BurnWarnings, listProjectBurns, postBurnWarning } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
@@ -14,7 +14,7 @@ import { checkReports, readReportRecords } from "../simulator/client-reports.js"
 // over a new store, nothing in memory carried over) tells neither again. Every row belongs to a
 // project this suite creates; the listing is narrowed to them, and afterAll deletes them.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
 // 20 requests with a 25% reserve: 5 set aside, 15 the project's work may draw; yellow from 8, red from 12.
 const BUDGETS = { perTaskRequests: 50, perProjectRequests: 20, verificationReservePercent: 25 };

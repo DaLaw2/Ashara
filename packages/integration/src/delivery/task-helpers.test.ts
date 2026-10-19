@@ -3,14 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { resolveTargetProjectPath } from "@ashara/delivery";
 import { parseProjectId, recordingLogger } from "@ashara/shared";
 
 // Against the shared dev database: every row here is created under a unique name
 // and deleted in afterAll.
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 const PREFIX = `task-helpers-test-${NONCE}`;
 

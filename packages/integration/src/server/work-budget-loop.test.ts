@@ -8,7 +8,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository, WorkGrantRepository } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, WorkGrantRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { CoreLoopDeps } from "@ashara/delivery";
@@ -34,7 +34,7 @@ import { projectState } from "../simulator/project-state.js";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `work-budget-loop-test-${randomUUID().slice(0, 8)}`;
 const AMPLE_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 

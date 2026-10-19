@@ -5,7 +5,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
 import { z } from "zod";
 import type pg from "pg";
-import { createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository, ClientRepository } from "@ashara/db";
+import { createDb, EventStoreRepository, ProjectRepository, ClientRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
 import { VisionRepository, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
@@ -16,7 +16,7 @@ import type { AppDeps } from "@ashara/server/routes";
 import { WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const API_TOKEN = `test-token-${randomUUID().slice(0, 8)}`;
 
 let db: Database;

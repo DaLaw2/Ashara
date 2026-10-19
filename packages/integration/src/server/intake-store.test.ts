@@ -4,7 +4,7 @@ import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { stepContainment } from "@ashara/delivery";
 import { TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
@@ -24,7 +24,7 @@ import { createIntakeStore } from "@ashara/server/intake-store";
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 // Caps far above anything a stubbed call can cost: these tests are about the calls, not the cap.
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NONCE = randomUUID().slice(0, 8);
