@@ -2,11 +2,12 @@ import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { acceptanceSweeps, clientMessages, completedGoalTasks, goalTaskSql, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, suiteReviewClaims, suiteReviewJudgements, taskChecks, undecidedItemClaims, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
+import { CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
-import type { DeliveredReportFailureRecord, ReadingTold, ReviewStrength, UndecidedBy } from "../delivered-report.js";
+import { JUDGE_STANDINGS } from "../delivered-report.js";
+import type { DeliveredReportFailureRecord, JudgeStanding, ReadingTold, ReviewStrength, UndecidedBy } from "../delivered-report.js";
 import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
@@ -47,7 +48,13 @@ type AcceptedVisionItem =
 type VisionCoverage =
   | {
       readonly kind: "recorded";
-      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy; readonly review: ReviewStrength | null }>;
+      readonly items: ReadonlyArray<{
+        readonly source: AcceptedVisionItem;
+        readonly checked: boolean;
+        readonly undecided: UndecidedBy;
+        readonly review: ReviewStrength | null;
+        readonly judges: JudgeStanding | null;
+      }>;
     }
   /** The review, or a check task whose checks ran, records no traced items: coverage cannot be stated. */
   | { readonly kind: "unrecorded" };
@@ -438,8 +445,10 @@ async function visionCoverage(
       // An item no review left undecided is false: no undecided_items row names it. Its review is then
       // the weakest confirmation among the check tasks deciding it, none when one of them has none.
       const left: UndecidedBy = record === undefined ? false : record.reason;
-      const review = record !== undefined ? record.strength : by === undefined ? null : weakestConfirmation([...by].map((checkTaskId) => confirmationOf(confirmations, checkTaskId)));
-      if (source.type === "scope") return { source, checked, undecided: left, review };
+      const confirmed = record !== undefined || by === undefined ? null : weakestConfirmation([...by].map((checkTaskId) => confirmationOf(confirmations, checkTaskId)));
+      const review = record !== undefined ? record.strength : confirmed === null ? null : confirmed.strength;
+      const judges = confirmed === null ? null : confirmed.judges;
+      if (source.type === "scope") return { source, checked, undecided: left, review, judges };
       const now = current.get(source.id);
       if (now === undefined) {
         throw new AcceptedStandingUnreadable(sweep.id, projectId, null, `the vision at acceptance holds no assumption ${source.id}, which the plan's review recorded`);
@@ -452,7 +461,7 @@ async function visionCoverage(
           `assumption ${source.id} reads "${now.text}" at acceptance, not "${source.text}" as the plan's review recorded it`,
         );
       }
-      return { source: now, checked, undecided: left, review };
+      return { source: now, checked, undecided: left, review, judges };
     }),
   };
 }
@@ -575,18 +584,49 @@ class ClaimCoveredUnreadable extends ReportRecordUnreadable {
   }
 }
 
-/** How the latest claim covering a check task stands: confirmed at a strength, or not confirmed. */
-type ClaimConfirmation = { readonly kind: "confirmed"; readonly strength: ReviewStrength } | { readonly kind: "unconfirmed" };
+/** A confirmation: the strength of the second review that confirmed, and how the claim's reviewing models stood to the work. */
+interface Confirmation {
+  readonly strength: ReviewStrength;
+  readonly judges: JudgeStanding;
+}
+
+/** How the latest claim covering a check task stands: confirmed, or not confirmed. */
+type ClaimConfirmation = ({ readonly kind: "confirmed" } & Confirmation) | { readonly kind: "unconfirmed" };
+
+/** A claim's three tier columns as stored: all set on a claim written with them, all null on one written before. */
+const StoredClaimTiersSchema = z.union([
+  z.object({ judgeTier: CapabilityLevelSchema, judgedTier: CapabilityLevelSchema, tierRelation: z.enum(["above", "equal"]) }),
+  z.object({ judgeTier: z.null(), judgedTier: z.null(), tierRelation: z.null() }),
+]);
+
+/** A stored claim's tier columns do not read as a judge's standing to the work. */
+class ClaimTiersUnreadable extends ReportRecordUnreadable {
+  constructor(
+    readonly claimId: string,
+    readonly detail: string,
+  ) {
+    super(`suite_review_claims row ${claimId}: judge_tier, judged_tier and tier_relation do not read as a judge's standing to the work: ${detail}`);
+    this.name = "ClaimTiersUnreadable";
+  }
+}
 
 /**
  * Per check task, how the latest claim covering it stands: confirmed at the
  * strength of the second review that answered, whether it named nothing or something about other
- * items; unconfirmed when it failed or was answered by its first's provider, a basis that records no strength. A check task
- * no claim covers has no entry.
+ * items, with how its reviewing models stood to the work; unconfirmed when it failed or was answered
+ * by its first's provider, a basis that records no strength. A check task no claim covers has no entry.
  */
 async function claimStrengths(db: DbHandle, projectId: string): Promise<Map<string, ClaimConfirmation>> {
   const rows = await db
-    .select({ id: suiteReviewClaims.id, basis: suiteReviewClaims.basis, covered: suiteReviewClaims.covered, strength: suiteReviewClaims.secondStrength })
+    .select({
+      id: suiteReviewClaims.id,
+      basis: suiteReviewClaims.basis,
+      covered: suiteReviewClaims.covered,
+      strength: suiteReviewClaims.secondStrength,
+      judgeTier: suiteReviewClaims.judgeTier,
+      judgedTier: suiteReviewClaims.judgedTier,
+      tierRelation: suiteReviewClaims.tierRelation,
+    })
     .from(suiteReviewClaims)
     .where(eq(suiteReviewClaims.projectId, projectId))
     .orderBy(asc(suiteReviewClaims.createdAt), asc(suiteReviewClaims.id));
@@ -598,25 +638,38 @@ async function claimStrengths(db: DbHandle, projectId: string): Promise<Map<stri
     if (row.basis === "second-opinion-clean" || row.basis === "second-opinion-found") {
       const strength = storedStrength("suite_review_claims", row.strength);
       if (strength === null) throw new ReviewStrengthUnreadable("suite_review_claims", `claim ${row.id} is ${row.basis} but records no strength`);
-      standing = { kind: "confirmed", strength };
+      const tiers = StoredClaimTiersSchema.safeParse(row);
+      if (!tiers.success) throw new ClaimTiersUnreadable(row.id, z.prettifyError(tiers.error));
+      standing = { kind: "confirmed", strength, judges: tiers.data.tierRelation === null ? "unrecorded" : tiers.data.tierRelation };
     }
     for (const checkTaskId of covered.data) latest.set(checkTaskId, standing);
   }
   return latest;
 }
 
-/** A check task's confirmation strength; null when its latest claim was not confirmed or no claim covers it. */
-function confirmationOf(confirmations: ReadonlyMap<string, ClaimConfirmation>, checkTaskId: string): ReviewStrength | null {
+/** A check task's confirmation; null when its latest claim was not confirmed or no claim covers it. */
+function confirmationOf(confirmations: ReadonlyMap<string, ClaimConfirmation>, checkTaskId: string): Confirmation | null {
   const standing = confirmations.get(checkTaskId);
-  return standing === undefined || standing.kind === "unconfirmed" ? null : standing.strength;
+  return standing === undefined || standing.kind === "unconfirmed" ? null : standing;
 }
 
-/** An item decided by several check tasks is confirmed only as strongly as the weakest of them (SECOND_OPINION_STRENGTHS is strongest first). */
-function weakestConfirmation(strengths: ReadonlyArray<ReviewStrength | null>): ReviewStrength | null {
-  let weakest: ReviewStrength | null = null;
-  for (const strength of strengths) {
-    if (strength === null) return null;
-    if (weakest === null || SECOND_OPINION_STRENGTHS.indexOf(strength) > SECOND_OPINION_STRENGTHS.indexOf(weakest)) weakest = strength;
+/**
+ * An item decided by several check tasks is confirmed only as strongly as the weakest of them
+ * (SECOND_OPINION_STRENGTHS is strongest first), and its reviewing models stand to the work only as
+ * the weakest of theirs does; null when one of them is not confirmed.
+ */
+function weakestConfirmation(confirmations: ReadonlyArray<Confirmation | null>): Confirmation | null {
+  let weakest: Confirmation | null = null;
+  for (const confirmation of confirmations) {
+    if (confirmation === null) return null;
+    if (weakest === null) {
+      weakest = confirmation;
+      continue;
+    }
+    weakest = {
+      strength: SECOND_OPINION_STRENGTHS.indexOf(confirmation.strength) > SECOND_OPINION_STRENGTHS.indexOf(weakest.strength) ? confirmation.strength : weakest.strength,
+      judges: JUDGE_STANDINGS.indexOf(confirmation.judges) > JUDGE_STANDINGS.indexOf(weakest.judges) ? confirmation.judges : weakest.judges,
+    };
   }
   return weakest;
 }

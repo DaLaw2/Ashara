@@ -75,6 +75,7 @@ interface LadderResult<T> {
   readonly capability: CapabilityLevel;
   readonly model: string;
   readonly provider: string;
+  readonly grade: CapabilityLevel;
   /** Total attempts across all tiers until a valid result. */
   readonly attempts: number;
   /** Distinct capability tiers actually exercised. */
@@ -150,7 +151,7 @@ export class StructuredOutputExhausted extends GatewayError {
 // ---------------------------------------------------------------------------
 
 type LadderAttemptOutcome<T> =
-  | { readonly ok: true; readonly value: T; readonly model: string; readonly provider: string }
+  | { readonly ok: true; readonly value: T; readonly model: string; readonly provider: string; readonly grade: CapabilityLevel }
   | {
       readonly ok: false;
       readonly errors: readonly string[];
@@ -243,6 +244,7 @@ async function runLadderCore<T>(
           capability,
           model: outcome.model,
           provider: outcome.provider,
+          grade: outcome.grade,
           attempts: attemptNo,
           tiersUsed: perModel.length + 1,
         };
@@ -310,6 +312,8 @@ interface StructuredProviderResult<T> {
   readonly data: T;
   readonly model: string;
   readonly provider: string;
+  /** The catalog grade of the model that answered. */
+  readonly grade: CapabilityLevel;
 }
 
 export interface StructuredProvider {
@@ -407,6 +411,7 @@ export function withStructuredLadder(
                 value: response.data,
                 model: response.model,
                 provider: response.provider,
+                grade: response.grade,
               };
             } catch (err) {
               if (err instanceof SchemaValidationError) {
@@ -430,7 +435,7 @@ export function withStructuredLadder(
           },
         },
       );
-      return { data: result.value, model: result.model, provider: result.provider };
+      return { data: result.value, model: result.model, provider: result.provider, grade: result.grade };
     },
   };
 }

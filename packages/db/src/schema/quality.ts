@@ -93,8 +93,23 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
 // review's first pass that Z0 could not disprove, routed, released or advisory, with both reviews'
 // findings whole, the second review's model and strength (none when no second review could change
 // the outcome, or when it failed, with why in second_failure), the strengths it passed over, and why
-// it acted or did not (basis). Append-only; the jsonb columns are parsed by the repository.
+// it acted or did not (basis), and how its judges stood to the check work. Append-only; the jsonb
+// columns are parsed by the repository.
 // ---------------------------------------------------------------------------
+
+/**
+ * How the judges a suite review row rests on stood to the check work they judged: judge_tier, the
+ * grade of the weaker of them (the first review, and the second where it answered); judged_tier,
+ * the check work's tier; tier_relation, "above" or "equal". All three on every row written now
+ * (*_tiers_recorded); none on a row written before they were recorded.
+ */
+function judgeTierColumns() {
+  return {
+    judgeTier: text("judge_tier"),
+    judgedTier: text("judged_tier"),
+    tierRelation: text("tier_relation"),
+  };
+}
 
 export const suiteReviewJudgements = pgTable("suite_review_judgements", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
@@ -118,6 +133,7 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
   secondStrength: text("second_strength"),
   passedOver: jsonb("passed_over").notNull(),
   secondFailure: text("second_failure"),
+  ...judgeTierColumns(),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 
@@ -125,7 +141,8 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
 // suite_review_claims (Quality): one row per suite review whose outcome routed
 // nothing: its claim that the checks decide the items it covers, with the second review that confirms
 // it or not (basis) whole, at the strength it answered (second_strength) after the strengths it passed
-// over. Append-only; second_findings, covered and passed_over are jsonb arrays.
+// over, and how its judges stood to the check work. Append-only; second_findings, covered and
+// passed_over are jsonb arrays.
 // ---------------------------------------------------------------------------
 
 export const suiteReviewClaims = pgTable("suite_review_claims", {
@@ -144,6 +161,7 @@ export const suiteReviewClaims = pgTable("suite_review_claims", {
   passedOver: jsonb("passed_over").notNull(),
   secondFindings: jsonb("second_findings").notNull(),
   secondFailure: text("second_failure"),
+  ...judgeTierColumns(),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 

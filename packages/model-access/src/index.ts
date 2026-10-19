@@ -3,6 +3,7 @@ export { LLMGateway } from "./gateway.js";
 export { providerFailureOf } from "./gateway.js";
 export type { CapabilityLevel } from "./capability-level.js";
 export { CapabilityLevelSchema } from "./capability-level.js";
+export { CAPABILITY_RANK, judgeRelation } from "./capability-rank.js";
 export type { ResolvedModel } from "./gateway.js";
 export type { TurnRequest, TurnResult, TurnToolSchema } from "./turn.js";
 export { buildGatewayConfig, toModelConfig } from "./config.js";
@@ -35,6 +36,7 @@ export { SchemaValidationError } from "./errors.js";
 /** @testseam Finance's work-ledger.test.ts holds the call-site purposes to every registered site; buildGateway is its production reader */
 export { KNOWN_LLM_SITES } from "./types.js";
 export type {
+  JudgeRelation,
   KnownLLMSite,
   ModelConfig,
   ProviderRequest,

@@ -278,12 +278,16 @@ describe("baseline onto 000_init.sql", () => {
   });
 });
 
-describe("migrations/ starts from one init equal to the numbered files it stands in for", () => {
-  test("000_init.sql is the first file, and no later file takes a name the init stands in for", () => {
-    const files = readdirSync(MIGRATIONS_DIR).sort();
-    expect(files[0]).toBe("000_init.sql");
+describe("migrations/ holds one init equal to the numbered files it stands in for, then the files after it", () => {
+  // A later file named as one the init stands in for would read as applied on a database that ran that file.
+  test("000_init.sql comes first; every later file is numbered after it and reuses no name the init stands in for", () => {
+    const [init, ...later] = readdirSync(MIGRATIONS_DIR).sort();
+    expect(init).toBe("000_init.sql");
     const legacy = new Set(LEGACY_MIGRATIONS.map((m) => m.filename));
-    expect(files.filter((f) => legacy.has(f))).toEqual([]);
+    for (const name of later) {
+      expect(name).toMatch(/^(?!000_)\d{3}_[a-z0-9_]+\.sql$/);
+      expect(legacy.has(name)).toBe(false);
+    }
   });
 
   // The fingerprint file was taken from a database built by running every numbered file in order;

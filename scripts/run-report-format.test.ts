@@ -324,13 +324,34 @@ describe("formatRunReport cost per Epic and goal task", () => {
   });
 });
 
+/** How a stored judgement's or claim's judges stood to the check work: above it, only equal to it, or not recorded. */
+const ABOVE = { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" } as const;
+const EQUAL = { kind: "recorded", judge: "Frontier", judged: "Frontier", relation: "equal" } as const;
+const UNRECORDED = { kind: "unrecorded" } as const;
+
 describe("formatSuiteReviewJudgements", () => {
   test("states both reviews' findings whole, side by side, with what the second review was", () => {
     const first = { kind: "outside-vision" as const, checkTasks: ["c1"], check: "prints-count", judgedItems: ["Monthly totals"], missingClause: "a count", problem: "the check asserts a count", evidence: "line 3" };
     const text = formatSuiteReviewJudgements([
-      { reviewTaskId: "r1", checkTaskId: "c1", checkName: "prints-count", outcome: "routed", basis: "two-reviews", firstFinding: first, secondFindings: [{ ...first, missingClause: "a row count" }], firstModel: "a/m", secondModel: "a/m", secondStrength: "same-model", passedOver: [], secondFailure: null },
+      {
+        reviewTaskId: "r1",
+        checkTaskId: "c1",
+        checkName: "prints-count",
+        outcome: "routed",
+        basis: "two-reviews",
+        firstFinding: first,
+        secondFindings: [{ ...first, missingClause: "a row count" }],
+        firstModel: "a/m",
+        secondModel: "a/m",
+        secondStrength: "same-model",
+        passedOver: [],
+        secondFailure: null,
+        tiers: EQUAL,
+      },
     ]);
-    expect(text).toContain("routed (two-reviews); second review same-model (first a/m, second a/m)");
+    expect(text).toContain(
+      "routed (two-reviews); second review same-model (first a/m, second a/m)\n    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (no model above it was routed to judge it)",
+    );
     expect(text).toContain('first review:  missing "a count": the check asserts a count');
     expect(text).toContain('second review: missing "a row count": the check asserts a count');
   });
@@ -351,11 +372,29 @@ describe("formatSuiteReviewJudgements", () => {
         secondStrength: "same-family-other-model",
         passedOver: [{ strength: "other-family", outcome: "unavailable", reason: "SecondOpinionUnavailable: no other provider" }],
         secondFailure: null,
+        tiers: ABOVE,
       },
-      { reviewTaskId: "r1", checkTaskId: "c1", checkName: null, outcome: "advisory", basis: "frozen", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondStrength: null, passedOver: [], secondFailure: null },
-      { reviewTaskId: "r1", checkTaskId: "c2", checkName: null, outcome: "advisory", basis: "second-review-failed", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondStrength: null, passedOver: [], secondFailure: "SecondOpinionUnanswered: no answer" },
+      { reviewTaskId: "r1", checkTaskId: "c1", checkName: null, outcome: "advisory", basis: "frozen", firstFinding: undecided, secondFindings: [], firstModel: "a/m", secondModel: null, secondStrength: null, passedOver: [], secondFailure: null, tiers: UNRECORDED },
+      {
+        reviewTaskId: "r1",
+        checkTaskId: "c2",
+        checkName: null,
+        outcome: "advisory",
+        basis: "second-review-failed",
+        firstFinding: undecided,
+        secondFindings: [],
+        firstModel: "a/m",
+        secondModel: null,
+        secondStrength: null,
+        passedOver: [],
+        secondFailure: "SecondOpinionUnanswered: no answer",
+        tiers: ABOVE,
+      },
     ]);
-    expect(text).toContain("its undecided-item finding of task c1: advisory (second-opinion-disagreed); second review same-family-other-model (first a/m, second a/n)");
+    expect(text).toContain(
+      "its undecided-item finding of task c1: advisory (second-opinion-disagreed); second review same-family-other-model (first a/m, second a/n)\n    judge tier: Frontier, above the check work at Strong",
+    );
+    expect(text).toContain("advisory (frozen); no second review asked\n    judge tier: not recorded (written before judge tiers were)");
     expect(text).toContain("    passed over other-family (unavailable): SecondOpinionUnavailable: no other provider\n    first review:  undecided S9: no check forces data to disk");
     expect(text).toContain("advisory (frozen); no second review asked");
     expect(text).toContain("advisory (second-review-failed); second review failed (first a/m): SecondOpinionUnanswered: no answer");
@@ -370,7 +409,7 @@ describe("formatSuiteReviewClaims", () => {
   type Answered = Extract<Claim["second"], { kind: "answered" }>;
   const answered = (strength: Answered["strength"], model: string, findings: Answered["findings"] = []): Answered => ({ kind: "answered", model, strength, findings });
   const claims: Claim[] = [
-    { reviewTaskId: "r1", basis: "second-opinion-clean", covered: ["c1"], firstModel: "a/m", passedOver: [], unverified: [], second: answered("other-family", "b/n") },
+    { reviewTaskId: "r1", basis: "second-opinion-clean", covered: ["c1"], firstModel: "a/m", passedOver: [], unverified: [], second: answered("other-family", "b/n"), tiers: ABOVE },
     {
       reviewTaskId: "r2",
       basis: "second-opinion-found",
@@ -379,6 +418,7 @@ describe("formatSuiteReviewClaims", () => {
       passedOver: [{ strength: "other-family", outcome: "unavailable", reason: "SecondOpinionUnavailable: no other provider" }],
       unverified: [{ checkTaskId: "c2", itemId: "S4", itemText: "data survives a restart" }],
       second: answered("same-family-other-model", "a/n", [finding]),
+      tiers: ABOVE,
     },
     {
       reviewTaskId: "r3",
@@ -391,6 +431,7 @@ describe("formatSuiteReviewClaims", () => {
       ],
       unverified: [],
       second: answered("same-model", "a/m"),
+      tiers: EQUAL,
     },
     {
       reviewTaskId: "r4",
@@ -400,6 +441,7 @@ describe("formatSuiteReviewClaims", () => {
       passedOver: [{ strength: "same-model", outcome: "failed", reason: "SecondOpinionUnanswered: no answer" }],
       unverified: [{ checkTaskId: "c4", itemId: "S7", itemText: "a full disk is reported" }],
       second: { kind: "failed", reason: "SecondOpinionUnanswered: no answer at any strength" },
+      tiers: UNRECORDED,
     },
   ];
 
@@ -408,8 +450,12 @@ describe("formatSuiteReviewClaims", () => {
     expect(text).not.toContain("none recorded");
     expect(text).toContain("Suite review claims (4):");
     expect(text).toContain(
-      "  review r1, covering check task(s) c1: second-opinion-clean (clean: the second opinion found no problem either); second opinion: other-family, another model family (first a/m, second b/n)\n    unverified: none",
+      "  review r1, covering check task(s) c1: second-opinion-clean (clean: the second opinion found no problem either); second opinion: other-family, another model family (first a/m, second b/n)\n    judge tier: Frontier, above the check work at Strong\n    unverified: none",
     );
+    expect(text).toContain(
+      "second opinion: same-model, the same model from another angle (first a/m, second a/m)\n    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (no model above it was routed to judge it)",
+    );
+    expect(text).toContain("second opinion: none (first a/m): SecondOpinionUnanswered: no answer at any strength\n    judge tier: not recorded (written before judge tiers were)");
     expect(text).toContain(
       "  review r2, covering check task(s) c1, c2: second-opinion-found (finding: the second opinion found a problem); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
     );
@@ -432,6 +478,7 @@ describe("formatSuiteReviewClaims", () => {
       passedOver: [],
       unverified: [{ checkTaskId: "c5", itemId: "S9", itemText: "put survives a power loss" }],
       second: answered("same-family-other-model", "a/n"),
+      tiers: ABOVE,
     };
     const text = formatSuiteReviewClaims([sameProvider]);
     expect(text).toContain(

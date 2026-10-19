@@ -216,7 +216,7 @@ describe("TenderIntake assumption label", () => {
       assumptions: [{ statement: "Until you answered nothing changes.", rationale: "Kept as written.", kind: "internal-design" }],
     };
     const llm: ContextualLlm = {
-      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(raw), model: "stub-model", provider: "stub" }) }),
+      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(raw), model: "stub-model", provider: "stub", grade: "Strong" }) }),
     };
     const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
     const store: IntakeStore = {
@@ -335,7 +335,7 @@ describe("TenderIntake assumptions report", () => {
 
   async function intakeOf(response: unknown) {
     const llm: ContextualLlm = {
-      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(response), model: "stub-model", provider: "stub" }) }),
+      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(response), model: "stub-model", provider: "stub", grade: "Strong" }) }),
     };
     const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
     const store = storeOf("tender-r", async (write) => {
@@ -452,7 +452,7 @@ describe("TenderIntake failure classes", () => {
       forCall: () => ({
         generateStructured: async (request) => {
           reads++;
-          return { data: request.schema.parse(valid), model: "stub-model", provider: "stub" };
+          return { data: request.schema.parse(valid), model: "stub-model", provider: "stub", grade: "Strong" };
         },
       }),
     };
@@ -554,8 +554,8 @@ describe("TenderIntake assumption kinds fail safe", () => {
         generateStructured: async (request) => {
           prompts.push(request.prompt);
           // The reading asks nothing, so another family's second reading confirms it.
-          if (request.secondOpinion !== undefined) return { data: request.schema.parse({ questions: [] }), model: "other-model", provider: "other" };
-          return { data: request.schema.parse(response), model: "stub-model", provider: "stub" };
+          if (request.secondOpinion !== undefined) return { data: request.schema.parse({ questions: [] }), model: "other-model", provider: "other", grade: "Strong" };
+          return { data: request.schema.parse(response), model: "stub-model", provider: "stub", grade: "Strong" };
         },
       }),
     };
@@ -629,10 +629,10 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
       forCall: () => ({
         generateStructured: async (request) => {
           asked.push({ strength: request.secondOpinion?.strength ?? null, prompt: request.prompt });
-          if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet" };
+          if (request.secondOpinion === undefined) return { data: request.schema.parse(first), provider: "anthropic", model: "sonnet", grade: "Strong" };
           if (request.capability === undefined) throw new Error("the second reading asks a capability, not a judge");
           const answer = second({ secondOpinion: request.secondOpinion, capability: request.capability });
-          return { ...answer, data: request.schema.parse(answer.data) };
+          return { ...answer, data: request.schema.parse(answer.data), grade: "Strong" };
         },
       }),
     };

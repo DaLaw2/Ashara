@@ -33,7 +33,7 @@ function scripted(...responses: unknown[]) {
       async generateStructured(request) {
         prompts.push(request.prompt);
         const next = responses.length > 1 ? responses.shift() : responses[0];
-        return { data: request.schema.parse(next), model: "stub", provider: "stub" };
+        return { data: request.schema.parse(next), model: "stub", provider: "stub", grade: "Strong" };
       },
     }),
   };

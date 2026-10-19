@@ -4,8 +4,8 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
-import type { ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
-import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
+import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
+import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, TaskCheckRepository, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId, recordingLogger } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
@@ -22,13 +22,16 @@ let clientId: string;
 let projectId: ProjectId;
 
 /** The model a stub catalog serves the first review with. */
-const FIRST = { provider: "first", model: "strong-a" };
+const FIRST = { provider: "first", model: "strong-a", grade: "Frontier" as const };
+
+/** A judge graded Frontier over check work at Strong. */
+const ABOVE_STRONG = { judgeTier: "Frontier", judgedTier: "Strong", relation: "above" } as const;
 
 /**
  * The model each strength of second opinion goes to in a stub catalog, as the gateway resolves it:
  * a strength the catalog lacks is refused unsent with SecondOpinionUnavailable.
  */
-function secondBy(request: ConstructorParameters<typeof SecondOpinionUnavailable>[1] & { readonly secondOpinion?: { readonly avoid: { readonly provider: string; readonly model: string }; readonly strength: SecondOpinionStrength } }, catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>) {
+function secondBy(request: ConstructorParameters<typeof SecondOpinionUnavailable>[1] & { readonly secondOpinion?: { readonly avoid: { readonly provider: string; readonly model: string }; readonly strength: SecondOpinionStrength } }, catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string; readonly grade: CapabilityLevel }>>) {
   const opinion = request.secondOpinion;
   if (opinion === undefined) return FIRST;
   const by = catalog[opinion.strength];
@@ -72,8 +75,8 @@ describe("suite review judgements", () => {
     const checkB = await workItem("Checks of Refuse bad rows");
     const source: SuiteReviewSource = {
       checkTasksUnderReview: async () => [
-        { id: checkA, status: "Completed", checksFor: implA, visionItems: ["Monthly totals"], sources: null, checkedTitle: "Sum by month", reviewReopens: 0 },
-        { id: checkB, status: "Completed", checksFor: implB, visionItems: ["Malformed rows are refused"], sources: null, checkedTitle: "Refuse bad rows", reviewReopens: 0 },
+        { id: checkA, status: "Completed", checksFor: implA, visionItems: ["Monthly totals"], sources: null, checkedTitle: "Sum by month", reviewReopens: 0, grade: "Strong", attemptModels: [] },
+        { id: checkB, status: "Completed", checksFor: implB, visionItems: ["Malformed rows are refused"], sources: null, checkedTitle: "Refuse bad rows", reviewReopens: 0, grade: "Strong", attemptModels: [] },
       ],
       latest: async (taskId) => ({
         checkTaskId: taskId === implA ? checkA : checkB,
@@ -94,7 +97,7 @@ describe("suite review judgements", () => {
     const llm: ContextualLlm = {
       forCall: () => ({
         generateStructured: async (request) => {
-          const by = secondBy(request, { "other-family": { provider: "second", model: "strong-b" } });
+          const by = secondBy(request, { "other-family": { provider: "second", model: "strong-b", grade: "Frontier" as const } });
           const answer = answers[next++];
           return { data: request.schema.parse(answer), ...by };
         },
@@ -120,6 +123,7 @@ describe("suite review judgements", () => {
         secondStrength: "other-family",
         passedOver: [],
         secondFailure: null,
+        tiers: { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" },
       },
       {
         reviewTaskId: reviewTask,
@@ -134,6 +138,7 @@ describe("suite review judgements", () => {
         secondStrength: "other-family",
         passedOver: [],
         secondFailure: null,
+        tiers: { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" },
       },
     ]);
 
@@ -144,8 +149,8 @@ describe("suite review judgements", () => {
     const reviewTask = await workItem("Review with a corrupt judgement");
     const checkTask = await workItem("Checks with a corrupt judgement");
     await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over)
-      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb)`);
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
+      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Frontier', 'Strong', 'above')`);
     await expect(suiteReviewJudgementsOf(db, projectId)).rejects.toMatchObject({ name: "SuiteReviewJudgementCorrupt" });
     // The corrupt row is this test's alone: the project's other judgements are read whole after it.
     await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
@@ -157,8 +162,8 @@ describe("suite review judgements", () => {
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
     const insert = (secondModel: string, secondStrength: string) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb)`);
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, 'Frontier', 'Strong', 'above')`);
     await expect(insert("q/n", "same-model")).rejects.toThrow();
     await expect(insert("p/m", "same-family-other-model")).rejects.toThrow();
     await expect(insert("p/n", "other-family")).rejects.toThrow();
@@ -181,13 +186,13 @@ describe("witnessed findings and the check set freeze", () => {
    * A review whose first pass raises one undecided item; the second answers from the model `catalog`
    * serves its strength with, raising the item too when `agrees`, or fails with `failure`.
    */
-  async function reviewUndecided(catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>, agrees: boolean, failure: Error | null = null) {
+  async function reviewUndecided(catalog: Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string; readonly grade: CapabilityLevel }>>, agrees: boolean, failure: Error | null = null) {
     const reviewTask = parseWorkItemId(await workItem("Review an undecided item"), "test review task");
     const impl = await workItem("Durable put");
     const check = await workItem("Checks of Durable put");
     const cited = { type: "scope" as const, id: "S9", text: "put survives a power loss", side: "in" as const };
     const source: SuiteReviewSource = {
-      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: [cited.text], sources: [cited], checkedTitle: "Durable put", reviewReopens: 0 }],
+      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: [cited.text], sources: [cited], checkedTitle: "Durable put", reviewReopens: 0, grade: "Strong", attemptModels: [] }],
       latest: async () => ({ checkTaskId: check, revision: 1, environmentVersion: "v1", baselineCommit: null, checks: [{ name: "put-then-get", command: "sh put.sh", decides: ["S9"] }], files: [] }),
       frozen: async () => false,
     };
@@ -210,7 +215,7 @@ describe("witnessed findings and the check set freeze", () => {
   }
 
   test("an undecided item the second review does not reach is kept advisory and stored undecided, never routed, with the second's strength", async () => {
-    const { outcome, kept, judged, check } = await reviewUndecided({ "same-family-other-model": { provider: "first", model: "strong-b" } }, false);
+    const { outcome, kept, judged, check } = await reviewUndecided({ "same-family-other-model": { provider: "first", model: "strong-b", grade: "Frontier" as const } }, false);
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
     expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
     expect(judged).toMatchObject([
@@ -227,7 +232,7 @@ describe("witnessed findings and the check set freeze", () => {
 
   test("a second review no model answered is stored as failed with its reason, the item kept advisory and undecided", async () => {
     const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
-    const { outcome, kept, judged, check } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b" } }, true, failure);
+    const { outcome, kept, judged, check } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b", grade: "Frontier" as const } }, true, failure);
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
     expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
     expect(judged).toMatchObject([{ outcome: "advisory", basis: "second-review-failed", secondModel: null, secondStrength: null, secondFindings: [] }]);
@@ -245,8 +250,8 @@ describe("witnessed findings and the check set freeze", () => {
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
     const insert = (basis: string, failure: string | null) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, passed_over, second_failure)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', '[]'::jsonb, ${failure})`);
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, passed_over, second_failure, judge_tier, judged_tier, tier_relation)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', '[]'::jsonb, ${failure}, 'Frontier', 'Strong', 'above')`);
     await expect(insert("second-review-failed", null)).rejects.toThrow();
     await expect(insert("frozen", "a reason")).rejects.toThrow();
     await insert("second-review-failed", "no second opinion answered");
@@ -254,7 +259,7 @@ describe("witnessed findings and the check set freeze", () => {
   });
 
   test("an undecided item another model family agrees on is routed once and not stored undecided", async () => {
-    const { outcome, kept, judged } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b" } }, true);
+    const { outcome, kept, judged } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b", grade: "Frontier" as const } }, true);
     expect(outcome).toMatchObject({ kind: "problems", undecided: [], problems: [{ kind: "undecided-item" }] });
     expect(kept).toEqual([]);
     expect(judged).toMatchObject([{ outcome: "routed", basis: "second-opinion-agreed", secondModel: "second/strong-b", secondStrength: "other-family", passedOver: [] }]);
@@ -268,7 +273,7 @@ describe("witnessed findings and the check set freeze", () => {
 
   /** A review whose first pass finds nothing, its second answering `second` from another family, or failing with it. */
   async function reviewClean(second: ((check: string) => { readonly problems: readonly unknown[] }) | Error) {
-    const catalog = { "other-family": { provider: "second", model: "strong-b" } };
+    const catalog = { "other-family": { provider: "second", model: "strong-b", grade: "Frontier" as const } };
     const reviewTask = parseWorkItemId(await workItem("Review a clean suite"), "test review task");
     const impl = await workItem("Durable put");
     const check = await workItem("Checks of Durable put");
@@ -277,7 +282,7 @@ describe("witnessed findings and the check set freeze", () => {
       { type: "scope" as const, id: "S9", text: "put survives a power loss", side: "in" as const },
     ];
     const source: SuiteReviewSource = {
-      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: cited.map((item) => item.text), sources: cited, checkedTitle: "Durable put", reviewReopens: 0 }],
+      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: cited.map((item) => item.text), sources: cited, checkedTitle: "Durable put", reviewReopens: 0, grade: "Strong", attemptModels: [] }],
       latest: async () => ({ checkTaskId: check, revision: 1, environmentVersion: "v1", baselineCommit: null, checks: [{ name: "put-then-get", command: "sh put.sh", decides: ["S8", "S9"] }], files: [] }),
       frozen: async () => false,
     };
@@ -346,8 +351,8 @@ describe("witnessed findings and the check set freeze", () => {
     // A confirmed claim holds the second model and its strength; one that failed holds why and no model.
     const claim = (basis: string, secondModel: string | null, secondStrength: string | null, failure: string | null) =>
       db.execute(sql`
-        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure)
-        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, '[]'::jsonb, ${failure})`);
+        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
+        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, '[]'::jsonb, ${failure}, 'Frontier', 'Strong', 'above')`);
     await expect(claim("second-opinion-clean", "p/m", null, null)).rejects.toThrow();
     await expect(claim("second-opinion-clean", "p/m", "other-family", null)).rejects.toThrow();
     await expect(claim("second-review-failed", null, null, null)).rejects.toThrow();
@@ -363,8 +368,8 @@ describe("witnessed findings and the check set freeze", () => {
     const reviewTask = await workItem("Review with a same-provider second opinion");
     const checkTask = await workItem("Checks with a same-provider second opinion");
     const inserted = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings)
-      VALUES (${projectId}, ${reviewTask}, 'no-other-family', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'p/n', 'same-family-other-model', '[]'::jsonb, '[]'::jsonb)
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
+      VALUES (${projectId}, ${reviewTask}, 'no-other-family', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'p/n', 'same-family-other-model', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal')
       RETURNING id`);
     const claimId = z.array(z.object({ id: z.string() })).parse(inserted.rows)[0]?.id;
     await db.execute(sql`
@@ -381,6 +386,7 @@ describe("witnessed findings and the check set freeze", () => {
         passedOver: [],
         unverified: [{ checkTaskId: checkTask, itemId: "S1", itemText: "Keys can be stored" }],
         second: { kind: "answered", model: "p/n", strength: "same-family-other-model", findings: [] },
+        tiers: { kind: "recorded", judge: "Strong", judged: "Strong", relation: "equal" },
       },
     ]);
   });
@@ -389,8 +395,8 @@ describe("witnessed findings and the check set freeze", () => {
     const reviewTask = await workItem("Review with an untied claim item");
     const checkTask = await workItem("Checks with an untied claim item");
     const inserted = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, passed_over, second_findings, second_failure)
-      VALUES (${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([checkTask])}::jsonb, 'p/m', '[]'::jsonb, '[]'::jsonb, 'no second opinion answered')
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
+      VALUES (${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([checkTask])}::jsonb, 'p/m', '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above')
       RETURNING id`);
     const claimId = z.array(z.object({ id: z.string() })).parse(inserted.rows)[0]?.id;
     await expect(
@@ -412,14 +418,24 @@ describe("witnessed findings and the check set freeze", () => {
       projectId,
       reviewTaskId: first,
       judgements: [],
-      claim: { basis: "second-opinion-found", covered: [check], firstModel: FIRST, secondReview: { first: FIRST, second: { provider: "second", model: "strong-b" }, strength: "other-family" }, passedOver: [], second: [found], secondFailure: null, unconfirmed: [item] },
+      claim: {
+        basis: "second-opinion-found",
+        covered: [check],
+        firstModel: FIRST,
+        secondReview: { first: FIRST, second: { provider: "second", model: "strong-b", grade: "Frontier" as const }, strength: "other-family" },
+        passedOver: [],
+        second: [found],
+        secondFailure: null,
+        unconfirmed: [item],
+        tiers: ABOVE_STRONG,
+      },
     });
     const later = parseWorkItemId(await workItem("Later review of Durable put"), "test review task");
     await repository.record({
       projectId,
       reviewTaskId: later,
       judgements: [],
-      claim: { basis: "second-review-failed", covered: [check], firstModel: FIRST, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item] },
+      claim: { basis: "second-review-failed", covered: [check], firstModel: FIRST, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item], tiers: ABOVE_STRONG },
     });
 
     const kept = await db.execute(sql`SELECT review_task_id AS "reviewTaskId" FROM undecided_items WHERE check_task_id = ${check}`);
@@ -429,6 +445,35 @@ describe("witnessed findings and the check set freeze", () => {
       [first, "second-opinion-found", [item]],
       [later, "second-review-failed", [item]],
     ]);
+  });
+
+  test("a check task under review is read with its grade and every model its attempts ran on, each with its catalog grade or none", async () => {
+    const impl = await task("Store keys", { origin: "decomposition" }, "implementation");
+    const graded = await task("Checks of Store keys", { origin: "check", checksFor: impl, capability: "Strong" }, "check");
+    const ungraded = await task("Checks of Store keys, ungraded", { origin: "check", checksFor: impl }, "check");
+    const review = await task("Review the plan's checks", { origin: "review" }, null);
+    await db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${review}, ${graded}), (${review}, ${ungraded})`);
+    const attempt = (taskId: string, model: string | null) =>
+      model === null
+        ? db.execute(sql`INSERT INTO dev_sessions (id, task_id, phase) VALUES (${randomUUID()}, ${taskId}, 'Completed')`)
+        : db.execute(sql`
+            INSERT INTO dev_sessions (id, task_id, phase, attempt_prompt_digest, attempt_terminal, attempt_turns, attempt_provider, attempt_model, attempt_cell)
+            VALUES (${randomUUID()}, ${taskId}, 'Completed', ${"d".repeat(64)}, 'finished:done', 3, 'anthropic', ${model}, 'base-cell')`);
+    await attempt(graded, "claude-opus-5-5");
+    await attempt(graded, "a-model-no-catalog-holds");
+    await attempt(graded, null);
+
+    const read = await new TaskCheckRepository(db).checkTasksUnderReview(review);
+    const byId = new Map(read.map((each) => [each.id, each]));
+    expect(byId.get(graded)).toMatchObject({
+      grade: "Strong",
+      attemptModels: [
+        { model: "claude-opus-5-5", grade: "Frontier" },
+        { model: "a-model-no-catalog-holds", grade: null },
+      ],
+    });
+    expect(byId.get(ungraded)).toMatchObject({ grade: null, attemptModels: [] });
+    await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (${graded}, ${ungraded})`);
   });
 
   test("the first task dispatched on a review's check set freezes it once, with the set as it stood; the freeze is never updated", async () => {

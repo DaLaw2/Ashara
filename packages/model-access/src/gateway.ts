@@ -617,6 +617,7 @@ export class LLMGateway {
       usage: extraction.usage,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,
+      grade: resolved.modelConfig.capabilityLevel,
     };
   }
 
@@ -680,6 +681,7 @@ export class LLMGateway {
         usage: extraction.usage,
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
+        grade: resolved.modelConfig.capabilityLevel,
       };
     }
 

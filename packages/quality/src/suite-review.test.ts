@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { PreCallRefusal, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
-import type { ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
+import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
 import { StructuredOutputExhausted } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
 import type { VisionSource } from "./acl/engagement-acl.js";
@@ -60,11 +60,20 @@ function interfaceAt(reads: Array<{ path: string; commit: string }> = []): Publi
 }
 const INTERFACE = interfaceAt();
 
-function source(statusB = "Completed", options: { readonly frozen?: boolean; readonly reopensA?: number } = {}): SuiteReviewSource {
+/** Check work graded Strong, written in one attempt on a model graded Strong. */
+const STRONG_WORK = { grade: "Strong", attemptModels: [{ model: "stub-author", grade: "Strong" }] } as const;
+
+/** How a check task's work is graded on record: its task's grade and the models its attempts ran on. */
+interface CheckWork {
+  readonly grade: CapabilityLevel | null;
+  readonly attemptModels: ReadonlyArray<{ readonly model: string; readonly grade: CapabilityLevel | null }>;
+}
+
+function source(statusB = "Completed", options: { readonly frozen?: boolean; readonly reopensA?: number; readonly workA?: CheckWork } = {}): SuiteReviewSource {
   return {
     checkTasksUnderReview: async () => [
-      { id: CHECK_A, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Sum by month", reviewReopens: options.reopensA ?? 0 },
-      { id: CHECK_B, status: statusB, checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Refuse bad rows", reviewReopens: 0 },
+      { id: CHECK_A, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Sum by month", reviewReopens: options.reopensA ?? 0, ...(options.workA ?? STRONG_WORK) },
+      { id: CHECK_B, status: statusB, checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Refuse bad rows", reviewReopens: 0, ...STRONG_WORK },
     ],
     latest: async (taskId) => (taskId === IMPL_A ? stored(CHECK_A, "prints-count", "sh checks/count.sh") : stored(CHECK_B, "stdout-empty", "sh checks/empty.sh")),
     frozen: async () => options.frozen ?? false,
@@ -72,14 +81,14 @@ function source(statusB = "Completed", options: { readonly frozen?: boolean; rea
 }
 
 /** Another model family than the stub's: a second review from it can confirm a finding no witness settles. */
-const OTHER_FAMILY = { provider: "other", model: "other-strong" };
+const OTHER_FAMILY = { provider: "other", model: "other-strong", grade: "Frontier" as const };
 /** Another model of the stub's own family. */
-const SIBLING = { provider: "stub", model: "stub-sibling" };
+const SIBLING = { provider: "stub", model: "stub-sibling", grade: "Frontier" as const };
 
 /** The model the stub's catalog serves each strength of second opinion with; a strength it lacks is unavailable. */
-type StubCatalog = Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string }>>;
+type StubCatalog = Partial<Record<SecondOpinionStrength, { readonly provider: string; readonly model: string; readonly grade: CapabilityLevel }>>;
 /** A deployment with one model at all: only the same model can answer a second time. */
-const ONE_MODEL: StubCatalog = { "same-model": { provider: "stub", model: "stub-model" } };
+const ONE_MODEL: StubCatalog = { "same-model": { provider: "stub", model: "stub-model", grade: "Frontier" } };
 /** A deployment with a model of another family: it answers. */
 const TWO_FAMILIES: StubCatalog = { "other-family": OTHER_FAMILY };
 /** A deployment with one provider key and two models: another model of the same family answers. */
@@ -93,7 +102,7 @@ function bounds(into: number[]): ContextualLlm {
         const opinion = request.secondOpinion;
         if (opinion !== undefined && opinion.strength !== "same-model") throw new SecondOpinionUnavailable(opinion, request, []);
         into.push(request.maxTokens);
-        return { data: request.schema.parse({ problems: [] }), provider: "stub", model: "stub-model" };
+        return { data: request.schema.parse({ problems: [] }), provider: "stub", model: "stub-model", grade: "Frontier" };
       },
     }),
   };
@@ -111,7 +120,7 @@ function scripted(answers: readonly unknown[], prompts: string[] = [], catalog: 
       generateStructured: async (request) => {
         const opinion = request.secondOpinion;
         asked.push(opinion?.strength);
-        let by: { readonly provider: string; readonly model: string } = { provider: "stub", model: "stub-model" };
+        let by: { readonly provider: string; readonly model: string; readonly grade: CapabilityLevel } = { provider: "stub", model: "stub-model", grade: "Frontier" };
         if (opinion !== undefined) {
           const served = catalog[opinion.strength];
           if (served === undefined) throw new SecondOpinionUnavailable(opinion, request, []);
@@ -141,7 +150,9 @@ function keep(into: Recorded[] = []): Judgements {
 
 const TASK = { id: REVIEW_ID, projectId: PROJECT, taskSpec: { origin: "review" as const, visionItems: VISION, sources: SOURCES } };
 
-const STUB = { provider: "stub", model: "stub-model" };
+const STUB = { provider: "stub", model: "stub-model", grade: "Frontier" as const };
+/** Both judges graded Frontier, over the Strong check work of `source`. */
+const ABOVE_STRONG = { judgeTier: "Frontier", judgedTier: "Strong", relation: "above" };
 const ITEM_A = { checkTaskId: CHECK_A, itemId: SCOPE.id, itemText: SCOPE.text };
 const ITEM_B = { checkTaskId: CHECK_B, itemId: REFUSAL.id, itemText: REFUSAL.text };
 /** The claim of a clean review another model family confirmed: every covered item reads as verified. */
@@ -191,6 +202,88 @@ describe("SuiteReviewer", () => {
     ]);
   });
 
+  // A judge is never weaker than the work it judges: the tier asked is the check work's own, never a floor.
+  describe("the tier of the check work judged", () => {
+    /** Records the judged tier each call asks, answered clean by the first review's and the second's model at the grades given. */
+    function asking(into: unknown[], grades: { readonly first: CapabilityLevel; readonly second: CapabilityLevel } = { first: "Frontier", second: "Frontier" }): ContextualLlm {
+      return {
+        forCall: () => ({
+          generateStructured: async (request) => {
+            into.push(request.judges);
+            const by = request.secondOpinion === undefined ? { ...STUB, grade: grades.first } : { ...OTHER_FAMILY, grade: grades.second };
+            return { data: request.schema.parse({ problems: [] }), ...by };
+          },
+        }),
+      };
+    }
+
+    test("a Frontier check task makes the review and its second opinion ask for a judge of Frontier work, recorded as equal", async () => {
+      const asked: unknown[] = [];
+      const recorded: Recorded[] = [];
+      const reviewer = new SuiteReviewer({
+        logger: recordingLogger(),
+        llm: asking(asked),
+        source: source("Completed", { workA: { grade: "Frontier", attemptModels: [] } }),
+        publicInterface: INTERFACE,
+        judgements: keep(recorded),
+      });
+
+      expect((await reviewer.review(TASK, PROJECT_PATH)).kind).toBe("clean");
+      expect(asked).toEqual(["Frontier", "Frontier"]);
+      expect(recorded[0]?.claim?.tiers).toEqual({ judgeTier: "Frontier", judgedTier: "Frontier", relation: "equal" });
+    });
+
+    test("an attempt on a model graded above its task's grade raises the tier judged", async () => {
+      const asked: unknown[] = [];
+      const work: CheckWork = { grade: "Strong", attemptModels: [{ model: "stub-author", grade: "Strong" }, { model: "stub-top", grade: "Frontier" }] };
+      const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: asking(asked), source: source("Completed", { workA: work }), publicInterface: INTERFACE, judgements: keep() });
+
+      expect((await reviewer.review(TASK, PROJECT_PATH)).kind).toBe("clean");
+      expect(asked).toEqual(["Frontier", "Frontier"]);
+    });
+
+    test("the weaker of the two judges is the judge tier a claim records", async () => {
+      const recorded: Recorded[] = [];
+      const reviewer = new SuiteReviewer({
+        logger: recordingLogger(),
+        llm: asking([], { first: "Frontier", second: "Strong" }),
+        source: source(),
+        publicInterface: INTERFACE,
+        judgements: keep(recorded),
+      });
+
+      expect((await reviewer.review(TASK, PROJECT_PATH)).kind).toBe("clean");
+      expect(recorded[0]?.claim?.tiers).toEqual({ judgeTier: "Strong", judgedTier: "Strong", relation: "equal" });
+    });
+
+    test("an answer from a model graded below the work is no verdict, and nothing is recorded on it", async () => {
+      const recorded: Recorded[] = [];
+      const reviewer = new SuiteReviewer({
+        logger: recordingLogger(),
+        llm: asking([], { first: "Medium", second: "Frontier" }),
+        source: source(),
+        publicInterface: INTERFACE,
+        judgements: keep(recorded),
+      });
+
+      await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toThrow(/check work at Strong was answered by stub\/stub-model, graded Medium/);
+      expect(recorded).toEqual([]);
+    });
+
+    test("a check task whose grade, or whose attempt model's grade, is not on record fails the review instead of being judged at a guess", async () => {
+      for (const [work, reason] of [
+        [{ grade: null, attemptModels: [] }, "records no grade it was dispatched at"],
+        [{ grade: "Strong", attemptModels: [{ model: "unlisted", grade: null }] }, "ran an attempt on model unlisted, which the catalog does not grade"],
+      ] as const) {
+        const asked: unknown[] = [];
+        const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: asking(asked), source: source("Completed", { workA: work }), publicInterface: INTERFACE, judgements: keep() });
+
+        await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toThrow(reason);
+        expect(asked).toEqual([]);
+      }
+    });
+  });
+
   // An empty problem list is a claim about the checks, as a finding
   // is; the items it covers read as verified only when an independent second review is clean too.
   describe("a review that finds nothing is a claim", () => {
@@ -214,6 +307,7 @@ describe("SuiteReviewer", () => {
             second: [],
             secondFailure: null,
             unconfirmed: [],
+            tiers: ABOVE_STRONG,
           },
         },
       ]);
@@ -444,8 +538,8 @@ describe("SuiteReviewer", () => {
     const LOCK_FILE = `bg() {\n  ( timeout 60 "$BIN" --dir "$D" "$@" >"$T/out.$_n" 2>"$T/err.$_n"; echo $? >"$T/rc.$_n" ) &\n}`;
     const sampled: SuiteReviewSource = {
       checkTasksUnderReview: async () => [
-        { id: LOG_TASK, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Refuse a corrupt log", reviewReopens: 0 },
-        { id: LOCK_TASK, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Wait for the store lock", reviewReopens: 0 },
+        { id: LOG_TASK, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Refuse a corrupt log", reviewReopens: 0, ...STRONG_WORK },
+        { id: LOCK_TASK, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Wait for the store lock", reviewReopens: 0, ...STRONG_WORK },
       ],
       latest: async (taskId) => {
         const [checkTaskId, name, command, content] =
@@ -557,6 +651,7 @@ describe("SuiteReviewer", () => {
         passedOver: [{ strength: "other-family", outcome: "unavailable", reason: expect.stringContaining("SecondOpinionUnavailable") }],
         secondFailure: null,
         undecided: item,
+        tiers: ABOVE_STRONG,
       },
     ]);
   });
@@ -690,7 +785,7 @@ describe("SuiteReviewer", () => {
   test("a check task whose row records no item ids names its cited items by their place", async () => {
     const prompts: string[] = [];
     const legacy: SuiteReviewSource = {
-      checkTasksUnderReview: async () => [{ id: CHECK_B, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: null, checkedTitle: "Refuse bad rows", reviewReopens: 0 }],
+      checkTasksUnderReview: async () => [{ id: CHECK_B, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: null, checkedTitle: "Refuse bad rows", reviewReopens: 0, ...STRONG_WORK }],
       latest: async () => stored(CHECK_B, "stdout-empty", "sh checks/empty.sh"),
       frozen: async () => false,
     };
@@ -799,6 +894,7 @@ describe("SuiteReviewer", () => {
             passedOver: [],
             secondFailure: null,
             undecided: null,
+            tiers: ABOVE_STRONG,
           },
         ],
         claim: null,

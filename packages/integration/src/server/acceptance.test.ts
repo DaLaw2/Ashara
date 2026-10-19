@@ -36,6 +36,8 @@ const NAME_PREFIX = `acceptance-test-${randomUUID().slice(0, 8)}`;
 const MERGE_A = "a1".repeat(20);
 const MAIN = "c3".repeat(20);
 const SCAFFOLD_MERGE = "5e".repeat(20);
+/** Judges graded Strong over check work at Strong: no stronger than the work. */
+const EQUAL_STRONG = { judgeTier: "Strong", judgedTier: "Strong", relation: "equal" } as const;
 
 let db: ReturnType<typeof createDb>;
 let clientId: string;
@@ -165,7 +167,7 @@ function acceptanceStore(): AcceptanceStore {
 /** The Liaison's reading of this suite's answers; the model's reading is stood in: it confirms. */
 function clientAnswers(): ClientAnswers {
   const store = createAnswerStore(db);
-  const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ reading: { verdict: "confirms" } }), model: "stub-model", provider: "stub" }) }) };
+  const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ reading: { verdict: "confirms" } }), model: "stub-model", provider: "stub", grade: "Strong" }) }) };
   return new ClientAnswers({ containment: memoryStepContainment(() => true), llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
 }
 
@@ -336,8 +338,8 @@ describe("acceptance on main", () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" });
     const judged = await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb)
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
+      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Strong', 'Strong', 'equal')
       RETURNING id`);
     const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
     await db.execute(sql`
@@ -360,8 +362,8 @@ describe("acceptance on main", () => {
   test("an item an unconfirmed clean review covered is read as undecided and reported as not verified", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const claimed = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure)
-      VALUES (${projectId}, ${checksOfStore}, 'second-review-failed', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'no second opinion answered')
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
+      VALUES (${projectId}, ${checksOfStore}, 'second-review-failed', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above')
       RETURNING id`);
     const [claim] = z.array(z.object({ id: z.string() })).parse(claimed.rows);
     await db.execute(sql`
@@ -379,26 +381,48 @@ describe("acceptance on main", () => {
     expect(body).not.toContain("Every item of what you asked for is decided");
   });
 
+  // A judge no stronger than the work it judged is named to the client, never reported as one above it.
+  test("an item a claim confirmed through a judge only equal to the check work is reported as reviewed by no stronger a model", async () => {
+    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
+    await db.execute(sql`
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
+      VALUES (${projectId}, ${checksOfStore}, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal')`);
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+
+    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
+    expect(items.filter((item) => item.judges !== null).map((item) => [item.source.id, item.review, item.judges])).toEqual([
+      ["S1", "other-family", "equal"],
+      ["A1", "other-family", "equal"],
+    ]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    const [body = ""] = await reportsOf(projectId);
+    expect(body).toContain(
+      "a second review of those checks, by another model family, found no problem with that; those checks were reviewed by a model no stronger than the one their work was graded for, " +
+        "since no stronger one was available to review them:\n- Keys can be stored and read\n",
+    );
+  });
+
   // An item a later claim leaves undecided again is read under that claim too, never
   // under the first claim alone, so a later failed second review is reported as the reason.
   test("an item two claims leave undecided is read under both, and reported under the reason that ranks first", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const judgements = new SuiteReviewJudgementRepository(db);
     const item = { checkTaskId: checksOfStore, itemId: "S1", itemText: VISION.stored.text };
-    const first = { provider: "p", model: "m" };
+    const first = { provider: "p", model: "m", grade: "Strong" as const };
     const reviewTaskId = parseWorkItemId(checksOfStore, "test review task");
     const doubt = { checkTasks: [checksOfStore], kind: "undecided-item" as const, item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" };
     await judgements.record({
       projectId,
       reviewTaskId,
       judgements: [],
-      claim: { basis: "second-opinion-found", covered: [checksOfStore], firstModel: first, secondReview: { first, second: { provider: "q", model: "n" }, strength: "other-family" }, passedOver: [], second: [doubt], secondFailure: null, unconfirmed: [item] },
+      claim: { basis: "second-opinion-found", covered: [checksOfStore], firstModel: first, secondReview: { first, second: { provider: "q", model: "n", grade: "Strong" as const }, strength: "other-family" }, passedOver: [], second: [doubt], secondFailure: null, unconfirmed: [item], tiers: EQUAL_STRONG },
     });
     await judgements.record({
       projectId,
       reviewTaskId,
       judgements: [],
-      claim: { basis: "second-review-failed", covered: [checksOfStore], firstModel: first, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item] },
+      claim: { basis: "second-review-failed", covered: [checksOfStore], firstModel: first, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item], tiers: EQUAL_STRONG },
     });
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
 

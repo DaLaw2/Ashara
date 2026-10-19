@@ -59,15 +59,32 @@ export type UndecidedBy = false | "unsettled" | "review-failed" | "clean-contrad
 export type ReviewStrength = SecondOpinionStrength;
 
 /**
+ * How the models whose reviews confirmed an item's checks stood to the work they reviewed: every one
+ * graded above it; one no stronger than it ("equal"); or not on record, for a review recorded before
+ * that was.
+ */
+export type JudgeStanding = "above" | "equal" | "unrecorded";
+
+/** Each judge standing, strongest first. */
+export const JUDGE_STANDINGS: readonly JudgeStanding[] = ["above", "equal", "unrecorded"];
+
+/**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
  * ran records that it decides it, whether a review of those checks left it undecided, and
  * the strength of the second review behind that: the one that confirmed a decided item, or the one
- * that left it undecided; null where none answered. Or none recorded.
+ * that left it undecided; null where none answered. A confirmed item also carries how its reviewing
+ * models stood to the work (`judges`); null on any other. Or none recorded.
  */
 type VisionCoverage =
   | {
       readonly kind: "recorded";
-      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: UndecidedBy; readonly review: ReviewStrength | null }>;
+      readonly items: ReadonlyArray<{
+        readonly source: AcceptedVisionItem;
+        readonly checked: boolean;
+        readonly undecided: UndecidedBy;
+        readonly review: ReviewStrength | null;
+        readonly judges: JudgeStanding | null;
+      }>;
     }
   | { readonly kind: "unrecorded" };
 
@@ -459,24 +476,38 @@ function coverageSection(vision: VisionCoverage): string {
 }
 
 /**
+ * How the models that reviewed an item's checks stood to the work they reviewed, in the client's
+ * words: nothing is added when every one was stronger than the work; a review no stronger than it,
+ * or one whose standing is not on record, is said so.
+ */
+const JUDGED_BY: Readonly<Record<JudgeStanding, string>> = {
+  above: "",
+  equal: "; those checks were reviewed by a model no stronger than the one their work was graded for, since no stronger one was available to review them",
+  unrecorded: "; how strong the models that reviewed those checks were, against the work they reviewed, is not on record",
+};
+
+/**
  * The asked-for items a stored check decides that no review left undecided, grouped by how
- * independent the second review that confirmed them was; and those no second review of their checks
- * is on record as confirming. Empty when there are none.
+ * independent the second review that confirmed them was and how its reviewing models stood to the
+ * work; and those no second review of their checks is on record as confirming. Empty when there are none.
  */
 function confirmedSection(vision: VisionCoverage): string[] {
   if (vision.kind === "unrecorded") return [];
   const decided = vision.items.filter((item) => askedFor(item.source) && item.checked && item.undecided === false);
-  const byStrength = SECOND_OPINION_STRENGTHS.flatMap((strength) => {
-    const confirmed = decided.filter((item) => item.review === strength);
-    if (confirmed.length === 0) return [];
-    return [
-      [
-        `These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a ` +
-          `second review of those checks, by ${REVIEWED_BY[strength]}, found no problem with that:`,
-        ...confirmed.map((item) => coverageLine(item.source)),
-      ].join("\n"),
-    ];
-  });
+  const byStrength = SECOND_OPINION_STRENGTHS.flatMap((strength) =>
+    JUDGE_STANDINGS.flatMap((judges) => {
+      // A confirmed item that carries no standing is reported as one whose standing is not on record, never dropped.
+      const confirmed = decided.filter((item) => item.review === strength && (item.judges === null ? "unrecorded" : item.judges) === judges);
+      if (confirmed.length === 0) return [];
+      return [
+        [
+          `These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a ` +
+            `second review of those checks, by ${REVIEWED_BY[strength]}, found no problem with that${JUDGED_BY[judges]}:`,
+          ...confirmed.map((item) => coverageLine(item.source)),
+        ].join("\n"),
+      ];
+    }),
+  );
   const unreviewed = decided.filter((item) => item.review === null);
   if (unreviewed.length === 0) return byStrength;
   return [

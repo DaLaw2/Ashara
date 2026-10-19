@@ -535,7 +535,7 @@ describe("DecompositionEngine", () => {
                 if (!parsed.success) {
                     throw new SchemaValidationError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`), "fake");
                 }
-                return { data: parsed.data, model: "fake", provider: "fake" };
+                return { data: parsed.data, model: "fake", provider: "fake", grade: "Strong" };
             },
         };
         const result = await new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT);

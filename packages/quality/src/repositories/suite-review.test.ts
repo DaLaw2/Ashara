@@ -12,11 +12,24 @@ const ROW = {
   secondFindings: [],
   secondFailure: null,
   unverified: [],
+  judgeTier: "Frontier",
+  judgedTier: "Strong",
+  tierRelation: "above",
 };
 
 describe("storedClaimOf", () => {
   test("reads a confirmed claim's second opinion with its strength", () => {
     expect(storedClaimOf("k1", ROW).second).toEqual({ kind: "answered", model: "b/n", strength: "other-family", findings: [] });
+  });
+
+  test("reads how its judges stood to the work: recorded whole, or unrecorded on a claim written before tiers were", () => {
+    expect(storedClaimOf("k1", ROW).tiers).toEqual({ kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" });
+    expect(storedClaimOf("k1", { ...ROW, judgeTier: null, judgedTier: null, tierRelation: null }).tiers).toEqual({ kind: "unrecorded" });
+  });
+
+  test("a claim that records only some of its tiers, or a tier the vocabulary does not name, is corrupt, never read as judged from above", () => {
+    expect(() => storedClaimOf("k4", { ...ROW, judgedTier: null })).toThrow(/suite_review_claims row k4: .*together, or none of them/);
+    expect(() => storedClaimOf("k5", { ...ROW, judgeTier: "Ultra" })).toThrow(/suite_review_claims row k5/);
   });
 
   test("a second_strength that is no strength of second opinion throws SuiteReviewStrengthUnreadable, never reads as verified", () => {

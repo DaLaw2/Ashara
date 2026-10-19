@@ -287,6 +287,8 @@ export interface StructuredResponse<T> {
   usage: TokenUsage;
   provider: string;
   model: string;
+  /** The catalog grade of the model that answered: what a judging caller holds against the judged tier. */
+  grade: CapabilityLevel;
 }
 
 export type LlmCallOperation = "generateObject" | "generateText:structured-fallback" | "generateText:turn";

@@ -2,7 +2,8 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItemClaims, undecidedItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
-import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
+import { CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance";
+import type { CapabilityLevel, JudgeRelation } from "@ashara/finance";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
 // Quality's record of the reviews of plan revisions' check suites: each review
@@ -131,6 +132,35 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
 /** A strength of second opinion a review got no answer at. */
 const PassedOverSchema = z.strictObject({ strength: z.enum(SECOND_OPINION_STRENGTHS), outcome: z.enum(["unavailable", "failed"]), reason: z.string().min(1) });
 
+/** The three tier columns of a stored judgement or claim, as read. */
+const StoredTierColumns = {
+  judgeTier: CapabilityLevelSchema.nullable(),
+  judgedTier: CapabilityLevelSchema.nullable(),
+  tierRelation: z.enum(["above", "equal"]).nullable(),
+};
+
+/**
+ * How a stored row's judges stood to the check work: the weaker judge's grade, the work's tier and
+ * whether the judge stood above it or only equal to it; or unrecorded, on a row written before they were.
+ */
+type StoredTiers =
+  | { readonly kind: "recorded"; readonly judge: CapabilityLevel; readonly judged: CapabilityLevel; readonly relation: JudgeRelation }
+  | { readonly kind: "unrecorded" };
+
+/** The tiers of a row whose three columns are all set or all null; null when only some are, which no row may hold. */
+function storedTiersOf(row: {
+  readonly judgeTier: CapabilityLevel | null;
+  readonly judgedTier: CapabilityLevel | null;
+  readonly tierRelation: JudgeRelation | null;
+}): StoredTiers | null {
+  const { judgeTier, judgedTier, tierRelation } = row;
+  if (judgeTier !== null && judgedTier !== null && tierRelation !== null) return { kind: "recorded", judge: judgeTier, judged: judgedTier, relation: tierRelation };
+  if (judgeTier === null && judgedTier === null && tierRelation === null) return { kind: "unrecorded" };
+  return null;
+}
+
+const TIERS_WHOLE = "a row records its judge tier, judged tier and tier relation together, or none of them";
+
 const StoredJudgementSchema = z
   .strictObject({
     reviewTaskId: z.string().min(1),
@@ -146,10 +176,17 @@ const StoredJudgementSchema = z
     secondStrength: z.enum(SECOND_OPINION_STRENGTHS).nullable(),
     passedOver: z.array(PassedOverSchema),
     secondFailure: z.string().min(1).nullable(),
+    ...StoredTierColumns,
   })
   .refine((row) => (row.firstFinding.kind === "outside-vision") === (row.checkName !== null), "a judgement names a check exactly when its first finding is an outside-vision rejection")
   .refine((row) => (row.secondModel === null) === (row.secondStrength === null), "a judgement records a second review's model exactly when it records that review's strength")
-  .refine((row) => (row.basis === "second-review-failed") === (row.secondFailure !== null), "a judgement records why its second review failed exactly when its basis is second-review-failed");
+  .refine((row) => (row.basis === "second-review-failed") === (row.secondFailure !== null), "a judgement records why its second review failed exactly when its basis is second-review-failed")
+  .transform(({ judgeTier, judgedTier, tierRelation, ...judgement }, ctx) => {
+    const tiers = storedTiersOf({ judgeTier, judgedTier, tierRelation });
+    if (tiers !== null) return { ...judgement, tiers };
+    ctx.addIssue({ code: "custom", message: TIERS_WHOLE });
+    return z.NEVER;
+  });
 
 export type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
 
@@ -219,6 +256,7 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
             secondStrength: judgement.secondReview === null ? null : judgement.secondReview.strength,
             passedOver: judgement.passedOver,
             secondFailure: judgement.secondFailure,
+            ...tierColumns(judgement.tiers),
           })),
         )
         .returning({ id: suiteReviewJudgements.id });
@@ -251,6 +289,7 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
         passedOver: claim.passedOver,
         secondFindings: claim.second,
         secondFailure: claim.secondFailure,
+        ...tierColumns(claim.tiers),
       })
       .returning({ id: suiteReviewClaims.id });
     if (row === undefined) throw new SuiteReviewClaimUnreturned(reviewTaskId);
@@ -289,6 +328,10 @@ function modelText(model: { readonly provider: string; readonly model: string })
   return `${model.provider}/${model.model}`;
 }
 
+function tierColumns(tiers: { readonly judgeTier: CapabilityLevel; readonly judgedTier: CapabilityLevel; readonly relation: JudgeRelation }) {
+  return { judgeTier: tiers.judgeTier, judgedTier: tiers.judgedTier, tierRelation: tiers.relation };
+}
+
 /** Every judgement the suite reviews of a project recorded, oldest first, each parsed whole: what the owner's run report states of them. */
 export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): Promise<StoredJudgement[]> {
   const rows = await db
@@ -306,6 +349,9 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
       secondStrength: suiteReviewJudgements.secondStrength,
       passedOver: suiteReviewJudgements.passedOver,
       secondFailure: suiteReviewJudgements.secondFailure,
+      judgeTier: suiteReviewJudgements.judgeTier,
+      judgedTier: suiteReviewJudgements.judgedTier,
+      tierRelation: suiteReviewJudgements.tierRelation,
     })
     .from(suiteReviewJudgements)
     .where(eq(suiteReviewJudgements.projectId, projectId))
@@ -359,9 +405,16 @@ const StoredClaimSchema = z
     secondFindings: z.array(StoredFindingSchema),
     secondFailure: z.string().min(1).nullable(),
     unverified: z.array(z.strictObject({ checkTaskId: z.string().min(1), itemId: z.string().min(1), itemText: z.string() })),
+    ...StoredTierColumns,
   })
   .refine((row) => row.basis !== "second-opinion-clean" || row.unverified.length === 0, "a claim a second review confirmed clean leaves no item unverified")
-  .transform(({ secondModel, secondStrength, secondFindings, secondFailure, ...claim }, ctx) => {
+  .transform(({ secondModel, secondStrength, secondFindings, secondFailure, judgeTier, judgedTier, tierRelation, ...rest }, ctx) => {
+    const tiers = storedTiersOf({ judgeTier, judgedTier, tierRelation });
+    if (tiers === null) {
+      ctx.addIssue({ code: "custom", message: TIERS_WHOLE });
+      return z.NEVER;
+    }
+    const claim = { ...rest, tiers };
     if (secondModel !== null && secondStrength !== null && secondFailure === null && claim.basis !== "second-review-failed") {
       return { ...claim, second: { kind: "answered" as const, model: secondModel, strength: secondStrength, findings: secondFindings } };
     }
@@ -408,6 +461,9 @@ export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Prom
       passedOver: suiteReviewClaims.passedOver,
       secondFindings: suiteReviewClaims.secondFindings,
       secondFailure: suiteReviewClaims.secondFailure,
+      judgeTier: suiteReviewClaims.judgeTier,
+      judgedTier: suiteReviewClaims.judgedTier,
+      tierRelation: suiteReviewClaims.tierRelation,
     })
     .from(suiteReviewClaims)
     .where(eq(suiteReviewClaims.projectId, projectId))

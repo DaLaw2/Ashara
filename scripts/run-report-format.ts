@@ -555,9 +555,19 @@ function findingLine(finding: StoredJudgement["secondFindings"][number]): string
 }
 
 /**
+ * How a judgement's or claim's judges stood to the check work they judged: the weaker judge's grade
+ * against the work's tier, with an equal relation named as no stronger than the work.
+ */
+function tiersLine(tiers: StoredJudgement["tiers"]): string {
+  if (tiers.kind === "unrecorded") return "    judge tier: not recorded (written before judge tiers were)";
+  if (tiers.relation === "above") return `    judge tier: ${tiers.judge}, above the check work at ${tiers.judged}`;
+  return `    judge tier: EQUAL: ${tiers.judge}, no stronger than the check work at ${tiers.judged} (no model above it was routed to judge it)`;
+}
+
+/**
  * The suite reviews' judgements on every finding of their first pass, routed, released or kept as
- * advisory, each with why, both reviews' findings whole, the second review's strength (or none
- * asked), and every strength it passed over before it answered or failed.
+ * advisory, each with why, how its judges stood to the check work, both reviews' findings whole, the
+ * second review's strength (or none asked), and every strength it passed over before it answered or failed.
  */
 export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement[]): string {
   if (judgements.length === 0) return "Suite review judgements: none recorded";
@@ -572,6 +582,7 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
           : `second review ${judgement.secondStrength} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
     lines.push(
       `  review ${judgement.reviewTaskId}, ${subject} of task ${judgement.checkTaskId}: ${judgement.outcome} (${judgement.basis}); ${second}`,
+      tiersLine(judgement.tiers),
       ...judgement.passedOver.map((over) => `    passed over ${over.strength} (${over.outcome}): ${over.reason}`),
       `    first review:  ${findingLine(judgement.firstFinding)}`,
     );
@@ -603,7 +614,7 @@ const CLAIM_BASIS: Readonly<Record<StoredClaim["basis"], { readonly label: strin
 
 /**
  * The claims of the suite reviews that routed nothing: what each covered, its basis, the strength of
- * the second opinion that answered (or none, and why), every strength passed over before it, its
+ * the second opinion that answered (or none, and why), how its judges stood to the check work, every strength passed over before it, its
  * findings, and each covered item it leaves unverified with the reason.
  */
 export function formatSuiteReviewClaims(claims: readonly StoredClaim[]): string {
@@ -617,6 +628,7 @@ export function formatSuiteReviewClaims(claims: readonly StoredClaim[]): string 
     const basis = CLAIM_BASIS[claim.basis];
     lines.push(
       `  review ${claim.reviewTaskId}, covering check task(s) ${claim.covered.join(", ")}: ${claim.basis} (${basis.label}); ${second}`,
+      tiersLine(claim.tiers),
       ...claim.passedOver.map((over) => `    passed over ${over.strength} (${over.outcome}): ${over.reason}`),
       ...(claim.second.kind === "answered" ? claim.second.findings.map((finding) => `    second review: ${findingLine(finding)}`) : []),
     );

@@ -2,6 +2,8 @@ import { and, asc, eq, max, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { dependencies, taskChecks, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
+import { CapabilityLevelSchema } from "@ashara/finance";
+import type { CapabilityLevel } from "@ashara/finance";
 import { parseWorkItemJsonb } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
 
@@ -17,6 +19,11 @@ type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
 
 /** A count of suite_review_findings rows as Postgres returns it cast to int. */
 const ReopenCountSchema = z.number().int().nonnegative();
+
+/** The models a task's attempts ran on (dev_sessions.attempt_model), each with its grade in model_configs, as the query aggregates them. */
+const AttemptModelsSchema = z.array(z.strictObject({ model: z.string().min(1), grade: CapabilityLevelSchema.nullable() }));
+
+type AttemptModels = z.infer<typeof AttemptModelsSchema>;
 
 interface TaskCheckDefinition {
   readonly name: string;
@@ -112,6 +119,10 @@ interface CheckTaskUnderReview {
   readonly checkedTitle: string | null;
   /** How many reviews have reopened it: its suite_review_findings rows. */
   readonly reviewReopens: number;
+  /** The grade its task was dispatched at (task_spec.capability); null when the row records none. */
+  readonly grade: CapabilityLevel | null;
+  /** Every model an attempt on it ran on, oldest first, each with its model_configs grade; null for a model the catalog does not hold. */
+  readonly attemptModels: AttemptModels;
 }
 
 interface CompletedChecks {
@@ -219,6 +230,9 @@ export class TaskCheckRepository {
         blockedReason: workItems.blockedReason,
         checkedTitle: sql<string | null>`(SELECT checked.title FROM work_items checked WHERE checked.id::text = ${workItems.taskSpec}->>'checksFor')`,
         reviewReopens: sql<unknown>`(SELECT count(*) FROM suite_review_findings named WHERE named.check_task_id = ${workItems.id})::int`,
+        attemptModels: sql<unknown>`(SELECT coalesce(jsonb_agg(jsonb_build_object('model', s.attempt_model, 'grade', m.capability) ORDER BY s.created_at, s.id), '[]'::jsonb)
+          FROM dev_sessions s LEFT JOIN model_configs m ON m.model_id = s.attempt_model
+          WHERE s.task_id = ${workItems.id} AND s.attempt_model IS NOT NULL)`,
       })
       .from(dependencies)
       .innerJoin(workItems, eq(workItems.id, dependencies.toId))
@@ -234,6 +248,8 @@ export class TaskCheckRepository {
         sources: taskSpec?.sources ?? null,
         checkedTitle: row.checkedTitle,
         reviewReopens: ReopenCountSchema.parse(row.reviewReopens),
+        grade: taskSpec?.capability ?? null,
+        attemptModels: AttemptModelsSchema.parse(row.attemptModels),
       };
     });
   }
