@@ -372,10 +372,10 @@ class AcceptedSweepNotFound extends Error {
 }
 
 /**
- * Posts the delivered report and records it on the sweep, with its table's verdicts when it carries
- * one, in one transaction; once per sweep.
+ * Posts the delivered report, or the acceptance notice in its place, and records it on the sweep,
+ * with its table's verdicts, in one transaction; once per sweep.
  */
-export async function postDeliveredReport(db: Database, sweepId: string, body: string, verdicts: TableVerdicts | null): Promise<"posted" | "already-posted"> {
+export async function postDeliveredReport(db: Database, sweepId: string, body: string, verdicts: TableVerdicts): Promise<"posted" | "already-posted"> {
   return db.transaction(async (tx) => {
     const [sweep] = await tx
       .select({ projectId: acceptanceSweeps.projectId, reportId: acceptanceSweeps.reportId })
@@ -389,7 +389,7 @@ export async function postDeliveredReport(db: Database, sweepId: string, body: s
       .values({ projectId: sweep.projectId, direction: "outbound", kind: "report", body, inReplyTo: null })
       .returning({ id: clientMessages.id });
     const message = insertedRow(rows, "client_messages", `post the delivered report of acceptance sweep ${sweepId}`);
-    if (verdicts !== null) await insertGuaranteeVerdicts(tx, sweep.projectId, message.id, verdicts);
+    await insertGuaranteeVerdicts(tx, sweep.projectId, message.id, verdicts);
     await tx.update(acceptanceSweeps).set({ reportId: message.id }).where(eq(acceptanceSweeps.id, sweepId));
     return "posted";
   });

@@ -2,14 +2,17 @@ import { and, asc, desc, eq, lte } from "drizzle-orm";
 import { z } from "zod";
 import { acceptanceSweeps, clientMessages, guaranteeEvidence, guaranteeVerdicts, visionDocuments } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
+import { describeErrorChain } from "@ashara/shared";
 import type { Evidence } from "../vision-language/index.js";
 import { CheckEvidenceSchema } from "../vision-language/index.js";
-import { readVisionVersion } from "../vision.js";
-import type { GuaranteeRecords, TableVerdicts } from "../guarantee-report.js";
+import { VisionUnreadable, readVisionVersion } from "../vision.js";
+import { GuaranteeEvidenceMismatch, guaranteeTableOf } from "../guarantee-report.js";
+import type { GuaranteeRecords, GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 
 // What a terminal message's guarantee table is read from: its sweep, the evidence that sweep
-// recorded per guarantee and the vision version the evidence was recorded against; and the verdicts
-// it persists beside the message, in the transaction that posts it.
+// recorded per guarantee and the vision version the evidence was recorded against, or, for a message
+// no sweep is on record for, the version in force when it is told; and the verdicts it persists
+// beside the message, in the transaction that posts it.
 
 /** guarantee_evidence.checks as stored: each stored check deciding the guarantee, its outcome and class. */
 const StoredChecksSchema = z.array(
@@ -98,6 +101,35 @@ export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: str
     .from(guaranteeVerdicts)
     .where(eq(guaranteeVerdicts.reportId, last.reportId))
     .orderBy(asc(guaranteeVerdicts.guaranteeId));
+}
+
+/**
+ * The records of a message no sweep is on record for: the project's latest vision version, every
+ * guarantee of it judged on no sweep; no version is no contract on record.
+ */
+async function recordsWithoutSweep(db: DbHandle, projectId: string): Promise<GuaranteeRecords> {
+  const [stored] = await db.select().from(visionDocuments).where(eq(visionDocuments.projectId, projectId)).orderBy(desc(visionDocuments.version)).limit(1);
+  if (stored === undefined) return { kind: "no-contract", sweep: null };
+  return { kind: "judged", sweep: null, vision: readVisionVersion(stored), evidence: { kind: "unrecorded" } };
+}
+
+/** Where a message's table is read from: its sweep, or, with none on record for it, its project's vision in force. */
+export type TableSource = { readonly kind: "sweep"; readonly sweepId: string } | { readonly kind: "no-sweep"; readonly projectId: string };
+
+/**
+ * The table a terminal message carries. Records that do not hold together (evidence that does not
+ * match its version, a version that does not read) are the unreadable table, logged at warn with
+ * why, so the message still goes out judging nothing; any other failure throws for a retry.
+ */
+export async function readGuaranteeTable(db: DbHandle, source: TableSource): Promise<GuaranteeTable> {
+  try {
+    return guaranteeTableOf(source.kind === "sweep" ? await guaranteeRecordsOf(db, source.sweepId) : await recordsWithoutSweep(db, source.projectId));
+  } catch (err) {
+    if (!(err instanceof GuaranteeRecordsUnreadable) && !(err instanceof GuaranteeEvidenceMismatch) && !(err instanceof VisionUnreadable)) throw err;
+    const sweepId = source.kind === "sweep" ? source.sweepId : null;
+    console.warn(`[guarantee-report] ${source.kind === "sweep" ? `sweep ${source.sweepId}` : `project ${source.projectId}`}: its guarantee table cannot be read, so its message judges no guarantee: ${describeErrorChain(err)}`);
+    return { kind: "unreadable", sweepId };
+  }
 }
 
 /** Persists a message's verdicts beside it, inside the transaction that posts it. */

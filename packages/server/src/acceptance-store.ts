@@ -1,7 +1,7 @@
 import type { createDb } from "@ashara/db";
 import { WorkItemRowRepository, adaptWorkItemRepo } from "@ashara/delivery";
 import type { AcceptanceStore, TerminalSweepStore } from "@ashara/delivery";
-import { DeliveredReports, acceptProject, guaranteesInForce, listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "@ashara/engagement";
+import { DeliveredReports, acceptProject, guaranteesInForce, listDueDeliveredReports, postDeliveredReport, readGuaranteeTable, recordDeliveredReportFailure } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
 import {
   PUBLIC_INTERFACE_FILE,
@@ -43,6 +43,7 @@ export function createTerminalSweepStore(db: Db): TerminalSweepStore {
 export function createDeliveredReportStore(db: Db): DeliveredReportStore {
   return {
     dueReports: () => listDueDeliveredReports(db),
+    guaranteeTable: (sweepId) => readGuaranteeTable(db, { kind: "sweep", sweepId }),
     postReport: (sweepId, body, verdicts) => postDeliveredReport(db, sweepId, body, verdicts),
     recordReportFailure: (sweepId, failure) => recordDeliveredReportFailure(db, sweepId, failure),
   };

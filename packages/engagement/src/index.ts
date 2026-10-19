@@ -38,7 +38,7 @@ export { listDueStackChoices, recordStackChoice } from "./repositories/stack-cho
 export { listDueStopReports, listUnconsumedStops, postClientStopReport, recordClientStop } from "./repositories/client-stop.js";
 export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "./repositories/client-change.js";
 export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
-export { lastReportGuaranteeVerdictsOf } from "./repositories/guarantee-report.js";
+export { insertGuaranteeVerdicts, lastReportGuaranteeVerdictsOf, readGuaranteeTable } from "./repositories/guarantee-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { PROJECT_STATUSES, acceptProject } from "./project-lifecycle.js";
 export type { VisionSource } from "./vision-language/index.js";

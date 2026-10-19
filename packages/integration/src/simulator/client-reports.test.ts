@@ -23,8 +23,8 @@ const noContract = (sweepId: string): string => `\n\nNo contract is on record fo
 function haltWith(kind: string, errorClass: string | null, reason: string | null, body: string): ReportRecords {
   return {
     ...noRecords,
-    reports: [{ id: "r1", body: `${body}${noContract("t1")}`, reportsOn: null, inReplyTo: null }],
-    episodes: [{ id: "e1", kind, errorClass, reason, spend: null, work: null, reportId: "r1", resumedReportId: null, ended: false }],
+    reports: [{ id: "r1", body: `${body}${noContract("t1")}`, reportsOn: null, inReplyTo: null, visionAtReport: null }],
+    episodes: [{ id: "e1", kind, errorClass, reason, spend: null, work: null, reportId: "r1", resumedReportId: null, ended: false, sweepBeforeReport: "t1" }],
     tableSweeps: [{ id: "t1", blockId: "e1", stopId: null, mainCommit: null, visionAtSweep: null }],
   };
 }
@@ -141,7 +141,7 @@ describe("checkReports, a delivered report", () => {
   const goal = { id: "t1", title: "Goal", status: "Completed", level: "Task", workKind: null, origin: "decomposition", mergeCommit: "c1", mergeKind: null, blockedReason: null };
   const delivered = (line: string, extra: Partial<ReportRecords> = {}, tail = ""): ReportRecords => ({
     ...noRecords,
-    reports: [{ id: "r1", body: `Your project is delivered.\n\nWhat was delivered:\n${line}${tail}`, reportsOn: null, inReplyTo: null }],
+    reports: [{ id: "r1", body: `Your project is delivered.\n\nWhat was delivered:\n${line}${tail}`, reportsOn: null, inReplyTo: null, visionAtReport: null }],
     sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1", reportFailures: 0 }],
     tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: null }],
     ...extra,
@@ -170,11 +170,25 @@ describe("checkReports, a delivered report", () => {
   it("holds an acceptance notice to the failed attempts recorded on the sweep", () => {
     const notice = (reportFailures: number): ReportRecords => ({
       ...noRecords,
-      reports: [{ id: "r1", body: "Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's records in 5 attempts. Ashara keeps the error in its record of this delivery, acceptance sweep s1.", reportsOn: null, inReplyTo: null }],
+      reports: [
+        {
+          id: "r1",
+          body: `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's records in 5 attempts. Ashara keeps the error in its record of this delivery, acceptance sweep s1.${noContract("s1")}`,
+          reportsOn: null,
+          inReplyTo: null,
+          visionAtReport: null,
+        },
+      ],
       sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1", reportFailures }],
+      tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: null }],
     });
     expect(keysOf(notice(4), "accepted", [goal])).toEqual([]);
     expect(keysOf(notice(1), "accepted", [goal])).toEqual(["delivered-notice-unfounded"]);
+    // The notice is a terminal message: it carries its sweep's table, here that no contract is on record.
+    const bare = notice(4);
+    expect(keysOf({ ...bare, reports: bare.reports.map((report) => ({ ...report, body: report.body.replace(noContract("s1"), "") })) }, "accepted", [goal])).toEqual([
+      "guarantee-table:delivered",
+    ]);
   });
 
   it("refuses the unrecorded-kind line for a close recorded as already delivered", () => {
@@ -236,7 +250,58 @@ describe("checkReports, a delivered report", () => {
       expect(keys(judged(`${offPunch}${off(offLines)}`, { ...offSweep, verdicts: unjudged }))).toEqual([]);
       expect(keys(judged(`${offPunch}${off(offLines)}`, offSweep))).toEqual(Array(3).fill("guarantee-table:delivered"));
       expect(keys(judged(""))).toEqual(["guarantee-table:delivered"]);
+      // A halt told with no sweep before it judges its table on none: its body still says the sweep's no-contract line.
       expect(keysOf({ ...haltWith("budget_cap", null, null, "Work on this project is paused.\n\nNo cause was recorded for this pause."), tableSweeps: [] }, "blocked")).toEqual(["guarantee-table:halt:budget_cap"]);
+    });
+
+    // A terminal message no sweep is on record for: every guarantee of the version in force when it
+    // was told, unjudged for want of a sweep on a commit, its verdicts naming no sweep.
+    describe("with no sweep on record", () => {
+      const head = "No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v1) is unjudged.";
+      const noSweepLines = LINES.map((line) => line.replace("verdict: pass", "verdict: unjudged, why"));
+      const noSweepPunch = "The punch list, what is not shown to hold, failures first:\n- G1: unjudged, why\n- G2: unjudged, why\n- G3: unjudged, why";
+      const noSweepTable = `${noSweepPunch}\n\n${head}\n${noSweepLines.join("\n")}`;
+      const noSweepVerdicts = verdicts.map((each) => ({ ...each, sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" }));
+      const halted = (body: string, extra: Partial<ReportRecords> = {}): ReportRecords => {
+        const records = haltWith("budget_cap", null, null, "Work on this project is paused.\n\nNo cause was recorded for this pause.");
+        return {
+          ...records,
+          reports: records.reports.map((report) => ({ ...report, body: `Work on this project is paused.\n\nNo cause was recorded for this pause.\n\n${body}`, visionAtReport: 1 })),
+          episodes: records.episodes.map((episode) => ({ ...episode, sweepBeforeReport: null })),
+          tableSweeps: [],
+          visions: [vision],
+          verdicts: noSweepVerdicts,
+          ...extra,
+        };
+      };
+      const planningStopped = (body: string, extra: Partial<ReportRecords> = {}): ReportRecords => ({
+        ...noRecords,
+        reports: [{ id: "r1", body: `Ashara could not turn this project's vision into a plan after 3 attempts, so work on this project has stopped.\n\n${body}`, reportsOn: "planning-stopped", inReplyTo: null, visionAtReport: 1 }],
+        visions: [vision],
+        verdicts: noSweepVerdicts,
+        ...extra,
+      });
+
+      it("accepts a halt told before its terminal sweep was recorded, every guarantee unjudged on no sweep, and refuses one that drops the table or names a sweep", () => {
+        expect(keysOf(halted(noSweepTable), "blocked")).toEqual([]);
+        expect(keysOf(halted(""), "blocked")).toEqual(["guarantee-table:halt:budget_cap"]);
+        expect(keysOf(halted(noSweepTable, { verdicts: noSweepVerdicts.map((each) => ({ ...each, sweepId: "t1" })) }), "blocked")).toEqual(Array(3).fill("guarantee-table:halt:budget_cap"));
+        expect(keysOf(halted(noSweepTable, { verdicts: [] }), "blocked")).toEqual(Array(3).fill("guarantee-table:halt:budget_cap"));
+      });
+
+      it("holds the planning-stopped report to the table on no sweep: one with no table is named", () => {
+        expect(keysOf(planningStopped(noSweepTable), "blocked")).toEqual([]);
+        expect(keysOf(planningStopped("No tasks were planned and nothing was built.", { verdicts: [] }), "blocked")).toEqual(Array(4).fill("guarantee-table:planning-stopped"));
+        expect(keysOf(planningStopped("No contract is on record for this project, so no guarantee is judged.", { visions: [], verdicts: [], reports: [{ id: "r1", body: "stopped.\n\nNo contract is on record for this project, so no guarantee is judged.", reportsOn: "planning-stopped", inReplyTo: null, visionAtReport: null }] }), "blocked")).toEqual([]);
+      });
+
+      it("accepts a table said unreadable only when the records do not hold together, with no verdict stored", () => {
+        const unreadable = "\n\nAshara's records of this project's guarantees at sweep s1 do not hold together, so no guarantee is judged in this message.";
+        const mismatched = evidence.map((each) => (each.guaranteeId === "G3" ? { ...each, guaranteeId: "G9" } : each));
+        expect(keys(judged(unreadable, { evidence: mismatched, verdicts: [] }))).toEqual([]);
+        expect(keys(judged(unreadable, { verdicts: [] }))).toEqual(["guarantee-table:delivered"]);
+        expect(keys(judged(unreadable, { evidence: mismatched }))).toEqual(["guarantee-table:delivered"]);
+      });
     });
   });
 });
@@ -410,7 +475,7 @@ describe("checkReports, a burn warning", () => {
     "building tasks of the current plan are finished.";
   const warned = (warnings: ReportRecords["burnWarnings"], text = body): ReportRecords => ({
     ...noRecords,
-    reports: warnings.map((warning) => ({ id: warning.reportId, body: text, reportsOn: null, inReplyTo: null })),
+    reports: warnings.map((warning) => ({ id: warning.reportId, body: text, reportsOn: null, inReplyTo: null, visionAtReport: null })),
     burnWarnings: warnings,
   });
 
@@ -428,8 +493,8 @@ describe("checkReports, a burn warning", () => {
     const red = { ...yellow, zone: "red", drawnRequests: 400, reportId: "w2", operatorReport, ledgerRequests: 400 };
     const redBody = body.replace("230 model", "400 model");
     const reports = [
-      { id: "w2", body: redBody, reportsOn: null, inReplyTo: null },
-      { id: "w3", body: redBody, reportsOn: null, inReplyTo: null },
+      { id: "w2", body: redBody, reportsOn: null, inReplyTo: null, visionAtReport: null },
+      { id: "w3", body: redBody, reportsOn: null, inReplyTo: null, visionAtReport: null },
     ];
     const records: ReportRecords = { ...noRecords, reports, burnWarnings: [red, { ...red, zone: "yellow", reportId: "w3", operatorReport: null }] };
     expect(keysOf(records, "active")).toEqual(["burn-warning-repeated"]);

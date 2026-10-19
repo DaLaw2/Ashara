@@ -97,6 +97,7 @@ describe("every progress report reissues the register", () => {
           posted.push(body);
           return "posted";
         },
+        guaranteesWithoutSweep: async () => expect.unreachable("no planning-stopped report is due"),
         dueRevisionReports: async () => [],
         postRevisionReport: async () => "posted",
         blockProject: async () => "blocked",

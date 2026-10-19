@@ -5,16 +5,17 @@ import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
-import { guaranteeTableOf } from "../guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
-import { guaranteeRecordsOf, insertGuaranteeVerdicts } from "./guarantee-report.js";
+import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
 // The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
 // infrastructure halt). Each is due while its episode (a project_blocks row) has no report, and
 // posting one records it against that episode in the same transaction, so a retried or concurrent
-// post tells the client once. A halt's report is due once the halt's terminal sweep is recorded:
-// it carries that sweep's guarantee table, and its verdicts are posted with it.
+// post tells the client once. A halt's report carries the guarantee table of the halt's terminal
+// sweep, which the cycle runs before its reports, and its verdicts are posted with it; a halt whose
+// sweep is not on record (its recording failed) is still told, every guarantee unjudged with no sweep
+// on a commit, since the client is never left unaware of a halt for want of evidence.
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
 type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
@@ -317,8 +318,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
     })
     .from(projectBlocks)
     .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
-    // The halt's terminal sweep: its report waits for it.
-    .innerJoin(acceptanceSweeps, eq(acceptanceSweeps.blockId, projectBlocks.id))
+    .leftJoin(acceptanceSweeps, eq(acceptanceSweeps.blockId, projectBlocks.id))
     .where(
       and(
         isNull(projectBlocks.endedAt),
@@ -335,7 +335,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       const kind = ProjectBlockKindSchema.safeParse(row.kind);
       if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
       const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
-      const guarantees = guaranteeTableOf(await guaranteeRecordsOf(db, row.sweepId));
+      const guarantees = await readGuaranteeTable(db, row.sweepId === null ? { kind: "no-sweep", projectId: row.projectId } : { kind: "sweep", sweepId: row.sweepId });
       if (kind.data === "check_dispute") {
         const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
         return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute, guarantees };

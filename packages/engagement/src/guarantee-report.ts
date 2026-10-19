@@ -7,8 +7,11 @@ import type { VisionVersion } from "./vision.js";
 // client's stop report. It is judged from one sweep's evidence on main, one verdict per guarantee of
 // the vision version that evidence was recorded against, each guarantee exactly once. A guarantee
 // passes only on a check deciding it that ran on that commit and passed; a review's reading of the
-// checks can only hold one back. A sweep that ran on no commit judges nothing, so every guarantee
-// reads unjudged and names that. The punch list comes first: every failure, then every unjudged
+// checks can only hold one back. A sweep that ran on no commit judges nothing, and neither does a
+// message no sweep is on record for (one told before its sweep could be recorded): every guarantee of
+// the version in force reads unjudged and names that, so a terminal message is never held back for
+// want of evidence. Records that do not hold together judge nothing either: the message says its
+// table could not be read rather than give any guarantee a verdict. The punch list comes first: every failure, then every unjudged
 // guarantee with why, then every pass that rests on an assumption the client has not confirmed.
 
 /**
@@ -29,10 +32,13 @@ interface JudgedSweep {
  */
 type SweepEvidence = { readonly kind: "recorded"; readonly byGuarantee: ReadonlyMap<string, Evidence> } | { readonly kind: "unrecorded" };
 
-/** What a table is read from: the sweep, and the vision version in force at it with each guarantee's evidence; or no vision at that sweep. */
+/**
+ * What a table is read from: the sweep, null when none is on record for the message, and the vision
+ * version in force at it with each guarantee's evidence; or no vision then.
+ */
 export type GuaranteeRecords =
-  | { readonly kind: "judged"; readonly sweep: JudgedSweep; readonly vision: VisionVersion; readonly evidence: SweepEvidence }
-  | { readonly kind: "no-contract"; readonly sweep: JudgedSweep };
+  | { readonly kind: "judged"; readonly sweep: JudgedSweep | null; readonly vision: VisionVersion; readonly evidence: SweepEvidence }
+  | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null };
 
 /** One guarantee's line of the table. */
 interface GuaranteeLine {
@@ -42,16 +48,20 @@ interface GuaranteeLine {
   readonly evidenceClass: EvidenceClass;
 }
 
-/** The table a terminal message carries, or that no contract was on record at its sweep. */
+/**
+ * The table a terminal message carries; or that no contract was on record at its sweep; or that its
+ * records did not read as a table, on the sweep named (null when none was on record).
+ */
 export type GuaranteeTable =
   | {
       readonly kind: "table";
-      readonly sweep: JudgedSweep;
+      readonly sweep: JudgedSweep | null;
       readonly vision: VisionVersion;
       readonly evidence: SweepEvidence["kind"];
       readonly lines: readonly GuaranteeLine[];
     }
-  | { readonly kind: "no-contract"; readonly sweep: JudgedSweep };
+  | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null }
+  | { readonly kind: "unreadable"; readonly sweepId: string | null };
 
 /** One verdict as guarantee_verdicts stores it beside the message that carries it. */
 interface StoredGuaranteeVerdict {
@@ -63,14 +73,17 @@ interface StoredGuaranteeVerdict {
   readonly evidenceClass: EvidenceClass;
 }
 
-/** The verdicts a message's table persists, with the sweep they were judged on; none when no contract was on record. */
+/**
+ * The verdicts a message's table persists, with the sweep they were judged on (null when none was on
+ * record); none when no contract was on record or the table could not be read.
+ */
 export interface TableVerdicts {
-  readonly sweepId: string;
+  readonly sweepId: string | null;
   readonly verdicts: readonly StoredGuaranteeVerdict[];
 }
 
 /** A sweep's evidence names a guarantee the vision version it was recorded against does not hold, or misses one it holds. */
-class GuaranteeEvidenceMismatch extends Error {
+export class GuaranteeEvidenceMismatch extends Error {
   constructor(
     readonly sweepId: string,
     readonly visionVersion: number,
@@ -110,26 +123,29 @@ function lineOf(guarantee: VisionGuarantee, evidence: Evidence, onCommit: boolea
 export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
   if (records.kind === "no-contract") return records;
   const { sweep, vision, evidence } = records;
+  const onCommit = sweep !== null && sweep.mainCommit !== null;
+  if (sweep === null || evidence.kind === "unrecorded") {
+    return { kind: "table", sweep, vision, evidence: "unrecorded", lines: vision.guarantees.map((guarantee) => lineOf(guarantee, NO_EVIDENCE, onCommit)) };
+  }
   const ids = new Set(vision.guarantees.map((guarantee) => guarantee.id));
-  if (evidence.kind === "recorded") {
-    for (const id of evidence.byGuarantee.keys()) {
-      if (!ids.has(id)) throw new GuaranteeEvidenceMismatch(sweep.id, vision.version, id, "unmatched");
-    }
+  for (const id of evidence.byGuarantee.keys()) {
+    if (!ids.has(id)) throw new GuaranteeEvidenceMismatch(sweep.id, vision.version, id, "unmatched");
   }
   const lines = vision.guarantees.map((guarantee) => {
-    if (evidence.kind === "unrecorded") return lineOf(guarantee, NO_EVIDENCE, sweep.mainCommit !== null);
     const seen = evidence.byGuarantee.get(guarantee.id);
     if (seen === undefined) throw new GuaranteeEvidenceMismatch(sweep.id, vision.version, guarantee.id, "missing");
-    return lineOf(guarantee, seen, sweep.mainCommit !== null);
+    return lineOf(guarantee, seen, onCommit);
   });
   return { kind: "table", sweep, vision, evidence: evidence.kind, lines };
 }
 
 /** The verdicts the table persists beside its message. */
 export function tableVerdicts(table: GuaranteeTable): TableVerdicts {
-  if (table.kind === "no-contract") return { sweepId: table.sweep.id, verdicts: [] };
+  if (table.kind === "unreadable") return { sweepId: table.sweepId, verdicts: [] };
+  const sweepId = table.sweep === null ? null : table.sweep.id;
+  if (table.kind === "no-contract") return { sweepId, verdicts: [] };
   return {
-    sweepId: table.sweep.id,
+    sweepId,
     verdicts: table.lines.map((line) => ({
       guaranteeId: line.guarantee.id,
       visionVersion: table.vision.version,
@@ -192,12 +208,15 @@ function punchList(lines: readonly GuaranteeLine[]): string {
 
 /** Where the table was judged, and on what. */
 function judgedOn(table: Extract<GuaranteeTable, { readonly kind: "table" }>): string {
+  const { sweep } = table;
   const where =
-    table.sweep.mainCommit === null
-      ? `No check could run on a commit of main for this report; why is in Ashara's record of that attempt, sweep ${table.sweep.id}.`
-      : `Each guarantee of your contract (vision v${table.vision.version}) is judged on main at commit ${table.sweep.mainCommit}, sweep ${table.sweep.id}.`;
+    sweep === null
+      ? `No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v${table.vision.version}) is unjudged.`
+      : sweep.mainCommit === null
+        ? `No check could run on a commit of main for this report; why is in Ashara's record of that attempt, sweep ${sweep.id}.`
+        : `Each guarantee of your contract (vision v${table.vision.version}) is judged on main at commit ${sweep.mainCommit}, sweep ${sweep.id}.`;
   const unrecorded =
-    table.evidence === "unrecorded" ? " Which checks decided each guarantee is not on record for that sweep, so none is judged as holding." : "";
+    sweep !== null && table.evidence === "unrecorded" ? " Which checks decided each guarantee is not on record for that sweep, so none is judged as holding." : "";
   return (
     `${where}${unrecorded} A guarantee passes only when a check deciding it ran on that commit and passed; a review of the checks ` +
     `can only hold one back, never pass it.`
@@ -246,7 +265,15 @@ function basisOfDesignPart(vision: VisionVersion): string[] {
  * and the Basis of Design. A project with no contract at the sweep is told so.
  */
 export function guaranteeSection(table: GuaranteeTable): string {
-  if (table.kind === "no-contract") return `No contract is on record for this project at sweep ${table.sweep.id}, so no guarantee is judged.`;
+  if (table.kind === "unreadable") {
+    const where = table.sweepId === null ? "" : ` at sweep ${table.sweepId}`;
+    return `Ashara's records of this project's guarantees${where} do not hold together, so no guarantee is judged in this message: none is told as holding, and none as failing. Its operator is told why.`;
+  }
+  if (table.kind === "no-contract") {
+    return table.sweep === null
+      ? `No contract is on record for this project, so no guarantee is judged.`
+      : `No contract is on record for this project at sweep ${table.sweep.id}, so no guarantee is judged.`;
+  }
   return [
     punchList(table.lines),
     [judgedOn(table), ...table.lines.map(tableLine)].join("\n"),

@@ -21,7 +21,8 @@ import type { Database } from "./database.js";
  * expect can never find production wrong.
  */
 
-const reportRow = z.object({ id: z.string(), body: z.string(), reportsOn: z.string().nullable(), inReplyTo: z.string().nullable() });
+/** An outbound report, with the latest vision version written before it: a table no sweep is on record for is judged on that version. */
+const reportRow = z.object({ id: z.string(), body: z.string(), reportsOn: z.string().nullable(), inReplyTo: z.string().nullable(), visionAtReport: z.number().nullable() });
 /** The amounts a budget_cap halt's cap was judged on, as project_blocks.spend holds them. */
 const spendRecord = z.strictObject({
   capUsd: z.number(),
@@ -52,6 +53,8 @@ const episodeRecord = z.object({
   reportId: z.string().nullable(),
   resumedReportId: z.string().nullable(),
   ended: z.boolean(),
+  /** The episode's terminal sweep, when it was recorded before the episode's report; null when none was. */
+  sweepBeforeReport: z.string().nullable(),
 });
 /** One zone of the work ledger's early warning a project entered (work_burn_warnings), with its report's text. */
 const burnWarningRow = z.object({
@@ -84,7 +87,7 @@ const evidenceRow = z.object({ sweepId: z.string(), guaranteeId: z.string(), vis
 /** One verdict stored beside the message that carries it. */
 const verdictRow = z.object({
   reportId: z.string(),
-  sweepId: z.string(),
+  sweepId: z.string().nullable(),
   visionVersion: z.number(),
   guaranteeId: z.string(),
   verdict: z.string(),
@@ -177,14 +180,18 @@ export async function readReportRecords(db: Database, projectId: string): Promis
   return {
     reports: await rows(
       reportRow,
-      sql`SELECT id, body, reports_on AS "reportsOn", in_reply_to AS "inReplyTo" FROM client_messages
-          WHERE project_id = ${projectId} AND direction = 'outbound' AND kind = 'report' ORDER BY created_at, id`,
+      sql`SELECT m.id, m.body, m.reports_on AS "reportsOn", m.in_reply_to AS "inReplyTo",
+                 (SELECT max(d.version) FROM vision_documents d WHERE d.project_id = m.project_id AND d.created_at <= m.created_at) AS "visionAtReport"
+          FROM client_messages m
+          WHERE m.project_id = ${projectId} AND m.direction = 'outbound' AND m.kind = 'report' ORDER BY m.created_at, m.id`,
     ),
     episodes: await rows(
       episodeRecord,
-      sql`SELECT id, kind, error_class AS "errorClass", reason, spend, work, report_id AS "reportId", resumed_report_id AS "resumedReportId",
-                 ended_at IS NOT NULL AS ended
-          FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`,
+      sql`SELECT b.id, b.kind, b.error_class AS "errorClass", b.reason, b.spend, b.work, b.report_id AS "reportId", b.resumed_report_id AS "resumedReportId",
+                 b.ended_at IS NOT NULL AS ended,
+                 (SELECT s.id FROM acceptance_sweeps s JOIN client_messages m ON m.id = b.report_id
+                   WHERE s.block_id = b.id AND s.created_at <= m.created_at ORDER BY s.created_at, s.id LIMIT 1) AS "sweepBeforeReport"
+          FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`,
     ),
     burnWarnings: await rows(
       burnWarningRow,
@@ -705,12 +712,18 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     } else if (judgement === "unknown") {
       add(`halt-kind-unknown:${kind}`, `a halt of kind ${kind}, outside the code's list, was reported: no oracle states what it must say`);
     }
-    // A planning-stopped report tells a stopped first planning, before any work; it carries no table.
-    if (report.reportsOn === null) {
-      const sweep = records.tableSweeps.find((each) => each.blockId === episode.id);
-      if (sweep === undefined) add(`guarantee-table:halt:${kind}`, `the ${kind} halt was reported with no terminal sweep on record for its episode, so its table was judged on nothing`);
-      for (const problem of sweep === undefined ? [] : tableProblems(records, report, sweep)) add(`guarantee-table:halt:${kind}`, `the ${kind} halt report: ${problem}`);
+    // The halt's terminal sweep, when it was on record before the report; a halt told before it was
+    // judges every guarantee on no sweep, as the version in force when it was told states them.
+    const sweep = records.tableSweeps.find((each) => each.id === episode.sweepBeforeReport);
+    for (const problem of tableProblems(records, report, sweep === undefined ? unsweptSource(report) : sweptSource(sweep))) {
+      add(`guarantee-table:halt:${kind}`, `the ${kind} halt report: ${problem}`);
     }
+  }
+
+  // The report of a first planning that stopped is that halt's report: nothing was built and no
+  // sweep is on record for it, so it carries every guarantee unjudged on no sweep.
+  for (const report of records.reports.filter((each) => each.reportsOn === "planning-stopped")) {
+    for (const problem of tableProblems(records, report, unsweptSource(report))) add("guarantee-table:planning-stopped", `the planning-stopped report: ${problem}`);
   }
 
   // The stop report names exactly the merges recorded.
@@ -730,7 +743,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
       if (lines.length !== merges.length) add("stop-merges", `the stop report names ${lines.length} merge(s); the records hold ${merges.length}`);
       const sweep = records.tableSweeps.find((each) => each.stopId !== null && each.stopId === stop.inReplyTo);
       if (sweep === undefined) add("guarantee-table:stop", "the stop report was posted with no terminal sweep on record for its stop, so its table was judged on nothing");
-      for (const problem of sweep === undefined ? [] : tableProblems(records, stop, sweep)) add("guarantee-table:stop", `the stop report: ${problem}`);
+      for (const problem of sweep === undefined ? [] : tableProblems(records, stop, sweptSource(sweep))) add("guarantee-table:stop", `the stop report: ${problem}`);
     }
   }
 
@@ -748,6 +761,12 @@ export function checkReports(records: ReportRecords, project: { readonly status:
       const attempts = Number(notice[1]);
       if (sweep.reportFailures < attempts - 1) {
         add("delivered-notice-unfounded", `the acceptance notice says the report could not be written in ${attempts} attempts; the sweep records ${sweep.reportFailures} failed attempt(s)`);
+      }
+      // The notice is the project's terminal message in the report's place, so it carries the sweep's table.
+      const tableSweep = records.tableSweeps.find((each) => each.id === sweep.id);
+      if (tableSweep === undefined) add("guarantee-table:delivered", `the acceptance notice's sweep ${sweep.id} is not among the project's sweeps`);
+      for (const problem of tableSweep === undefined || report === undefined ? [] : tableProblems(records, report, sweptSource(tableSweep))) {
+        add("guarantee-table:delivered", `the acceptance notice: ${problem}`);
       }
     } else if (report !== undefined && sweep !== undefined) {
       const goals = items.filter((item) => item.level === "Task" && item.status === "Completed" && item.origin === "decomposition");
@@ -785,7 +804,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
 
       const tableSweep = records.tableSweeps.find((each) => each.id === sweep.id);
       if (tableSweep === undefined) add("guarantee-table:delivered", `the delivered report's sweep ${sweep.id} is not among the project's sweeps`);
-      for (const problem of tableSweep === undefined ? [] : tableProblems(records, report, tableSweep)) add("guarantee-table:delivered", `the delivered report: ${problem}`);
+      for (const problem of tableSweep === undefined ? [] : tableProblems(records, report, sweptSource(tableSweep))) add("guarantee-table:delivered", `the delivered report: ${problem}`);
     }
   }
   return found;
@@ -1095,6 +1114,7 @@ function inForceAt(vision: z.infer<typeof visionVersionRow>): GuaranteeInForce[]
 const TABLE_ON_COMMIT = "Each guarantee of your contract (vision v";
 const TABLE_OFF_COMMIT = "No check could run on a commit of main for this report";
 const PUNCH_HEAD = "The punch list";
+const TABLE_UNREADABLE = "Ashara's records of this project's guarantees";
 
 /** The ids at the head of a paragraph's `- <id>: ` lines, in order. */
 function idsListed(part: string | null): string[] {
@@ -1104,44 +1124,72 @@ function idsListed(part: string | null): string[] {
   });
 }
 
+/** What a table is judged from: its sweep, or none on record for the message, with the vision version current then. */
+interface TableSource {
+  readonly sweepId: string | null;
+  readonly mainCommit: string | null;
+  readonly visionVersion: number | null;
+}
+
+function sweptSource(sweep: z.infer<typeof tableSweepRow>): TableSource {
+  return { sweepId: sweep.id, mainCommit: sweep.mainCommit, visionVersion: sweep.visionAtSweep };
+}
+
+function unsweptSource(report: z.infer<typeof reportRow>): TableSource {
+  return { sweepId: null, mainCommit: null, visionVersion: report.visionAtReport };
+}
+
 /**
- * Where a terminal message's guarantee table departs from its sweep's records: the verdicts stored
- * beside it name that sweep and every guarantee in force once, each as `judged` reads its evidence;
- * the table lists every guarantee once, in the version's order, with that verdict; and the punch
- * list names every failure, then every unjudged guarantee, then every pass stored as resting on an
- * assumption the client has not confirmed. A sweep with no vision before it carries no contract and
- * says so.
+ * Where a terminal message's guarantee table departs from its records: the verdicts stored beside it
+ * name its sweep (none, for a message no sweep is on record for) and every guarantee in force once,
+ * each as `judged` reads its evidence; the table lists every guarantee once, in the version's order,
+ * with that verdict; and the punch list names every failure, then every unjudged guarantee, then
+ * every pass stored as resting on an assumption the client has not confirmed. No vision then is no
+ * contract, said so. A message may say its records do not hold together as a table only when the
+ * oracle finds them so too, and then stores no verdict.
  */
-function tableProblems(records: Pick<ReportRecords, "evidence" | "verdicts" | "visions">, report: z.infer<typeof reportRow>, sweep: z.infer<typeof tableSweepRow>): string[] {
+function tableProblems(records: Pick<ReportRecords, "evidence" | "verdicts" | "visions">, report: z.infer<typeof reportRow>, source: TableSource): string[] {
   const stored = records.verdicts.filter((verdict) => verdict.reportId === report.id);
-  const evidence = records.evidence.filter((each) => each.sweepId === sweep.id);
+  const evidence = source.sweepId === null ? [] : records.evidence.filter((each) => each.sweepId === source.sweepId);
+  const at = source.sweepId === null ? "" : ` at sweep ${source.sweepId}`;
+  const saysUnreadable = paragraph(report.body, `${TABLE_UNREADABLE}${at} do not hold together`) !== null;
+  const broken: string[] = [];
   const versions = [...new Set(evidence.map((each) => each.visionVersion))];
-  if (versions.length > 1) return [`sweep ${sweep.id} records evidence against vision versions ${versions.join(", ")}; one table cannot be judged from it`];
-  const version = versions[0] ?? sweep.visionAtSweep;
+  if (versions.length > 1) broken.push(`its evidence${at} names vision versions ${versions.join(", ")}; one table cannot be judged from it`);
+  const version = versions[0] ?? source.visionVersion;
   if (version === null) {
+    const noContract = `No contract is on record for this project${at}, so no guarantee is judged.`;
     return [
-      ...(stored.length === 0 ? [] : [`it stores ${stored.length} verdict(s) though no vision is on record at sweep ${sweep.id}`]),
-      ...(report.body.includes(`No contract is on record for this project at sweep ${sweep.id}`) ? [] : [`no vision is on record at sweep ${sweep.id}, but it does not say no contract is on record`]),
+      ...(stored.length === 0 ? [] : [`it stores ${stored.length} verdict(s) though no vision is on record${at}`]),
+      ...(report.body.includes(noContract) ? [] : [`no vision is on record${at}, but it does not say "${noContract}"`]),
     ];
   }
   const vision = records.visions.find((each) => each.version === version);
-  if (vision === undefined) return [`sweep ${sweep.id} is judged against vision v${version}, which is not on record`];
-  const inForce = inForceAt(vision);
-  if (typeof inForce === "string") return [inForce];
-  const problems: string[] = [];
-  const ids = inForce.map((g) => g.id);
+  if (vision === undefined) broken.push(`its table${at} is judged against vision v${version}, which is not on record`);
+  const inForce = vision === undefined ? null : inForceAt(vision);
+  if (typeof inForce === "string") broken.push(inForce);
+  const ids = Array.isArray(inForce) ? inForce.map((g) => g.id) : [];
   const recorded = evidence.map((each) => each.guaranteeId);
-  if (evidence.length > 0 && JSON.stringify([...recorded].sort()) !== JSON.stringify([...ids].sort())) {
-    problems.push(`sweep ${sweep.id} records evidence for [${recorded.join(", ")}]; vision v${version} holds [${ids.join(", ")}]`);
+  if (Array.isArray(inForce) && evidence.length > 0 && JSON.stringify([...recorded].sort()) !== JSON.stringify([...ids].sort())) {
+    broken.push(`its evidence${at} names [${recorded.join(", ")}]; vision v${version} holds [${ids.join(", ")}]`);
   }
-  const onCommit = sweep.mainCommit !== null;
+  const unparsed = evidence.filter((each) => !checkEvidence.safeParse(each.checks).success).map((each) => each.guaranteeId);
+  if (unparsed.length > 0) broken.push(`the evidence of ${unparsed.join(", ")}${at} does not read as checks`);
+  if (saysUnreadable) {
+    return [
+      ...(broken.length > 0 ? [] : [`it says its records do not hold together as a table, though they read as one at vision v${version}`]),
+      ...(stored.length === 0 ? [] : [`it stores ${stored.length} verdict(s) though it says its records do not hold together`]),
+    ];
+  }
+  if (!Array.isArray(inForce)) return broken;
+  const problems: string[] = [...broken];
+  const onCommit = source.mainCommit !== null;
   const expected = inForce.map((guarantee) => {
     const seen = evidence.find((each) => each.guaranteeId === guarantee.id);
-    // A sweep recorded before evidence per guarantee judges every guarantee on none, as its table
-    // says; a sweep that records some and misses this one is named above.
+    // A sweep recorded before evidence per guarantee, or no sweep, judges every guarantee on none, as
+    // its table says; a sweep that records some and misses this one is named above.
     if (seen === undefined) return { guarantee, ...judged(guarantee, { checks: [], reviewLowers: false }, onCommit) };
     const checks = checkEvidence.safeParse(seen.checks);
-    if (!checks.success) problems.push(`the evidence of ${guarantee.id} on sweep ${sweep.id} does not read as checks: ${z.prettifyError(checks.error).slice(0, 200)}`);
     return { guarantee, ...judged(guarantee, { checks: checks.success ? checks.data : [], reviewLowers: seen.reviewLowers }, onCommit) };
   });
 
@@ -1152,13 +1200,20 @@ function tableProblems(records: Pick<ReportRecords, "evidence" | "verdicts" | "v
       problems.push(`it stores ${rows.length} verdict(s) for ${guarantee.id}; every guarantee in force has exactly one`);
       continue;
     }
-    if (row.sweepId !== sweep.id || row.visionVersion !== version) problems.push(`its verdict on ${guarantee.id} names sweep ${row.sweepId} at vision v${row.visionVersion}; it was judged on sweep ${sweep.id} at v${version}`);
+    if (row.sweepId !== source.sweepId || row.visionVersion !== version) {
+      problems.push(`its verdict on ${guarantee.id} names sweep ${row.sweepId ?? "none"} at vision v${row.visionVersion}; it was judged on sweep ${source.sweepId ?? "none"} at v${version}`);
+    }
     if (row.verdict !== verdict || row.reason !== reason) problems.push(`it stores ${guarantee.id} as ${row.verdict}${row.reason === null ? "" : ` (${row.reason})`}; its evidence reads ${verdict}${reason === null ? "" : ` (${reason})`}`);
   }
   const strays = stored.filter((row) => !ids.includes(row.guaranteeId));
   if (strays.length > 0) problems.push(`it stores verdicts for ${strays.map((row) => row.guaranteeId).join(", ")}, which vision v${version} does not hold`);
 
-  const head = sweep.mainCommit === null ? TABLE_OFF_COMMIT : `${TABLE_ON_COMMIT}${version}) is judged on main at commit ${sweep.mainCommit}, sweep ${sweep.id}.`;
+  const head =
+    source.sweepId === null
+      ? `${TABLE_OFF_COMMIT}: no sweep of main is on record for it, so each guarantee of your contract (vision v${version}) is unjudged.`
+      : source.mainCommit === null
+        ? `${TABLE_OFF_COMMIT}; why is in Ashara's record of that attempt, sweep ${source.sweepId}.`
+        : `${TABLE_ON_COMMIT}${version}) is judged on main at commit ${source.mainCommit}, sweep ${source.sweepId}.`;
   const table = paragraph(report.body, head);
   if (table === null) return [...problems, `it carries no guarantee table opening "${head.slice(0, 120)}"`];
   const lines = table.split("\n").filter((line) => line.startsWith("- "));

@@ -287,7 +287,7 @@ describe("SuiteReviewer", () => {
   // An empty problem list is a claim about the checks, as a finding
   // is; the items it covers read as verified only when an independent second review is clean too.
   describe("a review that finds nothing is a claim", () => {
-    test("it is confirmed by a second review asked of another model family first, recorded whole with its strength", async () => {
+    test("a second review, asked of another model family first, confirms it; the claim is recorded whole with its strength", async () => {
       const asked: unknown[] = [];
       const recorded: Recorded[] = [];
       const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm: scripted([{ problems: [] }], [], TWO_FAMILIES, asked), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });

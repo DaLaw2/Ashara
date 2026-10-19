@@ -152,7 +152,8 @@ export const guaranteeVerdicts = pgTable(
     reportId: uuid("report_id")
       .notNull()
       .references(() => clientMessages.id, { onDelete: "cascade" }),
-    sweepId: uuid("sweep_id").notNull(),
+    // null when no sweep is on record for the message; every verdict is then unjudged (a CHECK).
+    sweepId: uuid("sweep_id"),
     visionVersion: integer("vision_version").notNull(),
     guaranteeId: text("guarantee_id").notNull(),
     verdict: text().notNull(),

@@ -11,7 +11,8 @@ import { resolveTestDatabaseUrl } from "./test-database-url.js";
 // project, and its sweep, report and verdict rows with it.
 // A stored verdict speaks the hidden suite's vocabulary and nothing else: a reason outside it, an
 // unjudged verdict with no reason, a reason on a judged verdict, or a pass resting on a review's
-// reading are refused by the table itself, whatever writes the row.
+// reading are refused by the table itself, whatever writes the row. A verdict of a message no sweep
+// is on record for judges nothing: it is unjudged for want of a sweep on a commit, or refused.
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `guarantee-verdicts-test-${randomUUID().slice(0, 8)}`;
@@ -59,10 +60,10 @@ interface VerdictRow {
   readonly evidenceClass: string;
 }
 
-async function insertVerdict(row: VerdictRow): Promise<void> {
+async function insertVerdict(row: VerdictRow, swept: "swept" | "no-sweep" = "swept"): Promise<void> {
   await db.execute(sql`
     INSERT INTO guarantee_verdicts (project_id, report_id, sweep_id, vision_version, guarantee_id, verdict, reason, basis, evidence_class)
-    VALUES (${projectId}, ${reportId}, ${sweepId}, 1, ${row.guaranteeId}, ${row.verdict}, ${row.reason}, 'client-stated', ${row.evidenceClass})`);
+    VALUES (${projectId}, ${reportId}, ${swept === "swept" ? sweepId : null}, 1, ${row.guaranteeId}, ${row.verdict}, ${row.reason}, 'client-stated', ${row.evidenceClass})`);
 }
 
 beforeAll(async () => {
@@ -103,6 +104,16 @@ describe("guarantee_verdicts", () => {
   test("a pass rests on executed evidence: one resting on a review's reading is refused", async () => {
     expect(await failureOf(() => insertVerdict({ guaranteeId: "G5", verdict: "pass", reason: null, evidenceClass: "review-only" }))).toMatch(/guarantee_verdicts_pass_executed/);
     await insertVerdict({ guaranteeId: "G5", verdict: "pass", reason: null, evidenceClass: "implementer-visible" });
+  });
+
+  test("a verdict naming no sweep is unjudged for want of a sweep on a commit, and refused as anything else", async () => {
+    await insertVerdict({ guaranteeId: "G6", verdict: "unjudged", reason: "no-sweep-on-commit", evidenceClass: "none" }, "no-sweep");
+    expect(await failureOf(() => insertVerdict({ guaranteeId: "G7", verdict: "unjudged", reason: "no-executed-evidence", evidenceClass: "none" }, "no-sweep"))).toMatch(
+      /guarantee_verdicts_no_sweep_unjudged/,
+    );
+    expect(await failureOf(() => insertVerdict({ guaranteeId: "G8", verdict: "fail", reason: null, evidenceClass: "implementer-visible" }, "no-sweep"))).toMatch(
+      /guarantee_verdicts_no_sweep_unjudged/,
+    );
   });
 
   test("one report holds one verdict per guarantee", async () => {

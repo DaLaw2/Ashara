@@ -402,6 +402,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
     // The sweep's report columns, held here: the listing honours the retry time the failure set, as acceptance_sweeps.report_retry_at does.
     const store: DeliveredReportStore = {
       dueReports: async () => (posted.length > 0 || Date.now() < retryAt ? [] : [{ ...due, failures }]),
+      guaranteeTable: async () => due.guarantees,
       postReport: async (_sweepId, body) => {
         if (postFaults > 0) {
           postFaults -= 1;

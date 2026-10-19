@@ -40,6 +40,7 @@ function reportsFor(
       folded.push([...revisionIds]);
       return "posted";
     },
+    guaranteesWithoutSweep: async () => expect.unreachable("no planning-stopped report is due"),
     dueRevisionReports: async () => dueRevisions.map((r) => ({ ...r, projectId })),
     postRevisionReport: async (_revisionId, body) => {
       revisionPosts.push(body);
@@ -194,6 +195,7 @@ describe("plan revision report", () => {
       postReport: async () => {
         throw new Error("no first-plan report is due");
       },
+      guaranteesWithoutSweep: async () => expect.unreachable("no planning-stopped report is due"),
       dueRevisionReports: async () => [{ revisionId: "rev-2", projectId, revision: 2, summary, answersTaken }],
       postRevisionReport: async (revisionId, body) => {
         posted.push({ revisionId, body });

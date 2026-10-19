@@ -208,11 +208,12 @@ class RevisionsNotFoldable extends Error {
 }
 
 /**
- * Posts an outbound report on a planning outcome. The partial unique index on
- * (project_id, reports_on) admits one per outcome: a second post inserts nothing
+ * Posts an outbound report on a planning outcome, naming the message posted. The partial unique
+ * index on (project_id, reports_on) admits one per outcome: a second post inserts nothing
  * and returns "already-posted". `revisionIds` are the revisions a first-plan report
  * describes (listDuePlanReports): each is recorded as reported by it in the same
- * transaction, so none of them is reported again on its own.
+ * transaction, so none of them is reported again on its own. `alsoRecord` writes what the caller
+ * records beside the report in that transaction (a planning-stopped report's verdicts).
  */
 export async function postPlanReport(
   db: DbHandle,
@@ -220,6 +221,7 @@ export async function postPlanReport(
   subject: PlanReportSubject,
   body: string,
   revisionIds: readonly string[],
+  alsoRecord: (tx: DbHandle, reportId: string) => Promise<void>,
 ): Promise<"posted" | "already-posted"> {
   return db.transaction(async (tx) => {
     const [inserted] = await tx
@@ -239,6 +241,7 @@ export async function postPlanReport(
         .returning({ id: planRevisions.id });
       if (marked.length !== revisionIds.length) throw new RevisionsNotFoldable(projectId, revisionIds, marked.length);
     }
+    await alsoRecord(tx, inserted.id);
     return "posted";
   });
 }

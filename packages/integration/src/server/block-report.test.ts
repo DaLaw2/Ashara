@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
-import { BlockReports } from "@ashara/engagement";
+import { BlockReports, VisionRepository } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
@@ -76,6 +76,26 @@ async function statusOf(projectId: ProjectId): Promise<string | undefined> {
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status;
 }
 
+/** Vision v1 in the guarantees form: G1 and G2, both observed at I1 and quoted from the tender. */
+const CONTRACT_TENDER = "A key store. Clients put and get keys. A deleted key is gone.";
+
+async function writeContract(projectId: ProjectId): Promise<void> {
+  const quote = (text: string) => ({ kind: "tender" as const, quote: text });
+  await new VisionRepository(db).create(projectId, {
+    visionText: CONTRACT_TENDER,
+    summary: "A key store.",
+    inferences: [],
+    contract: {
+      interface: [{ id: "I1", text: "kv put KEY VALUE; kv get KEY; kv delete KEY", source: quote("Clients put and get keys.") }],
+      guarantees: [
+        { id: "G1", statement: "A get returns the value of the last put of its key.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a get after a put prints another value"], source: quote("Clients put and get keys.") },
+        { id: "G2", statement: "A deleted key is gone.", observable: { interface: ["I1"], observation: "exit-status" }, refutedBy: ["a get after a delete exits 0"], source: quote("A deleted key is gone.") },
+      ],
+      exclusions: [],
+    },
+  });
+}
+
 const budgetCap = {
   category: "budget_cap",
   errorClass: SPEND_CAP_ERROR_CLASS.project,
@@ -99,6 +119,7 @@ afterAll(async () => {
     await db.execute(sql`DELETE FROM client_messages WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM suite_review_findings WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM work_items WHERE project_id = ${id}`);
+    await db.execute(sql`DELETE FROM vision_documents WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM projects WHERE id = ${id}`);
   }
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
@@ -106,17 +127,36 @@ afterAll(async () => {
 });
 
 describe("a blocked project is told once; an operator's unblock is recorded and told once", () => {
-  // The halt's report carries the guarantee table of the halt's own terminal sweep, so it waits for it.
-  test("a halt is told only once its terminal sweep is recorded, and its report carries that sweep's table", async () => {
+  // The halt's report carries the guarantee table of the halt's own terminal sweep when it is on
+  // record; a halt whose sweep never was is still told, its table judged on no sweep.
+  test("a halt whose terminal sweep is never recorded is still told, every guarantee unjudged for want of a sweep, its verdicts stored", async () => {
     const projectId = await newProject();
+    await writeContract(projectId);
     await new ProjectHaltRepository(db).block(projectId, budgetCap);
     const store = createBlockReportStore(db);
     const unswept = new BlockReports({ ...store, dueReports: async () => (await store.dueReports()).filter((r) => r.projectId === projectId) }, memoryStepContainment(() => true));
-    expect(await unswept.runPending()).toEqual([]);
-    expect(await messagesOf(projectId)).toEqual([]);
-
-    await sweepTerminalsOf(db, (id) => id === projectId);
     expect(await unswept.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+
+    const [body = ""] = await messagesOf(projectId);
+    expect(body).toContain("Ashara recorded the cause as this: the spending limit set for this project left no room");
+    expect(body).toContain("No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v1) is unjudged.");
+    for (const id of ["G1", "G2"]) {
+      const line = body.split("\n").find((each) => each.startsWith(`- ${id}: `) && each.includes(" | verdict: "));
+      expect(line).toContain("| verdict: unjudged, no check could run on a commit of main for this report |");
+    }
+    const stored = await db.execute(sql`
+      SELECT guarantee_id AS "guaranteeId", sweep_id AS "sweepId", verdict, reason FROM guarantee_verdicts WHERE project_id = ${projectId} ORDER BY guarantee_id`);
+    expect(z.array(z.object({ guaranteeId: z.string(), sweepId: z.string().nullable(), verdict: z.string(), reason: z.string().nullable() })).parse(stored.rows)).toEqual([
+      { guaranteeId: "G1", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
+      { guaranteeId: "G2", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
+    ]);
+    expect(await episodesOf(projectId)).toEqual([expect.objectContaining({ kind: "budget_cap", reported: true })]);
+  });
+
+  test("a halt whose terminal sweep is recorded first carries that sweep's table", async () => {
+    const projectId = await newProject();
+    await new ProjectHaltRepository(db).block(projectId, budgetCap);
+    await reports().runPending();
     const sweeps = await db.execute(sql`
       SELECT s.id FROM acceptance_sweeps s JOIN project_blocks b ON b.id = s.block_id WHERE b.project_id = ${projectId}`);
     const [sweep] = z.array(z.object({ id: z.string() })).length(1).parse(sweeps.rows);
@@ -230,7 +270,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await stop();
     await reports().runPending();
     expect(await messagesOf(projectId)).toEqual([]);
-    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [])).toBe("posted");
+    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [], async () => {})).toBe("posted");
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
     const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM projects WHERE id = ${projectId}`);

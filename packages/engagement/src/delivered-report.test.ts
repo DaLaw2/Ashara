@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import { DeliveredReports } from "./delivered-report.js";
 import type { DeliveredReportFailureRecord, DeliveredReportStore } from "./delivered-report.js";
-import type { GuaranteeTable } from "./guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000021", "test");
 const MAIN = "c".repeat(40);
@@ -34,6 +34,7 @@ async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }):
   const reports = new DeliveredReports(
     {
       dueReports: async () => [due],
+      guaranteeTable: async () => expect.unreachable("the report carries the table it was listed with"),
       postReport: async (sweepId, body) => {
         expect(sweepId).toBe(due.sweepId);
         posted.push(body);
@@ -262,14 +263,18 @@ describe("a delivered report that fails is its own project's", () => {
   /** A workspace whose interface file reads, and whose report then fails to render: a failure no step names. */
   const UNRENDERABLE = "/work/unrenderable";
 
-  function store(listed: readonly Listed[], post: "posts" | "fails" = "posts") {
-    const posted: Array<{ sweepId: string; body: string }> = [];
+  function store(listed: readonly Listed[], post: "posts" | "fails" = "posts", table: GuaranteeTable | "lost" = NO_CONTRACT) {
+    const posted: Array<{ sweepId: string; body: string; verdicts: TableVerdicts }> = [];
     const failures: Array<{ sweepId: string } & DeliveredReportFailureRecord> = [];
     const reportStore: DeliveredReportStore = {
       dueReports: async () => listed,
-      postReport: async (sweepId, body) => {
+      guaranteeTable: async () => {
+        if (table === "lost") throw new Error("Connection terminated unexpectedly");
+        return table;
+      },
+      postReport: async (sweepId, body, verdicts) => {
         if (post === "fails") throw new Error("client_messages insert failed: connection reset");
-        posted.push({ sweepId, body });
+        posted.push({ sweepId, body, verdicts });
         return "posted";
       },
       recordReportFailure: async (sweepId, failure) => {
@@ -321,7 +326,12 @@ describe("a delivered report that fails is its own project's", () => {
   test("a failure that cannot be recorded throws through: a report's failure is never dropped", async () => {
     const unread: Listed = { kind: "unread", cause: "record", failures: 0, recordFailures: 0, sweepId: "s-unread", projectId: otherId, error: new Error("bad record") };
     const reports = new DeliveredReports(
-      { dueReports: async () => [unread], postReport: async () => "posted", recordReportFailure: async () => Promise.reject(new Error("ledger down")) },
+      {
+        dueReports: async () => [unread],
+        guaranteeTable: async () => NO_CONTRACT,
+        postReport: async () => "posted",
+        recordReportFailure: async () => Promise.reject(new Error("ledger down")),
+      },
       { file: INTERFACE_FILE, at: async () => ({ kind: "absent" }) },
     );
     await expect(reports.runPending()).rejects.toMatchObject({ name: "DeliveredReportFailureUnrecorded" });
@@ -352,7 +362,7 @@ describe("a delivered report that fails is its own project's", () => {
     expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, recordUnread: true, retryAfterSeconds: 240 }]);
   });
 
-  test("past its bound of records that do not read as a report, the client is told the project was accepted and where the error is kept", async () => {
+  test("past its bound of records that do not read as a report, the client is told the project was accepted, where the error is kept, and the sweep's table", async () => {
     const unread: Listed = { kind: "unread", cause: "record", failures: 4, recordFailures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
     const { reports, posted, failures } = store([unread]);
 
@@ -361,8 +371,19 @@ describe("a delivered report that fails is its own project's", () => {
     expect(posted[0]?.body).toBe(
       `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
         `records in 5 attempts. Ashara keeps the error in its record of this delivery, acceptance sweep s-unread.\n\n` +
+        `No contract is on record for this project at sweep s9, so no guarantee is judged.\n\n` +
         `Nothing more is built on this project; it waits until you stop it.`,
     );
+    expect(posted[0]?.verdicts).toEqual({ sweepId: "s9", verdicts: [] });
+  });
+
+  test("an acceptance notice whose table cannot be read for a lost connection is retried, never posted without it", async () => {
+    const unread: Listed = { kind: "unread", cause: "record", failures: 4, recordFailures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
+    const { reports, posted, failures } = store([unread], "posts", "lost");
+
+    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+    expect(posted).toEqual([]);
+    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("Connection terminated"), interfaceRead: false, recordUnread: false, retryAfterSeconds: expect.any(Number) }]);
   });
 
   test("a read of the records that failed (a lost connection) is retried and never counts toward the notice, however often", async () => {

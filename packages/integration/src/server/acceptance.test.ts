@@ -649,6 +649,28 @@ describe("acceptance on main", () => {
     expect(await reportAttempts(noWorkspace)).toMatchObject({ failures: 4, interfaceReadFailures: 0, lastError: expect.stringMatching(/records no workspace_path/) });
   });
 
+  // The notice sent in the report's place is the project's terminal message: it carries the sweep's
+  // guarantee table, read on its own, and stores its verdicts beside it.
+  test("the acceptance notice sent in place of an unreadable report carries the sweep's guarantee table and stores its verdicts", async () => {
+    const { projectId, goals } = await contractProject();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2"]))).toBe(1);
+    await db.execute(sql`UPDATE projects SET workspace_path = NULL WHERE id = ${projectId}`);
+    for (const attempt of [1, 2, 3, 4, 5]) {
+      await endBackoff(projectId);
+      expect(await deliveredReports().runPending()).toContainEqual(expect.objectContaining({ kind: attempt === 5 ? "posted" : "failed", projectId }));
+    }
+    const [notice = ""] = await reportsOf(projectId);
+    expect(notice).toContain("Your project is accepted: its acceptance sweep passed on main.");
+    expect(notice).toContain("could not be written from Ashara's records in 5 attempts.");
+    expect(tableIds(notice)).toEqual(["G1", "G2"]);
+    expect(notice).toContain("- G1: A get returns the value of the last put of its key. | verdict: pass |");
+    expect(notice).toContain("The punch list is empty");
+    expect(await verdictsOf(projectId)).toEqual([
+      { guaranteeId: "G1", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+      { guaranteeId: "G2", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+    ]);
+  });
+
   test("only a passed sweep makes a project accepted, and only the client's stop ends it, with the merges named", async () => {
     const { projectId } = await deliveredProject();
     await expect(db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();

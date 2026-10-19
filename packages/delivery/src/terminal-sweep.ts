@@ -7,8 +7,9 @@ import type { TaskVerification } from "./acl/quality-acl.js";
 // every stored check on main HEAD, with no model called, so each guarantee's evidence on the last
 // commit is on record whatever ended the work. It runs once per stop and per halt episode, before
 // the halt's report. A sweep that cannot run on a commit (no workspace, the substrate not answering,
-// any other fault) is recorded all the same, with no check run and why, so its guarantees read as
-// having no evidence on a commit rather than having no record at all.
+// any other fault) is recorded all the same, with no check run, no commit and why, so its guarantees
+// read as having no sweep on a commit rather than as having no evidence on one: a sweep that faulted
+// after reading main ran no check there, and the commit it read is named in why.
 
 type Sweep = Awaited<ReturnType<TaskVerification["sweepForTerminal"]>>;
 
@@ -57,15 +58,15 @@ function terminalId(terminal: Terminal): string {
   return terminal.kind === "stop" ? `stop ${terminal.stopId}` : `halt ${terminal.blockId}`;
 }
 
-/** The record of a sweep that ran on no commit's checks: nothing checked, and why. */
-function unswept(due: DueTerminalSweep, mainCommit: string | null, details: string): TerminalSweepRecord {
-  return { projectId: due.projectId, terminal: due.terminal, mainCommit, environmentVersion: null, checkedTasks: [], uncheckedTasks: [], checkOutcomes: [], details };
+/** The record of a sweep that ran no check on any commit: nothing checked, no commit, and why. */
+function unswept(due: DueTerminalSweep, details: string): TerminalSweepRecord {
+  return { projectId: due.projectId, terminal: due.terminal, mainCommit: null, environmentVersion: null, checkedTasks: [], uncheckedTasks: [], checkOutcomes: [], details };
 }
 
 /** The record of one due terminal's sweep, run when its project has a workspace. */
 async function sweepOf(deps: TerminalSweepDeps, due: DueTerminalSweep): Promise<TerminalSweepRecord> {
   if (due.workspacePath === null) {
-    return unswept(due, null, "No terminal sweep ran: the project never had a workspace, so main holds nothing of its work to check.");
+    return unswept(due, "No terminal sweep ran: the project never had a workspace, so main holds nothing of its work to check.");
   }
   const sweep = await deps.terminalSweeper.sweepForTerminal(due.projectId, due.workspacePath);
   switch (sweep.kind) {
@@ -81,9 +82,11 @@ async function sweepOf(deps: TerminalSweepDeps, due: DueTerminalSweep): Promise<
         details: sweep.details,
       };
     case "unrunnable":
-      return unswept(due, null, `No terminal sweep ran: Ashara's execution substrate did not answer: ${describeErrorChain(sweep.error)}`);
-    case "faulted":
-      return unswept(due, sweep.mainCommit, `No terminal sweep ran: ${describeErrorChain(sweep.error)}`);
+      return unswept(due, `No terminal sweep ran: Ashara's execution substrate did not answer: ${describeErrorChain(sweep.error)}`);
+    case "faulted": {
+      const read = sweep.mainCommit === null ? "" : ` on main at commit ${sweep.mainCommit}`;
+      return unswept(due, `No terminal sweep ran${read}: ${describeErrorChain(sweep.error)}`);
+    }
   }
 }
 

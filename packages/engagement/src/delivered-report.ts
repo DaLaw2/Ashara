@@ -125,8 +125,13 @@ export interface DeliveredReportStore {
    * last failed attempt set a retry time is listed once that time has passed.
    */
   dueReports(): Promise<ReadonlyArray<DueDeliveredReport | UnreadDeliveredReport>>;
-  /** Posts the report on the accepted sweep unless one is posted, with its table's verdicts when it carries one. */
-  postReport(sweepId: string, body: string, verdicts: TableVerdicts | null): Promise<"posted" | "already-posted">;
+  /**
+   * The sweep's guarantee table read on its own, for the acceptance notice; records that do not hold
+   * together as a table read as the unreadable table.
+   */
+  guaranteeTable(sweepId: string): Promise<GuaranteeTable>;
+  /** Posts the report on the accepted sweep unless one is posted, with its table's verdicts. */
+  postReport(sweepId: string, body: string, verdicts: TableVerdicts): Promise<"posted" | "already-posted">;
   /** Records a failure at the sweep's report (DeliveredReportFailureRecord). */
   recordReportFailure(sweepId: string, failure: DeliveredReportFailureRecord): Promise<void>;
 }
@@ -194,11 +199,15 @@ const MAX_INTERFACE_READ_FAILURES = 3;
  */
 const MAX_UNREAD_ATTEMPTS = 5;
 
-/** The client's notice of acceptance when the delivered report cannot be written from the records. */
-function unreadNotice(due: UnreadDeliveredReport, attempts: number): string {
+/**
+ * The client's notice of acceptance when the delivered report cannot be written from the records: a
+ * terminal message like the report, so it carries the sweep's guarantee table.
+ */
+function unreadNotice(due: UnreadDeliveredReport, attempts: number, guarantees: GuaranteeTable): string {
   return [
     `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
       `records in ${attempts} attempts. Ashara keeps the error in its record of this delivery, acceptance sweep ${due.sweepId}.`,
+    guaranteeSection(guarantees),
     `Nothing more is built on this project; it waits until you stop it.`,
   ].join("\n\n");
 }
@@ -429,21 +438,28 @@ export class DeliveredReports implements LiaisonDeliveredReports {
 
   /**
    * A report whose records cannot be read: retried; past its bound of records that do not read as a
-   * report, the client is told it was accepted. A read the database's connection failed is only retried.
+   * report, the client is told it was accepted, with the sweep's guarantee table. A read the
+   * database's connection failed, of the report or of its table, is only retried.
    */
   private async unread(due: UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
     if (due.cause === "connection") return this.failed(due, due.error, "connection");
     const attempts = due.recordFailures + 1;
     if (attempts < MAX_UNREAD_ATTEMPTS) return this.failed(due, due.error, "record");
+    let guarantees: GuaranteeTable;
+    try {
+      guarantees = await this.store.guaranteeTable(due.sweepId);
+    } catch (err) {
+      return this.failed(due, err, "table");
+    }
     await this.recordFailure(due.sweepId, { error: describeErrorChain(due.error), interfaceRead: false, recordUnread: true, retryAfterSeconds: null });
     console.warn(
       `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): its records did not read as a report in ` +
         `${attempts} attempts; the client is sent an acceptance notice without the report: ${describeErrorChain(due.error)}`,
     );
-    return this.post(due, unreadNotice(due, attempts), null);
+    return this.post(due, unreadNotice(due, attempts, guarantees), tableVerdicts(guarantees));
   }
 
-  private async post(due: DueDeliveredReport | UnreadDeliveredReport, body: string, verdicts: TableVerdicts | null): Promise<DeliveredReportOutcome> {
+  private async post(due: DueDeliveredReport | UnreadDeliveredReport, body: string, verdicts: TableVerdicts): Promise<DeliveredReportOutcome> {
     try {
       const kind = await this.store.postReport(due.sweepId, body, verdicts);
       return { kind, projectId: due.projectId };
@@ -456,7 +472,7 @@ export class DeliveredReports implements LiaisonDeliveredReports {
   private async failed(
     due: DueDeliveredReport | UnreadDeliveredReport,
     err: unknown,
-    what: "interface" | "record" | "connection" | "post",
+    what: "interface" | "record" | "connection" | "table" | "post",
   ): Promise<DeliveredReportOutcome> {
     const failures = due.failures + 1;
     const failure = new DeliveredReportFailed(due.projectId, due.sweepId, failures, faultBackoffSeconds(failures), err);

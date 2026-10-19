@@ -5,6 +5,8 @@ import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
+import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 
 // The Liaison's report on a project's first plan: Delivery records the planning outcome on the project, and the
 // Liaison, the only writer to the client, tells the client about it. Reports are
@@ -12,7 +14,9 @@ import type { RiskRecordReader } from "./early-warning.js";
 // crash is still reported after the restart; the store posts each at most once. A revision
 // of the plan for a client's change is reported the same way, once each, naming
 // every answer it took in: each of them was promised the client would
-// be told what changed.
+// be told what changed. The report of a first planning that stopped is the report of that halt, a
+// terminal message, so it carries the guarantee table: no sweep is on record for it (nothing was
+// built), so every guarantee of the version in force reads unjudged for want of a sweep on a commit.
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
 
@@ -72,17 +76,24 @@ interface DuePlanRevisionReport {
   readonly answersTaken: number;
 }
 
-type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unreadable" }>;
-
 /** Engagement's persistence port for planning reports; each report reissues the register of guarantees at risk. */
 export interface PlanReportStore extends RiskRecordReader {
   /** Each due report read on its own: one whose rows do not read is its UnreadSubject. */
   dueReports(): Promise<ReadonlyArray<DuePlanReport | UnreadSubject>>;
   /**
    * Posts the report unless one on this subject already exists for the project, recording each of
-   * `revisionIds` as reported by it in the same write.
+   * `revisionIds` as reported by it, and the verdicts of the table it carries (a planning-stopped
+   * report's; null for a first plan's, which carries none), in the same write.
    */
-  postReport(projectId: ProjectId, subject: PlanReportSubject, body: string, revisionIds: readonly string[]): Promise<"posted" | "already-posted">;
+  postReport(
+    projectId: ProjectId,
+    subject: PlanReportSubject,
+    body: string,
+    revisionIds: readonly string[],
+    verdicts: TableVerdicts | null,
+  ): Promise<"posted" | "already-posted">;
+  /** The project's guarantee table for a message no sweep is on record for: its vision version in force, nothing judged. */
+  guaranteesWithoutSweep(projectId: ProjectId): Promise<GuaranteeTable>;
   /** Each due revision report read on its own: one whose row does not read is its UnreadSubject. */
   dueRevisionReports(): Promise<ReadonlyArray<DuePlanRevisionReport | UnreadSubject>>;
   /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
@@ -362,6 +373,12 @@ export class PlanReports implements LiaisonPlanReports {
       (due) => ({ id: `${due.subject}:${due.projectId}`, projectId: due.projectId }),
       async (due): Promise<PlanReportOutcome> => {
         if (due.subject === "first-plan-unreadable") return this.block(due.projectId, due.cause);
+        if (due.subject === "planning-stopped") {
+          const guarantees = await this.store.guaranteesWithoutSweep(due.projectId);
+          const body = `${planningStoppedReport(due.attempts)}\n\n${guaranteeSection(guarantees)}`;
+          const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), [], tableVerdicts(guarantees));
+          return { kind, projectId: due.projectId, subject: due.subject };
+        }
         let body: string;
         try {
           body = this.compose(due);
@@ -376,8 +393,8 @@ export class PlanReports implements LiaisonPlanReports {
           }
           return this.block(due.projectId, projectBlockCause(err));
         }
-        const revisionIds = due.subject === "first-plan" ? due.revisions.map((r) => r.revisionId) : [];
-        const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), revisionIds);
+        const revisionIds = due.revisions.map((r) => r.revisionId);
+        const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), revisionIds, null);
         return { kind, projectId: due.projectId, subject: due.subject };
       },
     );
@@ -419,8 +436,7 @@ export class PlanReports implements LiaisonPlanReports {
     return { kind: "project-blocked", projectId, cause };
   }
 
-  private compose(due: ReportableDue): string {
-    if (due.subject === "planning-stopped") return planningStoppedReport(due.attempts);
+  private compose(due: Extract<DuePlanReport, { readonly subject: "first-plan" }>): string {
     const { tasks, droppedOrderingHints: dropped } = due;
     if (
       due.epicTitles.length === 0 ||

@@ -18,9 +18,9 @@ import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 // Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
 // each at most once. No task is reported on its own: no task waits on a person. A halt's report
-// carries the guarantee table of the halt's terminal sweep, so it is due once that sweep is
-// recorded; under a halt of Ashara's own machines that sweep ran on no commit, and every guarantee
-// reads unjudged, saying so.
+// carries the guarantee table of the halt's terminal sweep; under a halt of Ashara's own machines
+// that sweep ran on no commit, and a halt whose sweep is not on record is told all the same: either
+// way every guarantee reads unjudged, saying so.
 
 /** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
 type ProjectBlockKind =
