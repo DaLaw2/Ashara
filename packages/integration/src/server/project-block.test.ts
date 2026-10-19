@@ -285,7 +285,7 @@ describe("a parked Failed item at startup is routed by the verdict saved with it
     await repo.save(item, "InProgress");
   }
 
-  test("non-retryable is given up with no retry spent, retryable and pre-058 rows are replanned, an unreadable verdict blocks its project", async () => {
+  test("non-retryable is given up with no retry spent, retryable and verdict-less rows are replanned, an unreadable verdict blocks its project", async () => {
     await inRolledBackTransaction(async (tx) => {
       const healthy = await projectWith(tx, [{ status: "InProgress" }, { status: "InProgress" }, { status: "Failed" }], false);
       const corrupt = await projectWith(tx, [{ status: "InProgress" }], false);

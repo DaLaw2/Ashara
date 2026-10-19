@@ -85,3 +85,24 @@ export const LEGACY_MIGRATIONS: readonly { readonly filename: string; readonly s
   { filename: "078_trace_ids.sql", sha256: "48adeb1094098f556204323dc1daefde29a130a39fa9694df1d8686ffc42fbac" },
   { filename: "079_undecided_item_claims.sql", sha256: "5af65e07a040ce00c0f6d8ef3ccdccb2779bae150273a3724f72f23f78407172" },
 ];
+
+/**
+ * No file in LEGACY_MIGRATIONS carries the name a caller asked for.
+ * @testseam legacy-migrations.test.ts checks an unlisted name is refused
+ */
+export class LegacyMigrationUnlisted extends Error {
+  constructor(readonly change: string) {
+    super(`no numbered file the init stands in for is named ${change}.sql past its number`);
+    this.name = "LegacyMigrationUnlisted";
+  }
+}
+
+/**
+ * The listed numbered file whose name past its number is `change`: a caller names the schema change
+ * it depends on, and the number stays with the list it belongs to.
+ */
+export function legacyMigrationFile(change: string): string {
+  const listed = LEGACY_MIGRATIONS.find((m) => m.filename.replace(/^\d{3}_/, "") === `${change}.sql`);
+  if (listed === undefined) throw new LegacyMigrationUnlisted(change);
+  return listed.filename;
+}

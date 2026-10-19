@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
-import { projectHalted, projects } from "@ashara/db";
+import { INIT_MIGRATION, legacyMigrationFile, projectHalted, projects } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { AGENT_CALL_SITE } from "./attempt.js";
 import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
@@ -29,9 +29,13 @@ class RunReportAttemptMigrationUnrecorded extends Error {
 /**
  * The migrations that create the attempt columns: the numbered file that added them on a database
  * that ran it, and the init on one built from it. The earliest applied is when the columns began;
- * a session created before it cannot have them.
+ * a session created before it cannot have them. The numbered file is looked up by its change's name
+ * in the list the init stands in for, so its number lives in one place.
+ * @testseam run-evidence.test.ts checks the lookup without a database
  */
-const ATTEMPT_MIGRATIONS = ["046_dev_session_attempt_evidence.sql", "000_init.sql"] as const;
+export function attemptMigrations(): readonly [string, string] {
+  return [legacyMigrationFile("dev_session_attempt_evidence"), INIT_MIGRATION];
+}
 
 const count = z.coerce.number().int().nonnegative();
 const usd = z.coerce.number().nonnegative();
@@ -232,12 +236,13 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
   if (projectRow === undefined) throw new RunReportProjectMissing(projectId);
   const project = ProjectRowSchema.parse(projectRow);
 
+  const [columnsFile, initFile] = attemptMigrations();
   const migrationRows = await db.execute(
     sql`SELECT applied_at AS "appliedAt" FROM schema_migrations
-         WHERE filename IN (${ATTEMPT_MIGRATIONS[0]}, ${ATTEMPT_MIGRATIONS[1]}) ORDER BY applied_at LIMIT 1`,
+         WHERE filename IN (${columnsFile}, ${initFile}) ORDER BY applied_at LIMIT 1`,
   );
   const [migrationRow] = migrationRows.rows;
-  if (migrationRow === undefined) throw new RunReportAttemptMigrationUnrecorded(ATTEMPT_MIGRATIONS);
+  if (migrationRow === undefined) throw new RunReportAttemptMigrationUnrecorded([columnsFile, initFile]);
   const attemptColumnsSince = z.object({ appliedAt: z.coerce.date() }).parse(migrationRow).appliedAt;
 
   const sessionRows = await db.execute(sql`

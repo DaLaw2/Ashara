@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { z } from "zod";
 import { MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
@@ -61,9 +62,46 @@ function quoted(name: string): string {
   return `"${name}"`;
 }
 
-async function dropDatabase(client: pg.Client, name: string): Promise<void> {
-  await client.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", [name]);
-  await client.query(`DROP DATABASE IF EXISTS ${quoted(name)}`);
+/** The query a drop needs: pg.Client's, or a stand-in that answers as Postgres would. */
+interface AdminQuery {
+  query(text: string): Promise<unknown>;
+}
+
+/** SQLSTATE object_in_use: a backend on the database had not exited when the drop ran. */
+const OBJECT_IN_USE = "55006";
+const DROP_ATTEMPTS = 5;
+const DROP_PAUSE_MS = 1_000;
+
+const PgErrorCode = z.object({ code: z.string() });
+
+/**
+ * Drops a scratch database, ending every session on it first (`WITH (FORCE)`). A terminated backend
+ * exits on its own schedule, and on a loaded host it can outlast Postgres's wait inside the drop, so
+ * a drop refused as in use is retried a bounded number of times, then fails with the last refusal
+ * as its cause. Any other failure is not a slow exit and fails at once.
+ * @testseam database.test.ts drives the retry with a stand-in client
+ */
+export async function dropDatabase(client: AdminQuery, name: string, pauseMs: number = DROP_PAUSE_MS): Promise<void> {
+  const statement = `DROP DATABASE IF EXISTS ${quoted(name)} WITH (FORCE)`;
+  let refusal: unknown = null;
+  for (let attempt = 1; attempt <= DROP_ATTEMPTS; attempt += 1) {
+    try {
+      await client.query(statement);
+      return;
+    } catch (err) {
+      if (PgErrorCode.safeParse(err).data?.code !== OBJECT_IN_USE) {
+        throw new ScratchDatabaseFailed("drop", name, describeErrorChain(err), { cause: err });
+      }
+      refusal = err;
+    }
+    if (attempt < DROP_ATTEMPTS) await delay(pauseMs);
+  }
+  throw new ScratchDatabaseFailed(
+    "drop",
+    name,
+    `still in use after ${DROP_ATTEMPTS} forced drops ${pauseMs} ms apart: ${describeErrorChain(refusal)}`,
+    { cause: refusal },
+  );
 }
 
 /** The migrations' content hash: a template is reused only for exactly the migrations it ran. */

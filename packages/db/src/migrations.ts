@@ -21,7 +21,7 @@ const MIGRATION_LOCK_KEY = 7_212_345_501;
 export const MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
 
 /** The file a new database starts from; LEGACY_MIGRATIONS lists the numbered files it stands in for. */
-const INIT_MIGRATION = "000_init.sql";
+export const INIT_MIGRATION = "000_init.sql";
 
 const LEGACY_SHA256 = new Map(LEGACY_MIGRATIONS.map((m) => [m.filename, m.sha256]));
 

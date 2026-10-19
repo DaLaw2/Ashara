@@ -25,7 +25,10 @@
  * itself defines (an invariant's name), and a comment naming it names code. It also passes when it is
  * one of DOMAIN_NAMES, a word of the domain that happens to have the label's shape. Likewise a
  * numbered SQL file name passes when a tracked file has that name: the comment names a file that
- * exists, not one a checkout no longer holds.
+ * exists, not one a checkout no longer holds. A migration number is also caught bare: a zero-padded
+ * three-digit number after `pre-`, `before`, `after`, `since`, `until` or an opening parenthesis
+ * (`before` followed by such a number, `pre-` joined to one, a parenthesised list of them), since a
+ * quantity in prose carries no leading zero.
  *
  * Blind spots, each a stale comment this check passes:
  * - A history account in plain words ("X now does Y", "after the outage we ...") uses no marker the
@@ -35,6 +38,8 @@
  * - A measurement ("about ten seconds today") goes stale without carrying any id.
  * - An id written in a shape no pattern lists (a two-letter label such as `IN3`, a new label scheme)
  *   passes until a pattern names it.
+ * - A bare migration number in any other wording ("the rows 046 wrote") or without its leading zero
+ *   ("before 58") passes.
  * - A design label that some string literal happens to equal passes everywhere.
  * - A string literal that is prose for a human (a log message, a fixture description) is not read.
  *
@@ -98,7 +103,8 @@ const STALE_PATTERNS: readonly StalePattern[] = [
   },
   {
     patternClass: MIGRATION_CLASS,
-    regex: /\b[Mm]igrations? \d{3}\b|\b\d{3}_[a-z0-9_]+\.sql\b|\bmigrations\/\d{3}/g,
+    regex:
+      /\b[Mm]igrations? \d{3}\b|\b\d{3}_[a-z0-9_]+\.sql\b|\bmigrations\/\d{3}|(?:\b[Pp]re-|\b(?:[Bb]efore|[Aa]fter|[Ss]ince|[Uu]ntil) |\()0\d{2}\b/g,
   },
   { patternClass: "date", regex: /\b20\d{2}-[01]\d-[0-3]\d\b/g },
   { patternClass: "governance path", regex: /(?<![\w./-])docs\/[\w.-]/g },

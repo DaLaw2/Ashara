@@ -45,6 +45,10 @@ const PLANTED: readonly (readonly [string, string])[] = [
   ["migration number", `// The column is nullable (${MIGRATION} 048).`],
   ["migration number", "// The CHECK in 046_dev_session_attempt_evidence.sql admits these."],
   ["migration number", `// Rows written by ${MIGRATION}s 063, 069.`],
+  ["migration number", `// A row written before ${MIGRATION} 058.`],
+  ["migration number", "// A row that failed before 058 holds no verdict."],
+  ["migration number", "// Retryable and pre-046 rows are replanned."],
+  ["migration number", "// The migrated catalog (021, 026, 047)."],
   ["date", "// Measured on 2026-10-14."],
   ["governance path", "// See docs/rules/records.md."],
   ["run name", "// The m25final5 product fails here."],
@@ -67,6 +71,7 @@ describe("clean samples pass", () => {
     ["a rule name", "// Discipline A: fail closed. Discipline D holds the old path deleted.\nexport const a = 1;\n"],
     ["a date literal in code", 'export const at = new Date("2026-10-14T10:00:00Z");\n'],
     ["a string literal holding a governance path", 'export const readme = "docs/README.md"; // the scan root\n'],
+    ["numbers with no leading zero", "// Before 100 ms, after 3 tries, until 250 rows (500 at most), pre-1990, (0.05 s).\nexport const a = 1;\n"],
     ["a semver version", "// Pinned to 7.0.2 and 6.0.3; the adapter needs node 22.\nexport const a = 1;\n"],
     ["the word docs without a slash", "// The docs say nothing here; read the code.\nexport const a = 1;\n"],
     ["a hex literal in code", "export const digest = 0xdeadbeef01; // a fixed digest\n"],
@@ -122,6 +127,10 @@ describe("non-script files", () => {
       [1, "decision record id"],
       [6, "decision number"],
     ]);
+  });
+
+  test("a bare migration number in a config/models.toml comment fails", () => {
+    expect(classesIn("config/models.toml", '# Prices refreshed before 047.\nkey = "(047)"\n')).toEqual(["migration number"]);
   });
 
   test("SQL comments are read and other files are not", () => {

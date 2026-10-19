@@ -38,8 +38,8 @@ export interface ParkedFailureDeps extends FailureRecoveryDeps {
  * Routes a parked Failed item, one whose routing a dead process or an orchestrator error cut off
  * after its Failed transition was saved, by the verdict saved with that transition:
  * a non-retryable failure is given up and spends no retry, a retryable one is replanned within the
- * bound. A row that failed before 058 holds no verdict and is routed as retryable work within the
- * bound. A stored verdict that does not parse is read as neither: replanning could spend a retry
+ * bound. A row that failed before failure verdicts were saved holds none and is routed as
+ * retryable work within the bound. A stored verdict that does not parse is read as neither: replanning could spend a retry
  * the verdict forbids, and abandoning could throw away work another attempt would finish and open a
  * plan repair on a guess. Its project is blocked as Ashara's own fault, the policy for a work item
  * row that does not parse, and the item is left Failed: `held`.

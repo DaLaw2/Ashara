@@ -224,7 +224,7 @@ describe("the trace contract on a scripted run", () => {
     await repo.fail(orphanSession, { outcome: "abandoned", detail: "test orphan", resolvedBy: "startup-reconciler" }, null);
     const oldSession = createSessionId();
     await repo.insert(oldSession, idleTaskId, brief, null, "test-trace");
-    await repo.fail(oldSession, { outcome: "failed", detail: "a pre-046 row" }, null);
+    await repo.fail(oldSession, { outcome: "failed", detail: "a row from before the attempt columns" }, null);
     await db.execute(sql`UPDATE dev_sessions SET created_at = '2000-01-01T00:00:00Z' WHERE id = ${oldSession}`);
 
     const evidence = await readRunEvidence(db, projectId);

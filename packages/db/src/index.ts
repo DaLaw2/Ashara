@@ -53,7 +53,9 @@ export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { LlmCallMeasurement } from "./repositories/llm-call.js";
 export { WorkGrantRepository } from "./repositories/work-grant.js";
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
+export { legacyMigrationFile } from "./legacy-migrations.js";
 export {
+  INIT_MIGRATION,
   MIGRATIONS_DIR,
   MigrationBaselineError,
   MigrationDriftError,

@@ -581,7 +581,7 @@ type ClaimConfirmation = { readonly kind: "confirmed"; readonly strength: Review
 /**
  * Per check task, how the latest claim covering it stands: confirmed at the
  * strength of the second review that answered, whether it named nothing or something about other
- * items; unconfirmed when it failed or was answered by its first's provider before 073. A check task
+ * items; unconfirmed when it failed or was answered by its first's provider, a basis that records no strength. A check task
  * no claim covers has no entry.
  */
 async function claimStrengths(db: DbHandle, projectId: string): Promise<Map<string, ClaimConfirmation>> {

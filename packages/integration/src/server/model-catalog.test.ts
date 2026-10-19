@@ -99,7 +99,7 @@ describe("the model catalog", () => {
   });
 });
 
-describe("the migrated catalog (021, 026, 047)", () => {
+describe("the migrated catalog's prices and removals", () => {
   test("deepseek-flash is charged off-peak outside 01:00-04:00 and 06:00-10:00 UTC on weekdays, and all weekend", async () => {
     const row = (await repo.listModelConfigs()).find((m) => m.modelId === "deepseek-flash");
     if (row === undefined) return expect.unreachable("deepseek-flash not migrated");
@@ -125,7 +125,7 @@ describe("the migrated catalog (021, 026, 047)", () => {
     expect(ids).not.toContain("grok-3-mini");
   });
 
-  test("grok-3-mini's removal (026) holds", async () => {
+  test("grok-3-mini's removal holds", async () => {
     const ids = (await repo.listModelConfigs()).map((m) => m.modelId);
     expect(ids).not.toContain("grok-3-mini");
   });
@@ -153,7 +153,7 @@ const CATALOG_047: readonly (readonly [string, string, string, number, number, n
   ["codestral-2508", "mistral", "Light", 0.3, 0.9, 0.03, null, 128_000],
 ];
 
-describe("the migrated catalog (047)", () => {
+describe("the migrated catalog's current models", () => {
   test("holds exactly the record's eighteen models, each with its level, base-tier prices, context and API id", async () => {
     // The price-window test above adds one row of its own until afterAll.
     const rows = (await repo.listModelConfigs()).filter((m) => m.modelId !== MODEL_ID).map((m) => [
