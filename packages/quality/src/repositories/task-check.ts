@@ -6,6 +6,7 @@ import { CapabilityLevelSchema } from "@ashara/finance";
 import type { CapabilityLevel } from "@ashara/finance";
 import { parseWorkItemJsonb } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
+import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
 // Quality's task checks: the checks that decide an implementation
 // task, written by the check author in its check task. Append-only by revision.
@@ -129,6 +130,30 @@ interface CompletedChecks {
   readonly checked: TaskChecksRecord[];
   /** Completed implementation tasks with no stored check: nothing of theirs can be re-run. */
   readonly unchecked: string[];
+}
+
+/**
+ * The checks of a stored revision that the next one drops or changes, and those it keeps as they
+ * were. A check is its command run over the revision's files, so changed files change every check.
+ */
+function comparedChecks(
+  taskId: string,
+  revision: number,
+  previous: ReadonlyArray<{ readonly name: string; readonly command: string; readonly files: unknown }>,
+  next: readonly TaskCheckDefinition[],
+  nextFiles: readonly TaskCheckFile[],
+): { readonly changed: ReadonlySet<string>; readonly kept: ReadonlySet<string> } {
+  const commands = new Map(next.map((check) => [check.name, check.command]));
+  const nextFilesText = JSON.stringify(nextFiles);
+  const changed = new Set<string>();
+  const kept = new Set<string>();
+  for (const row of previous) {
+    const files = TaskCheckFilesSchema.safeParse(row.files);
+    if (!files.success) throw new TaskChecksCorrupt(taskId, revision, `files: ${z.prettifyError(files.error)}`);
+    if (commands.get(row.name) === row.command && JSON.stringify(files.data) === nextFilesText) kept.add(row.name);
+    else changed.add(row.name);
+  }
+  return { changed, kept };
 }
 
 export class TaskCheckRepository {
@@ -354,6 +379,13 @@ export class TaskCheckRepository {
           baselineCommit: write.baselineCommit,
         })),
       );
+      if (revision > 1) {
+        const previous = await tx
+          .select({ name: taskChecks.name, command: taskChecks.command, files: taskChecks.files })
+          .from(taskChecks)
+          .where(and(eq(taskChecks.taskId, write.taskId), eq(taskChecks.revision, revision - 1)));
+        await recordReauthoredRevisionOutcomes(tx, { projectId: write.projectId, taskId: write.taskId, checkTaskId: write.checkTaskId, revision, ...comparedChecks(write.taskId, revision - 1, previous, write.checks, files) });
+      }
       return revision;
     });
   }

@@ -216,6 +216,8 @@ export type AcceptanceSweep =
        * presents as verified (the public interface file's entries are never run).
        */
       readonly executedChecks: readonly ExecutedCheck[];
+      /** Every stored check this sweep ran that failed on main, in the order run: the witnesses a failed sweep rests on. */
+      readonly failedChecks: readonly FailedCheck[];
       readonly details: string;
     }
   | { readonly kind: "unrunnable"; readonly error: EnvironmentError }
@@ -226,6 +228,25 @@ export interface ExecutedCheck {
   readonly taskId: string;
   readonly name: string;
   readonly command: string;
+}
+
+/** One stored check an acceptance sweep ran and saw fail: whose it is, and the check task that wrote it. */
+export interface FailedCheck {
+  readonly taskId: string;
+  readonly checkTaskId: string;
+  readonly name: string;
+}
+
+/**
+ * Each task's stored checks that ran in `runs` and failed, in run order. A suite that reached no
+ * verdict (its files refused, or the product changed under it) holds no failed check: nothing it ran was a witness.
+ */
+function failedChecksOf(stored: ReadonlyArray<{ readonly taskId: string; readonly checkTaskId: string; readonly suite: CheckSuite }>, runs: readonly SuiteRun[]): FailedCheck[] {
+  return stored.flatMap(({ taskId, checkTaskId, suite }) => {
+    const report = runs.find((run) => run.suite === suite)?.report;
+    if (report?.kind !== "ran") return [];
+    return report.runs.filter((run) => !checkPassed(run)).map((run) => ({ taskId, checkTaskId, name: run.name }));
+  });
 }
 
 /** Each task's stored checks that ran in `runs` and passed, in run order; a check that failed or never ran is none of them. */
@@ -749,6 +770,7 @@ export class TaskVerification {
         uncheckedTasks: [],
         publicInterface: { kind: "not-compared" },
         executedChecks: [],
+        failedChecks: [],
         details: `no environment its cells can be built from: ${resolution.reason}`,
       };
     }
@@ -761,6 +783,7 @@ export class TaskVerification {
     const neverChecked = goalTaskIds.filter((id) => !checkedIds.has(id));
     const stored = completed.checked.map((prior) => ({
       taskId: prior.taskId,
+      checkTaskId: prior.checkTaskId,
       suite: {
         label: `task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
         checks: prior.checks,
@@ -809,6 +832,7 @@ export class TaskVerification {
       uncheckedTasks: completed.unchecked,
       publicInterface,
       executedChecks: executedChecksOf(stored, runs),
+      failedChecks: failedChecksOf(stored, runs),
       details,
     };
   }

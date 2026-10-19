@@ -21,7 +21,8 @@
  * (cache-read over input tokens, over the calls that reported both). Then the run's totals, and the suite
  * reviews' judgements on the rejections they routed or released, and the claims of those that routed nothing:
  * what each covered, its basis, the second opinion's strength (or none and why), the strengths passed over,
- * and the items it leaves unverified with why. Spend per Epic and per goal task, with
+ * and the items it leaves unverified with why; then each reviewer model's record, read from reviewer_outcomes alone:
+ * its passes contradicted and findings witnessed or refuted by later evidence, and its calls' cost at the site. Spend per Epic and per goal task, with
  * each check task's and environment change's spend charged to the goal task it serves by the link its row
  * records, and mean input tokens per agent call per Epic; spend that serves no goal task is printed as
  * unattributed in its Epic, and llm_calls with no task on a project-level line of their own. Exits 1 when an

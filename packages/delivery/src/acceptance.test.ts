@@ -66,7 +66,7 @@ function harness(
 ) {
   const accepted: string[] = [];
   const executed: unknown[] = [];
-  const defects: Array<{ details: string; writes: Array<{ op: string; status: string; source?: string }> }> = [];
+  const defects: Array<{ details: string; failedChecks: readonly unknown[]; writes: Array<{ op: string; status: string; source?: string }> }> = [];
   const created: WorkItem[] = [];
   const blocks: Array<{ projectId: ProjectId; cause: ProjectBlockCause }> = [];
   let faults = 0;
@@ -83,7 +83,7 @@ function harness(
     recordDefect: async (record, writeDefect) => {
       const writes: Array<{ op: string; status: string; source?: string }> = [];
       await writeDefect(defectRepo(writes, created));
-      defects.push({ details: record.details, writes });
+      defects.push({ details: record.details, failedChecks: record.failedChecks, writes });
       return "recorded";
     },
   };
@@ -147,6 +147,7 @@ describe("the acceptance sweep", () => {
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
       executedChecks: EXECUTED,
+      failedChecks: [],
       details: "all passed",
     });
     expect(await runAcceptanceSweeps(deps)).toBe(1);
@@ -171,15 +172,18 @@ describe("the acceptance sweep", () => {
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
       executedChecks: [],
+      failedChecks: [{ taskId: "g2", checkTaskId: "c2", name: "delete" }],
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);
     expect(accepted).toEqual([]);
     expect(blocks).toEqual([]);
     // Written Pending, then given up: the abandonment is the update the plan-repair trigger reads.
+    // The failed check is handed on with the sweep: the evidence its reviewer outcomes are written from.
     expect(defects).toEqual([
       {
         details,
+        failedChecks: [{ taskId: "g2", checkTaskId: "c2", name: "delete" }],
         writes: [
           { op: "create", status: "Pending" },
           { op: "save", status: "Abandoned", source: "acceptance_failed" },
@@ -200,6 +204,7 @@ describe("the acceptance sweep", () => {
       uncheckedTasks: [],
       publicInterface: { kind: "scaffold-placeholder", file: "PUBLIC_INTERFACE.md", scaffoldTaskId: "s1", scaffoldCommit: SCAFFOLD_MERGE },
       executedChecks: [],
+      failedChecks: [],
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);
@@ -222,6 +227,7 @@ describe("the acceptance sweep", () => {
       uncheckedTasks: [],
       publicInterface: { kind: "absent", file: "PUBLIC_INTERFACE.md" },
       executedChecks: [],
+      failedChecks: [],
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);

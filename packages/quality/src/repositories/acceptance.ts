@@ -2,7 +2,8 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { acceptanceSweeps, completedGoalTasks, goalTaskSql, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { ExecutedCheck } from "../verification.js";
+import type { ExecutedCheck, FailedCheck } from "../verification.js";
+import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
 // A delivered project is accepted on one sweep of main HEAD. A project is ready for it once its first plan exists,
 // no task of it is open (Pending, InProgress, Blocked, Failed), at least one goal task is Completed,
@@ -110,6 +111,14 @@ export async function recordAcceptanceSweepFault(db: DbHandle, projectId: Projec
   return row.faults;
 }
 
+/** A failed sweep's insert returned no row. */
+class AcceptanceSweepUnrecorded extends Error {
+  constructor(readonly projectId: ProjectId) {
+    super(`the failed acceptance sweep of project ${projectId} returned no row from its insert`);
+    this.name = "AcceptanceSweepUnrecorded";
+  }
+}
+
 /** Locks the project row and reads readiness again; false when the project moved since it was listed. */
 async function lockReady(tx: DbHandle, projectId: ProjectId): Promise<boolean> {
   await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
@@ -147,27 +156,33 @@ export async function recordAcceptance(
 
 /**
  * A sweep that failed: `writeDefect` writes the defect item in the transaction and gives it up (so
- * the abandonment trigger opens its repair) and returns its id; the sweep is recorded with it, in one transaction.
+ * the abandonment trigger opens its repair) and returns its id; the sweep is recorded with it, and
+ * with the reviewer outcomes its failed checks are evidence of, in one transaction.
  * "moved" when the project is no longer ready; nothing is written.
  */
 export async function recordAcceptanceDefect(
   db: Database,
-  sweep: AcceptanceSweepRecord,
+  sweep: AcceptanceSweepRecord & { readonly failedChecks: readonly FailedCheck[] },
   writeDefect: (tx: DbTransaction) => Promise<string>,
 ): Promise<"recorded" | "moved"> {
   return db.transaction(async (tx) => {
     if (!(await lockReady(tx, sweep.projectId))) return "moved";
     const defectItemId = await writeDefect(tx);
-    await tx.insert(acceptanceSweeps).values({
-      projectId: sweep.projectId,
-      mainCommit: sweep.mainCommit,
-      environmentVersion: sweep.environmentVersion,
-      checkedTasks: [...sweep.checkedTasks],
-      uncheckedTasks: [...sweep.uncheckedTasks],
-      passed: false,
-      details: sweep.details,
-      defectItemId,
-    });
+    const [recorded] = await tx
+      .insert(acceptanceSweeps)
+      .values({
+        projectId: sweep.projectId,
+        mainCommit: sweep.mainCommit,
+        environmentVersion: sweep.environmentVersion,
+        checkedTasks: [...sweep.checkedTasks],
+        uncheckedTasks: [...sweep.uncheckedTasks],
+        passed: false,
+        details: sweep.details,
+        defectItemId,
+      })
+      .returning({ id: acceptanceSweeps.id });
+    if (recorded === undefined) throw new AcceptanceSweepUnrecorded(sweep.projectId);
+    await recordFailedSweepOutcomes(tx, { projectId: sweep.projectId, sweepId: recorded.id, failedCheckTasks: sweep.failedChecks.map((check) => check.checkTaskId) });
     return "recorded";
   });
 }

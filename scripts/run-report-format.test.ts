@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { isGoalTask } from "@ashara/db";
 import { judgedVerdictSchema, overallOf, type JudgedVerdict } from "./hidden-verdict.js";
 import type { PickRecord } from "./pool-selection.js";
-import { formatPoolVerdicts, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
+import { formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
 
 const TSX = path.join(import.meta.dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
 
@@ -489,6 +489,22 @@ describe("formatSuiteReviewClaims", () => {
 
   test("states that no claim is recorded, apart from the judgements", () => {
     expect(formatSuiteReviewClaims([])).toBe("Suite review claims: none recorded");
+  });
+});
+
+describe("formatReviewerRecord", () => {
+  test("no outcome reads as no later evidence, never as every verdict held", () => {
+    expect(formatReviewerRecord([])).toBe("Reviewer record: no later evidence recorded against any reviewer's verdict");
+  });
+
+  test("one line per reviewer model and kind of verdict, with its calls' measured cost", () => {
+    const text = formatReviewerRecord([
+      { verdictKind: "judgement", site: "suite-review", reviewerModel: "p/m", passesContradicted: 0, findingsWitnessed: 2, findingsRefuted: 1, evidence: 3, cost: { calls: 4, measuredCalls: 4, measuredUsd: 0.25 } },
+    ]);
+    expect(text).toBe(
+      "Reviewer record (1):\n  p/m at suite-review (judgement): 0 pass(es) contradicted, 2 finding(s) witnessed, 1 finding(s) refuted, over 3 piece(s) of evidence; " +
+        "4 call(s) at suite-review, cost measured on 4: $0.250000",
+    );
   });
 });
 

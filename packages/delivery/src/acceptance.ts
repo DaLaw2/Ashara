@@ -54,8 +54,11 @@ export interface AcceptanceStore {
   recordAccepted(sweep: SweepRecord & { readonly mainCommit: string; readonly executedChecks: Extract<Sweep, { readonly kind: "ran" }>["executedChecks"] }): Promise<"accepted" | "moved">;
   /** Counts one sweep that could not run on the project (projects.acceptance_faults); returns the count with it. */
   recordSweepFault(projectId: ProjectId): Promise<number>;
-  /** Records a failed sweep with the defect `writeDefect` writes in the same transaction; "moved" when no longer ready. */
-  recordDefect(sweep: SweepRecord, writeDefect: (workItems: WorkItemRepository) => Promise<string>): Promise<"recorded" | "moved">;
+  /**
+   * Records a failed sweep, with the stored checks it saw fail, and the defect `writeDefect` writes, in the same
+   * transaction; "moved" when no longer ready.
+   */
+  recordDefect(sweep: FailedSweepRecord, writeDefect: (workItems: WorkItemRepository) => Promise<string>): Promise<"recorded" | "moved">;
 }
 
 interface AcceptanceDeps {
@@ -113,8 +116,11 @@ class AcceptanceFaultBudgetSpent extends Error {
 
 type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
 
+/** A failed sweep's record: the stored checks it ran and saw fail, none when it ran none. */
+type FailedSweepRecord = SweepRecord & { readonly failedChecks: Extract<Sweep, { readonly kind: "ran" }>["failedChecks"] };
+
 /** Records a failed sweep with its defect, given up at once, and publishes the defect's events. */
-async function recordDefect(deps: AcceptanceDeps, record: SweepRecord, interfaceDefect: InterfaceDefect | null): Promise<void> {
+async function recordDefect(deps: AcceptanceDeps, record: FailedSweepRecord, interfaceDefect: InterfaceDefect | null): Promise<void> {
   const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details, interfaceDefect });
   const outcome = await deps.acceptance.recordDefect(record, async (workItems) => {
     await PlanningService.createWorkItem(workItems, defect);
@@ -175,6 +181,7 @@ async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep
     environmentVersion: null,
     checkedTasks: [],
     uncheckedTasks: [],
+    failedChecks: [],
     details: `The acceptance run could not be carried out (${why}): ${describeErrorChain(sweep.error)}`,
   }, null);
 }
@@ -241,6 +248,6 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
     return outcome === "accepted" ? "accepted" : "not-accepted";
   }
   const standing = sweep.publicInterface;
-  await recordDefect(deps, record, standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null);
+  await recordDefect(deps, { ...record, failedChecks: sweep.failedChecks }, standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null);
   return "not-accepted";
 }

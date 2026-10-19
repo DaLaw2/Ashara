@@ -195,7 +195,12 @@ function deliveredReports(): DeliveredReports {
  * A stand-in sweep's verdict and what it ran: by default every checked task's stored check
  * ("works", as storeCheck writes it) ran and passed.
  */
-function sweepDeps(passed: boolean, details: string, ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] }) {
+function sweepDeps(
+  passed: boolean,
+  details: string,
+  ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] },
+  failedChecks: ReadonlyArray<{ readonly taskId: string; readonly checkTaskId: string; readonly name: string }> = [],
+) {
   const projects = new ProjectHaltRepository(db);
   const executedChecks = ran.checked.map((taskId) => ({ taskId, name: "works", command: "sh checks/run.sh" }));
   return {
@@ -211,6 +216,7 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
         uncheckedTasks: ran.unchecked,
         publicInterface: { kind: "not-placeholder" as const },
         executedChecks,
+        failedChecks,
         details,
       }),
     },
@@ -722,6 +728,26 @@ describe("acceptance on main", () => {
     expect(await new ProjectRepository(db).listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
     expect(await deliveredReports().runPending()).toEqual([]);
+  });
+
+  test("a failing sweep contradicts the pass of the claim covering the failed check's check task, beside the sweep, in its transaction", async () => {
+    const { projectId, store, checksOfStore } = await deliveredProject();
+    const claimId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
+      SELECT ${claimId}, ${projectId}, w.id, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'first/judge-a', 'second/judge-b', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Frontier', 'Strong', 'above'
+      FROM work_items w WHERE w.project_id = ${projectId} AND w.task_spec->>'origin' = 'review'`);
+
+    expect(await runAcceptanceSweeps(sweepDeps(false, `1 failure(s) on main:\n- task ${store}'s checks: check "works" exited 1`, undefined, [{ taskId: store, checkTaskId: checksOfStore, name: "works" }]))).toBe(0);
+
+    const outcomes = await db.execute(sql`
+      SELECT o.verdict_id AS "verdictId", o.reviewer_role AS role, o.outcome, o.evidence_kind AS "evidenceKind", o.evidence_ref = s.id::text AS "ofTheSweep"
+      FROM reviewer_outcomes o JOIN acceptance_sweeps s ON s.project_id = o.project_id AND NOT s.passed
+      WHERE o.project_id = ${projectId} ORDER BY o.reviewer_role`);
+    expect(outcomes.rows).toEqual([
+      { verdictId: claimId, role: "first", outcome: "pass-contradicted", evidenceKind: "acceptance-failed", ofTheSweep: true },
+      { verdictId: claimId, role: "second", outcome: "pass-contradicted", evidenceKind: "acceptance-failed", ofTheSweep: true },
+    ]);
   });
 
   test("a sweep that keeps faulting is counted on the project, durably, and halts it as undeliverable past the budget", async () => {

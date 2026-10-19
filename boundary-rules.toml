@@ -118,20 +118,22 @@ restrict.delivery = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
 # Its modules by business purpose: the merge gate and its verification, the verdict Delivery routes a
 # dispatch on, a task's stored checks, the suite review, the environment definition and its gate, and
-# the acceptance sweep's records (the sweep itself still runs inside src/verification.ts).
+# the acceptance sweep's records (the sweep itself still runs inside src/verification.ts), and the
+# reviewer record, written beside the evidence a re-authored check revision or a failed sweep is.
 module.verification   = ["src/verification.ts", "src/merge.ts", "src/gates/*.ts", "src/settled-branches.ts", "src/host-git.test.ts", "src/merge-queue.test.ts", "src/workspace-*.test.ts"]
 module.verdict        = ["src/dispatch-result.ts", "src/fault-class.ts", "src/task-verdict.ts"]
 module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
 module.suite-review   = ["src/suite-review.ts", "src/repositories/suite-review.ts"]
 module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts", "src/environment-definition.ts"]
 module.acceptance     = ["src/repositories/acceptance.ts"]
+module.reviewer-record = ["src/repositories/reviewer-outcome.ts"]
 module.acl            = ["src/acl/*.ts"]
 module.entry          = ["src/index.ts"]
 module-allow.verification = ["verdict", "checks", "environment", "suite-review"]
 module-allow.verdict      = ["checks", "environment", "acl"]
 module-allow.suite-review = ["checks", "acl"]
-module-allow.checks       = ["acl"]
-module-allow.acceptance   = ["verification"]
+module-allow.checks       = ["acl", "reviewer-record"]
+module-allow.acceptance   = ["verification", "reviewer-record"]
 module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/*.ts"]
 
 [delivery]

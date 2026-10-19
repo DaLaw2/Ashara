@@ -105,10 +105,11 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
   quality: {
     verification: { allow: ["verdict", "checks", "environment", "suite-review"], host: "src/verification.ts", target: "src/gates/finalize.ts" },
     verdict: { allow: ["checks", "environment", "acl"], host: "src/dispatch-result.ts", target: "src/fault-class.ts" },
-    checks: { allow: ["acl"], host: "src/task-checks.ts", target: "src/public-interface.ts" },
+    checks: { allow: ["acl", "reviewer-record"], host: "src/task-checks.ts", target: "src/public-interface.ts" },
     "suite-review": { allow: ["checks", "acl"], host: "src/suite-review.ts", target: "src/repositories/suite-review.ts" },
     environment: { allow: [], host: "src/environment-check.ts", target: "src/environment-definition.ts" },
-    acceptance: { allow: ["verification"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
+    acceptance: { allow: ["verification", "reviewer-record"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
+    "reviewer-record": { allow: [], host: "src/repositories/reviewer-outcome.ts", target: "src/repositories/reviewer-outcome.ts" },
     acl: { allow: [], host: "src/acl/engagement-acl.ts", target: "src/acl/delivery-acl.ts" },
     [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
   },

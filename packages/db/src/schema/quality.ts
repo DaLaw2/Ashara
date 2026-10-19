@@ -272,3 +272,33 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   /** The stored checks a passed sweep ran and saw pass, [{taskId, name, command}]; null on a failed sweep or one recorded before the column existed. */
   executedChecks: jsonb("executed_checks"),
 });
+
+// ---------------------------------------------------------------------------
+// reviewer_outcomes (Quality): one row per piece of later evidence about one
+// reviewer's verdict (a suite review claim or judgement, or an intake reading): its pass
+// contradicted, or its finding witnessed or refuted, with the evidence it rests on. Append-only;
+// a row leaves only with its project.
+// ---------------------------------------------------------------------------
+
+export const reviewerOutcomes = pgTable(
+  "reviewer_outcomes",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    verdictKind: text("verdict_kind").notNull(),
+    verdictId: uuid("verdict_id").notNull(),
+    /** "provider/model", as the verdict's row names the model that answered. */
+    reviewerModel: text("reviewer_model").notNull(),
+    reviewerRole: text("reviewer_role").notNull(),
+    outcome: text().notNull(),
+    evidenceKind: text("evidence_kind").notNull(),
+    /** The evidence row: a check dispute's or acceptance sweep's id, or "<task id>#<revision>" of a re-authored check revision. */
+    evidenceRef: text("evidence_ref").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    onePerEvidence: unique("reviewer_outcomes_one_per_evidence").on(t.verdictKind, t.verdictId, t.reviewerRole, t.evidenceKind, t.evidenceRef),
+  }),
+);

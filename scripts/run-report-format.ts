@@ -4,7 +4,7 @@
  */
 
 import { isGoalTask } from "@ashara/db";
-import type { StoredClaim, StoredJudgement } from "@ashara/quality";
+import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
 import type { PickRecord } from "./pool-selection.js";
@@ -637,4 +637,25 @@ export function formatSuiteReviewClaims(claims: readonly StoredClaim[]): string 
     for (const item of claim.unverified) lines.push(`    unverified ${item.itemId} of task ${item.checkTaskId} "${item.itemText}": ${why}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * Each reviewer model's record at each kind of verdict, read from reviewer_outcomes only: how many of
+ * its verdicts later evidence contradicted (a pass a witness failed) or bore out or refuted (a
+ * finding), and what that model's calls at the verdict's site cost. No line means no later evidence
+ * touched that reviewer's verdicts, never that every one of them held.
+ */
+export function formatReviewerRecord(lines: readonly ReviewerRecordLine[]): string {
+  if (lines.length === 0) return "Reviewer record: no later evidence recorded against any reviewer's verdict";
+  const out = [`Reviewer record (${lines.length}):`];
+  for (const line of lines) {
+    const unmeasured = line.cost.calls - line.cost.measuredCalls;
+    out.push(
+      `  ${line.reviewerModel} at ${line.site} (${line.verdictKind}): ${line.passesContradicted} pass(es) contradicted, ` +
+        `${line.findingsWitnessed} finding(s) witnessed, ${line.findingsRefuted} finding(s) refuted, over ${line.evidence} piece(s) of evidence; ` +
+        `${line.cost.calls} call(s) at ${line.site}, cost measured on ${line.cost.measuredCalls}: ${usd(line.cost.measuredUsd)}` +
+        `${unmeasured > 0 ? `; ${unmeasured} unmeasured` : ""}`,
+    );
+  }
+  return out.join("\n");
 }

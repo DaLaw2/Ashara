@@ -1,15 +1,15 @@
 /**
  * The whole run report of one project (scripts/run-report.ts), read from the database: the run's
  * evidence, with the tender pick and the hidden suite's verdict beside Ashara's after its first line,
- * then the suite reviews' judgements, then their claims, each through its reader. Prints
+ * then the suite reviews' judgements, then their claims, then each reviewer's record, each through its reader. Prints
  * nothing; the caller prints the text and exits 1 when `failed`.
  */
 
 import type { DbHandle } from "@ashara/db";
-import { suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
+import { reviewerRecordOf, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
 import { readRunEvidence } from "@ashara/workplace";
-import { formatPoolVerdicts, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements, type PoolEvidence } from "./run-report-format.js";
+import { formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements, type PoolEvidence } from "./run-report-format.js";
 
 /**
  * The report's text, and whether an llm_calls row is priced at $0, the spend does not add up to every row, or the
@@ -22,8 +22,9 @@ export async function runReport(db: DbHandle, projectId: ProjectId, pool: PoolEv
   const [head, ...rest] = report.text.split("\n");
   const judgements = formatSuiteReviewJudgements(await suiteReviewJudgementsOf(db, projectId));
   const claims = formatSuiteReviewClaims(await suiteReviewClaimsOf(db, projectId));
+  const reviewers = formatReviewerRecord(await reviewerRecordOf(db, projectId));
   return {
-    text: [head, ...verdicts.lines, ...rest, judgements, claims].join("\n"),
+    text: [head, ...verdicts.lines, ...rest, judgements, claims, reviewers].join("\n"),
     failed: report.zeroCostCalls > 0 || report.attributionViolation || verdicts.violation,
   };
 }

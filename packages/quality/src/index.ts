@@ -75,6 +75,8 @@ export { CheckSetFreezeRepository } from "./repositories/check-set-freeze.js";
 export { SuiteReviewFindingRepository, SuiteReviewJudgementRepository, blockingReview } from "./repositories/suite-review.js";
 export { suiteReviewClaimsOf, suiteReviewJudgementsOf } from "./repositories/suite-review.js";
 export type { StoredClaim, StoredJudgement } from "./repositories/suite-review.js";
+export { reviewerRecordOf } from "./repositories/reviewer-outcome.js";
+export type { ReviewerRecordLine } from "./repositories/reviewer-outcome.js";
 export {
   listProjectsReadyForAcceptance,
   recordAcceptance,

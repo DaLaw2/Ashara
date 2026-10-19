@@ -315,8 +315,9 @@ describe("the trace contract on a scripted run", () => {
   });
 });
 
-// The body main() prints, read from this project end to end: every suite review judgement and claim
-// through their readers. A body that left either reader out would print "none recorded" here.
+// The body main() prints, read from this project end to end: every suite review judgement and claim,
+// and each reviewer's record, through their readers. A body that left a reader out would print "none
+// recorded" or "no later evidence" here.
 describe("runReport, the body run-report prints", () => {
   async function completedTask(title: string): Promise<string> {
     const id = randomUUID();
@@ -383,5 +384,28 @@ describe("runReport, the body run-report prints", () => {
       `Suite review claims (1):\n  review ${claimed}, covering check task(s) ${check}: second-review-failed (unconfirmed: the second opinion failed at every strength); second opinion: none (first p/m): no second opinion answered\n${equal}`,
     );
     expect(text).toContain(`    unverified S9 of task ${check} "put survives a power loss": no second opinion answered: no second opinion answered`);
+  });
+
+  test("prints each reviewer model's record from reviewer_outcomes, with its calls at the verdict's site", async () => {
+    const reviewTask = await completedTask("Review whose pass a dispute contradicted");
+    const claimId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
+      VALUES (${claimId}, ${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([reviewTask])}::jsonb, 'q/judge', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'none answered', 'Strong', 'Strong', 'equal')`);
+    for (const evidenceRef of [randomUUID(), randomUUID()]) {
+      await db.execute(sql`
+        INSERT INTO reviewer_outcomes (project_id, verdict_kind, verdict_id, reviewer_model, reviewer_role, outcome, evidence_kind, evidence_ref)
+        VALUES (${projectId}, 'claim', ${claimId}, 'q/judge', 'first', 'pass-contradicted', 'dispute-upheld', ${evidenceRef})`);
+    }
+    await db.execute(sql`
+      INSERT INTO llm_calls (id, project_id, task_id, call_site, provider, model, estimated_cost_usd, state)
+      VALUES (${randomUUID()}, ${projectId}, ${reviewTask}, 'suite-review', 'q', 'judge', 0.5, 'pending')`);
+
+    const { text } = await runReport(db, projectId, { hidden: null, pick: null });
+
+    expect(text).toContain(
+      "Reviewer record (1):\n  q/judge at suite-review (claim): 1 pass(es) contradicted, 0 finding(s) witnessed, 0 finding(s) refuted, over 2 piece(s) of evidence; " +
+        "1 call(s) at suite-review, cost measured on 0: $0.000000; 1 unmeasured",
+    );
   });
 });
