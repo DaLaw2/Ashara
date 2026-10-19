@@ -307,9 +307,9 @@ const SCAN_SCOPE_CLAUSE =
   "and `docs/rules/*.md`, checks §7 retention, and fails closed on no documents.";
 
 const LIVE_RECORD_CLAUSE =
-  "A **live record** is: `state.toml`, `backlog.toml`, `context.md`, `roadmap.md`, anything in `design/` " +
-  "or `rules/`, an ADR body, `CLAUDE.md`, `.claude/commands/`, `.claude/workflows/`, or the auto-memory " +
-  "(not `.claude/worktrees/`).";
+  "A **live record** is: `state.toml`, `backlog.toml`, `backlog-deferred.toml`, `context.md`, `roadmap.md`, " +
+  "anything in `design/` or `rules/`, an ADR body, `CLAUDE.md`, `.claude/commands/`, `.claude/workflows/`, " +
+  "or the auto-memory (not `.claude/worktrees/`).";
 
 const CITATION_CLAUSE =
   "Only a **direct** citation by its `investigations/` path from a live record keeps a file in place; one " +
@@ -399,6 +399,7 @@ type LiveRecordSource =
 export const LIVE_RECORD_SOURCES: readonly LiveRecordSource[] = [
   { readmeName: "`state.toml`", kind: "file", rel: path.join("docs", "state.toml") },
   { readmeName: "`backlog.toml`", kind: "file", rel: path.join("docs", "backlog.toml") },
+  { readmeName: "`backlog-deferred.toml`", kind: "file", rel: path.join("docs", "backlog-deferred.toml") },
   { readmeName: "`context.md`", kind: "file", rel: path.join("docs", "context.md") },
   { readmeName: "`roadmap.md`", kind: "file", rel: path.join("docs", "roadmap.md") },
   { readmeName: "`design/`", kind: "tree", rel: path.join("docs", "design") },

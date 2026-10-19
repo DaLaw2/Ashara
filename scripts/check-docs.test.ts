@@ -36,6 +36,7 @@ function liveRecords(): void {
   write("CLAUDE.md", "# rules\n");
   write("docs/state.toml", "");
   write("docs/backlog.toml", "");
+  write("docs/backlog-deferred.toml", "");
   write("docs/context.md", "");
   write("docs/roadmap.md", "");
 }
@@ -112,6 +113,14 @@ describe("checkRetention", () => {
     write("memory/feedback.md", "Evidence: investigations/mem-2026-10-05.md");
     write("docs/investigations/mem-2026-10-05.md", "");
     write("docs/investigations/INDEX.md", index(["| `mem-2026-10-05.md` | x | x | x |"]));
+    expect(check()).toEqual([]);
+  });
+
+  test("a file cited only by backlog-deferred.toml is retained", () => {
+    liveRecords();
+    write("docs/backlog-deferred.toml", 'evidence = "docs/investigations/parked-2026-10-19.md"\n');
+    write("docs/investigations/parked-2026-10-19.md", "");
+    write("docs/investigations/INDEX.md", index(["| `parked-2026-10-19.md` | x | x | x |"]));
     expect(check()).toEqual([]);
   });
 
