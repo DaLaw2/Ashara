@@ -15,7 +15,7 @@
       "vitest": false
     },
     "packages/integration": {
-      "entry": ["src/cell-leak-guard.ts", "src/test-images-guard.ts", "src/test-cells.ts", "src/simulator/simulator-harness.ts"],
+      "entry": ["src/cell-leak-guard.ts", "src/test-images-guard.ts", "src/test-database-setup.ts", "src/test-cells.ts", "src/simulator/simulator-harness.ts"],
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false,
       "ignoreDependencies": ["@ashara/knowledge", "@hono/node-server", "ai", "hono"]

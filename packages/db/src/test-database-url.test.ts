@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_DATABASE_URL } from "./connection.js";
-import { assertTestDatabaseReachable, resolveTestDatabaseUrl } from "./test-database-url.js";
+import { assertTestDatabaseReachable, readyTestDatabase, resolveSimulatorDatabaseUrl, resolveTestDatabaseUrl } from "./test-database-url.js";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
 const TEST_SERVER_URL = "postgresql://ashara@localhost:5433/ashara";
@@ -38,6 +38,34 @@ describe("resolveTestDatabaseUrl", () => {
   });
 });
 
+describe("resolveSimulatorDatabaseUrl", () => {
+  const shared = expect.objectContaining({
+    name: "TestDatabaseUrlRefused",
+    refusal: { kind: "shared_database", variable: "SIM_DATABASE_URL", url: "postgresql://ashara@localhost:5432/ashara" },
+  });
+
+  test("refuses SIM_DATABASE_URL naming the shared database", () => {
+    expect(() => resolveSimulatorDatabaseUrl({ SIM_DATABASE_URL: "postgresql://ashara@localhost:5432/ashara" })).toThrow(shared);
+  });
+
+  test("uses SIM_DATABASE_URL when it names another database", () => {
+    const scratch = "postgresql://ashara@localhost:5433/ashara_sim_scratch";
+    expect(resolveSimulatorDatabaseUrl({ SIM_DATABASE_URL: scratch })).toBe(scratch);
+  });
+
+  test("falls back to the tests' URL, refused the same way", () => {
+    expect(resolveSimulatorDatabaseUrl({})).toBe(TEST_SERVER_URL);
+    expect(() => resolveSimulatorDatabaseUrl({ TEST_DATABASE_URL: DEFAULT_DATABASE_URL })).toThrow(refused);
+  });
+});
+
+describe("readyTestDatabase", () => {
+  test("fails closed naming `just test-db-up` before migrating when the server does not answer", async () => {
+    const ready = readyTestDatabase({ TEST_DATABASE_URL: "postgresql://nobody@127.0.0.1:1/none" });
+    await expect(ready).rejects.toMatchObject({ name: "TestDatabaseUnreachable", message: expect.stringContaining("just test-db-up") });
+  });
+});
+
 describe("assertTestDatabaseReachable", () => {
   test("fails closed naming `just test-db-up` when the server does not answer", async () => {
     const probe = assertTestDatabaseReachable("postgresql://nobody@127.0.0.1:1/none");
@@ -50,6 +78,14 @@ describe("no test or simulator entry point falls back to the shared database", (
     const paths = ["*.test.ts", "packages/integration/src/simulator/*.ts", "scripts/simulate.ts", "scripts/test-db-ready.ts"];
     const result = spawnSync("git", ["grep", "-nE", String.raw`\?\? DEFAULT_DATABASE_URL`, "--", ...paths], { cwd: REPO, encoding: "utf8" });
     // git grep exits 1 on no match and 0 on a match; anything else is a grep that did not run.
+    expect({ status: result.status, hits: result.stdout }).toEqual({ status: 1, hits: "" });
+  });
+
+  test("git grep finds no read of DATABASE_URL or loadDatabaseUrl call in tests or the integration package", () => {
+    // config.test.ts unit-tests loadDatabaseUrl itself and opens no connection.
+    const paths = ["*.test.ts", "packages/integration", ":!packages/server/src/config.test.ts"];
+    const pattern = String.raw`\?\? DEFAULT_DATABASE_URL|DATABASE_URL"\]|[.]DATABASE_URL([^A-Za-z0-9_]|$)|loadDatabaseUrl\(`;
+    const result = spawnSync("git", ["grep", "-nE", pattern, "--", ...paths], { cwd: REPO, encoding: "utf8" });
     expect({ status: result.status, hits: result.stdout }).toEqual({ status: 1, hits: "" });
   });
 });

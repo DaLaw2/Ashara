@@ -25,9 +25,15 @@ export default defineConfig({
     maxWorkers: Math.min(MAX_TEST_WORKERS, availableParallelism()),
     // The image guard runs first: a pinned test image absent from local podman storage stops the run
     // before any test, naming each such image and its pull command; the run never pulls one itself.
+    // The test database is migrated next, or the run stops naming `just test-db-up`, so a direct
+    // `npx vitest` after a fresh test Postgres works as `just test` does.
     // Every test cell's instance names this run (testCellInstance); the run fails if any of them
     // outlives it, after they are removed, and removes the cells of runs that died before their end.
-    globalSetup: ["packages/integration/src/test-images-guard.ts", "packages/integration/src/cell-leak-guard.ts"],
+    globalSetup: [
+      "packages/integration/src/test-images-guard.ts",
+      "packages/integration/src/test-database-setup.ts",
+      "packages/integration/src/cell-leak-guard.ts",
+    ],
     // The guard's end-of-run check spends at most 0.8 of this on podman: one listing and one removal
     // at worst, each bounded by its podman timeout (cell-leak-guard.ts), so it ends before vitest
     // gives up on the teardown.

@@ -93,10 +93,17 @@ test: _test-db-ready
 # selection rules and their blind spots); `just test` stays the full suite the merge lane runs.
 # Example: just test-affected origin/master --list
 #          just test-affected origin/master -- --maxWorkers=2
-# Bounded and signal-forwarding exactly as `test` is, for the same reasons.
-test-affected base *ARGS: _test-db-ready
+# Bounded and signal-forwarding exactly as `test` is, for the same reasons. `--list` runs no test, so
+# it needs no test database.
+test-affected base *ARGS:
     #!/usr/bin/env bash
     set -u
+    listing=0
+    for arg in {{ARGS}}; do
+      [ "$arg" = "--" ] && break
+      [ "$arg" = "--list" ] && listing=1
+    done
+    if [ "$listing" = 0 ]; then just _test-db-ready || exit 1; fi
     # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
     if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
     timeout -k 150 1200 npx tsx scripts/affected-tests.ts {{base}} {{ARGS}} &

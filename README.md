@@ -128,6 +128,8 @@ answers `ok` once the server is up.
 | `ASHARA_PORT` | The web client's port (default 3000). A value that is not a port stops Ashara from starting. |
 | `WORKDIR_BASE` | Required. Where projects are kept. Ashara will not start without it. |
 | `DATABASE_URL` | Optional. The database to use (default `postgresql://ashara@localhost:5432/ashara`, the one `just dev` starts). |
+| `TEST_DATABASE_URL` | Optional, for contributors. The database tests use (default `postgresql://ashara@localhost:5433/ashara`, the test Postgres `just test-db-up` starts). Tests never read `DATABASE_URL`, and a URL naming the shared database is refused. |
+| `SIM_DATABASE_URL` | Optional, for contributors. The server `just simulate` creates its scratch databases on (default the one `TEST_DATABASE_URL` resolves to); a URL naming the shared database is refused. |
 | `ASHARA_SECRET_KEY_FILE` | Optional. Where the key that encrypts stored secrets is kept (default `~/.config/ashara/secret.key`). |
 
 Any of these can go in `.env` instead of on the command line; `config/env.example` explains the container
@@ -159,9 +161,12 @@ just test       # test suite
 just simulate   # deterministic lifecycle simulator: crashes, races and misbehaving models, no model cost
 ```
 
-`just test` runs against the database `just dev` starts, migrated with `just migrate` (or the one
-`DATABASE_URL` names), and needs podman: the container tests run real containers and are never skipped.
-`just simulate` needs the database.
+Tests and the simulator never touch the database `just dev` starts. They run on a separate test Postgres,
+started with `just test-db-up` and stopped with `just test-db-down`; it keeps its data in memory, so stopping
+it discards every test database. `just test` migrates it before the run, as does a direct `npx vitest`, and
+either stops naming `just test-db-up` when it is not running. `TEST_DATABASE_URL` points tests at another
+database instead, never the shared one. `just test` also needs podman: the container tests run real
+containers and are never skipped. `just simulate` needs the test Postgres too.
 
 ### Packages
 

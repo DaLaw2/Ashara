@@ -1,6 +1,8 @@
 import pg from "pg";
 import { describeErrorChain } from "@ashara/shared";
 import { DEFAULT_DATABASE_URL } from "./connection.js";
+import { MIGRATIONS_DIR, runMigrations } from "./migrations.js";
+import type { MigrationRunResult } from "./migrations.js";
 
 /**
  * Where tests and the simulator connect when TEST_DATABASE_URL is unset: the test Postgres of
@@ -11,19 +13,22 @@ const DEFAULT_TEST_DATABASE_URL = "postgresql://ashara@localhost:5433/ashara";
 
 const TEST_DB_UP = "start it with `just test-db-up`";
 
-type TestDatabaseRefusal =
-  | { readonly kind: "invalid_url"; readonly url: string }
-  | { readonly kind: "shared_database"; readonly url: string };
+/** The environment variables that may name a database for tests or the simulator. */
+type TestDatabaseVariable = "TEST_DATABASE_URL" | "SIM_DATABASE_URL";
 
-/** TEST_DATABASE_URL names no URL a test may use: not a URL, or the shared database itself. */
+type TestDatabaseRefusal =
+  | { readonly kind: "invalid_url"; readonly variable: TestDatabaseVariable; readonly url: string }
+  | { readonly kind: "shared_database"; readonly variable: TestDatabaseVariable; readonly url: string };
+
+/** TEST_DATABASE_URL or SIM_DATABASE_URL names no URL a test may use: not a URL, or the shared database itself. */
 class TestDatabaseUrlRefused extends Error {
   readonly refusal: TestDatabaseRefusal;
 
   constructor(refusal: TestDatabaseRefusal, options?: ErrorOptions) {
     super(
       refusal.kind === "invalid_url"
-        ? `TEST_DATABASE_URL is not a URL: ${refusal.url}`
-        : `TEST_DATABASE_URL names the shared database (${refusal.url}); tests and the simulator run on the test Postgres, ${TEST_DB_UP} and leave TEST_DATABASE_URL unset or point it at a scratch database`,
+        ? `${refusal.variable} is not a URL: ${refusal.url}`
+        : `${refusal.variable} names the shared database (${refusal.url}); tests and the simulator run on the test Postgres, ${TEST_DB_UP} and leave ${refusal.variable} unset or point it at a scratch database`,
       options,
     );
     this.name = "TestDatabaseUrlRefused";
@@ -49,11 +54,11 @@ function redacted(url: string): string {
   return parsed.toString();
 }
 
-function parsed(url: string): URL {
+function parsed(variable: TestDatabaseVariable, url: string): URL {
   try {
     return new URL(url);
   } catch (cause) {
-    throw new TestDatabaseUrlRefused({ kind: "invalid_url", url }, { cause });
+    throw new TestDatabaseUrlRefused({ kind: "invalid_url", variable, url }, { cause });
   }
 }
 
@@ -68,9 +73,21 @@ function serverAndDatabase(url: URL): string {
  * the shared database is refused rather than used.
  */
 export function resolveTestDatabaseUrl(env: Readonly<Record<string, string | undefined>>): string {
-  const url = env["TEST_DATABASE_URL"] ?? DEFAULT_TEST_DATABASE_URL;
-  if (serverAndDatabase(parsed(url)) === serverAndDatabase(parsed(DEFAULT_DATABASE_URL))) {
-    throw new TestDatabaseUrlRefused({ kind: "shared_database", url });
+  return refusingSharedDatabase("TEST_DATABASE_URL", env["TEST_DATABASE_URL"] ?? DEFAULT_TEST_DATABASE_URL);
+}
+
+/**
+ * The database URL the simulator's soak tier connects to: SIM_DATABASE_URL, else the tests' URL
+ * (resolveTestDatabaseUrl). Either way a URL naming the shared database is refused rather than used.
+ */
+export function resolveSimulatorDatabaseUrl(env: Readonly<Record<string, string | undefined>>): string {
+  const simulatorUrl = env["SIM_DATABASE_URL"];
+  return simulatorUrl === undefined ? resolveTestDatabaseUrl(env) : refusingSharedDatabase("SIM_DATABASE_URL", simulatorUrl);
+}
+
+function refusingSharedDatabase(variable: TestDatabaseVariable, url: string): string {
+  if (serverAndDatabase(parsed(variable, url)) === serverAndDatabase(parsed(variable, DEFAULT_DATABASE_URL))) {
+    throw new TestDatabaseUrlRefused({ kind: "shared_database", variable, url });
   }
   return url;
 }
@@ -90,4 +107,15 @@ export async function assertTestDatabaseReachable(url: string): Promise<void> {
       console.warn(`[test-db] ending the probe connection failed: ${describeErrorChain(endError)}`);
     });
   }
+}
+
+/**
+ * Readies the tests' database before a run: resolves it (resolveTestDatabaseUrl), fails closed naming
+ * `just test-db-up` when its server does not answer, and applies the pending migrations, since the
+ * test Postgres keeps its data in tmpfs and starts empty.
+ */
+export async function readyTestDatabase(env: Readonly<Record<string, string | undefined>>): Promise<MigrationRunResult> {
+  const url = resolveTestDatabaseUrl(env);
+  await assertTestDatabaseReachable(url);
+  return runMigrations(url, MIGRATIONS_DIR);
 }

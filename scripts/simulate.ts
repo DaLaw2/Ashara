@@ -5,7 +5,8 @@
  *
  * Runs N consecutive seeds, each on its own scratch database created from a migrated template on
  * the server of SIM_DATABASE_URL, default the test Postgres (TEST_DATABASE_URL, resolveTestDatabaseUrl),
- * never DATABASE_URL; an unreachable server stops the run naming `just test-db-up`. The shared database is
+ * never DATABASE_URL (resolveSimulatorDatabaseUrl). Either variable naming the shared database is refused,
+ * and an unreachable server stops the run naming that URL and `just test-db-up`. The shared database is
  * never touched: every database it creates or drops is named `ashara_sim_*`. A failing seed is
  * written as a replay file; `--minimize` reduces it to the decisions it needs first. Exits 1 when
  * any seed fails an invariant it is not listed as failing, or never reports, or when a soak of at
@@ -32,7 +33,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertTestDatabaseReachable, resolveTestDatabaseUrl } from "@ashara/db";
+import { assertTestDatabaseReachable, resolveSimulatorDatabaseUrl } from "@ashara/db";
 import {
   DETERMINISM_RECHECKS,
   PROFILES,
@@ -411,7 +412,7 @@ async function soakInWorkers(seeds: readonly number[], workers: Workers, emit: (
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
-  const databaseUrl = process.env["SIM_DATABASE_URL"] ?? resolveTestDatabaseUrl(process.env);
+  const databaseUrl = resolveSimulatorDatabaseUrl(process.env);
   if (!args.worker) {
     await assertTestDatabaseReachable(databaseUrl);
     const dropped = await dropStaleRunDatabases(databaseUrl);

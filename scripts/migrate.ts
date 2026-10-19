@@ -9,8 +9,10 @@
  * file 000_init.sql stands in for has the init recorded instead of run.
  *
  * The database URL is `DATABASE_URL` when set, otherwise the policy default
- * `DEFAULT_DATABASE_URL` from @ashara/db, the same resolution the server and the
- * test suites use. CI sets DATABASE_URL explicitly; a local run needs nothing.
+ * `DEFAULT_DATABASE_URL` from @ashara/db, the same resolution the server uses: the
+ * shared database `just dev` starts. Tests never use it; they run on the test Postgres,
+ * which `just test` migrates itself (scripts/test-db-ready.ts). CI sets DATABASE_URL
+ * explicitly; a local run needs nothing.
  *
  * Usage: npx tsx scripts/migrate.ts
  */

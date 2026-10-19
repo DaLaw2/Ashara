@@ -346,7 +346,7 @@ async function inTransaction(
   }
 }
 
-interface MigrationRunResult {
+export interface MigrationRunResult {
   readonly applied: readonly string[];
   readonly backfilled: readonly string[];
   /** The init recorded as applied without running it, because the database ran every file it stands in for. */
