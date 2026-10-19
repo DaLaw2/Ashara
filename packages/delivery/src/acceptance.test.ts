@@ -59,7 +59,11 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
  * A store and project over one ready project: a block takes it out of readiness (as the projects
  * row's status does), and every sweep fault is counted on it.
  */
-function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: string; readonly mergeCommit: string | null }> = SCAFFOLDS) {
+function harness(
+  sweep: Sweep,
+  scaffoldMerges: ReadonlyArray<{ readonly taskId: string; readonly mergeCommit: string | null }> = SCAFFOLDS,
+  workspacePath: string | null = "/tmp/ashara-acceptance-test",
+) {
   const accepted: string[] = [];
   const executed: unknown[] = [];
   const defects: Array<{ details: string; writes: Array<{ op: string; status: string; source?: string }> }> = [];
@@ -69,7 +73,7 @@ function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: 
   let blocked = false;
   const acceptance: AcceptanceStore = {
     readyForAcceptance: async () =>
-      blocked ? [] : [{ projectId, workspacePath: "/tmp/ashara-acceptance-test", goalTaskIds: ["g1", "g2"], scaffoldMerges }],
+      blocked ? [] : [{ projectId, workspacePath, goalTaskIds: ["g1", "g2"], scaffoldMerges }],
     recordAccepted: async (record) => {
       accepted.push(record.mainCommit);
       executed.push(record.executedChecks);
@@ -246,6 +250,17 @@ describe("the acceptance sweep", () => {
     // What the operator does is said with what exists: the column the merge is recorded in and the unblock command.
     expect(blocks[0].cause.reason).toContain("UPDATE work_items SET merge_commit = '<commit>', merge_kind = 'merged' WHERE id = '<scaffold task id>'");
     expect(blocks[0].cause.reason).toContain(`npx tsx scripts/project.ts unblock ${projectId} --reason`);
+  });
+
+  test.each([
+    { what: "a Completed scaffold with no recorded merge", scaffolds: [...SCAFFOLDS, { taskId: "s2", mergeCommit: null }], workspacePath: "/tmp/ashara-acceptance-test", errorClass: "ScaffoldMergeUnrecorded" },
+    { what: "a project with no workspace", scaffolds: SCAFFOLDS, workspacePath: null, errorClass: "AcceptanceWorkspaceMissing" },
+  ])("the halt of $what is logged at error carrying the halting error itself", async ({ scaffolds, workspacePath, errorClass }) => {
+    const { deps, logger } = harness({ kind: "faulted", mainCommit: MAIN, error: sweepFault() }, scaffolds, workspacePath);
+    await runAcceptanceSweeps(deps);
+    const halts = logger.records.filter((r) => r.event === "delivery.project-halted");
+    expect(halts.map((r) => [r.level, r.fields?.["errorClass"]])).toEqual([["error", errorClass]]);
+    expect(halts[0]?.error).toEqual({ chain: expect.objectContaining({ name: errorClass }) });
   });
 
   test("a sweep the substrate could not run halts the project on infrastructure with the observed error", async () => {

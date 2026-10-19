@@ -445,7 +445,7 @@ async function executeTask(
         taskId: task.id,
         from: e.from,
         to: "Completed",
-      });
+      }, e);
     }
     return {
       result: completedResult(task.id, execResult.detail),
@@ -523,7 +523,7 @@ async function requeueWith(
     requeueWorkItem(item);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    deps.logger.warn("delivery.transition-rejected", `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, { taskId, from: e.from, to: "Pending" });
+    deps.logger.warn("delivery.transition-rejected", `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, { taskId, from: e.from, to: "Pending" }, e);
     return;
   }
   const dispatchCount = await write(item, previousStatus);
@@ -595,7 +595,7 @@ async function routeAsParked(
       from: e.from,
       to: "Blocked",
       source: reason.source,
-    });
+    }, e);
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
@@ -631,7 +631,7 @@ async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
       from: e.from,
       to: "Abandoned",
       source: reason.source,
-    });
+    }, e);
     return;
   }
   if (dispatch === "refund") {
@@ -819,7 +819,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
         taskId: task.id,
         from: e.from,
         to: "Completed",
-      });
+      }, e);
       return true;
     }
     const reason = `merged on main as ${merge} and recorded, but the task could not be Completed: ${describeErrorChain(e)}`;
@@ -882,7 +882,7 @@ async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id
     requeueWorkItem(item);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    deps.logger.warn("delivery.transition-rejected", `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, { taskId, from: e.from, to: "Pending" });
+    deps.logger.warn("delivery.transition-rejected", `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, { taskId, from: e.from, to: "Pending" }, e);
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
@@ -915,7 +915,7 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
       taskId,
       from: e.from,
       to: e.to,
-    });
+    }, e);
     return;
   }
 
@@ -947,7 +947,7 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
       taskId,
       from: e.from,
       to: item.status,
-    });
+    }, e);
     return;
   }
   await publishBestEffort(deps, taskId, takeEvents(item), "execution.routeAsStaleChecks");
@@ -1013,7 +1013,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
       taskId: task.id,
       from: e.from,
       to: e.to,
-    });
+    }, e);
     return;
   }
 
@@ -1050,7 +1050,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
       taskId: task.id,
       from: e.from,
       to: item.status,
-    });
+    }, e);
     return;
   }
   await publishBestEffort(deps, task.id, takeEvents(item), "execution.routeAsDisputed");
@@ -1109,7 +1109,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
       taskId: task.id,
       from: e.from,
       to: e.to,
-    });
+    }, e);
     return;
   }
 
@@ -1124,7 +1124,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
           taskId: task.id,
           from: e.from,
           to: "Abandoned",
-        });
+        }, e);
         return;
       }
       const why =
@@ -1211,7 +1211,7 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
       taskId: task.id,
       from: e.from,
       to: e.to,
-    });
+    }, e);
     return;
   }
 
@@ -1224,7 +1224,7 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
         taskId: task.id,
         from: e.from,
         to: "Abandoned",
-      });
+      }, e);
       return;
     }
     deps.logger.info(
@@ -1252,7 +1252,7 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
       taskId: task.id,
       from: e.from,
       to: "Pending",
-    });
+    }, e);
     return;
   }
   await publishBestEffort(deps, environment.id, takeEvents(environment), "execution.routeAsEnvironmentChange");

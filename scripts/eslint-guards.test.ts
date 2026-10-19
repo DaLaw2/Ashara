@@ -14,6 +14,10 @@ const BARE_ERROR = "Bare Error";
 const ASSERTION = "@typescript-eslint/consistent-type-assertions";
 const CATCH_CONTINUES = "Catch continues";
 const UNARGUED_DISABLE = "Unargued catch-continue disable";
+const LOG_ERROR = "Log record drops its error";
+const LOG_EVENT_NOT_LITERAL = "Log event name is not a literal";
+const LOG_EVENT_MALFORMED = "Log event name `";
+const DELIVERY_FILE = join(REPO, "packages", "delivery", "src", "planted.ts");
 
 /** The guard each finding of `code`, linted as the file at `filePath` with the repo's config, belongs to. */
 async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<string[]> {
@@ -21,11 +25,14 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
   expect(results).toHaveLength(1);
   return results.flatMap((result) => result.messages).map((message) => {
     if (message.ruleId === ASSERTION) return ASSERTION;
-    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE].find((prefix) => message.message.startsWith(prefix));
+    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
 }
 
+const LOGGER = 'import type { Logger } from "@ashara/shared";\n';
+const plantedLogging = (body: string): string =>
+  `${LOGGER}export async function planted(logger: Logger, deps: { readonly logger: Logger }, p: Promise<number>, t: string): Promise<unknown> {\n${body}\n}\n`;
 const planted = (body: string): string => `export async function planted(p: Promise<number>, x: unknown, t: string): Promise<unknown> {\n${body}\n}\n`;
 
 describe("eslint guards fire on planted instances", () => {
@@ -139,5 +146,39 @@ describe("eslint guards fire on planted instances", () => {
   test("a typed error class is not a bare Error", async () => {
     const code = 'class Planted extends Error {}\nexport function planted(): never {\n  throw new Planted("planted");\n}\n';
     expect(await guardsOf(code)).toEqual([]);
+  });
+
+  test.each([
+    'try { await p; } catch (e) { logger.warn("shared.planted", "planted", {}); throw e; }',
+    'try { await p; } catch (e) { deps.logger.error("shared.planted", "planted", {}); throw e; }',
+    'try { await p; } catch (e) { logger.warn("shared.planted", "planted", {}, t); throw e; }',
+    'try { await p; } catch { logger.warn("shared.planted", "planted", {}); throw new RangeError(t); }',
+    'class PlantedFault extends Error {}\nconst fault = new PlantedFault(t);\nlogger.error("shared.planted", "planted", {});\nthrow fault;',
+  ])("a warn/error record that drops its error: %s", async (body) => {
+    expect(await guardsOf(plantedLogging(body))).toEqual([LOG_ERROR]);
+  });
+
+  test.each([
+    'try { await p; } catch (e) { logger.warn("shared.planted", "planted", {}, e); throw e; }',
+    'try { await p; } catch (e) { const fault = new RangeError(t, { cause: e }); logger.error("shared.planted", "planted", {}, fault); throw fault; }',
+    'try { await p; } catch (e) { logger.info("shared.planted", "planted", {}); throw e; }',
+    'class PlantedFault extends Error {}\nconst fault = new PlantedFault(t);\nlogger.error("shared.planted", "planted", {}, fault);\nthrow fault;',
+    'const seen = new Set<string>();\nlogger.warn("shared.planted", "planted", { seen: [...seen] });',
+  ])("leaves a record that carries its error: %s", async (body) => {
+    expect(await guardsOf(plantedLogging(body))).toEqual([]);
+  });
+
+  test.each([
+    ['logger.info("delivery.Bad_Name", "planted");', LOG_EVENT_MALFORMED],
+    ['logger.info("quality.planted", "planted");', LOG_EVENT_MALFORMED],
+    ['logger.info("delivery.planted.sub", "planted");', LOG_EVENT_MALFORMED],
+    ['logger.debug(t, "planted");', LOG_EVENT_NOT_LITERAL],
+    ["deps.logger.warn(`delivery.${t}`, \"planted\", {});", LOG_EVENT_NOT_LITERAL],
+  ])("a log event name that is not `<package>.<kebab-case>`: %s", async (body, guard) => {
+    expect(await guardsOf(plantedLogging(body), DELIVERY_FILE)).toEqual([guard]);
+  });
+
+  test("leaves an event name of the file's own package in kebab case", async () => {
+    expect(await guardsOf(plantedLogging('logger.info("delivery.planted-2", "planted");'), DELIVERY_FILE)).toEqual([]);
   });
 });

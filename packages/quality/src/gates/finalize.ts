@@ -291,7 +291,7 @@ async function finalizeHeld(
       taskId: task.id,
       attempt,
       targetPath: targetProjectPath,
-    });
+    }, fault);
     return {
       success: false,
       failedStep: "merge",

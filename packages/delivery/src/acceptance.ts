@@ -192,13 +192,14 @@ export async function runAcceptanceSweeps(deps: AcceptanceDeps): Promise<number>
 /** One ready project's sweep; "accepted" when it passed and the project became accepted by it. */
 async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"accepted" | "not-accepted"> {
   if (ready.workspacePath === null) {
-    const cause = projectBlockCause(new AcceptanceWorkspaceMissing(ready.projectId));
+    const halt = new AcceptanceWorkspaceMissing(ready.projectId);
+    const cause = projectBlockCause(halt);
     const blocked = await deps.projectRepo.block(ready.projectId, cause);
     deps.logger.error("delivery.project-halted", `project ${ready.projectId} ${blocked}: ${cause.reason}`, {
       projectId: ready.projectId,
       errorClass: cause.errorClass,
       result: blocked,
-    });
+    }, halt);
     return "not-accepted";
   }
   // A Completed scaffold with no merge on record is a gap in the record that no repair task and no
@@ -206,13 +207,14 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
   // once, as a fault only the operator ends, with the scaffold named in the recorded cause.
   const unrecorded = ready.scaffoldMerges.filter((scaffold) => scaffold.mergeCommit === null).map((scaffold) => scaffold.taskId);
   if (unrecorded.length > 0) {
-    const cause = projectBlockCause(new ScaffoldMergeUnrecorded(ready.projectId, unrecorded));
+    const halt = new ScaffoldMergeUnrecorded(ready.projectId, unrecorded);
+    const cause = projectBlockCause(halt);
     const blocked = await deps.projectRepo.block(ready.projectId, cause);
     deps.logger.error("delivery.project-halted", `project ${ready.projectId} ${blocked}: ${cause.reason}`, {
       projectId: ready.projectId,
       errorClass: cause.errorClass,
       result: blocked,
-    });
+    }, halt);
     return "not-accepted";
   }
   const scaffolds = ready.scaffoldMerges.flatMap((scaffold) => (scaffold.mergeCommit === null ? [] : [{ taskId: scaffold.taskId, mergeCommit: scaffold.mergeCommit }]));

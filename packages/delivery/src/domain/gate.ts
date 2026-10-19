@@ -147,7 +147,7 @@ async function giveUpUnsatisfiable(
     await repo.save(item, "Pending");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    logger.warn("delivery.transition-rejected", "not given up for unsatisfiable dependencies, it changed concurrently", { taskId: item.id, from: err.from, to: err.to });
+    logger.warn("delivery.transition-rejected", "not given up for unsatisfiable dependencies, it changed concurrently", { taskId: item.id, from: err.from, to: err.to }, err);
     return;
   }
   logger.info("delivery.task-given-up", `given up, it waits on ${causes}; its plan is repaired`, {

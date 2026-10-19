@@ -165,7 +165,7 @@ export function environmentBlocked(block: EnvironmentBlock, eventSink: Execution
     fault: block.fault,
     errorClass,
     unavailable: block.unavailable,
-  });
+  }, block.chain);
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage, errorClass, reason: envelope.summary });
   return {
     status: "environment_blocked",

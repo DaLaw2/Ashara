@@ -100,6 +100,7 @@ export function createEventLog(logger: Logger): EventLog {
         refuse(new EventLineInvalid(event.event, issueLines(fields.error)));
         return;
       }
+      // eslint-disable-next-line ashara/log-event-name -- the writer of other contexts' events: recordEventName maps each closed, schema-validated event name to its owning context's kebab-case record name
       logger.info(recordEventName(event), event.event.replaceAll("_", " "), fields.data);
     },
   };

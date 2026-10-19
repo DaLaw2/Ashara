@@ -134,8 +134,147 @@ const isUnarguedDirective = (text) => {
   if (!rules.trim().split(/[\s,]+/).includes(`ashara/${CATCH_CONTINUE}`)) return false;
   return !/^best effort:\s*\S/.test(description.join(" -- ").trim());
 };
+// A call on the Logger from @ashara/shared, told apart without type information by its receiver's
+// name: every Logger in production source is held as `logger` (a parameter, a field, a deps member).
+// Blind spots: a Logger held under another name, destructured methods (`const { warn } = logger`),
+// and an unrelated object that happens to be named `logger`.
+const LOG_METHODS = new Set(["debug", "info", "warn", "error"]);
+const RECEIVER_NAMES = new Set(["logger", "log"]);
+const loggerMethod = (call) => {
+  const callee = call.callee;
+  if (callee.type !== "MemberExpression" || callee.computed || callee.property.type !== "Identifier") return null;
+  if (!LOG_METHODS.has(callee.property.name)) return null;
+  const receiver = callee.object;
+  const name = receiver.type === "Identifier" ? receiver.name : receiver.type === "MemberExpression" && !receiver.computed && receiver.property.type === "Identifier" ? receiver.property.name : null;
+  return name !== null && RECEIVER_NAMES.has(name) ? callee.property.name : null;
+};
+const childNodes = (node) =>
+  Object.entries(node).flatMap(([key, value]) => {
+    if (key === "parent" || key === "loc" || key === "range") return [];
+    if (Array.isArray(value)) return value.filter((item) => typeof item?.type === "string");
+    return typeof value?.type === "string" ? [value] : [];
+  });
+const referencesAny = (node, names) => {
+  if (node === null || typeof node !== "object") return false;
+  if (node.type === "Identifier" && names.has(node.name)) return true;
+  return childNodes(node).some((child) => referencesAny(child, names));
+};
+// The names in a catch body that hold the caught error or a value built from it (`const fault =
+// new Fault(..., { cause: e })`), in declaration order, not crossing into a nested function.
+const derivedNames = (catchClause) => {
+  const names = new Set([catchClause.param.name]);
+  const visit = (node) => {
+    if (FUNCTION_BOUNDARY.has(node.type)) return;
+    if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init !== null && referencesAny(node.init, names)) names.add(node.id.name);
+    childNodes(node).forEach(visit);
+  };
+  visit(catchClause.body);
+  return names;
+};
+const enclosingCatch = (node) => {
+  for (let at = node.parent; at !== null && at !== undefined; at = at.parent) {
+    if (at.type === "CatchClause") return at;
+    if (FUNCTION_BOUNDARY.has(at.type)) return null;
+  }
+  return null;
+};
+// Constructors a block may bind beside a warn without the bound value being the failure it reports.
+const NOT_FAILURES = new Set(["Map", "Set", "WeakMap", "WeakSet", "Date", "URL", "RegExp", "Array", "Promise", "AbortController", "TextDecoder", "TextEncoder"]);
+// The names a statement list binds to `new <Class>(...)` before `statement`: a failure built to be
+// recorded, which the record reporting it should carry.
+const failuresBuiltBefore = (statement) => {
+  const block = statement.parent;
+  if (block === null || block === undefined || !Array.isArray(block.body)) return [];
+  const before = block.body.slice(0, block.body.indexOf(statement));
+  return before.flatMap((sibling) =>
+    sibling.type !== "VariableDeclaration"
+      ? []
+      : sibling.declarations.filter(
+          (declarator) => declarator.id.type === "Identifier" && declarator.init?.type === "NewExpression" && declarator.init.callee.type === "Identifier" && /^[A-Z]/.test(declarator.init.callee.name) && !NOT_FAILURES.has(declarator.init.callee.name),
+        ),
+  ).map((declarator) => declarator.id.name);
+};
+
+// Discipline C: a warn or error record about a failure carries the failure in the Logger's
+// `error` argument (its fourth), where it is serialized as a chain that survives the boundary; a
+// message that quotes `e.message` keeps neither the class, the context nor the cause.
+// It reports a warn/error call inside a catch whose fourth argument is missing or does not reference
+// the caught error (or a value built from it), and one whose statement follows a `const x = new
+// C(...)` in the same block that the fourth argument does not reference.
+// Blind spots: a failure passed into a helper that logs it, a failure built inline (`f(new C())`),
+// a failure class constructed in another block, a result value standing for a failure (an
+// ErrorLayer on a returned object), and a catch that logs at info.
+const LOG_ERROR_FIELD = "log-error-field";
+// Discipline C: an event name is the stable key a reader asserts on, so it is a string literal
+// `<package>.<kebab-case-what>`, with the package the file's own.
+// Blind spots: a file outside `packages/<pkg>/src/`, and a template literal without expressions.
+const LOG_EVENT_NAME = "log-event-name";
+const KEBAB_WHAT = /^[a-z0-9-]+$/;
+const packageOf = (filename) => /(?:^|[\\/])packages[\\/]([^\\/]+)[\\/]src[\\/]/.exec(filename)?.[1] ?? null;
 const ashara = {
   rules: {
+    [LOG_ERROR_FIELD]: {
+      meta: {
+        type: "problem",
+        messages: {
+          caught:
+            "Log record drops its error (Discipline C). This warn/error call is inside a catch but its fourth argument does not carry the caught error, so the record keeps no class, context or cause. Pass the caught error, or a typed error built from it, as the `error` argument: `logger.warn(event, msg, fields, e)`.",
+          built:
+            "Log record drops its error (Discipline C). `{{name}}` is built just above as the failure this record reports, but the call's fourth argument does not carry it. Pass it as the `error` argument: `logger.error(event, msg, fields, {{name}})`.",
+        },
+        schema: [],
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            const method = loggerMethod(node);
+            if (method !== "warn" && method !== "error") return;
+            const passed = node.arguments[3];
+            const caught = enclosingCatch(node);
+            if (caught !== null) {
+              const names = caught.param?.type === "Identifier" ? derivedNames(caught) : new Set();
+              if (passed === undefined || !referencesAny(passed, names)) {
+                context.report({ node, messageId: "caught" });
+                return;
+              }
+            }
+            if (node.parent.type !== "ExpressionStatement") return;
+            const dropped = failuresBuiltBefore(node.parent).find((name) => passed === undefined || !referencesAny(passed, new Set([name])));
+            if (dropped !== undefined) context.report({ node, messageId: "built", data: { name: dropped } });
+          },
+        };
+      },
+    },
+    [LOG_EVENT_NAME]: {
+      meta: {
+        type: "problem",
+        messages: {
+          notLiteral:
+            "Log event name is not a literal (Discipline C). A reader asserts on the event name, so it is a string literal `{{prefix}}.<kebab-case-what>` a search finds, not a computed value.",
+          malformed:
+            "Log event name `{{name}}` does not match `{{prefix}}.<kebab-case-what>` (Discipline C): the prefix is this file's package and the rest is lowercase letters, digits and hyphens.",
+        },
+        schema: [],
+      },
+      create(context) {
+        const prefix = packageOf(context.filename);
+        if (prefix === null) return {};
+        return {
+          CallExpression(node) {
+            if (loggerMethod(node) === null) return;
+            const event = node.arguments[0];
+            if (event === undefined) return;
+            if (event.type !== "Literal" || typeof event.value !== "string") {
+              context.report({ node: event, messageId: "notLiteral", data: { prefix } });
+              return;
+            }
+            const [head, ...rest] = event.value.split(".");
+            const what = rest.join(".");
+            if (head !== prefix || !KEBAB_WHAT.test(what)) context.report({ node: event, messageId: "malformed", data: { name: event.value, prefix } });
+          },
+        };
+      },
+    },
     [CATCH_CONTINUE]: {
       meta: {
         type: "problem",
@@ -232,6 +371,8 @@ export default tseslint.config(
     rules: {
       "no-restricted-syntax": ["error", ...BASE_SYNTAX, ...PRODUCTION_SYNTAX],
       [`ashara/${CATCH_CONTINUE}`]: "error",
+      [`ashara/${LOG_ERROR_FIELD}`]: "error",
+      [`ashara/${LOG_EVENT_NAME}`]: "error",
 
       // No unvalidated `as` (CLAUDE.md): every assertion fails; `as const` stays legal. A cast
       // that follows a validation keeps an argued disable naming the validation.

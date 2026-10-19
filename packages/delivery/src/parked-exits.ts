@@ -102,7 +102,7 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
       taskId: item.id,
       from: err.from,
       to: err.to,
-    });
+    }, err);
     // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not completed; the record above names why
     return false;
   }
@@ -161,7 +161,7 @@ async function giveUp(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    deps.logger.warn("delivery.transition-rejected", `not given up, it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to });
+    deps.logger.warn("delivery.transition-rejected", `not given up, it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to }, err);
     // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not given up this pass; the record above names why
     return false;
   }
@@ -180,7 +180,7 @@ async function release(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    deps.logger.warn("delivery.transition-rejected", `not released, it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to });
+    deps.logger.warn("delivery.transition-rejected", `not released, it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to }, err);
     // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is not released; the record above names why
     return false;
   }
