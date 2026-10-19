@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { isGoalTask } from "@ashara/db";
 import { judgedVerdictSchema, overallOf, type JudgedVerdict } from "./hidden-verdict.js";
 import type { PickRecord } from "./pool-selection.js";
-import { asharaVerdictOf, formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
+import { readMappingFile, readPacketKey } from "./pool-mapping.js";
+import { asharaGuaranteesOf, asharaVerdictOf, formatGuaranteePairs, formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
 
 const TSX = path.join(import.meta.dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
 
@@ -599,7 +600,7 @@ describe("formatPoolVerdicts: Ashara's verdict beside the hidden suite's", () =>
   const noSweep = asharaVerdictOf("p1", undefined);
 
   test("Accepted and a hidden pass agree, every guarantee named, the pick's tender and seed printed", () => {
-    const { lines, violation } = formatPoolVerdicts(accepted, { hidden: allPass, pick: PICK });
+    const { lines, violation } = formatPoolVerdicts(accepted, { hidden: allPass, pick: PICK, mapping: null });
     expect(lines).toEqual([
       `tender pick: T1 seed ${"c".repeat(64)} (fewest runs (0) among T1, T2; drawn by seed; run pool-1, commit 0e2adaf9)`,
       `verdicts: Ashara Accepted (sweep on ${COMMIT}) | hidden suite T1 seed ${"c".repeat(12)}: PASS 2/2 pass, G1 pass, G2 pass | agree`,
@@ -608,23 +609,23 @@ describe("formatPoolVerdicts: Ashara's verdict beside the hidden suite's", () =>
   });
 
   test("Accepted over a hidden fail, and over a hidden incomplete, is DISAGREE", () => {
-    expect(formatPoolVerdicts(accepted, { hidden: oneFail, pick: PICK }).lines[1]).toBe(
+    expect(formatPoolVerdicts(accepted, { hidden: oneFail, pick: PICK, mapping: null }).lines[1]).toBe(
       `verdicts: Ashara Accepted (sweep on ${COMMIT}) | hidden suite T1 seed ${"c".repeat(12)}: FAIL 1/3 pass, G1 pass, G2 fail, G3 unjudged | DISAGREE`,
     );
-    expect(formatPoolVerdicts(accepted, { hidden: incomplete, pick: PICK }).lines[1]).toMatch(/: INCOMPLETE 0\/1 pass, G1 unjudged \| DISAGREE$/);
+    expect(formatPoolVerdicts(accepted, { hidden: incomplete, pick: PICK, mapping: null }).lines[1]).toMatch(/: INCOMPLETE 0\/1 pass, G1 unjudged \| DISAGREE$/);
   });
 
   test("a failed latest sweep is Rejected: DISAGREE with a hidden pass, agree with a hidden fail, not compared with an incomplete one", () => {
-    expect(formatPoolVerdicts(rejected, { hidden: allPass, pick: PICK }).lines[1]).toMatch(new RegExp(`^verdicts: Ashara Rejected \\(sweep failed on ${COMMIT}\\) \\| .* \\| DISAGREE$`));
-    expect(formatPoolVerdicts(rejected, { hidden: oneFail, pick: PICK }).lines[1]).toMatch(/^verdicts: Ashara Rejected .* \| agree$/);
-    expect(formatPoolVerdicts(rejected, { hidden: incomplete, pick: PICK }).lines[1]).toMatch(/\| not compared: the hidden suite is incomplete$/);
-    expect(formatPoolVerdicts(asharaVerdictOf("p1", { passed: false, mainCommit: null, createdAt: AT }), { hidden: null, pick: null }).lines[1]).toBe(
+    expect(formatPoolVerdicts(rejected, { hidden: allPass, pick: PICK, mapping: null }).lines[1]).toMatch(new RegExp(`^verdicts: Ashara Rejected \\(sweep failed on ${COMMIT}\\) \\| .* \\| DISAGREE$`));
+    expect(formatPoolVerdicts(rejected, { hidden: oneFail, pick: PICK, mapping: null }).lines[1]).toMatch(/^verdicts: Ashara Rejected .* \| agree$/);
+    expect(formatPoolVerdicts(rejected, { hidden: incomplete, pick: PICK, mapping: null }).lines[1]).toMatch(/\| not compared: the hidden suite is incomplete$/);
+    expect(formatPoolVerdicts(asharaVerdictOf("p1", { passed: false, mainCommit: null, createdAt: AT }), { hidden: null, pick: null, mapping: null }).lines[1]).toBe(
       "verdicts: Ashara Rejected (sweep failed on no recorded commit) | hidden suite: not run",
     );
   });
 
   test("no recorded sweep is no verdict and is not compared, whatever the project's status", () => {
-    expect(formatPoolVerdicts(noSweep, { hidden: allPass, pick: PICK }).lines[1]).toMatch(
+    expect(formatPoolVerdicts(noSweep, { hidden: allPass, pick: PICK, mapping: null }).lines[1]).toMatch(
       /^verdicts: Ashara gave no acceptance verdict \(no acceptance sweep recorded\) \| .* \| not compared: Ashara gave no acceptance verdict$/,
     );
   });
@@ -639,12 +640,12 @@ describe("formatPoolVerdicts: Ashara's verdict beside the hidden suite's", () =>
   });
 
   test("no --hidden prints 'hidden suite: not run', never a pass", () => {
-    const { lines } = formatPoolVerdicts(accepted, { hidden: null, pick: null });
+    const { lines } = formatPoolVerdicts(accepted, { hidden: null, pick: null, mapping: null });
     expect(lines).toEqual(["tender pick: not recorded (run-report was given no --run)", `verdicts: Ashara Accepted (sweep on ${COMMIT}) | hidden suite: not run`]);
   });
 
   test("a verdict for another tender than the pick is a violation", () => {
-    const { lines, violation } = formatPoolVerdicts(accepted, { hidden: allPass, pick: { ...PICK, tender: "T2" } });
+    const { lines, violation } = formatPoolVerdicts(accepted, { hidden: allPass, pick: { ...PICK, tender: "T2" }, mapping: null });
     expect(violation).toBe(true);
     expect(lines).toContain("VIOLATION: the hidden verdict judges tender T1, the run picked T2");
   });
@@ -674,5 +675,110 @@ describe("run-report --hidden with a verdict file that fails the schema", () => 
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`run-report --hidden ${file}: JSON of an unexpected shape`);
+  });
+});
+
+describe("formatGuaranteePairs: one Ashara/hidden pair per intended guarantee of the mapping", () => {
+  const REPORT = "00000000-0000-4000-8000-0000000000c1";
+  const hidden = judgedVerdictSchema.parse({
+    tender: "T1",
+    suiteDigest: "sha256:aa",
+    product: { dir: "/p", digest: "sha256:bb" },
+    image: "img",
+    suiteArgs: [],
+    timeoutSeconds: 60,
+    startedAt: "2026-10-18T00:00:00.000Z",
+    endedAt: "2026-10-18T00:01:00.000Z",
+    overall: "fail",
+    guarantees: [
+      { id: "I1", verdict: "pass" },
+      { id: "I2", verdict: "fail" },
+      { id: "I3", verdict: "fail" },
+    ],
+    problems: [],
+    runs: {},
+  });
+  const key = readPacketKey(
+    JSON.stringify({ version: 1, run: "pool-1", arm: "ashara", items: [{ label: "item-1", id: "G4" }, { label: "item-2", id: "G5" }] }),
+    "key.json",
+  );
+  const file = readMappingFile(
+    [
+      "version = 1",
+      'run = "pool-1"',
+      `packet = "sha256:${"d".repeat(64)}"`,
+      "[[map]]",
+      'intended = "I1"',
+      'to = ["item-1"]',
+      "narrowed = false",
+      "[[map]]",
+      'intended = "I2"',
+      'to = ["item-2"]',
+      "narrowed = true",
+      "[[map]]",
+      'intended = "I3"',
+      "to = []",
+      "narrowed = false",
+    ].join("\n"),
+    "reader-A.toml",
+  );
+  const ashara = asharaGuaranteesOf("p1", [
+    { reportId: REPORT, guaranteeId: "G4", verdict: "pass", reason: null, evidenceClass: "implementer-visible" },
+    { reportId: REPORT, guaranteeId: "G5", verdict: "pass", reason: null, evidenceClass: "witness" },
+  ]);
+  const pairs = formatGuaranteePairs(ashara, { hidden, pick: null, mapping: { file, key } });
+
+  test("a pass beside a hidden pass reads agree", () => {
+    expect(pairs.lines[0]).toBe(`pairs (mapping of run pool-1; terminal report ${REPORT}):`);
+    expect(pairs.lines[1]).toBe("  T1/I1 <- Ashara G4 pass (implementer-visible) | hidden pass | agree");
+    expect(pairs.violation).toBe(false);
+  });
+
+  test("a narrowed item reported pass over a hidden fail reads false-confirm", () => {
+    expect(pairs.lines[2]).toBe("  T1/I2 <- Ashara G5 pass (witness), narrowed | hidden fail | false-confirm");
+  });
+
+  test("an intended guarantee with no Ashara verdict reads omitted", () => {
+    expect(pairs.lines[3]).toBe("  T1/I3 <- Ashara none | hidden fail | omitted");
+    expect(pairs.lines).toHaveLength(4);
+  });
+
+  test("without --mapping it prints 'pairs: not mapped', never a pair", () => {
+    expect(formatGuaranteePairs(ashara, { hidden, pick: null, mapping: null })).toEqual({ lines: ["pairs: not mapped"], violation: false });
+  });
+
+  test("a key of another arm, or an item the last terminal report gives no verdict, is a violation and prints no pair", () => {
+    const baseline = formatGuaranteePairs(ashara, { hidden, pick: null, mapping: { file, key: { ...key, arm: "baseline" } } });
+    expect(baseline.violation).toBe(true);
+    expect(baseline.lines).toEqual(["pairs: not compared", "VIOLATION: the packet key is of the baseline arm, not Ashara's"]);
+    const noReport = formatGuaranteePairs(asharaGuaranteesOf("p1", []), { hidden, pick: null, mapping: { file, key } });
+    expect(noReport.violation).toBe(true);
+    expect(noReport.lines).toContain("VIOLATION: I1 maps to item-1 (G4), to which the last terminal report gives no verdict");
+  });
+});
+
+describe("run-report --mapping with a mapping file that fails the schema", () => {
+  let dir = "";
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "run-report-mapping-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("exits 1 naming the file, before any database is read", async () => {
+    const mapping = path.join(dir, "reader-A.toml");
+    const key = path.join(dir, "key.json");
+    await writeFile(mapping, ["version = 1", 'run = "pool-1"', 'packet = "not-a-digest"', "[[map]]", 'intended = "I1"', 'to = ["item-1"]', 'narrowed = "no"'].join("\n"));
+    await writeFile(key, JSON.stringify({ version: 1, run: "pool-1", arm: "ashara", items: [{ label: "item-1", id: "G4" }] }));
+    const result = spawnSync(process.execPath, [TSX, path.join(import.meta.dirname, "run-report.ts"), "00000000-0000-4000-8000-0000000000a1", "--mapping", mapping, "--key", key], {
+      encoding: "utf8",
+      // An unreachable database: the report must stop on the mapping file before it connects.
+      env: { ...process.env, DATABASE_URL: "postgresql://nobody@127.0.0.1:1/none" },
+      timeout: 60_000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`mapping file ${JSON.stringify(mapping)}: `);
+    expect(result.stderr).toMatch(/packet: a digest is sha256:/);
   });
 });

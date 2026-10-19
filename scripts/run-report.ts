@@ -2,6 +2,7 @@
  * The evidence of one project's run. Read-only; prints no credential and no connection string.
  *
  *   npx tsx scripts/run-report.ts <project-id> [--hidden <verdict.json>] [--run <label> [--pool <dir>]]
+ *     [--mapping <mapping.toml> --key <key.json>]
  *     (or: just run-report <project-id> [arguments])
  *
  * After the first line: the tender the run picked from the pool (its id, seed and reason, read from the pool's
@@ -9,6 +10,14 @@
  * beside the hidden suite's verdict (the judged file scripts/hidden-suite.ts writes) with every guarantee pass, fail
  * or unjudged, and DISAGREE when they disagree; with no --hidden, "hidden suite: not run". A verdict file or pick that
  * cannot be read or parsed stops the report before the database is read.
+ *
+ * With --mapping (a reader's blind mapping file of the run's Ashara arm, scripts/pool-mapping.ts) and --key (the packet
+ * key that joins its item labels back to Ashara's guarantee ids), one line per intended guarantee: the Ashara
+ * guarantees mapped to it with each verdict and evidence class from the guarantee_verdicts of the last terminal
+ * report, beside the hidden suite's verdict of it, read agree, false-confirm (a pass over a hidden fail, or any pass of
+ * a narrowed item), omitted (no item covers it) or not compared; without --mapping, "pairs: not mapped". A mapping or
+ * key that cannot be read or parsed stops the report before the database is read; one that does not join to the
+ * last terminal report is a violation.
  *
  * Per task: each dev session's attempt (terminal, turns, model, environment version, prompt
  * digest), or, when none is recorded, what the row says about why (still open, closed by the startup
@@ -28,19 +37,22 @@
  * unattributed in its Epic, and llm_calls with no task on a project-level line of their own. Exits 1 when an
  * llm_calls row is priced at exactly $0, which the ledger must never write (an unknown cost is NULL), when
  * the Epics' spend and the project-level spend do not add up to every llm_calls row, or when the hidden verdict
- * judges another tender than the run picked.
+ * judges another tender than the run picked, or when the mapping does not join to the last terminal report.
  */
 
 import { readFile } from "node:fs/promises";
 import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import { describeErrorChain, parseJson, parseProjectId } from "@ashara/shared";
 import { judgedVerdictSchema, type JudgedVerdict } from "./hidden-verdict.js";
+import { readMappingFile, readPacketKey } from "./pool-mapping.js";
 import { poolDirOf, recordedPick, type PickRecord } from "./pool-selection.js";
 import { runReport } from "./run-report-body.js";
+import type { GuaranteeMapping } from "./run-report-format.js";
 
-const USAGE = "Usage: npx tsx scripts/run-report.ts <project-id> [--hidden <verdict.json>] [--run <label> [--pool <dir>]]";
+const USAGE =
+  "Usage: npx tsx scripts/run-report.ts <project-id> [--hidden <verdict.json>] [--run <label> [--pool <dir>]] [--mapping <mapping.toml> --key <key.json>]";
 
-const FLAGS = ["--hidden", "--run", "--pool"];
+const FLAGS = ["--hidden", "--run", "--pool", "--mapping", "--key"];
 
 class RunReportUsageError extends Error {
   constructor(detail: string) {
@@ -59,6 +71,17 @@ class HiddenVerdictUnreadable extends Error {
   }
 }
 
+class MappingInputUnreadable extends Error {
+  constructor(
+    readonly what: "mapping file" | "packet key",
+    readonly path: string,
+    options: ErrorOptions,
+  ) {
+    super(`run-report: the ${what} ${JSON.stringify(path)} cannot be read`, options);
+    this.name = "MappingInputUnreadable";
+  }
+}
+
 function parseArgs(argv: readonly string[]): { readonly project: string; readonly flags: ReadonlyMap<string, string> } {
   const [project, ...rest] = argv;
   if (project === undefined || project.startsWith("--")) throw new RunReportUsageError("run-report takes one project id first.");
@@ -72,6 +95,7 @@ function parseArgs(argv: readonly string[]): { readonly project: string; readonl
     flags.set(flag, value);
   }
   if (flags.has("--pool") && !flags.has("--run")) throw new RunReportUsageError("--pool names where the --run label's pick is; --run is missing.");
+  if (flags.has("--mapping") !== flags.has("--key")) throw new RunReportUsageError("--mapping and --key are given together: the key joins the mapping's item labels to Ashara's guarantees.");
   return { project, flags };
 }
 
@@ -85,6 +109,20 @@ async function readHidden(path: string): Promise<JudgedVerdict> {
   return parseJson(judgedVerdictSchema, text, `run-report --hidden ${path}`);
 }
 
+async function readInput(what: "mapping file" | "packet key", path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    throw new MappingInputUnreadable(what, path, { cause: err });
+  }
+}
+
+async function readMapping(mappingPath: string, keyPath: string): Promise<GuaranteeMapping> {
+  const file = readMappingFile(await readInput("mapping file", mappingPath), mappingPath);
+  const key = readPacketKey(await readInput("packet key", keyPath), `run-report --key ${keyPath}`);
+  return { file, key };
+}
+
 async function main(): Promise<void> {
   const { project, flags } = parseArgs(process.argv.slice(2));
   const projectId = parseProjectId(project, "run-report <project-id> argument");
@@ -92,10 +130,13 @@ async function main(): Promise<void> {
   const hidden = hiddenPath === undefined ? null : await readHidden(hiddenPath);
   const run = flags.get("--run");
   const pick: PickRecord | null = run === undefined ? null : await recordedPick(poolDirOf(flags.get("--pool"), process.env), run);
+  const mappingPath = flags.get("--mapping");
+  const keyPath = flags.get("--key");
+  const mapping = mappingPath === undefined || keyPath === undefined ? null : await readMapping(mappingPath, keyPath);
 
   const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   try {
-    const report = await runReport(db, projectId, { hidden, pick });
+    const report = await runReport(db, projectId, { hidden, pick, mapping });
     console.log(report.text);
     if (report.failed) process.exitCode = 1;
   } finally {

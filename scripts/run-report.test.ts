@@ -374,7 +374,7 @@ describe("runReport, the body run-report prints", () => {
       },
     });
 
-    const { text } = await runReport(db, projectId, { hidden: null, pick: null });
+    const { text } = await runReport(db, projectId, { hidden: null, pick: null, mapping: null });
 
     expect(text).toContain(`run-report: project ${NAME} (${projectId})`);
     expect(text.split("\n").slice(1, 3)).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara gave no acceptance verdict (no acceptance sweep recorded) | hidden suite: not run"]);
@@ -403,7 +403,7 @@ describe("runReport, the body run-report prints", () => {
       INSERT INTO llm_calls (id, project_id, task_id, call_site, provider, model, estimated_cost_usd, state)
       VALUES (${randomUUID()}, ${projectId}, ${reviewTask}, 'suite-review', 'q', 'judge', 0.5, 'pending')`);
 
-    const { text } = await runReport(db, projectId, { hidden: null, pick: null });
+    const { text } = await runReport(db, projectId, { hidden: null, pick: null, mapping: null });
 
     expect(text).toContain(
       "Reviewer record (1):\n  q/judge at suite-review (claim): 1 pass(es) contradicted, 0 finding(s) witnessed, 0 finding(s) refuted, over 2 piece(s) of evidence; " +
@@ -413,7 +413,7 @@ describe("runReport, the body run-report prints", () => {
 
   test("a stopped project's verdict is its latest acceptance sweep, never its status", async () => {
     await db.execute(sql`UPDATE projects SET lifecycle = 'stopped' WHERE id = ${projectId}`);
-    const verdictLine = async () => (await runReport(db, projectId, { hidden: null, pick: null })).text.split("\n")[2];
+    const verdictLine = async () => (await runReport(db, projectId, { hidden: null, pick: null, mapping: null })).text.split("\n")[2];
     async function sweep(passed: boolean, commit: string, at: string): Promise<void> {
       const defect = passed ? null : await completedTask("Acceptance defect");
       await db.execute(sql`

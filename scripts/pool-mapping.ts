@@ -120,7 +120,7 @@ const keySchema = z.strictObject({
   arm: armSchema,
   items: z.array(z.strictObject({ label: labelSchema, id: idSchema })),
 });
-type PacketKey = z.infer<typeof keySchema>;
+export type PacketKey = z.infer<typeof keySchema>;
 
 const mappingFileSchema = z.strictObject({
   version: z.literal(1),
@@ -128,7 +128,7 @@ const mappingFileSchema = z.strictObject({
   packet: digestSchema,
   map: z.array(z.strictObject({ intended: idSchema, to: z.array(labelSchema), narrowed: z.boolean() })),
 });
-type MappingFile = z.infer<typeof mappingFileSchema>;
+export type MappingFile = z.infer<typeof mappingFileSchema>;
 
 function sha256(data: string | Buffer): string {
   return createHash("sha256").update(data).digest("hex");
@@ -187,11 +187,10 @@ export function packetText(packet: MappingPacket): string {
 }
 
 /**
- * A reader's mapping file, checked against the packet it was read from: the run and packet digest match, every intended
- * id of the packet appears exactly once and no other, and every label it maps to is one of the packet's items.
- * @testseam pool-mapping.test.ts checks a missing or repeated intended id is refused
+ * A reader's mapping file read on its own, without the packet it was read from: TOML of the mapping file schema, every
+ * intended id at most once, no label twice in one entry, and no narrowed entry that maps to no item.
  */
-export function parseMappingFile(text: string, source: string, packet: MappingPacket, packetDigest: string): MappingFile {
+export function readMappingFile(text: string, source: string): MappingFile {
   let raw: unknown;
   try {
     raw = parseToml(text);
@@ -202,7 +201,29 @@ export function parseMappingFile(text: string, source: string, packet: MappingPa
   if (!parsed.success) {
     throw new MappingFileInvalid(source, null, parsed.error.issues.map((issue) => `${issue.path.map(String).join(".") || "(root)"}: ${issue.message}`).join("; "));
   }
-  const file = parsed.data;
+  const seen = new Set<string>();
+  for (const entry of parsed.data.map) {
+    if (seen.has(entry.intended)) throw new MappingFileInvalid(source, entry.intended, "is mapped twice; every intended id appears exactly once");
+    seen.add(entry.intended);
+    const repeated = unique(entry.to);
+    if (repeated !== undefined) throw new MappingFileInvalid(source, entry.intended, `maps to ${repeated} twice`);
+    if (entry.narrowed && entry.to.length === 0) throw new MappingFileInvalid(source, entry.intended, "is narrowed but maps to no item");
+  }
+  return parsed.data;
+}
+
+/** The key a packet was exported with, which joins each packet label back to the arm's own item id. */
+export function readPacketKey(text: string, source: string): PacketKey {
+  return parseJson(keySchema, text, source);
+}
+
+/**
+ * A reader's mapping file, checked against the packet it was read from: the run and packet digest match, every intended
+ * id of the packet appears exactly once and no other, and every label it maps to is one of the packet's items.
+ * @testseam pool-mapping.test.ts checks a missing or repeated intended id is refused
+ */
+export function parseMappingFile(text: string, source: string, packet: MappingPacket, packetDigest: string): MappingFile {
+  const file = readMappingFile(text, source);
   if (file.run !== packet.run) throw new MappingFileInvalid(source, null, `run ${file.run} is not the packet's run ${packet.run}`);
   if (file.packet !== packetDigest) throw new MappingFileInvalid(source, null, `packet ${file.packet} is not the packet read, ${packetDigest}`);
   const intended = new Set(packet.intended.map((entry) => entry.id));
@@ -210,13 +231,9 @@ export function parseMappingFile(text: string, source: string, packet: MappingPa
   const seen = new Set<string>();
   for (const entry of file.map) {
     if (!intended.has(entry.intended)) throw new MappingFileInvalid(source, entry.intended, "is not on the packet's intended list");
-    if (seen.has(entry.intended)) throw new MappingFileInvalid(source, entry.intended, "is mapped twice; every intended id appears exactly once");
     seen.add(entry.intended);
     const unknown = entry.to.find((label) => !labels.has(label));
     if (unknown !== undefined) throw new MappingFileInvalid(source, entry.intended, `maps to ${unknown}, which the packet does not hold`);
-    const repeated = unique(entry.to);
-    if (repeated !== undefined) throw new MappingFileInvalid(source, entry.intended, `maps to ${repeated} twice`);
-    if (entry.narrowed && entry.to.length === 0) throw new MappingFileInvalid(source, entry.intended, "is narrowed but maps to no item");
   }
   const missing = packet.intended.find((entry) => !seen.has(entry.id));
   if (missing !== undefined) throw new MappingFileInvalid(source, missing.id, "is missing; every intended id appears exactly once");

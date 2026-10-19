@@ -8,6 +8,7 @@ import { isGoalTask } from "@ashara/db";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
+import type { MappingFile, PacketKey } from "./pool-mapping.js";
 import type { PickRecord } from "./pool-selection.js";
 
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
@@ -481,10 +482,17 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
   return { text: lines.join("\n"), zeroCostCalls: overall.zeroCostCalls, attributionViolation: cost.violation };
 }
 
-/** The hidden suite's verdict and the pool's pick record a run report is given, each or neither. */
+/** A reader's mapping of the run's Ashara arm, and the packet key that joins its item labels to Ashara's guarantee ids. */
+export interface GuaranteeMapping {
+  readonly file: MappingFile;
+  readonly key: PacketKey;
+}
+
+/** The hidden suite's verdict, the pool's pick record and the guarantee mapping a run report is given, each or none. */
 export interface PoolEvidence {
   readonly hidden: JudgedVerdict | null;
   readonly pick: PickRecord | null;
+  readonly mapping: GuaranteeMapping | null;
 }
 
 /**
@@ -565,6 +573,129 @@ export function formatPoolVerdicts(verdict: AsharaVerdict, pool: PoolEvidence): 
   const mismatch = pick !== null && pick.tender !== hidden.tender;
   if (mismatch) lines.push(`VIOLATION: the hidden verdict judges tender ${hidden.tender}, the run picked ${pick.tender}`);
   return { lines, violation: mismatch };
+}
+
+const storedVerdictFields = { reportId: z.string().min(1), guaranteeId: z.string().min(1), evidenceClass: z.string().min(1) };
+const storedGuaranteeVerdictSchema = z.discriminatedUnion("verdict", [
+  z.strictObject({ ...storedVerdictFields, verdict: z.enum(["pass", "fail"]), reason: z.null() }),
+  z.strictObject({ ...storedVerdictFields, verdict: z.literal("unjudged"), reason: z.string().min(1) }),
+]);
+type StoredGuaranteeVerdict = z.output<typeof storedGuaranteeVerdictSchema>;
+
+/** Ashara's per-guarantee verdicts: those its last terminal report carries, or none when no report carries any. */
+type AsharaGuarantees =
+  | { readonly kind: "none" }
+  | { readonly kind: "report"; readonly reportId: string; readonly byId: ReadonlyMap<string, StoredGuaranteeVerdict> };
+
+/** The guarantee_verdicts rows of a project's last terminal report do not read as one report's table. */
+class GuaranteeVerdictsUnreadable extends Error {
+  readonly projectId: string;
+  readonly issues: readonly string[];
+
+  constructor(projectId: string, issues: readonly string[], options?: ErrorOptions) {
+    super(`run-report: the guarantee_verdicts rows of project ${projectId}'s last terminal report do not read as its table: ${issues.join("; ")}`, options);
+    this.name = "GuaranteeVerdictsUnreadable";
+    this.projectId = projectId;
+    this.issues = issues;
+  }
+}
+
+/**
+ * Ashara's per-guarantee verdicts from the guarantee_verdicts rows of the project's last terminal report, as read from
+ * the database (none when no report carries any). Throws GuaranteeVerdictsUnreadable for rows of another shape, of
+ * more than one report, or naming a guarantee twice.
+ */
+export function asharaGuaranteesOf(projectId: string, rows: unknown): AsharaGuarantees {
+  const parsed = z.array(storedGuaranteeVerdictSchema).safeParse(rows);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((issue) => `${issue.path.map(String).join(".") || "(root)"}: ${issue.message}`);
+    throw new GuaranteeVerdictsUnreadable(projectId, issues, { cause: parsed.error });
+  }
+  const [first] = parsed.data;
+  if (first === undefined) return { kind: "none" };
+  const byId = new Map<string, StoredGuaranteeVerdict>();
+  for (const row of parsed.data) {
+    if (row.reportId !== first.reportId) throw new GuaranteeVerdictsUnreadable(projectId, [`rows of reports ${first.reportId} and ${row.reportId}, not one`]);
+    if (byId.has(row.guaranteeId)) throw new GuaranteeVerdictsUnreadable(projectId, [`guarantee ${row.guaranteeId} twice`]);
+    byId.set(row.guaranteeId, row);
+  }
+  return { kind: "report", reportId: first.reportId, byId };
+}
+
+function asharaItemText(row: StoredGuaranteeVerdict): string {
+  if (row.verdict === "unjudged") return `${row.guaranteeId} unjudged (${row.reason};${row.evidenceClass})`;
+  return `${row.guaranteeId} ${row.verdict} (${row.evidenceClass})`;
+}
+
+/**
+ * What Ashara said of one intended guarantee over the items mapped to it: fail when any of them failed, pass when every
+ * one passed, unjudged otherwise.
+ */
+function asharaClaim(rows: readonly StoredGuaranteeVerdict[]): "pass" | "fail" | "unjudged" {
+  if (rows.some((row) => row.verdict === "fail")) return "fail";
+  return rows.every((row) => row.verdict === "pass") ? "pass" : "unjudged";
+}
+
+type HiddenSide = JudgedVerdict["guarantees"][number]["verdict"] | "not run" | "not judged";
+
+/**
+ * One pair's outcome. An intended guarantee no item covers is omitted; a narrowed one Ashara reported as passing is a
+ * false confirm whatever the hidden suite says, since Ashara confirmed a weaker promise than the intended one; a pass
+ * over a hidden fail is a false confirm too.
+ */
+function pairOutcome(rows: readonly StoredGuaranteeVerdict[], narrowed: boolean, hidden: HiddenSide): string {
+  if (rows.length === 0) return "omitted";
+  const claim = asharaClaim(rows);
+  if (claim === "pass" && narrowed) return "false-confirm";
+  if (hidden === "not run") return "not compared: the hidden suite was not run";
+  if (hidden === "not judged") return "not compared: the hidden suite did not judge it";
+  if (hidden === "unjudged") return "not compared: the hidden suite left it unjudged";
+  if (claim === "unjudged") return "not compared: Ashara left it unjudged";
+  if (claim === hidden) return "agree";
+  return claim === "pass" ? "false-confirm" : "DISAGREE";
+}
+
+/**
+ * One Ashara/hidden pair per intended guarantee of the mapping: the Ashara guarantees its items join to through the
+ * key, each with its verdict and evidence class from the last terminal report, beside the hidden suite's verdict. No
+ * mapping prints "pairs: not mapped", never a pair. A key of another run or arm, a label the key does not hold, or an
+ * item whose guarantee the report gives no verdict is a violation, and no pair is printed.
+ */
+export function formatGuaranteePairs(ashara: AsharaGuarantees, pool: PoolEvidence): { readonly lines: string[]; readonly violation: boolean } {
+  const { mapping, hidden, pick } = pool;
+  if (mapping === null) return { lines: ["pairs: not mapped"], violation: false };
+  const { file, key } = mapping;
+  const problems: string[] = [];
+  if (key.run !== file.run) problems.push(`the packet key is of run ${key.run}, the mapping of run ${file.run}`);
+  if (key.arm !== "ashara") problems.push(`the packet key is of the ${key.arm} arm, not Ashara's`);
+  const idOf = new Map(key.items.map((item) => [item.label, item.id]));
+  const pairs = file.map.map((entry) => ({
+    entry,
+    rows: entry.to.flatMap((label) => {
+      const id = idOf.get(label);
+      if (id === undefined) {
+        problems.push(`${entry.intended} maps to ${label}, which the packet key does not hold`);
+        return [];
+      }
+      const row = ashara.kind === "report" ? ashara.byId.get(id) : undefined;
+      if (row === undefined) {
+        problems.push(`${entry.intended} maps to ${label} (${id}), to which the last terminal report gives no verdict`);
+        return [];
+      }
+      return [row];
+    }),
+  }));
+  if (problems.length > 0) return { lines: ["pairs: not compared", ...problems.map((problem) => `VIOLATION: ${problem}`)], violation: true };
+  const tender = hidden?.tender ?? pick?.tender;
+  const source = ashara.kind === "report" ? `terminal report ${ashara.reportId}` : "no terminal report carries guarantee verdicts";
+  const lines = [`pairs (mapping of run ${file.run}; ${source}):`];
+  for (const { entry, rows } of pairs) {
+    const judged = hidden?.guarantees.find((guarantee) => guarantee.id === entry.intended);
+    const hiddenSide: HiddenSide = hidden === null ? "not run" : (judged?.verdict ?? "not judged");
+    const asharaSide = rows.length === 0 ? "Ashara none" : `Ashara ${rows.map(asharaItemText).join(", ")}${entry.narrowed ? ", narrowed" : ""}`;
+    lines.push(`  ${tender === undefined ? "" : `${tender}/`}${entry.intended} <- ${asharaSide} | hidden ${hiddenSide} | ${pairOutcome(rows, entry.narrowed, hiddenSide)}`);
+  }
+  return { lines, violation: false };
 }
 
 /** One finding of a suite review, as the report states it. */

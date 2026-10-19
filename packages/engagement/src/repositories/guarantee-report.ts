@@ -1,6 +1,6 @@
-import { and, desc, eq, lte } from "drizzle-orm";
+import { and, asc, desc, eq, lte } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, guaranteeEvidence, guaranteeVerdicts, visionDocuments } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, guaranteeEvidence, guaranteeVerdicts, visionDocuments } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import type { Evidence } from "../vision-language/index.js";
 import { CheckEvidenceSchema } from "../vision-language/index.js";
@@ -72,6 +72,32 @@ export async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise
     });
   }
   return { kind: "judged", sweep: judged, vision, evidence: { kind: "recorded", byGuarantee } };
+}
+
+/**
+ * The verdict rows the project's last terminal report carries, by guarantee id, as stored and unparsed: the newest
+ * message any guarantee_verdicts row names. None when no report carries any.
+ */
+export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: string) {
+  const [last] = await db
+    .select({ reportId: guaranteeVerdicts.reportId })
+    .from(guaranteeVerdicts)
+    .innerJoin(clientMessages, eq(clientMessages.id, guaranteeVerdicts.reportId))
+    .where(eq(guaranteeVerdicts.projectId, projectId))
+    .orderBy(desc(clientMessages.createdAt), desc(clientMessages.id))
+    .limit(1);
+  if (last === undefined) return [];
+  return db
+    .select({
+      reportId: guaranteeVerdicts.reportId,
+      guaranteeId: guaranteeVerdicts.guaranteeId,
+      verdict: guaranteeVerdicts.verdict,
+      reason: guaranteeVerdicts.reason,
+      evidenceClass: guaranteeVerdicts.evidenceClass,
+    })
+    .from(guaranteeVerdicts)
+    .where(eq(guaranteeVerdicts.reportId, last.reportId))
+    .orderBy(asc(guaranteeVerdicts.guaranteeId));
 }
 
 /** Persists a message's verdicts beside it, inside the transaction that posts it. */
