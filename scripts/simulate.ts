@@ -30,7 +30,7 @@
 import { fork } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { availableParallelism, tmpdir } from "node:os";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertTestDatabaseReachable, resolveSimulatorDatabaseUrl } from "@ashara/db";
@@ -59,6 +59,7 @@ import {
 } from "@ashara/integration";
 import type { Decision, DeterminismVerdict, Floor, Profile, RunMode, RunOptions, RunResult, SeedReport } from "@ashara/integration";
 import { describeErrorChain, parseJson } from "@ashara/shared";
+import { resolveScratchRoot } from "./scratch-root.js";
 
 const USAGE = "Usage: npx tsx scripts/simulate.ts [--seeds N] [--start S] [--jobs J] [--profile P] [--projects 1|2] [--cap USD] [--minimize] [--trace] [--replay FILE]";
 
@@ -206,7 +207,7 @@ function sameFailure(a: RunResult, b: RunResult): boolean {
   return b.violations.some((v) => keys.has(v.key));
 }
 
-type Base = Pick<RunOptions, "databaseUrl" | "template" | "maxCycles" | "timeoutMs">;
+type Base = Pick<RunOptions, "databaseUrl" | "template" | "maxCycles" | "timeoutMs" | "scratchRoot">;
 
 /** One seed of the soak, judged, minimised and written as a replay file when it fails. */
 async function soakSeed(seed: number, args: Args, base: Base, mode: RunMode): Promise<SeedReport> {
@@ -230,7 +231,7 @@ async function soakSeed(seed: number, args: Args, base: Base, mode: RunMode): Pr
   const unexpected = diff.unexpected.length > 0 || diff.missing.length > 0;
   if (result.violations.length > 0) {
     const known = diff.unexpected.length === 0;
-    const path = join(tmpdir(), `ashara-sim-${seed}${args.projects === 2 ? "-p2" : ""}.json`);
+    const path = join(base.scratchRoot, `ashara-sim-${seed}${args.projects === 2 ? "-p2" : ""}.json`);
     await writeFile(path, `${JSON.stringify({ seed, profile, ...mode, decisions: minimal ?? result.decisions }, null, 2)}\n`);
     lines.push(`  replay: npx tsx scripts/simulate.ts --replay ${path}${known ? "  (known: listed in expected-failures.ts)" : ""}`);
   }
@@ -412,6 +413,7 @@ async function soakInWorkers(seeds: readonly number[], workers: Workers, emit: (
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
+  const scratchRoot = resolveScratchRoot();
   const databaseUrl = resolveSimulatorDatabaseUrl(process.env);
   if (!args.worker) {
     await assertTestDatabaseReachable(databaseUrl);
@@ -419,7 +421,7 @@ async function main(): Promise<void> {
     if (dropped.length > 0) console.log(`dropped ${dropped.length} stale run database(s)`);
   }
   const template = await prepareTemplate(databaseUrl);
-  const base: Base = { databaseUrl, template, maxCycles: MAX_CYCLES, timeoutMs: SEED_TIMEOUT_MS };
+  const base: Base = { databaseUrl, template, maxCycles: MAX_CYCLES, timeoutMs: SEED_TIMEOUT_MS, scratchRoot };
   const mode: RunMode = { projects: args.projects, ...(args.capUsd === null ? {} : { capUsd: args.capUsd }) };
 
   if (args.worker) {

@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveTestDatabaseUrl } from "@ashara/db";
 import { contendedWait } from "@ashara/shared";
@@ -118,6 +119,7 @@ function shortRun(test: TestScope, seed: number, scenario: Pick<RunOptions, "mut
     tape: { kind: "directed", directions: [] },
     databaseUrl,
     template,
+    scratchRoot: tmpdir(),
     maxCycles: 3,
     timeoutMs: 60_000,
     ...shape,

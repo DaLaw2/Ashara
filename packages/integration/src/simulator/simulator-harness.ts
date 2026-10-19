@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
@@ -21,6 +22,8 @@ const MAX_CYCLES = 120;
 const SEED_TIMEOUT_MS = 60_000;
 
 const databaseUrl = resolveTestDatabaseUrl(process.env);
+// vitest's scratch-root guard (scripts/scratch-root-guard.ts) points TMPDIR at the scratch root before any test.
+const scratchRoot = tmpdir();
 let template = "";
 
 /**
@@ -72,6 +75,7 @@ export function seeded(test: TestScope, seed: number, scenario: Pick<RunOptions,
     tape: { kind: "seeded", seed },
     databaseUrl,
     template,
+    scratchRoot,
     maxCycles: MAX_CYCLES,
     timeoutMs: SEED_TIMEOUT_MS,
     ...scenario,
@@ -90,6 +94,7 @@ export function replayed(test: TestScope, seed: number, decisions: RunResult["de
     tape: { kind: "replay", decisions },
     databaseUrl,
     template,
+    scratchRoot,
     maxCycles: MAX_CYCLES,
     timeoutMs: SEED_TIMEOUT_MS,
   });
@@ -115,6 +120,7 @@ export function directed(test: TestScope, directions: readonly Direction[], scen
     tape: { kind: "directed", directions },
     databaseUrl,
     template,
+    scratchRoot,
     maxCycles: MAX_CYCLES,
     timeoutMs: SEED_TIMEOUT_MS,
     ...shape,
@@ -128,7 +134,7 @@ export function directed(test: TestScope, directions: readonly Direction[], scen
  * @testseam the termination test files run each persona and plant through it
  */
 export function liveness(test: TestScope, directions: readonly Direction[], scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles">> = {}): Promise<RunResult> {
-  return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, timeoutMs: 90_000, maxCycles: MAX_CYCLES, ...scenario });
+  return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, scratchRoot, timeoutMs: 90_000, maxCycles: MAX_CYCLES, ...scenario });
 }
 
 /** @testseam the termination test files force a role's persona by name through it */

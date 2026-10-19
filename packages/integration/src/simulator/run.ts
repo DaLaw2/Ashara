@@ -1,6 +1,5 @@
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { sql } from "drizzle-orm";
@@ -80,6 +79,8 @@ export interface RunOptions {
    * the run ends only on its own terms or its wall clock.
    */
   readonly signal?: AbortSignal;
+  /** The existing directory the run's workdir and key file are made under (scripts/scratch-root.ts resolves it). */
+  readonly scratchRoot: string;
 }
 
 /** The run's shape apart from its seed: how many projects share the deployment, and its cap. */
@@ -831,7 +832,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
   /** The tasks a stand-in answered for in the cycle running now (I10's window). */
   const consulted = new Set<string>();
 
-  const workdir = await realpath(await mkdtemp(join(tmpdir(), "ashara-sim-")));
+  const workdir = await realpath(await mkdtemp(join(options.scratchRoot, "ashara-sim-")));
   const restoreIds = seededIds(options.seed);
   const restoreEnv = simulatedEnvironment(workdir, capUsd);
   const restoreWaits = observeContendedWaits(interleaver.contended);
@@ -861,7 +862,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     const db = database;
     const observing = createDb(db.url, (config) => new pg.Pool({ ...config, application_name: "ashara-sim-observer", max: 2 }));
     observer = observing;
-    const keyDir = await mkdtemp(join(tmpdir(), "ashara-sim-key-"));
+    const keyDir = await mkdtemp(join(options.scratchRoot, "ashara-sim-key-"));
     const keyFile = join(keyDir, "master.key");
     createKeyFile(keyFile);
     const masterKey: MasterKey = loadMasterKey(keyFile);

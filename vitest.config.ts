@@ -30,6 +30,8 @@ export default defineConfig({
     maxWorkers: Math.min(MAX_TEST_WORKERS, availableParallelism()),
     // The image guard runs first: a pinned test image absent from local podman storage stops the run
     // before any test, naming each such image and its pull command; the run never pulls one itself.
+    // The scratch-root guard runs next: it points TMPDIR at the scratch root (scripts/scratch-root.ts),
+    // or stops the run when that root is absent or full, so no test writes its temporary files to the disk.
     // The store guard is next: on a host with /data, a podman store other than the test store stops
     // the run. The test database is migrated next, or the run stops naming `just test-db-up`, so a
     // direct `npx vitest` after a fresh test Postgres works as `just test` does.
@@ -37,6 +39,7 @@ export default defineConfig({
     // outlives it, after they are removed, and removes the cells of runs that died before their end.
     globalSetup: [
       "packages/integration/src/test-images-guard.ts",
+      "scripts/scratch-root-guard.ts",
       "packages/integration/src/test-podman-store-guard.ts",
       "packages/integration/src/test-database-setup.ts",
       "packages/integration/src/cell-leak-guard.ts",

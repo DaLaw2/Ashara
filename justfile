@@ -79,9 +79,11 @@ test-images:
 test: _test-db-ready
     #!/usr/bin/env bash
     set -u
-    # Test and simulator temp files and logs go to /data (an HDD) when the host has it. The podman
+    # Every temp file goes under the scratch root (scripts/scratch-root.ts: a tmpfs unless
+    # ASHARA_SCRATCH_ROOT names another), or the recipe stops naming why it cannot. The podman
     # store follows vitest.config.ts (useTestPodmanStore), so a direct `npx vitest` gets it too.
-    if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
+    scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
+    export TMPDIR="$scratch"
     timeout -k 150 1200 npx vitest run &
     run=$!
     trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
@@ -107,8 +109,10 @@ test-affected base *ARGS:
       [ "$arg" = "--list" ] && listing=1
     done
     if [ "$listing" = 0 ]; then just _test-db-ready || exit 1; fi
-    # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
-    if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
+    # Every temp file goes under the scratch root (scripts/scratch-root.ts: a tmpfs unless
+    # ASHARA_SCRATCH_ROOT names another), or the recipe stops naming why it cannot.
+    scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
+    export TMPDIR="$scratch"
     timeout -k 150 1200 npx tsx scripts/affected-tests.ts {{base}} {{ARGS}} &
     run=$!
     trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
@@ -131,8 +135,10 @@ test-affected base *ARGS:
 simulate *ARGS:
     #!/usr/bin/env bash
     set -u
-    # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
-    if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
+    # Every temp file goes under the scratch root (scripts/scratch-root.ts: a tmpfs unless
+    # ASHARA_SCRATCH_ROOT names another), or the recipe stops naming why it cannot.
+    scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
+    export TMPDIR="$scratch"
     exec choom -n 1000 -- npx tsx scripts/simulate.ts {{ARGS}}
 
 # Secret scan. Deliberately NOT part of `just check`: it calls the GitGuardian API,

@@ -166,8 +166,13 @@ jobs:
       - name: Run migrations
         run: npx tsx scripts/migrate.ts
 
+      # The step exports TMPDIR from the scratch-root resolver as `just test` does (the suite's
+      # globalSetup pins it too); a runner without a tmpfs with room fails here naming why.
       - name: Test suite
-        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
+        run: |
+          TMPDIR="$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts)"
+          export TMPDIR
+          npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
 
       # vitest exits non-zero on a failed test, a suite that fails to collect,
       # or zero test files, but exits 0 with skipped tests; this step closes that.
