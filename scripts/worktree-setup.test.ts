@@ -5,9 +5,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { z } from "zod";
+import { SCAN_SOURCES } from "./check-docs-scope.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(REPO, "scripts", "worktree-setup.ts");
+
+// The outermost paths the doc gate scans: what worktree-setup links.
+const RECORD_RELS = SCAN_SOURCES.map((source) => source.rel).filter(
+  (rel, _index, rels) => !rels.some((outer) => outer !== rel && rel.startsWith(`${outer}${path.sep}`)),
+);
 
 const RootManifest = z.object({ workspaces: z.array(z.string()).nonempty() });
 const PackageManifest = z.object({ name: z.string().min(1) });
@@ -62,6 +68,25 @@ function linkSnapshot(modules: string): string[] {
   return entries;
 }
 
+// A record symlink is unlinked, never recursed into: its target is the main checkout's records.
+function removeRecord(record: string): void {
+  if (!fs.existsSync(record) && !isSymlink(record)) return;
+  if (isSymlink(record)) fs.unlinkSync(record);
+  else fs.rmSync(record, { recursive: true });
+}
+
+function removeRecordLinks(): void {
+  for (const rel of RECORD_RELS) removeRecord(path.join(worktree, rel));
+}
+
+function isSymlink(file: string): boolean {
+  try {
+    return fs.lstatSync(file).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 beforeAll(() => {
   const common = run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], REPO);
   expect(common.status, common.stderr).toBe(0);
@@ -109,6 +134,49 @@ describe("worktree-setup", () => {
 
     expect(workspaceRealpaths(mainCheckout)).toEqual(mainBefore);
     expect(linkSnapshot(path.join(mainCheckout, "node_modules"))).toEqual(mainLinksBefore);
+  });
+
+  test("links every record the doc gate scans to the main checkout's copy, idempotently", () => {
+    const scanned = SCAN_SOURCES.map((source) => source.rel).filter((rel) => fs.existsSync(path.join(mainCheckout, rel)));
+    expect(RECORD_RELS).toContain("docs");
+    expect(scanned, "the main checkout has every record the doc gate scans to link").toEqual(expect.arrayContaining(RECORD_RELS));
+    removeRecordLinks();
+
+    const first = setup(worktree);
+    expect(first.status, first.stderr).toBe(0);
+    expect(fs.lstatSync(path.join(worktree, "docs")).isSymbolicLink()).toBe(true);
+    for (const rel of scanned) {
+      expect(fs.realpathSync(path.join(worktree, rel)), rel).toBe(fs.realpathSync(path.join(mainCheckout, rel)));
+    }
+    const targets = scanned.map((rel) => fs.realpathSync(path.join(worktree, rel)));
+    const status = run("git", ["status", "--porcelain", "--untracked-files=all"], worktree);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout, "the record links are ignored, so git add -A in a worktree never commits them").toBe("");
+
+    const second = setup(worktree);
+    expect(second.status, second.stderr).toBe(0);
+    expect(fs.lstatSync(path.join(worktree, "docs")).isSymbolicLink()).toBe(true);
+    expect(scanned.map((rel) => fs.realpathSync(path.join(worktree, rel)))).toEqual(targets);
+  });
+
+  test("refuses with WorktreeSetupError and leaves a pre-existing docs directory that is not the link untouched", () => {
+    removeRecordLinks();
+    const docs = path.join(worktree, "docs");
+    fs.mkdirSync(docs);
+    fs.writeFileSync(path.join(docs, "own.md"), "own\n");
+    try {
+      const refused = setup(worktree);
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("WorktreeSetupError: docs link failed");
+      expect(fs.lstatSync(docs).isDirectory()).toBe(true);
+      expect(fs.readdirSync(docs)).toEqual(["own.md"]);
+      expect(fs.readFileSync(path.join(docs, "own.md"), "utf8")).toBe("own\n");
+      for (const rel of RECORD_RELS.filter((other) => other !== "docs")) {
+        expect(fs.existsSync(path.join(worktree, rel)), `${rel}: nothing is linked once a record is refused`).toBe(false);
+      }
+    } finally {
+      removeRecord(docs);
+    }
   });
 
   test("refuses with WorktreeSetupError and names npm ci when the lockfiles differ", () => {

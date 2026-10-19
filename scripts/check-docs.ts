@@ -25,6 +25,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
+import { SCAN_SOURCES } from "./check-docs-scope.js";
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -334,28 +335,6 @@ function normalizeWhitespace(text: string): string {
 // Document discovery
 // ---------------------------------------------------------------------------
 
-interface ScanSource {
-  /** The token SCAN_SCOPE_CLAUSE names this source by */
-  readonly readmeName: string;
-  /** Repo-relative file, or directory whose top-level *.md files are scanned */
-  readonly rel: string;
-  readonly kind: "file" | "markdown-dir";
-}
-
-/**
- * The verify-block scan scope of SCAN_SCOPE_CLAUSE. investigations/ and archive/ are dated
- * observations that never hold verify blocks, so they are not in it.
- * @testseam check-docs.test.ts requires these to be exactly the clause's tokens
- */
-export const SCAN_SOURCES: readonly ScanSource[] = [
-  { readmeName: "`CLAUDE.md`", rel: "CLAUDE.md", kind: "file" },
-  { readmeName: "`.claude/commands/*.md`", rel: path.join(".claude", "commands"), kind: "markdown-dir" },
-  { readmeName: "`docs/*.md`", rel: "docs", kind: "markdown-dir" },
-  { readmeName: "`docs/design/*.md`", rel: path.join("docs", "design"), kind: "markdown-dir" },
-  { readmeName: "`docs/decisions/*.md`", rel: path.join("docs", "decisions"), kind: "markdown-dir" },
-  { readmeName: "`docs/rules/*.md`", rel: path.join("docs", "rules"), kind: "markdown-dir" },
-];
-
 function markdownFilesIn(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
   try {
@@ -437,6 +416,25 @@ export const LIVE_RECORD_SOURCES: readonly LiveRecordSource[] = [
  * @testseam check-docs.test.ts requires the clause's tokens to be the sources' plus these
  */
 export const LIVE_RECORD_EXCLUSIONS: readonly string[] = ["`.claude/worktrees/`"];
+
+/**
+ * The checkout that holds the gitignored records (CLAUDE.md, .claude/, docs/ and its auto-memory).
+ * A linked worktree has none of its own: its docs/ is a symlink to the main checkout's, so the
+ * records, its .claude/workflows/ and its auto-memory among them, are those of the link target's
+ * parent. Any other checkout holds its own.
+ * @testseam check-docs.test.ts exercises a linked and an unlinked docs/ on a fixture tree
+ */
+export function recordsRoot(root: string): string {
+  const docs = path.join(root, "docs");
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(docs);
+  } catch (err: unknown) {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") return root;
+    throw err;
+  }
+  return stat.isSymbolicLink() ? path.dirname(fs.realpathSync(docs)) : root;
+}
 
 /**
  * The auto-memory directory Claude Code keeps for a checkout: `<config>/projects/<root with every
@@ -714,14 +712,17 @@ function formatMultiline(label: string, value: string, labelWidth: number): stri
 
 function main(): void {
   // The repo root is the working directory (`just` runs recipes from the justfile's
-  // directory), so the script can check a checkout other than the one it lives in.
+  // directory), so the script can check a checkout other than the one it lives in. Verify
+  // commands run against that checkout's code; the records are read from recordsRoot.
   const root = process.cwd();
 
+  let records: string;
   let documents: string[];
   let retentionFailures: RetentionFailure[];
   try {
-    documents = discoverDocuments(root);
-    retentionFailures = checkRetention(root, autoMemoryDir(root));
+    records = recordsRoot(root);
+    documents = discoverDocuments(records);
+    retentionFailures = checkRetention(records, autoMemoryDir(records));
   } catch (err: unknown) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: the operator script exits 1 below with the error's chain
     console.error(`\nERROR: ${describeErrorChain(err)}\n`);
@@ -737,7 +738,7 @@ function main(): void {
   const parseFailures: ClaimFailure[] = [];
 
   for (const docPath of documents) {
-    const relPath = path.relative(root, docPath);
+    const relPath = path.relative(records, docPath);
     let content: string;
     try {
       content = fs.readFileSync(docPath, "utf-8");

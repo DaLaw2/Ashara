@@ -1,5 +1,7 @@
 .idea/
 docs/
+# A worktree's docs is a symlink to the main checkout's records, which the directory pattern above does not match
+/docs
 dist/
 node_modules/
 .env

@@ -6,12 +6,20 @@
 // a package directory (a cache, a postinstall rebuild, a patch) writes into the main checkout's
 // install, for every worktree that links it.
 //
+// The records are gitignored (docs/, CLAUDE.md, .claude/commands/), so a worktree has none of its
+// own: each is a symlink to the main checkout's copy, and an agent in the worktree reads the same
+// records and runs the same doc gate, whose verify commands name them relative to the checkout.
+// They are shared, not copies: a write under <worktree>/docs (or either other link) writes the main
+// checkout's records. An existing record path that is anything other than that link is refused,
+// never replaced, before anything is written. A record the main checkout lacks gets no link, and
+// the summary says so.
+//
 // The main checkout's install is reused only when its node_modules/.package-lock.json records the
 // same packages as its package-lock.json; an install that drifted from its lockfile is refused,
 // naming npm ci in the main checkout.
 //
 // Run with plain node (type stripping), never tsx: a fresh worktree has no node_modules to load tsx
-// from. For the same reason it imports node built-ins only.
+// from. For the same reason it imports node built-ins and the doc gate's scope module only.
 //
 // Usage: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/worktree-setup.ts <worktree-dir> [--source <checkout-with-node_modules>]
 // The source defaults to the main checkout of the worktree's repository.
@@ -236,7 +244,68 @@ function removeExisting(modules: string, sourceModules: string, worktree: string
   fs.rmSync(modules, { recursive: true, force: true });
 }
 
-function setup(cli: Cli): void {
+// The gitignored records the doc gate scans and its verify commands name relative to the checkout.
+// A worktree has none of them, so each outermost scanned path is linked to the main checkout's copy.
+// The scope module is loaded by a computed specifier because plain node needs its .ts name, which
+// the typechecker refuses in a static import.
+async function recordLinks(worktree: string): Promise<readonly string[]> {
+  const scopeModule = new URL("./check-docs-scope.ts", import.meta.url);
+  const loaded: unknown = await import(scopeModule.href);
+  const sources = typeof loaded === "object" && loaded !== null && "SCAN_SOURCES" in loaded ? loaded.SCAN_SOURCES : undefined;
+  if (!Array.isArray(sources) || sources.length === 0) {
+    throw new WorktreeSetupError("record links", worktree, `${fileURLToPath(scopeModule)} exports no non-empty SCAN_SOURCES`);
+  }
+  const rels = sources.map((source: unknown) => {
+    if (typeof source === "object" && source !== null && "rel" in source && typeof source.rel === "string" && source.rel !== "") return source.rel;
+    throw new WorktreeSetupError("record links", worktree, `${fileURLToPath(scopeModule)} has a SCAN_SOURCES entry without a rel path: ${JSON.stringify(source)}`);
+  });
+  return rels.filter((rel) => !rels.some((outer) => outer !== rel && rel.startsWith(`${outer}${path.sep}`)));
+}
+
+interface RecordLink {
+  readonly rel: string;
+  readonly action: "create" | "present" | "absent";
+  readonly target: string;
+}
+
+function realpathOrUndefined(file: string): string | undefined {
+  try {
+    return fs.realpathSync(file);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function planRecordLink(rel: string, worktree: string, mainCheckout: string): RecordLink {
+  const target = path.join(mainCheckout, rel);
+  const mainRecord = realpathOrUndefined(target);
+  if (mainRecord === undefined) return { rel, action: "absent", target };
+  const own = path.join(worktree, rel);
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(own);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return { rel, action: "create", target: mainRecord };
+    throw new WorktreeSetupError(`${rel} link`, worktree, `cannot stat ${own}: ${String(error instanceof Error ? error.message : error)}`);
+  }
+  if (realpathOrUndefined(own) === mainRecord) return { rel, action: "present", target: mainRecord };
+  const what = stat.isSymbolicLink() ? `a symlink to ${fs.readlinkSync(own)}` : stat.isDirectory() ? "a directory" : "a file";
+  throw new WorktreeSetupError(`${rel} link`, worktree, `${own} is ${what}, not a link to ${mainRecord}; move it aside so ${rel} can be linked to the main checkout's records`);
+}
+
+function createRecordLink(link: RecordLink, worktree: string): void {
+  if (link.action !== "create") return;
+  const own = path.join(worktree, link.rel);
+  fs.mkdirSync(path.dirname(own), { recursive: true });
+  fs.symlinkSync(link.target, own);
+}
+
+function describeRecordLinks(links: readonly RecordLink[]): string {
+  return links.map((link) => (link.action === "absent" ? `no ${link.rel} link (${link.target} does not exist)` : `${link.rel} linked to ${link.target}`)).join("; ");
+}
+
+function setup(cli: Cli, recordRels: readonly string[]): void {
   const started = performance.now();
   const worktree = realDirectory(cli.dir, "worktree", cli.dir);
   if (!fs.existsSync(path.join(worktree, "package.json"))) {
@@ -256,6 +325,8 @@ function setup(cli: Cli): void {
     throw new WorktreeSetupError("lockfile", worktree, `package-lock.json differs from ${path.join(source, "package-lock.json")}, so the source's installed packages are not this worktree's; run npm ci in ${worktree}`);
   }
   checkInstall(source, sourceModules, sourceLock, worktree);
+  const recordsCheckout = cli.source === undefined ? source : mainCheckoutOf(worktree);
+  const records = recordRels.map((rel) => planRecordLink(rel, worktree, recordsCheckout));
 
   const modules = path.join(worktree, "node_modules");
   const staging = path.join(worktree, `node_modules.worktree-setup-${process.pid}`);
@@ -270,13 +341,15 @@ function setup(cli: Cli): void {
     fs.rmSync(staging, { recursive: true, force: true });
     throw error;
   }
+  for (const link of records) createRecordLink(link, worktree);
   const seconds = ((performance.now() - started) / 1000).toFixed(2);
-  console.log(`worktree-setup: ${modules} links ${counts.external} external package(s) and ${counts.bin} bin(s) from ${sourceModules}, and ${counts.workspace} workspace package(s) to ${worktree}, in ${seconds}s`);
+  console.log(`worktree-setup: ${modules} links ${counts.external} external package(s) and ${counts.bin} bin(s) from ${sourceModules}, and ${counts.workspace} workspace package(s) to ${worktree}; ${describeRecordLinks(records)}; in ${seconds}s`);
 }
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
   try {
-    setup(parseCli(argv));
+    const cli = parseCli(argv);
+    setup(cli, await recordLinks(path.resolve(cli.dir)));
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
@@ -285,5 +358,5 @@ function main(argv: readonly string[]): number {
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 }

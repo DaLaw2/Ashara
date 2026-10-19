@@ -176,8 +176,11 @@ hidden-suite *ARGS:
 # external packages are linked to it, workspace packages (@ashara/*) to the worktree's own. Refuses,
 # naming npm ci, when the main checkout has no node_modules, its package-lock.json differs, or its
 # installed tree does not match its own package-lock.json. External packages are the main checkout's
-# own directories, so a tool writing inside one writes there. Plain node, not tsx: the worktree has
-# no node_modules to load tsx from yet.
+# own directories, so a tool writing inside one writes there. Also links the gitignored records
+# (docs/, CLAUDE.md, .claude/commands/; a worktree has none) to the main checkout's, so
+# `just check-docs` runs there; the links are shared, so a write under one writes the main
+# checkout's records, and an existing record path that is not that link is refused. Plain node, not
+# tsx: the worktree has no node_modules to load tsx from yet.
 # Example: just worktree-setup .claude/worktrees/<name>
 worktree-setup dir:
     node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/worktree-setup.ts {{dir}}

@@ -10,8 +10,9 @@ import {
   LIVE_RECORD_SOURCES,
   parseVerifyBlocks,
   README_CLAUSES,
-  SCAN_SOURCES,
+  recordsRoot,
 } from "./check-docs.js";
+import { SCAN_SOURCES } from "./check-docs-scope.js";
 
 let root = "";
 
@@ -45,6 +46,19 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe("recordsRoot", () => {
+  test("is the checkout itself when docs/ is a directory or absent, and the link target's parent when docs/ is a symlink", () => {
+    const main = path.join(root, "main");
+    const worktree = path.join(root, "wt");
+    fs.mkdirSync(path.join(main, "docs"), { recursive: true });
+    fs.mkdirSync(worktree);
+    expect(recordsRoot(main)).toBe(main);
+    expect(recordsRoot(worktree)).toBe(worktree);
+    fs.symlinkSync(path.join(main, "docs"), path.join(worktree, "docs"));
+    expect(recordsRoot(worktree)).toBe(fs.realpathSync(main));
+  });
 });
 
 describe("discoverDocuments", () => {
