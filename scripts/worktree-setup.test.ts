@@ -38,6 +38,14 @@ function setup(...args: string[]): Run {
   return run(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", SCRIPT, ...args], REPO);
 }
 
+// The fixture worktree checks out HEAD, whose lockfile is this checkout's, not necessarily the main
+// checkout's: a change to dependencies is installed here before the main checkout runs npm ci. So
+// the linking tests take this checkout's install as the source; the lockfile refusal test keeps the
+// default source, the main checkout.
+function setupFromRepo(dir: string): Run {
+  return setup(dir, "--source", REPO);
+}
+
 // Enumerated from the root manifest's workspaces globs, independently of the script, which reads
 // the main checkout's node_modules instead.
 function workspacePackages(checkout: string): { name: string; dir: string }[] {
@@ -110,8 +118,10 @@ describe("worktree-setup", () => {
   test("links a fresh worktree so typecheck runs and every workspace package resolves into the worktree, idempotently, leaving the main checkout untouched", () => {
     const mainBefore = workspaceRealpaths(mainCheckout);
     const mainLinksBefore = linkSnapshot(path.join(mainCheckout, "node_modules"));
+    const sourceBefore = workspaceRealpaths(REPO);
+    const sourceLinksBefore = linkSnapshot(path.join(REPO, "node_modules"));
 
-    const first = setup(worktree);
+    const first = setupFromRepo(worktree);
     expect(first.status, first.stderr).toBe(0);
 
     const packages = workspacePackages(worktree);
@@ -129,12 +139,14 @@ describe("worktree-setup", () => {
     expect(typecheck.status, `${typecheck.stdout}\n${typecheck.stderr}`).toBe(0);
 
     const linksAfterFirst = linkSnapshot(path.join(worktree, "node_modules"));
-    const second = setup(worktree);
+    const second = setupFromRepo(worktree);
     expect(second.status, second.stderr).toBe(0);
     expect(linkSnapshot(path.join(worktree, "node_modules"))).toEqual(linksAfterFirst);
 
     expect(workspaceRealpaths(mainCheckout)).toEqual(mainBefore);
     expect(linkSnapshot(path.join(mainCheckout, "node_modules"))).toEqual(mainLinksBefore);
+    expect(workspaceRealpaths(REPO)).toEqual(sourceBefore);
+    expect(linkSnapshot(path.join(REPO, "node_modules"))).toEqual(sourceLinksBefore);
   });
 
   test("links every record the doc gate scans to the main checkout's copy, idempotently", () => {
@@ -143,7 +155,7 @@ describe("worktree-setup", () => {
     expect(scanned, "the main checkout has every record the doc gate scans to link").toEqual(expect.arrayContaining(RECORD_RELS));
     removeRecordLinks();
 
-    const first = setup(worktree);
+    const first = setupFromRepo(worktree);
     expect(first.status, first.stderr).toBe(0);
     expect(fs.lstatSync(path.join(worktree, "docs")).isSymbolicLink()).toBe(true);
     for (const rel of scanned) {
@@ -154,7 +166,7 @@ describe("worktree-setup", () => {
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout, "the record links are ignored, so git add -A in a worktree never commits them").toBe("");
 
-    const second = setup(worktree);
+    const second = setupFromRepo(worktree);
     expect(second.status, second.stderr).toBe(0);
     expect(fs.lstatSync(path.join(worktree, "docs")).isSymbolicLink()).toBe(true);
     expect(scanned.map((rel) => fs.realpathSync(path.join(worktree, rel)))).toEqual(targets);
@@ -166,7 +178,7 @@ describe("worktree-setup", () => {
     fs.mkdirSync(docs);
     fs.writeFileSync(path.join(docs, "own.md"), "own\n");
     try {
-      const refused = setup(worktree);
+      const refused = setupFromRepo(worktree);
       expect(refused.status).not.toBe(0);
       expect(refused.stderr).toContain("WorktreeSetupError: docs link failed");
       expect(fs.lstatSync(docs).isDirectory()).toBe(true);
@@ -206,7 +218,7 @@ describe("worktree-setup", () => {
       const lock = LockFile.parse(JSON.parse(original.toString("utf8")));
       lock.packages[""] = { ...lock.packages[""], engines: { node: ">=0.0.1-root-only" } };
       fs.writeFileSync(lockfile, JSON.stringify(lock));
-      const accepted = setup(worktree);
+      const accepted = setupFromRepo(worktree);
       expect(accepted.status, accepted.stderr).toBe(0);
     } finally {
       fs.writeFileSync(lockfile, original);
