@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationBaselineError, MigrationDriftError } from "@ashara/db";
@@ -81,7 +82,7 @@ import { SecretStore } from "@ashara/security";
 import { DevSessionRepository, terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
-import type { Clock, LogSink, ProjectId } from "@ashara/shared";
+import type { Clock, LogSink, Logger, ProjectId } from "@ashara/shared";
 import { contendedWait, createLogger, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
@@ -164,6 +165,17 @@ export interface AsharaInstance {
    */
   readonly cycles: CycleRunner;
   readonly runner: ContinuousRunner;
+  /**
+   * The composition's one logger. Records outside every cycle, request, attempt and startup are
+   * given a trace of their own on it by their caller: the boot's through `booted`, a shutdown's
+   * by a scope it mints.
+   */
+  readonly logger: Logger;
+  /**
+   * Runs `work` in the process's boot trace, the scope root the composition itself ran in, so
+   * what the process does to come up (startup, starting the runner, listening) joins that trace.
+   */
+  booted<T>(work: () => T): T;
   readonly app: Hono;
   readonly port: number;
   /** Aborted by `abort()`: the runner stops and every attempt in flight is cancelled. */
@@ -180,10 +192,16 @@ export interface AsharaInstance {
   closeDatabase(): Promise<void>;
 }
 
-export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
-  const { masterKey, databaseUrl } = ports;
+export function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
   // One logger per composition: its boot id tells this process's records from a dead one's.
   const logger = createLogger({ sink: ports.log, clock: ports.clock, minLevel: LOG_MIN_LEVEL });
+  // The boot trace, a scope root: the composition's records, and those of whatever it starts,
+  // join it rather than the logger's root trace, which no scope minted.
+  return logger.scope({ trace: "new" }, () => composeInBoot(ports, logger, AsyncLocalStorage.snapshot()));
+}
+
+async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T>(work: () => T) => T): Promise<AsharaInstance> {
+  const { masterKey, databaseUrl } = ports;
   // Fail closed on schema drift: a database that ran a different draft of a
   // migration otherwise surfaces only as a runtime query error.
   try {
@@ -211,7 +229,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   }
   const db = createDb(databaseUrl, ports.createPool);
   const secretStore = new SecretStore(new SecretRepository(db), masterKey);
-  console.log(`Secret store: master key ${masterKey.id}`);
+  logger.info("server.secret-store", `Secret store: master key ${masterKey.id}`, { masterKeyId: masterKey.id });
 
   const dbWorkItemRepo = new WorkItemRowRepository(db);
   const eventStore = new EventStoreRepository(db);
@@ -251,7 +269,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     workBudgets: config.workBudgets,
     admissionTurn: (ahead) => contendedWait("spend-admission", ahead),
   });
-  console.log(
+  logger.info(
+    "server.spend-caps",
     `Spend caps: deployment $${config.spendCaps.deploymentUsd}, per project $${config.spendCaps.perProjectUsd} (llm_calls); ` +
       `work budgets: ${config.workBudgets.perTaskRequests} model requests per task, ${config.workBudgets.perProjectRequests} per project`,
   );
@@ -288,8 +307,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   });
   // Finance in front of Model Access: every model call below goes through this guarded port.
   const modelCalls = new GuardedModelAccess(llmGateway, llmCallLedger, logger);
-  console.log("LLM gateway initialized");
-  console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
+  logger.info("server.gateway-ready", `LLM gateway initialized; model catalog: ${dbModelRows.length} models loaded from DB`, { models: dbModelRows.length });
 
   const failureRouter = new FailureRouter(3);
   // Aborted on SIGTERM/SIGINT: stops the runner and cancels any attempt in flight.
@@ -317,15 +335,16 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     mountRoot: config.coreLoop.workdirBase,
     runner: ports.processRunner,
     limits: config.cellLimits,
-    trace: () => logger.trace(),
+    logger,
   });
   const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
   const environmentBuildRepo = new EnvironmentBuildRepository(db);
   const baseCell = await loadBaseCell();
-  console.log(`Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}`);
-  console.log(
-    `Cell limits (every cell and image build): memory ${config.cellLimits.memoryBytes} bytes, ` +
-      `${config.cellLimits.cpus} CPUs, ${config.cellLimits.pids} pids`,
+  logger.info(
+    "server.cells",
+    `Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}; limits (every cell and image ` +
+      `build): memory ${config.cellLimits.memoryBytes} bytes, ${config.cellLimits.cpus} CPUs, ${config.cellLimits.pids} pids`,
+    { instance: cellInstance, image: baseCell.image },
   );
 
   // The agent half of each task's Assignment, resolved once per attempt: the work item's owner
@@ -539,6 +558,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   return {
     cycles,
     runner,
+    logger,
+    booted: inBootTrace,
     app,
     port: config.port,
     shutdownSignal: abortController.signal,

@@ -582,6 +582,42 @@ describe("CoreLoop spend cap", () => {
     expect(result.tasksProcessed).toBe(2);
   });
 
+  test("a project's halt logs in a trace of its own carrying the project, a child of the trace that reached it", async () => {
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({ taskId: task.id, status: "completed" as const, detail: "ok" }));
+    const logger = recordingLogger();
+    const deps = buildDeps(
+      {
+        runPending: async () => {
+          throw new StubRefusal("project");
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      stubSpendCap(() => false),
+    );
+    let blockTrace: string | null = null;
+    await new CoreLoop({
+      ...deps,
+      logger,
+      projectRepo: {
+        ...deps.projectRepo,
+        block: async () => {
+          blockTrace = logger.trace();
+          return "blocked";
+        },
+      },
+    }).runCycle();
+
+    const blocked = logger.records.filter((r) => r.event === "delivery.project-blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]).toMatchObject({ projectId: TEST_PROJECT_ID, parentTraceId: logger.trace() });
+    expect(blocked[0]?.traceId).not.toBe(logger.trace());
+    expect(blockTrace).toBe(blocked[0]?.traceId);
+  });
+
   test("a roster Organization refuses halts its project, blamed by the refusal's cause chain; Organization halts nothing itself", async () => {
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({
       taskId: task.id,

@@ -52,7 +52,7 @@ let substrate: PodmanSubstrate;
 
 beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "ashara-workplace-"));
-  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: tmpdir() });
+  substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: tmpdir() });
 });
 
 afterAll(async () => {

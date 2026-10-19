@@ -176,7 +176,7 @@ describe("a task runs on cells end to end", () => {
     await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment"], { cwd: target });
 
     const instance = testCellInstance();
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: workdirBase });
     const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();

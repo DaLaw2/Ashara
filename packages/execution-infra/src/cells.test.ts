@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { recordingLogger } from "@ashara/shared";
 import { cellInstanceFor, reconcileCellsAtStartup } from "./cells.js";
 import { PodmanSubstrate } from "./podman.js";
 
@@ -27,7 +28,7 @@ describe("reconcileCellsAtStartup", () => {
   it("does not stop the boot on an unreachable substrate; tasks block at their own probe", async () => {
     const root = await mkdtemp(join(tmpdir(), "ashara-reconcile-"));
     try {
-      const missing = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: join(root, "no-such-podman"), mountRoot: root });
+      const missing = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: join(root, "no-such-podman"), mountRoot: root });
       await expect(reconcileCellsAtStartup(missing, cellInstanceFor(root))).resolves.toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });

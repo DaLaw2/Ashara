@@ -45,7 +45,7 @@ beforeAll(async () => {
   process.env.ASHARA_PROBE_SECRET = "probe-secret-must-not-reach-the-cell";
   mountRoot = await realpath(await mkdtemp(join(tmpdir(), "ashara-cell-root-")));
   workspace = await mkdtemp(join(mountRoot, "ws-"));
-  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot });
+  substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot });
 });
 
 afterAll(async () => {
@@ -117,7 +117,7 @@ describe("cell on real podman", () => {
   // that reads the repository needs a usable one, not a stand-in.
   it("a cell created inside a logger scope is found by that scope's trace label, and by no other trace's", async () => {
     const logger = recordingLogger();
-    const traced = new PodmanSubstrate({ podmanPath: "podman", mountRoot, trace: () => logger.trace() });
+    const traced = new PodmanSubstrate({ podmanPath: "podman", mountRoot, logger });
     try {
       const base = await loadBaseCell();
       const { cell, trace } = await logger.scope({ taskId: task, attempt: 1, trace: "new" }, async () => ({
@@ -354,7 +354,7 @@ describe("cell on real podman", () => {
           : request.args;
       return spawnProcess({ ...request, args: wrapped });
     };
-    const nested = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot, runner: trampoline });
+    const nested = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot, runner: trampoline });
     const cell = await nested.createCell({
       image: image === "base" ? (await loadBaseCell()).image : image,
       project: "proj-cell-test",
@@ -424,7 +424,7 @@ describe("cell on real podman", () => {
   it("reconciles a leaked cell of this instance and leaves every other container alone", async () => {
     const base = await loadBaseCell();
     // A previous process of this instance that died without tearing down.
-    const previous = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot });
+    const previous = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot });
     const leaked = await previous.createCell({
       image: base.image,
       project: "proj-cell-test",

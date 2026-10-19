@@ -85,7 +85,7 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
     exitCode: 0, signal: null, stdout, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null,
     statusReport: null,
   });
-  return new PodmanSubstrate({ trace: () => "test-trace", 
+  return new PodmanSubstrate({ logger: recordingLogger(), 
     podmanPath: "podman",
     mountRoot,
     runner: async ({ args }) => {

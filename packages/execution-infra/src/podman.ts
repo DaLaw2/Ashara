@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 
 import { isAbsolute, join, sep } from "node:path";
 import { z } from "zod";
 import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import { cellLimitsSchema, readCellLimits, runLimitArgs, type CellResourceLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
@@ -307,11 +308,12 @@ interface PodmanSubstrateOptions {
    */
   readonly limits?: CellResourceLimits;
   /**
-   * The log trace the caller is in when it creates a cell (Logger.trace): the cell is labelled
+   * The composition's logger. The trace its caller is in when it creates a cell labels the cell
    * `ashara.trace=<it>`, so `podman ps --filter label=ashara.trace=<id>` maps a trace to its
-   * containers. A label only: nothing of it reaches the client's processes in the cell.
+   * containers; a label only, nothing of it reaches the client's processes in the cell. Each exec
+   * is logged on it at debug, in the scope of whoever called exec.
    */
-  readonly trace: () => string;
+  readonly logger: Pick<Logger, "debug" | "trace">;
 }
 
 const podmanInfoSchema = z.object({
@@ -442,7 +444,37 @@ class PodmanCell implements Cell {
     return run;
   }
 
+  /**
+   * One exec, logged at debug once it ends: the command's name and argument count, never an
+   * argument or the environment, either of which can carry what the client's code was handed.
+   */
   private async execAlone(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
+    const startedAt = Date.now();
+    // exec refused an empty argv before the lane ran this; null only types the index read.
+    const command = argv[0] ?? null;
+    const head = { cellId: this.id, command, argc: argv.length };
+    try {
+      const result = await this.execUnlogged(argv, options);
+      this.substrate.logExec(`${String(command)} in cell ${this.id} exited ${String(result.exitCode)}`, {
+        ...head,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        statusLost: result.statusLost,
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (err) {
+      this.substrate.logExec(`${String(command)} in cell ${this.id} failed: ${err instanceof Error ? err.name : "a non-Error throw"}`, {
+        ...head,
+        exitCode: err instanceof CellExecFailed ? err.exitCode : null,
+        failed: true,
+        durationMs: Date.now() - startedAt,
+      });
+      throw err;
+    }
+  }
+
+  private async execUnlogged(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
     if (this.tornDown || this.containerRemoved) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
@@ -651,7 +683,7 @@ export class PodmanSubstrate {
   private readonly maxOutputBytes: number;
   private readonly mountRoot: string;
   private readonly limits: CellResourceLimits;
-  private readonly trace: () => string;
+  private readonly logger: Pick<Logger, "debug" | "trace">;
   private readonly host: HostIdentity;
   private readonly cells = new Map<string, PodmanCell>();
   /** Containers a failed `podman run` may have left behind and that could not be removed yet, by name. */
@@ -677,7 +709,7 @@ export class PodmanSubstrate {
     this.mountRoot = options.mountRoot;
     this.runner = options.runner ?? spawnProcess;
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-    this.trace = options.trace;
+    this.logger = options.logger;
   }
 
   /**
@@ -704,6 +736,11 @@ export class PodmanSubstrate {
     }
   }
 
+  /** @internal used by PodmanCell: one exec's record, in the scope its caller is in. */
+  logExec(msg: string, fields: Parameters<Logger["debug"]>[2]): void {
+    this.logger.debug("execution-infra.cell-exec", msg, fields);
+  }
+
   /** The caps every container this substrate starts runs under, cells and image builds alike. */
   resourceLimits(): CellResourceLimits {
     return this.limits;
@@ -725,7 +762,7 @@ export class PodmanSubstrate {
   async createCell(spec: CellSpec): Promise<Cell> {
     const parsed = cellSpecSchema.safeParse(spec);
     if (!parsed.success) throw new InvalidCellRequest("createCell", issuesOf(parsed.error));
-    const trace = labelValue.safeParse(this.trace());
+    const trace = labelValue.safeParse(this.logger.trace());
     if (!trace.success) throw new InvalidCellRequest("createCell", issuesOf(trace.error).map((issue) => `trace ${issue}`));
     const hostPath = await this.canonicalMountPath(parsed.data.mount.hostPath);
     const gitEntry = await this.gitEntryKind(hostPath);

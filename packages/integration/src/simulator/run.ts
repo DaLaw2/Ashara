@@ -13,7 +13,7 @@ import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
-import type { LogRecord, LogSink } from "@ashara/shared";
+import type { LogRecord } from "@ashara/shared";
 import { AdmissionLedger } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
 import { capturingConsole } from "./console-capture.js";
@@ -29,7 +29,7 @@ import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
 import { asharaFaultHaltOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
 import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
-import { checkLogCorrelation, readCorrelationRows, uncorrelatedInCycle } from "./log-correlation.js";
+import { LogCorrelationJudge, judgingSink, readCorrelationRows } from "./log-correlation.js";
 import { refusedModelSchemas } from "./model-schemas.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
@@ -307,20 +307,6 @@ function seededIds(seed: number): () => void {
     Reflect.set(cryptoModule, "randomUUID", original);
     if (typeof webOriginal === "function") Reflect.deleteProperty(globalThis.crypto, "randomUUID");
     syncBuiltinESMExports();
-  };
-}
-
-/**
- * The log port every composed instance writes to: its records go into the run's, the last
- * LOG_RECORDS kept. Each is judged as it is written, while what was running is still known.
- */
-function capturingSink(records: LogRecord[], judge: (record: LogRecord) => void): LogSink {
-  return {
-    write(record) {
-      judge(record);
-      records.push(record);
-      if (records.length > LOG_RECORDS) records.splice(0, records.length - LOG_RECORDS);
-    },
   };
 }
 
@@ -779,6 +765,8 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     personas.describe(),
   ];
   const records: LogRecord[] = [];
+  /** L1, judging every record every instance logs as it is written, whatever `records` keeps. */
+  const correlation = new LogCorrelationJudge();
   /** Set while a cycle (full or halted) of the live instance runs: L1 asks every record logged meanwhile for the cycle. */
   let cycleRunning = false;
   const violations = new Map<string, Violation>();
@@ -1020,13 +1008,11 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
             git: faultingGit(seam, gitBroker.runner),
             clock,
             taskLanes: interleaver.lanes,
-            log: capturingSink(records, (record) => {
-              const uncorrelated = cycleRunning ? uncorrelatedInCycle(cycles, record) : null;
-              if (uncorrelated !== null) report(uncorrelated);
-            }),
+            log: judgingSink(correlation, () => ({ step: cycles, cycleRunning }), records, LOG_RECORDS),
           });
           handle.abort = () => ashara.abort();
-          await ashara.startup();
+          // In the composition's boot trace, as the served process boots (server process-lifecycle.ts).
+          await ashara.booted(() => ashara.startup());
           trace.push(`instance ${handle.name} started`);
           return { ashara, handle, generation };
         } catch (err) {
@@ -1055,14 +1041,17 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
       restarts += 1;
       trace.push(`restart after ${why}`);
       if (current.handle.sigtermed && !current.handle.dead) {
-        try {
-          await current.ashara.teardownCells();
-        } catch (err) {
-          // eslint-disable-next-line ashara/catch-continue -- best effort: the simulator traces a failed drain; the invariants checked right after it judge what the drain left
-          trace.push(`drain: teardown failed ${err instanceof Error ? err.name : "error"}`);
-        }
-        for (const violation of leakedConnections(current.handle, cycles)) violations.set(violation.key, violation);
-        await current.ashara.closeDatabase();
+        // The drain in a trace of its own, as the served process shuts down (server process-lifecycle.ts).
+        await current.ashara.logger.scope({ trace: "new" }, async () => {
+          try {
+            await current.ashara.teardownCells();
+          } catch (err) {
+            // eslint-disable-next-line ashara/catch-continue -- best effort: the simulator traces a failed drain; the invariants checked right after it judge what the drain left
+            trace.push(`drain: teardown failed ${err instanceof Error ? err.name : "error"}`);
+          }
+          for (const violation of leakedConnections(current.handle, cycles)) violations.set(violation.key, violation);
+          await current.ashara.closeDatabase();
+        });
         // A drain ends its own sessions, the target claim's included (closeDatabase): one left is
         // a claim the next process would be refused on, named here before it is killed.
         const left = await backendsAfterExit(instanceName(current.generation));
@@ -1236,7 +1225,8 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
           if (result.stop !== null && !current.handle.dead) {
             outcome = { kind: "halted", cause: "spend_cap", detail: result.stop.reason };
             haltedLive = current;
-            await current.ashara.teardownCells();
+            // In the boot trace, where the served process's runner removes the cells at a halt.
+            await current.ashara.booted(() => current.ashara.teardownCells());
           }
         } catch (err) {
           // eslint-disable-next-line ashara/catch-continue -- best effort: the simulator records a cycle's error in its trace and reports one no injected fault explains (unfaultedError) as a violation
@@ -1373,7 +1363,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     // W1 and W4, judged whatever the run ended in: a spend-cap halt is how a runaway loop would
     // otherwise pass (termination.ts).
     for (const { project, violation } of checkWork(cycles, port, await readRequests(observing, projectIds))) report(ofProject(project, violation));
-    for (const violation of checkLogCorrelation(cycles, records, await readCorrelationRows(observing), dispatches > 0)) report(violation);
+    for (const violation of correlation.verdict(cycles, await readCorrelationRows(observing), dispatches > 0)) report(violation);
     if (options.profile === "liveness") {
       for (const [index, each] of finals.entries()) {
         const end = index === 0 || spendHalted ? outcome : outcomeOf(each);

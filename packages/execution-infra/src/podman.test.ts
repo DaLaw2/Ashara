@@ -43,7 +43,12 @@ function unreported(exitCode: number, stderr = ""): ProcessResult {
   return { ...ok("", exitCode), stderr, statusReport: "" };
 }
 
-function recorder(responses: Array<ProcessResult | Error>) {
+/** A logger whose every trace is `trace`: a cell's label is then known before it is created. */
+function tracedAs(trace: string): ReturnType<typeof recordingLogger> {
+  return { ...recordingLogger(), trace: () => trace };
+}
+
+function recorder(responses: Array<ProcessResult | Error>, logger: ReturnType<typeof recordingLogger> = tracedAs("test-trace")) {
   const requests: ProcessRequest[] = [];
   const runner = async (request: ProcessRequest): Promise<ProcessResult> => {
     requests.push(request);
@@ -52,7 +57,7 @@ function recorder(responses: Array<ProcessResult | Error>) {
     if (next instanceof Error) throw next;
     return next;
   };
-  return { requests, substrate: new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS }) };
+  return { requests, substrate: new PodmanSubstrate({ logger, podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS }) };
 }
 
 // A real directory tree: mounts are canonicalized with realpath before podman runs.
@@ -112,7 +117,7 @@ describe("PodmanSubstrate argv", () => {
     const saved = process.env.ASHARA_CELL_MEMORY;
     delete process.env.ASHARA_CELL_MEMORY;
     try {
-      expect(() => new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "/opt/podman", mountRoot: root })).toThrow(CellLimitsInvalid);
+      expect(() => new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "/opt/podman", mountRoot: root })).toThrow(CellLimitsInvalid);
       expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4", ASHARA_CELL_CPUS: "1", ASHARA_CELL_PIDS_LIMIT: "10" })).toThrow(/ASHARA_CELL_MEMORY="4"/);
       expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "0", ASHARA_CELL_PIDS_LIMIT: "10" })).toThrow(/ASHARA_CELL_CPUS/);
       expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "1", ASHARA_CELL_PIDS_LIMIT: " " })).toThrow(/ASHARA_CELL_PIDS_LIMIT is not set/);
@@ -208,7 +213,7 @@ describe("PodmanSubstrate argv", () => {
       if (next === undefined) throw new Error(`unexpected podman call: ${request.args.join(" ")}`);
       return next;
     };
-    const substrate = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS, trace: () => logger.trace() });
+    const substrate = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS, logger });
 
     const traces = await Promise.all([1, 2].map((attempt) =>
       logger.scope({ taskId: "task-1", attempt, trace: "new" }, async () => {
@@ -223,7 +228,7 @@ describe("PodmanSubstrate argv", () => {
     expect(labels.every((own) => own.length === 1)).toBe(true);
     expect(labels.flat().sort()).toEqual(traces.map((trace) => `ashara.trace=${trace}`).sort());
 
-    const unlabelled = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS, trace: () => "a b" });
+    const unlabelled = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS, logger: tracedAs("a b") });
     await expect(unlabelled.createCell(spec)).rejects.toBeInstanceOf(InvalidCellRequest);
     expect(requests).toHaveLength(2);
   });
@@ -293,6 +298,29 @@ describe("PodmanSubstrate argv", () => {
     // 124 the command reported itself is its own exit code, not a timeout.
     const early = await cell.exec(["sh", "-c", "exit 124"], { timeoutSeconds: 30 });
     expect(early).toMatchObject({ exitCode: 124, timedOut: false });
+  });
+
+  it("logs each exec at debug in its caller's attempt scope: the command's name, exit and duration, never an argument or the environment", async () => {
+    process.env.ASHARA_PROBE_SECRET = "must-not-leak";
+    const logger = recordingLogger();
+    const { substrate } = recorder([ok(ID), ran("", 3), unreported(125)], logger);
+    const cell = await substrate.createCell(spec);
+
+    await logger.scope({ taskId: "task-1", attempt: 2, trace: "new" }, async () => {
+      await cell.exec(["deploy", "--token=argv-secret"], { timeoutSeconds: 30 });
+      await cell.exec(["deploy", "--token=argv-secret"], { timeoutSeconds: 30 }).catch((e: unknown) => e);
+    });
+
+    const execs = logger.records.filter((r) => r.event === "execution-infra.cell-exec");
+    expect(execs).toHaveLength(2);
+    for (const record of execs) {
+      expect(record).toMatchObject({ level: "debug", taskId: "task-1", attempt: 2, fields: { command: "deploy", argc: 2, cellId: ID } });
+      expect(typeof record.fields?.durationMs).toBe("number");
+      const line = JSON.stringify(record);
+      for (const leak of ["argv-secret", "must-not-leak", "ASHARA_ARG"]) expect(line).not.toContain(leak);
+    }
+    expect(execs[0]?.fields).toMatchObject({ exitCode: 3, timedOut: false, statusLost: false });
+    expect(execs[1]?.fields).toMatchObject({ exitCode: 125, failed: true });
   });
 
   it("a command that exits 125 is the command's result; a wrapper killed by a signal in a cell that fails its probe is the substrate's failure", async () => {
@@ -388,7 +416,7 @@ describe("PodmanSubstrate argv", () => {
       active--;
       return ran("", 0);
     };
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "/opt/podman", mountRoot: root, runner });
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "/opt/podman", mountRoot: root, runner });
     const cell = await substrate.createCell(spec);
     const results = await Promise.all([1, 2, 3].map(() => cell.exec(["true"], { timeoutSeconds: 1 })));
     expect(results.map((r) => r.exitCode)).toEqual([0, 0, 0]);

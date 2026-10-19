@@ -78,9 +78,13 @@ export class ContinuousRunner implements CycleRunner {
 
     let pgListener: PgListener | null = null;
     if (this.config.databaseUrl !== null) {
-      pgListener = await listenForEvents(this.config.databaseUrl, () => {
-        this.wake();
-      });
+      pgListener = await listenForEvents(
+        this.config.databaseUrl,
+        () => {
+          this.wake();
+        },
+        this.logger,
+      );
       const pid = pgListener.backendPid();
       if (pid === null) {
         this.logger.warn("delivery.listener-disconnected", "PG listener not connected; reconnecting in the background, polling meanwhile");

@@ -73,7 +73,7 @@ describe("a project whose workspace path is refused", () => {
     });
 
     const podmanCalls: string[] = [];
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), 
       podmanPath: "podman",
       mountRoot: root,
       runner: async ({ args }) => {

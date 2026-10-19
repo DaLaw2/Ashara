@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from "vitest";
 import pg from "pg";
 import { z } from "zod";
+import { recordingLogger } from "@ashara/shared";
 import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { listenForEvents } from "./listener.js";
 import type { PgListener } from "./listener.js";
@@ -27,6 +28,19 @@ async function backendExists(pid: number): Promise<boolean> {
   }
 }
 
+describe("PG listener trace", () => {
+  test("its records join a trace of their own, a child of the trace it was entered from, never the logger's root", async () => {
+    const logger = recordingLogger();
+    const unreachable = await listenForEvents("postgresql://ashara@127.0.0.1:1/none", () => {}, logger);
+    await unreachable.stop();
+
+    const failed = logger.records.filter((r) => r.event === "db.listener-connect-failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.traceId).not.toBe(logger.trace());
+    expect(failed[0]?.parentTraceId).toBe(logger.trace());
+  });
+});
+
 describe("PG listener cleanup", () => {
   let listener: PgListener | null = null;
 
@@ -36,7 +50,7 @@ describe("PG listener cleanup", () => {
   });
 
   test("stop() removes the listener's backend from pg_stat_activity", async () => {
-    listener = await listenForEvents(DATABASE_URL, () => {});
+    listener = await listenForEvents(DATABASE_URL, () => {}, recordingLogger());
     const pid = listener.backendPid();
     if (pid === null) throw new Error(`listenForEvents did not connect to ${DATABASE_URL}`);
 

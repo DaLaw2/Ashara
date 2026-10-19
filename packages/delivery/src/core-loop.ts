@@ -399,15 +399,20 @@ export class CoreLoop {
     return stopped(stop);
   }
 
-  /** Halts the project under `cause` through Delivery's guard, the one writer of a project halt. */
-  private async halt(projectId: ProjectId, cause: ProjectBlockCause, step: string): Promise<void> {
-    const result = await this.deps.projectRepo.block(projectId, cause);
-    this.deps.logger.info("delivery.project-blocked", `project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`, {
-      projectId,
-      step,
-      category: cause.category,
-      errorClass: cause.errorClass,
-      result,
+  /**
+   * Halts the project under `cause` through Delivery's guard, the one writer of a project halt,
+   * in a trace of its own carrying the project, a child of whatever trace reached the halt.
+   */
+  private halt(projectId: ProjectId, cause: ProjectBlockCause, step: string): Promise<void> {
+    return this.deps.logger.scope({ projectId, trace: "new" }, async () => {
+      const result = await this.deps.projectRepo.block(projectId, cause);
+      this.deps.logger.info("delivery.project-blocked", `project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`, {
+        projectId,
+        step,
+        category: cause.category,
+        errorClass: cause.errorClass,
+        result,
+      });
     });
   }
 

@@ -225,7 +225,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     new LlmCallRepository(db),
     new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ), recordingLogger());
-  const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
+  const substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRowRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];

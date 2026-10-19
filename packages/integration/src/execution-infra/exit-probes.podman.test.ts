@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { recordingLogger } from "@ashara/shared";
 import {
   PodmanSubstrate,
   WORKSPACE_ROOT,
@@ -35,7 +36,7 @@ beforeAll(async () => {
   const tree = await mkdtemp(join(mountRoot, "tree-"));
   // The negative control: a credential the cell can read, because it is in its own tree.
   await writeFile(join(tree, "planted.txt"), `${SECRET_VALUE}\n`);
-  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot, limits: LIMITS });
+  substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot, limits: LIMITS });
   cell = await substrate.createCell({
     image: ALPINE_IMAGE,
     project: "proj-exit-probes",

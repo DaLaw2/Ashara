@@ -142,7 +142,7 @@ async function harness(name: string): Promise<Harness> {
     checkedSources: ["test"],
     clock: () => new Date(),
   }), new LlmCallLedger(calls, spendCap), recordingLogger());
-  const substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
+  const substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRowRepository(db);
   const sessions = new DevSessionRepository(db);

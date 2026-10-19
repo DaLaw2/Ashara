@@ -545,7 +545,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     const target = join(workdirBase, "projects", "target");
     await mkdir(target, { recursive: true });
     const missing = join(root, "no-such-podman");
-    const { service, probe } = serviceOn(new PodmanSubstrate({ trace: () => "test-trace", podmanPath: missing, mountRoot: root }), workdirBase);
+    const { service, probe } = serviceOn(new PodmanSubstrate({ logger: recordingLogger(), podmanPath: missing, mountRoot: root }), workdirBase);
 
     const result = await service.execute(someTask(), target);
 
@@ -573,7 +573,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     await mkdir(target, { recursive: true });
     await ensureTargetGitInit(target, workdirBase);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), 
       podmanPath: "podman",
       mountRoot: root,
       runner: async (request) => {
@@ -609,7 +609,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     await ensureTargetGitInit(target, workdirBase);
     await commitEnvironment(target);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), 
       podmanPath: "podman",
       mountRoot: root,
       runner: async (request) => {
@@ -650,7 +650,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     await ensureTargetGitInit(target, workdirBase);
     await commitEnvironment(target);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace",
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(),
       podmanPath: "podman",
       mountRoot: root,
       runner: async (request) => {
@@ -694,7 +694,7 @@ describe("a task nothing could decide ends before the agent", () => {
     await ensureTargetGitInit(target, workdirBase);
     await commitEnvironment(target);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), 
       podmanPath: "podman",
       mountRoot: root,
       runner: async (request) => {
@@ -911,7 +911,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const sweepRuns: string[][] = [];
     const foundationBuilds: string[][] = [];
 
-    const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), 
       podmanPath: "podman",
       mountRoot,
       runner: async ({ args }) => {

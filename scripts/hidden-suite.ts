@@ -30,7 +30,7 @@ import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { PodmanSubstrate, WORKSPACE_ROOT, type Cell, type ExecResult } from "@ashara/execution-infra";
 import { parseEnvironmentDefinition } from "@ashara/quality";
-import { JsonParseFailed, describeErrorChain, parseJson } from "@ashara/shared";
+import { JsonParseFailed, createLogger, describeErrorChain, parseJson, stdoutSink, systemClock } from "@ashara/shared";
 import { evidenceSchema, guaranteeIdSchema, guaranteeVerdictSchema, overallOf, overallSchema, type JudgedGuarantee, type JudgedVerdict, type Overall, type RunRecord } from "./hidden-verdict.js";
 
 const USAGE =
@@ -276,8 +276,13 @@ async function readSuiteVerdict(path: string, problems: string[]): Promise<Suite
   }
 }
 
+/** The cells' logger: their exec records are debug, below what it writes; their label is `trace`. */
+function cellLogger(trace: string): ReturnType<typeof createLogger> {
+  return { ...createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }), trace: () => trace };
+}
+
 async function runInCell(args: RunnerArgs, manifest: SuiteManifest, build: string, stage: string): Promise<{ outcome: SuiteOutcome; runs: Record<string, RunRecord> }> {
-  const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: stage, trace: () => args.instance });
+  const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: stage, logger: cellLogger(args.instance) });
   const workspace = join(stage, "ws");
   let cell: Cell | null = null;
   try {

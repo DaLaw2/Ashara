@@ -278,7 +278,7 @@ beforeAll(async () => {
     VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the product''s layout', ${projectId},
             'implementation', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
-  substrate = new PodmanSubstrate({ trace: () => "test-trace", podmanPath: "podman", mountRoot: workdirBase });
+  substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: workdirBase });
 });
 
 afterAll(async () => {

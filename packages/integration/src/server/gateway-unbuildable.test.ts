@@ -16,6 +16,7 @@ import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { systemClock } from "@ashara/shared";
+import type { LogRecord, LogSink } from "@ashara/shared";
 import { createRunDatabase, prepareTemplate } from "../simulator/database.js";
 import type { RunDatabase } from "../simulator/database.js";
 import { projectState } from "../simulator/project-state.js";
@@ -120,7 +121,7 @@ const trackedPools: PoolFactory = (config) => {
   return pool;
 };
 
-function compose(url: string) {
+function compose(url: string, log: LogSink = { write: () => undefined }) {
   return composeAshara({
     masterKey,
     databaseUrl: url,
@@ -130,7 +131,7 @@ function compose(url: string) {
     git: refusingGit,
     clock: systemClock,
     taskLanes: (items, run) => Promise.allSettled(items.map(run)),
-    log: { write: () => undefined },
+    log,
   });
 }
 
@@ -225,5 +226,17 @@ describe("intake with a gateway that cannot be built", () => {
       expect.stringContaining(`provider "${provider.name}": provider_type "no-such-adapter" is not one of`),
     ]);
     await expectUntouched(projectId, tenderId);
+  });
+});
+
+describe("the composition's boot trace", () => {
+  test("what the composition logs before it refuses joins one boot trace, a scope root, never the logger's root trace", async () => {
+    const records: LogRecord[] = [];
+    await expect(compose(databaseUrl(), { write: (record) => records.push(record) })).rejects.toBeInstanceOf(NoLLMProvidersConfigured);
+
+    const composed = records.filter((r) => r.event === "server.secret-store" || r.event === "server.spend-caps");
+    expect(composed.map((r) => r.event)).toEqual(["server.secret-store", "server.spend-caps"]);
+    expect(composed.every((r) => r.parentTraceId !== undefined)).toBe(true);
+    expect(new Set(composed.map((r) => r.traceId)).size).toBe(1);
   });
 });

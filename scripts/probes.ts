@@ -31,7 +31,7 @@ import {
   type ProbeVerdict,
 } from "@ashara/execution-infra";
 import { resolveKeyFilePath } from "@ashara/security";
-import { describeErrorChain } from "@ashara/shared";
+import { createLogger, describeErrorChain, stdoutSink, systemClock } from "@ashara/shared";
 
 class ProbesUsageError extends Error {
   constructor(detail: string) {
@@ -89,7 +89,9 @@ async function main(): Promise<void> {
   const instance = `probes-${randomUUID()}`;
   // One trace for the probe run: its cells are found by `podman ps --filter label=ashara.trace=<it>`.
   const trace = `probes-${randomUUID()}`;
-  const substrate = new PodmanSubstrate({ podmanPath: process.env["ASHARA_PODMAN_BINARY"] ?? "podman", mountRoot, limits, trace: () => trace });
+  const substrate = new PodmanSubstrate({ podmanPath: process.env["ASHARA_PODMAN_BINARY"] ?? "podman", mountRoot, limits,
+    logger: { ...createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }), trace: () => trace },
+  });
   console.log(
     `Probing image ${image}; caps from ${Object.values(CELL_LIMIT_VARIABLES).join(", ")}: ` +
       `memory ${limits.memoryBytes} bytes, ${limits.cpus} CPUs, ${limits.pids} pids`,

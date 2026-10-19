@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { parseProjectId, recordingLogger } from "@ashara/shared";
 import { pruneEnvironmentImages } from "./environment-build.js";
 import { PodmanCommandFailed } from "./errors.js";
 import { PodmanSubstrate } from "./podman.js";
@@ -27,7 +27,7 @@ function substrateListing(images: unknown[], containers: unknown[], rmExit: (ima
   const done = (stdout: string, exitCode = 0, stderr = "") => ({
     exitCode, signal: null, stdout, stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null, statusReport: null,
   });
-  const substrate = new PodmanSubstrate({ trace: () => "test-trace", 
+  const substrate = new PodmanSubstrate({ logger: recordingLogger(), 
     podmanPath: "podman",
     mountRoot: "/tmp",
     runner: async (request) => {
