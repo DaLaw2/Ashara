@@ -106,11 +106,29 @@ describe("PodmanSubstrate argv", () => {
       "-v", `${root}/.ashara-cell-state/inst-1/${name}/home:/ashara-cell/home:Z`,
       IMAGE, "sleep", "infinity",
     ]);
-    expect(Object.keys(requests[0]?.env ?? {}).every((k) => ["PATH", "HOME", "XDG_RUNTIME_DIR"].includes(k))).toBe(true);
+    expect(Object.keys(requests[0]?.env ?? {}).every((k) => ["PATH", "HOME", "XDG_RUNTIME_DIR", "CONTAINERS_STORAGE_CONF"].includes(k))).toBe(true);
     // The cell's state goes with it.
     await cell.teardown();
     expect(requests[1]?.args).toEqual(["rm", "-f", ID]);
     expect(await readdir(join(root, ".ashara-cell-state", "inst-1"))).toEqual([]);
+  });
+
+  it("runs podman on the store CONTAINERS_STORAGE_CONF names when it is set, and on podman's default store when it is not", async () => {
+    const saved = process.env.CONTAINERS_STORAGE_CONF;
+    try {
+      process.env.CONTAINERS_STORAGE_CONF = "/srv/test-store/storage.conf";
+      const named = recorder([ok(`${ID}\n`)]);
+      await named.substrate.createCell(spec);
+      expect(named.requests[0]?.env?.CONTAINERS_STORAGE_CONF).toBe("/srv/test-store/storage.conf");
+
+      delete process.env.CONTAINERS_STORAGE_CONF;
+      const unset = recorder([ok(`${ID}\n`)]);
+      await unset.substrate.createCell(spec);
+      expect(Object.keys(unset.requests[0]?.env ?? {})).not.toContain("CONTAINERS_STORAGE_CONF");
+    } finally {
+      if (saved === undefined) delete process.env.CONTAINERS_STORAGE_CONF;
+      else process.env.CONTAINERS_STORAGE_CONF = saved;
+    }
   });
 
   it("refuses to build a substrate without cell limits: none given and ASHARA_CELL_MEMORY unset", () => {

@@ -328,10 +328,14 @@ const psEntrySchema = z.object({
   Labels: z.record(z.string(), z.string()).nullable().optional(),
 });
 
-/** The environment podman itself runs with: nothing of Ashara's reaches its process. */
+/**
+ * The environment podman itself runs with: nothing of Ashara's reaches its process. The store podman
+ * uses is the caller's: CONTAINERS_STORAGE_CONF passes through when set, and podman's own default
+ * store applies when it is not.
+ */
 function podmanEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const key of ["PATH", "HOME", "XDG_RUNTIME_DIR"] as const) {
+  for (const key of ["PATH", "HOME", "XDG_RUNTIME_DIR", "CONTAINERS_STORAGE_CONF"] as const) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }

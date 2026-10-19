@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describeErrorChain } from "@ashara/shared";
 import { pinnedTestImages, pullCommand } from "./test-images.js";
+import { useTestImageStore } from "./test-podman-store.js";
 
-// `just test-images` and CI's podman step: the one path that fetches the pinned test images. It only
-// pulls; it never removes an image.
+// `just test-images` and CI's podman step: the one path that fetches the pinned test images, into the
+// store test runs read them from (useTestImageStore). It only pulls; it never removes an image.
 
 const run = promisify(execFile);
 const PULL_TIMEOUT_MS = 600_000;
@@ -21,6 +22,7 @@ class TestImagePullFailed extends Error {
 }
 
 async function main(): Promise<void> {
+  useTestImageStore();
   for (const image of await pinnedTestImages()) {
     console.log(pullCommand(image));
     try {

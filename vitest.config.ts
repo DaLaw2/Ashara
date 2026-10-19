@@ -6,6 +6,11 @@ import {
   PODMAN_TEST_FILES,
   PODMAN_TEST_TIMEOUT_MS,
 } from "./packages/integration/src/podman-test-load.js";
+import { useTestPodmanStore } from "./packages/integration/src/test-podman-store.js";
+
+// Before any globalSetup or worker starts, so the guards, every test and every podman they start use
+// one store: the test store on a host with /data, podman's default store otherwise.
+useTestPodmanStore();
 
 // Owner rule: no unbounded resource use. Test files share one Postgres and the host's podman, so
 // the worker count is bounded: the host's cores, at most 4, or the run's --maxWorkers. The podman
@@ -25,12 +30,14 @@ export default defineConfig({
     maxWorkers: Math.min(MAX_TEST_WORKERS, availableParallelism()),
     // The image guard runs first: a pinned test image absent from local podman storage stops the run
     // before any test, naming each such image and its pull command; the run never pulls one itself.
-    // The test database is migrated next, or the run stops naming `just test-db-up`, so a direct
-    // `npx vitest` after a fresh test Postgres works as `just test` does.
+    // The store guard is next: on a host with /data, a podman store other than the test store stops
+    // the run. The test database is migrated next, or the run stops naming `just test-db-up`, so a
+    // direct `npx vitest` after a fresh test Postgres works as `just test` does.
     // Every test cell's instance names this run (testCellInstance); the run fails if any of them
     // outlives it, after they are removed, and removes the cells of runs that died before their end.
     globalSetup: [
       "packages/integration/src/test-images-guard.ts",
+      "packages/integration/src/test-podman-store-guard.ts",
       "packages/integration/src/test-database-setup.ts",
       "packages/integration/src/cell-leak-guard.ts",
     ],

@@ -61,6 +61,8 @@ typecheck-full:
 
 # Pulls every pinned image a test run needs: the BaseCell and packages/integration/test-images.json.
 # A test run never pulls; its globalSetup stops it before any test when one is absent and names this.
+# On a host with /data the images go into the test image store (config/podman-test-images.conf),
+# which every test run there reads, and podman's default store is left as it is.
 test-images:
     timeout 1200 npx tsx packages/integration/src/test-images-pull.ts
 
@@ -77,7 +79,8 @@ test-images:
 test: _test-db-ready
     #!/usr/bin/env bash
     set -u
-    # Test and simulator temp files and logs go to /data (an HDD) when the host has it.
+    # Test and simulator temp files and logs go to /data (an HDD) when the host has it. The podman
+    # store follows vitest.config.ts (useTestPodmanStore), so a direct `npx vitest` gets it too.
     if [ -d /data ]; then mkdir -p /data/ashara-tmp || exit 1; export TMPDIR=/data/ashara-tmp; fi
     timeout -k 150 1200 npx vitest run &
     run=$!
