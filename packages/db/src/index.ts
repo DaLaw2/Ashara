@@ -20,6 +20,7 @@ export {
   devSessions,
   failedApproaches,
   guaranteeEvidence,
+  guaranteeVerdicts,
   intakeReadings,
   knowledgeEntries,
   modelConfigs,

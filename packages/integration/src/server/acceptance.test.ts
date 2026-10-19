@@ -16,11 +16,10 @@ import {
 import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
-import { SuiteReviewJudgementRepository } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, parseWorkItemId, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared";
 import type { VisionSource } from "@ashara/engagement";
-import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
+import { createAcceptanceStore, createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { projectState } from "../simulator/project-state.js";
@@ -36,8 +35,6 @@ const NAME_PREFIX = `acceptance-test-${randomUUID().slice(0, 8)}`;
 const MERGE_A = "a1".repeat(20);
 const MAIN = "c3".repeat(20);
 const SCAFFOLD_MERGE = "5e".repeat(20);
-/** Judges graded Strong over check work at Strong: no stronger than the work. */
-const EQUAL_STRONG = { judgeTier: "Strong", judgedTier: "Strong", relation: "equal" } as const;
 
 let db: ReturnType<typeof createDb>;
 let clientId: string;
@@ -145,6 +142,42 @@ async function deliveredProject(
   return { projectId: project.id, goals: [store, remove], scaffold, store, checksOfStore, question };
 }
 
+/** Vision v1 in the guarantees form: G1 and G2, both observed at I1 and quoted from the tender. */
+const CONTRACT_TENDER = "A key store. Clients put and get keys. A deleted key is gone.";
+
+/**
+ * A planned project in the guarantees form whose one goal task, "Store keys", is Completed and
+ * merged, with one stored check ("works") that decides G1 and G2.
+ */
+async function contractProject(): Promise<{ readonly projectId: ProjectId; readonly goals: readonly string[]; readonly checksOfStore: string }> {
+  const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, CONTRACT_TENDER);
+  ourProjects.add(project.id);
+  const quote = (text: string) => ({ kind: "tender" as const, quote: text });
+  await new VisionRepository(db).create(project.id, {
+    visionText: CONTRACT_TENDER,
+    summary: "A key store.",
+    inferences: [],
+    contract: {
+      interface: [{ id: "I1", text: "kv put KEY VALUE; kv get KEY; kv delete KEY", source: quote("Clients put and get keys.") }],
+      guarantees: [
+        { id: "G1", statement: "A get returns the value of the last put of its key.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a get after a put prints another value"], source: quote("Clients put and get keys.") },
+        { id: "G2", statement: "A deleted key is gone.", observable: { interface: ["I1"], observation: "exit-status" }, refutedBy: ["a get after a delete exits 0"], source: quote("A deleted key is gone.") },
+      ],
+      exclusions: [],
+    },
+  });
+  await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
+  const store = randomUUID();
+  const checksOfStore = randomUUID();
+  await db.execute(sql`
+    INSERT INTO work_items (id, level, status, title, task_spec, project_id)
+    VALUES (${store}, 'Task', 'Completed', 'Store keys', ${JSON.stringify({ origin: "decomposition" })}::jsonb, ${project.id}),
+           (${checksOfStore}, 'Task', 'Completed', 'Checks for Store keys', ${JSON.stringify({ origin: "check", checksFor: store })}::jsonb, ${project.id})`);
+  await new WorkItemRowRepository(db).recordMergeCommit(store, MERGE_A, "merged");
+  await storeCheck(project.id, store, checksOfStore, ["G1", "G2"]);
+  return { projectId: project.id, goals: [store], checksOfStore };
+}
+
 /** One stored check of a task's first revision, deciding `decides` (null: a row from before checks recorded what they decide). */
 async function storeCheck(projectId: string, taskId: string, checkTaskId: string, decides: readonly string[] | null): Promise<void> {
   await db.execute(sql`
@@ -193,17 +226,18 @@ function deliveredReports(): DeliveredReports {
 
 /**
  * A stand-in sweep's verdict and what it ran: by default every checked task's stored check
- * ("works", as storeCheck writes it) ran and passed.
+ * ("works", as storeCheck writes it) ran and passed, deciding `decides`.
  */
 function sweepDeps(
   passed: boolean,
   details: string,
   ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] },
   failedChecks: ReadonlyArray<{ readonly taskId: string; readonly checkTaskId: string; readonly name: string }> = [],
+  decides: readonly string[] | null = null,
 ) {
   const projects = new ProjectHaltRepository(db);
-  // The stand-in names each checked task's stored check ("works", revision 1, as storeCheck writes it) without what it decides.
-  const checkOutcomes = ran.checked.map((taskId) => ({ taskId, revision: 1, checkTaskId: taskId, name: "works", command: "sh checks/run.sh", decides: null, outcome: "passed" as const }));
+  // The stand-in names each checked task's stored check ("works", revision 1, as storeCheck writes it).
+  const checkOutcomes = ran.checked.map((taskId) => ({ taskId, revision: 1, checkTaskId: taskId, name: "works", command: "sh checks/run.sh", decides, outcome: "passed" as const }));
   return {
     acceptance: acceptanceStore(),
     containment: memoryStepContainment(() => true),
@@ -248,6 +282,25 @@ async function reportAttempts(projectId: ProjectId): Promise<{ failures: number;
 /** Stands in for the backoff passing: the sweep's retry time is now. */
 async function endBackoff(projectId: ProjectId): Promise<void> {
   await db.execute(sql`UPDATE acceptance_sweeps SET report_retry_at = now() WHERE project_id = ${projectId} AND passed`);
+}
+
+const verdictRow = z.object({ guaranteeId: z.string(), verdict: z.string(), reason: z.string().nullable(), basis: z.string(), evidenceClass: z.string() });
+
+/** The verdicts stored beside the project's reports, oldest report first, by guarantee id. */
+async function verdictsOf(projectId: ProjectId): Promise<Array<z.infer<typeof verdictRow>>> {
+  const result = await db.execute(sql`
+    SELECT guarantee_id AS "guaranteeId", verdict, reason, basis, evidence_class AS "evidenceClass"
+    FROM guarantee_verdicts WHERE project_id = ${projectId} ORDER BY created_at, guarantee_id`);
+  return z.array(verdictRow).parse(result.rows);
+}
+
+/** The id at the head of each line of the report's table paragraph. */
+function tableIds(body: string): string[] {
+  const table = body.split("\n\n").find((part) => part.startsWith("Each guarantee of your contract"));
+  return (table ?? "").split("\n").flatMap((line) => {
+    const id = /^- ([A-Z]\d+): /.exec(line)?.[1];
+    return id === undefined ? [] : [id];
+  });
 }
 
 async function reportsOf(projectId: ProjectId): Promise<string[]> {
@@ -320,33 +373,32 @@ describe("acceptance on main", () => {
     expect(body).toContain(`"Store keys": built and merged, commit ${MERGE_A}.`);
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store keys".`);
-    // The items of what the client asked for that no stored check of a passing task decides, and
-    // only those; the exclusion is never listed, an assumption a client could observe is listed as
-    // what the work rests on, and the team's design choice is named apart as not verified by Ashara.
-    expect(body).toContain(
-      "These items of what you asked for are decided by no stored check of a task whose stored checks passed on main, " +
-        "so nothing confirms them either way:\n- Two writers never corrupt the store\n\n",
+    // The guarantee table: every guarantee of the version in force once. A version written before
+    // guarantees reads its scope lines and the assumptions a client could observe as guarantees that
+    // name nothing that would refute them, so each is unjudged, and a review never makes one pass.
+    expect(tableIds(body)).toEqual(["S1", "S2", "S3", "A1", "A3"]);
+    for (const line of body.split("\n").filter((each) => each.includes(" | verdict: "))) {
+      expect(line).toContain("| verdict: unjudged, as written it names nothing that would show it broken, so no check can decide it |");
+    }
+    expect(body).toContain("What is left out, so that silence is never read as a promise:\n- S4: Any network service");
+    expect(body).toContain("which your acceptance does not depend on:\n- A2: The log file is kv.log");
+    expect(body).not.toContain("second review");
+    expect(await verdictsOf(projectId)).toEqual(
+      ["A1", "A3", "S1", "S2", "S3"].map((guaranteeId) => ({
+        guaranteeId,
+        verdict: "unjudged",
+        reason: "not-checkable-as-written",
+        basis: guaranteeId === "A3" ? "assumed-unconfirmed" : guaranteeId === "A1" ? "client-stated" : "derived",
+        evidenceClass: "none",
+      })),
     );
-    expect(body).toContain(
-      "The work rests on these assumptions. None is counted above as an item of what you asked for: each is decided only through what you asked for that rests on it.\n" +
-        "- A missing key exits 3 (your answer)\n- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
-    );
-    expect(body).toContain("they are not verified by Ashara.\n- A2: The log file is kv.log\n\n");
-    // No suite review is on record, so the decided items are listed
-    // as unconfirmed and none is counted.
-    expect(body).toContain(
-      "None of the 3 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.\n\n" +
-        "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review of those checks is on record as confirming that: " +
-        "they are not verified by Ashara.\n- Keys can be stored and read\n- Keys can be deleted\n\n",
-    );
-    expect(body).not.toContain("Any network service");
   });
 
-  // An item a suite review left undecided on a delivered task's check task is
-  // read back as undecided and told as not verified, never as covered, though its stored check passed.
-  test("an item a suite review left undecided is read as undecided and reported as not verified", async () => {
-    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
-    const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" });
+  // A guarantee stands on the evidence the sweep recorded: one whose stored check ran on main and
+  // passed reads pass; one a suite review left undecided reads unjudged, though its check passed.
+  test("a guarantee whose check passed on main reads pass, one a review left undecided reads unjudged, and the verdicts are stored beside the report", async () => {
+    const { projectId, goals, checksOfStore } = await contractProject();
+    const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "G2", problem: "no check deletes a key", evidence: "sh checks/run.sh" });
     const judged = await db.execute(sql`
       INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
       VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Strong', 'Strong')
@@ -354,96 +406,19 @@ describe("acceptance on main", () => {
     const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
     await db.execute(sql`
       INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, judgement_id)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, 'S1', ${VISION.stored.text}, ${judgement?.id})`);
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, 'G2', 'A deleted key is gone.', ${judgement?.id})`);
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2"]))).toBe(1);
 
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
-    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
-    expect(items.filter((item) => item.undecided).map((item) => [item.source.id, item.checked])).toEqual([["S1", true]]);
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     const [body = ""] = await reportsOf(projectId);
-    expect(body).toContain(
-      "the second review, by the same model as the first review asked again from another angle, which shares every one of its blind spots, did not confirm or settle that: they are not verified by Ashara.\n- Keys can be stored and read\n\n",
-    );
-  });
-
-  // An item a clean review covered that no second review confirmed
-  // is read back as undecided and told as not verified, with why, never as decided.
-  test("an item an unconfirmed clean review covered is read as undecided and reported as not verified", async () => {
-    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
-    const claimed = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
-      VALUES (${projectId}, ${checksOfStore}, 'second-review-failed', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above', 'Frontier', NULL)
-      RETURNING id`);
-    const [claim] = z.array(z.object({ id: z.string() })).parse(claimed.rows);
-    await db.execute(sql`
-      WITH tie AS (INSERT INTO undecided_item_claims (claim_id, check_task_id, item_id) VALUES (${claim?.id}, ${checksOfStore}, 'S1'))
-      INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, claim_id)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, 'S1', ${VISION.stored.text}, ${claim?.id})`);
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
-
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
-    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
-    expect(items.filter((item) => item.undecided).map((item) => [item.source.id, item.undecided])).toEqual([["S1", "clean-unconfirmed"]]);
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
-    const [body = ""] = await reportsOf(projectId);
-    expect(body).toContain("the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored and read\n\n");
-    expect(body).not.toContain("Every item of what you asked for is decided");
-  });
-
-  // A judge no stronger than the work it judged is named to the client, never reported as one above it.
-  test("an item a claim confirmed through a second opinion only equal to the check work names that review as no stronger, the first as stronger", async () => {
-    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
-    await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
-      VALUES (${projectId}, ${checksOfStore}, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Frontier', 'Strong')`);
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
-
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
-    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
-    expect(items.filter((item) => item.judges !== null).map((item) => [item.source.id, item.review, item.judges])).toEqual([
-      ["S1", "other-family", "equal-second"],
-      ["A1", "other-family", "equal-second"],
+    expect(tableIds(body)).toEqual(["G1", "G2"]);
+    expect(body).toContain("- G1: A get returns the value of the last put of its key. | verdict: pass | basis: what your tender states | evidence: checked by a check its implementer could see");
+    expect(body).toContain("- G2: A deleted key is gone. | verdict: unjudged, a review of the checks found they may not decide it |");
+    expect(body).toContain("The punch list, what is not shown to hold, failures first:\n- G2: unjudged, a review of the checks found they may not decide it");
+    expect(await verdictsOf(projectId)).toEqual([
+      { guaranteeId: "G1", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+      { guaranteeId: "G2", verdict: "unjudged", reason: "lowered-by-review", basis: "client-stated", evidenceClass: "implementer-visible" },
     ]);
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
-    const [body = ""] = await reportsOf(projectId);
-    expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; that second review was by a model no stronger than the one their work was graded for, " +
-        "while the first review of those checks was by a stronger one:\n- Keys can be stored and read\n",
-    );
-    expect(body).not.toContain("no stronger one was available");
-  });
-
-  // An item a later claim leaves undecided again is read under that claim too, never
-  // under the first claim alone, so a later failed second review is reported as the reason.
-  test("an item two claims leave undecided is read under both, and reported under the reason that ranks first", async () => {
-    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
-    const judgements = new SuiteReviewJudgementRepository(db);
-    const item = { checkTaskId: checksOfStore, itemId: "S1", itemText: VISION.stored.text };
-    const first = { provider: "p", model: "m", grade: "Strong" as const };
-    const reviewTaskId = parseWorkItemId(checksOfStore, "test review task");
-    const doubt = { checkTasks: [checksOfStore], kind: "undecided-item" as const, item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" };
-    await judgements.record({
-      projectId,
-      reviewTaskId,
-      judgements: [],
-      claim: { basis: "second-opinion-found", covered: [checksOfStore], firstModel: first, secondReview: { first, second: { provider: "q", model: "n", grade: "Strong" as const }, strength: "other-family" }, passedOver: [], second: [doubt], secondFailure: null, unconfirmed: [item], tiers: EQUAL_STRONG },
-    });
-    await judgements.record({
-      projectId,
-      reviewTaskId,
-      judgements: [],
-      claim: { basis: "second-review-failed", covered: [checksOfStore], firstModel: first, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item], tiers: EQUAL_STRONG },
-    });
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
-
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
-    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
-    // The first claim alone reads clean-contradicted; the later failed one ranks first.
-    expect(items.filter((entry) => entry.undecided).map((entry) => [entry.source.id, entry.undecided])).toEqual([["S1", "clean-unconfirmed"]]);
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
-    const [body = ""] = await reportsOf(projectId);
-    expect(body).toContain("the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored and read\n\n");
   });
 
   // A goal task a plan revision replaced while it was open is set aside, never given up.
@@ -525,51 +500,29 @@ describe("acceptance on main", () => {
     expect(body).not.toContain("How the product was run in acceptance");
   });
 
-  test("coverage follows the stored checks: an item is checked only by a check deciding it as its text reads, and a broken or missing record is never read as covered", async () => {
-    const due = async (projectId: ProjectId) => {
-      const store = createDeliveredReportStore(db);
-      return (await store.dueReports()).find((row) => row.projectId === projectId);
-    };
+  // Evidence that misses a guarantee is a record that does not hold together: that report alone is refused.
+  test("a sweep whose evidence misses a guarantee is refused for its report alone, never read as no evidence", async () => {
+    const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     const accepted = async (): Promise<Delivered> => {
       const delivered = await deliveredProject();
       await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: delivered.goals, unchecked: [delivered.scaffold] }));
       return delivered;
     };
-
-    // The answer behind A1 changed after its checks were written: the cited text is not the reviewed one.
-    const drifted = await accepted();
-    await setSpec(drifted.checksOfStore, "sources", [VISION.stored, { ...VISION.missing, text: "A missing key exits 1" }]);
-    const driftedRow = await due(drifted.projectId);
-    expect(
-      driftedRow?.kind === "due" && driftedRow.vision.kind === "recorded" && driftedRow.vision.items.filter((item) => item.checked).map((item) => item.source.id),
-    ).toEqual(["S1", "S2"]);
-
-    // A line citing an item is no check of it: A1 cited, its check deciding S1 alone, is not checked.
-    const lineOnly = await accepted();
-    await db.execute(sql`DELETE FROM task_checks WHERE task_id = ${lineOnly.store}`);
-    await storeCheck(lineOnly.projectId, lineOnly.store, lineOnly.checksOfStore, ["S1"]);
-    const lineOnlyRow = await due(lineOnly.projectId);
-    expect(
-      lineOnlyRow?.kind === "due" && lineOnlyRow.vision.kind === "recorded" && lineOnlyRow.vision.items.filter((item) => item.checked).map((item) => item.source.id),
-    ).toEqual(["S1", "S2"]);
-
-    // A check deciding an id its own check task does not cite is a broken record, refused by name, for that report alone.
-    const broken = await accepted();
-    await setSpec(broken.checksOfStore, "sources", [VISION.stored]);
-    expect(await due(broken.projectId)).toMatchObject({
+    const whole = await accepted();
+    const torn = await accepted();
+    await db.execute(sql`DELETE FROM guarantee_evidence WHERE project_id = ${torn.projectId} AND guarantee_id = 'S3'`);
+    expect(await due(torn.projectId)).toMatchObject({
       kind: "unread",
       cause: "record",
-      error: expect.objectContaining({ message: expect.stringMatching(/stored check "works" decides A1, which its check task's task_spec.sources does not hold/) }),
+      error: expect.objectContaining({ message: expect.stringMatching(/records evidence for some guarantees of vision v1 but none for S3/) }),
     });
-    expect((await due(drifted.projectId))?.kind).toBe("due");
-
-    // A check stored before what it decides was recorded: coverage is not on record.
-    await db.execute(sql`DELETE FROM task_checks WHERE task_id = ${broken.store}`);
-    await storeCheck(broken.projectId, broken.store, broken.checksOfStore, null);
-    expect(await due(broken.projectId)).toMatchObject({ kind: "due", vision: { kind: "unrecorded" } });
-    const posted = await deliveredReports().runPending();
-    expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, lineOnly.projectId, broken.projectId].sort());
-    expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
+    expect((await due(whole.projectId))?.kind).toBe("due");
+    expect(new Map((await deliveredReports().runPending()).map((outcome) => [outcome.projectId, outcome.kind]))).toEqual(
+      new Map([
+        [whole.projectId, "posted"],
+        [torn.projectId, "failed"],
+      ]),
+    );
   });
 
   test("only an unreachable database is retried uncounted: an error nothing names counts toward the notice sent in the report's place", async () => {
@@ -645,8 +598,8 @@ describe("acceptance on main", () => {
 
     expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });
     const [body] = await reportsOf(projectId);
-    expect(body).toContain("- An empty prefix lists every key (you confirmed this when asked)\n");
-    expect(body).not.toContain("have not answered");
+    expect(body).toContain("- A3: An empty prefix lists every key (stated by you)\n");
+    expect(body).not.toContain("not confirmed by you");
   });
 
   test("one project's report failing (no workspace on record, git unable to read main) never stops another's: each failure is recorded and retried", async () => {
@@ -703,12 +656,34 @@ describe("acceptance on main", () => {
     await expect(db.execute(sql`UPDATE projects SET lifecycle = 'active' WHERE id = ${projectId}`)).rejects.toThrow();
     expect(await statusOf(projectId)).toBe("accepted");
 
-    await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Thanks, done.", inReplyTo: null });
+    const stop = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Thanks, done.", inReplyTo: null });
     const store = createClientStopStore(db);
-    const outcomes = await new ClientStops({ ...store, openStops: async () => (await store.openStops()).filter((stop) => stop.projectId === projectId) }, memoryStepContainment(() => true)).runPending();
-    expect(outcomes).toEqual([expect.objectContaining({ kind: "stopped", reported: true, merged: 3 })]);
+    const ours: typeof store = {
+      ...store,
+      openStops: async () => (await store.openStops()).filter((open) => open.projectId === projectId),
+      dueStopReports: async () => (await store.dueStopReports()).filter((due) => due.projectId === projectId),
+    };
+    const stops = new ClientStops(ours, memoryStepContainment(() => true));
+    expect(await stops.runPending()).toEqual([expect.objectContaining({ kind: "stopped", reportDue: true })]);
     expect(await statusOf(projectId)).toBe("stopped");
+    // The stop's report waits for its terminal sweep, then carries that sweep's table.
+    expect(await stops.runPending()).toEqual([]);
+    expect(
+      await createTerminalSweepStore(db).recordTerminalSweep({
+        projectId,
+        terminal: { kind: "stop", stopId: stop.id },
+        mainCommit: MAIN,
+        environmentVersion: "v1",
+        checkedTasks: [],
+        uncheckedTasks: [],
+        checkOutcomes: [],
+        details: "no stored check to run",
+      }),
+    ).toBe("recorded");
+    expect(await stops.runPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+    expect(await stops.runPending()).toEqual([]);
     const stopReport = (await reportsOf(projectId)).find((body) => body.includes("stopped at your request"));
+    expect(tableIds(stopReport ?? "")).toEqual(["S1", "S2", "S3", "A1", "A3"]);
     expect(stopReport).toContain(`- "Set up the module root": merged, commit ${SCAFFOLD_MERGE}`);
     expect(stopReport).toContain(`- "Store keys": merged, commit ${MERGE_A}`);
     expect(stopReport).toContain(`- "Delete keys": already delivered on commit ${MERGE_A}, nothing of its own merged`);

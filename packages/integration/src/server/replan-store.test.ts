@@ -31,6 +31,7 @@ import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // A late client change is planned. Every row here belongs to a project
 // this suite creates under a unique name, and afterAll deletes exactly those rows. Each store
@@ -194,9 +195,16 @@ function planReports(): PlanReports {
   return new PlanReports(narrowed, memoryStepContainment(() => true));
 }
 
+/** The Liaison's block reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
 function blockReports(): BlockReports {
   const store = createBlockReportStore(db);
-  const narrowed: BlockReportStore = { ...store, dueReports: ours(() => store.dueReports()) };
+  const narrowed: BlockReportStore = {
+    ...store,
+    dueReports: ours(async () => {
+      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
+      return store.dueReports();
+    }),
+  };
   return new BlockReports(narrowed, memoryStepContainment(() => true));
 }
 

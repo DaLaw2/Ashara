@@ -26,11 +26,9 @@ const briefRow = z.object({ title: z.string(), visionAtCreation: z.number().null
 const messageRow = z.object({ id: z.string(), body: z.string() });
 const replyRow = z.object({ answerId: z.string(), body: z.string() });
 const deliveredRow = z.object({ sweepId: z.string(), body: z.string(), mainCommit: z.string(), visionAtAcceptance: z.number().nullable() });
-const sweepReplyRow = z.object({ sweepId: z.string(), questionId: z.string(), readByAcceptance: z.boolean() });
 const firstPlanRow = z.object({ body: z.string() });
 const planItemRow = z.object({ origin: z.string().nullable(), beforeReport: z.boolean(), blockedReason: z.unknown() });
 const planRevisionRow = z.object({ revision: z.number(), beforeReport: z.boolean() });
-const reviewRow = z.object({ taskSpec: z.unknown() });
 const intakeReadingRow = z.object({ confirmation: z.string(), secondStrength: z.string().nullable(), secondQuestions: z.number().nullable() });
 
 export interface TextFactRecords {
@@ -47,15 +45,11 @@ export interface TextFactRecords {
   readonly intakeReading: z.infer<typeof intakeReadingRow> | null;
   /** Every posted delivered report, with the vision version current at its sweep. */
   readonly delivered: ReadonlyArray<z.infer<typeof deliveredRow>>;
-  /** Each delivered report's sweep: the client answers sent by acceptance, by question, and whether read by then. */
-  readonly sweepReplies: ReadonlyArray<z.infer<typeof sweepReplyRow>>;
   /**
    * The product's public interface file as main holds it at each delivered report's sweep commit,
    * by sweep id, read from the project's checkout; not held where no checkout is (a kept run's dump).
    */
   readonly interfaceOnMain: { readonly kind: "read"; readonly bySweep: ReadonlyMap<string, MainFile> } | { readonly kind: "not-held" };
-  /** The latest Completed review task's task_spec (every item of the vision), or null. */
-  readonly reviewSpec: unknown;
   readonly firstPlan: {
     readonly report: z.infer<typeof firstPlanRow> | null;
     readonly items: ReadonlyArray<z.infer<typeof planItemRow>>;
@@ -155,24 +149,6 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
           FROM acceptance_sweeps s JOIN client_messages m ON m.id = s.report_id
           WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
     ),
-    sweepReplies: await rows(
-      sweepReplyRow,
-      sql`SELECT s.id AS "sweepId", a.in_reply_to AS "questionId",
-                 (a.consumed_at IS NOT NULL AND a.consumed_at <= s.created_at) AS "readByAcceptance"
-          FROM acceptance_sweeps s JOIN client_messages a ON a.project_id = s.project_id
-          WHERE s.project_id = ${projectId} AND s.passed AND s.report_id IS NOT NULL
-            AND a.direction = 'inbound' AND a.kind = 'answer' AND a.in_reply_to IS NOT NULL AND a.created_at <= s.created_at
-          ORDER BY a.created_at, a.id`,
-    ),
-    reviewSpec:
-      (
-        await rows(
-          reviewRow,
-          sql`SELECT task_spec AS "taskSpec" FROM work_items
-              WHERE project_id = ${projectId} AND status = 'Completed' AND task_spec->>'origin' = 'review'
-              ORDER BY created_at DESC, id DESC LIMIT 1`,
-        )
-      )[0]?.taskSpec ?? null,
     firstPlan: {
       report: firstPlan ?? null,
       items:
@@ -593,93 +569,39 @@ function checkFirstPlan(records: TextFactRecords, add: Add): void {
   }
 }
 
-/** Where an assumption stands with the client at acceptance, as the acceptance rule defines it, recomputed here. */
-type AcceptedStanding = "stated" | "confirmed" | "changed" | "answered" | "answer-unread" | "asked" | "reported" | "unrecorded";
-
-const ACCEPTED_STATED: Readonly<Partial<Record<AcceptedStanding, string>>> = {
-  stated: "your answer",
-  confirmed: "you confirmed this when asked",
-  changed: "your answer, which changed what we had assumed",
-};
-const ACCEPTED_INFERRED: Readonly<Partial<Record<AcceptedStanding, string>>> = {
-  asked: "which you were asked about and have not answered",
-  answered: "which you were asked about; your reply neither confirmed nor changed it",
-  "answer-unread": "which you were asked about; your reply had not been read when the project was accepted",
-  reported: "which was reported to you",
-  unrecorded: "which Ashara has no record of showing you",
-};
-
-function acceptedStanding(
-  assumption: Assumption,
-  vision: Extract<VisionReading, { readonly kind: "read" }>,
-  replies: ReadonlyArray<z.infer<typeof sweepReplyRow>>,
-): AcceptedStanding | { readonly unreadable: string } {
-  if (assumption.status === "Stated") {
-    if (assumption.answer === null) return { unreadable: `${assumption.key} is Stated with no client answer recorded` };
-    if (assumption.answer.verdict === null) return "stated";
-    return assumption.answer.verdict === "confirms" ? "confirmed" : "changed";
-  }
-  if (assumption.standing !== "asked") return assumption.standing;
-  const question = vision.questions.find((open) => open.assumptionKey === assumption.key);
-  if (question === undefined) return { unreadable: `${assumption.key} was asked about and is not Stated, yet no open question names it` };
-  const reply = replies.find((each) => each.questionId === question.messageId);
-  if (reply === undefined) return "asked";
-  return reply.readByAcceptance ? "answered" : "answer-unread";
-}
-
-function acceptedLine(assumption: Assumption, standing: AcceptedStanding): string {
-  const unclassified = assumption.kind === "unclassified" ? " (not recorded as what you see or as how it is built)" : "";
-  const stated = ACCEPTED_STATED[standing];
-  if (stated !== undefined) return `- ${assumption.statement} (${stated})${unclassified}`;
-  return `- Ashara's assumption, ${ACCEPTED_INFERRED[standing] ?? standing}: ${assumption.statement}${unclassified}`;
-}
-
-const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
-const RESTING_HEAD = "The work rests on these assumptions.";
-
-/** The item lines of the delivered report's paragraph that opens with the head; none when it has no such paragraph. */
-function listedUnder(body: string, head: string): string[] {
-  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item whose standing to judge; client-reports coverageProblems judges the section itself
-  return (body.split("\n\n").find((part) => part.startsWith(head)) ?? "").split("\n").filter((line) => line.startsWith("- "));
-}
+const ASSUMPTIONS_HEAD = "The assumptions the guarantees rest on:";
 
 /**
- * Each assumption the delivered report lists, among the items no stored check decides or among those
- * the work rests on, stands with the client as the vision current at acceptance and the client's
- * replies by then say. A version written before guarantees reads a client-visible assumption as the
- * guarantee of its own key, so a reviewed guarantee whose key names an assumption at acceptance is
- * that assumption; one that names none is the client's own and states no standing.
+ * The assumptions paragraph of the delivered report's guarantee table names every assumption of
+ * the vision at acceptance not recorded as internal design, once, by its key and statement, and says
+ * whether the client stated it, as that version records it: an assumption the client has not stated
+ * is never told to them as theirs.
  */
-function checkDeliveredStandings(records: TextFactRecords, add: Add, versions: Versions): void {
-  if (records.delivered.length === 0) return;
-  // A corrupt task_spec throws TaskSpecCorrupt: the run fails, never passes unjudged.
-  // eslint-disable-next-line no-restricted-syntax -- policy default: an unrecorded review spec leaves no reviewed assumption whose standing to recompute; client-reports coverageOnRecord judges it as unrecorded
-  const reviewed = (parseStoredTaskSpec(records.reviewSpec)?.sources ?? []).filter((source) => source.type !== "scope");
+function checkTableAssumptions(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const report of records.delivered) {
-    const listed = [...listedUnder(report.body, UNCOVERED_HEAD), ...listedUnder(report.body, RESTING_HEAD)];
-    if (reviewed.length === 0 || listed.length === 0) continue;
     const vision = report.visionAtAcceptance === null ? undefined : versions.get(report.visionAtAcceptance);
-    if (vision === undefined || vision.kind === "unreadable") {
-      add("delivered-standing-unreadable", `the delivered report lists items of the vision, but the vision at acceptance ${vision === undefined ? "is not on record" : `cannot be read: ${vision.detail.slice(0, 200)}`}`);
+    if (vision === undefined) continue;
+    if (vision.kind === "unreadable") {
+      add("delivered-standing-unreadable", `the delivered report's table rests on a vision at acceptance that cannot be read: ${vision.detail.slice(0, 200)}`);
       continue;
     }
-    const replies = records.sweepReplies.filter((reply) => reply.sweepId === report.sweepId);
-    for (const source of reviewed) {
-      const line = listed.find((each) => each.includes(source.text));
-      if (line === undefined) continue;
-      const assumption = vision.assumptions.find((a) => a.key === source.id);
-      if (assumption === undefined && source.type === "guarantee") continue;
-      if (assumption === undefined) {
-        add(`delivered-standing:${source.id}`, `the delivered report lists assumption ${source.id}, which the vision at acceptance (v${report.visionAtAcceptance ?? "?"}) does not hold`);
-        continue;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: an absent paragraph lists no assumption, so each one the vision holds is named missing below
+    const listed = (report.body.split("\n\n").find((part) => part.startsWith(ASSUMPTIONS_HEAD)) ?? "").split("\n").filter((line) => line.startsWith("- "));
+    const visible = vision.assumptions.filter((assumption) => assumption.kind !== "internal-design");
+    for (const assumption of visible) {
+      const lines = listed.filter((line) => line.startsWith(`- ${assumption.key}: `));
+      const said = assumption.status === "Stated" ? "stated by you)" : "not confirmed by you)";
+      const [line] = lines;
+      if (lines.length !== 1 || line === undefined) {
+        add(`delivered-standing:${assumption.key}`, `the delivered report names assumption ${assumption.key} ${lines.length} time(s) among the assumptions the guarantees rest on; it must once`);
+      } else if (!line.startsWith(`- ${assumption.key}: ${assumption.statement} (`) || !line.endsWith(said)) {
+        add(`delivered-standing:${assumption.key}`, `the delivered report says "${line.slice(0, 200)}"; at acceptance ${assumption.key} is "${assumption.statement.slice(0, 120)}", ${assumption.status}, so it must end "${said}"`);
       }
-      const standing = acceptedStanding(assumption, vision, replies);
-      if (typeof standing !== "string") {
-        add(`delivered-standing-unreadable:${source.id}`, `the delivered report lists ${source.id}, whose standing at acceptance cannot be read: ${standing.unreadable}`);
-        continue;
-      }
-      const expected = acceptedLine(assumption, standing);
-      if (line !== expected) add(`delivered-standing:${source.id}`, `the delivered report says "${line.slice(0, 200)}"; at acceptance ${source.id} stood ${standing}: "${expected.slice(0, 200)}"`);
+    }
+    const known = new Set(visible.map((assumption) => assumption.key));
+    for (const line of listed) {
+      const key = /^- ([^:]+): /.exec(line)?.[1];
+      if (key === undefined || !known.has(key)) add(`delivered-standing:${key ?? "unkeyed"}`, `the delivered report names "${line.slice(0, 120)}" as an assumption the guarantees rest on; the vision at acceptance holds no such client-visible assumption`);
     }
   }
 }
@@ -847,19 +769,16 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/intake.ts#readingReport`, judges: [i9(checkIntakeReading)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#readingSection`, judges: [i9(checkIntakeReading)] },
   { source: `${ENGAGEMENT}/plan-report.ts#firstPlanReport`, judges: [i9(checkFirstPlan)] },
-  { source: `${ENGAGEMENT}/delivered-report.ts#coverageSection`, judges: [i9(checkDeliveredStandings), i4("delivered-coverage")] },
-  // Each assumption the work rests on, worded by where it stood with the client at acceptance.
-  { source: `${ENGAGEMENT}/delivered-report.ts#restingSection`, judges: [i9(checkDeliveredStandings)] },
+  // Every terminal message's table: each guarantee in force once with the verdict its sweep's evidence
+  // reads, stored beside it, the punch list, and each assumption with whether the client stated it.
+  { source: `${ENGAGEMENT}/guarantee-report.ts#guaranteeSection`, judges: [i4("guarantee-table"), i9(checkTableAssumptions)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#interfaceSection`, judges: [i9(checkDeliveredInterface)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#deliveredReport`, judges: [i4("delivered-close")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#uncheckedSection`, judges: [i4("delivered-unchecked")] },
-  { source: `${ENGAGEMENT}/delivered-report.ts#unverifiedSection`, judges: [i4("delivered-coverage")] },
-  { source: `${ENGAGEMENT}/delivered-report.ts#undecidedSection`, judges: [i4("delivered-coverage")] },
-  // Every decided item no review left undecided is listed once, confirmed or not, and only the confirmed are counted.
-  { source: `${ENGAGEMENT}/delivered-report.ts#confirmedSection`, judges: [i4("delivered-coverage")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#givenUpSection`, judges: [i4("delivered-given-up")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#unreadNotice`, judges: [i4("delivered-notice-unfounded")] },
   { source: `${ENGAGEMENT}/block-report.ts#projectBlockedReport`, judges: [i4("halt-cause")] },
+  { source: `${ENGAGEMENT}/block-report.ts#haltBody`, judges: [i4("halt-cause")] },
   { source: `${ENGAGEMENT}/block-report.ts#planRepairBoundReport`, judges: [i4("halt-cause:plan_repair")] },
   // No code path writes a check_dispute or suite_review halt; I4 names any one a run writes.
   { source: `${ENGAGEMENT}/block-report.ts#disputeBoundReport`, judges: [i4("halt-kind-retired")] },
@@ -874,10 +793,11 @@ const I9_CHECKS: readonly TextCheck[] = [...new Set(TEXT_COVERED.flatMap((entry)
 
 /** @testseam text-coverage.test.ts holds it to the source: the composers no oracle judges, each with its reason */
 export const TEXT_EXCLUDED: readonly ExcludedText[] = [
-  { source: `${ENGAGEMENT}/block-report.ts#blockedBody`, kind: "not-a-composer", reason: "chooses which halt composer writes the report; each is placed on its own" },
+  { source: `${ENGAGEMENT}/block-report.ts#blockedBody`, kind: "not-a-composer", reason: "joins the halt's own text and the guarantee table, each placed on its own" },
   { source: `${ENGAGEMENT}/repositories/block-report.ts#postProjectBlockReport`, kind: "not-a-composer", reason: "posts the body it is given, through insertReport" },
   { source: `${ENGAGEMENT}/repositories/block-report.ts#insertReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${DELIVERY}/repositories/plan-report.ts#postPlanReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${DELIVERY}/repositories/replan.ts#postPlanRevisionReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${DELIVERY}/dispatch/dispatch-records.ts#DispatchRecords.writeBrief`, kind: "not-a-composer", reason: "writes the composed brief to the conversation record as it is" },
@@ -951,7 +871,7 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   },
   { source: `${ENGAGEMENT}/repositories/tender-intake.ts#recordTenderIntake`, posts: [`${ENGAGEMENT}/intake.ts#contractDraftReport`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`, posts: [`${ENGAGEMENT}/intake.ts#questionBody`], clientWords: false },
-  { source: `${ENGAGEMENT}/repositories/client-stop.ts#recordClientStop`, posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`], clientWords: false },
+  { source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`, posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`], clientWords: false },
   {
     source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`,
     posts: [`${ENGAGEMENT}/delivered-report.ts#deliveredReport`, `${ENGAGEMENT}/delivered-report.ts#unreadNotice`],

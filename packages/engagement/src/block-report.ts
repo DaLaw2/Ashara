@@ -5,6 +5,8 @@ import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@as
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
+import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 
 // The Liaison's reports on project halts: the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
@@ -15,7 +17,10 @@ import type { RiskRecordReader } from "./early-warning.js";
 // in the client's words, naming the task's record, which holds the stored text (stored reasons are
 // Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
-// each at most once. No task is reported on its own: no task waits on a person.
+// each at most once. No task is reported on its own: no task waits on a person. A halt's report
+// carries the guarantee table of the halt's terminal sweep, so it is due once that sweep is
+// recorded; under a halt of Ashara's own machines that sweep ran on no commit, and every guarantee
+// reads unjudged, saying so.
 
 /** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
 type ProjectBlockKind =
@@ -83,6 +88,7 @@ type DueBlockReport =
       readonly projectId: ProjectId;
       readonly kind: ProjectBlockKind;
       readonly cause: RecordedCause;
+      readonly guarantees: GuaranteeTable;
     }
   | {
       readonly subject: "project-blocked";
@@ -90,6 +96,7 @@ type DueBlockReport =
       readonly projectId: ProjectId;
       readonly kind: "suite_review";
       readonly review: BlockingReview;
+      readonly guarantees: GuaranteeTable;
     }
   | {
       readonly subject: "project-blocked";
@@ -97,6 +104,7 @@ type DueBlockReport =
       readonly projectId: ProjectId;
       readonly kind: "plan_repair";
       readonly abandoned: readonly BlockingAbandonment[];
+      readonly guarantees: GuaranteeTable;
     }
   | {
       readonly subject: "project-blocked";
@@ -104,6 +112,7 @@ type DueBlockReport =
       readonly projectId: ProjectId;
       readonly kind: "check_dispute";
       readonly dispute: BlockingDispute;
+      readonly guarantees: GuaranteeTable;
     }
   /** `how` the halt ended: an owner's unblock, or the substrate probe passing after an infrastructure halt. */
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
@@ -112,8 +121,11 @@ type DueBlockReport =
 export interface BlockReportStore extends RiskRecordReader {
   /** Every report due, each read on its own: one whose record does not read as a report is its UnreadSubject. */
   dueReports(): Promise<ReadonlyArray<DueBlockReport | UnreadSubject>>;
-  /** Posts the report on a project's block episode, `on` the block or its resumption, unless one exists. */
-  postProjectReport(episodeId: string, on: "blocked" | "resumed", body: string): Promise<"posted" | "already-posted">;
+  /**
+   * Posts the report on a project's block episode, `on` the block (with its table's verdicts) or its
+   * resumption (with none), unless one exists.
+   */
+  postProjectReport(episodeId: string, on: "blocked" | "resumed", body: string, verdicts: TableVerdicts | null): Promise<"posted" | "already-posted">;
 }
 
 interface BlockReportOutcome {
@@ -414,7 +426,7 @@ function projectResumedReport(how: "unblocked" | "probe_passed"): string {
     : "Work on this project has resumed: the team cleared what paused it, and the work goes on from where it stopped.";
 }
 
-function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
+function haltBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
   switch (due.kind) {
     case "check_dispute":
       return disputeBoundReport(due.dispute);
@@ -425,6 +437,11 @@ function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-b
     default:
       return projectBlockedReport(due.episodeId, due.kind, due.cause);
   }
+}
+
+/** A halt's report: what paused the project, then the guarantee table of its terminal sweep. */
+function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
+  return `${haltBody(due)}\n\n${guaranteeSection(due.guarantees)}`;
 }
 
 export class BlockReports implements LiaisonBlockReports {
@@ -448,7 +465,12 @@ export class BlockReports implements LiaisonBlockReports {
       async (report): Promise<BlockReportOutcome> => {
         switch (report.subject) {
           case "project-blocked": {
-            const kind = await this.store.postProjectReport(report.episodeId, "blocked", await this.withRegister(report.projectId, blockedBody(report)));
+            const kind = await this.store.postProjectReport(
+              report.episodeId,
+              "blocked",
+              await this.withRegister(report.projectId, blockedBody(report)),
+              tableVerdicts(report.guarantees),
+            );
             return { kind, projectId: report.projectId, subject: report.subject };
           }
           case "project-resumed": {
@@ -456,6 +478,7 @@ export class BlockReports implements LiaisonBlockReports {
               report.episodeId,
               "resumed",
               await this.withRegister(report.projectId, projectResumedReport(report.how)),
+              null,
             );
             return { kind, projectId: report.projectId, subject: report.subject };
           }

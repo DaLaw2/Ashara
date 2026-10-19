@@ -1,16 +1,20 @@
 import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
+import { guaranteeTableOf } from "../guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
+import { guaranteeRecordsOf, insertGuaranteeVerdicts } from "./guarantee-report.js";
 
 // The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
 // infrastructure halt). Each is due while its episode (a project_blocks row) has no report, and
 // posting one records it against that episode in the same transaction, so a retried or concurrent
-// post tells the client once.
+// post tells the client once. A halt's report is due once the halt's terminal sweep is recorded:
+// it carries that sweep's guarantee table, and its verdicts are posted with it.
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
 type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
@@ -177,6 +181,7 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: ProjectBlockKind;
       readonly cause: RecordedCauseRow;
+      readonly guarantees: GuaranteeTable;
     }
   | {
       readonly subject: "project-blocked";
@@ -184,6 +189,7 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: "check_dispute";
       readonly dispute: BlockingDisputeRow;
+      readonly guarantees: GuaranteeTable;
     }
   | {
       readonly subject: "project-blocked";
@@ -191,6 +197,7 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: "suite_review";
       readonly review: BlockingReviewRow;
+      readonly guarantees: GuaranteeTable;
     }
   | {
       readonly subject: "project-blocked";
@@ -198,6 +205,7 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: "plan_repair";
       readonly abandoned: readonly BlockingAbandonmentRow[];
+      readonly guarantees: GuaranteeTable;
     }
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
 
@@ -305,9 +313,12 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       reason: projectBlocks.reason,
       spend: projectBlocks.spend,
       work: projectBlocks.work,
+      sweepId: acceptanceSweeps.id,
     })
     .from(projectBlocks)
     .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
+    // The halt's terminal sweep: its report waits for it.
+    .innerJoin(acceptanceSweeps, eq(acceptanceSweeps.blockId, projectBlocks.id))
     .where(
       and(
         isNull(projectBlocks.endedAt),
@@ -324,21 +335,22 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       const kind = ProjectBlockKindSchema.safeParse(row.kind);
       if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
       const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
+      const guarantees = guaranteeTableOf(await guaranteeRecordsOf(db, row.sweepId));
       if (kind.data === "check_dispute") {
         const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
-        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute };
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute, guarantees };
       }
       if (kind.data === "suite_review") {
         const review = await blockingReview(db, row.projectId, row.blockedAt);
         if (review === null) throw new BlockingReviewMissing(row.id, row.projectId);
-        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review };
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review, guarantees };
       }
       if (kind.data === "plan_repair") {
         const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
-        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned };
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned, guarantees };
       }
       const cause = { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend), work: recordedWork(row.id, row.work) };
-      return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause };
+      return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause, guarantees };
     },
   );
 
@@ -354,15 +366,16 @@ async function insertReport(tx: DbHandle, projectId: string, body: string): Prom
 }
 
 /**
- * Posts the report on one project block episode, `on` the block itself or its resumption, and
- * records it on the episode, in one transaction with the episode row locked. An episode already
- * reported on gets nothing.
+ * Posts the report on one project block episode, `on` the block itself or its resumption, with the
+ * verdicts of the table it carries, and records it on the episode, in one transaction with the
+ * episode row locked. An episode already reported on gets nothing.
  */
 export async function postProjectBlockReport(
   db: Database,
   episodeId: string,
   on: "blocked" | "resumed",
   body: string,
+  verdicts: TableVerdicts | null,
 ): Promise<"posted" | "already-posted"> {
   return db.transaction(async (tx) => {
     const [episode] = await tx
@@ -374,6 +387,7 @@ export async function postProjectBlockReport(
     const existing = on === "blocked" ? episode.reportId : episode.resumedReportId;
     if (existing !== null) return "already-posted";
     const reportId = await insertReport(tx, episode.projectId, body);
+    if (verdicts !== null) await insertGuaranteeVerdicts(tx, episode.projectId, reportId, verdicts);
     await tx
       .update(projectBlocks)
       .set(on === "blocked" ? { reportId } : { resumedReportId: reportId })

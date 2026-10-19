@@ -1,21 +1,16 @@
-import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { SecondOpinionStrength } from "@ashara/finance";
 import { describeErrorChain, faultBackoffSeconds, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
-import { checkDecides } from "./vision-language/index.js";
-import type { VisionSource } from "./vision-language/index.js";
+import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 
 // The Liaison's delivered report:
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
-// each goal task and how its record says it closed, and which items of what they asked for no
-// stored check covers. Every sentence is rendered from a record: a close
-// whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
-// folded into "delivered" or into what passed: the opening claims only the run that happened. Every
-// assumption classed internal design is named as not verified by Ashara: no check decides it.
-// So is every item a review of the checks left undecided: never counted as covered. Every
-// item counted as covered was confirmed by a second review of its checks, and the report names how
-// independent that review was. A tender whose first reading asked the
+// each goal task and how its record says it closed, and the guarantee table judged from that
+// sweep's evidence: one verdict per guarantee, which a review of the checks can only hold back.
+// Every sentence is rendered from a record: a close whose kind was not recorded is said to be so,
+// and "not checked" is stated as not checked, never folded into "delivered" or into what passed: the
+// opening claims only the run that happened. A tender whose first reading asked the
 // client nothing is told with the strength of the second reading behind that, or that none answered.
 // The only ways of running the product presented as verified are the commands acceptance ran and saw
 // pass; the public interface file, none of whose entries acceptance runs, is quoted as unverified.
@@ -28,72 +23,11 @@ type GoalClose =
   | { readonly kind: "unrecorded-kind"; readonly commit: string }
   | { readonly kind: "no-record" };
 
-/** An assumption with where it stood with the client at acceptance, never as the plan's copy of the vision recorded it. */
-interface AcceptedAssumption {
-  readonly type: "assumption";
-  readonly id: string;
-  readonly text: string;
-  readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
-  readonly standing: AcceptedAssumptionStanding;
-}
-
 /**
- * An item of the vision the plan was reviewed against: a guarantee, a scope line of a plan reviewed
- * before guarantees were recorded, or an assumption as it stood at acceptance. A guarantee a version
- * written before guarantees reads from an assumption carries that assumption, so the client is told
- * it was Ashara's and where it stood; null on every other guarantee.
+ * How independent of the first reading of the tender its second reading was: another model family,
+ * another model of the same family, or the same model asked again from another angle.
  */
-type AcceptedVisionItem =
-  | (Extract<VisionSource, { readonly type: "guarantee" }> & { readonly assumed: AcceptedAssumption | null })
-  | Extract<VisionSource, { readonly type: "scope" }>
-  | AcceptedAssumption;
-
-/**
- * Whether a review of the checks left an item undecided, and why. A finding that no check really
- * decides it did not act: "unsettled" when no second review confirmed or
- * settled it, "review-failed" when the second review that could have was asked and failed. A review
- * that found no problem in its checks was not confirmed: "clean-contradicted"
- * when a second review found one there, "clean-unconfirmed" when no second review answered. False
- * when no review left it so.
- */
-export type UndecidedBy = false | "unsettled" | "review-failed" | "clean-contradicted" | "clean-unconfirmed";
-
-/**
- * How independent of the first review the second review of an item's checks was: another model family, another model of the same family, or the same model asked
- * again from another angle.
- */
-export type ReviewStrength = SecondOpinionStrength;
-
-/**
- * How the models whose reviews confirmed an item's checks stood to the work they reviewed: every one
- * graded above it; the second review no stronger than it, the first above ("equal-second"); the
- * first no stronger, the second above ("equal-first"); both no stronger ("equal-both"); at least one
- * no stronger, without which on record ("equal"); or not on record, for a review recorded before that was.
- */
-export type JudgeStanding = "above" | "equal-second" | "equal-first" | "equal-both" | "equal" | "unrecorded";
-
-/** Each judge standing, strongest first. */
-const JUDGE_STANDINGS: readonly JudgeStanding[] = ["above", "equal-second", "equal-first", "equal-both", "equal", "unrecorded"];
-
-/**
- * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
- * ran records that it decides it, whether a review of those checks left it undecided, and
- * the strength of the second review behind that: the one that confirmed a decided item, or the one
- * that left it undecided; null where none answered. A confirmed item also carries how its reviewing
- * models stood to the work (`judges`); null on any other. Or none recorded.
- */
-type VisionCoverage =
-  | {
-      readonly kind: "recorded";
-      readonly items: ReadonlyArray<{
-        readonly source: AcceptedVisionItem;
-        readonly checked: boolean;
-        readonly undecided: UndecidedBy;
-        readonly review: ReviewStrength | null;
-        readonly judges: JudgeStanding | null;
-      }>;
-    }
-  | { readonly kind: "unrecorded" };
+type ReviewStrength = SecondOpinionStrength;
 
 /**
  * How the tender's reading stood (intake_readings): its first reading asked the client
@@ -131,7 +65,8 @@ interface DueDeliveredReport {
   readonly givenUp: readonly string[];
   /** The stored checks the sweep ran and saw pass (acceptance_sweeps.check_outcomes, those passed). */
   readonly executed: ExecutedChecks;
-  readonly vision: VisionCoverage;
+  /** The guarantee table judged from the sweep's evidence. */
+  readonly guarantees: GuaranteeTable;
   readonly reading: ReadingTold;
 }
 
@@ -190,8 +125,8 @@ export interface DeliveredReportStore {
    * last failed attempt set a retry time is listed once that time has passed.
    */
   dueReports(): Promise<ReadonlyArray<DueDeliveredReport | UnreadDeliveredReport>>;
-  /** Posts the report on the accepted sweep unless one is posted. */
-  postReport(sweepId: string, body: string): Promise<"posted" | "already-posted">;
+  /** Posts the report on the accepted sweep unless one is posted, with its table's verdicts when it carries one. */
+  postReport(sweepId: string, body: string, verdicts: TableVerdicts | null): Promise<"posted" | "already-posted">;
   /** Records a failure at the sweep's report (DeliveredReportFailureRecord). */
   recordReportFailure(sweepId: string, failure: DeliveredReportFailureRecord): Promise<void>;
 }
@@ -356,50 +291,6 @@ function closeLine(title: string, close: GoalClose): string {
   }
 }
 
-/**
- * Whether the item is part of what the client asked for, which a check decides: a guarantee, or a
- * scope line not recorded as out of scope. An assumption is not: it is decided through what the
- * client asked for that rests on it.
- */
-function askedFor(source: AcceptedVisionItem): boolean {
-  return checkDecides(source);
-}
-
-/**
- * The assumptions recorded as the team's own design choices, by id and text: no check decides one,
- * so the client is told Ashara did not verify them. Empty when there are none.
- */
-function unverifiedSection(vision: VisionCoverage): string[] {
-  if (vision.kind === "unrecorded") return [];
-  const design = vision.items.flatMap(({ source }) => (source.type === "assumption" && source.kind === "internal-design" ? [source] : []));
-  if (design.length === 0) return [];
-  return [
-    [
-      `These assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no ` +
-        `check decides them: they are not verified by Ashara.`,
-      ...design.map((source) => `- ${source.id}: ${source.text}`),
-    ].join("\n"),
-  ];
-}
-
-/**
- * The assumptions a client could observe that the work rests on, each worded by where it stood with
- * the client at acceptance. None is an item of what the client asked for, since each is decided only
- * through what rests on it, so none is counted among them. Empty when there are none.
- */
-function restingSection(vision: VisionCoverage): string[] {
-  if (vision.kind === "unrecorded") return [];
-  const resting = vision.items.flatMap(({ source }) => (source.type === "assumption" && source.kind !== "internal-design" ? [source] : []));
-  if (resting.length === 0) return [];
-  return [
-    [
-      `The work rests on these assumptions. None is counted above as an item of what you asked for: each is decided ` +
-        `only through what you asked for that rests on it.`,
-      ...resting.map(coverageLine),
-    ].join("\n"),
-  ];
-}
-
 /** Who gave the second reading of the tender, in the client's words: a weaker strength says what it shares. */
 const READ_BY: Readonly<Record<ReviewStrength, string>> = {
   "other-family": "another model family",
@@ -428,171 +319,6 @@ function readingSection(reading: ReadingTold): string[] {
     case "unrecorded":
       return [`How your tender was read is not on record for this project, so whether a second reading confirmed it is not stated.`];
   }
-}
-
-type StatedStanding = Extract<AcceptedAssumptionStanding, "stated" | "confirmed" | "changed">;
-
-/** What the client's answer made of a Stated assumption, as its record says, in the client's words. */
-const STATED_BY_CLIENT: Readonly<Record<StatedStanding, string>> = {
-  stated: "your answer",
-  confirmed: "you confirmed this when asked",
-  changed: "your answer, which changed what we had assumed",
-};
-
-/** How the client saw an Inferred assumption at acceptance, as the records say, in the client's words. */
-const SEEN_BY_CLIENT: Readonly<Record<Exclude<AcceptedAssumptionStanding, StatedStanding>, string>> = {
-  asked: "which you were asked about and have not answered",
-  answered: "which you were asked about; your reply neither confirmed nor changed it",
-  "answer-unread": "which you were asked about; your reply had not been read when the project was accepted",
-  reported: "which was reported to you",
-  unrecorded: "which Ashara has no record of showing you",
-};
-
-function isStated(standing: AcceptedAssumptionStanding): standing is StatedStanding {
-  return standing === "stated" || standing === "confirmed" || standing === "changed";
-}
-
-function coverageLine(source: AcceptedVisionItem): string {
-  if (source.type === "guarantee") return source.assumed === null ? `- ${source.id}: ${source.text}` : coverageLine(source.assumed);
-  if (source.type === "scope") {
-    return source.side === "unclassified"
-      ? `- ${source.text} (recorded without saying whether it is in or out of scope)`
-      : `- ${source.text}`;
-  }
-  const unclassified = source.kind === "unclassified" ? " (not recorded as what you see or as how it is built)" : "";
-  if (isStated(source.standing)) return `- ${source.text} (${STATED_BY_CLIENT[source.standing]})${unclassified}`;
-  return `- Ashara's assumption, ${SEEN_BY_CLIENT[source.standing]}: ${source.text}${unclassified}`;
-}
-
-/** How independent each strength of second review is, in the client's words: a weaker one says what it shares. */
-const REVIEWED_BY: Readonly<Record<ReviewStrength, string>> = {
-  "other-family": "another model family",
-  "same-family-other-model": "another model of the same family as the first review, which shares more of its blind spots than another family would",
-  "same-model": "the same model as the first review asked again from another angle, which shares every one of its blind spots",
-};
-
-/**
- * Which asked-for items no stored check decides, listed; then how many are decided by a stored check
- * and confirmed by a second review of those checks. Only those are counted: an item a review left
- * undecided, or one no second review confirmed, is never among them, and "none" is said when none is.
- */
-function coverageSection(vision: VisionCoverage): string {
-  if (vision.kind === "unrecorded") {
-    return "Which parts of what you asked for the checks cover is not on record for this plan, so none of it is stated as checked.";
-  }
-  const asked = vision.items.filter((item) => askedFor(item.source));
-  if (asked.length === 0) return "The plan's record holds no item of what you asked for, so none of it is stated as checked.";
-  const uncovered = asked.filter((item) => !item.checked);
-  const confirmed = asked.filter((item) => item.checked && item.undecided === false && item.review !== null).length;
-  const decided = "decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks";
-  const count =
-    confirmed === asked.length
-      ? `Every item of what you asked for is ${decided}; how independent that review was is said below.`
-      : confirmed === 0
-        ? `None of the ${plural(asked.length, "item")} of what you asked for is ${decided}.`
-        : `${confirmed} of the ${plural(asked.length, "item")} of what you asked for are ${decided}; how independent that review was is said below.`;
-  if (uncovered.length === 0) return count;
-  return [
-    `These items of what you asked for are decided by no stored check of a task whose stored checks passed on ` +
-      `main, so nothing confirms them either way:`,
-    ...uncovered.map((item) => coverageLine(item.source)),
-    ``,
-    count,
-  ].join("\n");
-}
-
-/**
- * How the models that reviewed an item's checks stood to the work they reviewed, in the client's
- * words: nothing is added when every one was stronger than the work; the review no stronger than it
- * is named where the record says which, and a standing not on record is said so.
- */
-const JUDGED_BY: Readonly<Record<JudgeStanding, string>> = {
-  above: "",
-  "equal-second":
-    "; that second review was by a model no stronger than the one their work was graded for, while the first review of those checks was by a stronger one",
-  "equal-first":
-    "; the first review of those checks was by a model no stronger than the one their work was graded for, while that second review was by a stronger one",
-  "equal-both": "; both the first review of those checks and that second review were by models no stronger than the one their work was graded for",
-  equal: "; at least one of the models that reviewed those checks was no stronger than the one their work was graded for",
-  unrecorded: "; how strong the models that reviewed those checks were, against the work they reviewed, is not on record",
-};
-
-/**
- * The asked-for items a stored check decides that no review left undecided, grouped by how
- * independent the second review that confirmed them was and how its reviewing models stood to the
- * work; and those no second review of their checks is on record as confirming. Empty when there are none.
- */
-function confirmedSection(vision: VisionCoverage): string[] {
-  if (vision.kind === "unrecorded") return [];
-  const decided = vision.items.filter((item) => askedFor(item.source) && item.checked && item.undecided === false);
-  const byStrength = SECOND_OPINION_STRENGTHS.flatMap((strength) =>
-    JUDGE_STANDINGS.flatMap((judges) => {
-      // A confirmed item that carries no standing is reported as one whose standing is not on record, never dropped.
-      const confirmed = decided.filter((item) => item.review === strength && (item.judges === null ? "unrecorded" : item.judges) === judges);
-      if (confirmed.length === 0) return [];
-      return [
-        [
-          `These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a ` +
-            `second review of those checks, by ${REVIEWED_BY[strength]}, found no problem with that${JUDGED_BY[judges]}:`,
-          ...confirmed.map((item) => coverageLine(item.source)),
-        ].join("\n"),
-      ];
-    }),
-  );
-  const unreviewed = decided.filter((item) => item.review === null);
-  if (unreviewed.length === 0) return byStrength;
-  return [
-    ...byStrength,
-    [
-      `These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no ` +
-        `second review of those checks is on record as confirming that: they are not verified by Ashara.`,
-      ...unreviewed.map((item) => coverageLine(item.source)),
-    ].join("\n"),
-  ];
-}
-
-const UNDECIDED_ORDER = ["unsettled", "review-failed", "clean-contradicted", "clean-unconfirmed"] as const satisfies ReadonlyArray<Exclude<UndecidedBy, false>>;
-
-/** What a review of the checks made of an undecided item, and why nothing settled it, by the strength of the second review behind it. */
-function unsettledBecause(why: Exclude<UndecidedBy, false>, strength: ReviewStrength | null): string {
-  const by = strength === null ? "" : `, by ${REVIEWED_BY[strength]},`;
-  switch (why) {
-    case "unsettled":
-      return strength === null
-        ? "a review of the checks found that none of them really decides it, and no second review confirmed or settled that: they are not verified by Ashara."
-        : `a review of the checks found that none of them really decides it, and the second review${by} did not confirm or settle that: they are not verified by Ashara.`;
-    case "review-failed":
-      return "a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.";
-    case "clean-contradicted":
-      return `the review that found no problem in their checks was not confirmed: a second review${by} found a problem there. They are not verified by Ashara.`;
-    case "clean-unconfirmed":
-      return strength === null
-        ? "the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara."
-        : `the review that found no problem in their checks was not confirmed: the second review${by} was not counted as confirming it. They are not verified by Ashara.`;
-  }
-}
-
-/**
- * The items of what the client asked for that a stored check claims to decide but no confirmed
- * review of the checks holds as decided: a review found none really does with nothing to settle it,
- * or the review that found no problem was not confirmed. They are unverified, never covered, grouped by why and by the strength of the second review
- * behind it, so a failed review never reads as a disagreement. Empty when there are none.
- */
-function undecidedSection(vision: VisionCoverage): string[] {
-  if (vision.kind === "unrecorded") return [];
-  const asked = vision.items.filter((item) => askedFor(item.source) && item.checked);
-  return UNDECIDED_ORDER.flatMap((why) =>
-    [...SECOND_OPINION_STRENGTHS, null].flatMap((strength) => {
-      const undecided = asked.filter((item) => item.undecided === why && item.review === strength);
-      if (undecided.length === 0) return [];
-      return [
-        [
-          `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but ${unsettledBecause(why, strength)}`,
-          ...undecided.map((item) => coverageLine(item.source)),
-        ].join("\n"),
-      ];
-    }),
-  );
 }
 
 /** What ran on main, and only that: the environment's test and the stored checks of the tasks named. */
@@ -633,11 +359,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
     interfaceSection(file, due.mainCommit, productInterface),
     ...uncheckedSection(due.unchecked),
     ...givenUpSection(due.givenUp),
-    coverageSection(due.vision),
-    ...confirmedSection(due.vision),
-    ...undecidedSection(due.vision),
-    ...restingSection(due.vision),
-    ...unverifiedSection(due.vision),
+    guaranteeSection(due.guarantees),
     ...readingSection(due.reading),
     `Nothing more is built on this project; it waits until you stop it.`,
   ].join("\n\n");
@@ -702,7 +424,7 @@ export class DeliveredReports implements LiaisonDeliveredReports {
       );
       read = { kind: "unreadable", attempts: reads, sweepId: due.sweepId };
     }
-    return this.post(due, deliveredReport(due, this.productInterface.file, read));
+    return this.post(due, deliveredReport(due, this.productInterface.file, read), tableVerdicts(due.guarantees));
   }
 
   /**
@@ -718,12 +440,12 @@ export class DeliveredReports implements LiaisonDeliveredReports {
       `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): its records did not read as a report in ` +
         `${attempts} attempts; the client is sent an acceptance notice without the report: ${describeErrorChain(due.error)}`,
     );
-    return this.post(due, unreadNotice(due, attempts));
+    return this.post(due, unreadNotice(due, attempts), null);
   }
 
-  private async post(due: DueDeliveredReport | UnreadDeliveredReport, body: string): Promise<DeliveredReportOutcome> {
+  private async post(due: DueDeliveredReport | UnreadDeliveredReport, body: string, verdicts: TableVerdicts | null): Promise<DeliveredReportOutcome> {
     try {
-      const kind = await this.store.postReport(due.sweepId, body);
+      const kind = await this.store.postReport(due.sweepId, body, verdicts);
       return { kind, projectId: due.projectId };
     } catch (err) {
       return this.failed(due, err, "post");

@@ -12,6 +12,7 @@ import { memoryStepContainment } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";
 import { projectState } from "../simulator/project-state.js";
+import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // Every project halt is told to the client
 // once, in plain words, stating its cause, and its end (an operator's unblock, or the substrate
@@ -30,11 +31,15 @@ async function newProject(): Promise<ProjectId> {
   return project.id;
 }
 
+/** The Liaison's block reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
 function reports(): BlockReports {
   const store = createBlockReportStore(db);
   const ours: BlockReportStore = {
     ...store,
-    dueReports: async () => (await store.dueReports()).filter((r) => ourProjects.has(r.projectId)),
+    dueReports: async () => {
+      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
+      return (await store.dueReports()).filter((r) => ourProjects.has(r.projectId));
+    },
   };
   return new BlockReports(ours, memoryStepContainment(() => true));
 }
@@ -101,6 +106,24 @@ afterAll(async () => {
 });
 
 describe("a blocked project is told once; an operator's unblock is recorded and told once", () => {
+  // The halt's report carries the guarantee table of the halt's own terminal sweep, so it waits for it.
+  test("a halt is told only once its terminal sweep is recorded, and its report carries that sweep's table", async () => {
+    const projectId = await newProject();
+    await new ProjectHaltRepository(db).block(projectId, budgetCap);
+    const store = createBlockReportStore(db);
+    const unswept = new BlockReports({ ...store, dueReports: async () => (await store.dueReports()).filter((r) => r.projectId === projectId) }, memoryStepContainment(() => true));
+    expect(await unswept.runPending()).toEqual([]);
+    expect(await messagesOf(projectId)).toEqual([]);
+
+    await sweepTerminalsOf(db, (id) => id === projectId);
+    expect(await unswept.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+    const sweeps = await db.execute(sql`
+      SELECT s.id FROM acceptance_sweeps s JOIN project_blocks b ON b.id = s.block_id WHERE b.project_id = ${projectId}`);
+    const [sweep] = z.array(z.object({ id: z.string() })).length(1).parse(sweeps.rows);
+    const [body] = await messagesOf(projectId);
+    expect(body).toContain(`No contract is on record for this project at sweep ${sweep?.id ?? ""}, so no guarantee is judged.`);
+  });
+
   test("block, report, unblock, resumed report, block again: one report per episode", async () => {
     const projectId = await newProject();
     const projects = new ProjectHaltRepository(db);
@@ -158,7 +181,9 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
 
     try {
       const store = createBlockReportStore(db);
-      const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((r) => r.projectId === unreadable || r.projectId === healthy) };
+      const mine = (projectId: string): boolean => projectId === unreadable || projectId === healthy;
+      await sweepTerminalsOf(db, mine);
+      const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((r) => mine(r.projectId)) };
       const outcomes = await new BlockReports(ours, memoryStepContainment(() => false)).runPending();
 
       expect(outcomes).toEqual([

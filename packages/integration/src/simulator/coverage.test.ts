@@ -14,7 +14,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     unrecordedCalls: 0,
     events,
     main: [],
-    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], goalUndecided: [], passedSweeps: [] },
+    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
     textFacts: {
       visions: [],
       briefs: [],
@@ -22,8 +22,6 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
       answerReplies: [],
       tenderReports: [],
       delivered: [],
-      sweepReplies: [],
-      reviewSpec: null,
       firstPlan: { report: null, items: [], revisions: [] },
       interfaceOnMain: { kind: "not-held" },
       intakeReading: null,

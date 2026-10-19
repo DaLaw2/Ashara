@@ -124,7 +124,7 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
   engagement: {
     vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
     intake: { allow: ["vision", "inbound"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
-    inbound: { allow: ["vision"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
+    inbound: { allow: ["vision", "reports"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
     reports: { allow: ["vision"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
     [ENTRY]: { allow: [], host: "src/model-schemas.ts", target: "src/index.ts" },
   },

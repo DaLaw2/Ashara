@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
 import { DeliveredReports } from "./delivered-report.js";
 import type { DeliveredReportFailureRecord, DeliveredReportStore } from "./delivered-report.js";
+import type { GuaranteeTable } from "./guarantee-report.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000021", "test");
 const MAIN = "c".repeat(40);
@@ -19,15 +19,9 @@ type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceRe
   readonly reading?: Due["reading"];
 };
 const ONE_RUN: Due["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
-type Item = Extract<Due["vision"], { readonly kind: "recorded" }>["items"][number]["source"];
 
-function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): Item {
-  return { type: "scope", id, text, side };
-}
-
-function assumption(id: string, text: string, standing: AcceptedAssumptionStanding, kind: "client-visible" | "internal-design" | "unclassified"): Item {
-  return { type: "assumption", id, text, standing, kind };
-}
+/** A table with no contract behind it; guarantee-report.test.ts judges the table's own text. */
+const NO_CONTRACT: GuaranteeTable = { kind: "no-contract", sweep: { id: "s9", mainCommit: MAIN } };
 
 const WORKSPACE = "/work/target";
 const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
@@ -69,7 +63,7 @@ const BASE: Fields = {
   checked: ["Count words"],
   unchecked: [],
   givenUp: [],
-  vision: { kind: "unrecorded" },
+  guarantees: NO_CONTRACT,
 };
 
 /** The section that says how acceptance ran the product, up to the interface file's. */
@@ -86,7 +80,7 @@ function asRun(body: string): string {
 function howToRun(body: string): string {
   const quoted = body.indexOf("Public interface (from ");
   const start = quoted >= 0 ? quoted : body.indexOf("How to run");
-  const end = body.indexOf("\n\nWhich parts of what you asked for");
+  const end = body.indexOf("\n\nNo contract is on record");
   expect(start).toBeGreaterThan(0);
   return body.slice(start, end);
 }
@@ -161,430 +155,35 @@ describe("how to run the product", () => {
 
 // The delivered report, every line from a record.
 describe("the delivered report", () => {
-  test("names each goal task with how its record says it closed, and each vision item no check covers as not checked", async () => {
+  test("names each goal task with how its record says it closed", async () => {
     const body = await render({
+      ...BASE,
       sweepId: "s1",
-      projectId,
-      mainCommit: MAIN,
       goals: [
         { title: "Store and read keys", close: { kind: "merged", commit: MERGE_A } },
         { title: "Delete keys", close: { kind: "already-delivered", commit: MERGE_A, by: "Store and read keys" } },
         { title: "List keys", close: { kind: "unrecorded-kind", commit: MERGE_A } },
+        { title: "Rename keys", close: { kind: "no-record" } },
       ],
       checked: ["Store and read keys", "Delete keys", "List keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "A key can be stored and read back"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "A key can be deleted"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S3", "Concurrent writers never corrupt the store"), checked: false, undecided: false, review: null, judges: null },
-        ],
-      },
     });
     expect(body).toContain(`the environment's test and the stored checks of 3 completed tasks passed together on main, commit ${MAIN}`);
     expect(body).toContain(`"Store and read keys": built and merged, commit ${MERGE_A}.`);
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store and read keys".`);
     expect(body).toContain(`"List keys": closed on commit ${MERGE_A}; whether it was merged or already delivered there is not on record.`);
-    expect(body).toContain("decided by no stored check of a task whose stored checks passed on main");
-    expect(body).toContain("- Concurrent writers never corrupt the store");
-    const uncovered = body.split("\n\n").find((section) => section.includes("decided by no stored check"));
-    expect(uncovered).not.toContain("- A key can be deleted");
-    expect(body).toContain("found no problem with that:\n- A key can be stored and read back\n- A key can be deleted");
+    expect(body).toContain(`"Rename keys": closed with no commit on record.`);
   });
 
-  test("with no coverage on record, nothing is stated as checked", async () => {
-    const body = await render({
-      sweepId: "s2",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: { kind: "unrecorded" },
-    });
-    expect(body).toContain("is not on record for this plan, so none of it is stated as checked");
-  });
-
-  test("every vision item covered is said so, and nothing else is claimed", async () => {
-    const body = await render({
-      sweepId: "s3",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" }] },
-    });
-    expect(body).toContain(
-      "Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks; how independent that review was is said below.",
-    );
-    expect(body).toContain("and a second review of those checks, by another model family, found no problem with that:\n- Keys can be stored");
-    expect(body).not.toContain("not checked");
-  });
-
-  // Every confirmed or unverified item is named with how independent
-  // its second review was; agreement within one family is said to share blind spots.
-  test("each confirmed item is grouped by the strength of the review that confirmed it, a weaker one saying what it shares", async () => {
-    const body = await render({
-      ...BASE,
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: false, review: "same-family-other-model", judges: "above" },
-          { source: scope("S3", "Keys can be listed"), checked: true, undecided: false, review: "same-model", judges: "above" },
-          { source: scope("S4", "Keys survive a power loss"), checked: true, undecided: "unsettled", review: "same-family-other-model", judges: null },
-          { source: scope("S5", "Keys can be renamed"), checked: true, undecided: false, review: null, judges: null },
-        ],
-      },
-    });
-    expect(body).toContain("3 of the 5 items of what you asked for are decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks;");
-    expect(body).toContain("a second review of those checks, by another model family, found no problem with that:\n- Keys can be stored\n\n");
-    expect(body).toContain(
-      "a second review of those checks, by another model of the same family as the first review, which shares more of its blind spots than another family would, found no problem with that:\n- Keys can be deleted\n\n",
-    );
-    expect(body).toContain(
-      "a second review of those checks, by the same model as the first review asked again from another angle, which shares every one of its blind spots, found no problem with that:\n- Keys can be listed\n\n",
-    );
-    expect(body).toContain(
-      "and the second review, by another model of the same family as the first review, which shares more of its blind spots than another family would, did not confirm or settle that: they are not verified by Ashara.\n- Keys survive a power loss",
-    );
-    expect(body).toContain("but no second review of those checks is on record as confirming that: they are not verified by Ashara.\n- Keys can be renamed");
-  });
-
-  // A judge no stronger than the work it judged is named, never folded in with one above it.
-  test("a confirmed item whose reviewing models were no stronger than the work, or whose standing is not on record, is said so in its own group", async () => {
-    const body = await render({
-      ...BASE,
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: false, review: "other-family", judges: "equal-second" },
-          { source: scope("S3", "Keys can be listed"), checked: true, undecided: false, review: "other-family", judges: "unrecorded" },
-          { source: scope("S4", "Keys can be renamed"), checked: true, undecided: false, review: "other-family", judges: "equal-both" },
-          { source: scope("S5", "Keys can be copied"), checked: true, undecided: false, review: "other-family", judges: "equal-first" },
-          { source: scope("S6", "Keys can be counted"), checked: true, undecided: false, review: "other-family", judges: "equal" },
-        ],
-      },
-    });
-    expect(body).toContain("Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks;");
-    expect(body).toContain("a second review of those checks, by another model family, found no problem with that:\n- Keys can be stored\n\n");
-    expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; that second review was by a model no stronger than the one their work was graded for, " +
-        "while the first review of those checks was by a stronger one:\n- Keys can be deleted\n\n",
-    );
-    expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; both the first review of those checks and that second review were by models no stronger " +
-        "than the one their work was graded for:\n- Keys can be renamed\n\n",
-    );
-    expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; the first review of those checks was by a model no stronger than the one their work was graded for, " +
-        "while that second review was by a stronger one:\n- Keys can be copied\n\n",
-    );
-    expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; at least one of the models that reviewed those checks was no stronger than the one their work was graded for:\n- Keys can be counted\n\n",
-    );
-    expect(body).not.toContain("no stronger one was available");
-    expect(body).not.toContain("no model above it was routed");
-    expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; how strong the models that reviewed those checks were, against the work they reviewed, is not on record:\n- Keys can be listed",
-    );
-  });
-
-  // The coverage sentence counts only items decided and confirmed, so it never contradicts a list of unverified items.
-  test("when every item is unverified, the coverage sentence says none is confirmed, above the list that names them", async () => {
-    const body = await render({
-      ...BASE,
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: "clean-unconfirmed", review: null, judges: null },
-          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: "clean-unconfirmed", review: null, judges: null },
-          { source: scope("S3", "Keys can be listed"), checked: false, undecided: false, review: null, judges: null },
-        ],
-      },
-    });
-    expect(body).toContain(
-      "None of the 3 items of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks.",
-    );
-    expect(body).not.toContain("Every other item");
-    expect(body).not.toMatch(/Every item of what you asked for is decided/);
-    expect(body).toContain("no second review of those checks answered. They are not verified by Ashara.\n- Keys can be stored\n- Keys can be deleted");
-    expect(body).toContain("so nothing confirms them either way:\n- Keys can be listed\n\nNone of the 3 items");
-  });
-
-  // An item a review of the checks left undecided is unverified, never covered,
-  // even though a stored check that passed records that it decides it.
-  test("an item a review left undecided is named as not verified, and never counted among the covered", async () => {
-    const body = await render({
-      sweepId: "s3c",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled", review: "other-family", judges: null },
-        ],
-      },
-    });
-    expect(body).not.toContain("Every item of what you asked for is decided");
-    expect(body).toContain("1 of the 2 items of what you asked for are decided by a stored check");
-    const [, unverified = ""] = body.split("a review of the checks found that none of them really decides it");
-    expect(unverified).toContain("and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n- A stored key survives a power loss");
-    expect(unverified).not.toContain("Keys can be stored");
-  });
-
-  // The client can tell a second review that failed from one that disagreed.
-  test("an item left undecided because the second review failed says the review failed, apart from one no review settled", async () => {
-    const body = await render({
-      sweepId: "s3d",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: "review-failed", review: null, judges: null },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "unsettled", review: "other-family", judges: null },
-        ],
-      },
-    });
-    expect(body).toContain(
-      "none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n- Keys can be stored",
-    );
-    expect(body).toContain("none of them really decides it, and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n- A stored key survives a power loss");
-    const [, failedSection = ""] = body.split("because that review failed.");
-    expect(failedSection.split("\n\n")[0]).not.toContain("A stored key survives a power loss");
-  });
-
-  // A review that found nothing is a claim; an item it covers that
-  // no second opinion confirmed is unverified, never "decided by a stored check".
-  test("an item whose clean review was not confirmed is named unverified with why, apart from one the second review contradicted", async () => {
-    const body = await render({
-      sweepId: "s3e",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: "clean-unconfirmed", review: null, judges: null },
-          { source: scope("S3", "A key can be deleted"), checked: true, undecided: "clean-contradicted", review: "other-family", judges: null },
-        ],
-      },
-    });
-    expect(body).not.toContain("Every item of what you asked for is decided");
-    expect(body).toContain("1 of the 3 items of what you asked for are decided by a stored check");
-    expect(body).toContain(
-      "but the review that found no problem in their checks was not confirmed: no second review of those checks answered. They are not verified by Ashara.\n- A stored key survives a power loss",
-    );
-    expect(body).toContain(
-      "but the review that found no problem in their checks was not confirmed: a second review, by another model family, found a problem there. They are not verified by Ashara.\n- A key can be deleted",
-    );
-    expect(body).not.toContain("review failed");
-    const [, unconfirmed = ""] = body.split("no second review of those checks answered.");
-    expect(unconfirmed.split("\n\n")[0]).not.toContain("Keys can be stored");
-  });
-
-  test("a record with no item of what the client asked for claims no coverage", async () => {
-    const body = await render({
-      sweepId: "s3b",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Any network service", "out"), checked: false, undecided: false, review: null, judges: null }] },
-    });
-    expect(body).toContain("The plan's record holds no item of what you asked for, so none of it is stated as checked.");
-    expect(body).not.toContain("Every item");
-  });
-
-  // Exclusions and internal-design assumptions are never unchecked items of what the client asked
-  // for; every internal-design assumption is named apart, by id and text, as not verified by Ashara.
-  // The vision below has scope lines on both sides and assumptions of every kind.
-  test("a vision with exclusions and design choices: exclusions are never listed, design choices are listed as not verified by Ashara; an assumption a client could observe is listed as what the work rests on, as the client saw it", async () => {
-    const body = await render({
-      sweepId: "s6",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Implement persistent put and get with required data directory", close: { kind: "merged", commit: MAIN } }],
-      checked: ["Implement persistent put and get with required data directory"],
-      unchecked: ["Set up the product's layout"],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: scope("S1", "put stores a value under a key"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "Several processes may use the same data directory at the same time"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S3", "A partly written final log record is ignored on recovery"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S4", "Any network service or remote access; this is a local CLI tool.", "out"), checked: false, undecided: false, review: null, judges: null },
-          { source: scope("S5", "Non-Linux platforms.", "out"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A4", "Commands wait for the data-directory lock.", "stated", "client-visible"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: assumption("A2", "Keys and values are UTF-8 text.", "stated", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A8", "The tool uses an OS advisory lock on a lock file.", "reported", "internal-design"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A27", "Empty keys are refused.", "unrecorded", "unclassified"), checked: false, undecided: false, review: null, judges: null },
-        ],
-      },
-    });
-    // An assumption is decided through what rests on it, never counted as an item of what was asked for.
-    expect(body).not.toContain("decided by no stored check");
-    expect(body.split("\n\n").find((section) => section.startsWith("The work rests on these assumptions"))).toBe(
-      [
-        "The work rests on these assumptions. None is counted above as an item of what you asked for: each is decided only through what you asked for that rests on it.",
-        "- Commands wait for the data-directory lock. (your answer)",
-        "- Keys and values are UTF-8 text. (your answer)",
-        "- Ashara's assumption, which was reported to you: No artificial limit is imposed on key or value size.",
-        "- Ashara's assumption, which you were asked about and have not answered: Values print with a trailing newline.",
-        "- Ashara's assumption, which Ashara has no record of showing you: Empty keys are refused. (not recorded as what you see or as how it is built)",
-      ].join("\n"),
-    );
-    expect(body.split("\n\n").find((section) => section.includes("not verified by Ashara"))).toBe(
-      [
-        "These assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no check decides them: they are not verified by Ashara.",
-        "- A8: The tool uses an OS advisory lock on a lock file.",
-        "- A10: Each log record is length-prefixed with a checksum.",
-      ].join("\n"),
-    );
-    expect(body).not.toContain("network");
-    // A covered item is listed only with the review that confirmed it.
-    expect(body.split("\n\n").filter((section) => section.includes("Several processes"))).toEqual([
-      expect.stringContaining("a second review of those checks, by another model family, found no problem with that:\n- put stores a value under a key\n- Several processes"),
-    ]);
-  });
-
-  test("a vision with no internal-design assumption, or no recorded coverage, names nothing as not verified", async () => {
-    const fields = { ...BASE, checked: ["Count words"], unchecked: [], givenUp: [] };
-    const visible = await render({
-      ...fields,
-      vision: { kind: "recorded", items: [{ source: assumption("A1", "Totals print last.", "reported", "client-visible"), checked: true, undecided: false, review: "other-family", judges: "above" }] },
-    });
-    expect(visible).not.toContain("not verified by Ashara");
-    expect(await render({ ...fields, vision: { kind: "unrecorded" } })).not.toContain("not verified by Ashara");
-  });
-
-  test("a guarantee is an item of what the client asked for, named by its key, whether a check decides it or not", async () => {
-    const guarantee = (id: string, text: string): Item => ({ type: "guarantee", id, text, observation: "output", interface: ["I1"], refutedBy: [`${id} broken`], assumed: null });
-    const body = await render({
-      ...BASE,
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: guarantee("G1", "Totals print last."), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: guarantee("G2", "Missing files exit 1."), checked: false, undecided: false, review: null, judges: null },
-        ],
-      },
-    });
-    expect(body).toContain("decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n- G2: Missing files exit 1.");
-    expect(body).toContain("found no problem with that:\n- G1: Totals print last.");
-    expect(body).toContain("1 of the 2 items of what you asked for");
-  });
-
-  // A version written before guarantees reads a client-visible assumption as a guarantee; the client is
-  // still told it was Ashara's assumption and where it stood at acceptance, never that they asked for it.
-  test("a guarantee read from an assumption is worded by where that assumption stood at acceptance", async () => {
-    const text = "Messages are in English.";
-    const body = await render({
-      ...BASE,
-      vision: {
-        kind: "recorded",
-        items: [
-          {
-            source: {
-              type: "guarantee",
-              id: "A1",
-              text,
-              observation: "unclassified",
-              interface: [],
-              refutedBy: [],
-              assumed: { type: "assumption", id: "A1", text, kind: "client-visible", standing: "asked" },
-            },
-            checked: false,
-            undecided: false,
-            review: null,
-            judges: null,
-          },
-        ],
-      },
-    });
-    expect(body).toContain(`so nothing confirms them either way:\n- Ashara's assumption, which you were asked about and have not answered: ${text}`);
-    expect(body).not.toContain(`- A1: ${text}`);
-  });
-
-  // Each uncited assumption is worded by where it stood at acceptance, an answer included.
-  test("an answered assumption is never said to be unanswered: each standing at acceptance has its own words", async () => {
-    const body = await render({
-      sweepId: "s8",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Count words", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Count words"],
-      unchecked: [],
-      givenUp: [],
-      vision: {
-        kind: "recorded",
-        items: [
-          { source: assumption("A1", "Python 3.12 is the runtime.", "confirmed", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A2", "Totals print last.", "changed", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A3", "No argument prints usage.", "answered", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-          { source: assumption("A4", "Missing files exit 1.", "answer-unread", "client-visible"), checked: false, undecided: false, review: null, judges: null },
-        ],
-      },
-    });
-    expect(body).toContain(
-      [
-        "- Python 3.12 is the runtime. (you confirmed this when asked)",
-        "- Totals print last. (your answer, which changed what we had assumed)",
-        "- Ashara's assumption, which you were asked about; your reply neither confirmed nor changed it: No argument prints usage.",
-        "- Ashara's assumption, which you were asked about; your reply had not been read when the project was accepted: Missing files exit 1.",
-      ].join("\n"),
-    );
-    expect(body).not.toContain("have not answered");
-  });
-
-  test("a scope line recorded without its side is listed, and says so", async () => {
-    const body = await render({
-      sweepId: "s7",
-      projectId,
-      mainCommit: MAIN,
-      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
-      checked: ["Store keys"],
-      unchecked: [],
-      givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Out of scope: non-Linux platforms.", "unclassified"), checked: false, undecided: false, review: null, judges: null }] },
-    });
-    expect(body).toContain("- Out of scope: non-Linux platforms. (recorded without saying whether it is in or out of scope)");
+  // The table replaces every count of items "decided and confirmed": a review never stands behind a pass.
+  test("carries the sweep's guarantee table after what ran, before how the tender was read and the closing line", async () => {
+    const body = await render({ ...BASE, reading: { kind: "unconfirmed" } });
+    const parts = body.split("\n\n");
+    const table = parts.indexOf("No contract is on record for this project at sweep s9, so no guarantee is judged.");
+    expect(table).toBeGreaterThan(parts.findIndex((part) => part.startsWith("What was delivered:")));
+    expect(table).toBeLessThan(parts.findIndex((part) => part.startsWith("When your tender was read")));
+    expect(parts.at(-1)).toBe("Nothing more is built on this project; it waits until you stop it.");
+    expect(body).not.toMatch(/second review of those checks|decided by no stored check/);
   });
 
   test("a completed task with no stored check is listed as not checked, apart from what passed, and the opening claims only what ran", async () => {
@@ -596,7 +195,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: ["Set up the product's module root"],
       givenUp: ["Shard the store"],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" }] },
+      guarantees: NO_CONTRACT,
     });
     const [opening] = body.split("\n\n");
     expect(opening).toBe(
@@ -617,7 +216,7 @@ describe("the delivered report", () => {
       checked: [],
       unchecked: ["Set up the product's module root"],
       givenUp: [],
-      vision: { kind: "unrecorded" },
+      guarantees: NO_CONTRACT,
     });
     expect(body).toContain(`the environment's test passed on main, commit ${MAIN}; no stored check of any task ran with it.`);
     expect(body).not.toContain("passed together");

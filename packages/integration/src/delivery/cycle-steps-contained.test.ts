@@ -130,6 +130,7 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/engagement/src/repositories/client-change.ts#listUnconsumedChanges": { kind: "rows-only", why: "message and project ids only" },
   "packages/engagement/src/repositories/client-message.ts#listByProject": { kind: "not-a-step-listing", why: "one project's messages, for the client channel" },
   "packages/engagement/src/repositories/client-message.ts#listUnconsumedTenders": { kind: "rows-only", why: "message rows as stored" },
+  "packages/engagement/src/repositories/client-stop.ts#listDueStopReports": { kind: "read-each" },
   "packages/engagement/src/repositories/client-stop.ts#listUnconsumedStops": { kind: "rows-only", why: "message and project ids only" },
   "packages/engagement/src/repositories/delivered-report.ts#listDueDeliveredReports": {
     kind: "own",

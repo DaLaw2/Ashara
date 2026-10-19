@@ -311,8 +311,8 @@ interface DueTerminalSweepRow {
 
 /**
  * Every terminal owed its one terminal sweep, oldest first: each stop that stopped a project still
- * stopped (the stop its stop report answers), then each open halt episode of an active project. A
- * second stop of a project already stopped stopped nothing, so it is owed none.
+ * stopped, then each open halt episode of an active project. A second stop of a project already
+ * stopped stopped nothing, so it is owed none. The stop's report waits for its sweep.
  */
 export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSweepRow[]> {
   const stops = await db
@@ -325,7 +325,9 @@ export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSw
         eq(clientMessages.kind, "stop"),
         sql`${clientMessages.consumedAt} IS NOT NULL`,
         eq(projects.lifecycle, "stopped"),
-        sql`EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = 'client-stop')`,
+        // The stop that stopped the project, as it records (stop_found_halted), or, on a stop that
+        // records nothing of it, as its stop report answers it.
+        sql`(${clientMessages.stopFoundHalted} IS NOT NULL OR EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = 'client-stop'))`,
         sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${clientMessages.id})`,
       ),
     )

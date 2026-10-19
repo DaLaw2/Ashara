@@ -48,14 +48,14 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed(ctx, [], { mutation: "check-set-skips-item" }))).toEqual(SKIPPED_ITEM);
   }, 90_000);
 
-  // The delivered report must list that item as decided by no stored check.
-  it("catches a delivered report that leaves out the item no stored check decides", async (ctx) => {
-    expect(keys(await directed(ctx, [], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage", ...SKIPPED_ITEM]);
+  // The delivered report's table holds every guarantee in force once, each with the verdict its
+  // sweep's evidence reads: dropped, or an unjudged one told as passing, it is named.
+  it("catches a delivered report whose table leaves out a guarantee", async (ctx) => {
+    expect(keys(await directed(ctx, [], { mutation: "delivered-report-drops-guarantee" }))).toEqual(["I4:guarantee-table:delivered"]);
   }, 90_000);
 
-  // The stand-ins' internal-design assumption is named as not verified by Ashara; dropped, it is named.
-  it("catches a delivered report that leaves out the assumption Ashara did not verify", async (ctx) => {
-    expect(keys(await directed(ctx, [], { mutation: "delivered-report-omits-unverified" }))).toEqual(["I4:delivered-coverage"]);
+  it("catches a delivered report whose table says an unjudged guarantee passed", async (ctx) => {
+    expect(keys(await directed(ctx, [], { mutation: "delivered-report-passes-unjudged" }))).toEqual(["I4:guarantee-table:delivered", ...SKIPPED_ITEM]);
   }, 90_000);
 
   it("catches a delivered report posted with no record of it", async (ctx) => {
@@ -76,7 +76,7 @@ describe("lifecycle simulator, directed", () => {
 
   // Here the second opinion never answers whole (each of its ladder's attempts is invalid output), so
   // every item the suites' checks decide is reported unverified, and the project is still delivered.
-  // With the claim's undecided rows dropped, the report calls them decided on the first review alone,
+  // With the claim's undecided rows dropped, no review holds them back on the first review alone,
   // as when no second review was asked of a clean one, and I6 names each from the stand-ins'
   // answers. The first review is the first call; its ladder's attempts, escalation included, are the
   // next four.

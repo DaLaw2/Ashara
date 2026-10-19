@@ -35,6 +35,7 @@ import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // The "moved" loops have no counter of their own: a plan revision whose write finds the project
 // moved and an answer whose record finds it moved are tried again next cycle,
@@ -225,7 +226,14 @@ function loopWith(
 ): CoreLoop {
   const projects = new ProjectHaltRepository(db);
   const blockReportStore = createBlockReportStore(db);
-  const reports: BlockReportStore = { ...blockReportStore, dueReports: ours(() => blockReportStore.dueReports()) };
+  // Each halt's terminal sweep is recorded before its report, as the loop's terminal-sweep step does.
+  const reports: BlockReportStore = {
+    ...blockReportStore,
+    dueReports: ours(async () => {
+      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
+      return blockReportStore.dueReports();
+    }),
+  };
   const deps: CoreLoopDeps = {
     config: { ...DEFAULT_CONFIG, workdirBase: "/nonexistent-moved-loops" },
     cycleLog: { emit: () => {} },

@@ -25,11 +25,11 @@ export const GuaranteeBasisSchema = z.enum(BASIS);
  */
 const EvidenceClassSchema = z.enum(["witness", "implementer-visible", "review-only", "none"]);
 
-type EvidenceClass = z.infer<typeof EvidenceClassSchema>;
+export type EvidenceClass = z.infer<typeof EvidenceClassSchema>;
 
 type ExecutedClass = Extract<EvidenceClass, "witness" | "implementer-visible">;
 
-const CheckEvidenceSchema = z.strictObject({
+export const CheckEvidenceSchema = z.strictObject({
   checkId: z.string().min(1),
   outcome: z.enum(["passed", "failed", "not-run"]),
   class: EvidenceClassSchema,
@@ -41,14 +41,13 @@ type CheckEvidence = z.infer<typeof CheckEvidenceSchema>;
  * Everything seen about one guarantee on one commit. An empty check list is a recorded absence of
  * evidence, and it reads unjudged, never pass. `reviewLowers` is set when a review finding or an
  * undecided item names the guarantee.
- * @testseam guarantee-verdict.test.ts judges every evidence combination through it; no production caller reads it yet
+ * @testseam guarantee-verdict.test.ts judges every evidence combination through it; production builds Evidence from stored rows instead
  */
 export const EvidenceSchema = z.strictObject({
   checks: z.array(CheckEvidenceSchema),
   reviewLowers: z.boolean(),
 });
 
-/** @testseam guarantee-verdict.test.ts types its evidence table with it; no production caller reads it yet */
 export type Evidence = z.infer<typeof EvidenceSchema>;
 
 const UnjudgedReasonSchema = z.enum([
@@ -64,7 +63,7 @@ const UnjudgedReasonSchema = z.enum([
 /**
  * One verdict per guarantee. A pass names the weakest executed evidence class it rests on; an
  * unjudged verdict names why it could not be judged.
- * @testseam guarantee-verdict.test.ts judges every evidence combination through it; no production caller reads it yet
+ * @testseam guarantee-verdict.test.ts judges every evidence combination through it; production types verdicts with Verdict
  */
 export const VerdictSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("pass"), evidence: z.enum(["witness", "implementer-visible"]) }),
@@ -72,14 +71,15 @@ export const VerdictSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("unjudged"), reason: UnjudgedReasonSchema }),
 ]);
 
-/** @testseam guarantee-verdict.test.ts types its verdicts with it; no production caller reads it yet */
+export type UnjudgedReason = z.infer<typeof UnjudgedReasonSchema>;
+
 export type Verdict = z.infer<typeof VerdictSchema>;
 
 /**
  * Whether the fault set that exercises stored data is available to the checks. While it is deferred, a
  * passing check cannot show that stored data survives a fault, so a stored-data guarantee stays unjudged.
  */
-type FaultSet = "available" | "deferred";
+export type FaultSet = "available" | "deferred";
 
 function isExecuted(check: CheckEvidence): check is CheckEvidence & { readonly class: ExecutedClass } {
   return check.class === "witness" || check.class === "implementer-visible";
@@ -90,7 +90,6 @@ function isExecuted(check: CheckEvidence): check is CheckEvidence & { readonly c
  * an executed check failed; the guarantee names nothing that would refute it; its stored data cannot
  * be exercised; no executed check passed; a review lowers it; otherwise pass. Reviews are read only by
  * the two rules that end unjudged, so no review evidence ever yields pass.
- * @testseam guarantee-verdict.test.ts judges every evidence combination through it; no production caller reads it yet
  */
 export function verdictOf(
   guarantee: Pick<VisionGuarantee, "observation" | "refutedBy">,

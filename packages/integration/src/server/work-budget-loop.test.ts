@@ -25,6 +25,7 @@ import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
+import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // The work ledger end to end: Finance draws one model request from the
 // project's and the task's budgets before every gateway request, counted from llm_calls rows, and
@@ -332,6 +333,7 @@ describe("a project that draws its whole work budget", () => {
 
       // The client and the operator are told the budget, what was drawn and by which call site.
       const store = createBlockReportStore(db);
+      await sweepTerminalsOf(db, (projectId) => projectId === at.projectId);
       const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => due.projectId === at.projectId) };
       await new BlockReports(ours, memoryStepContainment(() => false)).runPending();
       const reports = await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${at.projectId} AND direction = 'outbound'`);

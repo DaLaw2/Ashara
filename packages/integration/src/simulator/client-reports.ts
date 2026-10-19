@@ -11,8 +11,9 @@ import type { Database } from "./database.js";
  * I4, what the client is told, judged against the records it is told from: a halt
  * report states its episode's recorded kind and names the episode's record, a stop report names
  * exactly the merges recorded, and a delivered report names each goal's recorded close, exactly the
- * completed tasks no stored check covers, the goals given up, and exactly the items of what the
- * client asked for that no stored check the sweep ran decides. Every expectation is read
+ * completed tasks no stored check covers and the goals given up. Every one of those terminal messages
+ * carries the guarantee table of its own sweep: every guarantee in force once, each verdict as the
+ * oracle judges it from the sweep's evidence, stored beside the message. Every expectation is read
  * from the rows; the report's text is only what is judged. The oracle states its own expected wording
  * and classification and imports none of Engagement's composers or the acceptance repository's
  * predicates (boundary-rules.toml [integration] `named-only` admits into src/simulator/ only
@@ -70,7 +71,30 @@ const burnWarningRow = z.object({
 const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), title: z.string(), attempts: z.number(), blockedReason: z.unknown() });
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
-const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
+/** A sweep a guarantee table is judged from: what it was run for, the commit it ran on (null when none), and the vision version current then. */
+const tableSweepRow = z.object({
+  id: z.string(),
+  blockId: z.string().nullable(),
+  stopId: z.string().nullable(),
+  mainCommit: z.string().nullable(),
+  visionAtSweep: z.number().nullable(),
+});
+/** One guarantee's evidence on one sweep, as Quality recorded it. */
+const evidenceRow = z.object({ sweepId: z.string(), guaranteeId: z.string(), visionVersion: z.number(), checks: z.unknown(), reviewLowers: z.boolean() });
+/** One verdict stored beside the message that carries it. */
+const verdictRow = z.object({
+  reportId: z.string(),
+  sweepId: z.string(),
+  visionVersion: z.number(),
+  guaranteeId: z.string(),
+  verdict: z.string(),
+  reason: z.string().nullable(),
+  basis: z.string(),
+});
+/** A vision version's fields the guarantees in force are read from, unparsed. */
+const visionVersionRow = z.object({ version: z.number(), contractForm: z.unknown(), guarantees: z.unknown(), inferences: z.unknown(), scopeBoundaries: z.unknown() });
+/** A verdict a passed sweep's delivered report stores. */
+const sweptVerdictRow = z.object({ sweepId: z.string(), guaranteeId: z.string(), verdict: z.string() });
 const passedSweepRow = z.object({
   id: z.string(),
   version: z.number().nullable(),
@@ -86,12 +110,6 @@ const passedSweepRow = z.object({
  * review whose claim a second review contradicted or never confirmed.
  */
 const UNDECIDED_REASONS = ["review-failed", "clean-unconfirmed", "clean-contradicted", "unsettled"] as const;
-type UndecidedReason = (typeof UNDECIDED_REASONS)[number];
-
-/** Which reason an item undecided on several check tasks is reported under: the earliest in UNDECIDED_REASONS. */
-function firstReason(a: UndecidedReason, b: UndecidedReason): UndecidedReason {
-  return UNDECIDED_REASONS.indexOf(a) <= UNDECIDED_REASONS.indexOf(b) ? a : b;
-}
 
 /**
  * An undecided_items row's reason, joined with one claim tied to it (undecided_item_claims): the earlier in UNDECIDED_REASONS of its judgement's reason and that claim's.
@@ -130,12 +148,14 @@ export interface ReportRecords {
   readonly sweeps: ReadonlyArray<z.infer<typeof sweepRow>>;
   /** The reports the plan revisions record. */
   readonly revisionReports: readonly string[];
-  /** The task_spec of the project's latest Completed review task (every item of the vision), or null when none. */
-  readonly reviewSpec: unknown;
-  /** Every check of each Completed goal task's latest stored revision (the sets a sweep runs), with its check task's task_spec. */
-  readonly goalChecks: readonly SweptCheck[];
-  /** The items a suite review left undecided on a check task of a Completed goal task. */
-  readonly goalUndecided: ReadonlyArray<z.infer<typeof undecidedRow>>;
+  /** Every sweep of the project, acceptance and terminal, a guarantee table may be judged from. */
+  readonly tableSweeps: ReadonlyArray<z.infer<typeof tableSweepRow>>;
+  /** Every guarantee's evidence on every sweep. */
+  readonly evidence: ReadonlyArray<z.infer<typeof evidenceRow>>;
+  /** Every verdict stored beside a message. */
+  readonly verdicts: ReadonlyArray<z.infer<typeof verdictRow>>;
+  /** Every vision version. */
+  readonly visions: ReadonlyArray<z.infer<typeof visionVersionRow>>;
   /**
    * Every passed acceptance sweep, in order, with the vision version current when it passed (its
    * fields unparsed; version null when none was) and every stored check it ran, with the check task
@@ -146,6 +166,8 @@ export interface ReportRecords {
       readonly storedChecks: readonly RanCheck[];
       /** The items a suite review left undecided, before the sweep, on a check task whose checks it ran. */
       readonly undecided: ReadonlyArray<z.infer<typeof undecidedRow>>;
+      /** The verdicts stored beside the sweep's delivered report; none before it is posted. */
+      readonly reportVerdicts: ReadonlyArray<Omit<z.infer<typeof sweptVerdictRow>, "sweepId">>;
     }
   >;
 }
@@ -189,34 +211,26 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     revisionReports: (
       await rows(revisionRow, sql`SELECT report_id AS "reportId" FROM plan_revisions WHERE project_id = ${projectId} AND report_id IS NOT NULL`)
     ).map((row) => row.reportId),
-    reviewSpec:
-      (
-        await rows(
-          specRow,
-          sql`SELECT id, task_spec AS "taskSpec" FROM work_items
-              WHERE project_id = ${projectId} AND status = 'Completed' AND task_spec->>'origin' = 'review'
-              ORDER BY created_at DESC, id DESC LIMIT 1`,
-        )
-      )[0]?.taskSpec ?? null,
-    goalChecks: await rows(
-      storedCheckRow,
-      sql`SELECT a.id AS "checkTaskId", a.task_spec AS "taskSpec", c.name, c.decides
-          FROM work_items g
-          JOIN task_checks c ON c.task_id = g.id AND c.revision = (SELECT max(l.revision) FROM task_checks l WHERE l.task_id = g.id)
-          JOIN work_items a ON a.id = c.check_task_id
-          WHERE g.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
-          ORDER BY a.id, c.name`,
+    tableSweeps: await rows(
+      tableSweepRow,
+      sql`SELECT s.id, s.block_id AS "blockId", s.stop_id AS "stopId", s.main_commit AS "mainCommit",
+                 (SELECT max(d.version) FROM vision_documents d WHERE d.project_id = s.project_id AND d.created_at <= s.created_at) AS "visionAtSweep"
+          FROM acceptance_sweeps s WHERE s.project_id = ${projectId} ORDER BY s.created_at, s.id`,
     ),
-    goalUndecided: await rows(
-      undecidedRow,
-      sql`SELECT u.item_id AS id, u.item_text AS text, ${UNDECIDED_REASON_SQL} AS reason
-          FROM undecided_items u
-          LEFT JOIN suite_review_judgements j ON j.id = u.judgement_id
-          ${UNDECIDED_CLAIMS_SQL}
-          JOIN work_items a ON a.id = u.check_task_id
-          JOIN work_items g ON g.id::text = a.task_spec->>'checksFor'
-          WHERE u.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
-          ORDER BY u.item_id`,
+    evidence: await rows(
+      evidenceRow,
+      sql`SELECT sweep_id AS "sweepId", guarantee_id AS "guaranteeId", vision_version AS "visionVersion", checks, review_lowers AS "reviewLowers"
+          FROM guarantee_evidence WHERE project_id = ${projectId} ORDER BY sweep_id, guarantee_id`,
+    ),
+    verdicts: await rows(
+      verdictRow,
+      sql`SELECT report_id AS "reportId", sweep_id AS "sweepId", vision_version AS "visionVersion", guarantee_id AS "guaranteeId", verdict, reason, basis
+          FROM guarantee_verdicts WHERE project_id = ${projectId} ORDER BY report_id, guarantee_id`,
+    ),
+    visions: await rows(
+      visionVersionRow,
+      sql`SELECT version, contract_form AS "contractForm", guarantees, inferences, scope_boundaries AS "scopeBoundaries"
+          FROM vision_documents WHERE project_id = ${projectId} ORDER BY version`,
     ),
     passedSweeps: await passedSweepsOf(projectId, rows),
   };
@@ -258,10 +272,18 @@ async function passedSweepsOf(
         WHERE s.project_id = ${projectId} AND s.passed
         ORDER BY s.id, u.item_id`,
   );
+  const verdicts = await rows(
+    sweptVerdictRow,
+    sql`SELECT s.id AS "sweepId", v.guarantee_id AS "guaranteeId", v.verdict
+        FROM acceptance_sweeps s JOIN guarantee_verdicts v ON v.report_id = s.report_id
+        WHERE s.project_id = ${projectId} AND s.passed
+        ORDER BY s.id, v.guarantee_id`,
+  );
   return sweeps.map((sweep) => ({
     ...sweep,
     storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ sweepId: _sweep, ...check }) => check),
     undecided: undecided.filter((item) => item.sweepId === sweep.id).map(({ id, text, reason }) => ({ id, text, reason })),
+    reportVerdicts: verdicts.filter((verdict) => verdict.sweepId === sweep.id).map(({ guaranteeId, verdict }) => ({ guaranteeId, verdict })),
   }));
 }
 
@@ -320,7 +342,7 @@ const STATED_KINDS: ReadonlyArray<StatedKind> = [
   "work_budget",
 ];
 
-function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
+function judgementOf(kind: string): TableVerdict[keyof TableVerdict] | "unknown" {
   // eslint-disable-next-line no-restricted-syntax -- policy default: a typed Unknown, which the halt check reports as halt-kind-unknown
   return JUDGEMENT_OF.get(kind) ?? "unknown";
 }
@@ -606,11 +628,6 @@ function paragraph(body: string, head: string): string | null {
   return body.split("\n\n").find((part) => part.startsWith(head)) ?? null;
 }
 
-/** Every paragraph of a report that starts with `head`, in order. */
-function paragraphs(body: string, head: string): string[] {
-  return body.split("\n\n").filter((part) => part.startsWith(head));
-}
-
 /** The lines of a paragraph that name a task (`- "<title>"...`). */
 function namedLines(part: string | null): string[] {
   return part === null ? [] : part.split("\n").filter((line) => line.startsWith(`- "`));
@@ -688,6 +705,12 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     } else if (judgement === "unknown") {
       add(`halt-kind-unknown:${kind}`, `a halt of kind ${kind}, outside the code's list, was reported: no oracle states what it must say`);
     }
+    // A planning-stopped report tells a stopped first planning, before any work; it carries no table.
+    if (report.reportsOn === null) {
+      const sweep = records.tableSweeps.find((each) => each.blockId === episode.id);
+      if (sweep === undefined) add(`guarantee-table:halt:${kind}`, `the ${kind} halt was reported with no terminal sweep on record for its episode, so its table was judged on nothing`);
+      for (const problem of sweep === undefined ? [] : tableProblems(records, report, sweep)) add(`guarantee-table:halt:${kind}`, `the ${kind} halt report: ${problem}`);
+    }
   }
 
   // The stop report names exactly the merges recorded.
@@ -705,6 +728,9 @@ export function checkReports(records: ReportRecords, project: { readonly status:
         }
       }
       if (lines.length !== merges.length) add("stop-merges", `the stop report names ${lines.length} merge(s); the records hold ${merges.length}`);
+      const sweep = records.tableSweeps.find((each) => each.stopId !== null && each.stopId === stop.inReplyTo);
+      if (sweep === undefined) add("guarantee-table:stop", "the stop report was posted with no terminal sweep on record for its stop, so its table was judged on nothing");
+      for (const problem of sweep === undefined ? [] : tableProblems(records, stop, sweep)) add("guarantee-table:stop", `the stop report: ${problem}`);
     }
   }
 
@@ -757,28 +783,13 @@ export function checkReports(records: ReportRecords, project: { readonly status:
         add("delivered-given-up", `the delivered report names ${statedGivenUp.length} goal task(s) given up; the records hold ${givenUp.length}: ${givenUp.map((item) => `"${item.title}"`).join(", ")}`);
       }
 
-      for (const problem of coverageProblems(report.body, coverageOnRecord(records))) add("delivered-coverage", problem);
+      const tableSweep = records.tableSweeps.find((each) => each.id === sweep.id);
+      if (tableSweep === undefined) add("guarantee-table:delivered", `the delivered report's sweep ${sweep.id} is not among the project's sweeps`);
+      for (const problem of tableSweep === undefined ? [] : tableProblems(records, report, tableSweep)) add("guarantee-table:delivered", `the delivered report: ${problem}`);
     }
   }
   return found;
 }
-
-/** Which items of what the client asked for the records say no stored check the sweep ran decides. */
-type CoverageOnRecord =
-  | { readonly kind: "unrecorded" }
-  /** A record the coverage is computed from cannot be read: production's report cannot be rendered either. */
-  | { readonly kind: "unreadable"; readonly detail: string }
-  | {
-      readonly kind: "recorded";
-      readonly asked: readonly VisionSource[];
-      readonly uncovered: readonly VisionSource[];
-      /**
-       * Asked items a stored check records it decides but a suite review left undecided,
-       * each with why.
-       */
-      readonly undecided: ReadonlyArray<{ readonly source: VisionSource; readonly reason: UndecidedReason }>;
-      readonly notAsked: readonly VisionSource[];
-    };
 
 /**
  * An item is the same across a plan's revisions only when its id and text both match (as the
@@ -817,8 +828,13 @@ function decidedByStoredChecks(
 const sweptAssumption = z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), kind: z.enum(["client-visible", "internal-design"]).optional() });
 /** A scope line as stored: with its side, or a bare string written before sides were recorded (no side on record). */
 const sweptScopeLine = z.union([z.looseObject({ text: z.string().min(1), side: z.enum(["in", "out"]) }), z.string().min(1)]);
-/** A guarantee as stored: its key and its statement, what a plan cites it by. */
-const sweptGuarantee = z.looseObject({ id: z.string().min(1), statement: z.string().min(1) });
+/** A guarantee as stored: its key and its statement, what a plan cites it by, and what would show it broken. */
+const sweptGuarantee = z.looseObject({
+  id: z.string().min(1),
+  statement: z.string().min(1),
+  observable: z.looseObject({ observation: z.string() }).optional(),
+  refutedBy: z.array(z.string()).optional(),
+});
 
 /** One finding of the guard, keyed by the item (or the record that could not be read). */
 interface UncheckedFinding {
@@ -845,11 +861,15 @@ export function uncheckedAtPassedSweeps(records: Pick<ReportRecords, "passedSwee
   return [...found].map(([key, statement]) => ({ key, statement }));
 }
 
-/** One guarantee of the version in force: its id, its statement and how a finding names it. */
+/** One guarantee of the version in force: its id, its statement, how a finding names it, and what a check of it can show. */
 interface GuaranteeInForce {
   readonly id: string;
   readonly text: string;
   readonly named: string;
+  /** Whether it names an observation that would show it broken: only such a guarantee can be decided by a check. */
+  readonly checkable: boolean;
+  /** Whether it is about stored data, which no check can show surviving a fault while no fault set is run. */
+  readonly storedData: boolean;
 }
 
 const sweptContractForm = z.enum(["scope-lines", "guarantees"]);
@@ -865,17 +885,29 @@ function guaranteesInForce(
   guarantees: ReadonlyArray<z.infer<typeof sweptGuarantee>>,
   inferences: ReadonlyArray<z.infer<typeof sweptAssumption>>,
 ): GuaranteeInForce[] {
-  if (form === "guarantees") return guarantees.map((g) => ({ id: g.id, text: g.statement, named: `guarantee ${g.id} ("${g.statement.slice(0, 120)}")` }));
+  if (form === "guarantees") {
+    return guarantees.map((g) => {
+      const observation = g.observable?.observation;
+      return {
+        id: g.id,
+        text: g.statement,
+        named: `guarantee ${g.id} ("${g.statement.slice(0, 120)}")`,
+        // eslint-disable-next-line no-restricted-syntax -- policy default: a guarantee that records nothing refuting it is not checkable, the fail-closed reading
+        checkable: observation !== undefined && observation !== "unclassified" && (g.refutedBy ?? []).length > 0,
+        storedData: observation === "stored-data",
+      };
+    });
+  }
   return [
     ...scope.flatMap((line, i) => {
       const id = `S${i + 1}`;
       const { text, side } = typeof line === "string" ? { text: line, side: "of no recorded side" } : line;
-      return side === "out" ? [] : [{ id, text, named: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, read as a guarantee` }];
+      return side === "out" ? [] : [{ id, text, named: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, read as a guarantee`, checkable: false, storedData: false }];
     }),
     ...inferences.flatMap((record, i) => {
       const id = record.key ?? `A${i + 1}`;
       if (record.kind === "internal-design") return [];
-      return [{ id, text: record.statement, named: `assumption ${id} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, read as a guarantee` }];
+      return [{ id, text: record.statement, named: `assumption ${id} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, read as a guarantee`, checkable: false, storedData: false }];
     }),
   ];
 }
@@ -903,26 +935,18 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
 }
 
 /**
- * A guarantee of the version in force that a suite review left undecided is unverified, never
- * covered, whatever a stored check records it decides. Once the sweep's delivered report is posted,
- * it names every such guarantee apart as not verified and never says every item is decided. Judged
- * per guarantee, keyed by its id.
+ * A guarantee of the version in force that a suite review left undecided never reads pass in the
+ * table of the sweep's delivered report, whatever a stored check records it decides: a review's doubt
+ * holds a guarantee back and never lets it pass. TableVerdict per guarantee, keyed by its id.
  */
 function undecidedAtSweep(sweep: ReportRecords["passedSweeps"][number], inForce: readonly GuaranteeInForce[], at: string): UncheckedFinding[] {
   if (sweep.reportBody === null) return [];
   const asked = new Set(inForce.map((g) => g.id));
-  const undecided = sweep.undecided.filter((item) => asked.has(item.id));
-  if (undecided.length === 0) return [];
-  const listed = paragraphs(sweep.reportBody, UNDECIDED_HEAD).flatMap((part) => part.split("\n").filter((line) => line.startsWith("- ")));
-  const findings = undecided.flatMap((item) =>
-    listed.some((line) => line.includes(item.text))
-      ? []
-      : [{ key: `undecided-unreported:${item.id}`, statement: `${item.id} ("${item.text.slice(0, 120)}"), left undecided by a suite review, is not named as unverified in the delivered report of ${at}` }],
+  return sweep.undecided.flatMap((item) =>
+    asked.has(item.id) && sweep.reportVerdicts.some((verdict) => verdict.guaranteeId === item.id && verdict.verdict === "pass")
+      ? [{ key: `undecided-passed:${item.id}`, statement: `${item.id} ("${item.text.slice(0, 120)}"), left undecided by a suite review, reads pass in the delivered report of ${at}` }]
+      : [],
   );
-  if (sweep.reportBody.includes(ALL_COVERED)) {
-    findings.push({ key: "undecided-covered", statement: `the delivered report of ${at} says every item is decided while ${undecided.length} item(s) are left undecided` });
-  }
-  return findings;
 }
 
 /**
@@ -963,8 +987,8 @@ function namesItem(problem: unknown, checkTaskId: string, itemId: string): boole
 }
 
 /**
- * Judged from the stand-ins' own answers, never production's claim record: an asked-for item a passed sweep's delivered report calls decided
- * by a stored check (a check the sweep ran decides it and no undecided row names it) whose suite a
+ * TableVerdict from the stand-ins' own answers, never production's claim record: an asked-for item a passed sweep's
+ * checks decide and no undecided row names, so that its delivered report's table may read it pass, whose suite a
  * review read at the revision the sweep ran was confirmed by a second opinion. Some review round of
  * that revision holds a second opinion that says nothing about the item: an answer from a provider
  * other than the round's first answer's, or one asked to start from what each check cannot observe,
@@ -995,7 +1019,7 @@ export function unconfirmedAtPassedSweeps(records: Pick<ReportRecords, "passedSw
         if (!confirmed) {
           found.set(
             id,
-            `${id} ("${source.text.slice(0, 120)}") is called decided by a stored check in the delivered report of passed sweep ${n + 1} (${sweep.id}), ` +
+            `${id} ("${source.text.slice(0, 120)}") is left held back by no review at passed sweep ${n + 1} (${sweep.id}), ` +
               `but no second opinion on check "${check.name}"'s suite found its checks clean on it`,
           );
         }
@@ -1018,39 +1042,6 @@ function roundsOf(reviews: readonly ObservedReview[]): ObservedReview[][] {
 }
 
 /**
- * The coverage the delivered report must state, from the records alone: the review task's
- * sources are every item of the vision; an item is checked when a check of a goal task's latest
- * stored revision records that it decides it; an out-of-scope line, or an assumption, which is
- * decided through what rests on it, is not an item of what the client asked for and is never
- * listed. Unrecorded when the review holds no traced items or one such check records none it decides.
- */
-function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalChecks" | "goalUndecided">): CoverageOnRecord {
-  // A corrupt task_spec throws TaskSpecCorrupt through the snapshot check: the run fails, never passes unjudged.
-  const items = parseStoredTaskSpec(records.reviewSpec)?.sources;
-  if (items === undefined) return { kind: "unrecorded" };
-  const swept = decidedByStoredChecks(records.goalChecks);
-  if (swept.kind !== "decided") return swept.kind === "unrecorded" ? { kind: "unrecorded" } : { kind: "unreadable", detail: swept.detail };
-  const decided = swept.decided;
-  const asked = items.filter(askedFor);
-  const left = new Map<string, UndecidedReason>();
-  for (const item of records.goalUndecided) {
-    const key = JSON.stringify([item.id, item.text]);
-    const kept = left.get(key);
-    left.set(key, kept === undefined ? item.reason : firstReason(kept, item.reason));
-  }
-  return {
-    kind: "recorded",
-    asked,
-    uncovered: asked.filter((source) => !decided.has(identityOf(source))),
-    undecided: asked.flatMap((source) => {
-      const reason = left.get(JSON.stringify([source.id, source.text]));
-      return decided.has(identityOf(source)) && reason !== undefined ? [{ source, reason }] : [];
-    }),
-    notAsked: items.filter((source) => !askedFor(source)),
-  };
-}
-
-/**
  * Whether an item is part of what the client asked for, which a check decides, worded apart from the
  * report it judges: a guarantee, or a scope line not out of scope. An assumption is decided through
  * what rests on it, never on its own.
@@ -1059,131 +1050,132 @@ function askedFor(source: VisionSource): boolean {
   return source.type === "guarantee" || (source.type === "scope" && source.side !== "out");
 }
 
-const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
-const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
-const UNDECIDED_HEAD = "These items of what you asked for have a stored check that passed on main and is recorded as deciding them";
-/**
- * What an undecided section's first line says for each reason, whatever the strength of the second
- * review behind it, and no other section's does: the second review that could have settled its items
- * failed; a second review did not settle a finding; or the review that found no problem was
- * contradicted, or never confirmed, by one.
- */
-const SAYS: Readonly<Record<UndecidedReason, readonly string[]>> = {
-  "review-failed": ["because that review failed"],
-  unsettled: ["no second review confirmed or settled that", "did not confirm or settle that"],
-  "clean-contradicted": ["found a problem there"],
-  "clean-unconfirmed": ["no second review of those checks answered", "was not counted as confirming it"],
-};
+/** A check's evidence on a guarantee as guarantee_evidence records it: how it ended and what kind of evidence it is. */
+const checkEvidence = z.array(z.looseObject({ outcome: z.string(), class: z.string() }));
 
-/** The reasons a section's first line states. */
-function reasonsSaid(head: string): UndecidedReason[] {
-  return UNDECIDED_REASONS.filter((reason) => SAYS[reason].some((said) => head.includes(said)));
+/** A verdict as the oracle judges it: unjudged with why, else no reason. */
+interface TableVerdict {
+  readonly verdict: "pass" | "fail" | "unjudged";
+  readonly reason: string | null;
 }
 
-type CoverageUndecided = Extract<CoverageOnRecord, { readonly kind: "recorded" }>["undecided"];
-const ALL_COVERED = "Every item of what you asked for is decided";
-/**
- * The sentence counting the asked-for items decided and confirmed:
- * every one, none of N, or K of N.
- */
-const CONFIRMED_COUNT =
-  /(?:^|\n)(Every item|None of the (\d+) items?|(\d+) of the (\d+) items?) of what you asked for (?:is|are) decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks/;
-const CONFIRMED_HEAD = "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a second review";
-const UNREVIEWED_HEAD = "These items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review";
+const unjudged = (reason: string): TableVerdict => ({ verdict: "unjudged", reason });
 
 /**
- * Every asked-for item a stored check decides and no review left
- * undecided is listed once, as confirmed by a second review or as not confirmed; the count sentence
- * counts only the confirmed ones, of every asked-for item, and says none when none is.
+ * One guarantee's verdict from its evidence on the sweep, restated here by the rules the table
+ * promises the client: nothing is judged off a commit; an executed check that failed fails it; one
+ * that names nothing refuting it, or is about stored data (no fault set is run), no check decides;
+ * it passes only on an executed check that passed, and any review's doubt holds it back.
  */
-function confirmedCountProblems(body: string, asked: number, decided: readonly VisionSource[]): string[] {
-  const linesOf = (head: string): string[] => paragraphs(body, head).flatMap((part) => part.split("\n").filter((line) => line.startsWith("- ")));
-  const confirmed = linesOf(CONFIRMED_HEAD);
-  const listed = [...confirmed, ...linesOf(UNREVIEWED_HEAD)];
-  const problems: string[] = [];
-  for (const source of decided) {
-    const times = listed.filter((line) => line.includes(source.text)).length;
-    if (times !== 1) problems.push(`the delivered report lists "${source.text}" (${source.id}), decided and left undecided by no review, ${times} time(s) as confirmed or not; it must once`);
-  }
-  if (listed.length !== decided.length) problems.push(`the delivered report lists ${listed.length} item(s) as confirmed or not; the records hold ${decided.length} decided item(s) no review left undecided`);
-  const count = CONFIRMED_COUNT.exec(body);
-  if (count === null) return [...problems, `the delivered report does not say how many of the ${asked} asked-for item(s) are decided and confirmed`];
-  const [, said, none, some, of] = count;
-  const stated = said === "Every item" ? { confirmed: asked, of: asked } : none !== undefined ? { confirmed: 0, of: Number(none) } : { confirmed: Number(some), of: Number(of) };
-  if (stated.of !== asked || stated.confirmed !== confirmed.length || (said !== "Every item" && stated.confirmed === asked)) {
-    problems.push(`the delivered report says "${said}" of the asked-for items are decided and confirmed; it lists ${confirmed.length} confirmed of ${asked}`);
-  }
-  return problems;
+function judged(guarantee: GuaranteeInForce, evidence: { readonly checks: z.infer<typeof checkEvidence>; readonly reviewLowers: boolean }, onCommit: boolean): TableVerdict {
+  if (!onCommit) return unjudged("no-sweep-on-commit");
+  const executed = evidence.checks.filter((check) => check.class === "witness" || check.class === "implementer-visible");
+  if (executed.some((check) => check.outcome === "failed")) return { verdict: "fail", reason: null };
+  if (!guarantee.checkable) return unjudged("not-checkable-as-written");
+  if (guarantee.storedData) return unjudged("stored-data-unjudged");
+  const reviews = evidence.checks.filter((check) => check.class === "review-only");
+  if (!executed.some((check) => check.outcome === "passed")) return unjudged(reviews.length > 0 ? "review-only" : "no-executed-evidence");
+  if (evidence.reviewLowers || reviews.some((check) => check.outcome === "failed")) return unjudged("lowered-by-review");
+  return { verdict: "pass", reason: null };
 }
 
-/** Where the delivered report's coverage section departs from the records. */
-function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
-  if (coverage.kind === "unreadable") return [`the coverage records cannot be read, yet a delivered report was posted: ${coverage.detail}`];
-  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item, so each uncovered item is reported missing below and an empty expectation is met
-  const listed = (paragraph(body, UNCOVERED_HEAD) ?? "").split("\n").filter((line) => line.startsWith("- "));
-  const expectSentence = (sentence: string, what: string): string[] =>
-    [
-      ...(body.includes(sentence) ? [] : [`the records hold ${what}, but the delivered report does not say "${sentence}"`]),
-      ...(listed.length === 0 ? [] : [`the records hold ${what}, but the delivered report lists ${listed.length} item(s) as not covered`]),
+/** The guarantees in force at a vision version, or why the version cannot be read as a contract. */
+function inForceAt(vision: z.infer<typeof visionVersionRow>): GuaranteeInForce[] | string {
+  const form = sweptContractForm.safeParse(vision.contractForm);
+  const inferences = z.array(sweptAssumption).safeParse(vision.inferences);
+  const scope = z.array(sweptScopeLine).safeParse(vision.scopeBoundaries);
+  const guarantees = z.array(sweptGuarantee).safeParse(vision.guarantees);
+  if (!form.success || !inferences.success || !scope.success || !guarantees.success) {
+    const error = form.error ?? inferences.error ?? scope.error ?? guarantees.error;
+    return `vision v${vision.version} cannot be read as a contract: ${error === undefined ? "" : z.prettifyError(error).slice(0, 200)}`;
+  }
+  return guaranteesInForce(form.data, scope.data, guarantees.data, inferences.data);
+}
+
+const TABLE_ON_COMMIT = "Each guarantee of your contract (vision v";
+const TABLE_OFF_COMMIT = "No check could run on a commit of main for this report";
+const PUNCH_HEAD = "The punch list";
+
+/** The ids at the head of a paragraph's `- <id>: ` lines, in order. */
+function idsListed(part: string | null): string[] {
+  return part === null ? [] : part.split("\n").flatMap((line) => {
+    const id = /^- ([A-Za-z]+\d+): /.exec(line)?.[1];
+    return id === undefined ? [] : [id];
+  });
+}
+
+/**
+ * Where a terminal message's guarantee table departs from its sweep's records: the verdicts stored
+ * beside it name that sweep and every guarantee in force once, each as `judged` reads its evidence;
+ * the table lists every guarantee once, in the version's order, with that verdict; and the punch
+ * list names every failure, then every unjudged guarantee, then every pass stored as resting on an
+ * assumption the client has not confirmed. A sweep with no vision before it carries no contract and
+ * says so.
+ */
+function tableProblems(records: Pick<ReportRecords, "evidence" | "verdicts" | "visions">, report: z.infer<typeof reportRow>, sweep: z.infer<typeof tableSweepRow>): string[] {
+  const stored = records.verdicts.filter((verdict) => verdict.reportId === report.id);
+  const evidence = records.evidence.filter((each) => each.sweepId === sweep.id);
+  const versions = [...new Set(evidence.map((each) => each.visionVersion))];
+  if (versions.length > 1) return [`sweep ${sweep.id} records evidence against vision versions ${versions.join(", ")}; one table cannot be judged from it`];
+  const version = versions[0] ?? sweep.visionAtSweep;
+  if (version === null) {
+    return [
+      ...(stored.length === 0 ? [] : [`it stores ${stored.length} verdict(s) though no vision is on record at sweep ${sweep.id}`]),
+      ...(report.body.includes(`No contract is on record for this project at sweep ${sweep.id}`) ? [] : [`no vision is on record at sweep ${sweep.id}, but it does not say no contract is on record`]),
     ];
-  if (coverage.kind === "unrecorded") return expectSentence("is not on record for this plan", "no record of what the checks decide");
-  const problems = [...unverifiedProblems(body, coverage.notAsked), ...undecidedProblems(body, coverage.undecided)];
-  if (coverage.asked.length === 0) return [...problems, ...expectSentence("holds no item of what you asked for", "no item the client asked for")];
-  const notDecided = new Set([...coverage.uncovered, ...coverage.undecided.map((item) => item.source)]);
-  problems.push(...confirmedCountProblems(body, coverage.asked.length, coverage.asked.filter((source) => !notDecided.has(source))));
-  for (const source of coverage.uncovered) {
-    if (!listed.some((line) => line.includes(source.text))) problems.push(`the delivered report does not list "${source.text}" (${source.id}) as decided by no stored check`);
   }
-  for (const source of coverage.notAsked) {
-    if (listed.some((line) => line.includes(source.text))) problems.push(`the delivered report lists "${source.text}" (${source.id}), which the client did not ask for, as not covered`);
-  }
-  if (listed.length !== coverage.uncovered.length) problems.push(`the delivered report lists ${listed.length} item(s) as not covered; the records hold ${coverage.uncovered.length}`);
-  return problems;
-}
-
-/**
- * The delivered report names every asked-for item a
- * suite review left undecided as not verified, and nothing else there; no such section when there
- * is none. Each item is named in a section that states its reason and no other, so the client can
- * tell a failed review from one that did not settle the item, and a clean review a second opinion
- * contradicted from one no second opinion confirmed.
- */
-function undecidedProblems(body: string, undecided: CoverageUndecided): string[] {
-  const sections = paragraphs(body, UNDECIDED_HEAD);
-  if (undecided.length === 0) return sections.length === 0 ? [] : ["the delivered report names items a review left undecided; the records hold none"];
-  if (sections.length === 0) return [`the delivered report does not name the ${undecided.length} item(s) a review left undecided as not verified`];
-  const linesOf = (part: string): string[] => part.split("\n").filter((line) => line.startsWith("- "));
-  const listed = sections.flatMap(linesOf);
-  const sectionOf = (source: VisionSource): string | undefined => sections.find((part) => linesOf(part).some((line) => line.includes(source.text)));
+  const vision = records.visions.find((each) => each.version === version);
+  if (vision === undefined) return [`sweep ${sweep.id} is judged against vision v${version}, which is not on record`];
+  const inForce = inForceAt(vision);
+  if (typeof inForce === "string") return [inForce];
   const problems: string[] = [];
-  for (const { source, reason } of undecided) {
-    const section = sectionOf(source);
-    if (section === undefined) {
-      problems.push(`the delivered report does not name "${source.text}" (${source.id}), left undecided by a review, as not verified`);
+  const ids = inForce.map((g) => g.id);
+  const recorded = evidence.map((each) => each.guaranteeId);
+  if (evidence.length > 0 && JSON.stringify([...recorded].sort()) !== JSON.stringify([...ids].sort())) {
+    problems.push(`sweep ${sweep.id} records evidence for [${recorded.join(", ")}]; vision v${version} holds [${ids.join(", ")}]`);
+  }
+  const onCommit = sweep.mainCommit !== null;
+  const expected = inForce.map((guarantee) => {
+    const seen = evidence.find((each) => each.guaranteeId === guarantee.id);
+    // A sweep recorded before evidence per guarantee judges every guarantee on none, as its table
+    // says; a sweep that records some and misses this one is named above.
+    if (seen === undefined) return { guarantee, ...judged(guarantee, { checks: [], reviewLowers: false }, onCommit) };
+    const checks = checkEvidence.safeParse(seen.checks);
+    if (!checks.success) problems.push(`the evidence of ${guarantee.id} on sweep ${sweep.id} does not read as checks: ${z.prettifyError(checks.error).slice(0, 200)}`);
+    return { guarantee, ...judged(guarantee, { checks: checks.success ? checks.data : [], reviewLowers: seen.reviewLowers }, onCommit) };
+  });
+
+  for (const { guarantee, verdict, reason } of expected) {
+    const rows = stored.filter((row) => row.guaranteeId === guarantee.id);
+    const [row] = rows;
+    if (rows.length !== 1 || row === undefined) {
+      problems.push(`it stores ${rows.length} verdict(s) for ${guarantee.id}; every guarantee in force has exactly one`);
       continue;
     }
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a section with no first line states no reason, which differs from every recorded one below
-    const said = reasonsSaid(section.split("\n")[0] ?? "");
-    if (said.length !== 1 || said[0] !== reason) {
-      problems.push(`the delivered report names "${source.text}" (${source.id}) under a section that states [${said.join(", ")}]; the records say ${reason}`);
-    }
+    if (row.sweepId !== sweep.id || row.visionVersion !== version) problems.push(`its verdict on ${guarantee.id} names sweep ${row.sweepId} at vision v${row.visionVersion}; it was judged on sweep ${sweep.id} at v${version}`);
+    if (row.verdict !== verdict || row.reason !== reason) problems.push(`it stores ${guarantee.id} as ${row.verdict}${row.reason === null ? "" : ` (${row.reason})`}; its evidence reads ${verdict}${reason === null ? "" : ` (${reason})`}`);
   }
-  if (listed.length !== undecided.length) problems.push(`the delivered report names ${listed.length} item(s) as left undecided; the records hold ${undecided.length}`);
-  return problems;
-}
+  const strays = stored.filter((row) => !ids.includes(row.guaranteeId));
+  if (strays.length > 0) problems.push(`it stores verdicts for ${strays.map((row) => row.guaranteeId).join(", ")}, which vision v${version} does not hold`);
 
-/**
- * The delivered report names every assumption recorded as internal design, by id and text,
- * as not verified by Ashara, and nothing else there; none at all when there is no such assumption.
- */
-function unverifiedProblems(body: string, notAsked: readonly VisionSource[]): string[] {
-  const expected = notAsked.flatMap((source) => (source.type === "assumption" && source.kind === "internal-design" ? [`- ${source.id}: ${source.text}`] : []));
-  const section = paragraph(body, UNVERIFIED_HEAD);
-  if (expected.length === 0) return section === null ? [] : ["the delivered report names assumptions as not verified by Ashara; the records hold no internal-design assumption"];
-  if (section === null) return [`the delivered report does not name the ${expected.length} internal-design assumption(s) as not verified by Ashara`];
-  const listed = section.split("\n").filter((line) => line.startsWith("- "));
-  if (JSON.stringify(listed) !== JSON.stringify(expected)) {
-    return [`the delivered report names ${JSON.stringify(listed).slice(0, 200)} as not verified by Ashara; the records hold ${JSON.stringify(expected).slice(0, 200)}`];
+  const head = sweep.mainCommit === null ? TABLE_OFF_COMMIT : `${TABLE_ON_COMMIT}${version}) is judged on main at commit ${sweep.mainCommit}, sweep ${sweep.id}.`;
+  const table = paragraph(report.body, head);
+  if (table === null) return [...problems, `it carries no guarantee table opening "${head.slice(0, 120)}"`];
+  const lines = table.split("\n").filter((line) => line.startsWith("- "));
+  if (JSON.stringify(idsListed(table)) !== JSON.stringify(ids)) problems.push(`its table lists [${idsListed(table).join(", ")}]; vision v${version} holds [${ids.join(", ")}], each once`);
+  for (const { guarantee, verdict } of expected) {
+    const line = lines.find((each) => each.startsWith(`- ${guarantee.id}: `));
+    const said = line === undefined ? null : /\| verdict: (pass|fail|unjudged)\b/.exec(line)?.[1];
+    if (line !== undefined && said !== verdict) problems.push(`its table says ${guarantee.id} is ${said ?? "nothing"}; its evidence reads ${verdict}`);
   }
-  return [];
+  const atRisk = new Set(stored.filter((row) => row.verdict === "pass" && row.basis === "assumed-unconfirmed").map((row) => row.guaranteeId));
+  const punched = [
+    ...expected.filter((each) => each.verdict === "fail"),
+    ...expected.filter((each) => each.verdict === "unjudged"),
+    ...expected.filter((each) => each.verdict === "pass" && atRisk.has(each.guarantee.id)),
+  ].map((each) => each.guarantee.id);
+  const punch = paragraph(report.body, PUNCH_HEAD);
+  if (punch === null) problems.push("it carries no punch list");
+  else if (JSON.stringify(idsListed(punch)) !== JSON.stringify(punched)) problems.push(`its punch list names [${idsListed(punch).join(", ")}]; the verdicts put [${punched.join(", ")}] on it, failures first`);
+  return problems;
 }

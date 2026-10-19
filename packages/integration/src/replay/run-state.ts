@@ -215,7 +215,34 @@ export async function settleReports(db: Db, setAside: ReportsSetAside): Promise<
 export function composedAgain(key: string, projectId: string, recomposed: readonly SetAside[]): boolean {
   if (key.startsWith("brief-")) return true;
   const of = (table: SetAside["table"]): boolean => recomposed.some((record) => record.table === table && record.projectId === projectId);
-  if (key.startsWith("delivered-") || key.startsWith("accepted-")) return of("acceptance_sweeps");
-  if (key.startsWith("halt-")) return of("project_blocks");
+  if (key.startsWith("delivered-") || key.startsWith("accepted-") || key === "guarantee-table:delivered") return of("acceptance_sweeps");
+  if (key.startsWith("halt-") || key.startsWith("guarantee-table:halt:")) return of("project_blocks");
   return false;
+}
+
+const verdictRow = z.object({
+  reportId: z.string(),
+  sweepId: z.string(),
+  visionVersion: z.number(),
+  guaranteeId: z.string(),
+  verdict: z.string(),
+  reason: z.string().nullable(),
+  evidenceClass: z.string(),
+});
+
+/** One guarantee's verdict as a report today's composers posted stores it. */
+export type StoredVerdict = z.infer<typeof verdictRow>;
+
+/** Every verdict stored beside one of the project's reports, oldest report first, by guarantee id. */
+export async function storedVerdicts(db: Db, projectId: string): Promise<StoredVerdict[]> {
+  return z.array(verdictRow).parse(
+    (
+      await db.execute(sql`
+        SELECT v.report_id AS "reportId", v.sweep_id AS "sweepId", v.vision_version AS "visionVersion", v.guarantee_id AS "guaranteeId",
+               v.verdict, v.reason, v.evidence_class AS "evidenceClass"
+        FROM guarantee_verdicts v JOIN client_messages m ON m.id = v.report_id
+        WHERE v.project_id = ${projectId}
+        ORDER BY m.created_at, m.id, v.guarantee_id`)
+    ).rows,
+  );
 }

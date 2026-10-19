@@ -35,7 +35,7 @@ export { listDueBlockReports, postProjectBlockReport } from "./repositories/bloc
 export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.js";
 export { readRiskRecords } from "./repositories/early-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
-export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
+export { listDueStopReports, listUnconsumedStops, postClientStopReport, recordClientStop } from "./repositories/client-stop.js";
 export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
 export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";

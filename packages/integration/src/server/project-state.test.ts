@@ -30,15 +30,12 @@ async function halt(projectId: ProjectId): Promise<string> {
   return new ProjectHaltRepository(db).block(projectId, fault);
 }
 
-/** The client's stop through Engagement's guard; returns whether the report was told the project was paused. */
+/** The client's stop through Engagement's guard; returns whether the stop recorded the project as paused. */
 async function stop(projectId: ProjectId): Promise<boolean> {
   const message = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Stop.", inReplyTo: null });
-  let paused: boolean | null = null;
-  await recordClientStop(db, { id: message.id, projectId }, (_merged, wasPaused) => {
-    paused = wasPaused;
-    return "stopped";
-  });
-  return z.boolean().parse(paused);
+  await recordClientStop(db, { id: message.id, projectId });
+  const result = await db.execute(sql`SELECT stop_found_halted AS paused FROM client_messages WHERE id = ${message.id}`);
+  return z.array(z.object({ paused: z.boolean() })).length(1).parse(result.rows)[0]?.paused === true;
 }
 
 /** A passed sweep on record (what the acceptance guard requires), then Engagement's accept, in one transaction. */
@@ -93,7 +90,7 @@ describe("the client-visible project state, composed from the lifecycle and the 
     expect(await openEpisodes(projectId)).toBe(0);
   });
 
-  test("a halted project the client stops is stopped, its halt ended, the report told it was paused; a stopped project is never halted", async () => {
+  test("a halted project the client stops is stopped, its halt ended, the stop recording it was paused; a stopped project is never halted", async () => {
     const projectId = await newProject();
     await halt(projectId);
     expect(await stop(projectId)).toBe(true);
@@ -106,7 +103,7 @@ describe("the client-visible project state, composed from the lifecycle and the 
     await expect(new ProjectHaltRepository(db).unblock(projectId, "operator-a", "x")).rejects.toMatchObject({ name: "ProjectNotBlocked" });
   });
 
-  test("an active project the client stops is stopped and the report was not told of a pause", async () => {
+  test("an active project the client stops is stopped and the stop records no pause", async () => {
     const projectId = await newProject();
     expect(await stop(projectId)).toBe(false);
     expect(await stateOf(projectId)).toBe("stopped");

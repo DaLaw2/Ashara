@@ -11,6 +11,7 @@ import { memoryStepContainment, recordingLogger } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { projectState } from "../simulator/project-state.js";
+import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // A client's stop halts its project. Every row belongs
 // to a project this suite creates under a unique name, and every step is
@@ -58,11 +59,16 @@ async function sendStop(projectId: ProjectId, body: string) {
   return new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body, inReplyTo: null });
 }
 
+/** The Liaison's stop step over this suite's projects, each stop's terminal sweep recorded before its report is due. */
 function liaison(): ClientStops {
   const store = createClientStopStore(db);
   const ours: ClientStopStore = {
     ...store,
     openStops: async () => (await store.openStops()).filter((stop) => ourProjects.has(stop.projectId)),
+    dueStopReports: async () => {
+      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
+      return (await store.dueStopReports()).filter((due) => ourProjects.has(due.projectId));
+    },
   };
   return new ClientStops(ours, memoryStepContainment(() => true));
 }
@@ -140,7 +146,8 @@ describe("a client's stop", () => {
     const outcomes = await liaison().runPending();
 
     expect(outcomes).toEqual([
-      { kind: "stopped", reported: true, merged: 2, stopId: stop.id, projectId: stopped.projectId },
+      { kind: "stopped", reportDue: true, stopId: stop.id, projectId: stopped.projectId },
+      { kind: "posted", stopId: stop.id, projectId: stopped.projectId },
     ]);
     expect(await projectRow(stopped.projectId)).toEqual({ status: "stopped", errorClass: null, reason: null });
     expect(await projectRow(other.projectId)).toEqual({ status: "active", errorClass: null, reason: null });
@@ -156,6 +163,8 @@ describe("a client's stop", () => {
     expect(reports[0]).not.toContain("Marked done by hand");
     expect(reports[0]).not.toContain("Write the checks");
     expect(reports[0]).not.toMatch(/plan (is )?complete/i);
+    // The table of the stop's terminal sweep closes it: this project has no contract on record.
+    expect(reports[0]).toMatch(/\n\nNo contract is on record for this project at sweep [0-9a-f-]{36}, so no guarantee is judged\.$/);
     expect(await stopReports(other.projectId)).toEqual([]);
 
     // Never dispatched afterwards, and its open tender is never taken in.
@@ -219,6 +228,10 @@ describe("a client's stop", () => {
       "stopped",
       "stopped",
       "stopped",
+      "posted",
+      "posted",
+      "posted",
+      "posted",
     ]);
   });
 
@@ -229,7 +242,7 @@ describe("a client's stop", () => {
 
     const [outcome] = await liaison().runPending();
 
-    expect(outcome).toMatchObject({ kind: "stopped", reported: true, merged: 0 });
+    expect(outcome).toMatchObject({ kind: "stopped", reportDue: true });
     expect(await projectRow(project.projectId)).toEqual({
       status: "stopped",
       errorClass: "TestBlock",
@@ -238,5 +251,6 @@ describe("a client's stop", () => {
     const reports = await stopReports(project.projectId);
     expect(reports).toHaveLength(1);
     expect(reports[0]).toContain("No merged work is on record for this project.");
+    expect(reports[0]).toContain("Work on it was already paused when your request arrived.");
   });
 });

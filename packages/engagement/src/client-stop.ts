@@ -1,11 +1,15 @@
 import { containEach } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 
 // The client's stop. The web
 // client's Stop promises a halt; the Liaison, the only writer to the client,
 // keeps it: each cycle, before any intake, planning or dispatch, it consumes the
-// open stops, moves each project to 'stopped' and tells the
-// client once what is on record as merged.
+// open stops and moves each project to 'stopped'. The client is told once what is
+// on record as merged and how each guarantee stands on main: the stop report waits
+// for the stop's terminal sweep, the commands-only run of the stored checks on main,
+// and carries its guarantee table, so it is posted on a later cycle than the stop.
 //
 // A stop sent mid-cycle, after this step, is honoured by the rest of that cycle
 // all the same: every reader that admits a project to intake, first planning,
@@ -31,7 +35,8 @@ interface OpenStop {
 }
 
 type ClientStopCommit =
-  | { readonly kind: "stopped"; readonly reported: boolean; readonly merged: number }
+  /** `reportDue` is false only when a stop report already exists (an operator re-activated a stopped project). */
+  | { readonly kind: "stopped"; readonly reportDue: boolean }
   | { readonly kind: "already-stopped" };
 
 /**
@@ -44,18 +49,31 @@ interface MergedTask {
   readonly kind: "merged" | "already_delivered" | null;
 }
 
+/** A stop that stopped its project, its terminal sweep recorded, whose report the client has not been sent. */
+interface DueStopReport {
+  readonly stopId: string;
+  readonly projectId: ProjectId;
+  readonly merged: readonly MergedTask[];
+  /** Whether Delivery had the project halted when the stop arrived. */
+  readonly paused: boolean;
+  readonly guarantees: GuaranteeTable;
+}
+
 /** Engagement's persistence port for client stops. */
 export interface ClientStopStore {
   openStops(): Promise<readonly OpenStop[]>;
   /**
-   * Consumes the stop and, unless the project is already stopped, stops it and posts the report
-   * composed from its tasks' merge records and whether it was paused when the stop arrived, in one
-   * transaction.
+   * Consumes the stop and, unless the project is already stopped, stops it and records whether it
+   * was paused when the stop arrived, in one transaction.
    */
-  recordStop(stop: OpenStop, composeReport: (merged: readonly MergedTask[], paused: boolean) => string): Promise<ClientStopCommit>;
+  recordStop(stop: OpenStop): Promise<ClientStopCommit>;
+  /** Every stop report due, each read on its own: one whose records do not read as a report is its UnreadSubject. */
+  dueStopReports(): Promise<ReadonlyArray<DueStopReport | UnreadSubject>>;
+  /** Posts the stop's report with its table's verdicts, unless the project's stop report exists. */
+  postStopReport(stopId: string, body: string, verdicts: TableVerdicts): Promise<"posted" | "already-posted">;
 }
 
-type ClientStopOutcome = ClientStopCommit & { readonly stopId: string; readonly projectId: ProjectId };
+type ClientStopOutcome = (ClientStopCommit | { readonly kind: "posted" | "already-posted" }) & { readonly stopId: string; readonly projectId: ProjectId };
 
 /** What the core loop asks of the Liaison at the top of each cycle. */
 export interface LiaisonClientStops {
@@ -75,24 +93,25 @@ function mergedLine(task: MergedTask): string {
 
 /**
  * Plain words, only what is on record: that work stopped because the client
- * asked, that a pause already in place does not end the stop, and each task
- * with a commit on record, the commit and how it closed the task. Never a claim
- * that the plan is complete.
+ * asked, that a pause already in place does not end the stop, each task
+ * with a commit on record, the commit and how it closed the task, and the
+ * guarantee table of the stop's terminal sweep. Never a claim that the plan is complete.
  */
-function stopReport(mergedTasks: readonly MergedTask[], paused: boolean): string {
+function stopReport(due: DueStopReport): string {
   const merged =
-    mergedTasks.length === 0
+    due.merged.length === 0
       ? "No merged work is on record for this project."
-      : `What is on main for this project, as recorded:\n${mergedTasks.map(mergedLine).join("\n")}`;
+      : `What is on main for this project, as recorded:\n${due.merged.map(mergedLine).join("\n")}`;
   return [
     "Work on this project has stopped at your request. Ashara will not start any further work on it.",
-    ...(paused
+    ...(due.paused
       ? [
           "Work on it was already paused when your request arrived. Your request is recorded: the project stays " +
             "stopped, and clearing what paused it does not restart it.",
         ]
       : []),
     merged,
+    guaranteeSection(due.guarantees),
   ].join("\n\n");
 }
 
@@ -104,23 +123,34 @@ export class ClientStops implements LiaisonClientStops {
   ) {}
 
   /**
-   * A second stop on a stopped project is consumed and not answered: the client
-   * already holds the stop report, a second one would say nothing new, and the
-   * one-report-per-project index would refuse it anyway. A stop whose
-   * recording fails is contained to it (containEach) and stays unconsumed, so its
-   * project is still held from all work (noOpenStop) while the other stops are taken.
+   * The open stops, then the stop reports whose terminal sweep is recorded. A second stop on a
+   * stopped project is consumed and not answered: the client already holds, or is owed, the stop
+   * report, and a second one would say nothing new. A stop whose recording fails is contained to it
+   * (containEach) and stays unconsumed, so its project is still held from all work (noOpenStop) while
+   * the other stops are taken; a report that cannot be read or posted is contained to it the same way.
    */
   async runPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>> {
     const stops = await this.store.openStops();
-    return containEach(this.containment, "client-stop", stops, (stop) => ({ id: stop.id, projectId: stop.projectId }), async (stop): Promise<ClientStopOutcome> => {
-      const commit = await this.store.recordStop(stop, stopReport);
-      if (commit.kind === "stopped" && !commit.reported) {
+    const taken = await containEach(this.containment, "client-stop", stops, (stop) => ({ id: stop.id, projectId: stop.projectId }), async (stop): Promise<ClientStopOutcome> => {
+      const commit = await this.store.recordStop(stop);
+      if (commit.kind === "stopped" && !commit.reportDue) {
         console.warn(
           `[liaison-stop] project ${stop.projectId}: stopped by stop ${stop.id}, but a stop report already ` +
-            `existed, so none was posted; the project was re-activated after an earlier stop`,
+            `existed, so none is owed; the project was re-activated after an earlier stop`,
         );
       }
       return { ...commit, stopId: stop.id, projectId: stop.projectId };
     });
+    const reports = await containEach(
+      this.containment,
+      "client-stop",
+      await this.store.dueStopReports(),
+      (due) => ({ id: `report:${due.stopId}`, projectId: due.projectId }),
+      async (due): Promise<ClientStopOutcome> => {
+        const kind = await this.store.postStopReport(due.stopId, stopReport(due), tableVerdicts(due.guarantees));
+        return { kind, stopId: due.stopId, projectId: due.projectId };
+      },
+    );
+    return [...taken, ...reports];
   }
 }

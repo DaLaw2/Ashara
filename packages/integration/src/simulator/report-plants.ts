@@ -56,10 +56,17 @@ function dropFirstNamed(body: string, head: string, prefix = `- "`): string {
 
 const PAUSED = ["Work on this project is paused.", "Work on this project has stopped: the team cannot deliver"];
 
-/** A halt report that states a fixed cause, chosen by nothing that happened. */
+/** The paragraphs of a terminal message from its guarantee table on: its punch list, or that no contract is on record. */
+function tableOf(body: string): string {
+  const parts = body.split("\n\n");
+  const at = parts.findIndex((part) => part.startsWith("The punch list") || part.startsWith("No contract is on record"));
+  return at < 0 ? "" : `\n\n${parts.slice(at).join("\n\n")}`;
+}
+
+/** A halt report that states a fixed cause, chosen by nothing that happened, above the table it carries. */
 export const haltReportFixedCause = rewriteReport(
   (body) => PAUSED.some((opening) => body.startsWith(opening)),
-  () => "Work on this project is paused.\n\nThe cause: a temporary problem on our side.\n\nYou will be told when work resumes.",
+  (body) => `Work on this project is paused.\n\nThe cause: a temporary problem on our side.\n\nYou will be told when work resumes.${tableOf(body)}`,
 );
 
 /** A stop report that leaves out the first merge on record. */
@@ -89,12 +96,10 @@ export const deliveredReportMisstatesUnchecked = rewriteReport(
   },
 );
 
-const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
-
-/** A delivered report that leaves out the first asked-for item no stored check decides. */
-const deliveredReportOmitsUncovered = rewriteReport(
+/** A delivered report whose guarantee table leaves out its first guarantee. */
+export const deliveredReportDropsGuarantee = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
-  (body) => dropFirstNamed(body, UNCOVERED_HEAD, "- "),
+  (body) => dropFirstNamed(body, "Each guarantee of your contract", "- "),
 );
 
 /**
@@ -120,13 +125,7 @@ function rewriteInsert(table: string, rewrite: (param: string) => string): Query
  */
 export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => param.replaceAll(`"note":"Inferred; asked of the client, not yet answered;`, `"note":"Stated by the client;`));
 
-const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 
-/** A delivered report that leaves out the first internal-design assumption it must name as not verified by Ashara. */
-export const deliveredReportOmitsUnverified = rewriteReport(
-  (body) => body.startsWith("Your project is delivered."),
-  (body) => dropFirstNamed(body, UNVERIFIED_HEAD, "- "),
-);
 
 /**
  * A delivered report whose how-to-run section is not main's: the quoted interface names another command, or, where
@@ -176,29 +175,23 @@ export const checkSetSkipsItem: QueryPlant = (args) => {
   return [args[0], rewritten, ...args.slice(2)];
 };
 
-/** `plant` on a run whose check set is stored with one cited item undecided (checkSetSkipsItem): that item is what the report then states. */
-function onCheckSetSkippingItem(plant: QueryPlant): QueryPlant {
-  return (args) => checkSetSkipsItem(args) ?? plant(args);
-}
+/** A delivered report that tells the client an assumption they were asked about and have not answered is theirs. */
+export const deliveredReportMisstatesStanding = rewriteReport(
+  (body) => body.startsWith("Your project is delivered."),
+  (body) => body.replace("not confirmed by you)", "stated by you)"),
+);
 
 /**
- * A delivered report that leaves out the first asked-for item no stored check decides. The honest
- * check author decides every cited item, so the plant stores one check set with an item undecided
- * (I6 names that too).
+ * A delivered report whose table says its first unjudged guarantee passed. The honest check author
+ * decides every guarantee, so every one passes; the plant stores one check set with a guarantee
+ * undecided, which then reads unjudged on no executed evidence (I6 names that too).
  */
-export const deliveredReportOmitsUncoveredOfSkippedItem = onCheckSetSkippingItem(deliveredReportOmitsUncovered);
-
-/**
- * A delivered report that says an assumption the client was asked about was reported to them. The
- * report states the standing of an asked-for item no stored check decides, so the plant stores one
- * check set with an item undecided (I6 names that too).
- */
-export const deliveredReportMisstatesStanding = onCheckSetSkippingItem(
+export const deliveredReportPassesUnjudged: QueryPlant = (args) =>
+  checkSetSkipsItem(args) ??
   rewriteReport(
     (body) => body.startsWith("Your project is delivered."),
-    (body) => body.replaceAll("Ashara's assumption, which you were asked about and have not answered:", "Ashara's assumption, which was reported to you:"),
-  ),
-);
+    (body) => body.replace(/\| verdict: unjudged, [^|]*\|/, "| verdict: pass |"),
+  )(args);
 
 /** A question that says work proceeds on an assumption its vision does not record. */
 export const questionMisstatesAssumption = rewriteInsert("client_messages", (param) =>
@@ -217,8 +210,8 @@ export const deliveredReportUnrecorded: QueryPlant = (args) => {
 /**
  * A clean review's claim that no second opinion confirmed leaves no item undecided
  * (SuiteReviewJudgementRepository): an insert of undecided_items rows that names a
- * claim is sent as a statement that writes nothing, so every item it covers reads as decided by a
- * stored check in the delivered report, as when no second review was asked of a clean one. The
+ * claim is sent as a statement that writes nothing, so no review holds back any item it covers,
+ * as when no second review was asked of a clean one. The
  * statement keeps every parameter, each read as text, so the server binds what was sent.
  */
 export const unconfirmedClaimDropped: QueryPlant = (args) => {

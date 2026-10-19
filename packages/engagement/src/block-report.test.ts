@@ -3,12 +3,23 @@ import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
+import type { GuaranteeTable } from "./guarantee-report.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000020", "test");
 
-type Due = Awaited<ReturnType<BlockReportStore["dueReports"]>>[number];
+type Listed = Awaited<ReturnType<BlockReportStore["dueReports"]>>[number];
+type Due = Extract<Listed, { readonly subject: string }>;
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-function reportsFor(due: readonly Due[]) {
+/** The table these reports carry; guarantee-report.test.ts judges its text. */
+const TABLE: GuaranteeTable = { kind: "no-contract", sweep: { id: "s1", mainCommit: null } };
+
+function withTable(each: DistributiveOmit<Due, "guarantees">): Due {
+  return each.subject === "project-resumed" ? each : { ...each, guarantees: TABLE };
+}
+
+function reportsFor(listed: ReadonlyArray<DistributiveOmit<Due, "guarantees">>) {
+  const due = listed.map(withTable);
   const posted: Array<{ key: string; body: string }> = [];
   const store: BlockReportStore = {
     dueReports: async () => due,

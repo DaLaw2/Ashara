@@ -12,13 +12,6 @@ import type { Direction } from "./tape.js";
  */
 useSimulatorDatabase();
 
-/**
- * What I6 names when a check set of the stand-ins is stored with its last decided item undecided
- * (check-set-skips-item): the guarantee naming no behaviour, the last the scripted intake drafts for
- * the directed tier's two behaviours.
- */
-const SKIPPED_ITEM = ["I6:unchecked-item:G3"];
-
 describe("lifecycle simulator, directed", () => {
   // I3's intake clause: the lazy intake persona's reading asks the client nothing. The simulator's
   // catalog holds one model family, so the second reading is another model of it, asked what is
@@ -52,8 +45,7 @@ describe("lifecycle simulator, directed", () => {
 
   // I9 (text against fact): what a composer states is what the store held when it composed it. Every
   // brief carries the stand-ins' asked assumption with its standing, and the question states it. The
-  // delivered report states the standing of the assumption under a guarantee no stored check
-  // decides, so its plant stores a check set with that guarantee undecided, which I6 names too.
+  // delivered report's table says whether the client stated each assumption the guarantees rest on.
   it("catches a brief that states an assumption's standing its record does not hold", async (ctx) => {
     const briefs = keys(await directed(ctx, [], { mutation: "brief-misstates-standing" }));
     expect(briefs).toContain("I9:brief-assumptions:Define and commit the project environment");
@@ -61,7 +53,7 @@ describe("lifecycle simulator, directed", () => {
   }, 90_000);
 
   it("catches a delivered report that states an item's standing its record does not hold", async (ctx) => {
-    expect(keys(await directed(ctx, [], { mutation: "delivered-report-misstates-standing" }))).toEqual([...SKIPPED_ITEM, "I9:delivered-standing:A1"]);
+    expect(keys(await directed(ctx, [], { mutation: "delivered-report-misstates-standing" }))).toEqual(["I9:delivered-standing:A1"]);
   }, 90_000);
 
   it("catches a question that states an assumption its record does not hold", async (ctx) => {

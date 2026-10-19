@@ -43,7 +43,7 @@ export function createTerminalSweepStore(db: Db): TerminalSweepStore {
 export function createDeliveredReportStore(db: Db): DeliveredReportStore {
   return {
     dueReports: () => listDueDeliveredReports(db),
-    postReport: (sweepId, body) => postDeliveredReport(db, sweepId, body),
+    postReport: (sweepId, body, verdicts) => postDeliveredReport(db, sweepId, body, verdicts),
     recordReportFailure: (sweepId, failure) => recordDeliveredReportFailure(db, sweepId, failure),
   };
 }

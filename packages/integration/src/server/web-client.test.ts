@@ -28,6 +28,7 @@ import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "@ashara/server/web-c
 import type { WebClientDeps } from "@ashara/server/web-client";
 import { WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
+import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
@@ -857,12 +858,16 @@ describe("recorded web-client session", () => {
       step("pressed Stop, confirmed in-page; the stop appears in the timeline, shown as requested, Stop no longer offered");
 
       // The Liaison's production stop step, narrowed to this project so no other suite's stop is consumed.
+      // The stop's report waits for its terminal sweep, which the loop records between the two runs.
       const stopStore = createClientStopStore(db);
-      const stops = await new ClientStops({
+      const liaison = new ClientStops({
         ...stopStore,
         openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === project.id),
-      }, memoryStepContainment(() => true)).runPending();
-      expect(stops).toMatchObject([{ kind: "stopped", reported: true, merged: 0, projectId: project.id }]);
+        dueStopReports: async () => (await stopStore.dueStopReports()).filter((due) => due.projectId === project.id),
+      }, memoryStepContainment(() => true));
+      expect(await liaison.runPending()).toMatchObject([{ kind: "stopped", reportDue: true, projectId: project.id }]);
+      await sweepTerminalsOf(db, (id) => id === project.id);
+      expect(await liaison.runPending()).toMatchObject([{ kind: "posted", projectId: project.id }]);
       const stoppedState = page.locator('#project-state[data-status="stopped"]');
       await stoppedState.waitFor({ timeout: 15_000 });
       expect(await stoppedState.textContent()).toContain("Stopped at your request");

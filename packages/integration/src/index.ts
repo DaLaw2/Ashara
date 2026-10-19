@@ -20,7 +20,9 @@ export {
   replayProjects,
   setAsideReports,
   settleReports,
+  storedVerdicts,
 } from "./replay/run-state.js";
+export type { StoredVerdict } from "./replay/run-state.js";
 export type { RunMode, RunOptions, RunResult } from "./simulator/run.js";
 export { SeedRequestSchema, WorkerReplySchema } from "./simulator/soak-protocol.js";
 export type { SeedReport } from "./simulator/soak-protocol.js";

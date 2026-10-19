@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, jsonb, integer, unique, index, primaryKey, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, jsonb, integer, boolean, unique, index, primaryKey, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
 import { projects } from "./project.js";
@@ -68,6 +68,8 @@ export const clientMessages = pgTable(
     reportsOn: varchar("reports_on", { length: 20 }),
     // An outbound question's 1-based rank among those posted with it.
     position: integer(),
+    // On the inbound stop that moved its project to 'stopped': whether Delivery had it halted then.
+    stopFoundHalted: boolean("stop_found_halted"),
   },
   (t) => ({
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),
@@ -130,4 +132,36 @@ export const workBurnWarnings = pgTable(
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.planRevision, t.zone] })],
+);
+
+// ---------------------------------------------------------------------------
+// guarantee_verdicts (Engagement context)
+// ---------------------------------------------------------------------------
+// One row per guarantee of the vision version a terminal message's sweep evidence was recorded
+// against: its verdict, why it is unjudged, its basis and the class of evidence behind it. The
+// vocabulary, "a reason exactly when unjudged" and "a pass rests on executed evidence" are CHECKs in
+// the migration; the sweep's foreign key is there too. Append-only.
+
+export const guaranteeVerdicts = pgTable(
+  "guarantee_verdicts",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => clientMessages.id, { onDelete: "cascade" }),
+    sweepId: uuid("sweep_id").notNull(),
+    visionVersion: integer("vision_version").notNull(),
+    guaranteeId: text("guarantee_id").notNull(),
+    verdict: text().notNull(),
+    reason: text(),
+    basis: text().notNull(),
+    evidenceClass: text("evidence_class").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    onePerReport: unique("guarantee_verdicts_one_per_report").on(t.reportId, t.guaranteeId),
+  }),
 );

@@ -27,7 +27,10 @@
  *   project intent today's loadProjectIntent states from the vision current when the session was
  *   recorded), the delivered report of each passed sweep (its project accepted again for the
  *   while, as it was when the report was composed), and the report of a blocked project's open
- *   episode, posted again by Engagement through today's stores with the kept ones set aside. One
+ *   episode, posted again by Engagement through today's stores with the kept ones set aside. Each
+ *   carries the guarantee table of its sweep, and its verdicts are printed one per guarantee. An
+ *   open episode is owed a terminal sweep before its report; a dump holds no checkout to run one on,
+ *   so it is recorded as run on no commit, and every guarantee of that report reads unjudged. One
  *   today's Engagement does not post again (a project with a stop awaiting the Liaison is not
  *   reported on) gets its kept report back and is judged as kept, and says so. A brief's
  *   other sections (its context map, checks, knowledge) need the run's checkout, which a dump does
@@ -55,10 +58,11 @@ import {
   replayProjects,
   setAsideReports,
   settleReports,
+  storedVerdicts,
 } from "@ashara/integration";
-import type { StoredTextViolation } from "@ashara/integration";
+import type { StoredTextViolation, StoredVerdict } from "@ashara/integration";
 import { PUBLIC_INTERFACE_FILE } from "@ashara/quality";
-import { createDeliveredReportStore } from "@ashara/server/acceptance-store";
+import { createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createLogger, describeErrorChain, stdoutSink, systemClock, uncontainedSteps } from "@ashara/shared";
 
@@ -145,6 +149,43 @@ async function restore(dump: string, psql: readonly string[], database: string):
   });
 }
 
+/**
+ * Records the terminal sweep every open halt episode and stop of the dump is owed, as one that ran
+ * on no commit: a dump holds no checkout of the product, and the replay runs nothing on cells.
+ * Returns how many were recorded.
+ */
+async function recordUnsweptTerminals(db: ReturnType<typeof createDb>): Promise<number> {
+  const store = createTerminalSweepStore(db);
+  let recorded = 0;
+  for (const due of await store.dueTerminalSweeps()) {
+    const outcome = await store.recordTerminalSweep({
+      projectId: due.projectId,
+      terminal: due.terminal,
+      mainCommit: null,
+      environmentVersion: null,
+      checkedTasks: [],
+      uncheckedTasks: [],
+      checkOutcomes: [],
+      details: "No terminal sweep ran: a replay of a kept run's records holds no checkout of its product.",
+    });
+    if (outcome === "recorded") recorded += 1;
+  }
+  return recorded;
+}
+
+function printVerdicts(verdicts: readonly StoredVerdict[]): void {
+  if (verdicts.length === 0) {
+    console.log("  verdicts: none stored");
+    return;
+  }
+  for (const reportId of new Set(verdicts.map((each) => each.reportId))) {
+    const of = verdicts.filter((each) => each.reportId === reportId);
+    const [first] = of;
+    console.log(`  verdicts of report ${reportId} (sweep ${first?.sweepId ?? "?"}, vision v${first?.visionVersion ?? "?"}):`);
+    for (const each of of) console.log(`    ${each.guaranteeId} ${each.verdict}${each.reason === null ? "" : ` ${each.reason}`} (evidence: ${each.evidenceClass})`);
+  }
+}
+
 function print(label: string, violations: readonly StoredTextViolation[]): void {
   if (violations.length === 0) {
     console.log(`  ${label}: no violation`);
@@ -171,6 +212,7 @@ async function main(): Promise<void> {
       const kept = new Map<string, StoredTextViolation[]>();
       for (const project of projects) kept.set(project.id, await judgeStoredText(db, project.id, "as-recorded"));
       const setAside = await setAsideReports(db);
+      console.log(`terminal sweeps recorded on no commit for the open halts and stops: ${await recordUnsweptTerminals(db)}`);
       await new DeliveredReports(createDeliveredReportStore(db), {
         file: PUBLIC_INTERFACE_FILE,
         at: async () => ({ kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" }),
@@ -191,6 +233,7 @@ async function main(): Promise<void> {
         const composed = today.filter((each) => composedAgain(each.key, project.id, recomposed));
         print("today, composed again", composed);
         print("today, judged as kept", today.filter((each) => !composed.includes(each)));
+        printVerdicts(await storedVerdicts(db, project.id));
         failed += composed.length;
       }
     } finally {

@@ -8,11 +8,11 @@ import {
   briefMisstatesStanding,
   checkSetSkipsItem,
   deliveredReportMisquotesInterface,
+  deliveredReportDropsGuarantee,
   deliveredReportMisstatesStanding,
-  deliveredReportOmitsUnverified,
   deliveredReportMisstatesUnchecked,
   deliveredReportOmitsGoal,
-  deliveredReportOmitsUncoveredOfSkippedItem,
+  deliveredReportPassesUnjudged,
   deliveredReportUnrecorded,
   haltReportFixedCause,
   questionMisstatesAssumption,
@@ -32,28 +32,28 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - pending-uncounted: a spend-cap admission's read leaves out the pending rows of calls admitted
  *   and not yet recorded, so it counts the recorded spend alone (I5, admission clause);
  * - infrastructure-fault-pinned: a task's infrastructure faults stop counting at the halt (I8);
- * - halt-report-fixed-cause: a halt's report states a fixed cause, not the recorded one (I4);
+ * - halt-report-fixed-cause: a halt's report states a fixed cause, not the recorded one, above
+ *   the table it carries (I4);
  * - stop-report-omits-merge: the stop report leaves out a merge on record (I4);
  * - delivered-report-omits-goal, delivered-report-misstates-unchecked: the delivered report leaves
  *   out a goal's close, or states the wrong tasks as not checked by a stored check (I4);
- * - delivered-report-omits-uncovered: on a check set stored with a cited item undecided
- *   (check-set-skips-item), the delivered report leaves out an asked-for item no stored check
- *   decides (I4; I6 names the undecided item);
+ * - delivered-report-drops-guarantee: the delivered report's guarantee table leaves out a
+ *   guarantee in force (I4);
  * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
  *   it is posted again (I4, exactly once);
  * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
  *   (I9);
- * - delivered-report-misstates-standing: on a check set stored with a cited item undecided
- *   (check-set-skips-item), the delivered report says an assumption the client was asked about was
- *   reported to them (I9; I6 names the undecided item);
- * - delivered-report-omits-unverified: the delivered report leaves out an internal-design
- *   assumption it must name as not verified by Ashara (I4);
+ * - delivered-report-misstates-standing: the delivered report's table says an assumption the
+ *   client has not answered was stated by them (I9);
+ * - delivered-report-passes-unjudged: on a check set stored with a cited item undecided
+ *   (check-set-skips-item), the delivered report's table says that guarantee, which its evidence
+ *   leaves unjudged, passed (I4; I6 names the undecided item);
  * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9);
  * - unconfirmed-claim-dropped: a clean review's claim no second opinion confirmed leaves no item
- *   undecided, so the delivered report calls those items decided by a stored check (I6);
+ *   undecided, so no review holds back the items it covers (I6);
  * - intake-second-reading-dropped: a tender reading that asks the client nothing goes on with no
  *   second reading asked, recorded as another family's agreement (I3); caught
  *   under the lazy intake persona;
@@ -88,11 +88,11 @@ export const MUTATIONS = [
   "stop-report-omits-merge",
   "delivered-report-omits-goal",
   "delivered-report-misstates-unchecked",
-  "delivered-report-omits-uncovered",
+  "delivered-report-drops-guarantee",
   "delivered-report-unrecorded",
   "brief-misstates-standing",
   "delivered-report-misstates-standing",
-  "delivered-report-omits-unverified",
+  "delivered-report-passes-unjudged",
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
   "unconfirmed-claim-dropped",
@@ -127,11 +127,11 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "stop-report-omits-merge": { bypassed: [], queries: stopReportOmitsMerge, code: null },
   "delivered-report-omits-goal": { bypassed: [], queries: deliveredReportOmitsGoal, code: null },
   "delivered-report-misstates-unchecked": { bypassed: [], queries: deliveredReportMisstatesUnchecked, code: null },
-  "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncoveredOfSkippedItem, code: null },
+  "delivered-report-drops-guarantee": { bypassed: [], queries: deliveredReportDropsGuarantee, code: null },
   "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
   "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
   "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
-  "delivered-report-omits-unverified": { bypassed: [], queries: deliveredReportOmitsUnverified, code: null },
+  "delivered-report-passes-unjudged": { bypassed: [], queries: deliveredReportPassesUnjudged, code: null },
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
   "unconfirmed-claim-dropped": { bypassed: [], queries: unconfirmedClaimDropped, code: null },

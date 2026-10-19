@@ -63,23 +63,6 @@ export type AssumptionDisclosure = z.infer<typeof AssumptionDisclosureSchema>;
 export type AssumptionStanding = "stated" | "asked" | "reported" | "unrecorded";
 
 /**
- * Where an assumption stands with the client when the project is accepted, read from
- * the vision version current at acceptance and the client's replies, never from a plan's copy of the
- * vision: Stated by an answer that confirmed it, or changed it, or one whose effect was not recorded
- * ("stated"); Inferred and asked, with a reply read that settled nothing ("answered"), a reply not
- * yet read ("answer-unread") or none ("asked"); reported; or, on a record that does not say, unrecorded.
- */
-export type AcceptedAssumptionStanding =
-  | "stated"
-  | "confirmed"
-  | "changed"
-  | "answered"
-  | "answer-unread"
-  | "asked"
-  | "reported"
-  | "unrecorded";
-
-/**
  * The one wording of an assumption's standing and kind in Ashara's own prompts (a planner's vision
  * items, a check author's and a reviewer's, an agent's brief): what the record says, nothing beyond.
  */

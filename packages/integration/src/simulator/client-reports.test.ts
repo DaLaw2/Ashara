@@ -2,13 +2,30 @@ import { describe, expect, it } from "vitest";
 import { checkReports, unconfirmedAtPassedSweeps, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
-const noRecords: ReportRecords = { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], goalUndecided: [], passedSweeps: [] };
+const noRecords: ReportRecords = {
+  reports: [],
+  episodes: [],
+  burnWarnings: [],
+  repairs: [],
+  sweeps: [],
+  revisionReports: [],
+  tableSweeps: [],
+  evidence: [],
+  verdicts: [],
+  visions: [],
+  passedSweeps: [],
+};
 
+/** What a table says of a sweep with no vision before it, in the oracle's own words. */
+const noContract = (sweepId: string): string => `\n\nNo contract is on record for this project at sweep ${sweepId}, so no guarantee is judged.`;
+
+/** A halt's report on its episode e1, carrying the table of the episode's terminal sweep t1, which no vision precedes. */
 function haltWith(kind: string, errorClass: string | null, reason: string | null, body: string): ReportRecords {
   return {
     ...noRecords,
-    reports: [{ id: "r1", body, reportsOn: null, inReplyTo: null }],
+    reports: [{ id: "r1", body: `${body}${noContract("t1")}`, reportsOn: null, inReplyTo: null }],
     episodes: [{ id: "e1", kind, errorClass, reason, spend: null, work: null, reportId: "r1", resumedReportId: null, ended: false }],
+    tableSweeps: [{ id: "t1", blockId: "e1", stopId: null, mainCommit: null, visionAtSweep: null }],
   };
 }
 
@@ -126,9 +143,10 @@ describe("checkReports, a delivered report", () => {
     ...noRecords,
     reports: [{ id: "r1", body: `Your project is delivered.\n\nWhat was delivered:\n${line}${tail}`, reportsOn: null, inReplyTo: null }],
     sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1", reportFailures: 0 }],
+    tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: null }],
     ...extra,
   });
-  const unrecordedTail = "\n\nWhich parts of what you asked for the checks cover is not on record for this plan, so none of it is stated as checked.";
+  const unrecordedTail = noContract("s1");
 
   it("refuses a merged line for a close whose kind is not on record", () => {
     expect(keysOf(delivered(`- "Goal": built and merged, commit c1.`, {}, unrecordedTail), "accepted", [goal])).toEqual(["delivered-close"]);
@@ -164,121 +182,61 @@ describe("checkReports, a delivered report", () => {
     expect(keysOf(delivered(`- "Goal": closed on commit c1; whether it was merged or already delivered there is not on record.`, {}, unrecordedTail), "accepted", [already])).toEqual(["delivered-close"]);
   });
 
-  // Coverage comes from what the stored checks decide; an out-of-scope line or an
-  // internal-design assumption is never listed as not covered, and every undecided asked-for item is.
-  describe("coverage from the stored checks", () => {
+  // Every guarantee in force once, with the verdict its sweep's evidence reads, stored beside the
+  // report; the punch list first. The expected wording is the oracle's own.
+  describe("the guarantee table", () => {
     const merged = `- "Goal": built and merged, commit c1.`;
     const mergedGoal = { ...goal, mergeKind: "merged" };
-    const sources = [
-      { type: "scope", id: "S1", text: "The product greets.", side: "in" },
-      { type: "scope", id: "S2", text: "Any network service.", side: "out" },
-      // A version written before guarantees reads a client-visible assumption as the guarantee of its key.
-      { type: "guarantee", id: "A1", text: "Messages are in English.", observation: "unclassified", interface: [], refutedBy: [] },
-      { type: "assumption", id: "A2", text: "State lives in memory.", status: "Inferred", standing: "unrecorded", kind: "internal-design" },
+    const guarantees = [
+      { id: "G1", statement: "A user is greeted.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["no greeting is printed"] },
+      { id: "G2", statement: "Greetings survive a restart.", observable: { interface: ["I1"], observation: "stored-data" }, refutedBy: ["a greeting is gone"] },
+      { id: "G3", statement: "Names are kept as given.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a name is changed"] },
     ];
-    const traced = {
-      reviewSpec: { origin: "review", sources },
-      goalChecks: [{ checkTaskId: "c1", taskSpec: { origin: "check", sources: [sources[0], sources[2]], acceptance: [{ line: "A user is greeted.", sources: ["S1", "A1"] }] }, name: "greets", decides: ["S1"] }],
-    };
-    const unverified = (lines: readonly string[]): string =>
-      `\n\nThese assumptions were recorded as how the team builds the product, not as behaviour you could observe, so no check decides them: they are not verified by Ashara.\n${lines.join("\n")}`;
-    const confirmedBy = "decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks";
-    const confirmedHead = (lines: readonly string[]): string =>
-      `\n\nThese items of what you asked for are decided by a stored check of a task whose stored checks passed on main, and a second review of those checks, by another model family, found no problem with that:\n${lines.join("\n")}`;
-    /** The uncovered items `lines`; then S1 counted and listed as confirmed, or, when a review left it undecided, none counted. */
-    const section = (lines: readonly string[], s1: "confirmed" | "undecided" = "confirmed"): string =>
-      `\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n${lines.join("\n")}` +
-      (s1 === "confirmed" ? `\n\n1 of the 2 items of what you asked for are ${confirmedBy}; how independent that review was is said below.${confirmedHead(["- The product greets."])}` : `\n\nNone of the 2 items of what you asked for is ${confirmedBy}.`) +
-      unverified(["- A2: State lives in memory."]);
+    const vision = { version: 1, contractForm: "guarantees", guarantees, inferences: [], scopeBoundaries: [] };
+    const ran = (outcome: string, cls = "implementer-visible") => [{ taskCheckId: "k1", outcome, class: cls }];
+    const evidence = [
+      { sweepId: "s1", guaranteeId: "G1", visionVersion: 1, checks: ran("passed"), reviewLowers: false },
+      { sweepId: "s1", guaranteeId: "G2", visionVersion: 1, checks: ran("passed"), reviewLowers: false },
+      { sweepId: "s1", guaranteeId: "G3", visionVersion: 1, checks: ran("passed"), reviewLowers: true },
+    ];
+    const row = (guaranteeId: string, verdict: string, reason: string | null) => ({ reportId: "r1", sweepId: "s1", visionVersion: 1, guaranteeId, verdict, reason, basis: "client-stated" });
+    const verdicts = [row("G1", "pass", null), row("G2", "unjudged", "stored-data-unjudged"), row("G3", "unjudged", "lowered-by-review")];
+    const punch = "\n\nThe punch list, what is not shown to hold, failures first:\n- G2: unjudged, why\n- G3: unjudged, why";
+    const table = (lines: readonly string[]) => `\n\nEach guarantee of your contract (vision v1) is judged on main at commit m1, sweep s1. The rule.\n${lines.join("\n")}`;
+    const LINES = ["- G1: A user is greeted. | verdict: pass | basis: b | evidence: e", "- G2: Greetings survive a restart. | verdict: unjudged, why | basis: b | evidence: e", "- G3: Names are kept as given. | verdict: unjudged, why | basis: b | evidence: e"];
+    const judged = (tail: string, extra: Partial<ReportRecords> = {}): ReportRecords =>
+      delivered(merged, { tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: 1 }], visions: [vision], evidence, verdicts, ...extra }, tail);
+    const keys = (records: ReportRecords): string[] => keysOf(records, "accepted", [mergedGoal]);
 
-    // A1 is cited by an acceptance line, yet no stored check decides it: it is not covered.
-    it("accepts exactly the undecided asked-for items", () => {
-      expect(keysOf(delivered(merged, traced, section(["- A1: Messages are in English."])), "accepted", [mergedGoal])).toEqual([]);
+    it("accepts a table whose verdicts are those its sweep's evidence reads: a stored-data guarantee and one a review doubts never pass", () => {
+      expect(keys(judged(`${punch}${table(LINES)}`))).toEqual([]);
     });
 
-    it("refuses an out-of-scope line or an internal-design assumption listed as not covered", () => {
-      const listed = ["- A1: Messages are in English.", "- Any network service."];
-      expect(keysOf(delivered(merged, traced, section(listed)), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
-      const internal = ["- A1: Messages are in English.", "- Ashara's assumption, which Ashara has no record of showing you: State lives in memory."];
-      expect(keysOf(delivered(merged, traced, section(internal)), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
+    it("refuses a table that drops or doubles a guarantee, or says a verdict its evidence does not read", () => {
+      expect(keys(judged(`${punch}${table(LINES.slice(1))}`))).toEqual(["guarantee-table:delivered"]);
+      expect(keys(judged(`${punch}${table([...LINES, LINES[0] ?? ""])}`))).toEqual(["guarantee-table:delivered"]);
+      expect(keys(judged(`${punch}${table(LINES.map((line) => line.replace("verdict: unjudged, why", "verdict: pass")))}`))).toEqual(["guarantee-table:delivered", "guarantee-table:delivered"]);
+      expect(keys(judged(table(LINES)))).toEqual(["guarantee-table:delivered"]);
+      expect(keys(judged(`${punch.replace("\n- G3: unjudged, why", "")}${table(LINES)}`))).toEqual(["guarantee-table:delivered"]);
     });
 
-    it("refuses a report that leaves an undecided asked-for item out, or claims coverage the checks do not hold", () => {
-      // Each names the item left out and the count that differs; the unrecorded tail also lists no decided item nor counts one.
-      const allCovered = `\n\nEvery item of what you asked for is ${confirmedBy}; how independent that review was is said below.${confirmedHead(["- The product greets."])}${unverified(["- A2: State lives in memory."])}`;
-      expect(keysOf(delivered(merged, traced, allCovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage", "delivered-coverage"]);
-      expect(keysOf(delivered(merged, traced, `${unrecordedTail}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(Array(5).fill("delivered-coverage"));
+    it("refuses stored verdicts that miss a guarantee, name another sweep, or pass one on evidence that never reads pass", () => {
+      expect(keys(judged(`${punch}${table(LINES)}`, { verdicts: verdicts.slice(1) }))).toEqual(["guarantee-table:delivered"]);
+      expect(keys(judged(`${punch}${table(LINES)}`, { verdicts: verdicts.map((each) => ({ ...each, sweepId: "s0" })) }))).toEqual(Array(3).fill("guarantee-table:delivered"));
+      const reviewOnly = evidence.map((each) => (each.guaranteeId === "G1" ? { ...each, checks: ran("passed", "review-only") } : each));
+      expect(keys(judged(`${punch}${table(LINES)}`, { evidence: reviewOnly }))).toEqual(["guarantee-table:delivered", "guarantee-table:delivered", "guarantee-table:delivered"]);
     });
 
-    // Only decided items a second review confirmed are counted, and none is said as none.
-    it("holds the count to the decided items listed as confirmed, saying none when none is", () => {
-      const uncovered = "\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n- A1: Messages are in English.";
-      const tail = unverified(["- A2: State lives in memory."]);
-      const unreviewed = "\n\nThese items of what you asked for are decided by a stored check of a task whose stored checks passed on main, but no second review of those checks is on record as confirming that: they are not verified by Ashara.\n- The product greets.";
-      const none = `\n\nNone of the 2 items of what you asked for is ${confirmedBy}.`;
-      const one = `\n\n1 of the 2 items of what you asked for are ${confirmedBy}; how independent that review was is said below.`;
-      expect(keysOf(delivered(merged, traced, `${uncovered}${none}${unreviewed}${tail}`), "accepted", [mergedGoal])).toEqual([]);
-      // Counted as confirmed while listed unconfirmed; listed nowhere; or the count left out.
-      expect(keysOf(delivered(merged, traced, `${uncovered}${one}${unreviewed}${tail}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-      expect(keysOf(delivered(merged, traced, `${uncovered}${none}${tail}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
-      expect(keysOf(delivered(merged, traced, `${uncovered}${unreviewed}${tail}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-    });
-
-    // Every internal-design assumption is named, by id and text, as not verified by Ashara.
-    it("refuses a report that leaves an internal-design assumption out of what Ashara did not verify, or names another there", () => {
-      const uncovered = ["- A1: Messages are in English."];
-      const head =
-        `\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n${uncovered.join("\n")}` +
-        `\n\n1 of the 2 items of what you asked for are ${confirmedBy}; how independent that review was is said below.${confirmedHead(["- The product greets."])}`;
-      expect(keysOf(delivered(merged, traced, head), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-      expect(keysOf(delivered(merged, traced, `${head}${unverified(["- A2: State lives in memory.", "- A1: Messages are in English."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-      const noDesign = { ...traced, reviewSpec: { origin: "review", sources: sources.slice(0, 3) } };
-      expect(keysOf(delivered(merged, noDesign, `${head}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-    });
-
-    // An item a review left undecided is named as not verified, never covered.
-    const undecidedHead = (lines: readonly string[]): string =>
-      `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review, by another model family, did not confirm or settle that: they are not verified by Ashara.\n${lines.join("\n")}`;
-    it("holds an item a review left undecided to being named as not verified, never counted covered", () => {
-      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason: "unsettled" as const }] };
-      const uncovered = section(["- A1: Messages are in English."], "undecided");
-      expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
-      expect(keysOf(delivered(merged, left, uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-      // Named undecided while the records hold it decided: neither listed as confirmed nor counted.
-      expect(keysOf(delivered(merged, traced, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(Array(3).fill("delivered-coverage"));
-    });
-
-    // An item whose second review failed is named under a section that says so, never as unsettled.
-    it("holds an item whose second review failed to a section saying the review failed", () => {
-      const failedHead = (lines: readonly string[]): string =>
-        `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and the second review that could have confirmed or settled that failed: they are not verified by Ashara, because that review failed.\n${lines.join("\n")}`;
-      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason: "review-failed" as const }] };
-      const uncovered = section(["- A1: Messages are in English."], "undecided");
-      expect(keysOf(delivered(merged, left, `${uncovered}${failedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
-      expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-    });
-
-    // An item an unconfirmed clean review covered is named under a
-    // section that says why, and a failed confirmation never reads as a contradicted one.
-    it("holds an item whose clean review was not confirmed to a section saying why", () => {
-      const head = (why: string, lines: readonly string[]): string =>
-        `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but the review that found no problem in their checks was not confirmed: ${why}. They are not verified by Ashara.\n${lines.join("\n")}`;
-      const unanswered = head("no second review of those checks answered", ["- The product greets."]);
-      const contradicted = head("a second review, by another model of the same family as the first review, found a problem there", ["- The product greets."]);
-      const uncovered = section(["- A1: Messages are in English."], "undecided");
-      const left = (reason: "clean-unconfirmed" | "clean-contradicted") => ({ ...traced, goalUndecided: [{ id: "S1", text: "The product greets.", reason }] });
-      expect(keysOf(delivered(merged, left("clean-unconfirmed"), `${uncovered}${unanswered}`), "accepted", [mergedGoal])).toEqual([]);
-      expect(keysOf(delivered(merged, left("clean-contradicted"), `${uncovered}${contradicted}`), "accepted", [mergedGoal])).toEqual([]);
-      expect(keysOf(delivered(merged, left("clean-unconfirmed"), `${uncovered}${contradicted}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-      expect(keysOf(delivered(merged, left("clean-unconfirmed"), uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
-    });
-
-    it("holds a report to saying coverage is not on record when a swept check records no items it decides", () => {
-      const [check] = traced.goalChecks;
-      if (check === undefined) throw new Error("the fixture holds one stored check");
-      const untraced = { ...traced, goalChecks: [{ ...check, decides: null }] };
-      expect(keysOf(delivered(merged, untraced, unrecordedTail), "accepted", [mergedGoal])).toEqual([]);
-      expect(keysOf(delivered(merged, untraced, section(["- Messages are in English."])), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
+    it("holds a sweep that ran on no commit to every guarantee unjudged, and a missing table or sweep to being named", () => {
+      const off = (lines: readonly string[]) => `\n\nNo check could run on a commit of main for this report; why is in Ashara's record of that attempt, sweep s1.\n${lines.join("\n")}`;
+      const unjudged = verdicts.map((each) => ({ ...each, verdict: "unjudged", reason: "no-sweep-on-commit" }));
+      const offLines = LINES.map((line) => line.replace("verdict: pass", "verdict: unjudged, why"));
+      const offPunch = "\n\nThe punch list, what is not shown to hold, failures first:\n- G1: unjudged, why\n- G2: unjudged, why\n- G3: unjudged, why";
+      const offSweep = { tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: null, visionAtSweep: 1 }] };
+      expect(keys(judged(`${offPunch}${off(offLines)}`, { ...offSweep, verdicts: unjudged }))).toEqual([]);
+      expect(keys(judged(`${offPunch}${off(offLines)}`, offSweep))).toEqual(Array(3).fill("guarantee-table:delivered"));
+      expect(keys(judged(""))).toEqual(["guarantee-table:delivered"]);
+      expect(keysOf({ ...haltWith("budget_cap", null, null, "Work on this project is paused.\n\nNo cause was recorded for this pause."), tableSweeps: [] }, "blocked")).toEqual(["guarantee-table:halt:budget_cap"]);
     });
   });
 });
@@ -315,6 +273,7 @@ describe("uncheckedAtPassedSweeps", () => {
     storedChecks: decided.length === 0 ? [] : [{ checkTaskId: "c1", taskSpec: spec(cited), name: "greets", decides: decided.map((cite) => cite.id), taskId: "t1", revision: 1 }],
     reportBody: null,
     undecided: [],
+    reportVerdicts: [],
   });
   const keysOf = (...sweeps: ReportRecords["passedSweeps"]) => uncheckedAtPassedSweeps({ passedSweeps: sweeps }).map((found) => found.key);
 
@@ -366,13 +325,17 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf(sweep([visible], [S1]), { ...sweep([visible], [S1]), id: "sweep-2" })).toEqual(["A1"]);
   });
 
-  // An item a suite review left undecided reaches I6 as unverified, never covered.
-  it("names an item a review left undecided that the sweep's delivered report does not name as unverified, or calls covered", () => {
-    const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text, reason: "unsettled" as const }] });
-    const named = `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but nothing settled it.\n- ${greets.text}`;
-    expect(keysOf(left(`Delivered.\n\n${named}\n\nNothing more.`))).toEqual([]);
-    expect(keysOf(left("Delivered.\n\nEvery item of what you asked for is decided by a stored check."))).toEqual(["undecided-unreported:S1", "undecided-covered"]);
-    expect(keysOf({ ...left("Delivered."), reportBody: null })).toEqual([]);
+  // An item a suite review left undecided reaches I6 as held back, never as passing.
+  it("names an item a review left undecided that the sweep's delivered report stores as pass", () => {
+    const left = (verdict: string) => ({
+      ...sweep([visible], [S1, A1]),
+      reportBody: "Delivered.",
+      undecided: [{ id: "S1", text: greets.text, reason: "unsettled" as const }],
+      reportVerdicts: [{ guaranteeId: "S1", verdict }],
+    });
+    expect(keysOf(left("unjudged"))).toEqual([]);
+    expect(keysOf(left("pass"))).toEqual(["undecided-passed:S1"]);
+    expect(keysOf({ ...left("pass"), reportBody: null })).toEqual([]);
   });
 
   it("fails closed when the vision or the trace cannot be read", () => {

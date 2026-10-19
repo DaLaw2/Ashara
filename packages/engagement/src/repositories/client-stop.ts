@@ -1,13 +1,19 @@
-import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, workItems } from "@ashara/db";
-import type { Database } from "@ashara/db";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { acceptanceSweeps, clientMessages, projects, workItems } from "@ashara/db";
+import type { Database, DbHandle } from "@ashara/db";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { stopProject } from "../project-lifecycle.js";
+import { guaranteeTableOf } from "../guarantee-report.js";
+import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { ClientMessageRepository } from "./client-message.js";
+import { guaranteeRecordsOf, insertGuaranteeVerdicts } from "./guarantee-report.js";
 
-// The client's stop. The Liaison consumes each inbound 'stop',
-// moves the project to 'stopped' and posts one report on it, together.
+// The client's stop. The Liaison consumes each inbound 'stop' and moves the project to 'stopped',
+// together, recording on the stop whether the project was halted then. The stop's report is due
+// once the stop's terminal sweep is recorded, and is posted once per project with its table's
+// verdicts.
 
 /** work_items.merge_kind; NULL on a record from before merge kinds were recorded. */
 const MergeKindSchema = z.enum(["merged", "already_delivered"]).nullable();
@@ -41,8 +47,8 @@ interface OpenStopRow {
 }
 
 type ClientStopCommit =
-  /** `reported` is false only when a stop report already existed (an operator re-activated a stopped project). */
-  | { readonly kind: "stopped"; readonly reported: boolean; readonly merged: number }
+  /** `reportDue` is false only when a stop report already exists (an operator re-activated a stopped project). */
+  | { readonly kind: "stopped"; readonly reportDue: boolean }
   | { readonly kind: "already-stopped" };
 
 /** Inbound stops not yet consumed, of any project status, oldest first. */
@@ -61,65 +67,130 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
   return rows.map((row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "client_messages.project_id") }));
 }
 
+/** Whether the project's stop report is posted. */
+function stopReportPosted(projectId: string | SQL): SQL<boolean> {
+  return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = 'client-stop')`;
+}
+
 /**
- * One stop, in one transaction: the stop consumed first (its row lock
- * serialises two consumers of it), then an active (halted or not) or accepted project moved to
- * 'stopped' and the report, composed from the project's merged tasks and whether
- * Delivery had it halted when the stop arrived, posted once. A project already
- * stopped gets only the consumption.
+ * One stop, in one transaction: the stop consumed first (its row lock serialises two consumers of
+ * it), then an active (halted or not) or accepted project moved to 'stopped', and the stop marked as
+ * the one that stopped it with whether Delivery had it halted then. A project already stopped gets
+ * only the consumption.
  */
-export async function recordClientStop(
-  db: Database,
-  stop: OpenStopRow,
-  composeReport: (merged: readonly MergedTaskRow[], paused: boolean) => string,
-): Promise<ClientStopCommit> {
+export async function recordClientStop(db: Database, stop: OpenStopRow): Promise<ClientStopCommit> {
   return db.transaction(async (tx) => {
     await new ClientMessageRepository(tx).markConsumed(stop.id);
 
     // An accepted project waits for exactly this.
     const moved = await stopProject(tx, stop.projectId);
     if (moved.kind === "already-stopped") return moved;
+    await tx.update(clientMessages).set({ stopFoundHalted: moved.wasHalted }).where(eq(clientMessages.id, stop.id));
+    const [reported] = await tx.select({ posted: stopReportPosted(stop.projectId) }).from(projects).where(eq(projects.id, stop.projectId));
+    return { kind: "stopped", reportDue: reported?.posted === false };
+  });
+}
 
-    // A Task is merged when its merge record holds the commit Z0's merge step made
-    // on main, written before the Task is completed. Neither task
-    // status nor the dev_sessions attempt log is the evidence: an operator can set
-    // a Task Completed over the HTTP API with nothing merged, a Task preempted to
-    // Abandoned may have merged before the preemption, and a session's terminal
-    // write is fail-soft.
-    const rows = await tx
-      .select({ id: workItems.id, title: workItems.title, commit: workItems.mergeCommit, kind: workItems.mergeKind })
-      .from(workItems)
-      .where(
-        and(
-          eq(workItems.projectId, stop.projectId),
-          eq(workItems.level, "Task"),
-          isNotNull(workItems.mergeCommit),
-        ),
-      )
-      .orderBy(asc(workItems.updatedAt), asc(workItems.id));
-    const merged: MergedTaskRow[] = [];
-    for (const row of rows) {
-      if (row.commit === null) continue;
-      const kind = MergeKindSchema.safeParse(row.kind);
-      if (!kind.success) throw new MergeKindUnreadable(stop.projectId, row.id, row.kind, z.prettifyError(kind.error));
-      merged.push({ title: row.title, commit: row.commit, kind: kind.data });
-    }
+/**
+ * Every task of the project with a commit on record, oldest first. A Task is merged when its merge
+ * record holds the commit Z0's merge step made on main, written before the Task is completed.
+ * Neither task status nor the dev_sessions attempt log is the evidence: an operator can set a Task
+ * Completed over the HTTP API with nothing merged, a Task preempted to Abandoned may have merged
+ * before the preemption, and a session's terminal write is fail-soft.
+ */
+async function mergedTasksOf(db: DbHandle, projectId: ProjectId): Promise<MergedTaskRow[]> {
+  const rows = await db
+    .select({ id: workItems.id, title: workItems.title, commit: workItems.mergeCommit, kind: workItems.mergeKind })
+    .from(workItems)
+    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), isNotNull(workItems.mergeCommit)))
+    .orderBy(asc(workItems.updatedAt), asc(workItems.id));
+  const merged: MergedTaskRow[] = [];
+  for (const row of rows) {
+    if (row.commit === null) continue;
+    const kind = MergeKindSchema.safeParse(row.kind);
+    if (!kind.success) throw new MergeKindUnreadable(projectId, row.id, row.kind, z.prettifyError(kind.error));
+    merged.push({ title: row.title, commit: row.commit, kind: kind.data });
+  }
+  return merged;
+}
 
+/** A stop that stopped its project, whose report is due. */
+interface DueStopReportRow {
+  readonly stopId: string;
+  readonly projectId: ProjectId;
+  readonly merged: readonly MergedTaskRow[];
+  readonly paused: boolean;
+  readonly guarantees: GuaranteeTable;
+}
+
+/**
+ * Every stop that stopped its project, still stopped, whose terminal sweep is recorded and whose
+ * project has no stop report yet, oldest first. Each is read on its own (readEach): one whose records
+ * do not read as a report is its UnreadSubject, and every other report is still listed.
+ */
+export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopReportRow | UnreadSubject>> {
+  const rows = await db
+    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted, sweepId: acceptanceSweeps.id })
+    .from(clientMessages)
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    // The stop's terminal sweep: its report waits for it.
+    .innerJoin(acceptanceSweeps, eq(acceptanceSweeps.stopId, clientMessages.id))
+    .where(
+      and(
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.kind, "stop"),
+        isNotNull(clientMessages.stopFoundHalted),
+        eq(projects.lifecycle, "stopped"),
+        sql`NOT ${stopReportPosted(sql`${clientMessages.projectId}`)}`,
+      ),
+    )
+    .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
+  return readEach(
+    rows,
+    (row) => ({ id: `report:${row.stopId}`, projectId: parseProjectId(row.projectId, "client_messages.project_id") }),
+    async (row): Promise<DueStopReportRow> => {
+      const projectId = parseProjectId(row.projectId, "client_messages.project_id");
+      return {
+        stopId: row.stopId,
+        projectId,
+        merged: await mergedTasksOf(db, projectId),
+        paused: row.paused === true,
+        guarantees: guaranteeTableOf(await guaranteeRecordsOf(db, row.sweepId)),
+      };
+    },
+  );
+}
+
+/** A stop report was asked to be posted for a stop that is not an inbound stop of a project. */
+class StopNotFound extends Error {
+  constructor(readonly stopId: string) {
+    super(`cannot post the report of stop ${stopId}: no inbound stop has that id`);
+    this.name = "StopNotFound";
+  }
+}
+
+/**
+ * Posts the stop's report in reply to it, with its table's verdicts, in one transaction; once per
+ * project (the unique index on (project_id, reports_on)).
+ */
+export async function postClientStopReport(db: Database, stopId: string, body: string, verdicts: TableVerdicts): Promise<"posted" | "already-posted"> {
+  return db.transaction(async (tx) => {
+    const [stop] = await tx
+      .select({ projectId: clientMessages.projectId })
+      .from(clientMessages)
+      .where(and(eq(clientMessages.id, stopId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "stop")));
+    if (stop === undefined) throw new StopNotFound(stopId);
     const inserted = await tx
       .insert(clientMessages)
-      .values({
-        projectId: stop.projectId,
-        direction: "outbound",
-        kind: "report",
-        body: composeReport(merged, moved.wasHalted),
-        inReplyTo: stop.id,
-        reportsOn: "client-stop",
-      })
+      .values({ projectId: stop.projectId, direction: "outbound", kind: "report", body, inReplyTo: stopId, reportsOn: "client-stop" })
       .onConflictDoNothing({
         target: [clientMessages.projectId, clientMessages.reportsOn],
         where: isNotNull(clientMessages.reportsOn),
       })
       .returning({ id: clientMessages.id });
-    return { kind: "stopped", reported: inserted.length === 1, merged: merged.length };
+    const [report] = inserted;
+    if (report === undefined) return "already-posted";
+    await insertGuaranteeVerdicts(tx, stop.projectId, report.id, verdicts);
+    return "posted";
   });
 }

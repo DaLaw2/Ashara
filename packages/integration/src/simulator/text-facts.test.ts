@@ -11,8 +11,6 @@ const none: TextFactRecords = {
   answerReplies: [],
   tenderReports: [],
   delivered: [],
-  sweepReplies: [],
-  reviewSpec: null,
   firstPlan: { report: null, items: [], revisions: [] },
   interfaceOnMain: { kind: "not-held" },
   intakeReading: { confirmation: "not-needed", secondStrength: null, secondQuestions: null },
@@ -168,28 +166,27 @@ describe("checkTextFacts, the first-plan report", () => {
   });
 });
 
-describe("checkTextFacts, the delivered report's standings", () => {
-  const reviewSpec = { origin: "review", sources: [{ type: "assumption", id: "A1", text: "Commands wait for the lock.", status: "Inferred", standing: "asked", kind: "client-visible" }] };
-  const delivered = (line: string, visionAtAcceptance: number) => ({
+describe("checkTextFacts, the delivered report's assumptions", () => {
+  const delivered = (lines: readonly string[], visionAtAcceptance: number) => ({
     sweepId: "s1",
     mainCommit: "c".repeat(40),
     visionAtAcceptance,
-    body: `Your project is delivered.\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n${line}`,
+    body: `Your project is delivered.\n\nThe assumptions the guarantees rest on:\n${lines.join("\n")}\n\nWhat is left out: nothing is excluded on record.`,
   });
 
-  // An assumption the client confirmed is never reported as unanswered.
-  it("holds each listed assumption to where it stood with the client at acceptance", () => {
-    expect(keysOf({ visions: [v1, v2], reviewSpec, delivered: [delivered("- Commands wait for the lock. (you confirmed this when asked)", 2)] })).toEqual([]);
-    expect(
-      keysOf({ visions: [v1, v2], reviewSpec, delivered: [delivered("- Ashara's assumption, which you were asked about and have not answered: Commands wait for the lock.", 2)] }),
-    ).toEqual(["delivered-standing:A1"]);
+  // An assumption the client has not stated is never told to them as theirs, and one they stated always is.
+  it("holds each assumption to whether the client stated it in the vision at acceptance", () => {
+    expect(keysOf({ visions: [v1, v2], delivered: [delivered(["- A1: Commands wait for the lock. (underpins G1; stated by you)"], 2)] })).toEqual([]);
+    expect(keysOf({ visions: [v1, v2], delivered: [delivered(["- A1: Commands wait for the lock. (not confirmed by you)"], 1)] })).toEqual([]);
+    expect(keysOf({ visions: [v1, v2], delivered: [delivered(["- A1: Commands wait for the lock. (stated by you)"], 1)] })).toEqual(["delivered-standing:A1"]);
+    expect(keysOf({ visions: [v1, v2], delivered: [delivered(["- A1: Commands wait for the lock. (not confirmed by you)"], 2)] })).toEqual(["delivered-standing:A1"]);
   });
 
-  it("tells an answer read by acceptance from one not yet read", () => {
-    const line = (seen: string) => delivered(`- Ashara's assumption, ${seen}: Commands wait for the lock.`, 1);
-    const unread = [{ sweepId: "s1", questionId: "q1", readByAcceptance: false }];
-    expect(keysOf({ visions: [v1], reviewSpec, delivered: [line("which you were asked about; your reply had not been read when the project was accepted")], sweepReplies: unread })).toEqual([]);
-    expect(keysOf({ visions: [v1], reviewSpec, delivered: [line("which you were asked about and have not answered")], sweepReplies: unread })).toEqual(["delivered-standing:A1"]);
+  it("names an assumption left out, listed twice, or one the vision does not hold", () => {
+    expect(keysOf({ visions: [v1], delivered: [delivered([], 1)] })).toEqual(["delivered-standing:A1"]);
+    const line = "- A1: Commands wait for the lock. (not confirmed by you)";
+    expect(keysOf({ visions: [v1], delivered: [delivered([line, line], 1)] })).toEqual(["delivered-standing:A1"]);
+    expect(keysOf({ visions: [v1], delivered: [delivered([line, "- A9: Something else. (not confirmed by you)"], 1)] })).toEqual(["delivered-standing:A9"]);
   });
 });
 
