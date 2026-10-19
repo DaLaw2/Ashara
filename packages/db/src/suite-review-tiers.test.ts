@@ -9,7 +9,8 @@ import { resolveTestDatabaseUrl } from "./test-database-url.js";
 // Against the shared dev database: every row here is created by this suite under
 // a unique name and deleted in afterAll; nothing else is read or written.
 // A suite review row records how its judges stood to the check work: a tier the vocabulary names,
-// a relation that fits the two tiers, and never a judge below the work.
+// a relation that fits the two tiers, and never a judge below the work; and each review's grade,
+// the weaker being the judge tier.
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `suite-review-tiers-test-${randomUUID().slice(0, 8)}`;
@@ -47,19 +48,37 @@ async function workItem(title: string): Promise<string> {
   return id;
 }
 
-type Tiers = readonly [judge: string | null, judged: string | null, relation: string | null];
+/**
+ * The judge columns, then each review's grade: unless given, both the judge tier's, or Frontier where
+ * that is no tier, so a row refused for its judge columns is refused for them alone.
+ */
+type Tiers =
+  | readonly [judge: string | null, judged: string | null, relation: string | null]
+  | readonly [judge: string | null, judged: string | null, relation: string | null, first: string | null, second: string | null];
 
-function claim([judge, judged, relation]: Tiers) {
-  return db.execute(sql`
-    INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
-    VALUES (${projectId}, ${reviewTask}, 'second-opinion-clean', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, '[]'::jsonb, ${judge}, ${judged}, ${relation})`);
+const TIER_NAMES: readonly string[] = ["Light", "Medium", "Strong", "Frontier"];
+
+function reviewTiers(tiers: Tiers): readonly [string | null, string | null] {
+  if (tiers.length === 5) return [tiers[3], tiers[4]];
+  const grade = tiers[0] !== null && TIER_NAMES.includes(tiers[0]) ? tiers[0] : "Frontier";
+  return [grade, grade];
 }
 
-function judgement([judge, judged, relation]: Tiers) {
+function claim(tiers: Tiers) {
+  const [judge, judged, relation] = tiers;
+  const [first, second] = reviewTiers(tiers);
+  return db.execute(sql`
+    INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+    VALUES (${projectId}, ${reviewTask}, 'second-opinion-clean', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, '[]'::jsonb, ${judge}, ${judged}, ${relation}, ${first}, ${second})`);
+}
+
+function judgement(tiers: Tiers) {
+  const [judge, judged, relation] = tiers;
+  const [first, second] = reviewTiers(tiers);
   const finding = JSON.stringify({ checkTasks: [checkTask], kind: "undecided-item", item: "S1", problem: "p", evidence: "e" });
   return db.execute(sql`
-    INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
-    VALUES (${projectId}, ${reviewTask}, ${checkTask}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, ${judge}, ${judged}, ${relation})`);
+    INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+    VALUES (${projectId}, ${reviewTask}, ${checkTask}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, ${judge}, ${judged}, ${relation}, ${first}, ${second})`);
 }
 
 beforeAll(async () => {
@@ -86,6 +105,7 @@ describe.each([
   test("a judge above the work, or at its tier, is recorded with the relation that fits", async () => {
     await insert(["Frontier", "Strong", "above"]);
     await insert(["Strong", "Strong", "equal"]);
+    await insert(["Strong", "Strong", "equal", "Frontier", "Strong"]);
   });
 
   test.each([
@@ -97,6 +117,10 @@ describe.each([
     ["above over one tier", ["Strong", "Strong", "above"], `${table}_tier_relation_fits`],
     ["a row with no tiers", [null, null, null], `${table}_tiers_recorded`],
     ["a row with only some tiers", ["Frontier", null, "above"], `${table}_tiers_recorded`],
+    ["a first review's grade the vocabulary does not name", ["Strong", "Strong", "equal", "Ultra", "Strong"], `${table}_first_tier_known`],
+    ["a row with no first review's grade", ["Strong", "Strong", "equal", null, "Strong"], `${table}_review_tiers_recorded`],
+    ["an answered second review with no grade", ["Strong", "Strong", "equal", "Strong", null], `${table}_review_tiers_recorded`],
+    ["a judge tier that is not the weaker review's grade", ["Frontier", "Strong", "above", "Frontier", "Strong"], `${table}_judge_tier_weaker`],
   ] as const)("refuses %s", async (_what, tiers, constraint) => {
     expect(await failureOf(() => insert(tiers))).toContain(constraint);
   });

@@ -15,6 +15,8 @@ const ROW = {
   judgeTier: "Frontier",
   judgedTier: "Strong",
   tierRelation: "above",
+  firstTier: "Frontier",
+  secondTier: "Frontier",
 };
 
 describe("storedClaimOf", () => {
@@ -23,8 +25,27 @@ describe("storedClaimOf", () => {
   });
 
   test("reads how its judges stood to the work: recorded whole, or unrecorded on a claim written before tiers were", () => {
-    expect(storedClaimOf("k1", ROW).tiers).toEqual({ kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" });
-    expect(storedClaimOf("k1", { ...ROW, judgeTier: null, judgedTier: null, tierRelation: null }).tiers).toEqual({ kind: "unrecorded" });
+    expect(storedClaimOf("k1", ROW).tiers).toEqual({ kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above", reviews: { kind: "graded", first: "Frontier", second: "Frontier" } });
+    expect(storedClaimOf("k1", { ...ROW, judgeTier: null, judgedTier: null, tierRelation: null, firstTier: null, secondTier: null }).tiers).toEqual({ kind: "unrecorded" });
+  });
+
+  test("reads each review's grade: the second opinion's at the work's tier under a stronger first, or ungraded on a claim written before they were", () => {
+    const equal = { ...ROW, judgeTier: "Strong", tierRelation: "equal" };
+    expect(storedClaimOf("k1", { ...equal, secondTier: "Strong" }).tiers).toEqual({
+      kind: "recorded",
+      judge: "Strong",
+      judged: "Strong",
+      relation: "equal",
+      reviews: { kind: "graded", first: "Frontier", second: "Strong" },
+    });
+    expect(storedClaimOf("k1", { ...equal, firstTier: null, secondTier: null }).tiers).toEqual({ kind: "recorded", judge: "Strong", judged: "Strong", relation: "equal", reviews: { kind: "ungraded" } });
+  });
+
+  test("review grades that do not fit the judge tier or the second review are corrupt, never read as a review's grade", () => {
+    expect(() => storedClaimOf("k6", { ...ROW, secondTier: "Strong" })).toThrow(/suite_review_claims row k6: .*the weaker being the judge tier/);
+    expect(() => storedClaimOf("k7", { ...ROW, secondTier: null })).toThrow(/suite_review_claims row k7/);
+    expect(() => storedClaimOf("k8", { ...ROW, firstTier: null })).toThrow(/suite_review_claims row k8/);
+    expect(() => storedClaimOf("k9", { ...ROW, judgeTier: null, judgedTier: null, tierRelation: null })).toThrow(/suite_review_claims row k9/);
   });
 
   test("a claim that records only some of its tiers, or a tier the vocabulary does not name, is corrupt, never read as judged from above", () => {
@@ -50,6 +71,7 @@ describe("storedClaimOf", () => {
       basis: "second-review-failed",
       secondModel: null,
       secondStrength: null,
+      secondTier: null,
       secondFailure: "SecondOpinionUnanswered: no answer",
       unverified: [{ checkTaskId: "c1", itemId: "S1", itemText: "x" }],
     });

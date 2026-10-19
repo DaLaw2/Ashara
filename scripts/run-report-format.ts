@@ -579,14 +579,46 @@ function findingLine(finding: StoredJudgement["secondFindings"][number]): string
   }
 }
 
+type Strength = Extract<StoredClaim["second"], { readonly kind: "answered" }>["strength"];
+
+/** What each strength of second opinion was, as the report names it. */
+const STRENGTH_TEXT: Readonly<Record<Strength, string>> = {
+  "other-family": "another model family",
+  "same-family-other-model": "another model of the family",
+  "same-model": "the same model from another angle",
+};
+
+/** The reviews a judgement or claim rests on: the first, and the second opinion where one answered. */
+interface Reviews {
+  readonly first: string;
+  readonly second: { readonly model: string; readonly strength: Strength } | null;
+}
+
+/**
+ * Which review an equal judge tier rests on was graded at the work's tier, from each review's grade
+ * as stored; a row that does not record both reviews' grades says only that one of them was.
+ */
+function equalReason(tiers: Extract<StoredJudgement["tiers"], { readonly kind: "recorded" }>, reviews: Reviews): string {
+  const first = `the first review, ${reviews.first}`;
+  if (reviews.second === null) return `${first}, the only review it rests on, was graded at the work's tier`;
+  const second = `the second opinion, from ${STRENGTH_TEXT[reviews.second.strength]}, ${reviews.second.model}`;
+  const graded = tiers.reviews;
+  if (graded.kind === "ungraded" || graded.second === null) return `it rests on ${first}, and ${second}; which of them was graded at the work's tier is not on record`;
+  const firstAt = graded.first === tiers.judged;
+  const secondAt = graded.second === tiers.judged;
+  if (firstAt && secondAt) return `both reviews were graded at the work's tier: ${first}, and ${second}`;
+  if (secondAt) return `${second}, was graded ${graded.second}; ${first}, was graded ${graded.first}, above it`;
+  return `${first}, was graded ${graded.first}; ${second}, was graded ${graded.second}, above it`;
+}
+
 /**
  * How a judgement's or claim's judges stood to the check work they judged: the weaker judge's grade
- * against the work's tier, with an equal relation named as no stronger than the work.
+ * against the work's tier, with an equal relation named as no stronger than the work and which review was.
  */
-function tiersLine(tiers: StoredJudgement["tiers"]): string {
+function tiersLine(tiers: StoredJudgement["tiers"], reviews: Reviews): string {
   if (tiers.kind === "unrecorded") return "    judge tier: not recorded (written before judge tiers were)";
   if (tiers.relation === "above") return `    judge tier: ${tiers.judge}, above the check work at ${tiers.judged}`;
-  return `    judge tier: EQUAL: ${tiers.judge}, no stronger than the check work at ${tiers.judged} (no model above it was routed to judge it)`;
+  return `    judge tier: EQUAL: ${tiers.judge}, no stronger than the check work at ${tiers.judged} (${equalReason(tiers, reviews)})`;
 }
 
 /**
@@ -607,7 +639,10 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
           : `second review ${judgement.secondStrength} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
     lines.push(
       `  review ${judgement.reviewTaskId}, ${subject} of task ${judgement.checkTaskId}: ${judgement.outcome} (${judgement.basis}); ${second}`,
-      tiersLine(judgement.tiers),
+      tiersLine(judgement.tiers, {
+        first: judgement.firstModel,
+        second: judgement.secondModel === null || judgement.secondStrength === null ? null : { model: judgement.secondModel, strength: judgement.secondStrength },
+      }),
       ...judgement.passedOver.map((over) => `    passed over ${over.strength} (${over.outcome}): ${over.reason}`),
       `    first review:  ${findingLine(judgement.firstFinding)}`,
     );
@@ -616,15 +651,6 @@ export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement
   }
   return lines.join("\n");
 }
-
-type Strength = Extract<StoredClaim["second"], { readonly kind: "answered" }>["strength"];
-
-/** What each strength of second opinion was, as the report names it. */
-const STRENGTH_TEXT: Readonly<Record<Strength, string>> = {
-  "other-family": "another model family",
-  "same-family-other-model": "another model of the family",
-  "same-model": "the same model from another angle",
-};
 
 /** What each claim basis leaves of the claim, and why an item it leaves undecided reads unverified. */
 const CLAIM_BASIS: Readonly<Record<StoredClaim["basis"], { readonly label: string; readonly unverified: string }>> = {
@@ -653,7 +679,7 @@ export function formatSuiteReviewClaims(claims: readonly StoredClaim[]): string 
     const basis = CLAIM_BASIS[claim.basis];
     lines.push(
       `  review ${claim.reviewTaskId}, covering check task(s) ${claim.covered.join(", ")}: ${claim.basis} (${basis.label}); ${second}`,
-      tiersLine(claim.tiers),
+      tiersLine(claim.tiers, { first: claim.firstModel, second: claim.second.kind === "answered" ? { model: claim.second.model, strength: claim.second.strength } : null }),
       ...claim.passedOver.map((over) => `    passed over ${over.strength} (${over.outcome}): ${over.reason}`),
       ...(claim.second.kind === "answered" ? claim.second.findings.map((finding) => `    second review: ${findingLine(finding)}`) : []),
     );

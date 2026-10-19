@@ -45,10 +45,10 @@ async function workItem(title: string): Promise<string> {
 async function claim(reviewTask: string, checkTask: string, second: { readonly model: string; readonly findings: readonly unknown[] } | null): Promise<string> {
   const id = randomUUID();
   await db.execute(sql`
-    INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
+    INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
     VALUES (${id}, ${projectId}, ${reviewTask}, ${second === null ? "second-review-failed" : second.findings.length === 0 ? "second-opinion-clean" : "second-opinion-found"},
             ${JSON.stringify([checkTask])}::jsonb, 'first/judge-a', ${second?.model ?? null}, ${second === null ? null : "other-family"}, '[]'::jsonb,
-            ${JSON.stringify(second?.findings ?? [])}::jsonb, ${second === null ? "every strength failed" : null}, 'Frontier', 'Strong', 'above')`);
+            ${JSON.stringify(second?.findings ?? [])}::jsonb, ${second === null ? "every strength failed" : null}, 'Frontier', 'Strong', 'above', 'Frontier', ${second === null ? null : "Frontier"})`);
   return id;
 }
 
@@ -57,8 +57,8 @@ async function routedRejection(reviewTask: string, checkTask: string, check: str
   const id = randomUUID();
   const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check, judgedItems: ["S1"], missingClause: "c", problem: "p", evidence: "e" });
   await db.execute(sql`
-    INSERT INTO suite_review_judgements (id, project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
-    VALUES (${id}, ${projectId}, ${reviewTask}, ${checkTask}, ${check}, 'routed', 'two-reviews', ${finding}::jsonb, ${`[${finding}]`}::jsonb, 'first/judge-a', 'second/judge-b', 'other-family', '[]'::jsonb, 'Frontier', 'Strong', 'above')`);
+    INSERT INTO suite_review_judgements (id, project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+    VALUES (${id}, ${projectId}, ${reviewTask}, ${checkTask}, ${check}, 'routed', 'two-reviews', ${finding}::jsonb, ${`[${finding}]`}::jsonb, 'first/judge-a', 'second/judge-b', 'other-family', '[]'::jsonb, 'Frontier', 'Strong', 'above', 'Frontier', 'Frontier')`);
   return id;
 }
 

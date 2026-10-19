@@ -344,8 +344,8 @@ describe("acceptance on main", () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" });
     const judged = await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Strong', 'Strong', 'equal')
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Strong', 'Strong')
       RETURNING id`);
     const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
     await db.execute(sql`
@@ -368,8 +368,8 @@ describe("acceptance on main", () => {
   test("an item an unconfirmed clean review covered is read as undecided and reported as not verified", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     const claimed = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
-      VALUES (${projectId}, ${checksOfStore}, 'second-review-failed', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above')
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+      VALUES (${projectId}, ${checksOfStore}, 'second-review-failed', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above', 'Frontier', NULL)
       RETURNING id`);
     const [claim] = z.array(z.object({ id: z.string() })).parse(claimed.rows);
     await db.execute(sql`
@@ -388,25 +388,26 @@ describe("acceptance on main", () => {
   });
 
   // A judge no stronger than the work it judged is named to the client, never reported as one above it.
-  test("an item a claim confirmed through a judge only equal to the check work is reported as reviewed by no stronger a model", async () => {
+  test("an item a claim confirmed through a second opinion only equal to the check work names that review as no stronger, the first as stronger", async () => {
     const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
     await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
-      VALUES (${projectId}, ${checksOfStore}, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal')`);
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+      VALUES (${projectId}, ${checksOfStore}, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'p/m', 'q/n', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Frontier', 'Strong')`);
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
 
     const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
     expect(items.filter((item) => item.judges !== null).map((item) => [item.source.id, item.review, item.judges])).toEqual([
-      ["S1", "other-family", "equal"],
-      ["A1", "other-family", "equal"],
+      ["S1", "other-family", "equal-second"],
+      ["A1", "other-family", "equal-second"],
     ]);
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     const [body = ""] = await reportsOf(projectId);
     expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; those checks were reviewed by a model no stronger than the one their work was graded for, " +
-        "since no stronger one was available to review them:\n- Keys can be stored and read\n",
+      "a second review of those checks, by another model family, found no problem with that; that second review was by a model no stronger than the one their work was graded for, " +
+        "while the first review of those checks was by a stronger one:\n- Keys can be stored and read\n",
     );
+    expect(body).not.toContain("no stronger one was available");
   });
 
   // An item a later claim leaves undecided again is read under that claim too, never
@@ -734,8 +735,8 @@ describe("acceptance on main", () => {
     const { projectId, store, checksOfStore } = await deliveredProject();
     const claimId = randomUUID();
     await db.execute(sql`
-      INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
-      SELECT ${claimId}, ${projectId}, w.id, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'first/judge-a', 'second/judge-b', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Frontier', 'Strong', 'above'
+      INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+      SELECT ${claimId}, ${projectId}, w.id, 'second-opinion-clean', ${JSON.stringify([checksOfStore])}::jsonb, 'first/judge-a', 'second/judge-b', 'other-family', '[]'::jsonb, '[]'::jsonb, 'Frontier', 'Strong', 'above', 'Frontier', 'Frontier'
       FROM work_items w WHERE w.project_id = ${projectId} AND w.task_spec->>'origin' = 'review'`);
 
     expect(await runAcceptanceSweeps(sweepDeps(false, `1 failure(s) on main:\n- task ${store}'s checks: check "works" exited 1`, undefined, [{ taskId: store, checkTaskId: checksOfStore, name: "works" }]))).toBe(0);

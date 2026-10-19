@@ -271,17 +271,33 @@ describe("the delivered report", () => {
         kind: "recorded",
         items: [
           { source: scope("S1", "Keys can be stored"), checked: true, undecided: false, review: "other-family", judges: "above" },
-          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: false, review: "other-family", judges: "equal" },
+          { source: scope("S2", "Keys can be deleted"), checked: true, undecided: false, review: "other-family", judges: "equal-second" },
           { source: scope("S3", "Keys can be listed"), checked: true, undecided: false, review: "other-family", judges: "unrecorded" },
+          { source: scope("S4", "Keys can be renamed"), checked: true, undecided: false, review: "other-family", judges: "equal-both" },
+          { source: scope("S5", "Keys can be copied"), checked: true, undecided: false, review: "other-family", judges: "equal-first" },
+          { source: scope("S6", "Keys can be counted"), checked: true, undecided: false, review: "other-family", judges: "equal" },
         ],
       },
     });
     expect(body).toContain("Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main and confirmed by a second review of those checks;");
     expect(body).toContain("a second review of those checks, by another model family, found no problem with that:\n- Keys can be stored\n\n");
     expect(body).toContain(
-      "a second review of those checks, by another model family, found no problem with that; those checks were reviewed by a model no stronger than the one their work was graded for, " +
-        "since no stronger one was available to review them:\n- Keys can be deleted\n\n",
+      "a second review of those checks, by another model family, found no problem with that; that second review was by a model no stronger than the one their work was graded for, " +
+        "while the first review of those checks was by a stronger one:\n- Keys can be deleted\n\n",
     );
+    expect(body).toContain(
+      "a second review of those checks, by another model family, found no problem with that; both the first review of those checks and that second review were by models no stronger " +
+        "than the one their work was graded for:\n- Keys can be renamed\n\n",
+    );
+    expect(body).toContain(
+      "a second review of those checks, by another model family, found no problem with that; the first review of those checks was by a model no stronger than the one their work was graded for, " +
+        "while that second review was by a stronger one:\n- Keys can be copied\n\n",
+    );
+    expect(body).toContain(
+      "a second review of those checks, by another model family, found no problem with that; at least one of the models that reviewed those checks was no stronger than the one their work was graded for:\n- Keys can be counted\n\n",
+    );
+    expect(body).not.toContain("no stronger one was available");
+    expect(body).not.toContain("no model above it was routed");
     expect(body).toContain(
       "a second review of those checks, by another model family, found no problem with that; how strong the models that reviewed those checks were, against the work they reviewed, is not on record:\n- Keys can be listed",
     );

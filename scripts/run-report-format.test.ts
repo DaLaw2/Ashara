@@ -325,9 +325,14 @@ describe("formatRunReport cost per Epic and goal task", () => {
 });
 
 /** How a stored judgement's or claim's judges stood to the check work: above it, only equal to it, or not recorded. */
-const ABOVE = { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" } as const;
-const EQUAL = { kind: "recorded", judge: "Frontier", judged: "Frontier", relation: "equal" } as const;
+const ABOVE = { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above", reviews: { kind: "graded", first: "Frontier", second: "Frontier" } } as const;
+const EQUAL = { kind: "recorded", judge: "Frontier", judged: "Frontier", relation: "equal", reviews: { kind: "graded", first: "Frontier", second: "Frontier" } } as const;
 const UNRECORDED = { kind: "unrecorded" } as const;
+/** The first review above the work, the other-family second opinion at its tier. */
+const SECOND_AT_WORK = { kind: "recorded", judge: "Strong", judged: "Strong", relation: "equal", reviews: { kind: "graded", first: "Frontier", second: "Strong" } } as const;
+/** An equal relation on a row written before each review's grade was. */
+const EQUAL_UNGRADED = { kind: "recorded", judge: "Strong", judged: "Strong", relation: "equal", reviews: { kind: "ungraded" } } as const;
+const FALSE_REASONS = ["no model above it was routed", "no stronger one was available"];
 
 describe("formatSuiteReviewJudgements", () => {
   test("states both reviews' findings whole, side by side, with what the second review was", () => {
@@ -350,7 +355,7 @@ describe("formatSuiteReviewJudgements", () => {
       },
     ]);
     expect(text).toContain(
-      "routed (two-reviews); second review same-model (first a/m, second a/m)\n    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (no model above it was routed to judge it)",
+      "routed (two-reviews); second review same-model (first a/m, second a/m)\n    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (both reviews were graded at the work's tier: the first review, a/m, and the second opinion, from the same model from another angle, a/m)",
     );
     expect(text).toContain('first review:  missing "a count": the check asserts a count');
     expect(text).toContain('second review: missing "a row count": the check asserts a count');
@@ -399,6 +404,38 @@ describe("formatSuiteReviewJudgements", () => {
     expect(text).toContain("advisory (frozen); no second review asked");
     expect(text).toContain("advisory (second-review-failed); second review failed (first a/m): SecondOpinionUnanswered: no answer");
     expect(text).not.toContain("no finding on this check task");
+  });
+
+  test("an equal judge tier names the review graded at the work's tier, never that no stronger model was routed", () => {
+    const undecided = { kind: "undecided-item" as const, checkTasks: ["c1"], item: "S9", problem: "no check forces data to disk", evidence: "put.sh" };
+    const judgement = (tiers: Parameters<typeof formatSuiteReviewJudgements>[0][number]["tiers"], secondModel: string | null) => ({
+      reviewTaskId: "r1",
+      checkTaskId: "c1",
+      checkName: null,
+      outcome: "advisory" as const,
+      basis: "second-opinion-disagreed" as const,
+      firstFinding: undecided,
+      secondFindings: [],
+      firstModel: "anthropic/opus",
+      secondModel,
+      secondStrength: secondModel === null ? null : ("other-family" as const),
+      passedOver: [],
+      secondFailure: null,
+      tiers,
+    });
+    const text = formatSuiteReviewJudgements([
+      judgement(SECOND_AT_WORK, "deepseek/pro"),
+      judgement(EQUAL_UNGRADED, "deepseek/pro"),
+      judgement({ ...SECOND_AT_WORK, judge: "Frontier", judged: "Frontier", reviews: { kind: "graded", first: "Frontier", second: null } }, null),
+    ]);
+    expect(text).toContain(
+      "    judge tier: EQUAL: Strong, no stronger than the check work at Strong (the second opinion, from another model family, deepseek/pro, was graded Strong; the first review, anthropic/opus, was graded Frontier, above it)",
+    );
+    expect(text).toContain(
+      "    judge tier: EQUAL: Strong, no stronger than the check work at Strong (it rests on the first review, anthropic/opus, and the second opinion, from another model family, deepseek/pro; which of them was graded at the work's tier is not on record)",
+    );
+    expect(text).toContain("    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (the first review, anthropic/opus, the only review it rests on, was graded at the work's tier)");
+    for (const reason of FALSE_REASONS) expect(text).not.toContain(reason);
   });
 });
 
@@ -453,8 +490,9 @@ describe("formatSuiteReviewClaims", () => {
       "  review r1, covering check task(s) c1: second-opinion-clean (clean: the second opinion found no problem either); second opinion: other-family, another model family (first a/m, second b/n)\n    judge tier: Frontier, above the check work at Strong\n    unverified: none",
     );
     expect(text).toContain(
-      "second opinion: same-model, the same model from another angle (first a/m, second a/m)\n    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (no model above it was routed to judge it)",
+      "second opinion: same-model, the same model from another angle (first a/m, second a/m)\n    judge tier: EQUAL: Frontier, no stronger than the check work at Frontier (both reviews were graded at the work's tier: the first review, a/m, and the second opinion, from the same model from another angle, a/m)",
     );
+    for (const reason of FALSE_REASONS) expect(text).not.toContain(reason);
     expect(text).toContain("second opinion: none (first a/m): SecondOpinionUnanswered: no answer at any strength\n    judge tier: not recorded (written before judge tiers were)");
     expect(text).toContain(
       "  review r2, covering check task(s) c1, c2: second-opinion-found (finding: the second opinion found a problem); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
@@ -485,6 +523,29 @@ describe("formatSuiteReviewClaims", () => {
       "  review r5, covering check task(s) c5: no-other-family (unconfirmed: the second opinion came from the first review's provider (recorded before second-opinion strength was)); second opinion: same-family-other-model, another model of the family (first a/m, second a/n)",
     );
     expect(text).toContain('    unverified S9 of task c5 "put survives a power loss": no second opinion of another provider confirmed it (another model of the family)');
+  });
+
+  test("an equal claim whose first review was above the work names the other-family second opinion as the review at its tier", () => {
+    const text = formatSuiteReviewClaims([
+      { reviewTaskId: "r6", basis: "second-opinion-clean", covered: ["c6"], firstModel: "anthropic/opus", passedOver: [], unverified: [], second: answered("other-family", "deepseek/pro"), tiers: SECOND_AT_WORK },
+      {
+        reviewTaskId: "r7",
+        basis: "second-opinion-clean",
+        covered: ["c7"],
+        firstModel: "anthropic/sonnet",
+        passedOver: [],
+        unverified: [],
+        second: answered("other-family", "deepseek/pro"),
+        tiers: { ...SECOND_AT_WORK, reviews: { kind: "graded", first: "Strong", second: "Strong" } },
+      },
+    ]);
+    expect(text).toContain(
+      "second opinion: other-family, another model family (first anthropic/opus, second deepseek/pro)\n    judge tier: EQUAL: Strong, no stronger than the check work at Strong (the second opinion, from another model family, deepseek/pro, was graded Strong; the first review, anthropic/opus, was graded Frontier, above it)",
+    );
+    expect(text).toContain(
+      "second opinion: other-family, another model family (first anthropic/sonnet, second deepseek/pro)\n    judge tier: EQUAL: Strong, no stronger than the check work at Strong (both reviews were graded at the work's tier: the first review, anthropic/sonnet, and the second opinion, from another model family, deepseek/pro)",
+    );
+    for (const reason of FALSE_REASONS) expect(text).not.toContain(reason);
   });
 
   test("states that no claim is recorded, apart from the judgements", () => {

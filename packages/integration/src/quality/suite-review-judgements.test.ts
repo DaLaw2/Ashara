@@ -123,7 +123,7 @@ describe("suite review judgements", () => {
         secondStrength: "other-family",
         passedOver: [],
         secondFailure: null,
-        tiers: { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" },
+        tiers: { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above", reviews: { kind: "graded", first: "Frontier", second: "Frontier" } },
       },
       {
         reviewTaskId: reviewTask,
@@ -138,7 +138,7 @@ describe("suite review judgements", () => {
         secondStrength: "other-family",
         passedOver: [],
         secondFailure: null,
-        tiers: { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above" },
+        tiers: { kind: "recorded", judge: "Frontier", judged: "Strong", relation: "above", reviews: { kind: "graded", first: "Frontier", second: "Frontier" } },
       },
     ]);
 
@@ -149,8 +149,8 @@ describe("suite review judgements", () => {
     const reviewTask = await workItem("Review with a corrupt judgement");
     const checkTask = await workItem("Checks with a corrupt judgement");
     await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
-      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Frontier', 'Strong', 'above')`);
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Frontier', 'Strong', 'above', 'Frontier', 'Frontier')`);
     await expect(suiteReviewJudgementsOf(db, projectId)).rejects.toMatchObject({ name: "SuiteReviewJudgementCorrupt" });
     // The corrupt row is this test's alone: the project's other judgements are read whole after it.
     await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
@@ -162,8 +162,8 @@ describe("suite review judgements", () => {
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
     const insert = (secondModel: string, secondStrength: string) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, 'Frontier', 'Strong', 'above')`);
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, 'Frontier', 'Strong', 'above', 'Frontier', 'Frontier')`);
     await expect(insert("q/n", "same-model")).rejects.toThrow();
     await expect(insert("p/m", "same-family-other-model")).rejects.toThrow();
     await expect(insert("p/n", "other-family")).rejects.toThrow();
@@ -250,8 +250,8 @@ describe("witnessed findings and the check set freeze", () => {
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
     const insert = (basis: string, failure: string | null) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, passed_over, second_failure, judge_tier, judged_tier, tier_relation)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', '[]'::jsonb, ${failure}, 'Frontier', 'Strong', 'above')`);
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, passed_over, second_failure, judge_tier, judged_tier, tier_relation, first_tier)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'advisory', ${basis}, ${finding}::jsonb, '[]'::jsonb, 'p/m', '[]'::jsonb, ${failure}, 'Frontier', 'Strong', 'above', 'Frontier')`);
     await expect(insert("second-review-failed", null)).rejects.toThrow();
     await expect(insert("frozen", "a reason")).rejects.toThrow();
     await insert("second-review-failed", "no second opinion answered");
@@ -351,8 +351,8 @@ describe("witnessed findings and the check set freeze", () => {
     // A confirmed claim holds the second model and its strength; one that failed holds why and no model.
     const claim = (basis: string, secondModel: string | null, secondStrength: string | null, failure: string | null) =>
       db.execute(sql`
-        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
-        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, '[]'::jsonb, ${failure}, 'Frontier', 'Strong', 'above')`);
+        INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+        VALUES (${projectId}, ${reviewTask}, ${basis}, ${JSON.stringify([checkTask])}::jsonb, 'p/m', ${secondModel}, ${secondStrength}, '[]'::jsonb, '[]'::jsonb, ${failure}, 'Frontier', 'Strong', 'above', 'Frontier', ${secondModel === null ? null : "Frontier"})`);
     await expect(claim("second-opinion-clean", "p/m", null, null)).rejects.toThrow();
     await expect(claim("second-opinion-clean", "p/m", "other-family", null)).rejects.toThrow();
     await expect(claim("second-review-failed", null, null, null)).rejects.toThrow();
@@ -368,8 +368,8 @@ describe("witnessed findings and the check set freeze", () => {
     const reviewTask = await workItem("Review with a same-provider second opinion");
     const checkTask = await workItem("Checks with a same-provider second opinion");
     const inserted = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation)
-      VALUES (${projectId}, ${reviewTask}, 'no-other-family', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'p/n', 'same-family-other-model', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal')
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+      VALUES (${projectId}, ${reviewTask}, 'no-other-family', ${JSON.stringify([checkTask])}::jsonb, 'p/m', 'p/n', 'same-family-other-model', '[]'::jsonb, '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Frontier', 'Strong')
       RETURNING id`);
     const claimId = z.array(z.object({ id: z.string() })).parse(inserted.rows)[0]?.id;
     await db.execute(sql`
@@ -386,7 +386,7 @@ describe("witnessed findings and the check set freeze", () => {
         passedOver: [],
         unverified: [{ checkTaskId: checkTask, itemId: "S1", itemText: "Keys can be stored" }],
         second: { kind: "answered", model: "p/n", strength: "same-family-other-model", findings: [] },
-        tiers: { kind: "recorded", judge: "Strong", judged: "Strong", relation: "equal" },
+        tiers: { kind: "recorded", judge: "Strong", judged: "Strong", relation: "equal", reviews: { kind: "graded", first: "Frontier", second: "Strong" } },
       },
     ]);
   });
@@ -395,8 +395,8 @@ describe("witnessed findings and the check set freeze", () => {
     const reviewTask = await workItem("Review with an untied claim item");
     const checkTask = await workItem("Checks with an untied claim item");
     const inserted = await db.execute(sql`
-      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
-      VALUES (${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([checkTask])}::jsonb, 'p/m', '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above')
+      INSERT INTO suite_review_claims (project_id, review_task_id, basis, covered, first_model, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation, first_tier)
+      VALUES (${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([checkTask])}::jsonb, 'p/m', '[]'::jsonb, '[]'::jsonb, 'no second opinion answered', 'Frontier', 'Strong', 'above', 'Frontier')
       RETURNING id`);
     const claimId = z.array(z.object({ id: z.string() })).parse(inserted.rows)[0]?.id;
     await expect(

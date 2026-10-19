@@ -60,13 +60,14 @@ export type ReviewStrength = SecondOpinionStrength;
 
 /**
  * How the models whose reviews confirmed an item's checks stood to the work they reviewed: every one
- * graded above it; one no stronger than it ("equal"); or not on record, for a review recorded before
- * that was.
+ * graded above it; the second review no stronger than it, the first above ("equal-second"); the
+ * first no stronger, the second above ("equal-first"); both no stronger ("equal-both"); at least one
+ * no stronger, without which on record ("equal"); or not on record, for a review recorded before that was.
  */
-export type JudgeStanding = "above" | "equal" | "unrecorded";
+export type JudgeStanding = "above" | "equal-second" | "equal-first" | "equal-both" | "equal" | "unrecorded";
 
 /** Each judge standing, strongest first. */
-export const JUDGE_STANDINGS: readonly JudgeStanding[] = ["above", "equal", "unrecorded"];
+const JUDGE_STANDINGS: readonly JudgeStanding[] = ["above", "equal-second", "equal-first", "equal-both", "equal", "unrecorded"];
 
 /**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
@@ -477,12 +478,17 @@ function coverageSection(vision: VisionCoverage): string {
 
 /**
  * How the models that reviewed an item's checks stood to the work they reviewed, in the client's
- * words: nothing is added when every one was stronger than the work; a review no stronger than it,
- * or one whose standing is not on record, is said so.
+ * words: nothing is added when every one was stronger than the work; the review no stronger than it
+ * is named where the record says which, and a standing not on record is said so.
  */
 const JUDGED_BY: Readonly<Record<JudgeStanding, string>> = {
   above: "",
-  equal: "; those checks were reviewed by a model no stronger than the one their work was graded for, since no stronger one was available to review them",
+  "equal-second":
+    "; that second review was by a model no stronger than the one their work was graded for, while the first review of those checks was by a stronger one",
+  "equal-first":
+    "; the first review of those checks was by a model no stronger than the one their work was graded for, while that second review was by a stronger one",
+  "equal-both": "; both the first review of those checks and that second review were by models no stronger than the one their work was graded for",
+  equal: "; at least one of the models that reviewed those checks was no stronger than the one their work was graded for",
   unrecorded: "; how strong the models that reviewed those checks were, against the work they reviewed, is not on record",
 };
 

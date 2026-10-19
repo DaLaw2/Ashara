@@ -6,7 +6,6 @@ import { CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
-import { JUDGE_STANDINGS } from "../delivered-report.js";
 import type { DeliveredReportFailureRecord, JudgeStanding, ReadingTold, ReviewStrength, UndecidedBy } from "../delivered-report.js";
 import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
@@ -593,10 +592,17 @@ interface Confirmation {
 /** How the latest claim covering a check task stands: confirmed, or not confirmed. */
 type ClaimConfirmation = ({ readonly kind: "confirmed" } & Confirmation) | { readonly kind: "unconfirmed" };
 
-/** A claim's three tier columns as stored: all set on a claim written with them, all null on one written before. */
+const StoredJudgeColumns = { judgeTier: CapabilityLevelSchema, judgedTier: CapabilityLevelSchema, tierRelation: z.enum(["above", "equal"]) };
+
+/**
+ * A confirmed claim's tier columns as stored: the three judge columns and both reviews' grades on a
+ * claim written with them; the judge columns alone on one written before the reviews' grades were;
+ * none on one written before either was.
+ */
 const StoredClaimTiersSchema = z.union([
-  z.object({ judgeTier: CapabilityLevelSchema, judgedTier: CapabilityLevelSchema, tierRelation: z.enum(["above", "equal"]) }),
-  z.object({ judgeTier: z.null(), judgedTier: z.null(), tierRelation: z.null() }),
+  z.object({ ...StoredJudgeColumns, firstTier: CapabilityLevelSchema, secondTier: CapabilityLevelSchema }),
+  z.object({ ...StoredJudgeColumns, firstTier: z.null(), secondTier: z.null() }),
+  z.object({ judgeTier: z.null(), judgedTier: z.null(), tierRelation: z.null(), firstTier: z.null(), secondTier: z.null() }),
 ]);
 
 /** A stored claim's tier columns do not read as a judge's standing to the work. */
@@ -605,9 +611,25 @@ class ClaimTiersUnreadable extends ReportRecordUnreadable {
     readonly claimId: string,
     readonly detail: string,
   ) {
-    super(`suite_review_claims row ${claimId}: judge_tier, judged_tier and tier_relation do not read as a judge's standing to the work: ${detail}`);
+    super(`suite_review_claims row ${claimId}: judge_tier, judged_tier, tier_relation, first_tier and second_tier do not read as a judge's standing to the work: ${detail}`);
     this.name = "ClaimTiersUnreadable";
   }
+}
+
+/**
+ * How a confirmed claim's reviewing models stood to the work: an equal relation names the review
+ * graded at the work's tier where both reviews' grades are on record, and says only that one was where they are not.
+ */
+function standingOf(claimId: string, tiers: z.infer<typeof StoredClaimTiersSchema>): JudgeStanding {
+  if (tiers.tierRelation === null) return "unrecorded";
+  if (tiers.tierRelation === "above") return "above";
+  if (tiers.firstTier === null) return "equal";
+  const firstAt = tiers.firstTier === tiers.judgedTier;
+  const secondAt = tiers.secondTier === tiers.judgedTier;
+  if (firstAt && secondAt) return "equal-both";
+  if (secondAt) return "equal-second";
+  if (firstAt) return "equal-first";
+  throw new ClaimTiersUnreadable(claimId, `the relation is equal at ${tiers.judgedTier}, but neither review was graded at it (first ${tiers.firstTier}, second ${tiers.secondTier})`);
 }
 
 /**
@@ -626,6 +648,8 @@ async function claimStrengths(db: DbHandle, projectId: string): Promise<Map<stri
       judgeTier: suiteReviewClaims.judgeTier,
       judgedTier: suiteReviewClaims.judgedTier,
       tierRelation: suiteReviewClaims.tierRelation,
+      firstTier: suiteReviewClaims.firstTier,
+      secondTier: suiteReviewClaims.secondTier,
     })
     .from(suiteReviewClaims)
     .where(eq(suiteReviewClaims.projectId, projectId))
@@ -640,7 +664,7 @@ async function claimStrengths(db: DbHandle, projectId: string): Promise<Map<stri
       if (strength === null) throw new ReviewStrengthUnreadable("suite_review_claims", `claim ${row.id} is ${row.basis} but records no strength`);
       const tiers = StoredClaimTiersSchema.safeParse(row);
       if (!tiers.success) throw new ClaimTiersUnreadable(row.id, z.prettifyError(tiers.error));
-      standing = { kind: "confirmed", strength, judges: tiers.data.tierRelation === null ? "unrecorded" : tiers.data.tierRelation };
+      standing = { kind: "confirmed", strength, judges: standingOf(row.id, tiers.data) };
     }
     for (const checkTaskId of covered.data) latest.set(checkTaskId, standing);
   }
@@ -654,9 +678,20 @@ function confirmationOf(confirmations: ReadonlyMap<string, ClaimConfirmation>, c
 }
 
 /**
+ * How the reviewing models of two confirmations stand to the work together: their shared standing
+ * where it names the same review of the same strength; not on record where either is not; else only
+ * that at least one of them was no stronger than the work, since no single review is named for both.
+ */
+function jointStanding(a: Confirmation, b: Confirmation): JudgeStanding {
+  if (a.judges === "unrecorded" || b.judges === "unrecorded") return "unrecorded";
+  if (a.judges === b.judges && (a.strength === b.strength || a.judges === "above" || a.judges === "equal")) return a.judges;
+  return "equal";
+}
+
+/**
  * An item decided by several check tasks is confirmed only as strongly as the weakest of them
  * (SECOND_OPINION_STRENGTHS is strongest first), and its reviewing models stand to the work only as
- * the weakest of theirs does; null when one of them is not confirmed.
+ * all of theirs jointly do (jointStanding); null when one of them is not confirmed.
  */
 function weakestConfirmation(confirmations: ReadonlyArray<Confirmation | null>): Confirmation | null {
   let weakest: Confirmation | null = null;
@@ -668,7 +703,7 @@ function weakestConfirmation(confirmations: ReadonlyArray<Confirmation | null>):
     }
     weakest = {
       strength: SECOND_OPINION_STRENGTHS.indexOf(confirmation.strength) > SECOND_OPINION_STRENGTHS.indexOf(weakest.strength) ? confirmation.strength : weakest.strength,
-      judges: JUDGE_STANDINGS.indexOf(confirmation.judges) > JUDGE_STANDINGS.indexOf(weakest.judges) ? confirmation.judges : weakest.judges,
+      judges: jointStanding(confirmation, weakest),
     };
   }
   return weakest;

@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItemClaims, undecidedItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
-import { CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance";
+import { CAPABILITY_RANK, CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { CapabilityLevel, JudgeRelation } from "@ashara/finance";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
@@ -132,34 +132,58 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
 /** A strength of second opinion a review got no answer at. */
 const PassedOverSchema = z.strictObject({ strength: z.enum(SECOND_OPINION_STRENGTHS), outcome: z.enum(["unavailable", "failed"]), reason: z.string().min(1) });
 
-/** The three tier columns of a stored judgement or claim, as read. */
+/** The tier columns of a stored judgement or claim, as read. */
 const StoredTierColumns = {
   judgeTier: CapabilityLevelSchema.nullable(),
   judgedTier: CapabilityLevelSchema.nullable(),
   tierRelation: z.enum(["above", "equal"]).nullable(),
+  firstTier: CapabilityLevelSchema.nullable(),
+  secondTier: CapabilityLevelSchema.nullable(),
 };
 
 /**
- * How a stored row's judges stood to the check work: the weaker judge's grade, the work's tier and
- * whether the judge stood above it or only equal to it; or unrecorded, on a row written before they were.
+ * The grade of each review a stored row rests on, as called: the first review's, and the second's
+ * where one answered (null where none did); or ungraded, on a row written before they were recorded.
+ */
+type ReviewTiers = { readonly kind: "graded"; readonly first: CapabilityLevel; readonly second: CapabilityLevel | null } | { readonly kind: "ungraded" };
+
+/**
+ * How a stored row's judges stood to the check work: the weaker judge's grade, the work's tier,
+ * whether the judge stood above it or only equal to it, and each review's grade; or unrecorded, on a
+ * row written before they were.
  */
 type StoredTiers =
-  | { readonly kind: "recorded"; readonly judge: CapabilityLevel; readonly judged: CapabilityLevel; readonly relation: JudgeRelation }
+  | { readonly kind: "recorded"; readonly judge: CapabilityLevel; readonly judged: CapabilityLevel; readonly relation: JudgeRelation; readonly reviews: ReviewTiers }
   | { readonly kind: "unrecorded" };
 
-/** The tiers of a row whose three columns are all set or all null; null when only some are, which no row may hold. */
-function storedTiersOf(row: {
-  readonly judgeTier: CapabilityLevel | null;
-  readonly judgedTier: CapabilityLevel | null;
-  readonly tierRelation: JudgeRelation | null;
-}): StoredTiers | null {
-  const { judgeTier, judgedTier, tierRelation } = row;
-  if (judgeTier !== null && judgedTier !== null && tierRelation !== null) return { kind: "recorded", judge: judgeTier, judged: judgedTier, relation: tierRelation };
-  if (judgeTier === null && judgedTier === null && tierRelation === null) return { kind: "unrecorded" };
-  return null;
+/**
+ * The tiers of a row whose three judge columns are all set or all null, and whose review grades are
+ * set only beside them, the second exactly where a second review answered, the weaker being the
+ * judge's; null on any other row, which no row may hold.
+ */
+function storedTiersOf(
+  row: {
+    readonly judgeTier: CapabilityLevel | null;
+    readonly judgedTier: CapabilityLevel | null;
+    readonly tierRelation: JudgeRelation | null;
+    readonly firstTier: CapabilityLevel | null;
+    readonly secondTier: CapabilityLevel | null;
+  },
+  secondAnswered: boolean,
+): StoredTiers | null {
+  const { judgeTier, judgedTier, tierRelation, firstTier, secondTier } = row;
+  if (judgeTier === null && judgedTier === null && tierRelation === null) return firstTier === null && secondTier === null ? { kind: "unrecorded" } : null;
+  if (judgeTier === null || judgedTier === null || tierRelation === null) return null;
+  const recorded = { kind: "recorded" as const, judge: judgeTier, judged: judgedTier, relation: tierRelation };
+  if (firstTier === null) return secondTier === null ? { ...recorded, reviews: { kind: "ungraded" } } : null;
+  if ((secondTier !== null) !== secondAnswered) return null;
+  const weaker = secondTier !== null && CAPABILITY_RANK[secondTier] < CAPABILITY_RANK[firstTier] ? secondTier : firstTier;
+  if (weaker !== judgeTier) return null;
+  return { ...recorded, reviews: { kind: "graded", first: firstTier, second: secondTier } };
 }
 
-const TIERS_WHOLE = "a row records its judge tier, judged tier and tier relation together, or none of them";
+const TIERS_WHOLE =
+  "a row records its judge tier, judged tier and tier relation together, or none of them; each review's grade only beside them, the second exactly where a second review answered, the weaker being the judge tier";
 
 const StoredJudgementSchema = z
   .strictObject({
@@ -181,8 +205,8 @@ const StoredJudgementSchema = z
   .refine((row) => (row.firstFinding.kind === "outside-vision") === (row.checkName !== null), "a judgement names a check exactly when its first finding is an outside-vision rejection")
   .refine((row) => (row.secondModel === null) === (row.secondStrength === null), "a judgement records a second review's model exactly when it records that review's strength")
   .refine((row) => (row.basis === "second-review-failed") === (row.secondFailure !== null), "a judgement records why its second review failed exactly when its basis is second-review-failed")
-  .transform(({ judgeTier, judgedTier, tierRelation, ...judgement }, ctx) => {
-    const tiers = storedTiersOf({ judgeTier, judgedTier, tierRelation });
+  .transform(({ judgeTier, judgedTier, tierRelation, firstTier, secondTier, ...judgement }, ctx) => {
+    const tiers = storedTiersOf({ judgeTier, judgedTier, tierRelation, firstTier, secondTier }, judgement.secondModel !== null);
     if (tiers !== null) return { ...judgement, tiers };
     ctx.addIssue({ code: "custom", message: TIERS_WHOLE });
     return z.NEVER;
@@ -256,7 +280,7 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
             secondStrength: judgement.secondReview === null ? null : judgement.secondReview.strength,
             passedOver: judgement.passedOver,
             secondFailure: judgement.secondFailure,
-            ...tierColumns(judgement.tiers),
+            ...tierColumns(judgement),
           })),
         )
         .returning({ id: suiteReviewJudgements.id });
@@ -289,7 +313,7 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
         passedOver: claim.passedOver,
         secondFindings: claim.second,
         secondFailure: claim.secondFailure,
-        ...tierColumns(claim.tiers),
+        ...tierColumns(claim),
       })
       .returning({ id: suiteReviewClaims.id });
     if (row === undefined) throw new SuiteReviewClaimUnreturned(reviewTaskId);
@@ -328,8 +352,20 @@ function modelText(model: { readonly provider: string; readonly model: string })
   return `${model.provider}/${model.model}`;
 }
 
-function tierColumns(tiers: { readonly judgeTier: CapabilityLevel; readonly judgedTier: CapabilityLevel; readonly relation: JudgeRelation }) {
-  return { judgeTier: tiers.judgeTier, judgedTier: tiers.judgedTier, tierRelation: tiers.relation };
+/** The tier columns of a judgement or claim: how its judges stood to the work, and each review's grade as called. */
+function tierColumns(row: {
+  readonly tiers: { readonly judgeTier: CapabilityLevel; readonly judgedTier: CapabilityLevel; readonly relation: JudgeRelation };
+  readonly firstModel: { readonly grade: CapabilityLevel };
+  readonly secondReview: { readonly second: { readonly grade: CapabilityLevel } } | null;
+}) {
+  const { tiers } = row;
+  return {
+    judgeTier: tiers.judgeTier,
+    judgedTier: tiers.judgedTier,
+    tierRelation: tiers.relation,
+    firstTier: row.firstModel.grade,
+    secondTier: row.secondReview === null ? null : row.secondReview.second.grade,
+  };
 }
 
 /** Every judgement the suite reviews of a project recorded, oldest first, each parsed whole: what the owner's run report states of them. */
@@ -352,6 +388,8 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
       judgeTier: suiteReviewJudgements.judgeTier,
       judgedTier: suiteReviewJudgements.judgedTier,
       tierRelation: suiteReviewJudgements.tierRelation,
+      firstTier: suiteReviewJudgements.firstTier,
+      secondTier: suiteReviewJudgements.secondTier,
     })
     .from(suiteReviewJudgements)
     .where(eq(suiteReviewJudgements.projectId, projectId))
@@ -408,8 +446,8 @@ const StoredClaimSchema = z
     ...StoredTierColumns,
   })
   .refine((row) => row.basis !== "second-opinion-clean" || row.unverified.length === 0, "a claim a second review confirmed clean leaves no item unverified")
-  .transform(({ secondModel, secondStrength, secondFindings, secondFailure, judgeTier, judgedTier, tierRelation, ...rest }, ctx) => {
-    const tiers = storedTiersOf({ judgeTier, judgedTier, tierRelation });
+  .transform(({ secondModel, secondStrength, secondFindings, secondFailure, judgeTier, judgedTier, tierRelation, firstTier, secondTier, ...rest }, ctx) => {
+    const tiers = storedTiersOf({ judgeTier, judgedTier, tierRelation, firstTier, secondTier }, secondModel !== null);
     if (tiers === null) {
       ctx.addIssue({ code: "custom", message: TIERS_WHOLE });
       return z.NEVER;
@@ -464,6 +502,8 @@ export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Prom
       judgeTier: suiteReviewClaims.judgeTier,
       judgedTier: suiteReviewClaims.judgedTier,
       tierRelation: suiteReviewClaims.tierRelation,
+      firstTier: suiteReviewClaims.firstTier,
+      secondTier: suiteReviewClaims.secondTier,
     })
     .from(suiteReviewClaims)
     .where(eq(suiteReviewClaims.projectId, projectId))

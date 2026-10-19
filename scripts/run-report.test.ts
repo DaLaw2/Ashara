@@ -332,7 +332,9 @@ describe("runReport, the body run-report prints", () => {
     const judged = parseWorkItemId(await completedTask("Review with a finding"), "test review task");
     const claimed = parseWorkItemId(await completedTask("Review that routed nothing"), "test review task");
     const finding = { checkTasks: [check], kind: "undecided-item" as const, item: "S8", problem: "no check reads the value back", evidence: "sh put.sh" };
-    const first = { provider: "p", model: "m", grade: "Strong" as const };
+    const first = { provider: "p", model: "m", grade: "Frontier" as const };
+    const otherFamily = { provider: "q", model: "n", grade: "Strong" as const };
+    const firstAtWork = { provider: "p", model: "s", grade: "Strong" as const };
     const judgements = new SuiteReviewJudgementRepository(db);
     await judgements.record({
       projectId,
@@ -346,7 +348,7 @@ describe("runReport, the body run-report prints", () => {
           first: finding,
           second: [],
           firstModel: first,
-          secondReview: { first, second: first, strength: "same-model" },
+          secondReview: { first, second: otherFamily, strength: "other-family" },
           passedOver: [],
           secondFailure: null,
           undecided: null,
@@ -362,7 +364,7 @@ describe("runReport, the body run-report prints", () => {
       claim: {
         basis: "second-review-failed",
         covered: [check],
-        firstModel: first,
+        firstModel: firstAtWork,
         secondReview: null,
         passedOver: [],
         second: [],
@@ -376,12 +378,12 @@ describe("runReport, the body run-report prints", () => {
 
     expect(text).toContain(`run-report: project ${NAME} (${projectId})`);
     expect(text.split("\n").slice(1, 3)).toEqual(["tender pick: not recorded (run-report was given no --run)", "verdicts: Ashara gave no acceptance verdict (no acceptance sweep recorded) | hidden suite: not run"]);
-    const equal = "    judge tier: EQUAL: Strong, no stronger than the check work at Strong (no model above it was routed to judge it)";
+    const equal = "    judge tier: EQUAL: Strong, no stronger than the check work at Strong";
     expect(text).toContain(
-      `Suite review judgements (1):\n  review ${judged}, its undecided-item finding of task ${check}: advisory (second-opinion-disagreed); second review same-model (first p/m, second p/m)\n${equal}`,
+      `Suite review judgements (1):\n  review ${judged}, its undecided-item finding of task ${check}: advisory (second-opinion-disagreed); second review other-family (first p/m, second q/n)\n${equal} (the second opinion, from another model family, q/n, was graded Strong; the first review, p/m, was graded Frontier, above it)`,
     );
     expect(text).toContain(
-      `Suite review claims (1):\n  review ${claimed}, covering check task(s) ${check}: second-review-failed (unconfirmed: the second opinion failed at every strength); second opinion: none (first p/m): no second opinion answered\n${equal}`,
+      `Suite review claims (1):\n  review ${claimed}, covering check task(s) ${check}: second-review-failed (unconfirmed: the second opinion failed at every strength); second opinion: none (first p/s): no second opinion answered\n${equal} (the first review, p/s, the only review it rests on, was graded at the work's tier)`,
     );
     expect(text).toContain(`    unverified S9 of task ${check} "put survives a power loss": no second opinion answered: no second opinion answered`);
   });
@@ -390,8 +392,8 @@ describe("runReport, the body run-report prints", () => {
     const reviewTask = await completedTask("Review whose pass a dispute contradicted");
     const claimId = randomUUID();
     await db.execute(sql`
-      INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation)
-      VALUES (${claimId}, ${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([reviewTask])}::jsonb, 'q/judge', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'none answered', 'Strong', 'Strong', 'equal')`);
+      INSERT INTO suite_review_claims (id, project_id, review_task_id, basis, covered, first_model, second_model, second_strength, passed_over, second_findings, second_failure, judge_tier, judged_tier, tier_relation, first_tier)
+      VALUES (${claimId}, ${projectId}, ${reviewTask}, 'second-review-failed', ${JSON.stringify([reviewTask])}::jsonb, 'q/judge', NULL, NULL, '[]'::jsonb, '[]'::jsonb, 'none answered', 'Strong', 'Strong', 'equal', 'Strong')`);
     for (const evidenceRef of [randomUUID(), randomUUID()]) {
       await db.execute(sql`
         INSERT INTO reviewer_outcomes (project_id, verdict_kind, verdict_id, reviewer_model, reviewer_role, outcome, evidence_kind, evidence_ref)

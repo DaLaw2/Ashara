@@ -101,13 +101,17 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
  * How the judges a suite review row rests on stood to the check work they judged: judge_tier, the
  * grade of the weaker of them (the first review, and the second where it answered); judged_tier,
  * the check work's tier; tier_relation, "above" or "equal". All three on every row written now
- * (*_tiers_recorded); none on a row written before they were recorded.
+ * (*_tiers_recorded); none on a row written before they were recorded. first_tier and second_tier
+ * are each review's grade as called, the second's only where one answered, so a reader names which
+ * review was not above the work (*_review_tiers_recorded); neither on a row written before they were.
  */
 function judgeTierColumns() {
   return {
     judgeTier: text("judge_tier"),
     judgedTier: text("judged_tier"),
     tierRelation: text("tier_relation"),
+    firstTier: text("first_tier"),
+    secondTier: text("second_tier"),
   };
 }
 
