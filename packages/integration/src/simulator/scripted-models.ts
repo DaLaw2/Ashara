@@ -526,6 +526,7 @@ export class StandIns {
       );
     }
     if (keys.includes("reading")) return this.structured(options, "liaison-answer", () => this.answer());
+    if (keys.includes("correction")) return this.structured(options, "liaison-change", () => this.correction());
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
       const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);
@@ -924,6 +925,11 @@ export class StandIns {
 
   private answer(): unknown {
     return { reading: { verdict: "changes", statement: "Messages are in French.", kind: "undecided" } };
+  }
+
+  /** The client's one correction, read as it asks: an exclusion added, which no guarantee a task cites rests on. */
+  private correction(): unknown {
+    return { correction: { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "narrows" }], confirms: [] } };
   }
 
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {

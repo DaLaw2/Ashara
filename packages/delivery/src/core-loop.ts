@@ -1,6 +1,6 @@
 import { parseProjectId } from "@ashara/shared";
 import type { Logger, ProjectId } from "@ashara/shared";
-import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
+import type { AnswerOutcome, ClientChangeOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";
 import type { ReplanOutcome } from "./replan.js";
@@ -47,6 +47,23 @@ function logAnswer(logger: Logger, outcome: AnswerOutcome): void {
       },
     );
   }
+}
+
+/** Failures and a blocked project are logged at warn by the Liaison itself. */
+function logChange(logger: Logger, outcome: ClientChangeOutcome): void {
+  if (outcome.kind !== "recorded") return;
+  const { revision } = outcome;
+  const own =
+    revision.status === "applied"
+      ? `applied as vision v${revision.visionVersion} (${revision.direction})`
+      : revision.status === "proposed"
+        ? `held for the client's confirmation (${revision.direction}; ${revision.pushback.reasons.map((r) => r.kind).join(", ")})`
+        : "no change of its own";
+  logger.info(
+    "delivery.client-change-read",
+    `change ${outcome.changeId}: ${own}${outcome.confirmed.length === 0 ? "" : `; confirmed ${outcome.confirmed.join(", ")}`}; impact note posted`,
+    { projectId: outcome.projectId, changeId: outcome.changeId, status: revision.status, confirmed: outcome.confirmed.length },
+  );
 }
 
 /** A refused roster is logged at warn by the roster step itself, with the violations, and halts its project here. */
@@ -108,10 +125,6 @@ export class CoreLoop {
     // for it now: the previous cycle awaited every task it dispatched.
     const stops = await this.takeClientStops();
     if (stops !== null) return this.haltAtCap(stops);
-    // The client's changes of direction, each answered once that it is kept but not applied (no
-    // LLM call), so none is left unread even at the spend cap.
-    const changes = await this.answerClientChanges();
-    if (changes !== null) return this.haltAtCap(changes);
 
     // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
@@ -175,6 +188,12 @@ export class CoreLoop {
     // step revises its plan.
     const answers = await this.readAnswers();
     if (answers !== null) return this.haltAtCap(answers);
+    // Then the client's changes of direction, each read into operations on the contract in force and
+    // answered with its impact note this cycle: applied as the next vision version, or held for the
+    // client's confirmation when the Liaison pushes back.
+    const changes = await this.stepThenCap("client-change", () => deps.clientChanges.runPending());
+    if (changes.kind === "stop") return this.haltAtCap(changes.stop);
+    for (const outcome of changes.outcomes) logChange(deps.logger, outcome);
 
     // Then a roster for each project with vision v1 and none: first planning
     // requires one, since every planned task gets its owning role.
@@ -275,14 +294,13 @@ export class CoreLoop {
 
   /**
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
-   * stops and changes, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds,
+   * stops, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds,
    * the release of what attempts held, and the block, delivered and plan reports still due. A project stopped here
    * stays stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
     // The loop is already stopped at the cap: a stop any of these returns is that same stop.
     await this.takeClientStops();
-    await this.answerClientChanges();
     await this.releaseHeld();
     // A stop taken here, and a halt recorded at the cap, is owed its terminal sweep (no LLM call)
     // before its report; no full cycle runs again in this process to sweep it.
@@ -335,22 +353,6 @@ export class CoreLoop {
       runTerminalSweeps({ terminalSweeps: deps.terminalSweeps, terminalSweeper: deps.terminalSweeper, containment: deps.containment, logger: deps.logger }),
     );
     return swept.kind === "stop" ? swept.stop : null;
-  }
-
-  /** The client's changes, each answered once; the deployment cap's stop when a refusal named it, else null. */
-  private async answerClientChanges(): Promise<LoopStop | null> {
-    const changes = await this.step("client-change", () => this.deps.clientChanges.runPending());
-    if (changes.kind === "stop") return changes.stop;
-    for (const change of changes.kind === "ran" ? changes.value : []) {
-      if (change.kind === "deferred") {
-        this.deps.logger.info("delivery.client-change-deferred", `change ${change.changeId}: told not applied, reply ${change.replyId}`, {
-          projectId: change.projectId,
-          changeId: change.changeId,
-          replyId: change.replyId,
-        });
-      }
-    }
-    return null;
   }
 
   /** The client's answers not yet read, each read once; the spend cap's stop when a call was refused, else null. */

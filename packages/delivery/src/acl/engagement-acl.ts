@@ -24,6 +24,7 @@ import type { VisionItem } from "../decomposition-types.js";
 
 export type {
   AnswerOutcome,
+  ClientChangeOutcome,
   IntakeOutcome,
   LiaisonAnswers,
   LiaisonBlockReports,

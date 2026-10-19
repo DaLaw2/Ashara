@@ -825,7 +825,8 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
   { source: `${ENGAGEMENT}/intake.ts#readingAngleSection`, kind: "not-kept", reason: "part of a second reading's prompt within the first reading's model family" },
   { source: `${ENGAGEMENT}/answers.ts#buildAnswerPrompt`, kind: "not-kept", reason: "the prompt that reads a client answer" },
 
-  { source: `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`, kind: "fixed-text", reason: "the one reply to every change request" },
+  { source: `${ENGAGEMENT}/correction.ts#correctionPrompt`, kind: "not-kept", reason: "the prompt that reads a client change" },
+  { source: `${ENGAGEMENT}/correction.ts#correctionReport`, kind: "unjudged", reason: "states a correction's operations, the tasks citing its keys and its cost band; no oracle compares them with the records" },
 
   { source: `${ENGAGEMENT}/block-report.ts#projectResumedReport`, kind: "unjudged", reason: "states how the halt ended; I4 judges only that it is its episode's one report" },
   { source: `${ENGAGEMENT}/plan-report.ts#planRevisionReport`, kind: "unjudged", reason: "states the revision's task counts and what it set aside; I4 judges only that it is its revision's one report" },
@@ -866,7 +867,7 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   { source: `${ENGAGEMENT}/repositories/client-answer.ts#writeClientAnswer`, posts: [`${ENGAGEMENT}/answers.ts#replanReport`], clientWords: false },
   {
     source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insert`,
-    posts: [`${ENGAGEMENT}/intake.ts#readingReport`, `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`],
+    posts: [`${ENGAGEMENT}/intake.ts#readingReport`, `${ENGAGEMENT}/correction.ts#correctionReport`],
     clientWords: true,
   },
   { source: `${ENGAGEMENT}/repositories/tender-intake.ts#recordTenderIntake`, posts: [`${ENGAGEMENT}/intake.ts#contractDraftReport`], clientWords: false },

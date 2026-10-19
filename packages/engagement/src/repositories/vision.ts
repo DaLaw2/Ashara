@@ -1,8 +1,9 @@
-import { desc, eq, sql } from "drizzle-orm";
-import { visionDocuments } from "@ashara/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { visionDocuments, visionRevisions } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { readVisionVersion, visionWritable } from "../vision.js";
+import type { Direction, RevisionOp, RevisionRecord } from "../vision-language/contract-op.js";
 import type { ContractDraft } from "../vision-language/guarantee.js";
 import type { VisionAppend } from "../vision.js";
 
@@ -32,7 +33,36 @@ class VisionNotWritten extends Error {
   }
 }
 
-/** Engagement's vision versions (vision_documents): append-only, one version per row. */
+/** A proposed revision to apply was not found pending for the project. */
+class ProposalNotPending extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly proposalId: string,
+  ) {
+    super(`revision ${proposalId} of project ${projectId} is not a proposal awaiting confirmation; nothing was written`);
+    this.name = "ProposalNotPending";
+  }
+}
+
+/** The columns every revision row records of its record. */
+function revisionColumns(projectId: ProjectId, basedOnVersion: number, record: RevisionRecord) {
+  return {
+    projectId,
+    basedOnVersion,
+    author: record.author,
+    approver: record.approver,
+    direction: record.direction,
+    cause: record.cause,
+    sourceMessageId: record.sourceMessageId,
+    ops: record.ops,
+    pushback: record.pushback,
+  };
+}
+
+/**
+ * Engagement's vision versions (vision_documents): append-only, one version per row. Every version
+ * after the first is written with its revision record (vision_revisions) in the same transaction.
+ */
 export class VisionRepository {
   constructor(private readonly db: DbHandle) {}
 
@@ -78,24 +108,65 @@ export class VisionRepository {
 
   /**
    * Appends the version after `change.basedOnVersion`, a copy of it with the change's assumptions,
-   * open questions and reason. "moved", with nothing written, when the project's current version is
-   * not the one the change was composed against.
+   * open questions, contract and reason, and records `revision` as the revision that wrote it, applied.
+   * "moved", with nothing written, when the project's current version is not the one the change was
+   * composed against. Call it inside a transaction: the version and its record are one write.
    */
   async append(
     projectId: ProjectId,
     change: VisionAppend,
-  ): Promise<{ readonly kind: "appended" } | { readonly kind: "moved"; readonly current: number | null }> {
+    revision: RevisionRecord,
+  ): Promise<{ readonly kind: "appended"; readonly version: number } | { readonly kind: "moved"; readonly current: number | null }> {
+    const version = await this.appendVersion(projectId, change);
+    if (version.kind === "moved") return version;
+    await this.db.insert(visionRevisions).values({ ...revisionColumns(projectId, change.basedOnVersion, revision), version: version.version, status: "applied" });
+    return version;
+  }
+
+  /** Records a revision awaiting the client's confirmation against the version in force; no version is written. */
+  async propose(projectId: ProjectId, basedOnVersion: number, revision: RevisionRecord): Promise<void> {
+    await this.db.insert(visionRevisions).values({ ...revisionColumns(projectId, basedOnVersion, revision), version: null, status: "proposed" });
+  }
+
+  /**
+   * Applies a pending proposal the client confirmed in `confirmedBy`: appends its version and records
+   * it applied, approved by the client, with the operations as applied. Throws ProposalNotPending when
+   * the proposal is not pending; "moved" as append.
+   */
+  async applyProposal(
+    projectId: ProjectId,
+    proposalId: string,
+    confirmedBy: string,
+    change: VisionAppend,
+    applied: { readonly ops: readonly [RevisionOp, ...RevisionOp[]]; readonly direction: Direction },
+  ): Promise<{ readonly kind: "appended"; readonly version: number } | { readonly kind: "moved"; readonly current: number | null }> {
+    const version = await this.appendVersion(projectId, change);
+    if (version.kind === "moved") return version;
+    const updated = await this.db
+      .update(visionRevisions)
+      .set({ status: "applied", version: version.version, approver: "client", confirmedByMessageId: confirmedBy, ops: applied.ops, direction: applied.direction })
+      .where(and(eq(visionRevisions.id, proposalId), eq(visionRevisions.projectId, projectId), eq(visionRevisions.status, "proposed")))
+      .returning({ id: visionRevisions.id });
+    if (updated.length === 0) throw new ProposalNotPending(projectId, proposalId);
+    return version;
+  }
+
+  private async appendVersion(
+    projectId: ProjectId,
+    change: VisionAppend,
+  ): Promise<{ readonly kind: "appended"; readonly version: number } | { readonly kind: "moved"; readonly current: number | null }> {
     const current = await this.getCurrent(projectId);
     if (current === null || current.version !== change.basedOnVersion) return { kind: "moved", current: current?.version ?? null };
     const fields = { scopeBoundaries: current.scopeBoundaries, inferences: change.inferences, openQuestions: change.openQuestions };
-    const columns = visionWritable(projectId, {
-      visionText: current.visionText,
-      ...fields,
-      contract: { form: current.contractForm, interface: current.interface, guarantees: current.guarantees, exclusions: current.exclusions },
-    });
+    const contract =
+      change.contract.kind === "revised"
+        ? { form: "guarantees", ...change.contract.records }
+        : { form: current.contractForm, interface: current.interface, guarantees: current.guarantees, exclusions: current.exclusions };
+    const columns = visionWritable(projectId, { visionText: current.visionText, ...fields, contract });
+    const version = current.version + 1;
     await this.db.insert(visionDocuments).values({
       projectId,
-      version: current.version + 1,
+      version,
       visionText: current.visionText,
       summary: current.summary,
       ...fields,
@@ -103,7 +174,7 @@ export class VisionRepository {
       confirmedDirections: current.confirmedDirections,
       changeReason: change.changeReason,
     });
-    return { kind: "appended" };
+    return { kind: "appended", version };
   }
 }
 

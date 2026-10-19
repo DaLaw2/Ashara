@@ -61,12 +61,29 @@ describe("VisionRepository: versions per project", () => {
     expect((await visions.getCurrent(b))?.version).toBe(1);
   });
 
-  test("append writes the next version over the base it was composed on, and reports a moved base without writing", async () => {
-    const change = { basedOnVersion: 1, inferences: [{ ...asked, status: "Inferred" as const, kind: "client-visible" as const, disclosed: "reported" as const }], openQuestions: [], changeReason: "reported" };
-    expect(await visions.append(a, change)).toEqual({ kind: "appended" });
+  test("append writes the next version over the base it was composed on with its revision record, and reports a moved base without writing", async () => {
+    const change = {
+      basedOnVersion: 1,
+      inferences: [{ ...asked, status: "Inferred" as const, kind: "client-visible" as const, disclosed: "reported" as const }],
+      openQuestions: [],
+      contract: { kind: "unchanged" as const },
+      changeReason: "reported",
+    };
+    const revision = {
+      author: "ashara" as const,
+      sourceMessageId: null,
+      approver: null,
+      direction: "neutral" as const,
+      cause: "ashara-decision" as const,
+      ops: [{ target: "assumption" as const, action: "amend" as const, key: "A1", direction: "neutral" as const, labelled: null, read: null, statement: asked.statement }] as const,
+      pushback: null,
+    };
+    expect(await visions.append(a, change, revision)).toEqual({ kind: "appended", version: 2 });
     const second = await visions.getCurrent(a);
     expect([second?.version, second?.visionText, second?.changeReason]).toEqual([2, "vision A1", "reported"]);
-    expect(await visions.append(a, change)).toEqual({ kind: "moved", current: 2 });
+    const recorded = await db.execute(sql`SELECT author, approver, direction, status, version, based_on_version AS "basedOn" FROM vision_revisions WHERE project_id = ${a}`);
+    expect(recorded.rows).toEqual([{ author: "ashara", approver: null, direction: "neutral", status: "applied", version: 2, basedOn: 1 }]);
+    expect(await visions.append(a, change, revision)).toEqual({ kind: "moved", current: 2 });
     expect((await visions.getCurrent(b))?.version).toBe(1);
   });
 });

@@ -535,6 +535,7 @@ const MAX_CLIENT_REQUESTS = 8;
 const CLIENT_RETRIED = new Set([401, 409, 500]);
 const STOP_BODY = "Please stop the work.";
 const CHANGE_BODY = "Use French, please.";
+const CORRECTION_BODY = "Never colour the output.";
 
 /** A client route refused a request the client is entitled to make: the route, not a fault, said no. */
 class ClientRequestRefused extends Error {
@@ -760,6 +761,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
   if (options.corruptSecondProject === true && projectCount < 2) throw new CorruptionWithoutSecondProject(options.seed);
   const corruption: Corruption | null = options.corruptSecondProject === true ? { taskSpec: false, blockKind: false, contained: new Set() } : null;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
+  const correction = tape.chance("client.correction", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
   const trace: string[] = [
     `universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`,
@@ -1164,6 +1166,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     let restartsSeen = 0;
     let noProgress = false;
     let changed = false;
+    let corrected = false;
     let settleLeft: number | null = null;
     let settledOn = "";
     while (cycles < options.maxCycles) {
@@ -1283,6 +1286,16 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
           changed = true;
           trace.push(`client answer changes an assumption at cycle ${cycles}`);
         }
+      }
+
+      if (correction && !corrected && snapshot.items.some((i) => i.origin === "decomposition" && i.status === "Completed")) {
+        await clientAct<null>(
+          "change",
+          (app) => client.post(app, projectId, { kind: "change", body: CORRECTION_BODY }),
+          (app) => onRecord(app, (message) => message.kind === "change" && message.body === CORRECTION_BODY),
+        );
+        corrected = true;
+        trace.push(`client correction at cycle ${cycles}`);
       }
 
       // I8's measure: a fact of any project reached for the first time. A cycle that carried an

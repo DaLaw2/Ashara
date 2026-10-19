@@ -6,7 +6,7 @@ export type { AnswerOutcome, AnswerStore, LiaisonAnswers } from "./answers.js";
 export { ClientStops } from "./client-stop.js";
 export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
 export { ClientChanges } from "./client-change.js";
-export type { ClientChangeStore, LiaisonClientChanges } from "./client-change.js";
+export type { ClientChangeOutcome, ClientChangeStore, LiaisonClientChanges } from "./client-change.js";
 export { PlanReports } from "./plan-report.js";
 export type { LiaisonPlanReports, PlanReportStore } from "./plan-report.js";
 export { BlockReports } from "./block-report.js";
@@ -36,7 +36,7 @@ export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.j
 export { readRiskRecords } from "./repositories/early-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listDueStopReports, listUnconsumedStops, postClientStopReport, recordClientStop } from "./repositories/client-stop.js";
-export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
+export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "./repositories/client-change.js";
 export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { PROJECT_STATUSES, acceptProject } from "./project-lifecycle.js";

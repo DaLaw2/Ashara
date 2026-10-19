@@ -1,5 +1,6 @@
 import type { ZodType } from "zod";
 import { AnswerResponseSchema } from "./answers.js";
+import { CorrectionResponseSchema } from "./correction.js";
 import { IntakeResponseSchema, SecondReadingSchema } from "./intake.js";
 
 /**
@@ -9,4 +10,5 @@ export const ENGAGEMENT_MODEL_SCHEMAS: Readonly<Record<string, ZodType<unknown>>
   "liaison-intake: tender": IntakeResponseSchema,
   "liaison-intake: second reading": SecondReadingSchema,
   "liaison-intake: answer": AnswerResponseSchema,
+  "liaison-intake: change": CorrectionResponseSchema,
 };

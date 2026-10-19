@@ -19,12 +19,23 @@ export const GuaranteeKeySchema = z.string().regex(GUARANTEE_ID);
  * Where a contract record comes from: a sentence of the client's tender, quoted verbatim, or an
  * assumption of the same vision version, by its key.
  */
-const ContractSourceSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("tender"), quote: z.string().trim().min(1) }),
-  z.strictObject({ kind: z.literal("assumption"), id: AssumptionKeySchema }),
+const TenderSourceSchema = z.strictObject({ kind: z.literal("tender"), quote: z.string().trim().min(1) });
+const AssumptionSourceSchema = z.strictObject({ kind: z.literal("assumption"), id: AssumptionKeySchema });
+
+/** The sources a reading of the tender may give: the tender itself or an assumption, never a later message. */
+const ContractSourceSchema = z.discriminatedUnion("kind", [TenderSourceSchema, AssumptionSourceSchema]);
+
+/**
+ * Where a stored contract record comes from: the tender, an assumption, or a client's change message
+ * by its id, whose words put the record into a later version.
+ */
+const StoredSourceSchema = z.discriminatedUnion("kind", [
+  TenderSourceSchema,
+  AssumptionSourceSchema,
+  z.strictObject({ kind: z.literal("correction"), messageId: z.string().min(1) }),
 ]);
 
-type ContractSource = z.infer<typeof ContractSourceSchema>;
+export type StoredSource = z.infer<typeof StoredSourceSchema>;
 
 /**
  * Where the client could see a guarantee hold or break: in what the deliverable outputs, in how it
@@ -38,68 +49,61 @@ export type Observation = z.infer<typeof ObservationSchema>;
  * An observation kind as a drafter classifies it: "undecided" is a value it may give, and it is
  * recorded as stored-data, the stricter class, so doubt never buys a verdict an easier class would.
  */
-const ClassifiedObservationSchema = z
+export const ClassifiedObservationSchema = z
   .enum(["output", "errors", "exit-status", "stored-data", "undecided"])
   .transform((kind): Observation => (kind === "undecided" ? "stored-data" : kind));
 
-/** One entry of the product's public interface, in the terms the product's kind has. */
-const InterfaceEntrySchema = z.strictObject({
-  id: z.string().regex(INTERFACE_ID),
-  text: z.string().trim().min(1),
-  source: ContractSourceSchema,
-});
+/** An interface entry's key: "I" and its number. */
+export const InterfaceKeySchema = z.string().regex(INTERFACE_ID);
 
-const guaranteeShape = <O extends z.ZodType<Observation, unknown>>(observation: O) =>
+/** An exclusion's key: "X" and its number. */
+export const ExclusionKeySchema = z.string().regex(EXCLUSION_ID);
+
+/**
+ * The contract records, each record sourced by `source`: one entry of the product's public interface
+ * in the terms the product's kind has, the guarantees, and what the tender leaves out, recorded so its
+ * absence from the guarantees is never read as a promise.
+ */
+const contractShape = <O extends z.ZodType<Observation, unknown>, S extends z.ZodType<StoredSource>>(observation: O, source: S) =>
   z.strictObject({
-    id: GuaranteeKeySchema,
-    statement: z.string().trim().min(1),
-    observable: z.strictObject({
-      interface: z.array(z.string().regex(INTERFACE_ID)).min(1),
-      observation,
-    }),
-    refutedBy: z.array(z.string().trim().min(1)).min(1),
-    source: ContractSourceSchema,
+    interface: z.array(z.strictObject({ id: InterfaceKeySchema, text: z.string().trim().min(1), source })).min(1),
+    guarantees: z
+      .array(
+        z.strictObject({
+          id: GuaranteeKeySchema,
+          statement: z.string().trim().min(1),
+          observable: z.strictObject({
+            interface: z.array(InterfaceKeySchema).min(1),
+            observation,
+          }),
+          refutedBy: z.array(z.string().trim().min(1)).min(1),
+          source,
+        }),
+      )
+      .min(1),
+    exclusions: z.array(z.strictObject({ id: ExclusionKeySchema, text: z.string().trim().min(1), source })),
   });
 
-/** A guarantee as vision_documents.guarantees stores it: its observation kind is always one of the four. */
-const GuaranteeSchema = guaranteeShape(ObservationSchema);
-
-/** A guarantee as a writer hands it over: an "undecided" observation is recorded as stored-data. */
-const GuaranteeDraftSchema = guaranteeShape(ClassifiedObservationSchema);
-
-/** What the tender leaves out, recorded so its absence from the guarantees is never read as a promise. */
-const ExclusionSchema = z.strictObject({
-  id: z.string().regex(EXCLUSION_ID),
-  text: z.string().trim().min(1),
-  source: ContractSourceSchema,
-});
-
-export type InterfaceEntry = z.infer<typeof InterfaceEntrySchema>;
-type Guarantee = z.infer<typeof GuaranteeSchema>;
-
 /** The contract records of a guarantees-form version, as stored: never an empty interface or guarantee list. */
-export const StoredContractSchema = z.strictObject({
-  interface: z.array(InterfaceEntrySchema).min(1),
-  guarantees: z.array(GuaranteeSchema).min(1),
-  exclusions: z.array(ExclusionSchema),
-});
+export const StoredContractSchema = contractShape(ObservationSchema, StoredSourceSchema);
 
-/** The contract records a writer hands over, before an undecided observation is recorded as stored-data. */
-export const ContractDraftSchema = z.strictObject({
-  interface: z.array(InterfaceEntrySchema).min(1),
-  guarantees: z.array(GuaranteeDraftSchema).min(1),
-  exclusions: z.array(ExclusionSchema),
-});
+/** The contract records a version's writer hands over, before an undecided observation is recorded as stored-data. */
+export const WritableContractSchema = contractShape(ClassifiedObservationSchema, StoredSourceSchema);
+
+/** The contract records a reading of the tender drafts: sourced only from the tender and its assumptions. */
+export const ContractDraftSchema = contractShape(ClassifiedObservationSchema, ContractSourceSchema);
 
 export type ContractDraft = z.input<typeof ContractDraftSchema>;
 export type StoredContract = z.infer<typeof StoredContractSchema>;
+export type InterfaceEntry = StoredContract["interface"][number];
+type Guarantee = StoredContract["guarantees"][number];
 
 /**
  * Where a guarantee comes from as every reader sees it: a contract source, or, on a version written
  * before guarantees were, the in-scope line or the assumption it is read from.
  */
 export type GuaranteeSource =
-  | ContractSource
+  | StoredSource
   | { readonly kind: "legacy"; readonly from: "scope" }
   | { readonly kind: "legacy"; readonly from: "assumption"; readonly id: string };
 
@@ -129,7 +133,7 @@ export interface VisionGuarantee {
 export interface VisionExclusion {
   readonly id: string;
   readonly text: string;
-  readonly source: ContractSource | { readonly kind: "legacy"; readonly from: "scope" };
+  readonly source: StoredSource | { readonly kind: "legacy"; readonly from: "scope" };
 }
 
 /** The facts of an assumption basisOf reads: its key, its status and the guarantees it underpins. */
@@ -142,7 +146,7 @@ interface AssumptionFooting {
 /**
  * A guarantee's basis in the version whose assumptions are given. Any assumption it is sourced from or
  * that underpins it and is not Stated makes it assumed-unconfirmed, whatever else it rests on; a
- * tender quote or a Stated assumption makes it client-stated; a legacy scope line is derived. An
+ * tender quote, a client's change message or a Stated assumption makes it client-stated; a legacy scope line is derived. An
  * assumption named but absent from the version is not evidence of confirmation, so it reads unconfirmed.
  */
 export function basisOf(
@@ -155,7 +159,7 @@ export function basisOf(
   const resting = assumptions.filter((a) => a.id === sourceId || a.underpins.includes(guarantee.id));
   const sourceMissing = sourceId !== null && !assumptions.some((a) => a.id === sourceId);
   if (sourceMissing || resting.some((a) => a.status !== "Stated")) return "assumed-unconfirmed";
-  if (guarantee.source.kind === "tender" || sourceId !== null) return "client-stated";
+  if (guarantee.source.kind === "tender" || guarantee.source.kind === "correction" || sourceId !== null) return "client-stated";
   return "derived";
 }
 

@@ -37,6 +37,7 @@ export {
   undecidedItemClaims,
   undecidedItems,
   visionDocuments,
+  visionRevisions,
   workBurnWarnings,
   workItems,
 } from "./schema/index.js";

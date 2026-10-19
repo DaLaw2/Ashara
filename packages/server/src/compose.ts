@@ -461,7 +461,12 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     spendCap,
     containment,
     clientStops: new ClientStops(createClientStopStore(db), containment),
-    clientChanges: new ClientChanges(createClientChangeStore(db), containment),
+    clientChanges: new ClientChanges({
+      llm: modelCalls,
+      store: createClientChangeStore(db, config.workBudgets),
+      containment,
+      onAttempt: ladderAttemptSink,
+    }),
     liaisonIntake: new TenderIntake({
       llm: modelCalls,
       store: createIntakeStore(db),

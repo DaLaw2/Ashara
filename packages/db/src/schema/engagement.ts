@@ -165,3 +165,37 @@ export const guaranteeVerdicts = pgTable(
     onePerReport: unique("guarantee_verdicts_one_per_report").on(t.reportId, t.guaranteeId),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// vision_revisions (Engagement context)
+// ---------------------------------------------------------------------------
+// One row per revision of a project's contract after vision v1: who wrote it (the client, from the
+// change or answer message it names, or Ashara, from none), who approved it, which way it moved what
+// Ashara promises, why, its typed operations, and the Liaison's pushback when it held it. An applied
+// revision names the version it wrote; a proposed one awaits the client's confirmation and wrote none.
+// The consistency of each row is CHECKs in the migration.
+
+export const visionRevisions = pgTable(
+  "vision_revisions",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    basedOnVersion: integer("based_on_version").notNull(),
+    version: integer(),
+    author: text().notNull(),
+    approver: text(),
+    direction: text().notNull(),
+    cause: text().notNull(),
+    sourceMessageId: uuid("source_message_id").references(() => clientMessages.id, { onDelete: "cascade" }),
+    confirmedByMessageId: uuid("confirmed_by_message_id").references(() => clientMessages.id, { onDelete: "cascade" }),
+    ops: jsonb().notNull(),
+    pushback: jsonb(),
+    status: text().notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    projectVersionUnique: unique("vision_revisions_project_version_unique").on(t.projectId, t.version),
+  }),
+);

@@ -3,6 +3,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { clientMessages, noOpenStop, projectAtWork, projects, replanRequests } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { VisionRepository } from "./vision.js";
 
@@ -137,8 +138,8 @@ interface AnswerWrite {
   readonly projectId: ProjectId;
   /** Whether the project's first plan existed when the answer was composed. */
   readonly planned: boolean;
-  /** The vision version to append after `basedOnVersion`; every other field is copied from it. */
-  readonly vision: VisionAppend | null;
+  /** The vision version to append after `basedOnVersion` (every other field is copied from it), with its revision record. */
+  readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
   /** A planned project's replanning request: the request recorded (replan_requests) and the report posted, in reply to the answer. */
   readonly replanReport: string | null;
 }
@@ -199,12 +200,12 @@ function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded"
     if (consumed.length === 0) return "already-consumed";
 
     if (write.vision !== null) {
-      const appended = await new VisionRepository(tx).append(write.projectId, write.vision);
+      const appended = await new VisionRepository(tx).append(write.projectId, write.vision.append, write.vision.revision);
       if (appended.kind === "moved") {
         throw new AnswerContextMoved(
           write.answerId,
           write.projectId,
-          `composed against vision v${write.vision.basedOnVersion}, current is ${appended.current === null ? "none" : `v${appended.current}`}`,
+          `composed against vision v${write.vision.append.basedOnVersion}, current is ${appended.current === null ? "none" : `v${appended.current}`}`,
         );
       }
     }

@@ -2,6 +2,7 @@ import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { clientMessages, noOpenStop, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { VisionRepository } from "./vision.js";
 
@@ -81,6 +82,8 @@ interface StackChoiceWrite {
   readonly projectId: ProjectId;
   /** The vision version appended after the one the choice was composed against. */
   readonly vision: VisionAppend;
+  /** The revision record written with it. */
+  readonly revision: RevisionRecord;
   readonly report: string;
 }
 
@@ -98,7 +101,7 @@ export async function recordStackChoice(db: Database, write: StackChoiceWrite): 
       .returning({ id: clientMessages.id });
     if (inserted.length === 0) return "already-reported";
 
-    const appended = await new VisionRepository(tx).append(write.projectId, write.vision);
+    const appended = await new VisionRepository(tx).append(write.projectId, write.vision, write.revision);
     if (appended.kind === "moved") throw new StackChoiceVisionMoved(write.projectId, write.vision.basedOnVersion, appended.current);
     return "recorded";
   });

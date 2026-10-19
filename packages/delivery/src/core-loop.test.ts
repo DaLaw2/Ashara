@@ -387,10 +387,10 @@ describe("CoreLoop first plan", () => {
     );
     await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") } }).runCycle();
 
-    expect(order).toEqual(["stop", "change", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
+    expect(order).toEqual(["stop", "intake", "change", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
-  test("a cycle halted at the spend cap takes the client's stops, answers the client's changes and posts the block, delivered and plan reports still due, and nothing else", async () => {
+  test("a cycle halted at the spend cap takes the client's stops and posts the block, delivered and plan reports still due, and nothing else: a change is read by a model, so it waits", async () => {
     const order: string[] = [];
     const step = (name: string) =>
       vi.fn(async () => {
@@ -401,7 +401,7 @@ describe("CoreLoop first plan", () => {
 
     await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } }).runHaltedCycle();
 
-    expect(order).toEqual(["stop", "change", "block-report", "delivered-report", "report"]);
+    expect(order).toEqual(["stop", "block-report", "delivered-report", "report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
@@ -410,7 +410,6 @@ describe("CoreLoop first plan", () => {
     // waits, after a cap halt, for a full cycle this process never runs. A new step is classified here.
     const classified: Record<string, "halted" | { readonly excluded: string }> = {
       "client-stop": "halted",
-      "client-change": "halted",
       "settled-branches": "halted",
       "block-report": "halted",
       "delivered-report": "halted",

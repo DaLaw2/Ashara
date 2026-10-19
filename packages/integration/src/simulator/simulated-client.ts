@@ -3,8 +3,8 @@ import { describeErrorChain, parseJson } from "@ashara/shared";
 
 /**
  * The simulated client, as a browser on the web client is one: it logs in with its name
- * and access code, keeps the session cookie the server sets, and sends its tender, its stop and
- * its answers to the server's client routes, in process through the composed app's own request
+ * and access code, keeps the session cookie the server sets, and sends its tender, its stop, its
+ * change and its answers to the server's client routes, in process through the composed app's own request
  * handler. It never writes a client message itself, so every seed drives Engagement's client
  * channel through the routes, their validation and their authentication included.
  */
@@ -85,8 +85,12 @@ export class SimulatedClient {
     return this.call(app, "GET", `/client/api/projects/${projectId}/messages`, null, 200, (value) => MessageListSchema.parse(value));
   }
 
-  /** Posts a stop or an answer on one project. */
-  async post(app: ClientRoutes, projectId: string, message: { readonly kind: "stop"; readonly body: string } | { readonly kind: "answer"; readonly body: string; readonly inReplyTo: string }): Promise<ClientReply<null>> {
+  /** Posts a stop, a change or an answer on one project. */
+  async post(
+    app: ClientRoutes,
+    projectId: string,
+    message: { readonly kind: "stop" | "change"; readonly body: string } | { readonly kind: "answer"; readonly body: string; readonly inReplyTo: string },
+  ): Promise<ClientReply<null>> {
     return this.call(app, "POST", `/client/api/projects/${projectId}/messages`, message, 201, () => null);
   }
 

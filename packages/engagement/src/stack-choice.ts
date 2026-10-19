@@ -3,6 +3,7 @@ import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
+import type { RevisionRecord } from "./vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "./vision.js";
 
 // The stack the team chose in Sprint 0, made visible to the client.
@@ -23,6 +24,8 @@ interface DueStackChoice {
 interface StackChoiceWrite {
   readonly projectId: ProjectId;
   readonly vision: VisionAppend;
+  /** The revision that writes it: Ashara's own, applied unapproved since it promises the client nothing new. */
+  readonly revision: RevisionRecord;
   readonly report: string;
 }
 
@@ -115,7 +118,17 @@ export class StackChoiceReports implements LiaisonStackChoices {
         underpins: [],
         changeReason: (key) => `stack chosen by Sprint 0 task ${due.taskId}, recorded as Inferred assumption ${key}`,
       });
-      return { projectId: due.projectId, vision, report: stackChoiceReport(due.statement) };
+      const revision: RevisionRecord = {
+        author: "ashara",
+        sourceMessageId: null,
+        approver: null,
+        // An assumption of how the product is built promises the client nothing more or less.
+        direction: "neutral",
+        cause: "ashara-decision",
+        ops: [{ target: "assumption", action: "add", key: vision.key, direction: "neutral", labelled: null, read: null, statement: due.statement }],
+        pushback: null,
+      };
+      return { projectId: due.projectId, vision, revision, report: stackChoiceReport(due.statement) };
     } catch (err) {
       if (!(err instanceof VisionUnreadable || err instanceof VisionChangeRefused)) throw err;
       throw new StackChoiceVisionUnusable(due.projectId, `vision v${due.vision.version}: ${err.message}`);

@@ -6,6 +6,7 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
+import type { RevisionRecord } from "./vision-language/contract-op.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { Vision, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
@@ -14,7 +15,8 @@ import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 // until it is answered (intake.ts). The Liaison reads each answer once: one that
 // confirms or changes that assumption appends a vision version (versions are
 // append-only) in which the assumption is Stated and carries the answer, the client
-// message id as its provenance. Delivery plans from the current version, so an answer
+// message id as its provenance, with its revision record: the client's, approved by them, one
+// amended assumption. Delivery plans from the current version, so an answer
 // read before the first plan is planned on. One read after it that changes an
 // assumption the plan was built on is recorded as a request to revise the plan, which stops its
 // dispatch, and is reported to the client once. Delivery revises the plan once the work
@@ -46,7 +48,7 @@ interface AnswerWrite {
   readonly answerId: string;
   readonly projectId: ProjectId;
   readonly planned: boolean;
-  readonly vision: VisionAppend | null;
+  readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
   readonly replanReport: string | null;
 }
 
@@ -427,9 +429,17 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
 
   const statement = reading.verdict === "confirms" ? context.assumption.statement : reading.statement;
   const key = context.question.assumptionKey;
-  return {
-    ...base,
-    vision: context.vision.stateAssumption(key, {
+  const revision: RevisionRecord = {
+    author: "client",
+    sourceMessageId: answer.id,
+    approver: "client",
+    // An answer settles an assumption's wording; which way that moves the promise no record decides.
+    direction: "neutral",
+    cause: "client-change",
+    ops: [{ target: "assumption", action: "amend", key, direction: "neutral", labelled: null, read: null, statement }],
+    pushback: null,
+  };
+  const append = context.vision.stateAssumption(key, {
       messageId: answer.id,
       questionMessageId: answer.questionId,
       question: context.question.text,
@@ -442,7 +452,10 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
           ? `The client confirmed this in answer to "${context.question.text}".`
           : `The client's answer to "${context.question.text}" replaced the assumption "${context.assumption.statement}".`,
       changeReason: `client answer ${answer.id} ${reading.verdict === "confirms" ? "confirmed" : "changed"} assumption ${key}; now Stated`,
-    }),
+    });
+  return {
+    ...base,
+    vision: { append, revision },
     // A confirmed assumption leaves the plan as it is; a changed one it was built on does not.
     replanReport: answer.planned && reading.verdict === "changes" ? replanReport(context, statement) : null,
   };

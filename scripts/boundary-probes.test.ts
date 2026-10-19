@@ -50,6 +50,7 @@ const MAP: Readonly<Record<string, PackageMap>> = {
       delivery: [
         "src/answers.ts",
         "src/block-report.ts",
+        "src/client-change.ts",
         "src/intake.ts",
         "src/plan-report.ts",
         "src/plan-report.test.ts",

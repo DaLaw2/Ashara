@@ -1,16 +1,17 @@
 import { z } from "zod";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { ContractDraftSchema, StoredContractSchema, collapseWhitespace, visionGuaranteeOf } from "./vision-language/guarantee.js";
+import { StoredContractSchema, WritableContractSchema, collapseWhitespace, visionGuaranteeOf } from "./vision-language/guarantee.js";
 import type { ContractDraft, StoredContract, VisionExclusion } from "./vision-language/guarantee.js";
+import type { ContractOp } from "./vision-language/contract-op.js";
 import { basisOf } from "./vision-language/index.js";
 import type { InterfaceEntry, VisionGuarantee } from "./vision-language/index.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeSide } from "./vision-language/vision-assumption.js";
 
 // The Vision: a project's vision, versioned and
-// append-only. Engagement alone writes it: intake writes v1, a client's answer and the team's stack
-// choice each append the next version. Every other context reads a version only through
+// append-only. Engagement alone writes it: intake writes v1, a client's answer, a client's correction
+// and the team's stack choice each append the next version. Every other context reads a version only through
 // readVisionVersion, the published reader, never the stored jsonb.
 
 /** A vision version as vision_documents stores it, its jsonb unread. */
@@ -331,12 +332,52 @@ function assertContractHolds(
   }
 }
 
-/** A vision version appended after `basedOnVersion`: every field but these is the base version's. */
+/**
+ * A vision version appended after `basedOnVersion`: every field but these is the base version's. Its
+ * contract is the base version's unless a correction revised it.
+ */
 export interface VisionAppend {
   readonly basedOnVersion: number;
   readonly inferences: readonly AssumptionRecord[];
   readonly openQuestions: readonly unknown[];
+  readonly contract: { readonly kind: "unchanged" } | { readonly kind: "revised"; readonly records: StoredContract };
   readonly changeReason: string;
+}
+
+/** One operation of a correction applied, with the key it acted on, and whether it restored the tender's own words. */
+export interface AppliedOp {
+  readonly op: ContractOp;
+  readonly key: string;
+  readonly cause: "client-change" | "misread";
+}
+
+/** One operation of a correction the contract cannot take as read, with the rule it would break. */
+export interface UnappliedOp {
+  readonly op: ContractOp;
+  readonly reason: string;
+}
+
+/** A correction applied to a version: the next version, the Vision it reads as, and what each operation did. */
+export interface Corrected {
+  readonly append: VisionAppend;
+  readonly next: Vision;
+  readonly applied: readonly AppliedOp[];
+  readonly unapplied: readonly UnappliedOp[];
+}
+
+/** The change message a correction was read from, and every key the project's versions ever used. */
+interface CorrectionSource {
+  readonly messageId: string;
+  readonly body: string;
+  /** Keys are never reused: an added record takes the next number after every key any version held. */
+  readonly usedKeys: ReadonlySet<string>;
+  readonly changeReason: string;
+}
+
+/** The contract and assumptions a correction's operations act on, one operation at a time. */
+interface Working {
+  readonly contract: StoredContract;
+  readonly records: readonly AssumptionRecord[];
 }
 
 /** The vision cannot take the change asked of it without rewriting what the client was told. */
@@ -352,6 +393,9 @@ export class VisionChangeRefused extends Error {
 }
 
 const ASSUMPTION_KEY = /^A(\d+)$/;
+
+/** The words a guarantee withdrawn under the only one the contract holds would leave. */
+const LAST_GUARANTEE = "it would leave the contract with no guarantee, and only a stop ends a project's whole scope";
 
 /**
  * The Vision aggregate: one stored version read whole, and the only way a next version is composed.
@@ -474,6 +518,7 @@ export class Vision {
       basedOnVersion: this.current.version,
       inferences: this.composed([...records, appended]),
       openQuestions: this.questions,
+      contract: { kind: "unchanged" },
       changeReason: assumption.changeReason(key),
     };
   }
@@ -523,8 +568,178 @@ export class Vision {
       // A guarantee resting on it reads client-stated from the next version on: its basis is computed there, never rewritten.
       inferences: this.composed(records.map((other, i) => (i === index ? stated : other))),
       openQuestions: this.questions.filter((question) => typeof question === "string" || question.messageId !== answer.questionMessageId),
+      contract: { kind: "unchanged" },
       changeReason: answer.changeReason,
     };
+  }
+
+  /**
+   * The next version with a client's correction applied, one operation at a time in the order read:
+   * each is held to every rule a version keeps, and one that would break a rule is left out with the
+   * rule it breaks, never the rest with it. A version written before guarantees were holds no keyed
+   * contract records, so no operation applies to it.
+   */
+  correct(ops: readonly ContractOp[], source: CorrectionSource): Corrected {
+    const applied: AppliedOp[] = [];
+    const unapplied: UnappliedOp[] = [];
+    if (this.contract === null || this.records === null) {
+      const reason = "this project's contract was recorded before guarantees were, so it holds no keyed records to change";
+      return { append: this.revisedAppend({ contract: this.contract, records: this.records }, source), next: this, applied, unapplied: ops.map((op) => ({ op, reason })) };
+    }
+    const used = new Set(source.usedKeys);
+    for (const id of [
+      ...this.contract.interface.map((e) => e.id),
+      ...this.contract.guarantees.map((g) => g.id),
+      ...this.contract.exclusions.map((x) => x.id),
+      ...this.current.assumptions.map((a) => a.id),
+    ]) {
+      used.add(id);
+    }
+    let working: Working = { contract: this.contract, records: this.records };
+    for (const op of ops) {
+      try {
+        const step = this.applyOne(op, working, source, used);
+        const contract = StoredContractSchema.safeParse(step.working.contract);
+        if (!contract.success) throw new ContractBroken("contract", z.prettifyError(contract.error));
+        const assumptions = step.working.records.map(assumptionOf);
+        assertUniqueIds("inferences", "assumptions", assumptions.map((a) => a.id));
+        assertContractHolds(this.current.visionText, 0, contract.data, assumptions);
+        working = { contract: contract.data, records: step.working.records };
+        applied.push({ op, key: step.key, cause: step.cause });
+      } catch (err) {
+        if (!(err instanceof ContractBroken)) throw err;
+        unapplied.push({ op, reason: err.detail });
+      }
+    }
+    const append = this.revisedAppend(working, source);
+    const next = Vision.read({
+      projectId: this.current.projectId,
+      version: this.current.version + 1,
+      visionText: this.current.visionText,
+      summary: this.current.summary,
+      scopeBoundaries: [],
+      inferences: working.records,
+      openQuestions: this.questions,
+      contractForm: "guarantees",
+      interface: working.contract.interface,
+      guarantees: working.contract.guarantees,
+      exclusions: working.contract.exclusions,
+    });
+    return { append, next, applied, unapplied };
+  }
+
+  private revisedAppend(
+    working: { readonly contract: StoredContract | null; readonly records: readonly AssumptionRecord[] | null },
+    source: CorrectionSource,
+  ): VisionAppend {
+    return {
+      basedOnVersion: this.current.version,
+      // eslint-disable-next-line no-restricted-syntax -- policy default: a legacy version's unkeyed map takes no correction, and its append is never written (no operation applied)
+      inferences: working.records ?? [],
+      openQuestions: this.questions,
+      contract: working.contract === null ? { kind: "unchanged" } : { kind: "revised", records: working.contract },
+      changeReason: source.changeReason,
+    };
+  }
+
+  /** One operation on the working records; throws ContractBroken when it names a record they do not hold. */
+  private applyOne(
+    op: ContractOp,
+    working: Working,
+    source: CorrectionSource,
+    used: Set<string>,
+  ): { readonly working: Working; readonly key: string; readonly cause: "client-change" | "misread" } {
+    const { contract, records } = working;
+    const correction = { kind: "correction", messageId: source.messageId } as const;
+    const nextKey = (prefix: string): string => {
+      const pattern = new RegExp(`^${prefix}(\\d+)$`);
+      let highest = 0;
+      for (const key of used) {
+        const match = pattern.exec(key);
+        if (match?.[1] !== undefined) highest = Math.max(highest, Number(match[1]));
+      }
+      const key = `${prefix}${highest + 1}`;
+      used.add(key);
+      return key;
+    };
+    const missing = (field: string, what: string, id: string) => new ContractBroken(field, `it holds no ${what} keyed ${id}`);
+    const done = (next: Partial<Working>, key: string, cause: "client-change" | "misread" = "client-change") => ({
+      working: { contract: next.contract ?? contract, records: next.records ?? records },
+      key,
+      cause,
+    });
+    switch (op.op) {
+      case "add-guarantee": {
+        const id = nextKey("G");
+        const guarantee = { id, statement: op.statement, observable: { interface: op.interface, observation: op.observation }, refutedBy: op.refutedBy, source: correction };
+        return done({ contract: { ...contract, guarantees: [...contract.guarantees, guarantee] } }, id);
+      }
+      case "amend-guarantee": {
+        const old = contract.guarantees.find((g) => g.id === op.id);
+        if (old === undefined) throw missing("guarantees", "guarantee", op.id);
+        // A guarantee Ashara read into the tender, put back in the tender's own words, was Ashara's misreading.
+        const basis = visionGuaranteeOf(old, records.map(assumptionOf)).basis;
+        const restores = basis !== "client-stated" && collapseWhitespace(this.current.visionText).includes(collapseWhitespace(op.statement));
+        const amended = {
+          id: op.id,
+          statement: op.statement,
+          observable: { interface: op.interface, observation: op.observation },
+          refutedBy: op.refutedBy,
+          source: restores ? ({ kind: "tender", quote: op.statement } as const) : correction,
+        };
+        return done({ contract: { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? amended : g)) } }, op.id, restores ? "misread" : "client-change");
+      }
+      case "withdraw-guarantee": {
+        const old = contract.guarantees.find((g) => g.id === op.id);
+        if (old === undefined) throw missing("guarantees", "guarantee", op.id);
+        if (contract.guarantees.length === 1) throw new ContractBroken("guarantees", LAST_GUARANTEE);
+        const unpinned = records.map((record) =>
+          record.underpins?.includes(op.id) === true ? { ...record, underpins: record.underpins.filter((id) => id !== op.id) } : record,
+        );
+        // An assumption a client could observe that now underpins nothing is recorded as left out, so
+        // the withdrawn promise is never read as one still kept.
+        const excluded = new Set(contract.exclusions.flatMap((x) => (x.source.kind === "assumption" ? [x.source.id] : [])));
+        const orphans = unpinned.map(assumptionOf).filter((a) => a.kind !== "internal-design" && a.underpins.length === 0 && !excluded.has(a.id));
+        const exclusions = [
+          ...contract.exclusions,
+          ...orphans.map((a) => ({ id: nextKey("X"), text: old.statement, source: { kind: "assumption", id: a.id } as const })),
+        ];
+        return done({ contract: { ...contract, guarantees: contract.guarantees.filter((g) => g.id !== op.id), exclusions }, records: unpinned }, op.id);
+      }
+      case "amend-assumption": {
+        const index = records.map(assumptionOf).findIndex((a) => a.id === op.id);
+        const record = records[index];
+        if (record === undefined) throw missing("inferences", "assumption", op.id);
+        const stated: AssumptionRecord = {
+          ...record,
+          statement: op.statement,
+          status: "Stated",
+          clientAnswer: { messageId: source.messageId, question: "Change request", answer: source.body, verdict: "changes" },
+        };
+        return done({ records: records.map((other, i) => (i === index ? stated : other)) }, op.id);
+      }
+      case "add-exclusion": {
+        const id = nextKey("X");
+        return done({ contract: { ...contract, exclusions: [...contract.exclusions, { id, text: op.text, source: correction }] } }, id);
+      }
+      case "withdraw-exclusion": {
+        if (!contract.exclusions.some((x) => x.id === op.id)) throw missing("exclusions", "exclusion", op.id);
+        return done({ contract: { ...contract, exclusions: contract.exclusions.filter((x) => x.id !== op.id) } }, op.id);
+      }
+      case "add-interface": {
+        const id = nextKey("I");
+        return done({ contract: { ...contract, interface: [...contract.interface, { id, text: op.text, source: correction }] } }, id);
+      }
+      case "amend-interface": {
+        if (!contract.interface.some((e) => e.id === op.id)) throw missing("interface", "interface entry", op.id);
+        const entries = contract.interface.map((e) => (e.id === op.id ? { id: op.id, text: op.text, source: correction } : e));
+        return done({ contract: { ...contract, interface: entries } }, op.id);
+      }
+      case "withdraw-interface": {
+        if (!contract.interface.some((e) => e.id === op.id)) throw missing("interface", "interface entry", op.id);
+        return done({ contract: { ...contract, interface: contract.interface.filter((e) => e.id !== op.id) } }, op.id);
+      }
+    }
   }
 }
 
@@ -574,7 +789,7 @@ export function visionWritable(
   const form = field(ContractFormSchema, fields.contract.form, "contractForm");
   const columns = { interface: fields.contract.interface, guarantees: fields.contract.guarantees, exclusions: fields.contract.exclusions };
   let contract: StoredContract | null = null;
-  if (form === "guarantees") contract = field(ContractDraftSchema, columns, "contract");
+  if (form === "guarantees") contract = field(WritableContractSchema, columns, "contract");
   else field(NoContractSchema, columns, "contract");
   try {
     const assumptions = records.map(assumptionOf);
