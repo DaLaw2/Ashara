@@ -150,7 +150,8 @@ class PlanReportUnfounded extends Error {
 
 // What a revision did, as Delivery records it on plan_revisions.summary (planning replan.ts).
 const revisionWorkFields = {
-  newTasks: z.array(z.string().min(1)).min(1),
+  // Empty when a correction left nothing to plan again (a withdrawn guarantee, an assumption no check rests on).
+  newTasks: z.array(z.string().min(1)),
   newCheckTasks: z.number().int().min(0),
   // Absent where a stored summary does not count its review tasks; never read as 0.
   newReviewTasks: z.number().int().min(0).max(1).optional(),
@@ -254,14 +255,14 @@ function firstPlanReport(
   const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
-    // The client was told each changing answer changes the plan (answers.ts); this is where they read what each changed.
+    // The client was told each correction changes the plan (answers.ts, the impact note); this is where they read what each changed.
     ...(changes.length === 0
       ? []
       : [
           changes.length === 1
-            ? `This plan already takes in your answer. The team revised the plan it had made before your answer arrived, ` +
+            ? `This plan already takes in your message. The team revised the plan it had made before your message arrived, ` +
               `before any of that plan's work started. ${changeSentence(changes[0])}`
-            : `This plan already takes in your ${changes.length} answers that changed it. The team revised the plan it had ` +
+            : `This plan already takes in your ${changes.length} messages that changed it. The team revised the plan it had ` +
               `made before they arrived, before any of that plan's work started:\n` +
               changes.map((change) => `- ${changeSentence(change)}`).join("\n"),
         ]),
@@ -303,9 +304,9 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
   const paragraphs =
     "changes" in summary
       ? summary.changes.length === 1
-        ? [`The team has revised the plan for this project for your answer. ${changeSentence(summary.changes[0])}`]
+        ? [`The team has revised the plan for this project for your message. ${changeSentence(summary.changes[0])}`]
         : [
-            `The team has revised the plan for this project for your ${summary.changes.length} answers that changed it:\n` +
+            `The team has revised the plan for this project for your ${summary.changes.length} messages that changed it:\n` +
               summary.changes.map((change) => `- ${changeSentence(change)}`).join("\n"),
           ]
       : [
@@ -321,10 +322,14 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
     );
   }
   paragraphs.push(
-    `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,
-    `Before any of them starts, team members who do not do them write the checks that decide whether each is done ` +
-      `(${plural(summary.newCheckTasks, "check task")}).`,
-    revisionReviewSentence(summary.newReviewTasks),
+    ...(summary.newTasks.length === 0
+      ? [`No new task is needed for this: nothing it changed is left for the team to build or check again.`]
+      : [
+          `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,
+          `Before any of them starts, team members who do not do them write the checks that decide whether each is done ` +
+            `(${plural(summary.newCheckTasks, "check task")}).`,
+          revisionReviewSentence(summary.newReviewTasks),
+        ]),
   );
   const setAside = summary.supersededTasks.length + summary.supersededOther;
   paragraphs.push(

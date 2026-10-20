@@ -32,7 +32,7 @@ function logIntake(logger: Logger, outcome: IntakeOutcome): void {
 function logAnswer(logger: Logger, outcome: AnswerOutcome): void {
   if (outcome.kind === "stated") {
     const replan = outcome.replanRequested
-      ? "; the plan relied on it, so the project is not dispatched until its plan is revised"
+      ? "; the plan relied on it, so the tasks citing it are held until its plan is revised"
       : "";
     logger.info(
       "delivery.answer-stated",
@@ -183,14 +183,15 @@ export class CoreLoop {
 
     // Then the client's answers, before planning: one read now appends the vision version
     // the first plan is made from. One that changes an assumption an existing plan was
-    // built on records a request to revise it (replan_requests), and the gate below does not dispatch
-    // the tasks of a project awaiting that revision (ProjectRepository.listActiveIds) until the replanning
-    // step revises its plan.
+    // built on is a correction: it holds the tasks citing that assumption (correction_holds), which the
+    // gate below never dispatches, while the project's other tasks go on, until the replanning step
+    // replaces them.
     const answers = await this.readAnswers();
     if (answers !== null) return this.haltAtCap(answers);
     // Then the client's changes of direction, each read into operations on the contract in force and
-    // answered with its impact note this cycle: applied as the next vision version, or held for the
-    // client's confirmation when the Liaison pushes back.
+    // answered with its impact note this cycle: applied as the next vision version, holding the tasks
+    // citing a key it affects as answers do, or held for the client's confirmation when the Liaison
+    // pushes back.
     const changes = await this.stepThenCap("client-change", () => deps.clientChanges.runPending());
     if (changes.kind === "stop") return this.haltAtCap(changes.stop);
     for (const outcome of changes.outcomes) logChange(deps.logger, outcome);
@@ -222,16 +223,17 @@ export class CoreLoop {
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(deps.logger, outcome);
     // Answers posted while the first plan was being written are read before any of its tasks is
-    // dispatched: one that changes an assumption the plan relied on flags the project, the
-    // revision below replans it in this cycle, and the gate never dispatches the plan it replaces.
+    // dispatched: one that changes an assumption the plan relied on holds the tasks citing it, the
+    // revision below replaces them in this cycle, and the gate never dispatches the work it replaces.
     const afterPlan = await this.readAnswers();
     if (afterPlan !== null) return this.haltAtCap(afterPlan);
-    // Then a revision of each flagged plan, and a repair of each plan a given-up task stopped (the
-    // gate dispatches neither project's tasks meanwhile, so no dependent of a
-    // given-up task waits on anyone), whose project has no task in progress: the previous
-    // cycle awaited every task it dispatched, so in-flight work has finished before its plan is
-    // revised. Only Tasks count: the plan's Epic stays InProgress while any child is open, and the
-    // revision supersedes it with the open tasks. The Liaison's report on the revision follows with the other planning reports.
+    // Then a revision for each project's awaited corrections, once no task citing a key they affect
+    // is in progress, replacing only that work; and a repair of each plan a given-up task stopped
+    // (the gate dispatches none of that project's tasks meanwhile, so no dependent of a given-up task
+    // waits on anyone), once no task of it is in progress: the previous cycle awaited every task it
+    // dispatched, so in-flight work has finished before its plan is revised. Only Tasks count: the
+    // plan's Epic stays InProgress while any child is open, and the revision supersedes it with the
+    // open tasks it held. The Liaison's report on the revision follows with the other planning reports.
     const replans = await this.stepThenCap("replan", () => deps.replanning.runPending());
     if (replans.kind === "stop") return this.haltAtCap(replans.stop);
     for (const outcome of replans.outcomes) logReplan(deps.logger, outcome);

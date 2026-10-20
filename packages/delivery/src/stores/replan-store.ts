@@ -45,9 +45,10 @@ export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logge
           return {
           projectId: row.projectId,
           projectName: row.projectName,
-          changesAwaited: row.changesAwaited,
+          correctionsAwaited: row.correctionsAwaited,
           repairsAwaited: row.repairsAwaited,
           vision: row.vision,
+          dependencies: await workItems.listDependenciesByProject(row.projectId),
           rosterRows: await latestRosterRoles(db, row.projectId),
           replanAttempts: row.replanAttempts,
           replanLastError: row.replanLastError,
@@ -69,14 +70,14 @@ export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logge
     },
     async writeRevision(write) {
       // The supersession and the bulk-plan path run inside the locked revision transaction, so
-      // the superseded items, the new items with their edges and owners, the revision record and the answers and repairs it took in commit together.
+      // the superseded items, the new items with their edges and owners, the revision record and the corrections and repairs it took in commit together.
       return withPlanRevisionTransaction(
         db,
         {
           projectId: write.projectId,
           revision: write.revision,
           visionVersion: write.visionVersion,
-          answers: write.answers,
+          corrections: write.corrections,
           repaired: write.repaired,
           summary: write.summary,
           events: write.events,

@@ -206,10 +206,10 @@ async function haltKindOf(projectId: ProjectId): Promise<string | null> {
   return z.array(z.object({ kind: z.string() })).parse(result.rows)[0]?.kind ?? null;
 }
 
-/** The answers whose plan revision the project awaits (replan_requests), oldest first. */
+/** The client messages whose correction's plan revision the project awaits (correction_holds), oldest first. */
 async function awaitedChangesOf(projectId: ProjectId): Promise<string[]> {
   const result = await db.execute(sql`
-    SELECT answer_id AS "answerId" FROM replan_requests WHERE project_id = ${projectId} AND plan_revision_id IS NULL ORDER BY created_at`);
+    SELECT requested_by AS "answerId" FROM correction_holds WHERE project_id = ${projectId} AND plan_revision_id IS NULL ORDER BY created_at`);
   return z.array(z.object({ answerId: z.string() })).parse(result.rows).map((row) => row.answerId);
 }
 
@@ -248,7 +248,7 @@ beforeEach(() => {
 afterAll(async () => {
   const pattern = `${NAME_PREFIX}%`;
   const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
-  await db.execute(sql`DELETE FROM replan_requests WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM correction_holds WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
@@ -318,7 +318,7 @@ describe("the client's answers", () => {
     expect(await awaitedChangesOf(projectId)).toEqual([]);
   });
 
-  test("an answer after the first plan that changes an assumption it was built on is reported once and stops dispatch", async () => {
+  test("an answer after the first plan that changes an assumption it was built on is reported once and holds only the work citing it", async () => {
     const { projectId, tenderId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
@@ -348,7 +348,16 @@ describe("the client's answers", () => {
       clientAnswer: { messageId: answerId, verdict: "changes" },
     });
     expect(await awaitedChangesOf(projectId)).toEqual([answerId]);
-    expect(await projectRepo.listActiveIds()).not.toContain(projectId);
+    // Only the work citing A1 is held: the review, which cites every item, is parked; the task citing
+    // G1 alone stays Pending, and the project still dispatches.
+    expect(await projectRepo.listActiveIds()).toContain(projectId);
+    const tasks = await db.execute(sql`
+      SELECT task_spec->>'origin' AS origin, status, blocked_reason->>'source' AS source FROM work_items
+      WHERE project_id = ${projectId} AND task_spec->>'origin' IN ('review', 'decomposition') ORDER BY task_spec->>'origin'`);
+    expect(tasks.rows).toEqual([
+      { origin: "decomposition", status: "Pending", source: null },
+      { origin: "review", status: "Blocked", source: "correction_pending" },
+    ]);
     // Beside intake's report of the unasked assumptions, in reply to the tender,
     // and the first-plan report, in reply to nothing.
     const reports = (await new ClientMessageRepository(db).listByProject(projectId)).filter(

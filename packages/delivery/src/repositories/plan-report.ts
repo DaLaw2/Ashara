@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
-import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange, projectHalted } from "@ashara/db";
+import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingCorrection, projectHalted } from "@ashara/db";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
@@ -38,7 +38,7 @@ interface RevisionBeforeReport {
   readonly revisionId: string;
   readonly revision: number;
   readonly summary: unknown;
-  /** The client answers recorded as taken in by it (replan_requests). */
+  /** The client corrections recorded as taken in by it (correction_holds). */
   readonly answersTaken: number;
 }
 
@@ -115,7 +115,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
       and(
         projectReportsPlans(),
         isNotNull(projects.firstPlannedAt),
-        sql`NOT ${pendingChange(projects.id)}`,
+        sql`NOT ${pendingCorrection(projects.id)}`,
         unreported("first-plan"),
         noOpenStop(projects.id),
       ),

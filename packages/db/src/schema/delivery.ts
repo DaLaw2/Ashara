@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, jsonb, integer, unique } from "drizzle-orm/pg-core";
+import { pgTable, primaryKey, uuid, varchar, text, jsonb, integer, unique } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
 import { clientMessages } from "./engagement.js";
@@ -154,8 +154,8 @@ export const planRevisions = pgTable(
     revision: integer().notNull(),
     visionVersion: integer("vision_version").notNull(),
     /**
-     * The earliest client answer it took in, which its report replies to; null for a plan repair.
-     * Every answer it took in is a replan_requests row naming it.
+     * The earliest client message whose correction it took in, which its report replies to; null for
+     * a plan repair. Every correction it took in is a correction_holds row naming it.
      */
     requestedBy: uuid("requested_by").references(() => clientMessages.id, { onDelete: "cascade" }),
     /** 'client_change' or 'repair'. */
@@ -186,18 +186,29 @@ export const planRepairs = pgTable("plan_repairs", {
 });
 
 // ---------------------------------------------------------------------------
-// replan_requests: one row per client answer that changed an assumption the plan
-// was built on. While a row has no plan_revision_id the project awaits a revision and none of its
-// tasks is dispatched; the revision that took the answer in is recorded on it.
+// correction_holds: one row per client correction applied to a planned project (a change, a
+// confirmed proposal, an answer that changed an assumption), naming the guarantee and assumption
+// keys it affects. While a row has no plan_revision_id the tasks citing one of them are held and the
+// project's other work goes on; the revision that replaced the held work is recorded on it.
 // ---------------------------------------------------------------------------
 
-export const replanRequests = pgTable("replan_requests", {
-  answerId: uuid("answer_id")
-    .primaryKey()
-    .references(() => clientMessages.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  planRevisionId: uuid("plan_revision_id").references(() => planRevisions.id, { onDelete: "cascade" }),
-  createdAt: timestamptz("created_at").notNull().defaultNow(),
-});
+export const correctionHolds = pgTable(
+  "correction_holds",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** The vision version the correction wrote (vision_revisions.version). */
+    visionVersion: integer("vision_version").notNull(),
+    /** The client message the correction answers: its change, its confirmation or its answer. */
+    requestedBy: uuid("requested_by")
+      .notNull()
+      .references(() => clientMessages.id, { onDelete: "cascade" }),
+    affected: text().array().notNull(),
+    planRevisionId: uuid("plan_revision_id").references(() => planRevisions.id, { onDelete: "cascade" }),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.projectId, t.visionVersion] }),
+  }),
+);

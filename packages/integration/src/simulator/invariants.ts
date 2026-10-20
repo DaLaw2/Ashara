@@ -58,6 +58,8 @@ const itemRow = z.object({
   ownerRoleId: z.string().nullable(),
   dispatchCount: z.number(),
   infrastructureFaults: z.number(),
+  /** The vision keys its task_spec's sources cite; none when it records no sources. */
+  cites: z.array(z.string()),
 });
 type ItemRow = z.infer<typeof itemRow>;
 
@@ -87,6 +89,8 @@ const checkRow = z.object({
 });
 const eventRow = z.object({ seq: z.number(), eventType: z.string(), workItemId: z.string().nullable() });
 const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
+/** A client correction recorded as holding work: the vision version it wrote and the keys it affects. */
+const correctionRow = z.object({ visionVersion: z.number(), affected: z.array(z.string()) });
 
 interface MainCommit {
   readonly commit: string;
@@ -101,6 +105,8 @@ export interface Snapshot {
   readonly checks: ReadonlyArray<z.infer<typeof checkRow>>;
   /** Every problem a suite review's recorded findings route to a check task, as recorded. */
   readonly reviewFindings: ReadonlyArray<z.infer<typeof findingRow>>;
+  /** Every client correction recorded as holding work, released or not (I2's correction clause). */
+  readonly corrections: ReadonlyArray<z.infer<typeof correctionRow>>;
   readonly spendUsd: number;
   readonly unrecordedCalls: number;
   readonly events: ReadonlyArray<z.infer<typeof eventRow>>;
@@ -143,7 +149,9 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
         SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
                task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit", merge_kind AS "mergeKind",
                owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount",
-               infrastructure_faults AS "infrastructureFaults"
+               infrastructure_faults AS "infrastructureFaults",
+               COALESCE((SELECT json_agg(s->>'id') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(task_spec->'sources') = 'array'
+                 THEN task_spec->'sources' ELSE '[]'::jsonb END) s), '[]'::json) AS cites
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
     ).rows,
   );
@@ -170,6 +178,12 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
         SELECT f.check_task_id AS "checkTaskId", p.problem->>'problem' AS problem
         FROM suite_review_findings f, jsonb_array_elements(f.problems) AS p(problem)
         WHERE f.project_id = ${projectId} ORDER BY f.created_at, f.id`)
+    ).rows,
+  );
+  const corrections = z.array(correctionRow).parse(
+    (
+      await db.execute(sql`
+        SELECT vision_version AS "visionVersion", affected FROM correction_holds WHERE project_id = ${projectId} ORDER BY vision_version`)
     ).rows,
   );
   const [spend] = z.array(z.object({ spend: z.coerce.number(), unrecorded: z.coerce.number() })).parse(
@@ -199,6 +213,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     episodes,
     checks,
     reviewFindings,
+    corrections,
     spendUsd: spend.spend,
     unrecordedCalls: spend.unrecorded,
     events,
@@ -452,6 +467,21 @@ export function checkSnapshot(
     const source = sourceOf(item.blockedReason);
     if (blockedReasonOf(item.blockedReason) === null) {
       add("I2", `${item.title}:${source ?? "none"}`, `task "${item.title}" is Blocked (${source ?? "no reason"}) with no exit the loop takes`);
+    }
+  }
+  // I2's correction clause: a client's correction holds only the tasks citing a key it affects; a
+  // task held for one that cites none of them waits on a revision that has no reason to touch it.
+  for (const item of snapshot.items) {
+    const reason = item.status === "Blocked" ? blockedReasonOf(item.blockedReason) : null;
+    if (reason?.source !== "correction_pending") continue;
+    const correction = snapshot.corrections.find((each) => each.visionVersion === reason.visionVersion);
+    if (correction === undefined || !item.cites.some((key) => correction.affected.includes(key))) {
+      add(
+        "I2",
+        `held-unaffected:${item.title}`,
+        `task "${item.title}" (citing ${item.cites.join(", ") || "nothing"}) is held for the correction of vision v${reason.visionVersion}, ` +
+          (correction === undefined ? "which records no hold" : `which affects only ${correction.affected.join(", ")}`),
+      );
     }
   }
   for (const episode of context.final ? snapshot.episodes : []) {

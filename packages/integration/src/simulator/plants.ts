@@ -1,5 +1,6 @@
 import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
+import { correctionHoldsWholePlan } from "./correction-plants.js";
 import { intakeSecondReadingDropped } from "./intake-plants.js";
 import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
@@ -76,7 +77,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - suite-review-bound-ignored: the reviews naming a check task are read as at most one, so a check
  *   task is reopened on every review that names it (W3, and W2's bound clause);
  * - review-loop-unbounded: both of the last two and the ledger's: the review loop has no exit at all
- *   (W4 under the liveness profile, and W1).
+ *   (W4 under the liveness profile, and W1);
+ * - correction-holds-whole-plan: a client's correction parks every task not yet started, not only
+ *   the ones citing a key it affects (I2's correction clause).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -106,6 +109,7 @@ export const MUTATIONS = [
   "review-count-reset",
   "suite-review-bound-ignored",
   "review-loop-unbounded",
+  "correction-holds-whole-plan",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -145,6 +149,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "review-count-reset": { bypassed: [], queries: reviewCountReset, code: null },
   "suite-review-bound-ignored": { bypassed: [], queries: suiteReviewBoundIgnored, code: null },
   "review-loop-unbounded": { bypassed: [], queries: reviewLoopUnbounded, code: null },
+  "correction-holds-whole-plan": { bypassed: [], queries: correctionHoldsWholePlan, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

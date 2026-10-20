@@ -7,7 +7,7 @@ import {
   guaranteeEvidence,
   noOpenAnswer,
   noOpenStop,
-  pendingChange,
+  pendingCorrection,
   pendingRepair,
   projectAtWork,
   projectBlocks,
@@ -34,7 +34,7 @@ import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 /** Every condition of readiness, on the projects row in scope. */
 const readyForAcceptance = sql`(${projectAtWork()}
   AND ${projects.firstPlannedAt} IS NOT NULL
-  AND NOT ${pendingChange(projects.id)}
+  AND NOT ${pendingCorrection(projects.id)}
   AND NOT ${pendingRepair(projects.id)}
   AND ${noOpenStop(projects.id)}
   AND ${noOpenAnswer()}

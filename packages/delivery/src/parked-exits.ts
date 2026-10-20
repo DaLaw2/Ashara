@@ -14,7 +14,8 @@ import type { TargetPathSource } from "./orphan-merge.js";
 // cycle: a merged task whose merge record was not written has the record written again, then
 // Completed; a crash orphan the startup reconciler could not settle has main read again, then
 // Completed with its merge or back to Pending; an infrastructure block from a legacy row goes back
-// to Pending at once; any other block (from a legacy row, or with no reason) has no cause that
+// to Pending at once; a task a client's correction holds waits for the correction's plan revision,
+// which supersedes it; any other block (from a legacy row, or with no reason) has no cause that
 // clears by itself, so the task is given up and its plan repaired.
 // Shared blockedExitOf decides which is which.
 
@@ -33,7 +34,7 @@ interface ParkedExitDeps {
 /**
  * Takes the exit of every Blocked task of an active project, publishing its events: a
  * merge_unrecorded task is Completed once its merge record is written, an infrastructure block is
- * released to Pending, and any other block is given up. A project whose Blocked rows do not parse
+ * released to Pending, a correction_pending task stays for its revision, and any other block is given up. A project whose Blocked rows do not parse
  * is skipped here: the gate blocks it this same cycle. Any other failure is that project's,
  * contained to it (containEach). Returns how many tasks left Blocked.
  */
@@ -72,6 +73,10 @@ async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promi
         break;
       case "requeue":
         left = await release(deps, item);
+        break;
+      case "await-revision":
+        // Held by a client's correction: the revision the replanning step writes for it supersedes it.
+        left = false;
         break;
     }
     if (left) released++;

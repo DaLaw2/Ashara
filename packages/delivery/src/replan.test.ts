@@ -66,8 +66,9 @@ describe("Replanner: the environment judgement asks for a judge of the environme
         {
           projectId: PROJECT,
           projectName: "Key store",
-          changesAwaited: [],
+          correctionsAwaited: [],
           repairsAwaited: [given.id],
+          dependencies: [],
           vision: { projectId: PROJECT, version: 1, visionText: "A key store.", summary: "A key store.", scopeBoundaries: ["In: storing keys"], inferences: [], openQuestions: [], contractForm: "scope-lines", interface: [], guarantees: [], exclusions: [] },
           rosterRows: ROSTER_ROWS,
           replanAttempts: 0,

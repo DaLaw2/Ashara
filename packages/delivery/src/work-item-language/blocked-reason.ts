@@ -297,6 +297,21 @@ const orphanUnreconciledSchema = z.object({
 });
 
 /**
+ * The task cites a key a client's correction affects (vision `visionVersion`, correction_holds), and
+ * had not started when the correction was recorded: it is held, never dispatched, while the rest of
+ * the project goes on. `affected` names the affected keys it cites. Its exit is automatic: the
+ * correction's plan revision, which the loop writes on its own (Replanner), supersedes it; the
+ * revision's attempt and review bounds block the project, never the task, when it cannot be written.
+ */
+const correctionPendingSchema = z.object({
+  source: z.literal("correction_pending"),
+  visionVersion: z.number().int().min(2),
+  affected: z.array(z.string().min(1)).min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * The task was open (not started, Blocked or Failed) when a revision of the plan replaced it: the
  * client changed what is built, or a task was given up and the remaining work was
  * re-planned around it (a plan repair). It is Abandoned and never dispatched. Written
@@ -361,6 +376,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   orphanUnreconciledSchema,
+  correctionPendingSchema,
   supersededSchema,
   acceptanceFailedSchema,
   apiSchema,
@@ -399,6 +415,7 @@ export const BLOCKED_REASON_SOURCES = [
   "dependency_unsatisfiable",
   "merge_unrecorded",
   "orphan_unreconciled",
+  "correction_pending",
   "superseded",
   "acceptance_failed",
   "api",
@@ -445,6 +462,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "orphan_unreconciled":
+    case "correction_pending":
     case "superseded":
     case "acceptance_failed":
     case "api":
@@ -462,18 +480,20 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * loop itself writes it again each cycle. `read-main`: main is read for the task's merge, then to
  * Completed with the merge found or to Pending when main holds none; main still unreadable stays
  * Blocked for the next cycle. `requeue`: back to Pending at once, uncharged: an
- * infrastructure fault is not the task's. `give-up`: the cause cannot clear by itself, so the task
- * is given up (Abandoned) and its plan repaired.
+ * infrastructure fault is not the task's. `await-revision`: it stays Blocked until the plan revision
+ * the loop writes for the correction holding it supersedes it. `give-up`: the cause cannot clear by
+ * itself, so the task is given up (Abandoned) and its plan repaired.
  */
 type BlockedExit =
   | { readonly kind: "merge-recorded"; readonly mergeCommit: string; readonly mergeKind: MergeKind | null }
   | { readonly kind: "read-main" }
   | { readonly kind: "requeue" }
+  | { readonly kind: "await-revision" }
   | { readonly kind: "give-up" };
 
 /**
- * The exit of a Blocked item's stored reason. Only merge_unrecorded and orphan_unreconciled are
- * written on Blocked items; every other source on a Blocked row is a legacy row's (or is no Blocked
+ * The exit of a Blocked item's stored reason. Only merge_unrecorded, orphan_unreconciled and
+ * correction_pending are written on Blocked items; every other source on a Blocked row is a legacy row's (or is no Blocked
  * reason at all: task_failed, orchestrator_error, replan, failure_given_up, superseded), as is a
  * Blocked item with no reason. None of those waits: an infrastructure fault is requeued, anything
  * else is given up.
@@ -487,6 +507,8 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
       return { kind: "read-main" };
     case "environment_unavailable":
       return { kind: "requeue" };
+    case "correction_pending":
+      return { kind: "await-revision" };
     case "owner_unresolved":
     case "environment_undefined":
     case "checks_stale":

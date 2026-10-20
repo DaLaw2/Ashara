@@ -122,20 +122,6 @@ export function planningVisionOf(stored: StoredVision): PlanningVision {
   };
 }
 
-/** A change the client's answer made: their question, their words and what work now proceeds on. */
-interface StatedChange {
-  readonly question: string;
-  readonly answer: string;
-  readonly decision: string;
-}
-
-/** The change the answer `answerId` made, as a Stated assumption of the vision carries it; null when none does. */
-export function statedChangeOf(stored: StoredVision, answerId: string): StatedChange | null {
-  const stated = readVisionVersion(stored).assumptions.find((a) => a.status === "Stated" && a.clientAnswer?.messageId === answerId);
-  if (stated === undefined || stated.clientAnswer === null) return null;
-  return { question: stated.clientAnswer.question, answer: stated.clientAnswer.answer, decision: stated.statement };
-}
-
 /** An assumption the vision holds without a key of its own: a worker could not be told which one it may not contradict. */
 class AssumptionUnkeyed extends Error {
   constructor(

@@ -18,9 +18,10 @@ import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 // message id as its provenance, with its revision record: the client's, approved by them, one
 // amended assumption. Delivery plans from the current version, so an answer
 // read before the first plan is planned on. One read after it that changes an
-// assumption the plan was built on is recorded as a request to revise the plan, which stops its
-// dispatch, and is reported to the client once. Delivery revises the plan once the work
-// in progress has finished (planning replan.ts), taking in every such answer recorded, and the Liaison reports the revision, naming each.
+// assumption the plan was built on is a correction, taking the path a change message's does: it
+// holds only the tasks citing that assumption (Delivery's hold), the rest of the plan goes on, and it
+// is reported to the client once. Delivery replaces the held work once none of it is in progress
+// (planning replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
 const MAX_ANSWER_ATTEMPTS = 3;
@@ -65,7 +66,7 @@ export interface AnswerStore {
   openAnswer(answerId: string): Promise<OpenAnswer | null>;
   /**
    * Consumes the answer and, together with it, appends the vision version and
-   * records the request to revise the plan, with its report; an answer already consumed
+   * holds the work citing the assumption it changed, with its report; an answer already consumed
    * gets nothing new. A write composed against a vision version or a plan state
    * that is no longer current writes nothing and returns "moved".
    */
@@ -225,8 +226,9 @@ function replanReport(context: AnswerContext, statement: string): string {
     `Your answer to "${context.question.text}" changes an assumption the current plan was built on.`,
     `The plan assumed: ${context.assumption.statement}`,
     `Work now proceeds on: ${statement}`,
-    `The plan has to be revised for this change. No new work on this project starts until it is: work already ` +
-      `running finishes first, then the team revises the plan, and you will be told what changes.`,
+    `The plan has to be revised for this change. Only the work that rests on it waits: work on it already ` +
+      `running finishes first, then the team revises that part of the plan, and you will be told what changes. ` +
+      `The rest of the work goes on meanwhile.`,
   ].join("\n\n");
 }
 

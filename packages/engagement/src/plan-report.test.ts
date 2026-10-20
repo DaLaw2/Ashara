@@ -119,7 +119,7 @@ describe("first-plan report", () => {
     expect(folded).toEqual([["rev-2"]]);
     expect(revisionPosts).toEqual([]);
     expect(posted[0]).toContain("split into 6 tasks for what you asked for.");
-    expect(posted[0]).toContain(`This plan already takes in your answer. The team revised the plan`);
+    expect(posted[0]).toContain(`This plan already takes in your message. The team revised the plan`);
     expect(posted[0]).toContain(`Because you said "Keys contain no whitespace.", work proceeds on: Keys are non-empty and contain no whitespace.`);
     // Nothing of the replaced plan is described: the client never saw it.
     expect(posted[0]).not.toMatch(/Store keys without newlines|set aside/);
@@ -140,7 +140,7 @@ describe("first-plan report", () => {
     await reports.runPending();
 
     expect(blocked).toEqual([]);
-    expect(posted[0]).toContain("This plan already takes in your 2 answers that changed it.");
+    expect(posted[0]).toContain("This plan already takes in your 2 messages that changed it.");
     expect(posted[0]).toContain(`- Because you said "Count words like wc does.", work proceeds on: Words are counted as wc counts them.`);
     expect(posted[0]).toContain(`- Because you said "Use Python 3.", work proceeds on: The tool is written in Python 3.`);
   });
@@ -225,7 +225,7 @@ describe("plan revision report", () => {
 
     expect(posted).toHaveLength(1);
     const body = posted[0]?.body ?? "";
-    expect(body).toMatch(/^The team has revised the plan for this project for your answer\. Because you said "The hill studio opens first\.", work proceeds on: The hill studio opens first\./);
+    expect(body).toMatch(/^The team has revised the plan for this project for your message\. Because you said "The hill studio opens first\.", work proceeds on: The hill studio opens first\./);
     expect(body).toContain("The team will now do 1 task:\n- Open hill studio bookings");
     expect(body).toContain("set aside and will not be done as planned:\n- Open harbour studio bookings");
     expect(body).toContain("1 task already finished stays done");
@@ -233,6 +233,25 @@ describe("plan revision report", () => {
     // Recorded before review tasks were counted: the review is told as not on record, never asserted.
     expect(body).toContain("The record of this revision does not say whether a team member who wrote none of those checks reviews them");
     expect(body).not.toContain("reads them all together");
+  });
+
+  test("a correction that left nothing to plan again is reported with no new task", async () => {
+    const { reports, posted } = revisionReports({
+      changes: [{ answer: "Drop the class list.", decision: "G1 is withdrawn." }],
+      newTasks: [],
+      newCheckTasks: 0,
+      newReviewTasks: 0,
+      newEnvironmentTask: false,
+      supersededTasks: ["List classes"],
+      supersededOther: 1,
+      keptCompleted: 0,
+    });
+
+    expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
+    const body = posted[0]?.body ?? "";
+    expect(body).toContain("No new task is needed for this");
+    expect(body).not.toContain("The team will now do");
+    expect(body).toContain("set aside and will not be done as planned:\n- List classes");
   });
 
   test("states the review of the checks only when the revision records its review task", async () => {
@@ -277,7 +296,7 @@ describe("plan revision report", () => {
 
     expect(blocked).toEqual([]);
     const body = posted[0]?.body ?? "";
-    expect(body).toContain("for your 2 answers that changed it:");
+    expect(body).toContain("for your 2 messages that changed it:");
     expect(body).toContain(`- Because you said "The hill studio opens first.", work proceeds on: The hill studio opens first.`);
     expect(body).toContain(`- Because you said "Bookings close at 18:00.", work proceeds on: Bookings close at 18:00.`);
   });

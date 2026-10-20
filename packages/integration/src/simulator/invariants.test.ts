@@ -94,6 +94,7 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
     episodes: [],
     checks: [],
     reviewFindings: [],
+    corrections: [],
     spendUsd: 0,
     unrecordedCalls: 0,
     events: [],
@@ -110,13 +111,24 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
 describe("a state with no exit", () => {
   const task = (status: string, blockedReason: unknown): Snapshot["items"][number] => ({
     id: "impl", title: "Deliver b1", status, level: "Task", workKind: "implementation", origin: null, checksFor: null, blockedReason,
-    mergeCommit: null, mergeKind: null, ownerRoleId: OWNER, dispatchCount: 1, infrastructureFaults: 0,
+    mergeCommit: null, mergeKind: null, ownerRoleId: OWNER, dispatchCount: 1, infrastructureFaults: 0, cites: [],
   });
 
   it("names a Blocked task whose reason no exit of the loop reads (I2)", () => {
     const stranded = plantedSnapshot([task("Blocked", { source: "planted-no-such-source" })]);
     const keys = checkSnapshot(4, stranded, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
     expect(keys).toEqual(["I2:Deliver b1:none"]);
+  });
+
+  it("names a task held for a correction that affects none of the keys it cites (I2)", () => {
+    const held = (cites: string[]): Snapshot["items"][number] => ({
+      ...task("Blocked", { source: "correction_pending", visionVersion: 2, affected: ["G2"], reason: "held" }),
+      title: `Deliver ${cites.join("+")}`,
+      cites,
+    });
+    const snapshot = { ...plantedSnapshot([held(["G2"]), held(["G1"]), held(["G1", "G2"])]), corrections: [{ visionVersion: 2, affected: ["G2"] }] };
+    const keys = checkSnapshot(4, snapshot, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
+    expect(keys).toEqual(["I2:held-unaffected:Deliver G1"]);
   });
 
   it("names every non-terminal state of a run that made no progress (I8)", () => {

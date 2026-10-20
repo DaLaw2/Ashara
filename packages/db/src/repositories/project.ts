@@ -94,12 +94,12 @@ export const pendingRepair = (projectId: AnyColumn) =>
   sql`EXISTS (SELECT 1 FROM plan_repairs pr WHERE pr.project_id = ${projectId} AND pr.plan_revision_id IS NULL)`;
 
 /**
- * The project awaits a plan revision for a client's change: an answer that changed
- * an assumption the plan was built on, which no revision has taken in yet. Its dispatch is held
- * until one has (listActiveIds).
+ * The project awaits a plan revision for a client's correction (a change, a confirmed proposal, an
+ * answer that changed an assumption) that no revision has taken in yet. Only the tasks citing a key
+ * it affects are held: the rest of the project still dispatches (listActiveIds does not read it).
  */
-export const pendingChange = (projectId: AnyColumn) =>
-  sql`EXISTS (SELECT 1 FROM replan_requests rr WHERE rr.project_id = ${projectId} AND rr.plan_revision_id IS NULL)`;
+export const pendingCorrection = (projectId: AnyColumn) =>
+  sql`EXISTS (SELECT 1 FROM correction_holds ch WHERE ch.project_id = ${projectId} AND ch.plan_revision_id IS NULL)`;
 
 /**
  * The project's first plan is written and the Liaison's report of it (reports_on 'first-plan') is
@@ -180,9 +180,9 @@ export class ProjectRepository {
 
   /**
    * The projects whose work may be dispatched: at work (active, not halted), no stop
-   * awaiting the Liaison, no revision awaited for a client's change (a client
-   * answer contradicted an assumption the plan was built on), no plan repair awaited and no
-   * first-plan report awaited (firstPlanUnreported), oldest first.
+   * awaiting the Liaison, no plan repair awaited and no first-plan report awaited
+   * (firstPlanUnreported), oldest first. A client's correction awaiting its revision holds only the
+   * tasks citing a key it affects, each parked on its own row, so it does not hold the project.
    * This read is the dispatch decision: a stop committed after it is ordered
    * after the dispatch it gated.
    */
@@ -190,7 +190,7 @@ export class ProjectRepository {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingChange(projects.id)}`, sql`NOT ${pendingRepair(projects.id)}`, sql`NOT ${firstPlanUnreported()}`))
+      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingRepair(projects.id)}`, sql`NOT ${firstPlanUnreported()}`))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }

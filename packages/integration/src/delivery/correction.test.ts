@@ -1,0 +1,363 @@
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { MockLanguageModelV4 } from "ai/test";
+import { sql } from "drizzle-orm";
+import { z } from "zod";
+import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientChanges, ClientMessageRepository, TenderIntake, createProjectWithTender } from "@ashara/engagement";
+import type { ClientChangeStore, IntakeStore } from "@ashara/engagement";
+import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
+import { RosterDerivation } from "@ashara/organization";
+import type { RosterStore } from "@ashara/organization";
+import {
+  FirstPlanner,
+  PlanningService,
+  ProjectHaltRepository,
+  Replanner,
+  WorkItemRowRepository,
+  adaptWorkItemRepo,
+  createFirstPlanStore,
+  createReplanStore,
+  startWorkItem,
+} from "@ashara/delivery";
+import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
+import { memoryStepContainment, parseWorkItemId, recordingLogger, type ProjectId } from "@ashara/shared";
+import { createClientChangeStore } from "@ashara/server/client-change-store";
+import { createIntakeStore } from "@ashara/server/intake-store";
+import { createRosterStore } from "@ashara/server/roster-store";
+import { citingItemsToCheck } from "../simulator/scripted-models.js";
+
+// A client's correction holds and replaces only the work citing a guarantee it changes: with two
+// tasks citing G1 and G2, a correction amending G2 lets the G1 task dispatch before the revision,
+// supersedes the open G2 task for a new one citing the amended G2, and keeps a merged G2 task
+// Completed beside the new one. Real Postgres; every model call is a MockLanguageModelV4 answering
+// by what its prompt asks. Every row belongs to a project this suite creates under a unique name.
+
+const stub = vi.hoisted(() => ({ model: undefined as unknown }));
+vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
+
+const DATABASE_URL = resolveTestDatabaseUrl(process.env);
+const NAME_PREFIX = `correction-test-${randomUUID().slice(0, 8)}`;
+const TENDER = "A key store. Clients put and get keys. A deleted key is gone.";
+const AMENDED_G2 = "A deleted key is gone, and getting it prints that it was deleted.";
+
+let db: ReturnType<typeof createDb>;
+let gateway: GuardedModelAccess;
+let clientId: string;
+const ourProjects = new Set<string>();
+
+function model(id: string, capabilityLevel: ModelConfig["capabilityLevel"]): ModelConfig {
+  return {
+    id,
+    apiModelId: `${id}-api`,
+    provider: "deepseek",
+    capabilityLevel,
+    thinkingOffCapabilityLevel: capabilityLevel,
+    inputCostPer1M: 1,
+    outputCostPer1M: 2,
+    maxContextTokens: 100_000,
+    cacheReadCostPer1M: null,
+    cacheWriteCostPer1M: null,
+    priceWindows: [], priceTiers: [], datedPrices: [],
+  };
+}
+
+function jsonResult(value: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    usage: {
+      inputTokens: { total: 500, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 200, text: 200, reasoning: undefined },
+    },
+    finishReason: { unified: "stop" as const, raw: "stop" },
+    warnings: [],
+  };
+}
+
+const guarantee = (id: string, statement: string, quote: string) => ({
+  id,
+  statement,
+  observable: { interface: ["I1"], observation: "output" },
+  refutedBy: [`The product does not hold that ${statement}`],
+  source: { kind: "tender", quote },
+});
+
+const INTAKE = {
+  summary: "A key store.",
+  interface: [{ id: "I1", text: "kv put KEY VALUE; kv get KEY; kv delete KEY", source: { kind: "tender", quote: "Clients put and get keys." } }],
+  guarantees: [
+    guarantee("G1", "A get returns the value of the last put of its key.", "Clients put and get keys."),
+    guarantee("G2", "A deleted key is gone.", "A deleted key is gone."),
+  ],
+  assumptions: [],
+  questions: [],
+  exclusions: [],
+};
+
+const ROSTER = {
+  roles: [
+    { name: "Liaison", responsibility: "Talks to the client.", capabilities: ["client-comms"] },
+    { name: "Platform", responsibility: "Defines how the store is built and tested.", capabilities: ["write-environment"] },
+    { name: "Implementer", responsibility: "Builds the store.", capabilities: ["write-source"] },
+    { name: "Check author", responsibility: "Writes the checks the store must pass.", capabilities: ["author-checks"] },
+  ],
+};
+
+const task = (ref: string, title: string, cites: string) => ({
+  ref,
+  title,
+  description: title,
+  dependsOn: [],
+  goal: title,
+  endState: `${title}, end to end`,
+  scope: `the ${ref} part of the store`,
+  deliverables: [{ text: title, sources: [cites] }],
+  acceptance: [{ text: `a client sees: ${title}`, sources: [cites] }],
+  capability: "Medium",
+  capabilityReason: "graded for the test",
+});
+
+const FIRST_TASKS = { tasks: [task("t1", "Put and get keys", "G1"), task("t2", "Delete keys", "G2")] };
+const REVISED_TASKS = { tasks: [task("t1", "Tell a deleted key's get it was deleted", "G2")] };
+
+/** The client's correction of G2, as the Liaison's reading of their message returns it. */
+const AMEND_G2 = {
+  ops: [
+    {
+      op: "amend-guarantee",
+      id: "G2",
+      statement: AMENDED_G2,
+      interface: ["I1"],
+      observation: "output",
+      // Every refuting observation G2 had, and one more: it widens, so no confirmation is asked.
+      refutedBy: ["The product does not hold that A deleted key is gone.", "a get after a delete prints no word of the deletion"],
+      direction: "widens",
+    },
+  ],
+  confirms: [],
+};
+
+/** One model for every call, answering each by what its prompt asks; returns it to read the prompts sent. */
+function pipelineModel(): MockLanguageModelV4 {
+  const mock = new MockLanguageModelV4({
+    doGenerate: async (call) => {
+      const prompt = JSON.stringify(call.prompt);
+      if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
+      if (prompt.includes("client-comms")) return jsonResult(ROSTER);
+      if (prompt.includes("The client sent a message changing what they want built")) return jsonResult({ correction: AMEND_G2 });
+      if (prompt.includes("needs the project environment changed")) return jsonResult({ environmentChange: false, reason: "Only what a get prints changes." });
+      if (prompt.includes("changed what is built after work began")) return jsonResult(citingItemsToCheck(REVISED_TASKS, prompt));
+      return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
+    },
+  });
+  stub.model = mock;
+  return mock;
+}
+
+function ours<T extends { readonly projectId: string }>(list: () => Promise<readonly T[]>): () => Promise<T[]> {
+  return async () => (await list()).filter((row) => ourProjects.has(row.projectId));
+}
+
+const ItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  level: z.string(),
+  status: z.string(),
+  origin: z.string().nullable(),
+  reason: z.unknown(),
+  sources: z.array(z.object({ id: z.string(), text: z.string() }).loose()).nullable(),
+});
+
+async function itemsOf(projectId: ProjectId) {
+  const result = await db.execute(sql`
+    SELECT id, title, level, status, task_spec->>'origin' AS origin, blocked_reason AS reason, task_spec->'sources' AS sources
+    FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`);
+  return z.array(ItemSchema).parse(result.rows);
+}
+
+/** Starts a task as dispatch does: the task and every Pending ancestor, its Epic, go InProgress. */
+async function startTask(id: string): Promise<void> {
+  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
+  const item = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
+  if (item === null) throw new Error(`task ${id} not found`);
+  startWorkItem(item);
+  await PlanningService.saveWorkItem(repo, item, "Pending");
+  await PlanningService.activateAncestors(repo, item.parentId);
+}
+
+async function completeTask(id: string): Promise<void> {
+  await startTask(id);
+  await PlanningService.route(adaptWorkItemRepo(new WorkItemRowRepository(db)), parseWorkItemId(id, "test"), "passed");
+}
+
+/** The tasks the dispatch gate admits now, of this suite's projects, as the core loop gates them. */
+async function dispatchable(): Promise<string[]> {
+  const projects = new ProjectHaltRepository(db);
+  const gated = await PlanningService.gate(
+    adaptWorkItemRepo(new WorkItemRowRepository(db)),
+    { listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)), block: (id, cause) => projects.block(id, cause) },
+    { publish: async () => {} },
+    memoryStepContainment(() => true),
+    recordingLogger(),
+  );
+  return gated.available.map((item) => item.id);
+}
+
+/**
+ * A key store planned from G1 and G2 and told to the client: Sprint 0, the layout, the check tasks and
+ * the review are done, so the tasks citing G1 and G2 are each ready to dispatch.
+ */
+async function readyProject(): Promise<{ readonly projectId: ProjectId; readonly g1: string; readonly g2: string }> {
+  const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, TENDER);
+  const projectId = created.project.id;
+  ourProjects.add(projectId);
+  pipelineModel();
+  const intakeStore = createIntakeStore(db);
+  const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
+  expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  const rosterStore = createRosterStore(db);
+  const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
+  expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  const planStore = createFirstPlanStore(db);
+  const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
+  expect((await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  await db.execute(sql`
+    INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
+    VALUES (${projectId}, 'outbound', 'report', 'The plan.', 'first-plan')`);
+
+  const items = await itemsOf(projectId);
+  for (const done of items.filter((i) => i.level === "Task" && i.origin !== "decomposition")) await completeTask(done.id);
+  const citing = (key: string) => {
+    const found = items.find((i) => i.origin === "decomposition" && i.sources?.some((s) => s.id === key) === true);
+    if (found === undefined) throw new Error(`the first plan has no task citing ${key}`);
+    return found.id;
+  };
+  return { projectId, g1: citing("G1"), g2: citing("G2") };
+}
+
+/** The client's change amending G2, read by the Liaison the cycle it arrives. */
+async function amendG2(projectId: ProjectId): Promise<string> {
+  const change = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "change", body: "Getting a deleted key should say it was deleted.", inReplyTo: null });
+  pipelineModel();
+  const store = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
+  const narrowed: ClientChangeStore = { ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) };
+  const outcomes = await new ClientChanges({ llm: gateway, store: narrowed, containment: memoryStepContainment(() => true) }).runPending();
+  expect(outcomes).toMatchObject([{ kind: "recorded", changeId: change.id, revision: { status: "applied", visionVersion: 2 } }]);
+  return change.id;
+}
+
+function replanner(): Replanner {
+  const store = createReplanStore(db, recordingLogger());
+  const narrowed: ReplanStore = { ...store, projectsAwaitingReplan: ours(() => store.projectsAwaitingReplan()) };
+  return new Replanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: narrowed });
+}
+
+beforeAll(async () => {
+  db = createDb(DATABASE_URL);
+  clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
+  gateway = new GuardedModelAccess(
+    buildGateway({
+      models: sdkLanguageModels,
+      config: {
+        providers: [
+          {
+            name: "deepseek",
+            providerType: "deepseek",
+            apiKey: "test-key",
+            baseUrl: "https://stub.invalid/v1",
+            models: [model("correction-strong", "Strong"), model("correction-frontier", "Frontier")],
+            enabled: true,
+          },
+        ],
+        defaultProvider: "deepseek",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
+      },
+      checkedSources: ["test"],
+      clock: () => new Date(),
+    }),
+    new LlmCallLedger(new LlmCallRepository(db), new SpendCap({ ledger: new LlmCallRepository(db), caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } })),
+    recordingLogger(),
+  );
+});
+
+beforeEach(() => {
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  ourProjects.clear();
+});
+
+afterAll(async () => {
+  const pattern = `${NAME_PREFIX}%`;
+  const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
+  await db.execute(sql`DELETE FROM correction_holds WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM plan_revisions WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM task_checks WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM vision_revisions WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${projects}) AND in_reply_to IS NOT NULL`);
+  await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
+  await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
+  await db.$client.end();
+});
+
+describe("a client's correction holds and replaces only the work citing what it changes", () => {
+  test("the G1 task dispatches before the revision; the G2 task is held, then superseded by a new task citing the amended G2", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    expect((await dispatchable()).sort()).toEqual([g1, g2].sort());
+
+    const changeId = await amendG2(projectId);
+
+    // Before any revision: the task citing G1 alone is still dispatched, the one citing G2 is not.
+    expect(await dispatchable()).toEqual([g1]);
+    await startTask(g1);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({
+      status: "Blocked",
+      reason: { source: "correction_pending", visionVersion: 2, affected: ["G2"] },
+    });
+
+    // The revision waits for no task outside what the correction touches: the G1 task is in progress.
+    const mock = pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "client-change" }]);
+    const revisionPrompt = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("changed what is built after work began"));
+    expect(revisionPrompt).toContain(AMENDED_G2);
+
+    const after = await itemsOf(projectId);
+    expect(after.find((i) => i.id === g1)).toMatchObject({ status: "InProgress" });
+    expect(after.find((i) => i.id === g2)).toMatchObject({ status: "Abandoned", reason: { source: "superseded", planRevision: 2, requestedBy: changeId } });
+    const added = after.filter((i) => i.origin === "decomposition" && i.id !== g1 && i.id !== g2);
+    expect(added.map((i) => i.title)).toEqual(["Tell a deleted key's get it was deleted"]);
+    expect(added[0]?.sources).toEqual([expect.objectContaining({ id: "G2", text: AMENDED_G2 })]);
+    // Nothing citing G1 alone was replaced.
+    expect(after.filter((i) => i.status === "Abandoned" && i.sources?.every((s) => s.id === "G1") === true)).toEqual([]);
+    const released = await db.execute(sql`SELECT plan_revision_id IS NOT NULL AS released FROM correction_holds WHERE project_id = ${projectId}`);
+    expect(released.rows).toEqual([{ released: true }]);
+  });
+
+  test("a merged G2 task stays Completed, and the amended G2 gets a new task beside it", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    await completeTask(g2);
+    // Its stored check decided G2 as it read then: the amended G2 is not decided by it.
+    const checkTask = (await itemsOf(projectId)).find((i) => i.origin === "check" && i.sources?.some((s) => s.id === "G2") === true);
+    if (checkTask === undefined) throw new Error("the first plan has no check task for G2");
+    await db.execute(sql`
+      INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
+      VALUES (${projectId}, ${g2}, ${checkTask.id}, 1, 'deleted key is gone', 'true', '[]'::jsonb, ${"e".repeat(64)}, '["G2"]'::jsonb)`);
+
+    await amendG2(projectId);
+    expect(await dispatchable()).toEqual([g1]);
+    pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+
+    const after = await itemsOf(projectId);
+    expect(after.find((i) => i.id === g2)).toMatchObject({ status: "Completed" });
+    expect(after.find((i) => i.id === g1)).toMatchObject({ status: "Pending", reason: null });
+    const added = after.filter((i) => i.origin === "decomposition" && i.id !== g1 && i.id !== g2);
+    expect(added).toMatchObject([{ status: "Pending", sources: [expect.objectContaining({ id: "G2", text: AMENDED_G2 })] }]);
+  });
+});

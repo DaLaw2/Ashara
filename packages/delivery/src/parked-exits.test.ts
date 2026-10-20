@@ -194,6 +194,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     dependency_unsatisfiable: { source: "dependency_unsatisfiable", blockedBy: ["x"], reason: "abandoned" },
     merge_unrecorded: { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" },
     orphan_unreconciled: { source: "orphan_unreconciled", faultClass: "ashara", step: "requeue the task", reason: "connection lost" },
+    correction_pending: { source: "correction_pending", visionVersion: 3, affected: ["G2"], reason: "held" },
     superseded: { source: "superseded", planRevision: 2, requestedBy: null, reason: "replaced" },
     acceptance_failed: { source: "acceptance_failed", mainCommit: MERGE, reason: "check failed on main" },
     api: { source: "api" },
@@ -204,12 +205,14 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     "merge-recorded": "parked-exits.ts completeRecordedMerge: WorkItemRepository.recordMergeCommit, then completeRecordedMerge to Completed",
     "read-main": "parked-exits.ts settleOnMain: mergeOnMainOf reads main; none found (no target here), release: unblockWorkItem to Pending",
     requeue: "parked-exits.ts release: unblockWorkItem to Pending",
+    "await-revision": "replan.ts Replanner.compose: supersedeWorkItem to Abandoned, in the plan revision the replanning step writes for the correction holding it",
     "give-up": "parked-exits.ts giveUp: giveUpWorkItem to Abandoned; the plan_repair_on_abandon trigger opens the repair the Replanner answers",
   };
   const LEAVES_TO: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: WorkItemStatus } = {
     "merge-recorded": "Completed",
     "read-main": "Pending",
     requeue: "Pending",
+    "await-revision": "Abandoned",
     "give-up": "Abandoned",
   };
 
@@ -218,6 +221,14 @@ describe("no Blocked item is left with an exit only a person takes", () => {
       const exit = blockedExitOf(SAMPLE[source]).kind;
       const recorded: string[] = [];
       const { released, saves } = run([blocked(SAMPLE[source])], false, async (id) => void recorded.push(id));
+      if (exit === "await-revision") {
+        // The replanning step, not this sweep, takes its exit: the sweep leaves it for the revision.
+        expect(WRITER[exit], source).toMatch(/^replan\.ts /);
+        expect(LEAVES_TO[exit], source).toBe("Abandoned");
+        expect(await released, source).toBe(0);
+        expect(saves, source).toEqual([]);
+        continue;
+      }
 
       expect(WRITER[exit], source).toMatch(/^parked-exits\.ts /);
       expect(await released, `${source} (${WRITER[exit]})`).toBe(1);
@@ -232,12 +243,12 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     expect(saves).toEqual([expect.objectContaining({ status: "Abandoned", reason: expect.objectContaining({ source: "orchestrator_error" }) })]);
   });
 
-  test("only a merge-record wait or an unreadable main stays Blocked past its sweep; every other source requeues or is given up", () => {
+  test("only a merge-record wait, an unreadable main or a correction's hold stays Blocked past its sweep; every other source requeues or is given up", () => {
     const waiting = BLOCKED_REASON_SOURCES.filter((source) => {
       const exit = blockedExitOf(SAMPLE[source]);
       return exit.kind !== "requeue" && exit.kind !== "give-up";
     });
-    expect([...waiting]).toEqual(["merge_unrecorded", "orphan_unreconciled"]);
+    expect([...waiting]).toEqual(["merge_unrecorded", "orphan_unreconciled", "correction_pending"]);
   });
 
   test("an infrastructure block from a legacy row goes back to Pending at once, unblocked by its automatic exit", async () => {

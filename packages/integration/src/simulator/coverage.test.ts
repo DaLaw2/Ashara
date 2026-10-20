@@ -10,6 +10,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     episodes: [],
     checks: [],
     reviewFindings: [],
+    corrections: [],
     spendUsd: 0,
     unrecordedCalls: 0,
     events,

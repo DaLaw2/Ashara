@@ -1,10 +1,12 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { clientMessages, noOpenStop, projectAtWork, projects, replanRequests } from "@ashara/db";
+import { clientMessages, noOpenStop, projectAtWork, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
+import { affectedKeysOf } from "./client-change.js";
+import type { HoldCorrection } from "./client-change.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions: each inbound
@@ -140,22 +142,37 @@ interface AnswerWrite {
   readonly planned: boolean;
   /** The vision version to append after `basedOnVersion` (every other field is copied from it), with its revision record. */
   readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
-  /** A planned project's replanning request: the request recorded (replan_requests) and the report posted, in reply to the answer. */
+  /**
+   * A planned project's correction: Delivery's hold on the work citing the assumption it changed,
+   * and the report posted in reply to the answer.
+   */
   readonly replanReport: string | null;
+}
+
+/** A write asks to hold the work an answer changed, but appends no vision version for the hold to name. */
+class AnswerCorrectionUnversioned extends Error {
+  constructor(
+    readonly answerId: string,
+    readonly projectId: ProjectId,
+  ) {
+    super(`answer ${answerId} of project ${projectId} was composed as a correction of the plan with no vision version to hold the work by; nothing was written`);
+    this.name = "AnswerCorrectionUnversioned";
+  }
 }
 
 /**
  * In one transaction, with the project row locked (the first-plan transaction
  * locks it too): the answer consumed, the vision version appended, and for a
- * replanning request the request recorded and the report posted. An answer
+ * correction of a planned project Delivery's hold on the work citing the
+ * assumption it changed (`hold`) and the report posted. An answer
  * already consumed gets nothing new ("already-consumed"). One composed against a
  * state that no longer holds (another answer of the project wrote a vision version
  * first, or the first plan was written meanwhile) is rolled back whole and returned
  * as "moved", for the Liaison to compose again against the current state.
  */
-export async function recordClientAnswer(db: Database, write: AnswerWrite): Promise<AnswerRecording> {
+export async function recordClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<AnswerRecording> {
   try {
-    return { kind: await writeClientAnswer(db, write) };
+    return { kind: await writeClientAnswer(db, write, hold) };
   } catch (err) {
     if (err instanceof AnswerContextMoved) return { kind: "moved", detail: err.message };
     throw err;
@@ -168,7 +185,7 @@ type AnswerRecording =
   | { readonly kind: "already-consumed" }
   | { readonly kind: "moved"; readonly detail: string };
 
-function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded" | "already-consumed"> {
+function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
     const [project] = await tx
       .select({ firstPlannedAt: projects.firstPlannedAt })
@@ -199,6 +216,7 @@ function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded"
       .returning({ id: clientMessages.id });
     if (consumed.length === 0) return "already-consumed";
 
+    let applied: { readonly version: number; readonly revision: RevisionRecord } | null = null;
     if (write.vision !== null) {
       const appended = await new VisionRepository(tx).append(write.projectId, write.vision.append, write.vision.revision);
       if (appended.kind === "moved") {
@@ -208,11 +226,14 @@ function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded"
           `composed against vision v${write.vision.append.basedOnVersion}, current is ${appended.current === null ? "none" : `v${appended.current}`}`,
         );
       }
+      applied = { version: appended.version, revision: write.vision.revision };
     }
 
     if (write.replanReport !== null) {
-      // Every changing answer is on record: the revision that takes it in names it, and its report says what it changed.
-      await tx.insert(replanRequests).values({ answerId: write.answerId, projectId: write.projectId });
+      if (applied === null) throw new AnswerCorrectionUnversioned(write.answerId, write.projectId);
+      // Every changing answer is on record: the hold names it, the revision that takes it in records
+      // itself on the hold, and its report says what it changed.
+      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.answerId, affected: affectedKeysOf(applied.revision.ops) });
       await tx.insert(clientMessages).values({
         projectId: write.projectId,
         direction: "outbound",

@@ -7,12 +7,35 @@ import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
+import type { RevisionOp } from "../vision-language/contract-op.js";
 import { ClientMessageRepository } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's changes of direction (client_messages kind 'change'): each read once against its
-// project's current vision, and consumed together with the revisions it writes and the impact note
-// posted in reply to it, so a change is never left unread and never answered twice.
+// project's current vision, and consumed together with the revisions it writes, the hold on the work
+// each applied revision touches and the impact note posted in reply to it, so a change is never left
+// unread, never answered twice and never applied with the work it changes still dispatching.
+
+/** One applied correction as Delivery's hold reads it: the version it wrote, the message it answers and the keys it affects. */
+interface AppliedCorrection {
+  readonly projectId: ProjectId;
+  readonly visionVersion: number;
+  readonly requestedBy: string;
+  readonly affected: readonly string[];
+}
+
+/**
+ * Delivery's hold on the work an applied correction touches, written in the transaction that records
+ * it, so no task citing a key it affects is dispatched after it applies; the composition root
+ * supplies Delivery's.
+ */
+export type HoldCorrection = (tx: DbHandle, correction: AppliedCorrection) => Promise<unknown>;
+
+/** The guarantee and assumption keys a revision's operations affect: what a task cites and a correction holds. */
+export function affectedKeysOf(ops: readonly RevisionOp[]): string[] {
+  const keys = ops.filter((op) => op.target === "guarantee" || op.target === "assumption").flatMap((op) => (op.key === null ? [] : [op.key]));
+  return [...new Set(keys)];
+}
 
 /**
  * Unconsumed inbound changes of active projects, oldest first, each with its project's current vision,
@@ -206,22 +229,24 @@ class ChangeContextMoved extends Error {
 /**
  * In one transaction: the change consumed (a change already consumed gets nothing new), each proposal
  * it confirms applied as the next version, its own revision applied as the version after them or
- * recorded as a proposal, and the impact note posted in reply to it. A write composed against a vision
- * version that is no longer current is rolled back whole and returned as "moved".
+ * recorded as a proposal, Delivery's hold on the work each applied version touches (`hold`), and the
+ * impact note posted in reply to it. A write composed against a vision version that is no longer
+ * current is rolled back whole and returned as "moved".
  */
 export async function recordCorrection(
   db: Database,
   write: CorrectionWrite,
+  hold: HoldCorrection,
 ): Promise<{ readonly kind: "recorded" } | { readonly kind: "already-consumed" } | { readonly kind: "moved"; readonly detail: string }> {
   try {
-    return { kind: await writeCorrection(db, write) };
+    return { kind: await writeCorrection(db, write, hold) };
   } catch (err) {
     if (err instanceof ChangeContextMoved) return { kind: "moved", detail: err.message };
     throw err;
   }
 }
 
-function writeCorrection(db: Database, write: CorrectionWrite): Promise<"recorded" | "already-consumed"> {
+function writeCorrection(db: Database, write: CorrectionWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
     const consumed = await tx
       .update(clientMessages)
@@ -249,11 +274,13 @@ function writeCorrection(db: Database, write: CorrectionWrite): Promise<"recorde
         direction: confirmation.direction,
       });
       if (applied.kind === "moved") throw moved(applied.current, confirmation.vision.basedOnVersion);
+      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.changeId, affected: affectedKeysOf(confirmation.ops) });
     }
     const { revision } = write;
     if (revision?.status === "applied") {
       const applied = await visions.append(write.projectId, revision.vision, revision.record);
       if (applied.kind === "moved") throw moved(applied.current, revision.vision.basedOnVersion);
+      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.changeId, affected: affectedKeysOf(revision.record.ops) });
     } else if (revision?.status === "proposed") {
       const current = await visions.getCurrent(write.projectId);
       if (current?.version !== revision.basedOnVersion) throw moved(current?.version ?? null, revision.basedOnVersion);

@@ -115,7 +115,7 @@ const FIRST_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [], goal: "",
-      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
+      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1", "A1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -286,12 +286,12 @@ async function dependenciesOf(id: string): Promise<string[]> {
   return z.array(z.object({ to: z.string() })).parse(result.rows).map((row) => row.to);
 }
 
-/** The project's status and category, and the answers whose revision it awaits (replan_requests), oldest first. */
+/** The project's status and category, and the client messages whose correction's revision it awaits (correction_holds), oldest first. */
 async function projectRow(projectId: ProjectId) {
   const result = await db.execute(sql`
     SELECT ${projectState} AS status, blocked_category AS "category",
-      COALESCE((SELECT json_agg(rr.answer_id ORDER BY rr.created_at) FROM replan_requests rr
-        WHERE rr.project_id = projects.id AND rr.plan_revision_id IS NULL), '[]'::json) AS "awaiting"
+      COALESCE((SELECT json_agg(ch.requested_by ORDER BY ch.created_at) FROM correction_holds ch
+        WHERE ch.project_id = projects.id AND ch.plan_revision_id IS NULL), '[]'::json) AS "awaiting"
     FROM projects WHERE id = ${projectId}`);
   const [row] = z
     .array(z.object({ status: z.string(), awaiting: z.array(z.string()), category: z.string().nullable() }))
@@ -340,7 +340,7 @@ beforeEach(() => {
 afterAll(async () => {
   const pattern = `${NAME_PREFIX}%`;
   const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
-  await db.execute(sql`DELETE FROM replan_requests WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM correction_holds WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM plan_revisions WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
@@ -402,16 +402,16 @@ describe("the client is told one plan, and never what the team will now do on a 
     const mock = pipelineModel({ environmentChange: false });
     expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
-    expect(prompts.some((p) => p.includes("in 2 answers") && p.includes("Each class shows its teacher.") && p.includes("The hill studio opens first."))).toBe(true);
+    expect(prompts.some((p) => p.includes("in 2 messages") && p.includes("Each class shows its teacher.") && p.includes("The hill studio opens first."))).toBe(true);
     expect((await projectRow(projectId)).awaiting).toEqual([]);
     const taken = await db.execute(sql`
-      SELECT rr.answer_id AS "answerId" FROM replan_requests rr JOIN plan_revisions r ON r.id = rr.plan_revision_id
-      WHERE r.project_id = ${projectId} AND r.revision = 2 ORDER BY rr.created_at`);
+      SELECT ch.requested_by AS "answerId" FROM correction_holds ch JOIN plan_revisions r ON r.id = ch.plan_revision_id
+      WHERE r.project_id = ${projectId} AND r.revision = 2 ORDER BY ch.created_at`);
     expect(taken.rows).toEqual([{ answerId: first }, { answerId: second }]);
 
     expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
     const plan = (await reportsOf(projectId)).find((m) => m.body.startsWith("Ashara has made the first plan"));
-    expect(plan?.body).toContain("This plan already takes in your 2 answers that changed it.");
+    expect(plan?.body).toContain("This plan already takes in your 2 messages that changed it.");
     expect(plan?.body).toContain(`- Because you said "No, the hill studio opens first.", work proceeds on: The hill studio opens first.`);
     expect(plan?.body).toContain(`- Because you said "Yes, name the teacher.", work proceeds on: Each class shows its teacher.`);
   });
@@ -482,9 +482,18 @@ describe("a late client change is planned", () => {
     expect((await projectRow(projectId)).awaiting).toEqual([answerId]);
 
     pipelineModel();
+    // The revision waits for the check task in flight, which cites A1; the work not started that
+    // cites A1 is held (parked) meanwhile, and the scaffold, which cites no item, is not.
     expect(await replanner().runPending()).toEqual([]);
     const inFlight = (i: (typeof first)[number]) => i.id === check.id || i.id === epic.id;
-    expect(await itemsOf(projectId)).toEqual(first.map((i) => ({ ...i, status: i.id === sprint0.id ? "Completed" : inFlight(i) ? "InProgress" : i.status })));
+    const held = (i: (typeof first)[number]) => i.origin === "decomposition" || i.origin === "review";
+    expect(await itemsOf(projectId)).toEqual(
+      first.map((i) =>
+        held(i)
+          ? { ...i, status: "Blocked", reason: expect.objectContaining({ source: "correction_pending", affected: ["A1"], visionVersion: 2 }) }
+          : { ...i, status: i.id === sprint0.id ? "Completed" : inFlight(i) ? "InProgress" : i.status },
+      ),
+    );
 
     await completeTask(check.id);
     expect((await itemsOf(projectId)).find((i) => i.id === epic.id)?.status).toBe("InProgress");
@@ -623,11 +632,16 @@ describe("a late client change is planned", () => {
     expect(await replanner().runPending()).toMatchObject([{ kind: "revised", revision: 2 }]);
 
     const revision = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("changed what is built after work began"));
+    // Every guarantee the replaced work cited decided by a stored check: nothing is left to plan, so no planner is asked.
+    if (decides === "cited") {
+      expect(revision).toBeUndefined();
+      return;
+    }
     if (revision === undefined) throw new Error("no revision prompt was sent");
     const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(revision)?.[1]?.split(", ") ?? [];
     // G1, the guarantee the answer leaves as it was: a revision plans it again unless a stored check decides it.
     expect(cited.map((item) => item.id)).toContain("G1");
-    expect(listed.includes("G1")).toBe(decides !== "cited");
+    expect(listed).toContain("G1");
   });
 
   test("an environment change plans a new environment task, and the old one stays Completed", async () => {

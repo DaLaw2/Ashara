@@ -1,32 +1,34 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, replanRequests, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
+import { clientMessages, correctionHolds, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingCorrection, pendingRepair, projectAtWork } from "@ashara/db";
 import { CapabilityLevelSchema, higherCapability } from "../acl/finance-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
+import { blockWorkItem, takeEvents } from "../domain/index.js";
 import type { AttemptGrade } from "../replan.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
+import { rowToWorkItem, workItemSaveRow } from "./work-item-adapter.js";
 import { WorkItemRowRepository } from "./work-item.js";
 
-// Delivery's revisions of a plan under way. A project awaits a revision while
-// it is active, planned, awaiting the revision for a client answer that changed an assumption
-// (replan_requests) or the repair of a task the failure router gave up
-// (plan_repairs), has no task in progress, no
-// unread answer and no stop awaiting the Liaison. Only a Task has a live attempt: an Epic is
-// InProgress from its first started task until every child settles, so a plan under way always
-// has one, and counting it would keep a flagged project from ever being revised. A revision
-// supersedes the open work, writes the new work, records itself and records every answer and
-// repair it takes in, in one transaction.
+// Delivery's revisions of a plan under way. A project awaits a revision while it is at work,
+// planned, has no unread answer and no stop awaiting the Liaison, and awaits either the revision
+// for a client's correction (correction_holds), with no task citing a key it affects in progress, or
+// the repair of a task the failure router gave up (plan_repairs), with no task in progress at all.
+// Only a Task has a live attempt: an Epic is InProgress from its first started task until every child
+// settles, so a plan under way always has one, and counting it would keep a flagged project from
+// ever being revised. A correction holds only the tasks citing a key it affects, in its own
+// transaction; a revision supersedes the work it replaces, writes the new work, records itself and
+// records every correction and repair it takes in, in one transaction.
 
 interface ProjectAwaitingReplanRow {
   readonly projectId: ProjectId;
   readonly projectName: string;
-  /** The client answers whose revision the project awaits (replan_requests), oldest first; empty when none. */
-  readonly changesAwaited: readonly string[];
+  /** The client's corrections whose revision the project awaits (correction_holds), oldest first; empty when none. */
+  readonly correctionsAwaited: readonly AwaitedCorrection[];
   /** The tasks the failure router gave up whose repair the project awaits, oldest first; empty when none. */
   readonly repairsAwaited: readonly string[];
   readonly replanAttempts: number;
@@ -84,10 +86,10 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
       and(
         projectAtWork(),
         isNotNull(projects.firstPlannedAt),
-        sql`(${pendingChange(projects.id)} OR ${pendingRepair(projects.id)})`,
+        sql`((${pendingCorrection(projects.id)} AND NOT ${heldTaskInProgress(projects.id)})
+          OR (${pendingRepair(projects.id)} AND NOT ${taskInProgress(projects.id)}))`,
         noOpenStop(projects.id),
         noOpenAnswer(),
-        sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id AND w.level = 'Task' AND w.status = 'InProgress')`,
       ),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
@@ -109,7 +111,7 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
       return {
         projectId: parseProjectId(row.id, "projects.id"),
         projectName: row.name,
-        changesAwaited: await awaitedAnswers(db, row.id),
+        correctionsAwaited: await awaitedCorrections(db, row.id),
         repairsAwaited: awaited.map((repair) => repair.id),
         replanAttempts: row.replanAttempts,
         replanLastError: row.replanLastError,
@@ -121,15 +123,139 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
   );
 }
 
-/** The answers whose revision the project awaits, in the order the client sent them. */
-async function awaitedAnswers(db: DbHandle, projectId: string): Promise<string[]> {
+/** Whether a Task of the project is in progress. */
+const taskInProgress = (projectId: AnyColumn): SQL =>
+  sql`EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'InProgress')`;
+
+/** Whether work item `w` cites one of `keys` (a text[] expression) among its task_spec's sources. */
+const citesAnyOf = (keys: SQL): SQL =>
+  sql`EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
+    THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(${keys}))`;
+
+/** Whether a Task citing a key of a correction the project awaits is in progress: that revision waits only for it. */
+const heldTaskInProgress = (projectId: AnyColumn): SQL =>
+  sql`EXISTS (SELECT 1 FROM work_items w JOIN correction_holds ch ON ch.project_id = w.project_id AND ch.plan_revision_id IS NULL
+    WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'InProgress' AND ${citesAnyOf(sql`ch.affected`)})`;
+
+/** One client correction a project awaits the revision of, with the client's own words. */
+interface AwaitedCorrection {
+  /** The vision version the correction wrote. */
+  readonly visionVersion: number;
+  /** The client message it answers: the change, its confirmation or the answer. */
+  readonly requestedBy: string;
+  /** That message's words. */
+  readonly words: string;
+  /** The guarantee and assumption keys it affects; never empty. */
+  readonly affected: readonly [string, ...string[]];
+}
+
+const AffectedSchema = z.array(z.string().min(1));
+
+/** A stored correction hold names no affected key, or its keys do not read: the row the migration's CHECK refuses. */
+class CorrectionHoldUnreadable extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly visionVersion: number,
+    readonly detail: string,
+  ) {
+    super(`project ${projectId}: the correction hold of vision v${visionVersion} does not read: ${detail}`);
+    this.name = "CorrectionHoldUnreadable";
+  }
+}
+
+/** The corrections whose revision the project awaits, in the order they were recorded. */
+async function awaitedCorrections(db: DbHandle, projectId: string): Promise<AwaitedCorrection[]> {
   const rows = await db
-    .select({ id: replanRequests.answerId })
-    .from(replanRequests)
-    .innerJoin(clientMessages, eq(clientMessages.id, replanRequests.answerId))
-    .where(and(eq(replanRequests.projectId, projectId), isNull(replanRequests.planRevisionId)))
-    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
-  return rows.map((row) => row.id);
+    .select({ visionVersion: correctionHolds.visionVersion, requestedBy: correctionHolds.requestedBy, words: clientMessages.body, affected: correctionHolds.affected })
+    .from(correctionHolds)
+    .innerJoin(clientMessages, eq(clientMessages.id, correctionHolds.requestedBy))
+    .where(and(eq(correctionHolds.projectId, projectId), isNull(correctionHolds.planRevisionId)))
+    .orderBy(asc(correctionHolds.createdAt), asc(correctionHolds.visionVersion));
+  return rows.map((row) => {
+    const affected = AffectedSchema.safeParse(row.affected);
+    if (!affected.success) throw new CorrectionHoldUnreadable(projectId, row.visionVersion, z.prettifyError(affected.error));
+    const [first, ...rest] = affected.data;
+    if (first === undefined) throw new CorrectionHoldUnreadable(projectId, row.visionVersion, "it names no affected key");
+    return { visionVersion: row.visionVersion, requestedBy: row.requestedBy, words: row.words, affected: [first, ...rest] };
+  });
+}
+
+/** A client correction applied to a project, as the correction's own transaction records it. */
+export interface CorrectionHold {
+  readonly projectId: ProjectId;
+  /** The vision version the correction wrote, with its vision_revisions row. */
+  readonly visionVersion: number;
+  /** The client message it answers: the change, its confirmation or the answer. */
+  readonly requestedBy: string;
+  /** The guarantee and assumption keys it affects. */
+  readonly affected: readonly string[];
+}
+
+/** What holdCorrection did: held, parking `parked` tasks, or nothing, and why. */
+type HoldOutcome = { readonly kind: "held"; readonly parked: number } | { readonly kind: "unplanned" } | { readonly kind: "no-key" };
+
+/**
+ * Holds the work a client's correction touches, in the transaction that records the correction:
+ * the correction is recorded as awaiting its revision, and every Task of the project not yet started
+ * (Pending) that cites a key it affects is parked (correction_pending), so it is never dispatched
+ * before the revision replaces it; every other task goes on dispatching. The project row is locked,
+ * as the first-plan transaction locks it: before the first plan nothing is held, since that plan is
+ * made from the vision the correction wrote, and a correction affecting no guarantee or assumption
+ * holds nothing either.
+ */
+export async function holdCorrection(db: DbHandle, hold: CorrectionHold): Promise<HoldOutcome> {
+  const affected = [...new Set(hold.affected)];
+  const [first, ...rest] = affected;
+  if (first === undefined) return { kind: "no-key" };
+  const [project] = await db.select({ firstPlannedAt: projects.firstPlannedAt }).from(projects).where(eq(projects.id, hold.projectId)).for("update");
+  if (!project || project.firstPlannedAt === null) return { kind: "unplanned" };
+  await db.insert(correctionHolds).values({ projectId: hold.projectId, visionVersion: hold.visionVersion, requestedBy: hold.requestedBy, affected });
+
+  const keys = sql`${`{${affected.join(",")}}`}::text[]`;
+  const citing = await db.execute(sql`
+    SELECT w.id FROM work_items w WHERE w.project_id = ${hold.projectId} AND w.level = 'Task' AND w.status = 'Pending'
+    AND (${citesAnyOf(keys)}) ORDER BY w.created_at, w.id`);
+  const rows = new WorkItemRowRepository(db);
+  for (const { id } of HeldIdsSchema.parse(citing.rows)) {
+    const row = await rows.findById(id);
+    if (row === null) throw new HeldTaskVanished(hold.projectId, id);
+    const item = rowToWorkItem(row);
+    blockWorkItem(item, {
+      source: "correction_pending",
+      visionVersion: hold.visionVersion,
+      affected: [first, ...rest],
+      reason:
+        `held: the client's correction (vision v${hold.visionVersion}, message ${hold.requestedBy}) changed ` +
+        `${affected.join(", ")}, which this task cites; the plan revision for it replaces this task`,
+    });
+    await rows.save(workItemSaveRow(item), "Pending");
+    for (const event of takeEvents(item)) await insertEvent(db, event);
+  }
+  return { kind: "held", parked: citing.rows.length };
+}
+
+const HeldIdsSchema = z.array(z.object({ id: z.string() }));
+
+/** A task the hold's own read listed is gone before it is parked, under the project's lock. */
+class HeldTaskVanished extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly taskId: string,
+  ) {
+    super(`project ${projectId}: task ${taskId}, listed as citing a corrected key, is gone before it could be held`);
+    this.name = "HeldTaskVanished";
+  }
+}
+
+async function insertEvent(db: DbHandle, event: DomainEvent): Promise<void> {
+  await db.insert(domainEvents).values({
+    eventId: event.eventId,
+    eventType: event.eventType,
+    timestamp: event.timestamp,
+    sourceContext: event.sourceContext,
+    correlationId: event.correlationId ?? null,
+    payload: event.payload,
+  });
 }
 
 /** task_checks.decides: the ids of the vision items one stored check decides; null on a legacy row that records none. */
@@ -217,9 +343,9 @@ export async function completedAttemptGrades(db: DbHandle, projectId: string): P
   return grades;
 }
 
-/** How many client answers the revision took in (replan_requests), as a selected column. */
+/** How many client corrections the revision took in (correction_holds), as a selected column. */
 export const answersTakenBy = (revisionId: AnyColumn) =>
-  sql<unknown>`(SELECT count(*)::int FROM replan_requests rr WHERE rr.plan_revision_id = ${revisionId})`;
+  sql<unknown>`(SELECT count(*)::int FROM correction_holds ch WHERE ch.plan_revision_id = ${revisionId})`;
 
 /** The answersTakenBy column did not read back as a count. */
 class AnswersTakenUnreadable extends Error {
@@ -239,13 +365,13 @@ export function parseAnswersTaken(revisionId: string, raw: unknown): number {
   return parsed.data;
 }
 
-/** A revision was to be written that takes in neither a client's answer nor a repair: nothing asked for it. */
+/** A revision was to be written that takes in neither a client's correction nor a repair: nothing asked for it. */
 class RevisionCauseMissing extends Error {
   constructor(
     readonly projectId: ProjectId,
     readonly revision: number,
   ) {
-    super(`plan revision ${revision} of project ${projectId} takes in no client answer and no repair; nothing is written`);
+    super(`plan revision ${revision} of project ${projectId} takes in no client correction and no repair; nothing is written`);
     this.name = "RevisionCauseMissing";
   }
 }
@@ -283,12 +409,22 @@ class RevisionTaskUnowned extends Error {
   }
 }
 
+/** The corrections a revision takes in. */
+interface RevisionCorrections {
+  readonly versions: readonly [number, ...number[]];
+  readonly requestedBy: string;
+  readonly affected: readonly string[];
+}
+
 interface PlanRevisionRecord {
   readonly projectId: ProjectId;
   readonly revision: number;
   readonly visionVersion: number;
-  /** The client answers the revision takes in, in the order the client sent them; empty for a plan repair. */
-  readonly answers: readonly string[];
+  /**
+   * The client corrections the revision takes in, by the vision version each wrote in the order they
+   * were recorded, with the message its report replies to and every key they affect; null for a plan repair.
+   */
+  readonly corrections: RevisionCorrections | null;
   /** The given-up tasks whose awaited repair the revision records; at least one for a plan repair. */
   readonly repaired: readonly string[];
   readonly summary: unknown;
@@ -296,14 +432,15 @@ interface PlanRevisionRecord {
 }
 
 /**
- * Runs the revision in one transaction with the project row locked (the answer and first-plan
- * transactions lock it too): the project must still be active, awaiting a revision for exactly the
- * answers it takes in (none, for a repair), every repair it records still awaited, on the same vision version, with no
- * task in progress and no stop awaiting the Liaison. `fn` supersedes and writes the items; then
- * every task must have a roster owner, and the revision, its domain events, the answers and
- * repairs it took in and the reset attempts are written. A revision that takes in no answer and
- * no repair throws RevisionCauseMissing: nothing asked for it. A moved read, or an item that left the
- * status it was read in, writes nothing and returns "moved".
+ * Runs the revision in one transaction with the project row locked (the answer, correction and
+ * first-plan transactions lock it too): the project must still be active, awaiting a revision for
+ * exactly the corrections it takes in (none, for a repair), every repair it records still awaited, on
+ * the same vision version, with no stop awaiting the Liaison and no task in progress (for a
+ * correction, none citing a key it affects). `fn` supersedes and writes the items; then every task
+ * must have a roster owner, and the revision, its domain events, the corrections and repairs it took
+ * in and the reset attempts are written. A revision that takes in no correction and no repair throws
+ * RevisionCauseMissing: nothing asked for it. A moved read, or an item that left the status it was
+ * read in, writes nothing and returns "moved".
  */
 export async function withPlanRevisionTransaction(
   db: Database,
@@ -312,7 +449,9 @@ export async function withPlanRevisionTransaction(
   logger: Logger,
 ): Promise<"written" | "moved"> {
   const { projectId } = record;
-  if (record.answers.length === 0 && record.repaired.length === 0) throw new RevisionCauseMissing(projectId, record.revision);
+  const { corrections } = record;
+  if (corrections === null && record.repaired.length === 0) throw new RevisionCauseMissing(projectId, record.revision);
+  const versions: readonly number[] = corrections === null ? [] : corrections.versions;
   try {
     await db.transaction(async (tx) => {
       const [locked] = await tx
@@ -324,13 +463,11 @@ export async function withPlanRevisionTransaction(
       // Read after the lock, in its own statement: a halt committed while the lock was awaited is seen.
       const [atWork] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), projectAtWork()));
       if (!atWork) throw new RevisionReadMoved(projectId, `the project is ${locked.lifecycle === "active" ? "blocked" : locked.lifecycle}`);
-      // The answer transaction locks the project row too: no answer is added to this set meanwhile.
-      const awaited = await awaitedAnswers(tx, projectId);
-      if (awaited.join(",") !== record.answers.join(",")) {
-        throw new RevisionReadMoved(
-          projectId,
-          `the revision is awaited for answer(s) ${awaited.join(", ") || "none"}, not ${record.answers.join(", ") || "none"}`,
-        );
+      // The answer and correction transactions lock the project row too: no correction joins this set meanwhile.
+      const awaited = (await awaitedCorrections(tx, projectId)).map((correction) => correction.visionVersion);
+      if (awaited.join(",") !== versions.join(",")) {
+        const named = (list: readonly number[]) => (list.length === 0 ? "none" : list.map((version) => `v${version}`).join(", "));
+        throw new RevisionReadMoved(projectId, `the revision is awaited for the correction(s) of vision ${named(awaited)}, not ${named(versions)}`);
       }
       if (record.repaired.length > 0) {
         const awaited = await tx
@@ -352,11 +489,11 @@ export async function withPlanRevisionTransaction(
       if (current?.version !== record.visionVersion) {
         throw new RevisionReadMoved(projectId, `planned from vision v${record.visionVersion}, current is v${current?.version ?? "none"}`);
       }
-      const [running] = await tx
-        .select({ id: workItems.id })
-        .from(workItems)
-        .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), eq(workItems.status, "InProgress")))
-        .limit(1);
+      // A correction's revision replaces only the work citing a key it affects, so it waits only for that.
+      const held = corrections === null ? sql`TRUE` : citesAnyOf(sql`${`{${corrections.affected.join(",")}}`}::text[]`);
+      const inProgress = await tx.execute(sql`SELECT w.id FROM work_items w
+        WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'InProgress' AND ${held} LIMIT 1`);
+      const [running] = z.array(z.object({ id: z.string() })).parse(inProgress.rows);
       if (running) throw new RevisionReadMoved(projectId, `task ${running.id} is in progress`);
       // An Epic is not an attempt: it is superseded with its open tasks (supersedeWorkItem).
 
@@ -364,24 +501,23 @@ export async function withPlanRevisionTransaction(
 
       const unowned = await tasksWithoutRosterOwnerAmongOpen(tx, projectId);
       if (unowned.length > 0) throw new RevisionTaskUnowned(projectId, unowned);
-      const [repliedTo] = record.answers;
       const [written] = await tx
         .insert(planRevisions)
         .values({
           projectId,
           revision: record.revision,
           visionVersion: record.visionVersion,
-          requestedBy: repliedTo ?? null,
-          kind: repliedTo === undefined ? "repair" : "client_change",
+          requestedBy: corrections === null ? null : corrections.requestedBy,
+          kind: corrections === null ? "repair" : "client_change",
           summary: record.summary,
         })
         .returning({ id: planRevisions.id });
       if (!written) throw new RevisionNotInserted(projectId, record.revision);
-      if (record.answers.length > 0) {
+      if (versions.length > 0) {
         await tx
-          .update(replanRequests)
+          .update(correctionHolds)
           .set({ planRevisionId: written.id })
-          .where(and(eq(replanRequests.projectId, projectId), isNull(replanRequests.planRevisionId), inArray(replanRequests.answerId, [...record.answers])));
+          .where(and(eq(correctionHolds.projectId, projectId), isNull(correctionHolds.planRevisionId), inArray(correctionHolds.visionVersion, [...versions])));
       }
       if (record.repaired.length > 0) {
         await tx
@@ -389,16 +525,7 @@ export async function withPlanRevisionTransaction(
           .set({ planRevisionId: written.id })
           .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), inArray(planRepairs.workItemId, [...record.repaired])));
       }
-      for (const event of record.events) {
-        await tx.insert(domainEvents).values({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          timestamp: event.timestamp,
-          sourceContext: event.sourceContext,
-          correlationId: event.correlationId ?? null,
-          payload: event.payload,
-        });
-      }
+      for (const event of record.events) await insertEvent(tx, event);
       await tx
         .update(projects)
         .set({ replanAttempts: 0, replanLastError: null, replanLastFailure: null })
@@ -443,7 +570,7 @@ export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, er
       and(
         eq(projects.id, projectId),
         projectAtWork(),
-        sql`(${pendingChange(projects.id)} OR ${pendingRepair(projects.id)})`,
+        sql`(${pendingCorrection(projects.id)} OR ${pendingRepair(projects.id)})`,
       ),
     )
     .returning({ replanAttempts: projects.replanAttempts });
@@ -457,7 +584,7 @@ interface DuePlanRevisionRow {
   readonly revision: number;
   /** plan_revisions.summary as stored; Engagement parses it. */
   readonly summary: unknown;
-  /** The client answers recorded as taken in by it (replan_requests); Engagement checks the summary names each. */
+  /** The client corrections recorded as taken in by it (correction_holds); Engagement checks the summary names each. */
   readonly answersTaken: number;
 }
 
@@ -519,8 +646,8 @@ class PlanRevisionReportNotInserted extends Error {
 }
 
 /**
- * Posts the Liaison's one report on a plan revision, in reply to the earliest answer it took in (in
- * reply to nothing for a plan repair, which no answer asked for), and records it on the revision in
+ * Posts the Liaison's one report on a plan revision, in reply to the earliest client message whose
+ * correction it took in (in reply to nothing for a plan repair, which no client asked for), and records it on the revision in
  * the same transaction; a revision already reported on gets nothing new.
  */
 export async function postPlanRevisionReport(db: DbHandle, revisionId: string, body: string): Promise<"posted" | "already-posted"> {

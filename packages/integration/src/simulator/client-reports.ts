@@ -404,6 +404,8 @@ function categoryWords(reason: StoredBlockedReason): string {
       return reason.mainCommit === null
         ? "the final check of the whole project could not read the project's main line"
         : "the final check of the whole project did not pass on the project's main line";
+    case "correction_pending":
+      return "the client's correction changed what it rests on, and a revision of the plan replaces it";
     case "superseded":
       return "a revision of the plan replaced it";
     case "api":

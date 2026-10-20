@@ -75,4 +75,4 @@ export { adaptWorkItemRepo, rowToWorkItem, workItemSaveRow } from "./repositorie
 export { ProjectHaltRepository } from "./repositories/project-halt.js";
 export { stepContainment } from "./repositories/step-containment.js";
 export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.js";
-export { listDuePlanRevisionReports, postPlanRevisionReport } from "./repositories/replan.js";
+export { holdCorrection, listDuePlanRevisionReports, postPlanRevisionReport } from "./repositories/replan.js";

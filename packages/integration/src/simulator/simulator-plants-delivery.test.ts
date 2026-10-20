@@ -32,6 +32,23 @@ describe("lifecycle simulator, directed", () => {
     expect([...clean.coverage.sweeps]).toEqual(["ran:passed"]);
   }, 90_000);
 
+  // The client corrects the guarantee a task not yet started cites, after the first goal task merged:
+  // only that task and the work waiting on it are held and planned again, and the project is still
+  // accepted. A correction that holds the whole plan holds tasks citing only what it left as it was.
+  const CORRECTED = [draw("universe.extra-behaviours", 1, 1), draw("universe.extra-tasks", 1, 2), draw("client.correction", 1)];
+  it("holds and plans again only the work a client's correction touches", async (ctx) => {
+    const clean = await directed(ctx, CORRECTED);
+    expect(keys(clean), statements(clean)).toEqual([]);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+    expect(clean.records.some((r) => r.event === "delivery.revision-written" && r.fields?.["cause"] === "client-change"), clean.trace.join("\n")).toBe(true);
+  }, 90_000);
+
+  it("catches a correction that holds the whole plan", async (ctx) => {
+    const run = await directed(ctx, CORRECTED, { mutation: "correction-holds-whole-plan" });
+    const planted = keys(run);
+    expect(planted.some((key) => key.startsWith("I2:held-unaffected:")), planted.join(", ")).toBe(true);
+  }, 90_000);
+
   it("catches a delivered report that drops a goal's close", async (ctx) => {
     expect(keys(await directed(ctx, [], { mutation: "delivered-report-omits-goal" }))).toEqual(["I4:delivered-close"]);
   }, 90_000);

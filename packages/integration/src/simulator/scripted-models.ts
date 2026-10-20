@@ -304,6 +304,17 @@ function messagesGuarantee(behaviours: number): string {
  * The vision items the planner's prompt says a task must cite, as an honest planner
  * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
  */
+/** What a revision prompt for a client's correction says, as the planner reads it (replan.ts causeSection). */
+const CORRECTION_REVISION = "changed what is built after work began";
+
+/** A guarantee as vision_documents.guarantees stores it: what the scripted correction restates. */
+const storedGuaranteeSchema = z.object({
+  id: z.string(),
+  statement: z.string(),
+  observable: z.object({ interface: z.array(z.string()), observation: z.string() }),
+  refutedBy: z.array(z.string()),
+});
+
 function itemsToCheck(prompt: string): string[] {
   const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
   return listed === undefined ? [] : listed.split(", ");
@@ -526,7 +537,7 @@ export class StandIns {
       );
     }
     if (keys.includes("reading")) return this.structured(options, "liaison-answer", () => this.answer());
-    if (keys.includes("correction")) return this.structured(options, "liaison-change", () => this.correction());
+    if (keys.includes("correction")) return this.structured(options, "liaison-change", () => this.correction(promptText(options)));
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
       const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);
@@ -669,7 +680,12 @@ export class StandIns {
       : [];
     // Answering that evidence, it plans only what is still to do: a done task planned again could
     // never have a check fail on its foundation.
-    const todo = interfaceTask.length === 0 ? universe.tasks : universe.tasks.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
+    // A correction's revision lists only the guarantees it plans again: it plans only the tasks naming them.
+    const listed = guaranteesListed(prompt);
+    const corrected = prompt.includes(CORRECTION_REVISION)
+      ? universe.tasks.filter((task) => task.behaviours.every((b) => listed.some((g) => namesBehaviour(g.line, b))))
+      : universe.tasks;
+    const todo = interfaceTask.length === 0 ? corrected : corrected.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
     const planned = this.plannerReverses() ? [...todo].reverse() : todo;
     return {
       tasks: citingPerLine([...planned.map((task, i) => ({
@@ -927,9 +943,49 @@ export class StandIns {
     return { reading: { verdict: "changes", statement: "Messages are in French.", kind: "undecided" } };
   }
 
-  /** The client's one correction, read as it asks: an exclusion added, which no guarantee a task cites rests on. */
-  private correction(): unknown {
-    return { correction: { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "narrows" }], confirms: [] } };
+  /**
+   * The client's one correction, read so that it touches work not yet started: the guarantee cited by
+   * the last goal task not yet started that no open task waits on, so the open work it does not touch
+   * stays open beside the revision, restated whole with one more refuting observation (it widens, so
+   * the client is asked for no confirmation), its behaviour still named. The project is the one whose
+   * open change this is and whose guarantees the prompt lists. With no such task the correction adds
+   * an exclusion, which no task cites.
+   */
+  private async correction(prompt: string): Promise<unknown> {
+    const exclusion = { correction: { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "narrows" }], confirms: [] } };
+    const { observer, projectIds } = this.context;
+    for (const projectId of projectIds) {
+      const open = await observer.execute(sql`
+        SELECT 1 FROM client_messages WHERE project_id = ${projectId} AND direction = 'inbound' AND kind = 'change' AND consumed_at IS NULL`);
+      if (open.rows.length === 0) continue;
+      const vision = await observer.execute(sql`
+        SELECT guarantees FROM vision_documents WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`);
+      const [latest] = z.array(z.object({ guarantees: z.array(storedGuaranteeSchema) })).parse(vision.rows);
+      if (latest === undefined || !latest.guarantees.every((g) => prompt.includes(`- ${g.id}: ${g.statement} (`))) continue;
+      const pending = await observer.execute(sql`
+        SELECT w.task_spec->'sources' AS sources FROM work_items w
+        WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'Pending' AND w.task_spec->>'origin' = 'decomposition'
+          AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN work_items o ON o.id = d.from_id
+                          WHERE d.to_id = w.id AND o.status IN ('Pending', 'Blocked', 'Failed'))
+        ORDER BY w.created_at DESC, w.id DESC`);
+      const cited = z
+        .array(z.object({ sources: z.array(citedItemSchema).nullable() }))
+        .parse(pending.rows)
+        .flatMap((row) => (row.sources === null ? [] : row.sources.map((source) => source.id)));
+      const target = latest.guarantees.find((g) => cited.includes(g.id));
+      if (target === undefined) return exclusion;
+      const op = {
+        op: "amend-guarantee",
+        id: target.id,
+        statement: `${target.statement} It holds as the client's correction restates it.`,
+        interface: target.observable.interface,
+        observation: target.observable.observation,
+        refutedBy: [...target.refutedBy, `${target.statement} fails after the client's correction.`],
+        direction: "widens",
+      };
+      return { correction: { ops: [op], confirms: [] } };
+    }
+    return exclusion;
   }
 
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {

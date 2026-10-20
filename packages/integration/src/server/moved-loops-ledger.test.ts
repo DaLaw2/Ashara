@@ -339,7 +339,7 @@ beforeEach(() => {
 afterAll(async () => {
   const pattern = `${NAME_PREFIX}%`;
   const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
-  await db.execute(sql`DELETE FROM replan_requests WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM correction_holds WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM plan_revisions WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
