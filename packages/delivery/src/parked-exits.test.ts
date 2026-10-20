@@ -71,6 +71,7 @@ function run(
     getDependencies: notExercised("getDependencies"),
     findChildren: notExercised("findChildren"),
     listDependenciesByProject: notExercised("listDependenciesByProject"),
+    listCorrectionHeld: notExercised("listCorrectionHeld"),
     withTransaction: notExercised("withTransaction"),
   };
   const released = releaseClearedBlocks({

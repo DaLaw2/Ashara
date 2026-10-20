@@ -11,6 +11,7 @@ import {
   completeRecordedMerge,
   failWorkItem,
   blockWorkItem,
+  holdForCorrection,
   unblockWorkItem,
   replanWorkItem,
   abandonWorkItem,
@@ -119,6 +120,14 @@ describe("state-machine totality", () => {
     blockWorkItem(other, BLOCK_REASON);
     expect(() => completeRecordedMerge(other)).toThrow(InvalidStatusTransition);
     expect(() => completeWorkItem(other)).toThrow(InvalidStatusTransition);
+  });
+
+  test("a task held for a client's correction never goes back to Pending: only its revision supersedes it", () => {
+    const item = createPendingWorkItem("Task", "held-task", TEST_PROJECT_ID);
+    holdForCorrection(item, { visionVersion: 2, requestedBy: "change-1", affected: ["G2"] });
+    expect(item.blockedReason).toMatchObject({ source: "correction_pending", visionVersion: 2, affected: ["G2"] });
+    expect(() => unblockWorkItem(item)).toThrow(InvalidStatusTransition);
+    expect(item.status).toBe("Blocked");
   });
 
   test("abandonWorkItem accepts a Blocked item (the owner-parked give-up path)", () => {

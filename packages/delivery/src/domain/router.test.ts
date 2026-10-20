@@ -36,6 +36,7 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     addDependency: async () => {},
     getDependencies: async () => [],
     listDependenciesByProject: async () => [],
+    listCorrectionHeld: async () => [],
     withTransaction: async <T>(fn: (repo: WorkItemRepository) => Promise<T>) =>
       fn(buildInMemoryRepo([...store.values()])),
   };

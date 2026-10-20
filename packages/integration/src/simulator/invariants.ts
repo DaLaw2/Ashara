@@ -89,8 +89,11 @@ const checkRow = z.object({
 });
 const eventRow = z.object({ seq: z.number(), eventType: z.string(), workItemId: z.string().nullable() });
 const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
-/** A client correction recorded as holding work: the vision version it wrote and the keys it affects. */
-const correctionRow = z.object({ visionVersion: z.number(), affected: z.array(z.string()) });
+/**
+ * A client correction recorded as holding work: the vision version it wrote, the keys it affects, and
+ * the tasks citing one of them that were started after it was recorded and before its revision.
+ */
+const correctionRow = z.object({ visionVersion: z.number(), affected: z.array(z.string()), startedWhileHeld: z.array(z.string()) });
 
 interface MainCommit {
   readonly commit: string;
@@ -183,7 +186,16 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const corrections = z.array(correctionRow).parse(
     (
       await db.execute(sql`
-        SELECT vision_version AS "visionVersion", affected FROM correction_holds WHERE project_id = ${projectId} ORDER BY vision_version`)
+        SELECT ch.vision_version AS "visionVersion", ch.affected,
+               COALESCE((SELECT json_agg(DISTINCT w.title) FROM work_items w
+                 JOIN domain_events e ON e.event_type = 'work_item.started' AND e.payload->>'work_item_id' = w.id::text
+                 WHERE w.project_id = ch.project_id AND w.level = 'Task'
+                   AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
+                     THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(ch.affected))
+                   AND e.created_at > ch.created_at
+                   AND e.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
+                 '[]'::json) AS "startedWhileHeld"
+        FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
     ).rows,
   );
   const [spend] = z.array(z.object({ spend: z.coerce.number(), unrecorded: z.coerce.number() })).parse(
@@ -484,6 +496,18 @@ export function checkSnapshot(
       );
     }
   }
+  // And it holds every task citing one, whatever the task's status was when it was recorded: none is
+  // dispatched on the words it changed before its revision replaces it.
+  for (const correction of snapshot.corrections) {
+    for (const title of correction.startedWhileHeld) {
+      add(
+        "I2",
+        `dispatched-held:${title}`,
+        `task "${title}" cites a key the correction of vision v${correction.visionVersion} affects (${correction.affected.join(", ")}) ` +
+          `and was dispatched while that correction awaited its revision`,
+      );
+    }
+  }
   for (const episode of context.final ? snapshot.episodes : []) {
     if (!episode.ended && episode.reportId === null && snapshot.project.status === "blocked") {
       add("I2", `episode:${episode.kind}`, `project block episode ${episode.kind} has no report to the client`);
@@ -637,7 +661,7 @@ export function checkTotality(step: number, stalled: Snapshot, cycles: number): 
 }
 
 /** The stored reason as production parses it; an unreadable one has no exit. */
-function blockedReasonOf(raw: unknown): StoredBlockedReason | null {
+export function blockedReasonOf(raw: unknown): StoredBlockedReason | null {
   try {
     return parseStoredBlockedReason(raw) ?? null;
   } catch (err) {

@@ -1,6 +1,6 @@
 import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
-import { correctionHoldsWholePlan } from "./correction-plants.js";
+import { correctionHoldMissesReturned, correctionHoldsWholePlan } from "./correction-plants.js";
 import { intakeSecondReadingDropped } from "./intake-plants.js";
 import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
@@ -79,7 +79,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - review-loop-unbounded: both of the last two and the ledger's: the review loop has no exit at all
  *   (W4 under the liveness profile, and W1);
  * - correction-holds-whole-plan: a client's correction parks every task not yet started, not only
- *   the ones citing a key it affects (I2's correction clause).
+ *   the ones citing a key it affects (I2's correction clause);
+ * - correction-hold-misses-returned: a correction holds a task only as it stood when recorded, so a
+ *   citing task back at Pending after the hold is dispatched before its revision (I2, dispatched-held).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -110,6 +112,7 @@ export const MUTATIONS = [
   "suite-review-bound-ignored",
   "review-loop-unbounded",
   "correction-holds-whole-plan",
+  "correction-hold-misses-returned",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -150,6 +153,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "suite-review-bound-ignored": { bypassed: [], queries: suiteReviewBoundIgnored, code: null },
   "review-loop-unbounded": { bypassed: [], queries: reviewLoopUnbounded, code: null },
   "correction-holds-whole-plan": { bypassed: [], queries: correctionHoldsWholePlan, code: null },
+  "correction-hold-misses-returned": { bypassed: [], queries: correctionHoldMissesReturned, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

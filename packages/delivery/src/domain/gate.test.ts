@@ -40,6 +40,7 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     addDependency: async () => {},
     getDependencies: async () => [],
     listDependenciesByProject: async (projectId) => edges.filter((e) => projectOf(e.fromId) === projectId),
+    listCorrectionHeld: async () => [],
     withTransaction: async (fn) => fn(repo),
   };
   return { repo, store, saves };

@@ -1,10 +1,12 @@
 import { and, eq, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
+import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
 import { insertedRow, workItems, dependencies } from "@ashara/db";
 import { parseWorkItemStatus } from "../work-item-language/work-item-status.js";
 import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "../work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
+import { citesAnyOf } from "./citation.js";
 
 type WorkItemRow = typeof workItems.$inferSelect;
 
@@ -424,5 +426,68 @@ export class WorkItemRowRepository {
       .innerJoin(workItems, eq(workItems.id, dependencies.fromId))
       .where(eq(workItems.projectId, projectId));
     return rows;
+  }
+
+  /** Removes the edge by which `fromId` waits on `toId`; throws when there is none. */
+  async removeDependency(fromId: string, toId: string): Promise<void> {
+    const removed = await this.db
+      .delete(dependencies)
+      .where(and(eq(dependencies.fromId, fromId), eq(dependencies.toId, toId)))
+      .returning({ fromId: dependencies.fromId });
+    if (removed.length === 0) throw new DependencyNotFound(fromId, toId);
+  }
+
+  /**
+   * The project's Pending Tasks citing a key of a client correction that awaits its plan revision
+   * (correction_holds), oldest first, each with the earliest such correction it cites, whatever the
+   * task's status was when that correction was recorded.
+   */
+  async listCorrectionHeld(projectId: string): Promise<CorrectionHeldTask[]> {
+    const result = await this.db.execute(sql`
+      SELECT held.id AS "taskId", held.vision_version AS "visionVersion", held.requested_by AS "requestedBy", held.affected
+      FROM (SELECT DISTINCT ON (w.id) w.id, w.created_at, ch.vision_version, ch.requested_by, ch.affected
+            FROM work_items w JOIN correction_holds ch ON ch.project_id = w.project_id AND ch.plan_revision_id IS NULL
+            WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'Pending' AND (${citesAnyOf(sql`ch.affected`)})
+            ORDER BY w.id, ch.created_at, ch.vision_version) held
+      ORDER BY held.created_at, held.id`);
+    return CorrectionHeldRowsSchema.parse(result.rows).map((row) => {
+      const [first, ...rest] = row.affected;
+      if (first === undefined) throw new CorrectionHoldKeyless(projectId, row.visionVersion);
+      return { ...row, affected: [first, ...rest] };
+    });
+  }
+}
+
+/** A Pending task a client correction holds, with that correction: the version it wrote, the message it answers and the keys it affects. */
+export interface CorrectionHeldTask {
+  readonly taskId: string;
+  readonly visionVersion: number;
+  readonly requestedBy: string;
+  readonly affected: readonly [string, ...string[]];
+}
+
+const CorrectionHeldRowsSchema = z.array(
+  z.object({ taskId: z.string(), visionVersion: z.number().int(), requestedBy: z.string(), affected: z.array(z.string().min(1)) }),
+);
+
+/** A correction hold that names no affected key: the row the correction_holds CHECK refuses. */
+class CorrectionHoldKeyless extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly visionVersion: number,
+  ) {
+    super(`project ${projectId}: the correction hold of vision v${visionVersion} names no affected key`);
+    this.name = "CorrectionHoldKeyless";
+  }
+}
+
+/** An edge to remove is not on record. */
+class DependencyNotFound extends Error {
+  constructor(
+    readonly fromId: string,
+    readonly toId: string,
+  ) {
+    super(`work item ${fromId} does not wait on ${toId}: no such dependency to remove`);
+    this.name = "DependencyNotFound";
   }
 }

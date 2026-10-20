@@ -1,12 +1,14 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, noOpenStop, projectAtWork, projects } from "@ashara/db";
+import { clientMessages, noOpenStop, projectAtWork, projects, visionDocuments } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { projectWorkBudget } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
+import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
+import { readVisionVersion } from "../vision.js";
 import type { RevisionOp } from "../vision-language/contract-op.js";
 import { ClientMessageRepository } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
@@ -31,10 +33,31 @@ interface AppliedCorrection {
  */
 export type HoldCorrection = (tx: DbHandle, correction: AppliedCorrection) => Promise<unknown>;
 
-/** The guarantee and assumption keys a revision's operations affect: what a task cites and a correction holds. */
-export function affectedKeysOf(ops: readonly RevisionOp[]): string[] {
-  const keys = ops.filter((op) => op.target === "guarantee" || op.target === "assumption").flatMap((op) => (op.key === null ? [] : [op.key]));
-  return [...new Set(keys)];
+/** An applied correction's version, or the one it was applied to, is not on record in its own transaction. */
+class CorrectionVersionMissing extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly version: number,
+  ) {
+    super(`project ${projectId}: vision v${version - 1} and v${version}, which an applied correction reads and writes, are not both on record`);
+    this.name = "CorrectionVersionMissing";
+  }
+}
+
+/**
+ * The guarantee and assumption keys a revision's operations affect, as applied as `version`: what a
+ * task cites and a correction holds (affectedKeys). An operation on an interface entry or an exclusion
+ * is read against the guarantees of `version` and of the version it was applied to, so a guarantee
+ * observed at an entry the correction withdrew, or moved off one, is still affected. Call it inside the
+ * correction's transaction, after `version` is written.
+ */
+export async function affectedKeysOf(db: DbHandle, projectId: ProjectId, version: number, ops: readonly RevisionOp[]): Promise<string[]> {
+  const rows = await db
+    .select()
+    .from(visionDocuments)
+    .where(and(eq(visionDocuments.projectId, projectId), inArray(visionDocuments.version, [version - 1, version])));
+  if (rows.length !== 2) throw new CorrectionVersionMissing(projectId, version);
+  return affectedKeys(ops, rows.flatMap((row) => readVisionVersion(row).guarantees));
 }
 
 /**
@@ -274,13 +297,13 @@ function writeCorrection(db: Database, write: CorrectionWrite, hold: HoldCorrect
         direction: confirmation.direction,
       });
       if (applied.kind === "moved") throw moved(applied.current, confirmation.vision.basedOnVersion);
-      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.changeId, affected: affectedKeysOf(confirmation.ops) });
+      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.changeId, affected: await affectedKeysOf(tx, write.projectId, applied.version, confirmation.ops) });
     }
     const { revision } = write;
     if (revision?.status === "applied") {
       const applied = await visions.append(write.projectId, revision.vision, revision.record);
       if (applied.kind === "moved") throw moved(applied.current, revision.vision.basedOnVersion);
-      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.changeId, affected: affectedKeysOf(revision.record.ops) });
+      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.changeId, affected: await affectedKeysOf(tx, write.projectId, applied.version, revision.record.ops) });
     } else if (revision?.status === "proposed") {
       const current = await visions.getCurrent(write.projectId);
       if (current?.version !== revision.basedOnVersion) throw moved(current?.version ?? null, revision.basedOnVersion);

@@ -5,10 +5,11 @@ import type { Database, DbHandle } from "@ashara/db";
 import { clientMessages, correctionHolds, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingCorrection, pendingRepair, projectAtWork } from "@ashara/db";
 import { CapabilityLevelSchema, higherCapability } from "../acl/finance-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
-import { blockWorkItem, takeEvents } from "../domain/index.js";
+import { holdForCorrection, takeEvents } from "../domain/index.js";
 import type { AttemptGrade } from "../replan.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
+import { citesAnyOf } from "./citation.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { rowToWorkItem, workItemSaveRow } from "./work-item-adapter.js";
@@ -127,11 +128,6 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
 const taskInProgress = (projectId: AnyColumn): SQL =>
   sql`EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'InProgress')`;
 
-/** Whether work item `w` cites one of `keys` (a text[] expression) among its task_spec's sources. */
-const citesAnyOf = (keys: SQL): SQL =>
-  sql`EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
-    THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(${keys}))`;
-
 /** Whether a Task citing a key of a correction the project awaits is in progress: that revision waits only for it. */
 const heldTaskInProgress = (projectId: AnyColumn): SQL =>
   sql`EXISTS (SELECT 1 FROM work_items w JOIN correction_holds ch ON ch.project_id = w.project_id AND ch.plan_revision_id IS NULL
@@ -197,44 +193,33 @@ type HoldOutcome = { readonly kind: "held"; readonly parked: number } | { readon
 /**
  * Holds the work a client's correction touches, in the transaction that records the correction:
  * the correction is recorded as awaiting its revision, and every Task of the project not yet started
- * (Pending) that cites a key it affects is parked (correction_pending), so it is never dispatched
- * before the revision replaces it; every other task goes on dispatching. The project row is locked,
- * as the first-plan transaction locks it: before the first plan nothing is held, since that plan is
- * made from the vision the correction wrote, and a correction affecting no guarantee or assumption
- * holds nothing either.
+ * (Pending) that cites a key of a correction awaiting its revision is parked (correction_pending), so
+ * it is never dispatched before the revision replaces it; every other task goes on dispatching. A
+ * citing task in progress, Blocked or Failed is held as it comes back to Pending (the dispatch gate
+ * parks it), and the revision waits for one in progress. The project row is locked, as the
+ * first-plan transaction locks it: before the first plan nothing is held, since that plan is made
+ * from the vision the correction wrote, and a correction affecting no guarantee or assumption holds
+ * nothing either.
  */
 export async function holdCorrection(db: DbHandle, hold: CorrectionHold): Promise<HoldOutcome> {
   const affected = [...new Set(hold.affected)];
-  const [first, ...rest] = affected;
-  if (first === undefined) return { kind: "no-key" };
+  if (affected.length === 0) return { kind: "no-key" };
   const [project] = await db.select({ firstPlannedAt: projects.firstPlannedAt }).from(projects).where(eq(projects.id, hold.projectId)).for("update");
   if (!project || project.firstPlannedAt === null) return { kind: "unplanned" };
   await db.insert(correctionHolds).values({ projectId: hold.projectId, visionVersion: hold.visionVersion, requestedBy: hold.requestedBy, affected });
 
-  const keys = sql`${`{${affected.join(",")}}`}::text[]`;
-  const citing = await db.execute(sql`
-    SELECT w.id FROM work_items w WHERE w.project_id = ${hold.projectId} AND w.level = 'Task' AND w.status = 'Pending'
-    AND (${citesAnyOf(keys)}) ORDER BY w.created_at, w.id`);
   const rows = new WorkItemRowRepository(db);
-  for (const { id } of HeldIdsSchema.parse(citing.rows)) {
-    const row = await rows.findById(id);
-    if (row === null) throw new HeldTaskVanished(hold.projectId, id);
+  const held = await rows.listCorrectionHeld(hold.projectId);
+  for (const { taskId, ...holdOf } of held) {
+    const row = await rows.findById(taskId);
+    if (row === null) throw new HeldTaskVanished(hold.projectId, taskId);
     const item = rowToWorkItem(row);
-    blockWorkItem(item, {
-      source: "correction_pending",
-      visionVersion: hold.visionVersion,
-      affected: [first, ...rest],
-      reason:
-        `held: the client's correction (vision v${hold.visionVersion}, message ${hold.requestedBy}) changed ` +
-        `${affected.join(", ")}, which this task cites; the plan revision for it replaces this task`,
-    });
+    holdForCorrection(item, holdOf);
     await rows.save(workItemSaveRow(item), "Pending");
     for (const event of takeEvents(item)) await insertEvent(db, event);
   }
-  return { kind: "held", parked: citing.rows.length };
+  return { kind: "held", parked: held.length };
 }
-
-const HeldIdsSchema = z.array(z.object({ id: z.string() }));
 
 /** A task the hold's own read listed is gone before it is parked, under the project's lock. */
 class HeldTaskVanished extends Error {

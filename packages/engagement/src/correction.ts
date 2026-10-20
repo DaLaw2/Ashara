@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ContractOpSchema, opKey, opShape } from "./vision-language/contract-op.js";
-import type { ContractOp, Direction, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
+import type { ContractOp, Direction, OpTarget, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
 import type { AppliedOp, UnappliedOp, VisionVersion } from "./vision.js";
 
 // A client's correction: a change message read into typed operations on the contract of the version in
@@ -103,15 +103,47 @@ export interface CheckedOp {
   readonly direction: Direction;
 }
 
-/** The guarantee and assumption keys a correction's operations act on: the ones a task can cite. */
-export function affectedIds(ops: readonly ContractOp[]): string[] {
-  const ids = new Set<string>();
-  for (const op of ops) {
-    const key = opKey(op);
-    const { target } = opShape(op);
-    if (key !== null && (target === "guarantee" || target === "assumption")) ids.add(key);
+/** A guarantee as the affected-key reading needs it: its key and the interface entries it is observed at. */
+interface ObservedGuarantee {
+  readonly id: string;
+  readonly interface: readonly string[];
+}
+
+/**
+ * The guarantee and assumption keys operations affect: the keys a task can cite. An operation on a
+ * guarantee or an assumption affects its own key; one on an interface entry affects every guarantee of
+ * `guarantees` observed at that entry; one on an exclusion affects every guarantee of `guarantees`,
+ * since no record says which guarantee an exclusion bounds, so none is passed over as untouched.
+ * `guarantees` holds every guarantee of the versions the operations are read against and written to.
+ */
+export function affectedKeys(
+  ops: ReadonlyArray<{ readonly target: OpTarget; readonly key: string | null }>,
+  guarantees: readonly ObservedGuarantee[],
+): string[] {
+  const keys = new Set<string>();
+  for (const { target, key } of ops) {
+    switch (target) {
+      case "guarantee":
+      case "assumption":
+        if (key !== null) keys.add(key);
+        break;
+      case "interface":
+        for (const guarantee of guarantees) if (key !== null && guarantee.interface.includes(key)) keys.add(guarantee.id);
+        break;
+      case "exclusion":
+        for (const guarantee of guarantees) keys.add(guarantee.id);
+        break;
+    }
   }
-  return [...ids];
+  return [...keys];
+}
+
+/** The keys a correction's operations, as read, affect in the version they are read against (affectedKeys). */
+export function affectedIds(ops: readonly ContractOp[], vision: VisionVersion): string[] {
+  return affectedKeys(
+    ops.map((op) => ({ target: opShape(op).target, key: opKey(op) })),
+    vision.guarantees,
+  );
 }
 
 /** A task of the project's current plan citing an affected key, with where it stands. */
@@ -264,7 +296,7 @@ function pushbackLine(reason: PushbackReason): string {
 function impactLines(note: CorrectionNote): string[] {
   const { impact, band } = note;
   if (impact === null || band === null) return [];
-  const ids = affectedIds(note.ops.map((c) => c.op));
+  const ids = affectedIds(note.ops.map((c) => c.op), note.vision);
   const cited =
     ids.length === 0
       ? ["No guarantee or assumption a task cites is affected."]

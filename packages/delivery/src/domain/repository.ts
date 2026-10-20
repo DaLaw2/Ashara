@@ -2,7 +2,13 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { MergeKind } from "../work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { ProjectBlockCause } from "../project-halt.js";
-import type { WorkItem } from "./work-item.js";
+import type { CorrectionHoldOf, WorkItem } from "./work-item.js";
+
+/** A Pending task a client correction holds, and that correction. */
+interface CorrectionHeld {
+  readonly taskId: WorkItemId;
+  readonly hold: CorrectionHoldOf;
+}
 
 /** Which projects' work may be dispatched (active and not halted), and halting one. */
 export interface ActiveProjects {
@@ -99,6 +105,11 @@ export interface WorkItemRepository {
   findChildren(parentId: WorkItemId): Promise<WorkItem[]>;
   /** The edges whose dependent (from) item belongs to the project. */
   listDependenciesByProject(projectId: ProjectId): Promise<Array<{ fromId: WorkItemId; toId: WorkItemId }>>;
+  /**
+   * The project's Pending Tasks citing a key of a client correction that awaits its plan revision,
+   * each with the earliest such correction, whatever the task's status was when it was recorded.
+   */
+  listCorrectionHeld(projectId: ProjectId): Promise<CorrectionHeld[]>;
   /**
    * Runs `fn` atomically. The repository handed to the callback is
    * transaction-scoped: creating a batch of work items AND their dependency

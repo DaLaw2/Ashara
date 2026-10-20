@@ -212,6 +212,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     getDependencies: async () => [],
     findChildren: async () => [],
     listDependenciesByProject: notExercised("listDependenciesByProject"),
+    listCorrectionHeld: notExercised("listCorrectionHeld"),
     withTransaction: notExercised("withTransaction"),
   };
 
@@ -440,6 +441,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       getDependencies: async () => [],
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     };
 
@@ -634,6 +636,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       getDependencies: async () => [],
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     };
     const deps = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => probeBlocked } });
@@ -1000,6 +1003,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
       getDependencies: async () => [],
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     };
 
@@ -1157,6 +1161,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       getDependencies: async (id) => (id === ITEM_ID && whose === "own" ? [CHECK_ID] : []),
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     };
     const deps = coreLoopDeps({
@@ -1326,6 +1331,7 @@ describe("an environment change requested: an environment task is opened and the
       getDependencies: async (id) => edges.filter((edge) => edge.from === id).map((edge) => edge.to as WorkItemId),
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: async (fn) => fn(workItemRepo),
     };
     const deps = coreLoopDeps({
@@ -1522,6 +1528,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
       getDependencies: async () => [],
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     };
 
@@ -1657,6 +1664,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
       getDependencies: async () => [],
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     };
     const deps = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => execResult } });
@@ -1898,6 +1906,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
       getDependencies: async () => [],
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: async (fn) => fn(workItemRepo),
     };
     const deps = coreLoopDeps({

@@ -185,8 +185,10 @@ interface PlanRevisionWrite {
   readonly superseded: readonly SupersededItem[];
   /** The new items, edges between them by temp id, and owners, as a first plan writes them. */
   readonly plan: FirstPlanWrite;
-  /** Edges from a new item (temp id) to work already on record (its id): the environment kept. */
+  /** Edges from a new item (temp id) to work already on record (its id): the environment kept, a kept task's check tasks its review reads. */
   readonly existingEdges: readonly BulkPlanEdge[];
+  /** Kept tasks whose wait on a superseded review (`from`) moves to the revision's review (`toTempId`). */
+  readonly regated: ReadonlyArray<{ readonly taskId: string; readonly from: string; readonly toTempId: string }>;
   readonly events: readonly DomainEvent[];
   readonly summary: PlanRevisionSummary;
 }
@@ -227,6 +229,17 @@ export type ReplanOutcome =
 /** What the core loop asks of Delivery's planning each cycle, after the first plans. */
 export interface Replanning {
   runPending(): Promise<readonly ReplanOutcome[]>;
+}
+
+/** A revision keeps tasks that waited on a review it supersedes, and plans no review of its own for them to wait on. */
+class RevisionReviewMissing extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly taskIds: readonly string[],
+  ) {
+    super(`plan revision of project ${projectId}: task(s) ${taskIds.join(", ")} wait on a review it supersedes, and it plans no review of its own`);
+    this.name = "RevisionReviewMissing";
+  }
 }
 
 /** The project's plan was revised its bound of times since the operator last reviewed it. */
@@ -617,10 +630,14 @@ function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
  * The vision items the stored checks of a completed goal task (isGoalTask) decide, so a revision
  * need not give them a task again. What the task cites is never read here: an item it cites that no
  * stored check decides, a check stored before decides was recorded or a task completed with no
- * stored checks, is planned again.
+ * stored checks, is planned again. A key a correction the revision answers affects is never among
+ * them: every stored check was written against the contract before that correction, and a key's text
+ * can stand unchanged while what it rests on changed (an interface entry it is observed at, an
+ * exclusion), so a check deciding it decides the old contract, not the corrected one.
  */
-function checkedByDone(completed: readonly PlannedItem[]): VisionItem[] {
-  return completed.flatMap(({ item, decided }) => (goalTask(item) ? [...decided] : []));
+function checkedByDone(completed: readonly PlannedItem[], cause: RevisionCause): VisionItem[] {
+  const affected = new Set(cause.kind === "client-change" ? affectedKeys(cause.changes) : []);
+  return completed.flatMap(({ item, decided }) => (goalTask(item) ? decided.filter((done) => !affected.has(done.id)) : []));
 }
 
 /** The work already done, kept as the revision's context: titles and what merged them. */
@@ -640,6 +657,17 @@ interface RevisionScope {
   readonly replaced: readonly PlannedItem[];
   /** The vision items it plans again, as the current vision states them. */
   readonly planned: readonly VisionItem[];
+  /** Open tasks it keeps that waited on a review task it supersedes: each waits on the revision's own review instead. */
+  readonly regated: readonly RegatedTask[];
+}
+
+/** A kept task moved off a superseded review task onto the revision's own review. */
+interface RegatedTask {
+  readonly taskId: string;
+  /** The superseded review task it waited on. */
+  readonly review: string;
+  /** Its own check tasks, kept: the revision's review reads their suites with its own. */
+  readonly checkTasks: readonly string[];
 }
 
 /** Not started, Blocked or Failed: work a revision may supersede. */
@@ -664,6 +692,7 @@ function wholePlanScope(project: ProjectAwaitingReplan, vision: PlanningVision):
     waitsOn: tasks.find(({ item }) => item.status === "InProgress") ?? null,
     replaced: [...tasks.filter(({ item }) => isOpen(item)), ...openEpics],
     planned: vision.items,
+    regated: [],
   };
 }
 
@@ -671,27 +700,45 @@ function wholePlanScope(project: ProjectAwaitingReplan, vision: PlanningVision):
  * A correction's scope: only the work citing a key it affects. It waits for a task citing one that is
  * in progress and for no other; it supersedes the open tasks citing one, and every open task waiting
  * on those, directly or not, which would otherwise wait on work never done; and it plans again the
- * affected keys still in the vision and every item the work it supersedes cited. A merged task citing
- * an affected key stays Completed: its key, as the vision now states it, is not decided by the checks
- * it merged with (checkedByDone matches an item by its text too), so it is planned again. An open
- * environment or layout task is replaced too while none is completed, since the revision then plans
- * its own. An open Epic left with no open task of its own is closed with the work it held, since
- * nothing would settle it.
+ * affected keys still in the vision and every item the work it supersedes, a review aside, cited. Two waits are not
+ * passed on, since the work behind them is not changed: a superseded check task gates only the task it
+ * checks, as dependency resolution reads it; and a task citing no affected key that waits on a
+ * superseded review task is kept, moved to wait on the revision's own review (regated), unless the
+ * revision plans nothing and so writes no review, when it is replaced with the review. A merged task
+ * citing an affected key stays Completed: its key is not decided by the checks it merged with, which
+ * decide the contract before the correction (checkedByDone), so it is planned again. An
+ * open environment or layout task is replaced too while none is completed, since the revision then
+ * plans its own. An open Epic left with no open task of its own is closed with the work it held,
+ * since nothing would settle it.
  */
 function correctionScope(project: ProjectAwaitingReplan, affected: readonly string[], vision: PlanningVision, checked: readonly VisionItem[]): RevisionScope {
   const keys = new Set(affected);
   const tasks = project.items.filter(isTask);
+  const byId = new Map<string, PlannedItem>(tasks.map((task) => [task.item.id, task]));
   const citing = tasks.filter(({ item }) => citedKeys(item).some((key) => keys.has(key)));
   const waitsOn = citing.find(({ item }) => item.status === "InProgress") ?? null;
   const openIds = new Set<string>(tasks.filter(({ item }) => isOpen(item)).map(({ item }) => item.id));
+  // A dependent not read as a task is replaced: nothing shows it untouched.
+  const citesAffected = (id: string) => {
+    const task = byId.get(id);
+    return task === undefined || citedKeys(task.item).some((key) => keys.has(key));
+  };
 
-  const closeOver = (seed: readonly PlannedItem[]): RevisionScope => {
+  const closeOver = (seed: readonly PlannedItem[], reviewWaits: "regate" | "replace"): RevisionScope => {
     const replacedIds = new Set<string>(seed.map(({ item }) => item.id));
+    const regatedOn = new Map<string, string>();
     const frontier = [...replacedIds];
     for (let next = frontier.pop(); next !== undefined; next = frontier.pop()) {
       const waitedOn = next;
+      const gate = byId.get(waitedOn)?.item;
+      const checksOnly = gate?.workKind === "check" ? (gate.taskSpec?.checksFor ?? null) : null;
       for (const edge of project.dependencies) {
         if (edge.toId !== waitedOn || replacedIds.has(edge.fromId) || !openIds.has(edge.fromId)) continue;
+        if (checksOnly !== null && checksOnly !== edge.fromId) continue;
+        if (reviewWaits === "regate" && gate?.taskSpec?.origin === "review" && !citesAffected(edge.fromId)) {
+          regatedOn.set(edge.fromId, waitedOn);
+          continue;
+        }
         replacedIds.add(edge.fromId);
         frontier.push(edge.fromId);
       }
@@ -702,12 +749,29 @@ function correctionScope(project: ProjectAwaitingReplan, affected: readonly stri
       const children = tasks.filter((task) => task.item.parentId === item.id);
       return children.some((task) => replacedIds.has(task.item.id)) && children.every((task) => !isOpen(task.item) || replacedIds.has(task.item.id)) && !children.some((task) => task.item.status === "InProgress");
     });
-    const cited = new Set([...keys, ...replaced.flatMap(({ item }) => citedKeys(item))]);
-    return { waitsOn, replaced: [...replaced, ...closedEpics], planned: vision.items.filter((item) => cited.has(item.id)) };
+    const regated = [...regatedOn].flatMap(([taskId, review]): RegatedTask[] =>
+      replacedIds.has(taskId)
+        ? []
+        : [
+            {
+              taskId,
+              review,
+              checkTasks: tasks
+                .filter(({ item }) => item.workKind === "check" && item.taskSpec?.checksFor === taskId && item.status !== "Abandoned" && !replacedIds.has(item.id))
+                .map(({ item }) => item.id),
+            },
+          ],
+    );
+    // A review cites every item of its plan and builds none of them: the work it reviewed is planned by its own citations.
+    const cited = new Set([...keys, ...replaced.filter(({ item }) => item.taskSpec?.origin !== "review").flatMap(({ item }) => citedKeys(item))]);
+    return { waitsOn, replaced: [...replaced, ...closedEpics], planned: vision.items.filter((item) => cited.has(item.id)), regated };
   };
 
   const held = citing.filter(({ item }) => isOpen(item));
-  const scope = closeOver(held);
+  const regating = closeOver(held, "regate");
+  // A revision that plans nothing writes no review for a kept task to wait on: it is replaced instead.
+  const reviewWaits = regating.regated.length > 0 && stillToCheck(regating.planned, checked).length === 0 ? "replace" : "regate";
+  const scope = reviewWaits === "regate" ? regating : closeOver(held, reviewWaits);
   if (stillToCheck(scope.planned, checked).length === 0) return scope;
   // With no environment or layout completed, a revision that plans work plans its own (environmentOf,
   // layoutOf): the open one it would duplicate is replaced too, with the work waiting on it.
@@ -718,7 +782,7 @@ function correctionScope(project: ProjectAwaitingReplan, affected: readonly stri
   // One of them in progress is waited for, as a held task is: its result decides whether the revision sets up its own.
   const settingUp = tasks.find(({ item }) => item.status === "InProgress" && setsUpAgain(item)) ?? null;
   const duplicated = tasks.filter(({ item }) => isOpen(item) && setsUpAgain(item));
-  const full = duplicated.length === 0 ? scope : closeOver([...held, ...duplicated]);
+  const full = duplicated.length === 0 ? scope : closeOver([...held, ...duplicated], reviewWaits);
   return { ...full, waitsOn: waitsOn ?? settingUp };
 }
 
@@ -803,7 +867,7 @@ export class Replanner implements Replanning {
     // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
     const vision = planningVisionOf(project.vision);
     const completed = project.items.filter(isTask).filter(({ item }) => item.status === "Completed");
-    const checked = checkedByDone(completed);
+    const checked = checkedByDone(completed, cause);
     const scope =
       cause.kind === "client-change" ? correctionScope(project, affectedKeys(cause.changes), vision, checked) : wholePlanScope(project, vision);
     // The store lists a project only with no such task in progress; one seen here started since. Nothing
@@ -821,7 +885,7 @@ export class Replanner implements Replanning {
         const environment = await this.environmentOf(project, cause, completed, vision);
         planned = { decomposition: await this.decompose(project, vision, scope.planned, cause, completed, environment), environment };
       }
-      write = this.compose(project, cause, vision, planned, owners, completed, scope.replaced);
+      write = this.compose(project, cause, vision, planned, owners, completed, scope);
       result = await this.deps.store.writeRevision(write);
     } catch (err) {
       // Only the model's or its provider's failure is a failed revision attempt. Ashara's own (a
@@ -935,7 +999,7 @@ export class Replanner implements Replanning {
       // the revision plans again (for a repair, all of them).
       visionItems: planned,
       interface: vision.interface,
-      checkedItems: checkedByDone(completed),
+      checkedItems: checkedByDone(completed, cause),
     };
     return new DecompositionEngine(llm).decompose(input);
   }
@@ -951,12 +1015,18 @@ export class Replanner implements Replanning {
     planned: { readonly decomposition: DecompositionResult; readonly environment: EnvironmentPlanning } | null,
     owners: ReturnType<typeof planOwners>,
     completed: readonly PlannedItem[],
-    replaced: readonly PlannedItem[],
+    scope: RevisionScope,
   ): PlanRevisionWrite {
+    const { replaced } = scope;
     const plan: FirstPlanWrite =
       planned === null ? { projectId: project.projectId, items: [], edges: [], owners: [], droppedDependencies: [] } : toWrite(project.projectId, planned.decomposition, owners);
     const tempIds = new Set(plan.items.map((item) => item.tempId));
-    const existingEdges = plan.edges.filter((edge) => !tempIds.has(edge.to));
+    // A kept task moved off a superseded review waits on the revision's own, which reads its checks' suites too.
+    const review = planned?.decomposition.tasks.find((task) => task.taskSpec.origin === "review");
+    if (scope.regated.length > 0 && review === undefined) throw new RevisionReviewMissing(project.projectId, scope.regated.map((task) => task.taskId));
+    const regated = review === undefined ? [] : scope.regated.map(({ taskId, review: from }) => ({ taskId, from, toTempId: review.id }));
+    const reviewed = review === undefined ? [] : scope.regated.flatMap(({ checkTasks }) => checkTasks.map((to) => ({ from: review.id, to })));
+    const existingEdges = [...plan.edges.filter((edge) => !tempIds.has(edge.to)), ...reviewed];
     const revision = project.nextRevision;
     const repairOf = [...project.repairsAwaited];
     const corrections: RevisionCorrections | null =
@@ -1016,6 +1086,7 @@ export class Replanner implements Replanning {
       superseded,
       plan: { ...plan, edges: plan.edges.filter((edge) => tempIds.has(edge.to)) },
       existingEdges,
+      regated,
       events,
       summary:
         cause.kind === "client-change"

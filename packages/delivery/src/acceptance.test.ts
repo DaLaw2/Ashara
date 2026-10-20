@@ -52,6 +52,7 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
     getDependencies: notExercised("getDependencies"),
     findChildren: notExercised("findChildren"),
     listDependenciesByProject: notExercised("listDependenciesByProject"),
+    listCorrectionHeld: notExercised("listCorrectionHeld"),
     withTransaction: notExercised("withTransaction"),
   };
 }

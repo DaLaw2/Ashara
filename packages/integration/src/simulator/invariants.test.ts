@@ -126,7 +126,7 @@ describe("a state with no exit", () => {
       title: `Deliver ${cites.join("+")}`,
       cites,
     });
-    const snapshot = { ...plantedSnapshot([held(["G2"]), held(["G1"]), held(["G1", "G2"])]), corrections: [{ visionVersion: 2, affected: ["G2"] }] };
+    const snapshot = { ...plantedSnapshot([held(["G2"]), held(["G1"]), held(["G1", "G2"])]), corrections: [{ visionVersion: 2, affected: ["G2"], startedWhileHeld: [] }] };
     const keys = checkSnapshot(4, snapshot, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
     expect(keys).toEqual(["I2:held-unaffected:Deliver G1"]);
   });

@@ -192,6 +192,30 @@ export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void
   );
 }
 
+/** A client correction awaiting its plan revision, as a task citing a key it affects is held for it. */
+export interface CorrectionHoldOf {
+  /** The vision version the correction wrote. */
+  readonly visionVersion: number;
+  /** The client message it answers. */
+  readonly requestedBy: string;
+  readonly affected: readonly [string, ...string[]];
+}
+
+/**
+ * Parks a Pending task citing a key `hold` affects (correction_pending): it is never dispatched on
+ * the words the correction changed, and the correction's plan revision replaces it.
+ */
+export function holdForCorrection(item: WorkItem, hold: CorrectionHoldOf): void {
+  blockWorkItem(item, {
+    source: "correction_pending",
+    visionVersion: hold.visionVersion,
+    affected: [...hold.affected],
+    reason:
+      `held: the client's correction (vision v${hold.visionVersion}, message ${hold.requestedBy}) changed ` +
+      `${hold.affected.join(", ")}, which this task cites; the plan revision for it replaces this task`,
+  });
+}
+
 /**
  * Returns a Blocked item to Pending once its automatic exit has cleared (orchestrator
  * parked-exits.ts); no person unblocks a task. Pins its
@@ -204,7 +228,9 @@ export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void
  */
 export function unblockWorkItem(item: WorkItem): void {
   // A merge_unrecorded item's work is merged: Pending would re-dispatch it (completeRecordedMerge is its exit).
-  if (item.status !== "Blocked" || item.blockedReason?.source === "merge_unrecorded" || !canTransitionTo(item.status, "Pending")) {
+  // A correction_pending item's spec holds the words a client's correction changed: its plan revision supersedes it.
+  const source = item.blockedReason?.source;
+  if (item.status !== "Blocked" || source === "merge_unrecorded" || source === "correction_pending" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
   const previous = item.blockedReason === undefined ? null : blockedReasonToRecord(item.blockedReason);

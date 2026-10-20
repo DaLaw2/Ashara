@@ -152,6 +152,10 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
       const rows = await db.listDependenciesByProject(projectId);
       return rows.map((row) => ({ fromId: parseWorkItemId(row.fromId, "dependencies.from_id"), toId: parseWorkItemId(row.toId, "dependencies.to_id") }));
     },
+    async listCorrectionHeld(projectId) {
+      const rows = await db.listCorrectionHeld(projectId);
+      return rows.map(({ taskId, ...hold }) => ({ taskId: parseWorkItemId(taskId, "work_items.id"), hold }));
+    },
     async withTransaction(fn) {
       return db.withTransaction((txDb) => fn(adaptWorkItemRepo(txDb)));
     },

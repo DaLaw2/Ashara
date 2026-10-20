@@ -319,7 +319,7 @@ export class ClientChanges implements LiaisonClientChanges {
     let impact: ChangeImpact | null = null;
     let band: CorrectionNote["band"] = null;
     if (checked.length > 0) {
-      impact = await this.deps.store.impact(change.projectId, affectedIds(reading.ops));
+      impact = await this.deps.store.impact(change.projectId, affectedIds(reading.ops, before));
       band = costBandOf(reading.ops, impact);
       const pushback = pushbackOf(checked, impact, band);
       const authorship = { author: "client", sourceMessageId: change.id } as const;

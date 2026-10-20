@@ -5,8 +5,8 @@ import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { EventPublisher } from "../lifecycle/ports.js";
-import type { WorkItem } from "./work-item.js";
-import { giveUpWorkItem, takeEvents } from "./work-item.js";
+import type { CorrectionHoldOf, WorkItem } from "./work-item.js";
+import { giveUpWorkItem, holdForCorrection, takeEvents } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import {
   DependencyGraph,
@@ -110,7 +110,15 @@ async function admitProject(
   }
   const resolution = graph.resolveDependencies(buildDependencyContext(items));
 
-  const pending = items.filter((item) => item.status === "Pending" && item.level === "Task");
+  // A task a client's correction holds is parked however it came back to Pending (a requeue, a retry,
+  // a parked exit): its spec still holds the words the correction changed.
+  const held = new Map((await repo.listCorrectionHeld(projectId)).map((each) => [each.taskId, each.hold] as const));
+  const pending: WorkItem[] = [];
+  for (const item of items.filter((each) => each.status === "Pending" && each.level === "Task")) {
+    const hold = held.get(item.id);
+    if (hold === undefined) pending.push(item);
+    else await parkHeld(repo, events, logger, item, hold);
+  }
   const statusById = new Map(items.map((item) => [item.id, item.status] as const));
   for (const item of pending) {
     const result = resolution.get(item.id);
@@ -161,6 +169,34 @@ async function giveUpUnsatisfiable(
     } catch (err) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the give-up is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
       logger.warn("delivery.event-publish-failed", `failed to publish ${event.eventType} (the give-up is committed)`, { taskId: item.id, site: "gate", eventType: event.eventType }, err);
+    }
+  }
+}
+
+/**
+ * Parks a Pending task a client's correction holds (holdForCorrection). A concurrent change to the
+ * task refuses the save, and the task is not admitted this cycle either way; the next cycle's gate
+ * reads it again.
+ */
+async function parkHeld(repo: WorkItemRepository, events: EventPublisher, logger: Logger, item: WorkItem, hold: CorrectionHoldOf): Promise<void> {
+  holdForCorrection(item, hold);
+  try {
+    await repo.save(item, "Pending");
+  } catch (err) {
+    if (!(err instanceof InvalidStatusTransition)) throw err;
+    logger.warn("delivery.transition-rejected", "not held for the client's correction, it changed concurrently", { taskId: item.id, from: err.from, to: err.to }, err);
+    return;
+  }
+  logger.info("delivery.task-held", `held for the client's correction of vision v${hold.visionVersion}: it cites ${hold.affected.join(", ")}`, {
+    taskId: item.id,
+    visionVersion: hold.visionVersion,
+  });
+  for (const event of takeEvents(item)) {
+    try {
+      await events.publish(event);
+    } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the hold is committed before its events are published; domain_events is an operator audit log that no verdict, counter, charge or client text reads
+      logger.warn("delivery.event-publish-failed", `failed to publish ${event.eventType} (the hold is committed)`, { taskId: item.id, site: "gate", eventType: event.eventType }, err);
     }
   }
 }

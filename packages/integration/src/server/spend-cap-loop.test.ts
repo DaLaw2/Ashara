@@ -110,6 +110,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
       getDependencies: notExercised("getDependencies"),
       findChildren: notExercised("findChildren"),
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     },
     eventStore: { publish: notExercised("publish") },

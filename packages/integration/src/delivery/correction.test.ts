@@ -20,6 +20,8 @@ import {
   adaptWorkItemRepo,
   createFirstPlanStore,
   createReplanStore,
+  failWorkItem,
+  replanWorkItem,
   startWorkItem,
 } from "@ashara/delivery";
 import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
@@ -76,20 +78,23 @@ function jsonResult(value: unknown) {
   };
 }
 
-const guarantee = (id: string, statement: string, quote: string) => ({
+const guarantee = (id: string, statement: string, quote: string, at: string) => ({
   id,
   statement,
-  observable: { interface: ["I1"], observation: "output" },
+  observable: { interface: [at], observation: "output" },
   refutedBy: [`The product does not hold that ${statement}`],
   source: { kind: "tender", quote },
 });
 
 const INTAKE = {
   summary: "A key store.",
-  interface: [{ id: "I1", text: "kv put KEY VALUE; kv get KEY; kv delete KEY", source: { kind: "tender", quote: "Clients put and get keys." } }],
+  interface: [
+    { id: "I1", text: "kv put KEY VALUE; kv get KEY", source: { kind: "tender", quote: "Clients put and get keys." } },
+    { id: "I2", text: "kv delete KEY", source: { kind: "tender", quote: "A deleted key is gone." } },
+  ],
   guarantees: [
-    guarantee("G1", "A get returns the value of the last put of its key.", "Clients put and get keys."),
-    guarantee("G2", "A deleted key is gone.", "A deleted key is gone."),
+    guarantee("G1", "A get returns the value of the last put of its key.", "Clients put and get keys.", "I1"),
+    guarantee("G2", "A deleted key is gone.", "A deleted key is gone.", "I2"),
   ],
   assumptions: [],
   questions: [],
@@ -129,7 +134,7 @@ const AMEND_G2 = {
       op: "amend-guarantee",
       id: "G2",
       statement: AMENDED_G2,
-      interface: ["I1"],
+      interface: ["I2"],
       observation: "output",
       // Every refuting observation G2 had, and one more: it widens, so no confirmation is asked.
       refutedBy: ["The product does not hold that A deleted key is gone.", "a get after a delete prints no word of the deletion"],
@@ -139,14 +144,22 @@ const AMEND_G2 = {
   confirms: [],
 };
 
+/** The client's correction of interface entry I2 alone, which only G2 is observed at. */
+const AMEND_I2 = { ops: [{ op: "amend-interface", id: "I2", text: "kv delete KEY; kv deleted KEY", direction: "neutral" }], confirms: [] };
+
+/** The client's new exclusion, which no task cites and every guarantee is planned beside. */
+const ADD_EXCLUSION = { ops: [{ op: "add-exclusion", text: "No key expires by itself.", direction: "narrows" }], confirms: [] };
+
+type Reading = typeof AMEND_G2 | typeof AMEND_I2 | typeof ADD_EXCLUSION;
+
 /** One model for every call, answering each by what its prompt asks; returns it to read the prompts sent. */
-function pipelineModel(): MockLanguageModelV4 {
+function pipelineModel(reading: Reading = AMEND_G2): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
     doGenerate: async (call) => {
       const prompt = JSON.stringify(call.prompt);
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
-      if (prompt.includes("The client sent a message changing what they want built")) return jsonResult({ correction: AMEND_G2 });
+      if (prompt.includes("The client sent a message changing what they want built")) return jsonResult({ correction: reading });
       if (prompt.includes("needs the project environment changed")) return jsonResult({ environmentChange: false, reason: "Only what a get prints changes." });
       if (prompt.includes("changed what is built after work began")) return jsonResult(citingItemsToCheck(REVISED_TASKS, prompt));
       return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
@@ -207,9 +220,10 @@ async function dispatchable(): Promise<string[]> {
 
 /**
  * A key store planned from G1 and G2 and told to the client: Sprint 0, the layout, the check tasks and
- * the review are done, so the tasks citing G1 and G2 are each ready to dispatch.
+ * the review are done, so the tasks citing G1 and G2 are each ready to dispatch; or, with
+ * `reviewDone` false, all but the review, which every goal task waits on.
  */
-async function readyProject(): Promise<{ readonly projectId: ProjectId; readonly g1: string; readonly g2: string }> {
+async function readyProject(reviewDone = true): Promise<{ readonly projectId: ProjectId; readonly g1: string; readonly g2: string; readonly review: string }> {
   const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, TENDER);
   const projectId = created.project.id;
   ourProjects.add(projectId);
@@ -228,19 +242,21 @@ async function readyProject(): Promise<{ readonly projectId: ProjectId; readonly
     VALUES (${projectId}, 'outbound', 'report', 'The plan.', 'first-plan')`);
 
   const items = await itemsOf(projectId);
-  for (const done of items.filter((i) => i.level === "Task" && i.origin !== "decomposition")) await completeTask(done.id);
+  for (const done of items.filter((i) => i.level === "Task" && i.origin !== "decomposition" && (reviewDone || i.origin !== "review"))) await completeTask(done.id);
+  const review = items.find((i) => i.origin === "review");
+  if (review === undefined) throw new Error("the first plan has no review task");
   const citing = (key: string) => {
     const found = items.find((i) => i.origin === "decomposition" && i.sources?.some((s) => s.id === key) === true);
     if (found === undefined) throw new Error(`the first plan has no task citing ${key}`);
     return found.id;
   };
-  return { projectId, g1: citing("G1"), g2: citing("G2") };
+  return { projectId, g1: citing("G1"), g2: citing("G2"), review: review.id };
 }
 
-/** The client's change amending G2, read by the Liaison the cycle it arrives. */
-async function amendG2(projectId: ProjectId): Promise<string> {
+/** The client's change, read by the Liaison the cycle it arrives as `reading`: by default, amending G2. */
+async function amendG2(projectId: ProjectId, reading: Reading = AMEND_G2): Promise<string> {
   const change = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "change", body: "Getting a deleted key should say it was deleted.", inReplyTo: null });
-  pipelineModel();
+  pipelineModel(reading);
   const store = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
   const narrowed: ClientChangeStore = { ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) };
   const outcomes = await new ClientChanges({ llm: gateway, store: narrowed, containment: memoryStepContainment(() => true) }).runPending();
@@ -359,5 +375,165 @@ describe("a client's correction holds and replaces only the work citing what it 
     expect(after.find((i) => i.id === g1)).toMatchObject({ status: "Pending", reason: null });
     const added = after.filter((i) => i.origin === "decomposition" && i.id !== g1 && i.id !== g2);
     expect(added).toMatchObject([{ status: "Pending", sources: [expect.objectContaining({ id: "G2", text: AMENDED_G2 })] }]);
+  });
+});
+
+/**
+ * Returns a task in progress to Pending as a requeue writes it (an orphan the startup reconciler
+ * finds, a refused model call): its attempt ended with no verdict, so nothing else about it changes.
+ */
+async function requeue(id: string): Promise<void> {
+  const result = await db.execute(sql`
+    UPDATE work_items SET status = 'Pending', updated_at = now() WHERE id = ${id} AND status = 'InProgress' RETURNING id`);
+  expect(result.rows).toHaveLength(1);
+}
+
+/** Fails a task's attempt in progress and returns it to Pending for its next attempt, as the failure router's retry does. */
+async function failAndRetry(id: string): Promise<void> {
+  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
+  const item = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
+  if (item === null) throw new Error(`task ${id} not found`);
+  failWorkItem(item, { source: "task_failed", reason: "its checks did not pass" }, { kind: "retryable", ground: "work" });
+  await PlanningService.saveWorkItem(repo, item, "InProgress");
+  replanWorkItem(item, null);
+  await PlanningService.saveWorkItem(repo, item, "Failed");
+}
+
+describe("a correction holds every task citing what it changes, whatever the task's status", () => {
+  test("a citing task in progress when the correction lands is held once requeued, and the revision waits for it while it runs", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    await startTask(g2);
+    await amendG2(projectId);
+    // The revision waits for the citing task in progress, and for nothing else.
+    pipelineModel();
+    expect(await replanner().runPending()).toEqual([]);
+
+    await requeue(g2);
+    expect(await dispatchable()).toEqual([g1]);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({
+      status: "Blocked",
+      reason: { source: "correction_pending", visionVersion: 2, affected: ["G2"] },
+    });
+    pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Abandoned", reason: { source: "superseded", planRevision: 2 } });
+  });
+
+  test("a citing task whose attempt fails after the correction lands is held when it is retried", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    await startTask(g2);
+    await amendG2(projectId);
+    await failAndRetry(g2);
+
+    expect(await dispatchable()).toEqual([g1]);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Blocked", reason: { source: "correction_pending" } });
+  });
+
+  // A held task in progress finishes its attempt and merges: its merge is not taken as meeting the
+  // corrected guarantee, since the revision waits for it and then plans the amended G2 again beside it.
+  test("a citing task in progress merges, and the amended guarantee still gets a task of its own", async () => {
+    const { projectId, g2 } = await readyProject();
+    await startTask(g2);
+    await amendG2(projectId);
+    pipelineModel();
+    expect(await replanner().runPending()).toEqual([]);
+    await PlanningService.route(adaptWorkItemRepo(new WorkItemRowRepository(db)), parseWorkItemId(g2, "test"), "passed");
+
+    pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+    const after = await itemsOf(projectId);
+    expect(after.find((i) => i.id === g2)).toMatchObject({ status: "Completed" });
+    const added = after.filter((i) => i.origin === "decomposition" && i.status === "Pending" && i.sources?.some((s) => s.id === "G2") === true);
+    expect(added).toMatchObject([{ sources: [expect.objectContaining({ id: "G2", text: AMENDED_G2 })] }]);
+  });
+});
+
+describe("a correction of an interface entry or an exclusion reaches the tasks planned on it", () => {
+  test("amending the interface entry G2 is observed at holds the task citing G2, and only it", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    await amendG2(projectId, AMEND_I2);
+    const holds = await db.execute(sql`SELECT affected FROM correction_holds WHERE project_id = ${projectId}`);
+    expect(holds.rows).toEqual([{ affected: ["G2"] }]);
+    expect(await dispatchable()).toEqual([g1]);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Blocked", reason: { source: "correction_pending", affected: ["G2"] } });
+  });
+
+  test("a new exclusion holds every task citing a guarantee: no record says which one it bounds", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    await amendG2(projectId, ADD_EXCLUSION);
+    const holds = await db.execute(sql`SELECT affected FROM correction_holds WHERE project_id = ${projectId}`);
+    expect(holds.rows).toEqual([{ affected: ["G1", "G2"] }]);
+    expect(await dispatchable()).toEqual([]);
+    const after = await itemsOf(projectId);
+    for (const id of [g1, g2]) expect(after.find((i) => i.id === id)).toMatchObject({ status: "Blocked", reason: { source: "correction_pending" } });
+  });
+});
+
+/** Stores a check of `taskId` deciding G2 as its check task wrote it before any correction. */
+async function storeG2Check(projectId: ProjectId, taskId: string): Promise<void> {
+  const checkTask = (await itemsOf(projectId)).find((i) => i.origin === "check" && i.sources?.some((s) => s.id === "G2") === true);
+  if (checkTask === undefined) throw new Error("the first plan has no check task for G2");
+  await db.execute(sql`
+    INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
+    VALUES (${projectId}, ${taskId}, ${checkTask.id}, 1, 'deleted key is gone', 'true', '[]'::jsonb, ${"e".repeat(64)}, '["G2"]'::jsonb)`);
+}
+
+/** The open tasks the revision added citing G2. */
+async function newG2Tasks(projectId: ProjectId, g2: string) {
+  return (await itemsOf(projectId)).filter((i) => i.origin === "decomposition" && i.id !== g2 && i.status === "Pending" && i.sources?.some((s) => s.id === "G2") === true);
+}
+
+// G2's statement is unchanged by an interface correction: a check stored against the old interface
+// still names G2 as its text reads, and is not taken as deciding G2 under the corrected interface.
+describe("work on a guarantee whose interface entry a correction changed is planned again", () => {
+  test("a citing task in progress merges with checks deciding G2, and G2 still gets a task against the corrected interface", async () => {
+    const { projectId, g2 } = await readyProject();
+    await startTask(g2);
+    await amendG2(projectId, AMEND_I2);
+    pipelineModel();
+    expect(await replanner().runPending()).toEqual([]);
+    await storeG2Check(projectId, g2);
+    await PlanningService.route(adaptWorkItemRepo(new WorkItemRowRepository(db)), parseWorkItemId(g2, "test"), "passed");
+
+    const mock = pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+    const revisionPrompt = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("changed what is built after work began"));
+    expect(revisionPrompt).toContain("kv deleted KEY");
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Completed" });
+    expect(await newG2Tasks(projectId, g2)).toHaveLength(1);
+  });
+
+  test("a citing task merged before the correction stays Completed, and G2 gets a task against the corrected interface", async () => {
+    const { projectId, g2 } = await readyProject();
+    await completeTask(g2);
+    await storeG2Check(projectId, g2);
+    await amendG2(projectId, AMEND_I2);
+
+    pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Completed" });
+    expect(await newG2Tasks(projectId, g2)).toHaveLength(1);
+  });
+});
+
+describe("a correction before the review completes", () => {
+  test("replaces the review and the task citing G2, and keeps the G1 task, waiting on the revision's own review", async () => {
+    const { projectId, g1, g2, review } = await readyProject(false);
+    await amendG2(projectId);
+    pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+
+    const after = await itemsOf(projectId);
+    expect(after.find((i) => i.id === g2)).toMatchObject({ status: "Abandoned", reason: { source: "superseded" } });
+    expect(after.find((i) => i.id === review)).toMatchObject({ status: "Abandoned", reason: { source: "superseded" } });
+    expect(after.find((i) => i.id === g1)).toMatchObject({ status: "Pending", reason: null });
+    // G1 is planned once: the revision plans only the amended G2.
+    expect(after.filter((i) => i.origin === "decomposition" && i.status !== "Abandoned" && i.sources?.some((s) => s.id === "G1") === true).map((i) => i.id)).toEqual([g1]);
+    const reviews = after.filter((i) => i.origin === "review" && i.status === "Pending");
+    expect(reviews).toHaveLength(1);
+    const waits = await db.execute(sql`SELECT to_id AS "to" FROM dependencies WHERE from_id = ${g1}`);
+    const waitedOn = z.array(z.object({ to: z.string() })).parse(waits.rows).map((row) => row.to);
+    expect(waitedOn).toContain(reviews[0]?.id);
+    expect(waitedOn).not.toContain(review);
   });
 });

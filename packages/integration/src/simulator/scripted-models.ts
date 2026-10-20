@@ -300,10 +300,6 @@ function messagesGuarantee(behaviours: number): string {
   return `G${behaviours + 1}`;
 }
 
-/**
- * The vision items the planner's prompt says a task must cite, as an honest planner
- * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
- */
 /** What a revision prompt for a client's correction says, as the planner reads it (replan.ts causeSection). */
 const CORRECTION_REVISION = "changed what is built after work began";
 
@@ -315,6 +311,10 @@ const storedGuaranteeSchema = z.object({
   refutedBy: z.array(z.string()),
 });
 
+/**
+ * The vision items the planner's prompt says a task must cite, as an honest planner
+ * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
+ */
 function itemsToCheck(prompt: string): string[] {
   const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
   return listed === undefined ? [] : listed.split(", ");
@@ -949,7 +949,7 @@ export class StandIns {
    * stays open beside the revision, restated whole with one more refuting observation (it widens, so
    * the client is asked for no confirmation), its behaviour still named. The project is the one whose
    * open change this is and whose guarantees the prompt lists. With no such task the correction adds
-   * an exclusion, which no task cites.
+   * an exclusion, which no task cites and every guarantee is read as resting on.
    */
   private async correction(prompt: string): Promise<unknown> {
     const exclusion = { correction: { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "narrows" }], confirms: [] } };

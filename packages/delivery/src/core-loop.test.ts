@@ -111,6 +111,7 @@ function buildDeps(
     getDependencies: async () => [],
     findChildren: async () => [],
     listDependenciesByProject: notExercised("listDependenciesByProject"),
+    listCorrectionHeld: notExercised("listCorrectionHeld"),
     withTransaction: notExercised("withTransaction"),
   };
 

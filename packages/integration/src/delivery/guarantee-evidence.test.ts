@@ -167,6 +167,7 @@ function loopDeps(sweep: (projectId: ProjectId) => AcceptanceSweep): CoreLoopDep
       getDependencies: notExercised("getDependencies"),
       findChildren: notExercised("findChildren"),
       listDependenciesByProject: notExercised("listDependenciesByProject"),
+      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: notExercised("withTransaction"),
     },
     eventStore: { publish: notExercised("publish") },

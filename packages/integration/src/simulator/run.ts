@@ -26,7 +26,7 @@ import type { FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { GitBroker } from "./git-broker.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
-import { asharaFaultHaltOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
+import { asharaFaultHaltOf, blockedReasonOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
 import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
 import { LogCorrelationJudge, judgingSink, readCorrelationRows } from "./log-correlation.js";
 import { refusedModelSchemas } from "./model-schemas.js";
@@ -486,6 +486,25 @@ async function corruptRows(db: Database, projectId: string, snapshot: Snapshot, 
   }
 }
 
+/**
+ * A task a client's correction holds comes back to Pending while the correction still awaits its
+ * revision, as one does through a path the hold did not see (a crash-orphaned attempt requeued or
+ * read off main, a failed attempt retried): the first held task, written back to Pending as such a
+ * path writes it. Returns whether one was; none is while no awaited correction holds a task.
+ */
+async function returnHeldTask(db: Database, projectId: string, snapshot: Snapshot, trace: string[]): Promise<boolean> {
+  const held = snapshot.items.find((item) => item.level === "Task" && item.status === "Blocked" && blockedReasonOf(item.blockedReason)?.source === "correction_pending");
+  if (held === undefined) return false;
+  const written = await db.execute(sql`
+    UPDATE work_items SET status = 'Pending', blocked_reason = NULL, updated_at = now()
+    WHERE id = ${held.id} AND status = 'Blocked'
+      AND EXISTS (SELECT 1 FROM correction_holds ch WHERE ch.project_id = ${projectId} AND ch.plan_revision_id IS NULL)
+    RETURNING id`);
+  if (written.rows.length === 0) return false;
+  trace.push(`held task "${held.title}" back at Pending before its correction's revision`);
+  return true;
+}
+
 /** A cycle's I10 window as it opened: the counters, and how many faults and decisions the run had made by then. */
 interface ChargeWindowStart {
   readonly before: Charges;
@@ -762,6 +781,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
   const corruption: Corruption | null = options.corruptSecondProject === true ? { taskSpec: false, blockKind: false, contained: new Set() } : null;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
   const correction = tape.chance("client.correction", rates.lateChange);
+  const heldReturns = correction && tape.chance("correction.held-returns", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
   const trace: string[] = [
     `universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`,
@@ -1167,6 +1187,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     let noProgress = false;
     let changed = false;
     let corrected = false;
+    let returned = false;
     let settleLeft: number | null = null;
     let settledOn = "";
     while (cycles < options.maxCycles) {
@@ -1297,6 +1318,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
         corrected = true;
         trace.push(`client correction at cycle ${cycles}`);
       }
+      if (heldReturns && !returned) returned = await returnHeldTask(observing, projectId, snapshot, trace);
 
       // I8's measure: a fact of any project reached for the first time. A cycle that carried an
       // injected fault, a duplicated wake or a restart neither progresses nor counts against it.

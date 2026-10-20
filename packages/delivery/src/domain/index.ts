@@ -4,6 +4,7 @@ export {
   startWorkItem,
   failWorkItem,
   blockWorkItem,
+  holdForCorrection,
   unblockWorkItem,
   replanWorkItem,
   abandonWorkItem,

@@ -100,6 +100,12 @@ export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logge
             if (from === undefined) throw new RevisionItemNotPlanned(write.projectId, edge.from, "edge");
             await domainRepo.addDependency(from, parseWorkItemId(edge.to, "replan existingEdges[].to"));
           }
+          for (const { taskId, from, toTempId } of write.regated) {
+            const to = plan.tempIdToId[toTempId];
+            if (to === undefined) throw new RevisionItemNotPlanned(write.projectId, toTempId, "edge");
+            await workItemRepo.removeDependency(taskId, from);
+            await workItemRepo.addDependency(taskId, to);
+          }
           for (const owner of write.plan.owners) {
             const id = plan.tempIdToId[owner.tempId];
             if (id === undefined) throw new RevisionItemNotPlanned(write.projectId, owner.tempId, "owner");

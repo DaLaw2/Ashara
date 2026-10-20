@@ -233,7 +233,7 @@ function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrectio
       if (applied === null) throw new AnswerCorrectionUnversioned(write.answerId, write.projectId);
       // Every changing answer is on record: the hold names it, the revision that takes it in records
       // itself on the hold, and its report says what it changed.
-      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.answerId, affected: affectedKeysOf(applied.revision.ops) });
+      await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.answerId, affected: await affectedKeysOf(tx, write.projectId, applied.version, applied.revision.ops) });
       await tx.insert(clientMessages).values({
         projectId: write.projectId,
         direction: "outbound",
