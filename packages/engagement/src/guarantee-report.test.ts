@@ -203,6 +203,75 @@ describe("the guarantee table", () => {
   });
 });
 
+type ContractRevision = NonNullable<Extract<GuaranteeRecords, { kind: "judged" }>["revisions"]>[number];
+
+describe("the appendix of the contract's revisions", () => {
+  const PRIOR_G3 = "A get of a missing key prints nothing.";
+  const PROPOSED_G1 = "A get returns some value that was put for its key.";
+  const V1 = readVisionVersion({
+    projectId,
+    version: 1,
+    visionText: TENDER,
+    summary: "A store.",
+    scopeBoundaries: [],
+    inferences: ASSUMPTIONS,
+    openQuestions: [{ messageId: "q1", text: "Ack after disk?", assumptionKey: "A1" }],
+    contractForm: "guarantees",
+    interface: [{ id: "I1", text: "put KEY VALUE, get KEY, delete KEY", source: quote("Clients put and get values.") }],
+    guarantees: [...GUARANTEES.slice(0, 2), { ...GUARANTEES[2], statement: PRIOR_G3 }, ...GUARANTEES.slice(3), { ...GUARANTEES[0], id: "G5", statement: "A list prints every key." }],
+    exclusions: [{ id: "X1", text: "No authentication.", source: quote("Clients put and get values.") }],
+  });
+  const op = (action: "amend" | "withdraw", key: string, statement: string | null) =>
+    ({ target: "guarantee", action, key, direction: "narrows", labelled: null, read: null, statement }) as const;
+  const APPLIED: ContractRevision = {
+    status: "applied",
+    author: "client",
+    direction: "narrows",
+    basedOn: V1,
+    wrote: VISION,
+    ops: [op("amend", "G3", null), op("withdraw", "G5", null)],
+  };
+  const PROPOSAL: ContractRevision = { status: "proposed", author: "ashara", direction: "narrows", basedOn: VISION, ops: [op("amend", "G1", PROPOSED_G1)] };
+  const revised = (revisions: readonly ContractRevision[]): GuaranteeRecords =>
+    SWEPT.kind === "judged" ? { ...SWEPT, revisions } : expect.unreachable("the sweep's records are judged");
+  const HEAD = "Appendix, how your contract has been revised:";
+
+  test("a proposed Ashara narrowing leaves the prior guarantee in the table and is told only in the appendix", () => {
+    const body = guaranteeSection(guaranteeTableOf(revised([PROPOSAL])));
+    expect(tableLine(body, "G1")).toContain("- G1: A get returns the value of the last put of its key. | verdict: pass |");
+    const head = body.indexOf(HEAD);
+    expect(head).toBeGreaterThan(body.indexOf("- G1: A get returns the value"));
+    expect(body.slice(0, head)).not.toContain(PROPOSED_G1);
+    expect(body.slice(head)).toContain(PROPOSED_G1);
+    expect(body.slice(head).split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      `- G1 (as it stands: A get returns the value of the last put of its key.) | Ashara proposes to amend it to: ${PROPOSED_G1}`,
+    ]);
+  });
+
+  test("every guarantee an applied revision superseded is listed with what replaced it, or that nothing did", () => {
+    const parts = guaranteeSection(guaranteeTableOf(revised([APPLIED]))).split("\n\n");
+    expect(parts.at(-1)).toBe(
+      [
+        HEAD,
+        "Guarantees an earlier version of your contract held, each with what replaced it:",
+        `- G3 (vision v1): ${PRIOR_G3} | replaced in vision v2 by your change with G3: A get of a missing key exits 1.`,
+        "- G5 (vision v1): A list prints every key. | withdrawn in vision v2 by your change; nothing replaces it",
+      ].join("\n"),
+    );
+  });
+
+  test("a contract with no revision, or none the appendix lists, prints no appendix heading", () => {
+    expect(guaranteeSection(guaranteeTableOf(SWEPT))).not.toContain("Appendix");
+    const clientProposal: ContractRevision = { ...PROPOSAL, author: "client" };
+    const assumptionOnly: ContractRevision = { ...APPLIED, ops: [{ ...op("amend", "A1", "A put is acknowledged at once."), target: "assumption" }] };
+    expect(guaranteeSection(guaranteeTableOf(revised([clientProposal, assumptionOnly])))).not.toContain("Appendix");
+  });
+
+  test("a revision naming a guarantee its versions do not hold is refused, never read as no change", () => {
+    expect(() => guaranteeTableOf(revised([{ ...APPLIED, ops: [op("withdraw", "G9", null)] }]))).toThrow(/G9, which vision v1 does not hold/);
+  });
+});
+
 describe("every terminal message carries the table", () => {
   test("an infrastructure halt's report holds the table, every guarantee once and unjudged because no check ran on a commit, and posts those verdicts", async () => {
     const posted: Array<{ body: string; verdicts: TableVerdicts | null }> = [];

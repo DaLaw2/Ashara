@@ -1,5 +1,6 @@
 import { verdictOf } from "./vision-language/index.js";
 import type { Evidence, EvidenceClass, FaultSet, UnjudgedReason, Verdict, VisionGuarantee } from "./vision-language/index.js";
+import type { Direction, RevisionOp } from "./vision-language/contract-op.js";
 import type { GuaranteeBasis } from "./vision-language/guarantee.js";
 import type { VisionVersion } from "./vision.js";
 
@@ -12,7 +13,10 @@ import type { VisionVersion } from "./vision.js";
 // the version in force reads unjudged and names that, so a terminal message is never held back for
 // want of evidence. Records that do not hold together judge nothing either: the message says its
 // table could not be read rather than give any guarantee a verdict. The punch list comes first: every failure, then every unjudged
-// guarantee with why, then every pass that rests on an assumption the client has not confirmed.
+// guarantee with why, then every pass that rests on an assumption the client has not confirmed. An
+// appendix follows when the contract was revised: each guarantee an earlier version held with what
+// replaced it, and each narrowing Ashara proposed that the client has not confirmed. A proposal is
+// never in force, so the table judges the guarantee it would narrow as the version in force states it.
 
 /**
  * The fault set that exercises stored data is deferred: no check of a stored-data guarantee can
@@ -33,12 +37,53 @@ interface JudgedSweep {
 type SweepEvidence = { readonly kind: "recorded"; readonly byGuarantee: ReadonlyMap<string, Evidence> } | { readonly kind: "unrecorded" };
 
 /**
+ * One revision of the project's contract as its record holds it, with the version it revised: applied,
+ * with the version it wrote, or proposed and awaiting the client's confirmation, having written none.
+ */
+type ContractRevision = {
+  readonly author: "client" | "ashara";
+  readonly direction: Direction;
+  readonly basedOn: VisionVersion;
+  readonly ops: readonly RevisionOp[];
+} & ({ readonly status: "applied"; readonly wrote: VisionVersion } | { readonly status: "proposed" });
+
+/**
  * What a table is read from: the sweep, null when none is on record for the message, and the vision
- * version in force at it with each guarantee's evidence; or no vision then.
+ * version in force at it with each guarantee's evidence and the project's contract revisions; or no
+ * vision then. Records read from a source that does not load revision records carry none, and their
+ * table prints no appendix: it lists only what a revision record states.
  */
 export type GuaranteeRecords =
-  | { readonly kind: "judged"; readonly sweep: JudgedSweep | null; readonly vision: VisionVersion; readonly evidence: SweepEvidence }
+  | {
+      readonly kind: "judged";
+      readonly sweep: JudgedSweep | null;
+      readonly vision: VisionVersion;
+      readonly evidence: SweepEvidence;
+      readonly revisions?: readonly ContractRevision[];
+    }
   | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null };
+
+/** A guarantee an earlier version of the contract held, and the one a revision replaced it with; null when it was withdrawn. */
+interface SupersededGuarantee {
+  readonly prior: VisionGuarantee;
+  readonly priorVersion: number;
+  readonly replacedBy: VisionGuarantee | null;
+  readonly version: number;
+  readonly author: ContractRevision["author"];
+}
+
+/** One operation of a narrowing Ashara proposed, with the guarantee it acts on as the version in force holds it (null for any other record or an add) and the text it proposes (null when it withdraws). */
+interface ProposedOp {
+  readonly op: RevisionOp;
+  readonly standing: VisionGuarantee | null;
+  readonly text: string | null;
+}
+
+/** What the table's appendix lists: the guarantees superseded up to the version judged, and Ashara's pending narrowings of it. */
+interface Appendix {
+  readonly superseded: readonly SupersededGuarantee[];
+  readonly proposed: readonly ProposedOp[];
+}
 
 /** One guarantee's line of the table. */
 interface GuaranteeLine {
@@ -59,6 +104,7 @@ export type GuaranteeTable =
       readonly vision: VisionVersion;
       readonly evidence: SweepEvidence["kind"];
       readonly lines: readonly GuaranteeLine[];
+      readonly appendix: Appendix;
     }
   | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null }
   | { readonly kind: "unreadable"; readonly sweepId: string | null };
@@ -99,6 +145,19 @@ export class GuaranteeEvidenceMismatch extends Error {
   }
 }
 
+/** A revision's record names a guarantee that the version it revised, or the version it wrote, does not hold. */
+class ContractRevisionMismatch extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly visionVersion: number,
+    readonly guaranteeId: string,
+    readonly detail: string,
+  ) {
+    super(`project ${projectId}: a revision ${detail} ${guaranteeId}, which vision v${visionVersion} does not hold: its appendix cannot be read`);
+    this.name = "ContractRevisionMismatch";
+  }
+}
+
 const NO_EVIDENCE: Evidence = { checks: [], reviewLowers: false };
 
 const CLASS_RANK: readonly EvidenceClass[] = ["witness", "implementer-visible", "review-only"];
@@ -115,17 +174,76 @@ function lineOf(guarantee: VisionGuarantee, evidence: Evidence, onCommit: boolea
   return { guarantee, verdict, evidenceClass: verdict.kind === "pass" ? verdict.evidence : strongestClass(evidence) };
 }
 
+function heldGuarantee(version: VisionVersion, id: string, detail: string): VisionGuarantee {
+  const held = version.guarantees.find((guarantee) => guarantee.id === id);
+  if (held === undefined) throw new ContractRevisionMismatch(version.projectId, version.version, id, detail);
+  return held;
+}
+
+/** The text an operation proposes, as the client's message or Ashara's own record states it; null when it withdraws. */
+function proposedText(op: RevisionOp): string | null {
+  if (op.read === null) return op.statement;
+  switch (op.read.op) {
+    case "add-guarantee":
+    case "amend-guarantee":
+    case "amend-assumption":
+      return op.read.statement;
+    case "add-exclusion":
+    case "add-interface":
+    case "amend-interface":
+      return op.read.text;
+    case "withdraw-guarantee":
+    case "withdraw-exclusion":
+    case "withdraw-interface":
+      return null;
+  }
+}
+
+/**
+ * The appendix of the table judged at `vision`: every guarantee an applied revision up to that version
+ * amended or withdrew, with what replaced it, in the order the revisions were made; and every
+ * operation of a narrowing Ashara proposed against that version that the client has not confirmed. A
+ * revision naming a guarantee its versions do not hold throws, never reads as no change.
+ */
+function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[]): Appendix {
+  const superseded: SupersededGuarantee[] = [];
+  const proposed: ProposedOp[] = [];
+  for (const revision of revisions) {
+    if (revision.status === "applied") {
+      if (revision.wrote.version > vision.version) continue;
+      for (const op of revision.ops) {
+        if (op.target !== "guarantee" || op.action === "add" || op.key === null) continue;
+        superseded.push({
+          prior: heldGuarantee(revision.basedOn, op.key, `${op.action}s`),
+          priorVersion: revision.basedOn.version,
+          replacedBy: op.action === "amend" ? heldGuarantee(revision.wrote, op.key, "writes an amended") : null,
+          version: revision.wrote.version,
+          author: revision.author,
+        });
+      }
+    } else if (revision.author === "ashara" && revision.direction === "narrows" && revision.basedOn.version === vision.version) {
+      for (const op of revision.ops) {
+        const standing = op.target === "guarantee" && op.key !== null ? heldGuarantee(vision, op.key, `proposes to ${op.action}`) : null;
+        proposed.push({ op, standing, text: proposedText(op) });
+      }
+    }
+  }
+  return { superseded, proposed };
+}
+
 /**
  * The table of every guarantee of the version in force at the sweep, each exactly once, in the
- * version's order. Evidence that misses a guarantee or names one the version does not hold is a
- * record that does not hold together: it throws, never reads as no evidence.
+ * version's order, with the appendix of the contract's revisions. Evidence that misses a guarantee or
+ * names one the version does not hold is a record that does not hold together: it throws, never reads
+ * as no evidence; so does a revision naming a guarantee its versions do not hold.
  */
 export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
   if (records.kind === "no-contract") return records;
   const { sweep, vision, evidence } = records;
+  const appendix = records.revisions === undefined ? { superseded: [], proposed: [] } : appendixOf(vision, records.revisions);
   const onCommit = sweep !== null && sweep.mainCommit !== null;
   if (sweep === null || evidence.kind === "unrecorded") {
-    return { kind: "table", sweep, vision, evidence: "unrecorded", lines: vision.guarantees.map((guarantee) => lineOf(guarantee, NO_EVIDENCE, onCommit)) };
+    return { kind: "table", sweep, vision, evidence: "unrecorded", lines: vision.guarantees.map((guarantee) => lineOf(guarantee, NO_EVIDENCE, onCommit)), appendix };
   }
   const ids = new Set(vision.guarantees.map((guarantee) => guarantee.id));
   for (const id of evidence.byGuarantee.keys()) {
@@ -136,7 +254,7 @@ export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
     if (seen === undefined) throw new GuaranteeEvidenceMismatch(sweep.id, vision.version, guarantee.id, "missing");
     return lineOf(guarantee, seen, onCommit);
   });
-  return { kind: "table", sweep, vision, evidence: evidence.kind, lines };
+  return { kind: "table", sweep, vision, evidence: evidence.kind, lines, appendix };
 }
 
 /** The verdicts the table persists beside its message. */
@@ -259,10 +377,47 @@ function basisOfDesignPart(vision: VisionVersion): string[] {
   ];
 }
 
+const REVISED_BY: Readonly<Record<ContractRevision["author"], string>> = { client: "by your change", ashara: "by Ashara" };
+
+function supersededLine(each: SupersededGuarantee): string {
+  const was = `- ${each.prior.id} (vision v${each.priorVersion}): ${each.prior.statement}`;
+  if (each.replacedBy === null) return `${was} | withdrawn in vision v${each.version} ${REVISED_BY[each.author]}; nothing replaces it`;
+  return `${was} | replaced in vision v${each.version} ${REVISED_BY[each.author]} with ${each.replacedBy.id}: ${each.replacedBy.statement}`;
+}
+
+function proposedLine({ op, standing, text }: ProposedOp): string {
+  const subject = op.key ?? `a new ${op.target}`;
+  const now = standing === null ? "" : ` (as it stands: ${standing.statement})`;
+  const unrecorded = "its text is not on record";
+  const would = op.action === "withdraw" ? "withdraw it" : `${op.action === "add" ? "add it" : "amend it to"}: ${text ?? unrecorded}`;
+  return `- ${subject}${now} | Ashara proposes to ${would}`;
+}
+
+const APPENDIX_HEAD = "Appendix, how your contract has been revised:";
+
+/**
+ * The appendix: the guarantees earlier versions held, each with what replaced it, then the narrowings
+ * Ashara proposed that the client has not confirmed; none, not even its heading, when there are neither.
+ */
+function appendixPart(appendix: Appendix): string[] {
+  if (appendix.superseded.length === 0 && appendix.proposed.length === 0) return [];
+  const superseded =
+    appendix.superseded.length === 0 ? [] : [`Guarantees an earlier version of your contract held, each with what replaced it:`, ...appendix.superseded.map(supersededLine)];
+  const proposed =
+    appendix.proposed.length === 0
+      ? []
+      : [
+          `Narrowings Ashara has proposed that you have not confirmed: none is in force, so the table above judges each guarantee as your contract states it now.`,
+          ...appendix.proposed.map(proposedLine),
+        ];
+  return [[APPENDIX_HEAD, ...superseded, ...proposed].join("\n")];
+}
+
 /**
  * The table's paragraphs as the client reads them: the punch list, where and on what it was judged,
- * every guarantee once with its verdict, basis and evidence, then the assumptions, the exclusions
- * and the Basis of Design. A project with no contract at the sweep is told so.
+ * every guarantee once with its verdict, basis and evidence, then the assumptions, the exclusions,
+ * the Basis of Design and the appendix of the contract's revisions. A project with no contract at the
+ * sweep is told so.
  */
 export function guaranteeSection(table: GuaranteeTable): string {
   if (table.kind === "unreadable") {
@@ -280,5 +435,6 @@ export function guaranteeSection(table: GuaranteeTable): string {
     ...assumptionsPart(table.vision),
     exclusionsPart(table.vision),
     ...basisOfDesignPart(table.vision),
+    ...appendixPart(table.appendix),
   ].join("\n\n");
 }
