@@ -5,9 +5,8 @@ import type { Database, DbHandle } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DeliveredReportFailureRecord, ReadingTold } from "../delivered-report.js";
-import { guaranteeTableOf } from "../guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
-import { guaranteeRecordsOf, insertGuaranteeVerdicts } from "./guarantee-report.js";
+import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
 // The Liaison's delivered report: due while a
 // passed acceptance sweep has none, rendered only from what is recorded: how each goal task closed,
@@ -279,7 +278,7 @@ async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredRep
     unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),
     givenUp: await givenUpGoalTitles(db, row.projectId),
     executed: await passedChecksOf(db, row.id, row.checkOutcomes),
-    guarantees: guaranteeTableOf(await guaranteeRecordsOf(db, row.id)),
+    guarantees: await readGuaranteeTable(db, { kind: "sweep", sweepId: row.id }),
     reading: await readingOf(db, row.projectId),
   };
 }

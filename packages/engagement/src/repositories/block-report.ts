@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
@@ -268,6 +268,12 @@ const notCoveredByPlanningStoppedReport = sql`(${projectBlocks.kind} <> 'plannin
   SELECT 1 FROM client_messages m WHERE m.project_id = ${projectBlocks.projectId}
     AND m.reports_on = 'planning-stopped' AND m.created_at < ${projectBlocks.blockedAt}))`;
 
+/**
+ * The halt is told before its resumption: its own report is posted, or it is a planning_stopped
+ * block the planning-stopped report tells.
+ */
+const haltTold = sql`(${projectBlocks.reportId} IS NOT NULL OR NOT ${notCoveredByPlanningStoppedReport})`;
+
 /** The report's subject in the block-report step's ledger: one per episode and side (BlockReports). */
 function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id: string; readonly projectId: string }) {
   return { id: `${subject}:${row.id}`, projectId: parseProjectId(row.projectId, "project_blocks.project_id") };
@@ -288,6 +294,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       and(
         inArray(projectBlocks.endKind, ["unblocked", "probe_passed"]),
         isNull(projectBlocks.resumedReportId),
+        haltTold,
         ne(projects.lifecycle, "stopped"),
         noOpenStop(projects.id),
       ),
@@ -321,8 +328,15 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
     .leftJoin(acceptanceSweeps, eq(acceptanceSweeps.blockId, projectBlocks.id))
     .where(
       and(
-        isNull(projectBlocks.endedAt),
+        // A halt ended by an unblock or a passing probe before its report was posted is still told,
+        // and its resumption after it; one the client's stop ended is told by the stop report. An episode
+        // whose resumption the client has already heard is never told the halt after it.
+        or(
+          isNull(projectBlocks.endedAt),
+          and(inArray(projectBlocks.endKind, ["unblocked", "probe_passed"]), isNull(projectBlocks.resumedReportId)),
+        ),
         isNull(projectBlocks.reportId),
+        ne(projects.lifecycle, "stopped"),
         noOpenStop(projects.id),
         notCoveredByPlanningStoppedReport,
       ),

@@ -504,13 +504,14 @@ function pairRows(inputs: PairInputs): Omit<PairRow, "seq">[] {
     throw new TrustLedgerAppendRefused(pick.run, detail);
   };
   if (hidden.tender !== pick.tender) refuse(`the hidden verdict judges tender ${hidden.tender}, the run picked ${pick.tender}`);
-  if (ashara.kind === "none" && facts.runOutcome === "terminal") refuse("the facts read terminal, but no terminal report of the project carries guarantee verdicts");
+  if (ashara.kind === "no-terminal-report" && facts.runOutcome === "terminal") refuse("the facts read terminal, but the project has no terminal report on record");
+  if (ashara.kind === "no-verdicts" && facts.runOutcome === "terminal") refuse(`the facts read terminal, but the project's last terminal report ${ashara.reportId} carries no guarantee verdicts`);
   const idOf = new Map(readers.A.key.items.map((item) => [item.label, item.id]));
   const rowOf = (label: string, intended: string): StoredGuaranteeVerdict => {
     const id = idOf.get(label);
     if (id === undefined) return refuse(`${intended} maps to ${label}, which the packet key does not hold`);
     const row = ashara.kind === "report" ? ashara.byId.get(id) : undefined;
-    if (row === undefined) return refuse(`${intended} maps to ${label} (${id}), to which the last terminal report gives no verdict`);
+    if (row === undefined) return refuse(`${intended} maps to ${label} (${id}), to which ${ashara.kind === "no-terminal-report" ? "no terminal report on record" : "the last terminal report"} gives no verdict`);
     return row;
   };
   const settled = facts.intended.map((fact) => {
@@ -521,7 +522,7 @@ function pairRows(inputs: PairInputs): Omit<PairRow, "seq">[] {
   });
   const mappedLabels = new Set(settled.flatMap((entry) => entry.labels));
   const unmappedPasses = readers.A.key.items.flatMap((item) => {
-    if (mappedLabels.has(item.label) || ashara.kind === "none") return [];
+    if (mappedLabels.has(item.label) || ashara.kind !== "report") return [];
     const row = ashara.byId.get(item.id);
     return row !== undefined && row.verdict === "pass" ? [row] : [];
   });

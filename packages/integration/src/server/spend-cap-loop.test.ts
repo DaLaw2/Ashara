@@ -127,7 +127,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
     },
     dispatchService: { execute: notExercised("execute") },
     failureRouter: { route: notExercised("route") },
-    clientStops: { runPending: async () => [] },
+    clientStops: { runPending: async () => [], reportPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },
@@ -253,15 +253,14 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
         blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
       },
       clientStops: {
-        runPending: async () => {
-          const taken = await clientStops.runPending();
-          // The halted cycle's terminal sweep and the next halted cycle's stop step, here in one, so
-          // the runner need not wait out its idle interval between them.
+        runPending: () => clientStops.runPending(),
+        reportPending: async () => {
+          // The halted cycle's terminal sweep, over this suite's project only.
           await sweepTerminalsOf(db, (id) => id === projectId);
-          const answered = await clientStops.runPending();
+          const answered = await clientStops.reportPending();
           // Once the stop is answered, the test ends the halted runner, as SIGTERM does.
           if (answered.some((outcome) => outcome.kind === "posted")) abort.abort();
-          return [...taken, ...answered];
+          return answered;
         },
       },
       spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null },

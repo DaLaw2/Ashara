@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { isGoalTask } from "@ashara/db";
+import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
@@ -582,9 +583,16 @@ const storedGuaranteeVerdictSchema = z.discriminatedUnion("verdict", [
 ]);
 export type StoredGuaranteeVerdict = z.output<typeof storedGuaranteeVerdictSchema>;
 
-/** Ashara's per-guarantee verdicts: those its last terminal report carries, or none when no report carries any. */
+/** The project's last terminal report as the database holds it: none, one carrying no verdict rows, or one with its rows unparsed. */
+type LastTerminalReport = Awaited<ReturnType<typeof lastReportGuaranteeVerdictsOf>>;
+
+/**
+ * Ashara's per-guarantee verdicts: those its last terminal report carries; or that its last terminal report carries
+ * none; or that it has no terminal report.
+ */
 export type AsharaGuarantees =
-  | { readonly kind: "none" }
+  | { readonly kind: "no-terminal-report" }
+  | { readonly kind: "no-verdicts"; readonly reportId: string }
   | { readonly kind: "report"; readonly reportId: string; readonly byId: ReadonlyMap<string, StoredGuaranteeVerdict> };
 
 /** The guarantee_verdicts rows of a project's last terminal report do not read as one report's table. */
@@ -602,24 +610,35 @@ class GuaranteeVerdictsUnreadable extends Error {
 
 /**
  * Ashara's per-guarantee verdicts from the guarantee_verdicts rows of the project's last terminal report, as read from
- * the database (none when no report carries any). Throws GuaranteeVerdictsUnreadable for rows of another shape, of
- * more than one report, or naming a guarantee twice.
+ * the database. Throws GuaranteeVerdictsUnreadable for rows of another shape, of a report other than the last terminal
+ * one, or naming a guarantee twice.
  */
-export function asharaGuaranteesOf(projectId: string, rows: unknown): AsharaGuarantees {
-  const parsed = z.array(storedGuaranteeVerdictSchema).safeParse(rows);
+export function asharaGuaranteesOf(projectId: string, last: LastTerminalReport): AsharaGuarantees {
+  if (last.kind !== "verdicts") return last;
+  const parsed = z.array(storedGuaranteeVerdictSchema).nonempty().safeParse(last.rows);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((issue) => `${issue.path.map(String).join(".") || "(root)"}: ${issue.message}`);
     throw new GuaranteeVerdictsUnreadable(projectId, issues, { cause: parsed.error });
   }
-  const [first] = parsed.data;
-  if (first === undefined) return { kind: "none" };
   const byId = new Map<string, StoredGuaranteeVerdict>();
   for (const row of parsed.data) {
-    if (row.reportId !== first.reportId) throw new GuaranteeVerdictsUnreadable(projectId, [`rows of reports ${first.reportId} and ${row.reportId}, not one`]);
+    if (row.reportId !== last.reportId) throw new GuaranteeVerdictsUnreadable(projectId, [`a row of report ${row.reportId}, not of the last terminal report ${last.reportId}`]);
     if (byId.has(row.guaranteeId)) throw new GuaranteeVerdictsUnreadable(projectId, [`guarantee ${row.guaranteeId} twice`]);
     byId.set(row.guaranteeId, row);
   }
-  return { kind: "report", reportId: first.reportId, byId };
+  return { kind: "report", reportId: last.reportId, byId };
+}
+
+/** Where Ashara's side of the pairs is read from, in the report's words. */
+function asharaSource(ashara: AsharaGuarantees): string {
+  switch (ashara.kind) {
+    case "report":
+      return `terminal report ${ashara.reportId}`;
+    case "no-verdicts":
+      return `terminal report ${ashara.reportId}, which carries no guarantee verdicts`;
+    case "no-terminal-report":
+      return "no terminal report on record";
+  }
 }
 
 function asharaItemText(row: StoredGuaranteeVerdict): string {
@@ -679,7 +698,7 @@ export function formatGuaranteePairs(ashara: AsharaGuarantees, pool: PoolEvidenc
       }
       const row = ashara.kind === "report" ? ashara.byId.get(id) : undefined;
       if (row === undefined) {
-        problems.push(`${entry.intended} maps to ${label} (${id}), to which the last terminal report gives no verdict`);
+        problems.push(`${entry.intended} maps to ${label} (${id}), to which ${ashara.kind === "no-terminal-report" ? "no terminal report on record" : "the last terminal report"} gives no verdict`);
         return [];
       }
       return [row];
@@ -687,8 +706,7 @@ export function formatGuaranteePairs(ashara: AsharaGuarantees, pool: PoolEvidenc
   }));
   if (problems.length > 0) return { lines: ["pairs: not compared", ...problems.map((problem) => `VIOLATION: ${problem}`)], violation: true };
   const tender = hidden?.tender ?? pick?.tender;
-  const source = ashara.kind === "report" ? `terminal report ${ashara.reportId}` : "no terminal report carries guarantee verdicts";
-  const lines = [`pairs (mapping of run ${file.run}; ${source}):`];
+  const lines = [`pairs (mapping of run ${file.run}; ${asharaSource(ashara)}):`];
   for (const { entry, rows } of pairs) {
     const judged = hidden?.guarantees.find((guarantee) => guarantee.id === entry.intended);
     const hiddenSide: HiddenSide = hidden === null ? "not run" : (judged?.verdict ?? "not judged");

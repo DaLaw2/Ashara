@@ -136,15 +136,20 @@ export async function recomposeBriefs(db: Db, projectId: string): Promise<Recomp
   return briefs;
 }
 
-/** A record whose kept report was set aside for today's Engagement to report on again. */
-interface SetAside {
-  readonly table: "acceptance_sweeps" | "project_blocks";
-  readonly id: string;
-  readonly projectId: string;
-  readonly reportId: string;
-}
+/** The outcomes a project is sent one report on, which the report itself records (client_messages.reports_on). */
+type MessageSubject = "client-stop" | "planning-stopped";
+
+/**
+ * A record whose kept report was set aside for today's Engagement to report on again: a sweep or a
+ * halt episode, whose report it names; or the kept report of a project's stop or stopped planning,
+ * which names its own subject.
+ */
+type SetAside =
+  | { readonly table: "acceptance_sweeps" | "project_blocks"; readonly id: string; readonly projectId: string; readonly reportId: string }
+  | { readonly table: "client_messages"; readonly subject: MessageSubject; readonly id: string; readonly projectId: string; readonly reportId: string };
 
 const setAsideRow = z.object({ id: z.string(), projectId: z.string(), reportId: z.string() });
+const setAsideMessageRow = setAsideRow.extend({ subject: z.enum(["client-stop", "planning-stopped"]) });
 const statusRow = z.object({ id: z.string(), status: z.string() });
 
 interface ReportsSetAside {
@@ -154,9 +159,10 @@ interface ReportsSetAside {
 }
 
 /**
- * Sets aside the kept delivered report of every passed sweep and the kept report of every blocked
- * project's open episode, so today's Engagement reports on them again. A project accepted and later
- * stopped or reopened is accepted again for the while: its delivered report was composed while it was.
+ * Sets aside the kept delivered report of every passed sweep, the kept report of every blocked
+ * project's open episode, and every kept stop and planning-stopped report (its subject cleared, so the
+ * project reads as not yet told), so today's Engagement reports on them again. A project accepted and
+ * later stopped or reopened is accepted again for the while: its delivered report was composed while it was.
  */
 export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
   return await db.transaction(async (tx) => {
@@ -176,13 +182,25 @@ export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
           RETURNING b.id, b.project_id AS "projectId", o.report_id AS "reportId"`)
       ).rows,
     );
+    const messages = z.array(setAsideMessageRow).parse(
+      (
+        await tx.execute(sql`
+          UPDATE client_messages m SET reports_on = NULL FROM client_messages o
+          WHERE o.id = m.id AND m.reports_on IN ('client-stop', 'planning-stopped')
+          RETURNING m.id, m.project_id AS "projectId", m.id AS "reportId", o.reports_on AS subject`)
+      ).rows,
+    );
     const statuses: Array<z.infer<typeof statusRow>> = [];
     for (const projectId of new Set(sweeps.map((sweep) => sweep.projectId))) {
       statuses.push(...z.array(statusRow).parse((await tx.execute(sql`SELECT id, lifecycle AS status FROM projects WHERE id = ${projectId} AND lifecycle <> 'accepted'`)).rows));
     }
     for (const { id } of statuses) await tx.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${id}`);
     return {
-      records: [...sweeps.map((row) => ({ table: "acceptance_sweeps" as const, ...row })), ...episodes.map((row) => ({ table: "project_blocks" as const, ...row }))],
+      records: [
+        ...sweeps.map((row) => ({ table: "acceptance_sweeps" as const, ...row })),
+        ...episodes.map((row) => ({ table: "project_blocks" as const, ...row })),
+        ...messages.map((row) => ({ table: "client_messages" as const, ...row })),
+      ],
       statuses,
     };
   });
@@ -197,6 +215,18 @@ export async function settleReports(db: Db, setAside: ReportsSetAside): Promise<
   return await db.transaction(async (tx) => {
     const recomposed: SetAside[] = [];
     for (const record of setAside.records) {
+      if (record.table === "client_messages") {
+        const told = z.array(z.object({ id: z.string() })).parse(
+          (await tx.execute(sql`SELECT id FROM client_messages WHERE project_id = ${record.projectId} AND reports_on = ${record.subject}`)).rows,
+        );
+        if (told.length === 0) {
+          await tx.execute(sql`UPDATE client_messages SET reports_on = ${record.subject} WHERE id = ${record.reportId}`);
+          continue;
+        }
+        await tx.execute(sql`DELETE FROM client_messages WHERE id = ${record.reportId}`);
+        recomposed.push(record);
+        continue;
+      }
       const table = sql.identifier(record.table);
       const [now] = z.array(z.object({ reportId: z.string().nullable() })).parse((await tx.execute(sql`SELECT report_id AS "reportId" FROM ${table} WHERE id = ${record.id}`)).rows);
       if (now === undefined || now.reportId === null) {
@@ -214,15 +244,20 @@ export async function settleReports(db: Db, setAside: ReportsSetAside): Promise<
 /** Whether a violation's key is about a text today's code composed again for this project, not one judged as kept. */
 export function composedAgain(key: string, projectId: string, recomposed: readonly SetAside[]): boolean {
   if (key.startsWith("brief-")) return true;
-  const of = (table: SetAside["table"]): boolean => recomposed.some((record) => record.table === table && record.projectId === projectId);
+  const ours = recomposed.filter((record) => record.projectId === projectId);
+  const of = (table: "acceptance_sweeps" | "project_blocks"): boolean => ours.some((record) => record.table === table);
+  const told = (subject: MessageSubject): boolean => ours.some((record) => record.table === "client_messages" && record.subject === subject);
   if (key.startsWith("delivered-") || key.startsWith("accepted-") || key === "guarantee-table:delivered") return of("acceptance_sweeps");
   if (key.startsWith("halt-") || key.startsWith("guarantee-table:halt:")) return of("project_blocks");
+  if (key === "guarantee-table:planning-stopped") return told("planning-stopped");
+  if (key.startsWith("stop-") || key === "guarantee-table:stop") return told("client-stop");
   return false;
 }
 
 const verdictRow = z.object({
   reportId: z.string(),
-  sweepId: z.string(),
+  /** null on a message no sweep is on record for: every verdict of it is unjudged for want of one. */
+  sweepId: z.string().nullable(),
   visionVersion: z.number(),
   guaranteeId: z.string(),
   verdict: z.string(),

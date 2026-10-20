@@ -25,6 +25,7 @@ const runPending = (file: string, ownLedger?: { readonly marker: string; readonl
 /** Every call CoreLoop makes into a dependency or an imported function. */
 const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.clientStops.runPending": runPending("packages/engagement/src/client-stop.ts"),
+  "deps.clientStops.reportPending": { kind: "step", file: "packages/engagement/src/client-stop.ts", declaration: "async reportPending(" },
   "deps.clientChanges.runPending": runPending("packages/engagement/src/client-change.ts"),
   "deps.stackChoices.runPending": runPending("packages/engagement/src/stack-choice.ts"),
   "deps.liaisonIntake.runPending": runPending("packages/engagement/src/intake.ts"),

@@ -5,15 +5,15 @@ import { acceptanceSweeps, clientMessages, projects, workItems } from "@ashara/d
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { stopProject } from "../project-lifecycle.js";
-import { guaranteeTableOf } from "../guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { ClientMessageRepository } from "./client-message.js";
-import { guaranteeRecordsOf, insertGuaranteeVerdicts } from "./guarantee-report.js";
+import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
 // The client's stop. The Liaison consumes each inbound 'stop' and moves the project to 'stopped',
-// together, recording on the stop whether the project was halted then. The stop's report is due
-// once the stop's terminal sweep is recorded, and is posted once per project with its table's
-// verdicts.
+// together, recording on the stop whether the project was halted then. The stop's report is posted
+// once per project with its table's verdicts: the table of the stop's terminal sweep, which the cycle
+// runs before its stop reports, or, for a stop whose sweep is not on record (its recording failed),
+// every guarantee unjudged with no sweep on a commit.
 
 /** work_items.merge_kind; NULL on a record from before merge kinds were recorded. */
 const MergeKindSchema = z.enum(["merged", "already_delivered"]).nullable();
@@ -124,8 +124,8 @@ interface DueStopReportRow {
 }
 
 /**
- * Every stop that stopped its project, still stopped, whose terminal sweep is recorded and whose
- * project has no stop report yet, oldest first. Each is read on its own (readEach): one whose records
+ * Every stop that stopped its project, still stopped, whose project has no stop report yet, oldest
+ * first, with its terminal sweep when one is on record. Each is read on its own (readEach): one whose records
  * do not read as a report is its UnreadSubject, and every other report is still listed.
  */
 export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopReportRow | UnreadSubject>> {
@@ -133,8 +133,7 @@ export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopRep
     .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted, sweepId: acceptanceSweeps.id })
     .from(clientMessages)
     .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    // The stop's terminal sweep: its report waits for it.
-    .innerJoin(acceptanceSweeps, eq(acceptanceSweeps.stopId, clientMessages.id))
+    .leftJoin(acceptanceSweeps, eq(acceptanceSweeps.stopId, clientMessages.id))
     .where(
       and(
         eq(clientMessages.direction, "inbound"),
@@ -155,7 +154,7 @@ export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopRep
         projectId,
         merged: await mergedTasksOf(db, projectId),
         paused: row.paused === true,
-        guarantees: guaranteeTableOf(await guaranteeRecordsOf(db, row.sweepId)),
+        guarantees: await readGuaranteeTable(db, row.sweepId === null ? { kind: "no-sweep", projectId } : { kind: "sweep", sweepId: row.sweepId }),
       };
     },
   );

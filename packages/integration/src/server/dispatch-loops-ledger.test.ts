@@ -259,7 +259,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets, shutdown: AbortControl
     },
     dispatchService,
     failureRouter: new FailureRouter(),
-    clientStops: { runPending: async () => [] },
+    clientStops: { runPending: async () => [], reportPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },

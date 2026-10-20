@@ -161,7 +161,7 @@ describe("a project whose workspace path is refused", () => {
       dispatchService,
       failureRouter: new FailureRouter(),
       spendCap,
-      clientStops: { runPending: async () => [] },
+      clientStops: { runPending: async () => [], reportPending: async () => [] },
       clientChanges: { runPending: async () => [] },
       stackChoices: { runPending: async () => [] },
       liaisonIntake: { runPending: async () => [] },

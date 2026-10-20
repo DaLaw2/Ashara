@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, listProjectsAwaitingRoster, resolveTestDatabaseUrl } from "@ashara/db";
-import { ClientStops, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
@@ -72,6 +72,43 @@ function liaison(): ClientStops {
   };
   return new ClientStops(ours, memoryStepContainment(() => true));
 }
+
+/** One cycle's stop steps over this suite's projects: the stops taken, then the reports due after the terminal sweeps. */
+async function stopSteps() {
+  const steps = liaison();
+  return [...(await steps.runPending()), ...(await steps.reportPending())];
+}
+
+/** The stop reports over one project with no terminal sweep run first: what is due when a stop's sweep could not be recorded. */
+function unsweptReports(projectId: ProjectId, escapes: boolean): ClientStops {
+  const store = createClientStopStore(db);
+  const ours: ClientStopStore = {
+    ...store,
+    openStops: async () => (await store.openStops()).filter((stop) => stop.projectId === projectId),
+    dueStopReports: async () => (await store.dueStopReports()).filter((due) => due.projectId === projectId),
+  };
+  return new ClientStops(ours, memoryStepContainment(() => escapes));
+}
+
+/** Vision v1 in the guarantees form: G1 and G2, both observed at I1 and quoted from the tender. */
+async function writeContract(projectId: ProjectId): Promise<void> {
+  const quote = (text: string) => ({ kind: "tender" as const, quote: text });
+  await new VisionRepository(db).create(projectId, {
+    visionText: "A key store. Clients put and get keys. A deleted key is gone.",
+    summary: "A key store.",
+    inferences: [],
+    contract: {
+      interface: [{ id: "I1", text: "kv put KEY VALUE; kv get KEY; kv delete KEY", source: quote("Clients put and get keys.") }],
+      guarantees: [
+        { id: "G1", statement: "A get returns the value of the last put of its key.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a get after a put prints another value"], source: quote("Clients put and get keys.") },
+        { id: "G2", statement: "A deleted key is gone.", observable: { interface: ["I1"], observation: "exit-status" }, refutedBy: ["a get after a delete exits 0"], source: quote("A deleted key is gone.") },
+      ],
+      exclusions: [],
+    },
+  });
+}
+
+const StoredVerdictsSchema = z.array(z.object({ guaranteeId: z.string(), sweepId: z.string().nullable(), verdict: z.string(), reason: z.string().nullable() }));
 
 async function gate() {
   const projects = new ProjectHaltRepository(db);
@@ -143,7 +180,7 @@ describe("a client's stop", () => {
     expect((await gate()).map((item) => item.id).sort()).toEqual([stopped.taskIds[4], other.taskIds[0]].sort());
     const stop = await sendStop(stopped.projectId, "Budget moved to another project.");
 
-    const outcomes = await liaison().runPending();
+    const outcomes = await stopSteps();
 
     expect(outcomes).toEqual([
       { kind: "stopped", reportDue: true, stopId: stop.id, projectId: stopped.projectId },
@@ -175,12 +212,12 @@ describe("a client's stop", () => {
 
     // A second stop is consumed and not answered.
     const again = await sendStop(stopped.projectId, "Stop.");
-    expect(await liaison().runPending()).toEqual([
+    expect(await stopSteps()).toEqual([
       { kind: "already-stopped", stopId: again.id, projectId: stopped.projectId },
     ]);
     expect((await new ClientMessageRepository(db).findById(again.id))?.consumedAt).toBeInstanceOf(Date);
     expect(await stopReports(stopped.projectId)).toHaveLength(1);
-    expect(await liaison().runPending()).toEqual([]);
+    expect(await stopSteps()).toEqual([]);
   });
 
   test("a stop not yet consumed already keeps its project out of gating, intake, roster, first planning and reports", async () => {
@@ -223,7 +260,7 @@ describe("a client's stop", () => {
     expect(await toReport()).not.toContain(planned.projectId);
 
     // The next cycle's stop step then stops all four.
-    expect((await liaison().runPending()).map((outcome) => outcome.kind)).toEqual([
+    expect((await stopSteps()).map((outcome) => outcome.kind)).toEqual([
       "stopped",
       "stopped",
       "stopped",
@@ -240,7 +277,7 @@ describe("a client's stop", () => {
     await new ProjectHaltRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
     await sendStop(project.projectId, "Never mind.");
 
-    const [outcome] = await liaison().runPending();
+    const [outcome] = await stopSteps();
 
     expect(outcome).toMatchObject({ kind: "stopped", reportDue: true });
     expect(await projectRow(project.projectId)).toEqual({
@@ -252,5 +289,95 @@ describe("a client's stop", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0]).toContain("No merged work is on record for this project.");
     expect(reports[0]).toContain("Work on it was already paused when your request arrived.");
+  });
+
+  // The stop's report carries the table of the stop's terminal sweep when it is on record; a stop
+  // whose sweep never was is still told, its table judged on no sweep.
+  test("a stop whose terminal sweep is never recorded is still told, every guarantee unjudged for want of a sweep, its verdicts stored", async () => {
+    const { projectId } = await projectWith([]);
+    await writeContract(projectId);
+    const stop = await sendStop(projectId, "Stop, please.");
+    const reports = unsweptReports(projectId, true);
+
+    expect(await reports.runPending()).toEqual([{ kind: "stopped", reportDue: true, stopId: stop.id, projectId }]);
+    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+
+    const [body = ""] = await stopReports(projectId);
+    expect(body).toContain("Work on this project has stopped at your request.");
+    expect(body).toContain("No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v1) is unjudged.");
+    const stored = await db.execute(sql`
+      SELECT guarantee_id AS "guaranteeId", sweep_id AS "sweepId", verdict, reason FROM guarantee_verdicts WHERE project_id = ${projectId} ORDER BY guarantee_id`);
+    expect(StoredVerdictsSchema.parse(stored.rows)).toEqual([
+      { guaranteeId: "G1", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
+      { guaranteeId: "G2", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
+    ]);
+  });
+
+  test("a stop whose sweep's guarantee records do not hold together is told once that its table cannot be read, never retried", async () => {
+    const { projectId } = await projectWith([]);
+    const stop = await sendStop(projectId, "Stop, please.");
+    const reports = unsweptReports(projectId, false);
+    await reports.runPending();
+    await sweepTerminalsOf(db, (id) => id === projectId);
+    // Evidence naming a vision version the project does not hold: the sweep's records cannot be read as a table.
+    await db.execute(sql`
+      INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks, review_lowers)
+      SELECT ${projectId}, s.id, 7, 'G1', NULL, '[]'::jsonb, false FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id}`);
+
+    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+    expect(await reports.reportPending()).toEqual([]);
+
+    const posted = await stopReports(projectId);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatch(/Ashara's records of this project's guarantees at sweep [0-9a-f-]{36} do not hold together, so no guarantee is judged in this message/);
+  });
+
+  /** Ashara's proposal to narrow `key` of vision v1, written to vision_revisions; it awaits the client's confirmation. */
+  async function proposeNarrowing(projectId: ProjectId, key: string, statement: string): Promise<void> {
+    await new VisionRepository(db).propose(projectId, 1, {
+      author: "ashara",
+      sourceMessageId: null,
+      approver: null,
+      direction: "narrows",
+      cause: "ashara-decision",
+      ops: [{ target: "guarantee", action: "amend", key, direction: "narrows", labelled: null, read: null, statement }],
+      pushback: null,
+    });
+  }
+
+  test("a contract revision written to the database is told in the stop report's appendix", async () => {
+    const { projectId } = await projectWith([]);
+    await writeContract(projectId);
+    await proposeNarrowing(projectId, "G1", "A get returns some value put for its key.");
+    const stop = await sendStop(projectId, "Stop, please.");
+    const reports = unsweptReports(projectId, false);
+    await reports.runPending();
+    await sweepTerminalsOf(db, (id) => id === projectId);
+
+    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+
+    const [body = ""] = await stopReports(projectId);
+    const appendix = body.slice(body.indexOf("Appendix, how your contract has been revised:"));
+    expect(appendix).toContain("Narrowings Ashara has proposed that you have not confirmed");
+    expect(appendix).toContain(
+      "- G1 (as it stands: A get returns the value of the last put of its key.) | Ashara proposes to amend it to: A get returns some value put for its key.",
+    );
+  });
+
+  test("a contract revision naming a guarantee its version does not hold is told once as a table that cannot be read, never retried", async () => {
+    const { projectId } = await projectWith([]);
+    await writeContract(projectId);
+    await proposeNarrowing(projectId, "G9", "A key lives for ever.");
+    const stop = await sendStop(projectId, "Stop, please.");
+    const reports = unsweptReports(projectId, false);
+    await reports.runPending();
+    await sweepTerminalsOf(db, (id) => id === projectId);
+
+    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+    expect(await reports.reportPending()).toEqual([]);
+
+    const posted = await stopReports(projectId);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatch(/Ashara's records of this project's guarantees at sweep [0-9a-f-]{36} do not hold together, so no guarantee is judged in this message/);
   });
 });

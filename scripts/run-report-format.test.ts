@@ -722,10 +722,14 @@ describe("formatGuaranteePairs: one Ashara/hidden pair per intended guarantee of
     ].join("\n"),
     "reader-A.toml",
   );
-  const ashara = asharaGuaranteesOf("p1", [
-    { reportId: REPORT, guaranteeId: "G4", verdict: "pass", reason: null, evidenceClass: "implementer-visible" },
-    { reportId: REPORT, guaranteeId: "G5", verdict: "pass", reason: null, evidenceClass: "witness" },
-  ]);
+  const ashara = asharaGuaranteesOf("p1", {
+    kind: "verdicts",
+    reportId: REPORT,
+    rows: [
+      { reportId: REPORT, guaranteeId: "G4", verdict: "pass", reason: null, evidenceClass: "implementer-visible" },
+      { reportId: REPORT, guaranteeId: "G5", verdict: "pass", reason: null, evidenceClass: "witness" },
+    ],
+  });
   const pairs = formatGuaranteePairs(ashara, { hidden, pick: null, mapping: { file, key } });
 
   test("a pass beside a hidden pass reads agree", () => {
@@ -736,6 +740,13 @@ describe("formatGuaranteePairs: one Ashara/hidden pair per intended guarantee of
 
   test("a narrowed item reported pass over a hidden fail reads false-confirm", () => {
     expect(pairs.lines[2]).toBe("  T1/I2 <- Ashara G5 pass (witness), narrowed | hidden fail | false-confirm");
+  });
+
+  test("a narrowed item reported pass over a hidden pass still reads false-confirm: Ashara confirmed a weaker promise", () => {
+    const passing = judgedVerdictSchema.parse({ ...hidden, overall: "pass", guarantees: hidden.guarantees.map((guarantee) => ({ ...guarantee, verdict: "pass" })) });
+    const lines = formatGuaranteePairs(ashara, { hidden: passing, pick: null, mapping: { file, key } }).lines;
+    expect(lines[1]).toBe("  T1/I1 <- Ashara G4 pass (implementer-visible) | hidden pass | agree");
+    expect(lines[2]).toBe("  T1/I2 <- Ashara G5 pass (witness), narrowed | hidden pass | false-confirm");
   });
 
   test("an intended guarantee with no Ashara verdict reads omitted", () => {
@@ -751,9 +762,19 @@ describe("formatGuaranteePairs: one Ashara/hidden pair per intended guarantee of
     const baseline = formatGuaranteePairs(ashara, { hidden, pick: null, mapping: { file, key: { ...key, arm: "baseline" } } });
     expect(baseline.violation).toBe(true);
     expect(baseline.lines).toEqual(["pairs: not compared", "VIOLATION: the packet key is of the baseline arm, not Ashara's"]);
-    const noReport = formatGuaranteePairs(asharaGuaranteesOf("p1", []), { hidden, pick: null, mapping: { file, key } });
+    const noReport = formatGuaranteePairs(asharaGuaranteesOf("p1", { kind: "no-terminal-report" }), { hidden, pick: null, mapping: { file, key } });
     expect(noReport.violation).toBe(true);
-    expect(noReport.lines).toContain("VIOLATION: I1 maps to item-1 (G4), to which the last terminal report gives no verdict");
+    expect(noReport.lines).toContain("VIOLATION: I1 maps to item-1 (G4), to which no terminal report on record gives no verdict");
+    const noVerdicts = formatGuaranteePairs(asharaGuaranteesOf("p1", { kind: "no-verdicts", reportId: REPORT }), { hidden, pick: null, mapping: { file, key } });
+    expect(noVerdicts.violation).toBe(true);
+    expect(noVerdicts.lines).toContain("VIOLATION: I1 maps to item-1 (G4), to which the last terminal report gives no verdict");
+  });
+
+  test("rows of a report other than the last terminal one do not read as its table", () => {
+    const other = "00000000-0000-4000-8000-0000000000c2";
+    expect(() =>
+      asharaGuaranteesOf("p1", { kind: "verdicts", reportId: REPORT, rows: [{ reportId: other, guaranteeId: "G4", verdict: "pass", reason: null, evidenceClass: "witness" }] }),
+    ).toThrow(`a row of report ${other}, not of the last terminal report ${REPORT}`);
   });
 });
 

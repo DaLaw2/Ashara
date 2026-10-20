@@ -153,6 +153,8 @@ export interface ReportRecords {
   readonly revisionReports: readonly string[];
   /** Every sweep of the project, acceptance and terminal, a guarantee table may be judged from. */
   readonly tableSweeps: ReadonlyArray<z.infer<typeof tableSweepRow>>;
+  /** Each stop's terminal sweep recorded at or before that stop's report: the sweep its table is judged from. */
+  readonly stopSweepsBeforeReport: readonly string[];
   /** Every guarantee's evidence on every sweep. */
   readonly evidence: ReadonlyArray<z.infer<typeof evidenceRow>>;
   /** Every verdict stored beside a message. */
@@ -224,6 +226,13 @@ export async function readReportRecords(db: Database, projectId: string): Promis
                  (SELECT max(d.version) FROM vision_documents d WHERE d.project_id = s.project_id AND d.created_at <= s.created_at) AS "visionAtSweep"
           FROM acceptance_sweeps s WHERE s.project_id = ${projectId} ORDER BY s.created_at, s.id`,
     ),
+    stopSweepsBeforeReport: (
+      await rows(
+        z.object({ id: z.string() }),
+        sql`SELECT s.id FROM acceptance_sweeps s JOIN client_messages m ON m.in_reply_to = s.stop_id AND m.reports_on = 'client-stop'
+            WHERE s.project_id = ${projectId} AND s.created_at <= m.created_at ORDER BY s.created_at, s.id`,
+      )
+    ).map((row) => row.id),
     evidence: await rows(
       evidenceRow,
       sql`SELECT sweep_id AS "sweepId", guarantee_id AS "guaranteeId", vision_version AS "visionVersion", checks, review_lowers AS "reviewLowers"
@@ -743,9 +752,10 @@ export function checkReports(records: ReportRecords, project: { readonly status:
         }
       }
       if (lines.length !== merges.length) add("stop-merges", `the stop report names ${lines.length} merge(s); the records hold ${merges.length}`);
-      const sweep = records.tableSweeps.find((each) => each.stopId !== null && each.stopId === stop.inReplyTo);
-      if (sweep === undefined) add("guarantee-table:stop", "the stop report was posted with no terminal sweep on record for its stop, so its table was judged on nothing");
-      for (const problem of sweep === undefined ? [] : tableProblems(records, stop, sweptSource(sweep))) add("guarantee-table:stop", `the stop report: ${problem}`);
+      // The stop's terminal sweep, when it was on record before the report; a stop told before it was
+      // judges every guarantee on no sweep, as the version in force when it was told states them.
+      const sweep = records.tableSweeps.find((each) => each.stopId !== null && each.stopId === stop.inReplyTo && records.stopSweepsBeforeReport.includes(each.id));
+      for (const problem of tableProblems(records, stop, sweep === undefined ? unsweptSource(stop) : sweptSource(sweep))) add("guarantee-table:stop", `the stop report: ${problem}`);
     }
   }
 

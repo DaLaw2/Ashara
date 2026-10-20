@@ -238,6 +238,40 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     }
   });
 
+  test("a halt the owner unblocks before its report is posted is still told, then its resumption", async () => {
+    const projectId = await newProject();
+    const projects = new ProjectHaltRepository(db);
+    await projects.block(projectId, budgetCap);
+    await projects.unblock(projectId, "operator-a", "raised the project cap to $10");
+
+    const ours = async () => (await reports().runPending()).filter((outcome) => outcome.projectId === projectId);
+    expect(await ours()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+    expect(await ours()).toEqual([{ kind: "posted", projectId, subject: "project-resumed" }]);
+    expect(await ours()).toEqual([]);
+
+    const bodies = await messagesOf(projectId);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toContain("Ashara recorded the cause as this: the spending limit set for this project left no room");
+    expect(bodies[1]).toContain("has resumed");
+    expect(await episodesOf(projectId)).toEqual([expect.objectContaining({ kind: "budget_cap", endKind: "unblocked", reported: true, resumedReported: true })]);
+  });
+
+  test("an episode whose resumption was told while its halt never was is not told the halt after it", async () => {
+    const projectId = await newProject();
+    const projects = new ProjectHaltRepository(db);
+    await projects.block(projectId, budgetCap);
+    await projects.unblock(projectId, "operator-a", "raised the project cap to $10");
+    await db.execute(sql`
+      WITH told AS (
+        INSERT INTO client_messages (project_id, direction, kind, body)
+        VALUES (${projectId}, 'outbound', 'report', 'Work on this project has resumed (told alone).')
+        RETURNING id)
+      UPDATE project_blocks SET resumed_report_id = (SELECT id FROM told) WHERE project_id = ${projectId}`);
+
+    expect((await reports().runPending()).filter((outcome) => outcome.projectId === projectId)).toEqual([]);
+    expect(await messagesOf(projectId)).toEqual(["Work on this project has resumed (told alone)."]);
+  });
+
   test("unblocking a project that is not blocked throws and writes nothing", async () => {
     const projectId = await newProject();
     await expect(new ProjectHaltRepository(db).unblock(projectId, "operator-a", "nothing")).rejects.toThrow(/not halted/);

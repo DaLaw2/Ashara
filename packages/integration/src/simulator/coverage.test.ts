@@ -15,7 +15,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     unrecordedCalls: 0,
     events,
     main: [],
-    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
+    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
     textFacts: {
       visions: [],
       briefs: [],

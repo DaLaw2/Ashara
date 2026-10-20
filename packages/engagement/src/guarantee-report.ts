@@ -40,7 +40,7 @@ type SweepEvidence = { readonly kind: "recorded"; readonly byGuarantee: Readonly
  * One revision of the project's contract as its record holds it, with the version it revised: applied,
  * with the version it wrote, or proposed and awaiting the client's confirmation, having written none.
  */
-type ContractRevision = {
+export type ContractRevision = {
   readonly author: "client" | "ashara";
   readonly direction: Direction;
   readonly basedOn: VisionVersion;
@@ -49,9 +49,9 @@ type ContractRevision = {
 
 /**
  * What a table is read from: the sweep, null when none is on record for the message, and the vision
- * version in force at it with each guarantee's evidence and the project's contract revisions; or no
- * vision then. Records read from a source that does not load revision records carry none, and their
- * table prints no appendix: it lists only what a revision record states.
+ * version in force at it with each guarantee's evidence and every revision record of the project's
+ * contract; or no vision then. The appendix lists only what a revision record states, so the records
+ * always carry the list read, never an absent one that would read as no revision.
  */
 export type GuaranteeRecords =
   | {
@@ -59,7 +59,7 @@ export type GuaranteeRecords =
       readonly sweep: JudgedSweep | null;
       readonly vision: VisionVersion;
       readonly evidence: SweepEvidence;
-      readonly revisions?: readonly ContractRevision[];
+      readonly revisions: readonly ContractRevision[];
     }
   | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null };
 
@@ -146,7 +146,7 @@ export class GuaranteeEvidenceMismatch extends Error {
 }
 
 /** A revision's record names a guarantee that the version it revised, or the version it wrote, does not hold. */
-class ContractRevisionMismatch extends Error {
+export class ContractRevisionMismatch extends Error {
   constructor(
     readonly projectId: string,
     readonly visionVersion: number,
@@ -202,7 +202,8 @@ function proposedText(op: RevisionOp): string | null {
 /**
  * The appendix of the table judged at `vision`: every guarantee an applied revision up to that version
  * amended or withdrew, with what replaced it, in the order the revisions were made; and every
- * operation of a narrowing Ashara proposed against that version that the client has not confirmed. A
+ * narrowing operation of a revision Ashara proposed against that version that the client has not
+ * confirmed (an operation of it that widens or is neutral narrows nothing, so it is not listed there). A
  * revision naming a guarantee its versions do not hold throws, never reads as no change.
  */
 function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[]): Appendix {
@@ -222,7 +223,7 @@ function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[
         });
       }
     } else if (revision.author === "ashara" && revision.direction === "narrows" && revision.basedOn.version === vision.version) {
-      for (const op of revision.ops) {
+      for (const op of revision.ops.filter((each) => each.direction === "narrows")) {
         const standing = op.target === "guarantee" && op.key !== null ? heldGuarantee(vision, op.key, `proposes to ${op.action}`) : null;
         proposed.push({ op, standing, text: proposedText(op) });
       }
@@ -240,7 +241,7 @@ function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[
 export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
   if (records.kind === "no-contract") return records;
   const { sweep, vision, evidence } = records;
-  const appendix = records.revisions === undefined ? { superseded: [], proposed: [] } : appendixOf(vision, records.revisions);
+  const appendix = appendixOf(vision, records.revisions);
   const onCommit = sweep !== null && sweep.mainCommit !== null;
   if (sweep === null || evidence.kind === "unrecorded") {
     return { kind: "table", sweep, vision, evidence: "unrecorded", lines: vision.guarantees.map((guarantee) => lineOf(guarantee, NO_EVIDENCE, onCommit)), appendix };

@@ -312,7 +312,8 @@ interface DueTerminalSweepRow {
 /**
  * Every terminal owed its one terminal sweep, oldest first: each stop that stopped a project still
  * stopped, then each open halt episode of an active project. A second stop of a project already
- * stopped stopped nothing, so it is owed none. The stop's report waits for its sweep.
+ * stopped stopped nothing, so it is owed none. The stop's report is posted after the cycle's terminal
+ * sweeps, so it carries this sweep when it is recorded, and is still posted, with no sweep, when it is not.
  */
 export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSweepRow[]> {
   const stops = await db

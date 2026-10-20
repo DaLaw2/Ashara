@@ -172,6 +172,7 @@ export interface CoreLoopDeps {
   /**
    * The Liaison's handling of the client's stops, run first in every cycle,
    * before the spend-cap check: a stopped project is never intaken, planned or gated.
+   * Their reports are posted after the cycle's terminal sweeps, each with its stop's table.
    */
   readonly clientStops: LiaisonClientStops;
   /**

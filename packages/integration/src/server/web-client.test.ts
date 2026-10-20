@@ -858,7 +858,7 @@ describe("recorded web-client session", () => {
       step("pressed Stop, confirmed in-page; the stop appears in the timeline, shown as requested, Stop no longer offered");
 
       // The Liaison's production stop step, narrowed to this project so no other suite's stop is consumed.
-      // The stop's report waits for its terminal sweep, which the loop records between the two runs.
+      // The stop's report is posted after its terminal sweep, which the loop records between the two steps.
       const stopStore = createClientStopStore(db);
       const liaison = new ClientStops({
         ...stopStore,
@@ -867,7 +867,7 @@ describe("recorded web-client session", () => {
       }, memoryStepContainment(() => true));
       expect(await liaison.runPending()).toMatchObject([{ kind: "stopped", reportDue: true, projectId: project.id }]);
       await sweepTerminalsOf(db, (id) => id === project.id);
-      expect(await liaison.runPending()).toMatchObject([{ kind: "posted", projectId: project.id }]);
+      expect(await liaison.reportPending()).toMatchObject([{ kind: "posted", projectId: project.id }]);
       const stoppedState = page.locator('#project-state[data-status="stopped"]');
       await stoppedState.waitFor({ timeout: 15_000 });
       expect(await stoppedState.textContent()).toContain("Stopped at your request");

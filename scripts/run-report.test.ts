@@ -13,6 +13,7 @@ import type { ModelConfig } from "@ashara/model-access";
 import { SuiteReviewJudgementRepository } from "@ashara/quality";
 import { parseWorkItemId, recordingLogger, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { readMappingFile, readPacketKey } from "./pool-mapping.js";
 import { runReport } from "./run-report-body.js";
 import { formatRunReport } from "./run-report-format.js";
 
@@ -427,5 +428,63 @@ describe("runReport, the body run-report prints", () => {
     expect(await verdictLine()).toBe(`verdicts: Ashara Accepted (sweep on ${"c".repeat(40)}) | hidden suite: not run`);
     await sweep(false, "a".repeat(40), "2026-10-18T00:00:00Z");
     expect(await verdictLine()).toBe(`verdicts: Ashara Accepted (sweep on ${"c".repeat(40)}) | hidden suite: not run`);
+  });
+});
+
+describe("runReport with a mapping: Ashara's side is the last terminal report's verdicts", () => {
+  const key = readPacketKey(JSON.stringify({ version: 1, run: "pool-1", arm: "ashara", items: [{ label: "item-1", id: "G4" }] }), "key.json");
+  const file = readMappingFile(
+    ["version = 1", 'run = "pool-1"', `packet = "sha256:${"d".repeat(64)}"`, "[[map]]", 'intended = "I1"', 'to = ["item-1"]', "narrowed = false"].join("\n"),
+    "reader-A.toml",
+  );
+  const MAPPED = `${NAME}-mapped`;
+  let mapped: ProjectId;
+
+  beforeAll(async () => {
+    const client = await new ClientRepository(db).create(MAPPED);
+    mapped = (await new ProjectRepository(db).create(MAPPED, client.id)).id;
+  });
+
+  afterAll(async () => {
+    await db.execute(sql`DELETE FROM guarantee_verdicts WHERE project_id = ${mapped}`);
+    await db.execute(sql`DELETE FROM acceptance_sweeps WHERE project_id = ${mapped}`);
+    await db.execute(sql`DELETE FROM client_messages WHERE project_id = ${mapped}`);
+    await db.execute(sql`DELETE FROM projects WHERE id = ${mapped}`);
+    await db.execute(sql`DELETE FROM clients WHERE name = ${MAPPED}`);
+  });
+
+  const IdRowSchema = z.object({ id: z.string() });
+
+  async function report(at: string, reportsOn: string | null): Promise<string> {
+    const rows = await db.execute(sql`
+      INSERT INTO client_messages (project_id, direction, kind, body, reports_on, created_at)
+      VALUES (${mapped}, 'outbound', 'report', 'scripted report', ${reportsOn}, ${at}) RETURNING id`);
+    return IdRowSchema.parse(rows.rows[0]).id;
+  }
+
+  test("pairs the delivered report's verdicts; once a later terminal report carries none, it says so and never pairs the older ones", async () => {
+    const delivered = await report("2026-10-18T00:01:00Z", null);
+    const swept = await db.execute(sql`
+      INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, report_id, created_at)
+      VALUES (${mapped}, ${"c".repeat(40)}, 'env-1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', ${delivered}, '2026-10-18T00:00:00Z') RETURNING id`);
+    const sweepId = IdRowSchema.parse(swept.rows[0]).id;
+    await db.execute(sql`
+      INSERT INTO guarantee_verdicts (project_id, report_id, sweep_id, vision_version, guarantee_id, verdict, reason, basis, evidence_class)
+      VALUES (${mapped}, ${delivered}, ${sweepId}, 1, 'G4', 'pass', NULL, 'client-stated', 'witness')`);
+    const pool = { hidden: null, pick: null, mapping: { file, key } };
+
+    const before = await runReport(db, mapped, pool);
+    expect(before.text).toContain(`pairs (mapping of run pool-1; terminal report ${delivered}):`);
+    expect(before.text).toContain("I1 <- Ashara G4 pass (witness) | hidden not run");
+
+    // A later plain report is no terminal; a later planning-stopped report is one, and carries no verdict row.
+    await report("2026-10-18T00:02:00Z", null);
+    expect((await runReport(db, mapped, pool)).text).toContain(`terminal report ${delivered}`);
+    await report("2026-10-18T00:03:00Z", "planning-stopped");
+
+    const after = await runReport(db, mapped, pool);
+    expect(after.text).toContain("VIOLATION: I1 maps to item-1 (G4), to which the last terminal report gives no verdict");
+    expect(after.text).not.toContain("Ashara G4 pass");
+    expect(after.failed).toBe(true);
   });
 });

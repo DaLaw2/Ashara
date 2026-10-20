@@ -85,7 +85,7 @@ function buildDeps(
   liaisonIntake: LiaisonIntake = { runPending: async () => [] },
   firstPlanning: FirstPlanning = { runPending: async () => [] },
   planReports: LiaisonPlanReports = { runPending: async () => [] },
-  clientStops: LiaisonClientStops = { runPending: async () => [] },
+  clientStops: LiaisonClientStops = { runPending: async () => [], reportPending: async () => [] },
   rosterDerivation: RosterDerivationStep = { runPending: async () => [] },
   stackChoices: LiaisonStackChoices = { runPending: async () => [] },
   spendCap: SpendCapPort = { deploymentStop: async () => null, refusalOf: () => null },
@@ -383,12 +383,12 @@ describe("CoreLoop first plan", () => {
       { runPending: step("intake") },
       { runPending: step("plan") },
       { runPending: step("report") },
-      { runPending: step("stop") },
+      { runPending: step("stop"), reportPending: step("stop-report") },
       { runPending: step("roster") },
     );
     await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") } }).runCycle();
 
-    expect(order).toEqual(["stop", "intake", "change", "roster", "plan", "report", "dispatch", "dispatch"]);
+    expect(order).toEqual(["stop", "stop-report", "intake", "change", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
   test("a cycle halted at the spend cap takes the client's stops and posts the block, delivered and plan reports still due, and nothing else: a change is read by a model, so it waits", async () => {
@@ -398,11 +398,11 @@ describe("CoreLoop first plan", () => {
         order.push(name);
         return [];
       });
-    const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop") });
+    const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop"), reportPending: step("stop-report") });
 
     await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } }).runHaltedCycle();
 
-    expect(order).toEqual(["stop", "block-report", "delivered-report", "report"]);
+    expect(order).toEqual(["stop", "stop-report", "block-report", "delivered-report", "report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
@@ -411,6 +411,7 @@ describe("CoreLoop first plan", () => {
     // waits, after a cap halt, for a full cycle this process never runs. A new step is classified here.
     const classified: Record<string, "halted" | { readonly excluded: string }> = {
       "client-stop": "halted",
+      "client-stop-report": "halted",
       "settled-branches": "halted",
       "block-report": "halted",
       "delivered-report": "halted",
@@ -503,14 +504,15 @@ describe("CoreLoop spend cap", () => {
         { runPending: step("intake") },
         { runPending: step("plan") },
         { runPending: step("report") },
-        { runPending: step("stop") },
+        { runPending: step("stop"), reportPending: step("stop-report") },
         { runPending: step("roster") },
         undefined,
         stubSpendCap(() => true),
       ),
     ).runCycle();
 
-    expect(order).toEqual(["stop"]);
+    // The stop reports run in the cycle's own steps and again as the cap halts it, both with no LLM call.
+    expect(order).toEqual(["stop", "stop-report", "stop-report"]);
     expect(result.stop?.reason).toMatch(/budget_cap/);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });

@@ -42,6 +42,7 @@ const SWEPT: GuaranteeRecords = {
       ["G2", { checks: [], reviewLowers: false }],
     ]),
   },
+  revisions: [],
 };
 
 describe("the stop report", () => {
@@ -56,7 +57,7 @@ describe("the stop report", () => {
         return "posted";
       },
     };
-    expect(await new ClientStops(store, memoryStepContainment(() => true)).runPending()).toEqual([{ kind: "posted", stopId: "stop-1", projectId }]);
+    expect(await new ClientStops(store, memoryStepContainment(() => true)).reportPending()).toEqual([{ kind: "posted", stopId: "stop-1", projectId }]);
     const [{ stopId, body, verdicts } = { stopId: "", body: "", verdicts: null }] = posted;
     expect(stopId).toBe("stop-1");
     expect(body.startsWith("Work on this project has stopped at your request.")).toBe(true);
@@ -66,12 +67,12 @@ describe("the stop report", () => {
     expect(verdicts).toEqual(tableVerdicts(guaranteeTableOf(SWEPT)));
   });
 
-  test("a stop is taken at once; its report waits until its sweep is recorded", async () => {
+  test("a stop is taken at once; its report waits for the cycle's terminal sweeps", async () => {
     const store: ClientStopStore = {
       openStops: async () => [{ id: "stop-1", projectId }],
       recordStop: async () => ({ kind: "stopped", reportDue: true }),
-      dueStopReports: async () => [],
-      postStopReport: async () => expect.unreachable("no report is due before its sweep"),
+      dueStopReports: async () => expect.unreachable("taking the stops reads no report"),
+      postStopReport: async () => expect.unreachable("no report is posted before the terminal sweeps"),
     };
     expect(await new ClientStops(store, memoryStepContainment(() => true)).runPending()).toEqual([{ kind: "stopped", reportDue: true, stopId: "stop-1", projectId }]);
   });

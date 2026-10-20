@@ -421,6 +421,29 @@ describe("acceptance on main", () => {
     ]);
   });
 
+  test("a contract revision naming a guarantee its version does not hold posts the delivered report once, its table told as unreadable, never retried", async () => {
+    const { projectId, goals } = await contractProject();
+    await new VisionRepository(db).propose(projectId, 1, {
+      author: "ashara",
+      sourceMessageId: null,
+      approver: null,
+      direction: "narrows",
+      cause: "ashara-decision",
+      ops: [{ target: "guarantee", action: "amend", key: "G9", direction: "narrows", labelled: null, read: null, statement: "A key lives for ever." }],
+      pushback: null,
+    });
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2"]))).toBe(1);
+
+    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    expect(due).toMatchObject({ kind: "due", guarantees: { kind: "unreadable" } });
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([]);
+    const posted = await reportsOf(projectId);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatch(/Ashara's records of this project's guarantees at sweep [0-9a-f-]{36} do not hold together, so no guarantee is judged in this message/);
+    expect(await verdictsOf(projectId)).toEqual([]);
+  });
+
   // A goal task a plan revision replaced while it was open is set aside, never given up.
   test("the delivered report's given-up tasks are the goal tasks given up, never one a plan revision set aside", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
@@ -500,8 +523,8 @@ describe("acceptance on main", () => {
     expect(body).not.toContain("How the product was run in acceptance");
   });
 
-  // Evidence that misses a guarantee is a record that does not hold together: that report alone is refused.
-  test("a sweep whose evidence misses a guarantee is refused for its report alone, never read as no evidence", async () => {
+  // Evidence that misses a guarantee is a record that does not hold together: that report alone tells its table as unreadable.
+  test("a sweep whose evidence misses a guarantee posts its report with the table told as unreadable, never read as no evidence", async () => {
     const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     const accepted = async (): Promise<Delivered> => {
       const delivered = await deliveredProject();
@@ -511,18 +534,23 @@ describe("acceptance on main", () => {
     const whole = await accepted();
     const torn = await accepted();
     await db.execute(sql`DELETE FROM guarantee_evidence WHERE project_id = ${torn.projectId} AND guarantee_id = 'S3'`);
-    expect(await due(torn.projectId)).toMatchObject({
-      kind: "unread",
-      cause: "record",
-      error: expect.objectContaining({ message: expect.stringMatching(/records evidence for some guarantees of vision v1 but none for S3/) }),
-    });
-    expect((await due(whole.projectId))?.kind).toBe("due");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await due(torn.projectId)).toMatchObject({ kind: "due", guarantees: { kind: "unreadable" } });
+      expect(warn.mock.calls.flat().join("\n")).toMatch(/records evidence for some guarantees of vision v1 but none for S3/);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await due(whole.projectId)).toMatchObject({ kind: "due", guarantees: { kind: "table" } });
     expect(new Map((await deliveredReports().runPending()).map((outcome) => [outcome.projectId, outcome.kind]))).toEqual(
       new Map([
         [whole.projectId, "posted"],
-        [torn.projectId, "failed"],
+        [torn.projectId, "posted"],
       ]),
     );
+    const [tornBody = ""] = await reportsOf(torn.projectId);
+    expect(tornBody).toMatch(/Ashara's records of this project's guarantees at sweep [0-9a-f-]{36} do not hold together, so no guarantee is judged in this message/);
+    expect(await verdictsOf(torn.projectId)).toEqual([]);
   });
 
   test("only an unreachable database is retried uncounted: an error nothing names counts toward the notice sent in the report's place", async () => {
@@ -574,7 +602,7 @@ describe("acceptance on main", () => {
 
   // A confirming answer read after the plan was made asks for no replan, so the
   // review's copy of the vision can still say the item was asked about when the project is accepted.
-  test("an answer confirming an assumption after the plan was made is reported as confirmed, and an unreadable standing is refused", async () => {
+  test("an answer confirming an assumption after the plan was made is reported as confirmed, and an unreadable standing posts the table as unreadable", async () => {
     const { projectId, goals, scaffold, question } = await deliveredProject({ prefixAsked: true });
     if (question === null) throw new Error("the fixture posted no question");
     const answerId = (await new ClientMessageRepository(db).insertInbound({ projectId, kind: "answer", body: "Yes, every key.", inReplyTo: question })).id;
@@ -583,23 +611,30 @@ describe("acceptance on main", () => {
     ]);
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
 
-    // The standing is read from the vision at acceptance: one it cannot read fails closed, never the review's copy.
-    const saved = await db.execute(sql`SELECT inferences FROM vision_documents WHERE project_id = ${projectId} AND version = 2`);
-    const inferences = z.array(z.object({ inferences: z.unknown() })).parse(saved.rows)[0]?.inferences;
-    await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${projectId} AND version = 2`);
-    expect(await deliveredReports().runPending()).toEqual([
-      { kind: "failed", projectId, failure: expect.objectContaining({ message: expect.stringMatching(/a Stated assumption carries the client answer that stated it/) }) },
-    ]);
-    expect(await reportAttempts(projectId)).toEqual({ failures: 1, interfaceReadFailures: 0, lastError: expect.stringMatching(/a Stated assumption carries/), waiting: true });
-    // Not listed again until its backoff has passed.
-    expect(await deliveredReports().runPending()).toEqual([]);
-    await db.execute(sql`UPDATE vision_documents SET inferences = ${JSON.stringify(inferences)}::jsonb WHERE project_id = ${projectId} AND version = 2`);
-    await endBackoff(projectId);
-
     expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });
     const [body] = await reportsOf(projectId);
     expect(body).toContain("- A3: An empty prefix lists every key (stated by you)\n");
     expect(body).not.toContain("not confirmed by you");
+
+    // The standing is read from the vision at acceptance: one it cannot read judges nothing, never the review's copy.
+    const torn = await deliveredProject({ prefixAsked: true });
+    if (torn.question === null) throw new Error("the fixture posted no question");
+    const tornAnswer = (await new ClientMessageRepository(db).insertInbound({ projectId: torn.projectId, kind: "answer", body: "Yes, every key.", inReplyTo: torn.question })).id;
+    expect(await clientAnswers().runPending()).toEqual([
+      { kind: "stated", answerId: tornAnswer, projectId: torn.projectId, assumptionKey: "A3", verdict: "confirms", visionVersion: 2, replanRequested: false },
+    ]);
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: torn.goals, unchecked: [torn.scaffold] }))).toBe(1);
+    await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${torn.projectId} AND version = 2`);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId: torn.projectId }]);
+      expect(warn.mock.calls.flat().join("\n")).toMatch(/a Stated assumption carries the client answer that stated it/);
+    } finally {
+      warn.mockRestore();
+    }
+    const [tornBody = ""] = await reportsOf(torn.projectId);
+    expect(tornBody).toMatch(/Ashara's records of this project's guarantees at sweep [0-9a-f-]{36} do not hold together, so no guarantee is judged in this message/);
+    expect(tornBody).not.toContain("stated by you");
   });
 
   test("one project's report failing (no workspace on record, git unable to read main) never stops another's: each failure is recorded and retried", async () => {
@@ -688,7 +723,7 @@ describe("acceptance on main", () => {
     const stops = new ClientStops(ours, memoryStepContainment(() => true));
     expect(await stops.runPending()).toEqual([expect.objectContaining({ kind: "stopped", reportDue: true })]);
     expect(await statusOf(projectId)).toBe("stopped");
-    // The stop's report waits for its terminal sweep, then carries that sweep's table.
+    // The stop's report is posted after the cycle's terminal sweep, and carries that sweep's table.
     expect(await stops.runPending()).toEqual([]);
     expect(
       await createTerminalSweepStore(db).recordTerminalSweep({
@@ -702,8 +737,8 @@ describe("acceptance on main", () => {
         details: "no stored check to run",
       }),
     ).toBe("recorded");
-    expect(await stops.runPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
-    expect(await stops.runPending()).toEqual([]);
+    expect(await stops.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+    expect(await stops.reportPending()).toEqual([]);
     const stopReport = (await reportsOf(projectId)).find((body) => body.includes("stopped at your request"));
     expect(tableIds(stopReport ?? "")).toEqual(["S1", "S2", "S3", "A1", "A3"]);
     expect(stopReport).toContain(`- "Set up the module root": merged, commit ${SCAFFOLD_MERGE}`);

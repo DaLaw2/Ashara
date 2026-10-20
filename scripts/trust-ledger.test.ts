@@ -40,12 +40,13 @@ beforeAll(async () => {
   db = createDb(DATABASE_URL);
   const client = await new ClientRepository(db).create(NAME);
   projectId = parseProjectId((await new ProjectRepository(db).create(NAME, client.id)).id, "fixture project");
-  const sweepId = await insertedId(sql`
-    INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, check_outcomes)
-    VALUES (${projectId}, ${COMMIT}, 'v1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', '[]'::jsonb)
-    RETURNING id`);
+  // The sweep's delivered report: the project's last terminal report.
   const reportId = await insertedId(sql`
     INSERT INTO client_messages (project_id, direction, kind, body) VALUES (${projectId}, 'outbound', 'report', 'scripted report')
+    RETURNING id`);
+  const sweepId = await insertedId(sql`
+    INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, check_outcomes, report_id)
+    VALUES (${projectId}, ${COMMIT}, 'v1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', '[]'::jsonb, ${reportId})
     RETURNING id`);
   for (const [guarantee, verdict, evidence] of [
     ["G1", "pass", "witness"],

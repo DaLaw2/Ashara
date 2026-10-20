@@ -209,7 +209,7 @@ async function harness(name: string): Promise<Harness> {
     // The production bound (packages/server/src/compose.ts).
     failureRouter: new FailureRouter(3),
     spendCap,
-    clientStops: { runPending: async () => [] },
+    clientStops: { runPending: async () => [], reportPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },

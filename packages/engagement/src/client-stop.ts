@@ -7,9 +7,12 @@ import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 // client's Stop promises a halt; the Liaison, the only writer to the client,
 // keeps it: each cycle, before any intake, planning or dispatch, it consumes the
 // open stops and moves each project to 'stopped'. The client is told once what is
-// on record as merged and how each guarantee stands on main: the stop report waits
-// for the stop's terminal sweep, the commands-only run of the stored checks on main,
-// and carries its guarantee table, so it is posted on a later cycle than the stop.
+// on record as merged and how each guarantee stands on main: the stop report is
+// posted after the cycle's terminal sweeps, the commands-only run of the stored
+// checks on main, and carries the table of the stop's terminal sweep; a stop whose
+// sweep is not on record (its recording failed) is still told, every guarantee
+// unjudged with no sweep on a commit, since the client is never left without the
+// stop's report for want of evidence.
 //
 // A stop sent mid-cycle, after this step, is honoured by the rest of that cycle
 // all the same: every reader that admits a project to intake, first planning,
@@ -49,7 +52,7 @@ interface MergedTask {
   readonly kind: "merged" | "already_delivered" | null;
 }
 
-/** A stop that stopped its project, its terminal sweep recorded, whose report the client has not been sent. */
+/** A stop that stopped its project, whose report the client has not been sent. */
 interface DueStopReport {
   readonly stopId: string;
   readonly projectId: ProjectId;
@@ -75,9 +78,10 @@ export interface ClientStopStore {
 
 type ClientStopOutcome = (ClientStopCommit | { readonly kind: "posted" | "already-posted" }) & { readonly stopId: string; readonly projectId: ProjectId };
 
-/** What the core loop asks of the Liaison at the top of each cycle. */
+/** What the core loop asks of the Liaison: the stops at the top of each cycle, their reports after its terminal sweeps. */
 export interface LiaisonClientStops {
   runPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>>;
+  reportPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>>;
 }
 
 function mergedLine(task: MergedTask): string {
@@ -123,15 +127,14 @@ export class ClientStops implements LiaisonClientStops {
   ) {}
 
   /**
-   * The open stops, then the stop reports whose terminal sweep is recorded. A second stop on a
-   * stopped project is consumed and not answered: the client already holds, or is owed, the stop
-   * report, and a second one would say nothing new. A stop whose recording fails is contained to it
-   * (containEach) and stays unconsumed, so its project is still held from all work (noOpenStop) while
-   * the other stops are taken; a report that cannot be read or posted is contained to it the same way.
+   * The open stops. A second stop on a stopped project is consumed and not answered: the client
+   * already holds, or is owed, the stop report, and a second one would say nothing new. A stop whose
+   * recording fails is contained to it (containEach) and stays unconsumed, so its project is still
+   * held from all work (noOpenStop) while the other stops are taken.
    */
   async runPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>> {
     const stops = await this.store.openStops();
-    const taken = await containEach(this.containment, "client-stop", stops, (stop) => ({ id: stop.id, projectId: stop.projectId }), async (stop): Promise<ClientStopOutcome> => {
+    return containEach(this.containment, "client-stop", stops, (stop) => ({ id: stop.id, projectId: stop.projectId }), async (stop): Promise<ClientStopOutcome> => {
       const commit = await this.store.recordStop(stop);
       if (commit.kind === "stopped" && !commit.reportDue) {
         console.warn(
@@ -141,7 +144,15 @@ export class ClientStops implements LiaisonClientStops {
       }
       return { ...commit, stopId: stop.id, projectId: stop.projectId };
     });
-    const reports = await containEach(
+  }
+
+  /**
+   * The stop reports due, each posted once; run after the cycle's terminal sweeps, so each carries
+   * its stop's sweep when one could be recorded. A report that cannot be read or posted is contained
+   * to it (containEach).
+   */
+  async reportPending(): Promise<ReadonlyArray<ClientStopOutcome | StepFaulted>> {
+    return containEach(
       this.containment,
       "client-stop",
       await this.store.dueStopReports(),
@@ -151,6 +162,5 @@ export class ClientStops implements LiaisonClientStops {
         return { kind, stopId: due.stopId, projectId: due.projectId };
       },
     );
-    return [...taken, ...reports];
   }
 }

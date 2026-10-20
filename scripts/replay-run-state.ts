@@ -26,17 +26,18 @@
  *   session's brief facts (its goal as Delivery takes it from the task's task_spec, and the
  *   project intent today's loadProjectIntent states from the vision current when the session was
  *   recorded), the delivered report of each passed sweep (its project accepted again for the
- *   while, as it was when the report was composed), and the report of a blocked project's open
- *   episode, posted again by Engagement through today's stores with the kept ones set aside. Each
- *   carries the guarantee table of its sweep, and its verdicts are printed one per guarantee. An
- *   open episode is owed a terminal sweep before its report; a dump holds no checkout to run one on,
- *   so it is recorded as run on no commit, and every guarantee of that report reads unjudged. One
+ *   while, as it was when the report was composed), the report of a blocked project's open
+ *   episode, the client's stop report and the planning-stopped report, posted again by Engagement
+ *   through today's stores with the kept ones set aside. Each carries the guarantee table of its
+ *   sweep, or of none on record for it, and its verdicts are printed one per guarantee. An open
+ *   episode and a stop are owed a terminal sweep before the report; a dump holds no checkout to run
+ *   one on, so it is recorded as run on no commit, and every guarantee of that report reads unjudged. One
  *   today's Engagement does not post again (a project with a stop awaiting the Liaison is not
  *   reported on) gets its kept report back and is judged as kept, and says so. A brief's
  *   other sections (its context map, checks, knowledge) need the run's checkout, which a dump does
  *   not hold, so they are not composed, and a delivered report composed again says it does not
- *   quote the product's public interface file, for the same reason; questions, the assumptions report, answer replies and plan
- *   reports are written with a model call or in the step that made the record, so they are judged
+ *   quote the product's public interface file, for the same reason; questions, the assumptions report, answer replies and the
+ *   other plan reports are written with a model call or in the step that made the record, so they are judged
  *   as kept only.
  * Exits 1 when a text today's code composed again states a fact its records do not hold, or when any
  * step fails; the kept violations, and today's on texts judged as kept, are printed for the record
@@ -47,7 +48,7 @@ import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
-import { BlockReports, DeliveredReports } from "@ashara/engagement";
+import { BlockReports, ClientStops, DeliveredReports, PlanReports } from "@ashara/engagement";
 import {
   composedAgain,
   createReplayDatabase,
@@ -64,7 +65,9 @@ import type { StoredTextViolation, StoredVerdict } from "@ashara/integration";
 import { PUBLIC_INTERFACE_FILE } from "@ashara/quality";
 import { createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { createLogger, describeErrorChain, stdoutSink, systemClock, uncontainedSteps } from "@ashara/shared";
+import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { createPlanReportStore } from "@ashara/server/plan-report-store";
+import { UnreadSubject, createLogger, describeErrorChain, stdoutSink, systemClock, uncontainedSteps } from "@ashara/shared";
 
 const USAGE = 'Usage: npx tsx scripts/replay-run-state.ts --dump FILE --psql "COMMAND" [--keep]';
 const RESTORE_TIMEOUT_MS = 5 * 60_000;
@@ -173,6 +176,19 @@ async function recordUnsweptTerminals(db: ReturnType<typeof createDb>): Promise<
   return recorded;
 }
 
+/**
+ * Today's planning-report store narrowed to the planning-stopped report: the first-plan and revision
+ * reports are judged as kept, and a replay blocks no project.
+ */
+function planningStoppedReportsOnly(db: ReturnType<typeof createDb>): ReturnType<typeof createPlanReportStore> {
+  const store = createPlanReportStore(db);
+  return {
+    ...store,
+    dueReports: async () => (await store.dueReports()).filter((due) => !(due instanceof UnreadSubject) && due.subject === "planning-stopped"),
+    dueRevisionReports: async () => [],
+  };
+}
+
 function printVerdicts(verdicts: readonly StoredVerdict[]): void {
   if (verdicts.length === 0) {
     console.log("  verdicts: none stored");
@@ -181,7 +197,8 @@ function printVerdicts(verdicts: readonly StoredVerdict[]): void {
   for (const reportId of new Set(verdicts.map((each) => each.reportId))) {
     const of = verdicts.filter((each) => each.reportId === reportId);
     const [first] = of;
-    console.log(`  verdicts of report ${reportId} (sweep ${first?.sweepId ?? "?"}, vision v${first?.visionVersion ?? "?"}):`);
+    const sweep = first === undefined ? "?" : (first.sweepId ?? "none on record");
+    console.log(`  verdicts of report ${reportId} (sweep ${sweep}, vision v${first?.visionVersion ?? "?"}):`);
     for (const each of of) console.log(`    ${each.guaranteeId} ${each.verdict}${each.reason === null ? "" : ` ${each.reason}`} (evidence: ${each.evidenceClass})`);
   }
 }
@@ -219,10 +236,13 @@ async function main(): Promise<void> {
       }).runPending();
       // A replay contains nothing and skips nothing: any report that fails throws, so the replay stops on it, and a
       // backoff kept in the restored step_faults does not hide a report.
-      await new BlockReports(createBlockReportStore(db), uncontainedSteps(createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }))).runPending();
+      const steps = uncontainedSteps(createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }));
+      await new BlockReports(createBlockReportStore(db), steps).runPending();
+      await new ClientStops(createClientStopStore(db), steps).reportPending();
+      await new PlanReports(planningStoppedReportsOnly(db), steps).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(
-        `today's composers: every recorded brief's facts, and ${recomposed.length} of ${setAside.records.length} kept delivered and halt ` +
+        `today's composers: every recorded brief's facts, and ${recomposed.length} of ${setAside.records.length} kept delivered, halt, stop and planning-stopped ` +
           `report(s), composed again; every other text is judged as kept`,
       );
       for (const project of projects) {
