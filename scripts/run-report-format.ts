@@ -580,10 +580,10 @@ const storedGuaranteeVerdictSchema = z.discriminatedUnion("verdict", [
   z.strictObject({ ...storedVerdictFields, verdict: z.enum(["pass", "fail"]), reason: z.null() }),
   z.strictObject({ ...storedVerdictFields, verdict: z.literal("unjudged"), reason: z.string().min(1) }),
 ]);
-type StoredGuaranteeVerdict = z.output<typeof storedGuaranteeVerdictSchema>;
+export type StoredGuaranteeVerdict = z.output<typeof storedGuaranteeVerdictSchema>;
 
 /** Ashara's per-guarantee verdicts: those its last terminal report carries, or none when no report carries any. */
-type AsharaGuarantees =
+export type AsharaGuarantees =
   | { readonly kind: "none" }
   | { readonly kind: "report"; readonly reportId: string; readonly byId: ReadonlyMap<string, StoredGuaranteeVerdict> };
 
@@ -631,7 +631,7 @@ function asharaItemText(row: StoredGuaranteeVerdict): string {
  * What Ashara said of one intended guarantee over the items mapped to it: fail when any of them failed, pass when every
  * one passed, unjudged otherwise.
  */
-function asharaClaim(rows: readonly StoredGuaranteeVerdict[]): "pass" | "fail" | "unjudged" {
+export function asharaClaim(rows: readonly StoredGuaranteeVerdict[]): "pass" | "fail" | "unjudged" {
   if (rows.some((row) => row.verdict === "fail")) return "fail";
   return rows.every((row) => row.verdict === "pass") ? "pass" : "unjudged";
 }

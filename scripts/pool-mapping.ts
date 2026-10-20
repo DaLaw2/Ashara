@@ -33,14 +33,13 @@ import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { describeErrorChain, parseJson } from "@ashara/shared";
-import { armSchema } from "./trust-ledger.js";
 
 const USAGE = [
   "Usage: npx tsx scripts/pool-mapping.ts export --source <source.json> --seed <hex64> --packet <packet.json> --key <key.json>",
   "       npx tsx scripts/pool-mapping.ts check --packet <packet.json> --mapping <reader.toml>",
 ].join("\n");
 
-/** @testseam pool-mapping.test.ts checks a refused output path throws this type */
+/** A refused command, with the exit status it ends with. */
 export class PoolMappingRefused extends Error {
   constructor(
     readonly status: 1 | 2,
@@ -70,6 +69,8 @@ const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/, "a digest is sha2
 const seedSchema = z.string().regex(/^[0-9a-f]{64}$/, "a seed is 64 lowercase hex digits");
 const labelSchema = z.string().regex(/^item-[1-9][0-9]*$/, "an item label is item- and a positive number");
 const textSchema = z.string().trim().min(1);
+/** The arms a run is measured under; the trust ledger records the same vocabulary. */
+export const armSchema = z.enum(["ashara", "baseline", "qa3"]);
 
 function unique(values: readonly string[]): string | undefined {
   const seen = new Set<string>();
@@ -134,7 +135,8 @@ function sha256(data: string | Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-function digestOf(data: string | Buffer): string {
+/** The digest a ledger row and a mapping file name a file by: `sha256:` and the hex sha256 of its bytes. */
+export function digestOf(data: string | Buffer): string {
   return `sha256:${sha256(data)}`;
 }
 
@@ -245,10 +247,7 @@ function gitEnv(): NodeJS.ProcessEnv {
   return { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))), LC_ALL: "C", LANGUAGE: "C" };
 }
 
-/**
- * Refuses an output path inside any git work tree, ignored or not: a packet or key holds hidden material.
- * @testseam pool-mapping.test.ts checks a path in this checkout is refused
- */
+/** Refuses an output path inside any git work tree, ignored or not: a packet, key or ledger holds hidden material. */
 export function refuseInsideGitTree(out: string): void {
   const target = path.resolve(out);
   const parent = path.dirname(target);

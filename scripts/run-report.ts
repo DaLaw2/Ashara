@@ -40,14 +40,11 @@
  * judges another tender than the run picked, or when the mapping does not join to the last terminal report.
  */
 
-import { readFile } from "node:fs/promises";
 import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
-import { describeErrorChain, parseJson, parseProjectId } from "@ashara/shared";
-import { judgedVerdictSchema, type JudgedVerdict } from "./hidden-verdict.js";
-import { readMappingFile, readPacketKey } from "./pool-mapping.js";
+import { describeErrorChain, parseProjectId } from "@ashara/shared";
 import { poolDirOf, recordedPick, type PickRecord } from "./pool-selection.js";
 import { runReport } from "./run-report-body.js";
-import type { GuaranteeMapping } from "./run-report-format.js";
+import { readHidden, readMapping } from "./run-report-inputs.js";
 
 const USAGE =
   "Usage: npx tsx scripts/run-report.ts <project-id> [--hidden <verdict.json>] [--run <label> [--pool <dir>]] [--mapping <mapping.toml> --key <key.json>]";
@@ -58,27 +55,6 @@ class RunReportUsageError extends Error {
   constructor(detail: string) {
     super(`${detail}\n${USAGE}`);
     this.name = "RunReportUsageError";
-  }
-}
-
-class HiddenVerdictUnreadable extends Error {
-  constructor(
-    readonly path: string,
-    options: ErrorOptions,
-  ) {
-    super(`run-report: the hidden verdict file ${JSON.stringify(path)} cannot be read`, options);
-    this.name = "HiddenVerdictUnreadable";
-  }
-}
-
-class MappingInputUnreadable extends Error {
-  constructor(
-    readonly what: "mapping file" | "packet key",
-    readonly path: string,
-    options: ErrorOptions,
-  ) {
-    super(`run-report: the ${what} ${JSON.stringify(path)} cannot be read`, options);
-    this.name = "MappingInputUnreadable";
   }
 }
 
@@ -99,40 +75,16 @@ function parseArgs(argv: readonly string[]): { readonly project: string; readonl
   return { project, flags };
 }
 
-async function readHidden(path: string): Promise<JudgedVerdict> {
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (err) {
-    throw new HiddenVerdictUnreadable(path, { cause: err });
-  }
-  return parseJson(judgedVerdictSchema, text, `run-report --hidden ${path}`);
-}
-
-async function readInput(what: "mapping file" | "packet key", path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (err) {
-    throw new MappingInputUnreadable(what, path, { cause: err });
-  }
-}
-
-async function readMapping(mappingPath: string, keyPath: string): Promise<GuaranteeMapping> {
-  const file = readMappingFile(await readInput("mapping file", mappingPath), mappingPath);
-  const key = readPacketKey(await readInput("packet key", keyPath), `run-report --key ${keyPath}`);
-  return { file, key };
-}
-
 async function main(): Promise<void> {
   const { project, flags } = parseArgs(process.argv.slice(2));
   const projectId = parseProjectId(project, "run-report <project-id> argument");
   const hiddenPath = flags.get("--hidden");
-  const hidden = hiddenPath === undefined ? null : await readHidden(hiddenPath);
+  const hidden = hiddenPath === undefined ? null : await readHidden(hiddenPath, "run-report");
   const run = flags.get("--run");
   const pick: PickRecord | null = run === undefined ? null : await recordedPick(poolDirOf(flags.get("--pool"), process.env), run);
   const mappingPath = flags.get("--mapping");
   const keyPath = flags.get("--key");
-  const mapping = mappingPath === undefined || keyPath === undefined ? null : await readMapping(mappingPath, keyPath);
+  const mapping = mappingPath === undefined || keyPath === undefined ? null : await readMapping(mappingPath, keyPath, "run-report");
 
   const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   try {
