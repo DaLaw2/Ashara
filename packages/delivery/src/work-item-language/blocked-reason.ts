@@ -298,8 +298,9 @@ const orphanUnreconciledSchema = z.object({
 
 /**
  * The task cites a key a client's correction affects (vision `visionVersion`, correction_holds), and
- * had not started when the correction was recorded: it is held, never dispatched, while the rest of
- * the project goes on. `affected` names the affected keys it cites. Its exit is automatic: the
+ * is Pending while the correction awaits its plan revision, whatever it was when the correction was
+ * recorded: it is held, never dispatched, while the rest of the project goes on (a citing task in
+ * progress finishes its attempt and may merge, and is then merged work the revision keeps). `affected` names the affected keys it cites. Its exit is automatic: the
  * correction's plan revision, which the loop writes on its own (Replanner), supersedes it; the
  * revision's attempt and review bounds block the project, never the task, when it cannot be written.
  */

@@ -26,19 +26,19 @@ import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's revision of a plan already under way, asked for in one of two ways. A client's
 // correction (a change, a confirmed proposal, or an answer that changed an assumption) holds only the
-// tasks citing a guarantee or assumption key it affects (correction_holds), each not yet started
-// parked as it is recorded, and the rest of the project goes on dispatching; every correction
+// tasks citing a guarantee or assumption key it affects (correction_holds): each is parked whenever it
+// is Pending, and one in progress finishes its attempt and may merge; the rest of the project goes on dispatching; every correction
 // awaiting a revision is taken in by the next one, and its report names each, since each was promised
 // the client would hear what it changed. Once no task citing an affected key is in progress, only the
 // affected keys and the items of the work replaced are planned again: the open tasks citing an
-// affected key, and the open tasks waiting on them, are superseded; a merged task citing one stays
-// Completed, and its key, as the vision now states it, gets a new task. A task given up, for any cause
+// affected key, and the open tasks waiting on them, are superseded; merged work citing one (Completed,
+// or Blocked as merge_unrecorded) is kept, and its key, as the vision now states it, gets a new task. A task given up, for any cause
 // (the failure router's attempt bound, a dispute or review bound, the environment-change bound, an
 // unsatisfiable dependency), opens a plan repair, which stops the project's dispatch: no person
 // releases its dependents. Once no task of the project is in progress, the current vision is
 // decomposed again with the completed work and the given-up work and its evidence as context:
-// completed work stays Completed, open work (not started, Blocked or Failed, and the Epic that held
-// it) is superseded. Either way the new tasks build on the environment already set up unless an
+// merged work is kept, open work (not started, Blocked or Failed, and the Epic that held it) is
+// superseded. Either way the new tasks build on the environment already set up unless an
 // environment change is needed. Revision, supersession and what it took in commit together; the
 // Liaison reports the revision from what is recorded.
 
@@ -670,9 +670,14 @@ interface RegatedTask {
   readonly checkTasks: readonly string[];
 }
 
-/** Not started, Blocked or Failed: work a revision may supersede. */
+/**
+ * Not started, Blocked or Failed: work a revision may supersede. A task Blocked as merge_unrecorded is
+ * merged work, its code on main and only its record unwritten, so it is kept as a Completed task is
+ * (its exit completes it): a correction citing its key plans that key again beside it.
+ */
 function isOpen(item: WorkItem): boolean {
-  return item.status === "Pending" || item.status === "Blocked" || item.status === "Failed";
+  if (item.status === "Blocked") return item.blockedReason?.source !== "merge_unrecorded";
+  return item.status === "Pending" || item.status === "Failed";
 }
 
 /** The vision keys a task cites in its task_spec's sources; none when its spec records no sources. */
@@ -704,8 +709,8 @@ function wholePlanScope(project: ProjectAwaitingReplan, vision: PlanningVision):
  * passed on, since the work behind them is not changed: a superseded check task gates only the task it
  * checks, as dependency resolution reads it; and a task citing no affected key that waits on a
  * superseded review task is kept, moved to wait on the revision's own review (regated), unless the
- * revision plans nothing and so writes no review, when it is replaced with the review. A merged task
- * citing an affected key stays Completed: its key is not decided by the checks it merged with, which
+ * revision plans nothing and so writes no review, when it is replaced with the review. Merged work
+ * citing an affected key is kept (isOpen), a held task that finished its attempt and merged included: its key is not decided by the checks it merged with, which
  * decide the contract before the correction (checkedByDone), so it is planned again. An
  * open environment or layout task is replaced too while none is completed, since the revision then
  * plans its own. An open Epic left with no open task of its own is closed with the work it held,

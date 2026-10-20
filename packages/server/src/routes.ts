@@ -8,9 +8,10 @@ import { InvalidId, parseProjectId, parseWorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { EventStoreRepository, ProjectRepository } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
-import { WorkItemRowRepository, rowToWorkItem, workItemSaveRow } from "@ashara/delivery";
+import { WorkItemRowRepository, adaptWorkItemRepo, rowToWorkItem, workItemSaveRow } from "@ashara/delivery";
 import {
-  startWorkItem,
+  startUnlessHeld,
+  TaskHeldForCorrection,
   failWorkItem,
   replanWorkItem,
   abandonWorkItem,
@@ -105,7 +106,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     try {
       switch (newStatus) {
         case "InProgress":
-          startWorkItem(item);
+          await startUnlessHeld(adaptWorkItemRepo(workItemRepo), item);
           break;
         case "Completed":
           // Nothing outside Quality marks work passed: a task is Completed only by the
@@ -166,6 +167,10 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     } catch (e) {
       if (e instanceof InvalidStatusTransition) {
         return c.json({ error: e.message }, 400);
+      }
+      // A task a client's correction holds is replaced by the correction's plan revision: nobody starts it by hand.
+      if (e instanceof TaskHeldForCorrection) {
+        return c.json({ error: e.message, heldBy: { visionVersion: e.hold.visionVersion, requestedBy: e.hold.requestedBy, affected: e.hold.affected } }, 409);
       }
       throw e;
     }

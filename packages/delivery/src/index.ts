@@ -28,8 +28,11 @@ export { createAgentStaffing, gradedCapability } from "./staffing.js";
 export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 
 export type { WorkItemRepository } from "./domain/index.js";
+/** @testseam the integration tests start a task as dispatch does against Postgres; processTask is its production caller */
+export { startWorkItem } from "./domain/index.js";
 export {
-  startWorkItem,
+  startUnlessHeld,
+  TaskHeldForCorrection,
   failWorkItem,
   replanWorkItem,
   abandonWorkItem,

@@ -46,18 +46,19 @@ class CorrectionVersionMissing extends Error {
 
 /**
  * The guarantee and assumption keys a revision's operations affect, as applied as `version`: what a
- * task cites and a correction holds (affectedKeys). An operation on an interface entry or an exclusion
- * is read against the guarantees of `version` and of the version it was applied to, so a guarantee
- * observed at an entry the correction withdrew, or moved off one, is still affected. Call it inside the
- * correction's transaction, after `version` is written.
+ * task cites and a correction holds, read by affectedKeys against `version` and the version it was
+ * applied to, as the correction's impact note reads them. Call it inside the correction's
+ * transaction, after `version` is written.
  */
 export async function affectedKeysOf(db: DbHandle, projectId: ProjectId, version: number, ops: readonly RevisionOp[]): Promise<string[]> {
   const rows = await db
     .select()
     .from(visionDocuments)
     .where(and(eq(visionDocuments.projectId, projectId), inArray(visionDocuments.version, [version - 1, version])));
-  if (rows.length !== 2) throw new CorrectionVersionMissing(projectId, version);
-  return affectedKeys(ops, rows.flatMap((row) => readVisionVersion(row).guarantees));
+  const appliedTo = rows.find((row) => row.version === version - 1);
+  const written = rows.find((row) => row.version === version);
+  if (appliedTo === undefined || written === undefined) throw new CorrectionVersionMissing(projectId, version);
+  return affectedKeys(ops, readVisionVersion(appliedTo), readVisionVersion(written));
 }
 
 /**

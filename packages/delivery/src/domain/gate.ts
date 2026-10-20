@@ -6,7 +6,7 @@ import { WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { EventPublisher } from "../lifecycle/ports.js";
 import type { CorrectionHoldOf, WorkItem } from "./work-item.js";
-import { giveUpWorkItem, holdForCorrection, takeEvents } from "./work-item.js";
+import { giveUpWorkItem, holdForCorrection, startWorkItem, takeEvents } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import {
   DependencyGraph,
@@ -112,7 +112,7 @@ async function admitProject(
 
   // A task a client's correction holds is parked however it came back to Pending (a requeue, a retry,
   // a parked exit): its spec still holds the words the correction changed.
-  const held = new Map((await repo.listCorrectionHeld(projectId)).map((each) => [each.taskId, each.hold] as const));
+  const held = await correctionHolds(repo, projectId);
   const pending: WorkItem[] = [];
   for (const item of items.filter((each) => each.status === "Pending" && each.level === "Task")) {
     const hold = held.get(item.id);
@@ -199,6 +199,39 @@ async function parkHeld(repo: WorkItemRepository, events: EventPublisher, logger
       logger.warn("delivery.event-publish-failed", `failed to publish ${event.eventType} (the hold is committed)`, { taskId: item.id, site: "gate", eventType: event.eventType }, err);
     }
   }
+}
+
+/**
+ * Each Pending task of the project a client's correction awaiting its plan revision holds, with the
+ * earliest such correction: the one reading of the hold, which the gate parks by and every other start
+ * of a task refuses by (startUnlessHeld).
+ */
+async function correctionHolds(repo: WorkItemRepository, projectId: ProjectId): Promise<Map<string, CorrectionHoldOf>> {
+  return new Map((await repo.listCorrectionHeld(projectId)).map((each) => [each.taskId, each.hold] as const));
+}
+
+/** A start of a task a client's correction holds: its spec still holds the words the correction changed. */
+export class TaskHeldForCorrection extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly hold: CorrectionHoldOf,
+  ) {
+    super(
+      `task ${taskId} is held for the client's correction of vision v${hold.visionVersion} (message ${hold.requestedBy}): ` +
+        `it cites ${hold.affected.join(", ")}, which the correction changed, and the correction's plan revision replaces it`,
+    );
+    this.name = "TaskHeldForCorrection";
+  }
+}
+
+/**
+ * Starts `item` outside the gate's admission (an operator's start), refusing with
+ * TaskHeldForCorrection when a client's correction holds it, as the gate would park it.
+ */
+export async function startUnlessHeld(repo: WorkItemRepository, item: WorkItem): Promise<void> {
+  const hold = (await correctionHolds(repo, item.projectId)).get(item.id);
+  if (hold !== undefined) throw new TaskHeldForCorrection(item.id, hold);
+  startWorkItem(item);
 }
 
 /** Absent from the map ⇒ no dependencies ⇒ met. */

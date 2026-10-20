@@ -90,7 +90,8 @@ export class LifecycleRouter {
       const parent = await repo.findById(parentId);
       if (!parent) throw new WorkItemNotFound(parentId);
 
-      if (parent.status === "Completed" || parent.status === "Blocked" || parent.status === "Failed") break;
+      // A superseded Epic is closed: a merged task a revision kept under it (merge_unrecorded) completes alone.
+      if (parent.status === "Completed" || parent.status === "Blocked" || parent.status === "Failed" || parent.status === "Abandoned") break;
 
       if (parent.status === "Pending") {
         startWorkItem(parent);

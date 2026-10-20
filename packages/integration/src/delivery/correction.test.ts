@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
+import { Hono } from "hono";
 import { z } from "zod";
-import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { ClientChanges, ClientMessageRepository, TenderIntake, createProjectWithTender } from "@ashara/engagement";
+import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientChanges, ClientMessageRepository, TenderIntake, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientChangeStore, IntakeStore } from "@ashara/engagement";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -29,6 +30,8 @@ import { memoryStepContainment, parseWorkItemId, recordingLogger, type ProjectId
 import { createClientChangeStore } from "@ashara/server/client-change-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { createRoutes } from "@ashara/server/routes";
+import { DevSessionRepository } from "@ashara/workplace";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
 
 // A client's correction holds and replaces only the work citing a guarantee it changes: with two
@@ -150,7 +153,23 @@ const AMEND_I2 = { ops: [{ op: "amend-interface", id: "I2", text: "kv delete KEY
 /** The client's new exclusion, which no task cites and every guarantee is planned beside. */
 const ADD_EXCLUSION = { ops: [{ op: "add-exclusion", text: "No key expires by itself.", direction: "narrows" }], confirms: [] };
 
-type Reading = typeof AMEND_G2 | typeof AMEND_I2 | typeof ADD_EXCLUSION;
+/** The client's new guarantee observed at I2, and a correction of I2 itself: the new guarantee is observed at I2 only in the version written. */
+const ADD_AT_I2 = {
+  ops: [
+    {
+      op: "add-guarantee",
+      statement: "Deleting a key that is not there says so.",
+      interface: ["I2"],
+      observation: "output",
+      refutedBy: ["a delete of a missing key prints nothing"],
+      direction: "widens",
+    },
+    { op: "amend-interface", id: "I2", text: "kv delete KEY, which names a missing KEY", direction: "neutral" },
+  ],
+  confirms: [],
+};
+
+type Reading = typeof AMEND_G2 | typeof AMEND_I2 | typeof ADD_EXCLUSION | typeof ADD_AT_I2;
 
 /** One model for every call, answering each by what its prompt asks; returns it to read the prompts sent. */
 function pipelineModel(reading: Reading = AMEND_G2): MockLanguageModelV4 {
@@ -535,5 +554,65 @@ describe("a correction before the review completes", () => {
     const waitedOn = z.array(z.object({ to: z.string() })).parse(waits.rows).map((row) => row.to);
     expect(waitedOn).toContain(reviews[0]?.id);
     expect(waitedOn).not.toContain(review);
+  });
+});
+
+describe("no path outside the correction gate starts or replaces a task the correction holds", () => {
+  test("an operator's start of a held task back at Pending is refused with 409 and leaves it Pending", async () => {
+    const { projectId, g2 } = await readyProject();
+    await startTask(g2);
+    await amendG2(projectId);
+    await requeue(g2);
+
+    const app = new Hono();
+    app.route(
+      "/",
+      createRoutes({
+        workItemRepo: new WorkItemRowRepository(db),
+        eventStore: new EventStoreRepository(db),
+        devSessionRepo: new DevSessionRepository(db),
+        visionRepo: new VisionRepository(db),
+        projectRepo: new ProjectRepository(db),
+        clientMessageRepo: new ClientMessageRepository(db),
+        clientRepo: new ClientRepository(db),
+        createTender: async () => {
+          throw new Error("no tender is sent in this test");
+        },
+      }),
+    );
+    const res = await app.request(`/work-items/${g2}/status`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "InProgress" }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ heldBy: { visionVersion: 2, affected: ["G2"] } });
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Pending" });
+  });
+
+  test("a task merged on main with its record unwritten (merge_unrecorded) is kept, and the amended G2 gets a new task", async () => {
+    const { projectId, g2 } = await readyProject();
+    await startTask(g2);
+    const unrecorded = { source: "merge_unrecorded", mergeCommit: "a".repeat(40), mergeKind: "merged", reason: "the merge record could not be written" };
+    const parked = await db.execute(sql`
+      UPDATE work_items SET status = 'Blocked', updated_at = now(), blocked_reason = ${JSON.stringify(unrecorded)}::jsonb
+      WHERE id = ${g2} AND status = 'InProgress' RETURNING id`);
+    expect(parked.rows).toHaveLength(1);
+    await amendG2(projectId);
+
+    pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2 }]);
+    expect((await itemsOf(projectId)).find((i) => i.id === g2)).toMatchObject({ status: "Blocked", reason: { source: "merge_unrecorded" } });
+    expect(await newG2Tasks(projectId, g2)).toMatchObject([{ sources: [expect.objectContaining({ id: "G2", text: AMENDED_G2 })] }]);
+  });
+
+  test("the impact note names every key the correction holds, a guarantee observed at a corrected entry only in the version written included", async () => {
+    const { projectId } = await readyProject();
+    const changeId = await amendG2(projectId, ADD_AT_I2);
+    const holds = z.array(z.object({ affected: z.array(z.string()) })).parse((await db.execute(sql`SELECT affected FROM correction_holds WHERE project_id = ${projectId}`)).rows);
+    expect(holds).toHaveLength(1);
+    const held = holds[0]?.affected ?? [];
+    expect(held.length).toBeGreaterThan(1);
+
+    const notes = z.array(z.object({ body: z.string() })).parse((await db.execute(sql`SELECT body FROM client_messages WHERE in_reply_to = ${changeId} AND direction = 'outbound'`)).rows);
+    expect(notes).toHaveLength(1);
+    const named = /^Affected: (.+)\. Work citing/m.exec(notes[0]?.body ?? "")?.[1]?.split(/, | and /) ?? [];
+    expect([...named].sort()).toEqual([...held].sort());
   });
 });

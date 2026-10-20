@@ -7,7 +7,7 @@ import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@a
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import {
   CorrectionResponseSchema,
-  affectedIds,
+  affectedKeys,
   causeOf,
   checkedDirection,
   correctionPrompt,
@@ -318,8 +318,10 @@ export class ClientChanges implements LiaisonClientChanges {
     let noted: CorrectionNote["outcome"] = { status: "unchanged", unapplied: corrected.unapplied };
     let impact: ChangeImpact | null = null;
     let band: CorrectionNote["band"] = null;
+    // The keys the hold will park work on once the operations apply, so the note names every one held.
+    const affected = affectedKeys(revisionOpsOf(checked, corrected.applied), before, corrected.next.current);
     if (checked.length > 0) {
-      impact = await this.deps.store.impact(change.projectId, affectedIds(reading.ops, before));
+      impact = await this.deps.store.impact(change.projectId, affected);
       band = costBandOf(reading.ops, impact);
       const pushback = pushbackOf(checked, impact, band);
       const authorship = { author: "client", sourceMessageId: change.id } as const;
@@ -344,7 +346,7 @@ export class ClientChanges implements LiaisonClientChanges {
         }
       }
     }
-    const note = correctionReport({ vision: before, confirmed: confirmedNotes, ops: checked, outcome: noted, impact, band });
+    const note = correctionReport({ vision: before, confirmed: confirmedNotes, ops: checked, affected, outcome: noted, impact, band });
     return {
       write: { changeId: change.id, projectId: change.projectId, basedOnVersion: context.vision.current.version, confirmations, revision, note },
       confirmed: confirmations.map((c) => c.proposalId),

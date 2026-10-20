@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ContractOpSchema, opKey, opShape } from "./vision-language/contract-op.js";
-import type { ContractOp, Direction, OpTarget, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
+import type { ContractOp, Direction, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
 import type { AppliedOp, UnappliedOp, VisionVersion } from "./vision.js";
 
 // A client's correction: a change message read into typed operations on the contract of the version in
@@ -103,6 +103,9 @@ export interface CheckedOp {
   readonly direction: Direction;
 }
 
+/** An operation as the affected-key reading needs it: what it acts on and the record's key, null on an add not applied. */
+type AffectingOp = Pick<RevisionOp, "target" | "key">;
+
 /** A guarantee as the affected-key reading needs it: its key and the interface entries it is observed at. */
 interface ObservedGuarantee {
   readonly id: string;
@@ -110,16 +113,17 @@ interface ObservedGuarantee {
 }
 
 /**
- * The guarantee and assumption keys operations affect: the keys a task can cite. An operation on a
- * guarantee or an assumption affects its own key; one on an interface entry affects every guarantee of
- * `guarantees` observed at that entry; one on an exclusion affects every guarantee of `guarantees`,
- * since no record says which guarantee an exclusion bounds, so none is passed over as untouched.
- * `guarantees` holds every guarantee of the versions the operations are read against and written to.
+ * The guarantee and assumption keys a correction's applied operations affect: the keys a task can
+ * cite, which the impact note names and Delivery's hold parks the citing work on, both from this one
+ * reading. An operation on a guarantee or an assumption affects its own key; one on an interface entry
+ * affects every guarantee observed at that entry; one on an exclusion affects every guarantee, since no
+ * record says which guarantee an exclusion bounds, so none is passed over as untouched. Each is read
+ * against the guarantees of both `appliedTo`, the version in force, and `written`, the version the
+ * operations write, so a guarantee observed at an entry the correction withdrew, or moved off one, is
+ * still affected.
  */
-export function affectedKeys(
-  ops: ReadonlyArray<{ readonly target: OpTarget; readonly key: string | null }>,
-  guarantees: readonly ObservedGuarantee[],
-): string[] {
+export function affectedKeys(ops: readonly AffectingOp[], appliedTo: VisionVersion, written: VisionVersion): string[] {
+  const guarantees: readonly ObservedGuarantee[] = [...appliedTo.guarantees, ...written.guarantees];
   const keys = new Set<string>();
   for (const { target, key } of ops) {
     switch (target) {
@@ -138,13 +142,6 @@ export function affectedKeys(
   return [...keys];
 }
 
-/** The keys a correction's operations, as read, affect in the version they are read against (affectedKeys). */
-export function affectedIds(ops: readonly ContractOp[], vision: VisionVersion): string[] {
-  return affectedKeys(
-    ops.map((op) => ({ target: opShape(op).target, key: opKey(op) })),
-    vision.guarantees,
-  );
-}
 
 /** A task of the project's current plan citing an affected key, with where it stands. */
 export interface CitingTask {
@@ -223,6 +220,8 @@ export interface CorrectionNote {
   readonly vision: VisionVersion;
   readonly confirmed: ReadonlyArray<{ readonly label: string; readonly version: number; readonly unapplied: readonly UnappliedOp[] }>;
   readonly ops: readonly CheckedOp[];
+  /** The keys the operations affect, as the hold reads them when they apply (affectedKeys). */
+  readonly affected: readonly string[];
   readonly outcome:
     | { readonly status: "applied"; readonly version: number; readonly direction: Direction; readonly applied: readonly AppliedOp[]; readonly unapplied: readonly UnappliedOp[] }
     | { readonly status: "proposed"; readonly direction: Direction; readonly pushback: Pushback; readonly unapplied: readonly UnappliedOp[] }
@@ -296,7 +295,7 @@ function pushbackLine(reason: PushbackReason): string {
 function impactLines(note: CorrectionNote): string[] {
   const { impact, band } = note;
   if (impact === null || band === null) return [];
-  const ids = affectedIds(note.ops.map((c) => c.op), note.vision);
+  const ids = note.affected;
   const cited =
     ids.length === 0
       ? ["No guarantee or assumption a task cites is affected."]
