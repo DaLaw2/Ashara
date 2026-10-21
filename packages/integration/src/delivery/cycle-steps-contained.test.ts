@@ -105,13 +105,13 @@ const ROWS_ONLY_QUERIES = "each row's columns, with per-row queries only, whose 
 /** Every listing of a repository or store, keyed `<file>#<name>`. */
 const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/db/src/repositories/client.ts#list": { kind: "not-a-step-listing", why: "the clients, for the HTTP API" },
-  "packages/db/src/repositories/config.ts#listModelConfigs": { kind: "not-a-step-listing", why: "the deployment's model configuration, no project's" },
-  "packages/db/src/repositories/config.ts#listProviderConfigs": { kind: "not-a-step-listing", why: "the deployment's provider configuration, no project's" },
+  "packages/model-access/src/config-repository.ts#listModelConfigs": { kind: "not-a-step-listing", why: "the deployment's model configuration, no project's" },
+  "packages/model-access/src/config-repository.ts#listProviderConfigs": { kind: "not-a-step-listing", why: "the deployment's provider configuration, no project's" },
   "packages/db/src/repositories/event-store.ts#listRecent": { kind: "not-a-step-listing", why: "the HTTP API's recent events; no cycle step reads it" },
   "packages/db/src/repositories/project.ts#listByClient": { kind: "not-a-step-listing", why: "one client's projects, for the HTTP API" },
   "packages/db/src/repositories/project.ts#listWithWorkspace": { kind: "rows-only", why: "project ids and workspace paths as stored" },
-  "packages/db/src/repositories/roster.ts#listProjectsAwaitingRoster": { kind: "rows-only", why: "each project with its vision row as stored; Organization parses it inside the step" },
-  "packages/db/src/repositories/secret.ts#listNames": { kind: "not-a-step-listing", why: "the deployment's secret names" },
+  "packages/organization/src/roster-repository.ts#listProjectsAwaitingRoster": { kind: "rows-only", why: "each project with its vision row as stored; Organization parses it inside the step" },
+  "packages/security/src/secret-repository.ts#listNames": { kind: "not-a-step-listing", why: "the deployment's secret names" },
   "packages/delivery/src/repositories/first-plan.ts#listProjectsAwaitingFirstPlan": { kind: "rows-only", why: "each project with its vision row as stored; planning parses it inside the step" },
   "packages/delivery/src/repositories/plan-report.ts#listDuePlanReports": { kind: "read-each" },
   "packages/delivery/src/repositories/project-halt.ts#listActiveIds": { kind: "rows-only", why: "project ids only" },

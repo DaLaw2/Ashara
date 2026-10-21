@@ -1,5 +1,5 @@
 import { isNotNull } from "drizzle-orm";
-import { clientMessages } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { PlanReportSubject } from "../report-subjects.js";

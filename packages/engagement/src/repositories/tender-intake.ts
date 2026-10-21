@@ -1,4 +1,4 @@
-import { clientMessages, intakeReadings } from "@ashara/db";
+import { clientMessages, intakeReadings } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { IntakeReading } from "../intake.js";

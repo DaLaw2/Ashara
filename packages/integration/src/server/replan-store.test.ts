@@ -5,7 +5,9 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, latestRosterRevision, latestRosterRoles, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { LlmCallRepository } from "@ashara/finance";
+import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
 import { TaskCheckRepository } from "@ashara/quality";
 import {
   BlockReports,

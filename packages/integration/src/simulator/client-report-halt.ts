@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
+import type { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 import { BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";

@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { visionDocuments, visionRevisions } from "@ashara/db";
+import { visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { readVisionVersion, visionWritable } from "../vision.js";

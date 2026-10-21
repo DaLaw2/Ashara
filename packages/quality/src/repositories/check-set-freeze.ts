@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { checkSetFreezes } from "@ashara/db";
+import { checkSetFreezes } from "@ashara/db/schema/quality";
 import type { Database } from "@ashara/db";
 import { checkTasksUnderReview, reviewTasksHeldBy } from "../acl/delivery-acl.js";
 import { inLatestCheckRevision } from "../stored-checks.js";

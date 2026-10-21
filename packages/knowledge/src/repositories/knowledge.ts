@@ -1,5 +1,5 @@
 import { and, eq, isNull, ne, or, desc, sql } from "drizzle-orm";
-import { knowledgeEntries } from "@ashara/db";
+import { knowledgeEntries } from "@ashara/db/schema/knowledge";
 import type { Database } from "@ashara/db";
 
 export class KnowledgeRepository {

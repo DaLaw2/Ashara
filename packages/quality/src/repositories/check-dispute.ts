@@ -1,5 +1,5 @@
 import { count, eq } from "drizzle-orm";
-import { checkDisputes } from "@ashara/db";
+import { checkDisputes } from "@ashara/db/schema/quality";
 import type { Database } from "@ashara/db";
 
 // Quality's record of an implementer's disputes of its task's checks.

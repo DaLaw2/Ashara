@@ -4,7 +4,7 @@ import { qualifiedColumn } from "@ashara/db";
 
 // Engagement's published reads of a project's vision versions (vision_documents) for a context that
 // admits or plans a project by them inside its own statement: whether the project has a vision, which
-// version is in force, and that version as stored. Each is spelled here once; a reader imports it
+// version is in force, and that version or a numbered one as stored. Each is spelled here once; a reader imports it
 // (`@ashara/engagement/vision`) instead of querying the table.
 
 /** A column named with its table, so a subquery never reads it as one of its own; an expression as written. */
@@ -17,16 +17,25 @@ export const hasVision = (projectId: AnyColumn | SQL): SQL => sql`EXISTS (SELECT
 export const currentVisionVersion = (projectId: AnyColumn | SQL): SQL<unknown> =>
   sql<unknown>`(SELECT max(cv.version) FROM vision_documents cv WHERE cv.project_id = ${named(projectId)})`;
 
+/** A vision_documents row `sv` as one jsonb object, the shape parseStoredVision reads. */
+const STORED_VISION_OBJECT = sql.raw(`jsonb_build_object(
+      'projectId', sv.project_id, 'version', sv.version, 'visionText', sv.vision_text, 'summary', sv.summary,
+      'scopeBoundaries', sv.scope_boundaries, 'inferences', sv.inferences, 'openQuestions', sv.open_questions,
+      'contractForm', sv.contract_form, 'interface', sv.interface, 'guarantees', sv.guarantees, 'exclusions', sv.exclusions)`);
+
 /**
  * The project's vision version in force as stored, its jsonb unread, a scalar subquery of one jsonb
  * object (null when it has none) that parseStoredVision reads.
  */
 export const currentStoredVision = (projectId: AnyColumn | SQL): SQL<unknown> =>
-  sql<unknown>`(SELECT jsonb_build_object(
-      'projectId', sv.project_id, 'version', sv.version, 'visionText', sv.vision_text, 'summary', sv.summary,
-      'scopeBoundaries', sv.scope_boundaries, 'inferences', sv.inferences, 'openQuestions', sv.open_questions,
-      'contractForm', sv.contract_form, 'interface', sv.interface, 'guarantees', sv.guarantees, 'exclusions', sv.exclusions)
-    FROM vision_documents sv WHERE sv.project_id = ${named(projectId)} ORDER BY sv.version DESC LIMIT 1)`;
+  sql<unknown>`(SELECT ${STORED_VISION_OBJECT} FROM vision_documents sv WHERE sv.project_id = ${named(projectId)} ORDER BY sv.version DESC LIMIT 1)`;
+
+/**
+ * The project's vision version `version` as stored, its jsonb unread, a scalar subquery of one jsonb
+ * object (null when the project has no such version) that parseStoredVision reads.
+ */
+export const storedVisionVersion = (projectId: AnyColumn | SQL, version: number): SQL<unknown> =>
+  sql<unknown>`(SELECT ${STORED_VISION_OBJECT} FROM vision_documents sv WHERE sv.project_id = ${named(projectId)} AND sv.version = ${version})`;
 
 const StoredVisionSchema = z.strictObject({
   projectId: z.string().min(1),

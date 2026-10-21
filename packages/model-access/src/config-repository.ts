@@ -1,6 +1,6 @@
 import { asc } from "drizzle-orm";
-import type { Database } from "../connection.js";
-import { modelConfigs, modelDatedPrices, modelPriceTiers, modelPriceWindows, providerConfigs } from "../schema/index.js";
+import type { Database } from "@ashara/db";
+import { modelConfigs, modelDatedPrices, modelPriceTiers, modelPriceWindows, providerConfigs } from "@ashara/db/schema/model-access";
 
 type PriceWindowRow = typeof modelPriceWindows.$inferSelect;
 type PriceTierRow = typeof modelPriceTiers.$inferSelect;

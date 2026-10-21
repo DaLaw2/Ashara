@@ -1,4 +1,5 @@
 export { SecretStore } from "./secret-store.js";
+export { SecretRepository } from "./secret-repository.js";
 export { MasterKey } from "./master-key.js";
 export { createKeyFile, loadMasterKey, resolveKeyFilePath } from "./master-key.js";
 export {

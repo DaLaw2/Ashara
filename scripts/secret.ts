@@ -10,7 +10,8 @@
  * Key file: $ASHARA_SECRET_KEY_FILE or ~/.config/ashara/secret.key (scripts/secret-key-init.ts).
  */
 
-import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
+import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { SecretRepository } from "@ashara/security";
 import {
   SecretNotFound,
   SecretStore,

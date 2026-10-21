@@ -1,5 +1,6 @@
 import { SQL, and, asc, eq, inArray, isNotNull, sql, type AnyColumn } from "drizzle-orm";
-import { clientMessages, projects, qualifiedColumn } from "@ashara/db";
+import { projects, qualifiedColumn } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { projectHalted, projectHaltedOnModelWork } from "@ashara/delivery/predicates";
 import { REPORT_SUBJECT } from "./report-subjects.js";

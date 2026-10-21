@@ -8,7 +8,8 @@
  * (directly and through a helper) and for the bounds-table rule (a package's name and another
  * file), one manifest-name literal in production source for the
  * [stack-literals] denylist, a write and a raw SQL read of another context's table for the [tables]
- * owner map, plus one permitted import
+ * owner map, an import of another context's table object for db's subpath-importers (by its
+ * subpath, by a relative path, from scripts/, and re-exported by db's root entry), plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -16,13 +17,18 @@
  * MODULES does the same inside each package that declares internal modules: one type-only relative
  * import per ordered pair of its modules, a file that belongs to no module, a module glob that
  * matches nothing, and, in a scratch copy of the rules, a module-allow cycle the parser must refuse.
+ * A last scratch copy admits a context to another's tables, which the [tables] owner map refuses.
  */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getTableName, is } from "drizzle-orm";
+import { PgTable } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import * as dbRoot from "@ashara/db";
+import { DB_OWNER, SHARED_OWNER, declaredTables, parseTableOwnershipRules } from "./table-ownership.js";
 
 interface PackageMap {
   /** Packages this one may import; "*" for the composition root. */
@@ -39,10 +45,10 @@ const ACL_AND_DISPATCH = ["src/acl/*.ts", "src/dispatch/*.ts"];
 const MAP: Readonly<Record<string, PackageMap>> = {
   shared: { allow: [] },
   db: { allow: ["shared"] },
-  "model-access": { allow: ["shared"], importers: ["finance", "server", "integration"] },
+  "model-access": { allow: ["shared", "db"], importers: ["finance", "server", "integration"] },
   finance: { allow: ["shared", "db", "model-access"] },
   security: { allow: ["db"], importers: ["server", "integration"] },
-  "execution-infra": { allow: ["shared"] },
+  "execution-infra": { allow: ["shared", "db"] },
   knowledge: { allow: ["shared", "db"] },
   workplace: { allow: ["shared", "db", "finance", "execution-infra"] },
   engagement: {
@@ -80,7 +86,7 @@ const MAP: Readonly<Record<string, PackageMap>> = {
     },
   },
   organization: {
-    allow: ["shared", "finance", "engagement", "workplace"],
+    allow: ["shared", "db", "finance", "engagement", "workplace"],
     restrict: { engagement: ACL, workplace: ACL },
   },
   quality: {
@@ -204,6 +210,9 @@ const PROBE_MODULE = 'module.probe = ["src/__boundary_probe__/**"]';
 const UNASSIGNED_FILE = "src/__module_probe__.ts";
 const EMPTY_MODULE = { name: "probe-empty", glob: "src/__no_such_module_file__.ts" };
 const CYCLE_RULE = { pkg: "engagement", line: 'module-allow.vision = ["reports"]', reason: "a cycle between modules: vision -> reports -> vision" };
+const OWNER_SUBPATH_RULE = 'subpath-importers.schema/delivery = ["delivery", "server", "integration"]';
+const WIDENED_SUBPATH_RULE = 'subpath-importers.schema/delivery = ["delivery", "quality", "server", "integration"]';
+const WIDENED_SUBPATH_REASON = 'admits "quality" to work_items, which "delivery" owns';
 
 function relativeSpecifier(fromFile: string, toFile: string): string {
   const rel = path.posix.relative(path.posix.dirname(fromFile), toFile).replace(/\.ts$/, ".js");
@@ -299,21 +308,33 @@ const STACK_LITERAL_PROBE = {
     'packages/delivery/src/__boundary_probe__/stack-literal.ts:1  delivery -> "Cargo.toml"  (stack literal in production source: "Cargo.toml"; take it from the contract, or exempt it in [stack-literals] with a reason)',
 };
 
+// The subpaths of db's schema, spelled apart from any import statement so that the checker's scan of
+// scripts/ reads this file's probe text as no import.
+const SCHEMA = "@ashara/db/schema";
+
 // A context writing another context's table through drizzle and through raw SQL, and reading one in
-// raw SQL that no [tables] exemption admits, each on its own line of one file.
+// raw SQL that no [tables] exemption admits, each on its own line of one file. The table object the
+// drizzle write names is itself an import db's subpath-importers refuse; a drizzle read of it is
+// therefore no probe of the [tables] scan.
 const TABLE_PROBE_FILE = "packages/delivery/src/__boundary_probe__/table-ownership.ts";
 const TABLE_PROBE_CONTENT = [
   'import { sql } from "drizzle-orm";',
-  'import { acceptanceSweeps, clientMessages, taskChecks } from "@ashara/db";',
+  `import { clientMessages } from "${SCHEMA}/engagement";`,
   "export const write = (tx: { insert(table: unknown): unknown }) => tx.insert(clientMessages);",
   "export const rawWrite = sql`UPDATE acceptance_sweeps SET details = 'x'`;",
   "export const rawRead = sql`SELECT count(*) FROM llm_calls`;",
-  "export const builderRead = (db: { select(): { from(table: unknown): unknown } }) => db.select().from(acceptanceSweeps);",
-  "export const builderJoin = (q: { innerJoin(table: unknown, on: unknown): unknown }) => q.innerJoin(taskChecks, true);",
   "export const rawLock = sql`SELECT id FROM dev_sessions WHERE id = ${1} FOR UPDATE`;",
   "",
 ].join("\n");
+const SUBPATH_REFUSAL = (pkg: string): string => `only [${pkg}, server, integration] may import "${SCHEMA}/${pkg}" (subpath-importers.schema/${pkg})`;
 const TABLE_PROBES = [
+  {
+    // Planted by the probe below, on its second line: this entry adds nothing to the file.
+    name: "a context importing another context's table object for a drizzle write is refused",
+    file: TABLE_PROBE_FILE,
+    content: null,
+    violation: `${TABLE_PROBE_FILE}:2  delivery -> "${SCHEMA}/engagement"  (${SUBPATH_REFUSAL("engagement")})`,
+  },
   {
     name: "a write to another context's table through drizzle is refused",
     file: TABLE_PROBE_FILE,
@@ -336,31 +357,66 @@ const TABLE_PROBES = [
       "read it through finance's typed read, or admit it in [tables] as an allowed edge with its reason)",
   },
   {
-    // Planted by the first probe, on its sixth line: this entry adds nothing to the file.
-    name: "a drizzle builder read (select().from) of another context's table is refused",
-    file: TABLE_PROBE_FILE,
-    content: null,
-    violation:
-      `${TABLE_PROBE_FILE}:6  delivery -> "acceptance_sweeps"  (a drizzle builder reads a table "quality" owns: db.select().from(acceptanceSweeps); ` +
-      "read it through quality's typed read, or admit it in [tables] as an allowed edge with its reason)",
-  },
-  {
-    // Planted by the first probe, on its seventh line: this entry adds nothing to the file.
-    name: "a drizzle builder join of another context's table is refused",
-    file: TABLE_PROBE_FILE,
-    content: null,
-    violation:
-      `${TABLE_PROBE_FILE}:7  delivery -> "task_checks"  (a drizzle builder reads a table "quality" owns: q.innerJoin(taskChecks, true); ` +
-      "read it through quality's typed read, or admit it in [tables] as an allowed edge with its reason)",
-  },
-  {
-    // Planted by the first probe, on its eighth line: this entry adds nothing to the file.
+    // Planted by the write probe, on its sixth line: this entry adds nothing to the file.
     name: "a raw FOR UPDATE lock on another context's table is refused",
     file: TABLE_PROBE_FILE,
     content: null,
     violation:
-      `${TABLE_PROBE_FILE}:8  delivery -> "dev_sessions"  (raw SQL reads a table "workplace" owns: SELECT id FROM dev_sessions WHERE id = ? FOR UPDATE; ` +
+      `${TABLE_PROBE_FILE}:6  delivery -> "dev_sessions"  (raw SQL reads a table "workplace" owns: SELECT id FROM dev_sessions WHERE id = ? FOR UPDATE; ` +
       "read it through workplace's typed read, or admit it in [tables] as an allowed edge with its reason)",
+  },
+];
+
+// Another context's table object imported by its subpath, by a relative path into db and from
+// scripts/, the owner's own import of it, db's root entry re-exporting it, and a subpath rule that
+// names no exported subpath.
+const DB_ROOT_ENTRY = "packages/db/src/index.ts";
+const DELIVERY_SCHEMA = "packages/db/src/schema/delivery.ts";
+const RULES_TEXT = fs.readFileSync(path.join(import.meta.dirname, "..", "boundary-rules.toml"), "utf-8");
+const TABLE_OWNERS = parseTableOwnershipRules(RULES_TEXT, "boundary-rules.toml").owners;
+const DELIVERY_TABLES = declaredTables(fs.readFileSync(path.join(import.meta.dirname, "..", DELIVERY_SCHEMA), "utf-8"), DELIVERY_SCHEMA)
+  .map((table) => `${table.name} ("${TABLE_OWNERS.get(table.name)}")`)
+  .join(", ");
+const UNEXPORTED_SUBPATH_RULE = 'subpath-importers.schema/nowhere = ["server"]';
+const SUBPATH_PROBES: PlannedProbe[] = [
+  {
+    name: "a context importing another context's table object by its subpath is refused",
+    file: "packages/quality/src/__boundary_probe__/foreign-table.ts",
+    content: `import { workItems } from "${SCHEMA}/delivery";\n`,
+    violation: `packages/quality/src/__boundary_probe__/foreign-table.ts:1  quality -> "${SCHEMA}/delivery"  (${SUBPATH_REFUSAL("delivery")})`,
+  },
+  {
+    name: "a context imports its own table objects by its subpath",
+    file: "packages/delivery/src/__boundary_probe__/own-table.ts",
+    content: `import { workItems } from "${SCHEMA}/delivery";\n`,
+    violation: null,
+  },
+  {
+    name: "a context reaching db's table objects by a relative path is refused",
+    file: "packages/quality/src/__boundary_probe__/relative-table.ts",
+    content: 'import { workItems } from "../../../db/src/schema/delivery.js";\n',
+    violation:
+      'packages/quality/src/__boundary_probe__/relative-table.ts:1  quality -> "../../../db/src/schema/delivery.js"  ' +
+      '(a relative path into package "db", whose subpaths admit only the importers its subpath-importers list; import it by its @ashara/ name)',
+  },
+  {
+    name: "a script importing a context's table object is refused",
+    file: "scripts/__boundary_probe__.ts",
+    content: `import { workItems } from "${SCHEMA}/delivery";\n`,
+    violation: `scripts/__boundary_probe__.ts:1  scripts -> "${SCHEMA}/delivery"  (scripts/ imports no subpath of package "db", whose subpath-importers admit only packages)`,
+  },
+  {
+    name: "db's root entry re-exporting a context's table object is refused",
+    file: DB_ROOT_ENTRY,
+    content: 'export { workItems } from "./schema/delivery.js";\n',
+    violation: `${DB_ROOT_ENTRY}:0  db -> "${DELIVERY_SCHEMA}"  (the root entry re-exports from a file declaring tables a package owns: ${DELIVERY_TABLES}; each is reached only through its subpath)`,
+    prepend: true,
+  },
+  {
+    name: "a subpath rule that names no exported subpath is refused",
+    file: "packages/db/package.json",
+    content: null,
+    violation: `boundary-rules.toml:0  db -> "subpath-importers.schema/nowhere"  (packages/db/package.json exports no "./schema/nowhere"; a rule that holds nothing passes everything)`,
   },
 ];
 
@@ -489,6 +545,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   probes.push({ name: "integration simulator imports only listed names", ...NAMED_ONLY_PROBE });
   probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
   probes.push(...TABLE_PROBES);
+  probes.push(...SUBPATH_PROBES);
   probes.push(...STAND_IN_PROBES);
   probes.push(...BOUNDS_TABLE_PROBES);
   for (const pkg of Object.keys(MODULES)) probes.push(...moduleProbes(pkg));
@@ -552,6 +609,7 @@ describe("boundary-rules.toml against the context map", () => {
   let clean: { status: number | null; output: string } = { status: null, output: "" };
   let probed: { status: number | null; output: string } = { status: null, output: "" };
   let cyclic: { status: number | null; output: string } = { status: null, output: "" };
+  let widened: { status: number | null; output: string } = { status: null, output: "" };
   let reported = new Set<string>();
 
   beforeAll(() => {
@@ -561,11 +619,14 @@ describe("boundary-rules.toml against the context map", () => {
     const rulesFile = path.join(scratch, "boundary-rules.toml");
     const rules = fs.readFileSync(rulesFile, "utf-8");
     const probeModules = Object.fromEntries(Object.keys(MODULES).map((pkg) => [pkg, [PROBE_MODULE, `module.${EMPTY_MODULE.name} = ["${EMPTY_MODULE.glob}"]`]]));
-    fs.writeFileSync(rulesFile, withSectionLines(rules, probeModules));
+    fs.writeFileSync(rulesFile, withSectionLines(rules, { ...probeModules, db: [UNEXPORTED_SUBPATH_RULE] }));
     for (const probe of probes) plant(scratch, probe);
     probed = runChecker(scratch);
     fs.writeFileSync(rulesFile, withSectionLines(rules, { [CYCLE_RULE.pkg]: [CYCLE_RULE.line] }));
     cyclic = runChecker(scratch);
+    if (!rules.includes(OWNER_SUBPATH_RULE)) throw new ProbeTreeError("rules copy", `no line ${OWNER_SUBPATH_RULE}`);
+    fs.writeFileSync(rulesFile, rules.replace(OWNER_SUBPATH_RULE, WIDENED_SUBPATH_RULE));
+    widened = runChecker(scratch);
     reported = new Set(probed.output.split("\n").flatMap((line) => {
       const match = VIOLATION_LINE.exec(line);
       return match === null ? [] : [match[1]];
@@ -590,6 +651,20 @@ describe("boundary-rules.toml against the context map", () => {
   test("a module-allow cycle fails the rules' parse", () => {
     expect(cyclic.status).toBe(1);
     expect(cyclic.output).toContain(CYCLE_RULE.reason);
+  });
+
+  test("a subpath rule admitting a context to another's tables fails against the [tables] owner map", () => {
+    expect(widened.status).toBe(1);
+    expect(widened.output).toContain(WIDENED_SUBPATH_REASON);
+  });
+
+  test("db's root entry exports no table object a package owns", () => {
+    const tables = Object.values(dbRoot).filter((value) => is(value, PgTable)).map((table) => getTableName(table));
+    expect(tables.length).toBeGreaterThan(0);
+    expect(tables.filter((name) => {
+      const owner = TABLE_OWNERS.get(name);
+      return owner !== DB_OWNER && owner !== SHARED_OWNER;
+    })).toEqual([]);
   });
 
   test("the unprobed tree passes", () => {

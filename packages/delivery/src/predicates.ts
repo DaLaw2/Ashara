@@ -1,5 +1,6 @@
 import { and, asc, eq, isNotNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
-import { projectBlocks, qualifiedColumn, workItems } from "@ashara/db";
+import { qualifiedColumn } from "@ashara/db";
+import { projectBlocks, workItems } from "@ashara/db/schema/delivery";
 import type { DbHandle } from "@ashara/db";
 
 // Delivery's published predicates: the facts about a project's halt, its awaited plan revisions and
@@ -15,6 +16,9 @@ export interface WorkItemColumns {
   readonly level: AnyColumn;
   readonly taskSpec: AnyColumn;
 }
+
+/** Every kind of halt episode project_blocks records: the closed list its CHECK holds. */
+export { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 
 /** The project's open block episode, `also` narrowing which one. */
 const openEpisode = (projectId: AnyColumn, also: SQL | null): SQL =>
@@ -34,6 +38,10 @@ export const projectHaltedOnModelWork = (projectId: AnyColumn): SQL =>
 /** The kind of the project's open block episode; null while it is not halted. */
 export const openHaltKind = (projectId: AnyColumn): SQL<unknown> =>
   sql<unknown>`(SELECT hb.kind FROM project_blocks hb WHERE hb.project_id = ${qualifiedColumn(projectId)} AND hb.ended_at IS NULL)`;
+
+/** The project has no work item: nothing of it was ever planned. */
+export const projectUnplanned = (projectId: AnyColumn): SQL =>
+  sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = ${qualifiedColumn(projectId)})`;
 
 /**
  * The project awaits a plan repair: a task the failure router gave up that no plan

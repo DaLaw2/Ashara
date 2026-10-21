@@ -1,7 +1,7 @@
-import type { LlmCallRepository } from "@ashara/db";
 import { WorkBudgetSpent, WorkBudgetsInvalid } from "./errors.js";
 import type { WorkAtBudget } from "./errors.js";
 import type { PendingLlmCall } from "./guarded-model-access.js";
+import type { LlmCallRepository } from "./llm-call-repository.js";
 import { CALL_SITE_PURPOSE } from "./work-purpose.js";
 import type { WorkPurpose } from "./work-purpose.js";
 

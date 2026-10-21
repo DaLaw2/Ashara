@@ -6,7 +6,17 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./schema/delivery": "./src/schema/delivery.ts",
+    "./schema/engagement": "./src/schema/engagement.ts",
+    "./schema/execution-infra": "./src/schema/execution-infra.ts",
+    "./schema/finance": "./src/schema/finance.ts",
+    "./schema/knowledge": "./src/schema/knowledge.ts",
+    "./schema/model-access": "./src/schema/model-access.ts",
+    "./schema/organization": "./src/schema/organization.ts",
+    "./schema/quality": "./src/schema/quality.ts",
+    "./schema/security": "./src/schema/security.ts",
+    "./schema/workplace": "./src/schema/workplace.ts"
   },
   "dependencies": {
     "@ashara/shared": "*",

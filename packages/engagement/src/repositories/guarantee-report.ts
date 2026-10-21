@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, guaranteeVerdicts, visionDocuments, visionRevisions } from "@ashara/db";
+import { clientMessages, guaranteeVerdicts, visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 import { recordedSweep, sweepEvidence } from "@ashara/quality/published-reads";

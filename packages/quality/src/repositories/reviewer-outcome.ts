@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { checkDisputes, reviewerOutcomes, suiteReviewJudgements } from "@ashara/db";
+import { checkDisputes, reviewerOutcomes, suiteReviewJudgements } from "@ashara/db/schema/quality";
 import type { DbHandle } from "@ashara/db";
 import { siteCostOf } from "@ashara/finance";
 

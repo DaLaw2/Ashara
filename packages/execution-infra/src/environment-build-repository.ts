@@ -1,9 +1,8 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { DbHandle } from "../connection.js";
-import { insertedRow } from "../inserted-row.js";
-import { environmentBuilds } from "../schema/index.js";
+import { insertedRow, type DbHandle } from "@ashara/db";
+import { environmentBuilds } from "@ashara/db/schema/execution-infra";
 
 interface EnvironmentBuildColumns {
   readonly projectId: ProjectId;

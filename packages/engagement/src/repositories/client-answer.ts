@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull, lt, not, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { clientMessages, projects } from "@ashara/db";
+import { projects } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
 import { parseProjectId, type ProjectId } from "@ashara/shared";

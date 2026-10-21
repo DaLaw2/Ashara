@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { Database, DbHandle } from "../connection.js";
-import { qualifiedColumn } from "../qualified-column.js";
-import { projects, rosterRoles, visionDocuments } from "../schema/index.js";
+import { projects, qualifiedColumn, type Database, type DbHandle } from "@ashara/db";
+import { rosterRoles } from "@ashara/db/schema/organization";
+import { storedVisionVersion } from "./acl/engagement-vision-acl.js";
 
 // A project's roster: the rows of its latest revision. Derived
 // from vision v1 before the first plan; the table is append-only.
@@ -12,7 +12,8 @@ const FIRST_VISION_VERSION = 1;
 
 interface ProjectAwaitingRosterRow {
   readonly projectId: ProjectId;
-  readonly vision: typeof visionDocuments.$inferSelect;
+  /** Vision v1 as Engagement's storedVisionVersion selects it, read by derivation inside its step. */
+  readonly vision: unknown;
 }
 
 /** A roster to append: every role of one revision. */
@@ -59,29 +60,19 @@ export const roleOfLatestRoster = (projectId: string, roleId: AnyColumn): SQL =>
     AND r.revision = (SELECT MAX(l.revision) FROM roster_roles l WHERE l.project_id = ${projectId}))`;
 
 /**
- * Projects every condition of `admitted` admits, with vision v1, no roster and nothing planned yet,
- * oldest first, each with vision v1. The caller states which projects a roster is derived for in
- * the words of the contexts that own the facts (a project at work, no stop awaiting the Liaison),
- * which this package below every context cannot import. A project already planned before rosters
- * existed is not listed: its items were written without owners, and a roster now would own none.
+ * Projects every condition of `admitted` admits, with vision v1, no roster and no planning outcome
+ * stamped, oldest first, each with vision v1 as stored. The caller states which projects a roster is
+ * derived for in the words of the contexts that own the facts (a project at work, no stop awaiting the
+ * Liaison, nothing planned yet), which Organization reads only through their published reads. A
+ * project already planned before rosters existed is not listed: its items were written without
+ * owners, and a roster now would own none.
  */
 export async function listProjectsAwaitingRoster(db: DbHandle, admitted: readonly [SQL, ...SQL[]]): Promise<ProjectAwaitingRosterRow[]> {
+  const firstVision = storedVisionVersion(projects.id, FIRST_VISION_VERSION);
   const rows = await db
-    .select({ id: projects.id, vision: visionDocuments })
+    .select({ id: projects.id, vision: firstVision })
     .from(projects)
-    .innerJoin(
-      visionDocuments,
-      and(eq(visionDocuments.projectId, projects.id), eq(visionDocuments.version, FIRST_VISION_VERSION)),
-    )
-    .where(
-      and(
-        ...admitted,
-        isNull(projects.firstPlannedAt),
-        isNull(projects.planStoppedAt),
-        sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = ${projects.id})`,
-        noRoster(),
-      ),
-    )
+    .where(and(...admitted, isNull(projects.firstPlannedAt), isNull(projects.planStoppedAt), sql`${firstVision} IS NOT NULL`, noRoster()))
     .orderBy(asc(projects.createdAt), asc(projects.id));
   return rows.map((row) => ({ projectId: parseProjectId(row.id, "projects.id"), vision: row.vision }));
 }

@@ -1,5 +1,5 @@
 /**
- * Finds a write to another context's table, and a read of one in raw SQL or through drizzle's builder. Every insert, update or
+ * Finds a write to another context's table, and a read of one in raw SQL. Every insert, update or
  * delete a context's source issues lands on a table that context owns; anything it does to another
  * context's table goes through that owner's exported write entry or typed read. Run by
  * check-boundaries.ts inside `just check`; the owner of every table and the reads the context map
@@ -19,17 +19,15 @@
  * - A raw read: a table named after `from` or `join` inside a `sql`-tagged template or a `sql.raw`
  *   string (a `for update` lock included), a substitution that is a table's identifier read as its
  *   name.
- * - A builder read: a call `.from(T)`, `.innerJoin(T, ...)`, `.leftJoin`, `.rightJoin`, `.fullJoin`,
- *   `.crossJoin` or `.join`, or `alias(T, ...)`, whose first argument is the identifier of a table the
- *   schema exports.
+ * A drizzle builder read (`.from(T)`, a join, `alias(T, ...)`) is not read here: it needs the table
+ * object, which only the owner's `@ashara/db/schema/<context>` entry exports, and boundary-rules.toml's
+ * [db] subpath-importers refuse that import to every other context. Raw SQL names a table by a
+ * string no import carries, so the raw read stays here.
  * A read of a table owned by another package or by "db" fails unless an allowed edge names the file
  * and the table; an edge no read uses is itself a finding. There is no exemption: a key other than an
  * owner or an edge is a parse error.
  *
  * Blind spots, each a finding this check passes:
- * - A column `T.c` of another context's table named in a select or a predicate without a from or join
- *   of `T` in the same file, and its jsonb parsed in place.
- * - A read through a variable holding the table under another name.
  * - A write through an alias or a variable holding the table, a write built from pieces, and SQL
  *   held in a plain string or template that is not `sql`-tagged.
  * - A write the database makes for the context (a trigger, a cascade).
@@ -162,11 +160,11 @@ export function declaredTables(source: string, fileName: string): DeclaredTable[
   return tables;
 }
 
-/** What a context's source does to a table: writes it, or reads it in raw SQL or through the builder. */
+/** What a context's source does to a table: writes it, or reads it in raw SQL. */
 export interface TableUse {
   readonly line: number;
   readonly table: string;
-  readonly kind: "write" | "raw-read" | "builder-read";
+  readonly kind: "write" | "raw-read";
   /** The call or the SQL as written, cut to a readable length. */
   readonly text: string;
 }
@@ -175,7 +173,6 @@ const RAW_WRITE_RES = [/\binsert\s+into\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?/gi
 // A `delete from` is the write's own table, reported as the write.
 const RAW_READ_RE = /(?<!\bdelete\s+)\b(?:from|join)\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?/gi;
 const WRITE_METHODS = new Set(["insert", "update", "delete"]);
-const READ_METHODS = new Set(["from", "innerJoin", "leftJoin", "rightJoin", "fullJoin", "crossJoin", "join"]);
 
 function cut(text: string): string {
   const flat = text.replace(/\s+/g, " ");
@@ -208,7 +205,7 @@ function sqlText(node: ts.Node, tables: ReadonlyMap<string, string>): string | n
 }
 
 /**
- * Every write, raw read and builder read of a table in `source`; `tables` maps each table identifier the schema
+ * Every write and raw read of a table in `source`; `tables` maps each table identifier the schema
  * exports to its SQL name. Only tables the map names are reported.
  */
 export function findTableUses(source: string, fileName: string, tables: ReadonlyMap<string, string>): TableUse[] {
@@ -221,14 +218,6 @@ export function findTableUses(source: string, fileName: string, tables: Readonly
       const [first] = node.arguments;
       const table = first !== undefined && ts.isIdentifier(first) ? tables.get(first.text) : undefined;
       if (table !== undefined && node.arguments.length === 1) uses.push({ line, table, kind: "write", text: cut(node.getText(sourceFile)) });
-    }
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const reads =
-        (ts.isPropertyAccessExpression(callee) && READ_METHODS.has(callee.name.text)) || (ts.isIdentifier(callee) && callee.text === "alias");
-      const [first] = node.arguments;
-      const table = reads && first !== undefined && ts.isIdentifier(first) ? tables.get(first.text) : undefined;
-      if (table !== undefined) uses.push({ line, table, kind: "builder-read", text: cut(node.getText(sourceFile)) });
     }
     const text = sqlText(node, tables);
     if (text !== null) {

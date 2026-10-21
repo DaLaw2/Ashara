@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNull, lt, not, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, projects, visionDocuments } from "@ashara/db";
+import { projects } from "@ashara/db";
+import { clientMessages, visionDocuments } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
 import { completedImplementationTaskIds, currentTasksCiting } from "@ashara/delivery/reads";

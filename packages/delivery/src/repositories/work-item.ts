@@ -1,7 +1,8 @@
 import { and, eq, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
-import { insertedRow, workItems, dependencies } from "@ashara/db";
+import { insertedRow } from "@ashara/db";
+import { workItems, dependencies } from "@ashara/db/schema/delivery";
 import { parseWorkItemStatus } from "../work-item-language/work-item-status.js";
 import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "../work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";

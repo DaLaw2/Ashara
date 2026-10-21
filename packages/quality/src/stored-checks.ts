@@ -1,6 +1,7 @@
 import { Column, and, asc, eq, inArray, is, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { qualifiedColumn, taskChecks } from "@ashara/db";
+import { qualifiedColumn } from "@ashara/db";
+import { taskChecks } from "@ashara/db/schema/quality";
 import type { DbHandle } from "@ashara/db";
 
 // Quality's published language for a task's stored checks (task_checks): which revision of them is

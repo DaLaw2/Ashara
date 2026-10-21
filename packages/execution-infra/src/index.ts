@@ -76,6 +76,7 @@ export {
 export { environmentVersion } from "./environment.js";
 export { ENVIRONMENT_BUILD_TIMEOUT_MS, buildEnvironmentImage, pruneEnvironmentImages } from "./environment-build.js";
 export type { BuiltEnvironment } from "./environment-build.js";
+export { EnvironmentBuildRepository } from "./environment-build-repository.js";
 export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, PodmanCommandFailed } from "./errors.js";
 /** @testseam the integration environment-build.test.ts asserts the class; buildEnvironmentImage throws it */
 export { EnvironmentBuildUnrecorded } from "./errors.js";

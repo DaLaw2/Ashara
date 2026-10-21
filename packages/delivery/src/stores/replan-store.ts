@@ -1,6 +1,6 @@
-import { latestRosterRoles } from "@ashara/db";
 import type { createDb } from "@ashara/db";
 import { parseWorkItemId, readEach, type Logger, type ProjectId } from "@ashara/shared";
+import { latestRosterRoles } from "../acl/organization-roster-acl.js";
 import { createBulkPlan } from "../bulk-plan.js";
 import { PlanningService } from "../domain/index.js";
 import type { AttemptGrade, ReplanStore } from "../replan.js";

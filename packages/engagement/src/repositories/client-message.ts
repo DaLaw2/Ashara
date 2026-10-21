@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { ProjectRepository, clientMessages, insertedRow, projects } from "@ashara/db";
+import { ProjectRepository, insertedRow, projects } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { noOpenStop, projectAtWork } from "../predicates.js";

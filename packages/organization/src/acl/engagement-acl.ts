@@ -1,11 +1,10 @@
 import { VisionUnreadable, readVisionVersion } from "@ashara/engagement";
-import type { StoredVision } from "@ashara/engagement";
+import { parseStoredVision } from "@ashara/engagement/vision";
 
 // Organization reads the client's vision only as Engagement's published VisionVersion,
 // through this file.
 
 export { VisionUnreadable };
-export type { StoredVision };
 
 /** The vision as roster derivation reads it: the tender verbatim and each assumption in a line. */
 export interface RosterVision {
@@ -14,9 +13,12 @@ export interface RosterVision {
   readonly assumptions: readonly string[];
 }
 
-/** The stored vision read for roster derivation; throws VisionUnreadable, the project's own record. */
-export function rosterVisionOf(stored: StoredVision): RosterVision {
-  const vision = readVisionVersion(stored);
+/**
+ * The stored vision, as the roster repository selected it, read for roster derivation; throws
+ * VisionUnreadable, the project's own record, and a selection that is no stored vision version.
+ */
+export function rosterVisionOf(projectId: string, stored: unknown): RosterVision {
+  const vision = readVisionVersion(parseStoredVision(projectId, stored));
   return {
     version: vision.version,
     visionText: vision.visionText,

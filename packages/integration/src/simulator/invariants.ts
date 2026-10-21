@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
+import type { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 import { describeErrorChain } from "@ashara/shared";
 import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";

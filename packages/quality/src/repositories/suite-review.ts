@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItemClaims, undecidedItems } from "@ashara/db";
+import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItemClaims, undecidedItems } from "@ashara/db/schema/quality";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { CAPABILITY_RANK, CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { CapabilityLevel, JudgeRelation } from "@ashara/finance";

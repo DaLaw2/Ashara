@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { ClientRepository, ProjectRepository, createDb, failedApproaches, knowledgeEntries, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { failedApproaches, knowledgeEntries } from "@ashara/db/schema/knowledge";
 import type { Database } from "@ashara/db";
 import { FailedApproachRepository, KnowledgeRepository } from "@ashara/knowledge";
 import type { ProjectId } from "@ashara/shared";

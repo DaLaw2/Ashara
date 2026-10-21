@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDb, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { SecretRepository } from "@ashara/security";
 import { SecretStore, createKeyFile, loadMasterKey } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 

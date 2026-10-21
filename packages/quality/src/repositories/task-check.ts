@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewFindings, taskChecks } from "@ashara/db";
+import { suiteReviewFindings, taskChecks } from "@ashara/db/schema/quality";
 import type { Database } from "@ashara/db";
 import { CapabilityLevelSchema } from "@ashara/finance";
 import type { CapabilityLevel } from "@ashara/finance";

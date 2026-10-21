@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { workBurnWarnings } from "@ashara/db";
+import { workBurnWarnings } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import type { BurnZone } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";

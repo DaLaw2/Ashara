@@ -2,12 +2,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
-import { createDb, type Database } from "../connection.js";
-import { resolveTestDatabaseUrl } from "../test-database-url.js";
-import { llmCalls } from "../schema/finance.js";
-import { ClientRepository } from "./client.js";
-import { LlmCallRepository } from "./llm-call.js";
-import { ProjectRepository } from "./project.js";
+import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl, type Database } from "@ashara/db";
+import { llmCalls } from "@ashara/db/schema/finance";
+import { LlmCallRepository } from "@ashara/finance";
 
 // Every row here belongs to a project this suite creates under a unique name; its llm_calls rows go
 // before it.

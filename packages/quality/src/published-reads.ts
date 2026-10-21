@@ -1,5 +1,6 @@
 import { and, asc, count, desc, eq, lte, type SQL } from "drizzle-orm";
-import { acceptanceSweeps, checkDisputes, guaranteeEvidence, qualifiedColumn } from "@ashara/db";
+import { qualifiedColumn } from "@ashara/db";
+import { acceptanceSweeps, checkDisputes, guaranteeEvidence } from "@ashara/db/schema/quality";
 import type { DbHandle } from "@ashara/db";
 
 // Quality's published reads of its acceptance sweeps, the evidence each recorded per guarantee and

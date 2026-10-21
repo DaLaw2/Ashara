@@ -1,5 +1,5 @@
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
-import { failedApproaches } from "@ashara/db";
+import { failedApproaches } from "@ashara/db/schema/knowledge";
 import type { Database } from "@ashara/db";
 
 export class FailedApproachRepository {

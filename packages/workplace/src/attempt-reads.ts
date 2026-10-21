@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
-import { devSessions } from "@ashara/db";
+import { devSessions } from "@ashara/db/schema/workplace";
 import type { DbHandle } from "@ashara/db";
 import { attemptGrade } from "@ashara/finance";
 

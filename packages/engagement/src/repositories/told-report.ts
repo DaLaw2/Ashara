@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
-import { clientMessages, insertedRow, toldReports } from "@ashara/db";
+import { insertedRow } from "@ashara/db";
+import { clientMessages, toldReports } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { haltEpisodeOf } from "@ashara/delivery/predicates";
 import { planRevisionProjects } from "@ashara/delivery/reads";

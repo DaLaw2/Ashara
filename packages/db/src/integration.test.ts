@@ -5,15 +5,9 @@ import type { ProjectId } from "@ashara/shared";
 import { createDb, type Database } from "./connection.js";
 import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { EventStoreRepository } from "./repositories/event-store.js";
-import { ConfigRepository } from "./repositories/config.js";
 import { ClientRepository } from "./repositories/client.js";
 import { ProjectRepository } from "./repositories/project.js";
-import {
-  domainEvents,
-  modelConfigs,
-  providerConfigs,
-  workItems,
-} from "./schema/index.js";
+import { domainEvents, workItems } from "./schema/index.js";
 
 // ---------------------------------------------------------------------------
 // One insert -> read round trip per repository, against real Postgres
@@ -26,8 +20,6 @@ let db: Database;
 
 const createdWorkItemIds: string[] = [];
 const createdEventIds: string[] = [];
-const createdProviderNames: string[] = [];
-const createdModelIds: string[] = [];
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
@@ -51,12 +43,6 @@ afterAll(async () => {
 });
 
 async function cleanupAll() {
-  for (const modelId of createdModelIds) {
-    await db.execute(sql`DELETE FROM model_configs WHERE model_id = ${modelId}`);
-  }
-  for (const name of createdProviderNames) {
-    await db.execute(sql`DELETE FROM provider_configs WHERE name = ${name}`);
-  }
   for (const id of createdEventIds) {
     await db.execute(sql`DELETE FROM domain_events WHERE event_id = ${id}`);
   }
@@ -105,49 +91,6 @@ describe("EventStoreRepository", () => {
     expect(row.payload).toEqual({ key: "value", nested: { a: 1 } });
     expect(row.timestamp).toBeInstanceOf(Date);
     expect(row.createdAt).toBeInstanceOf(Date);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 5. ConfigRepository
-// ---------------------------------------------------------------------------
-
-describe("ConfigRepository", () => {
-  let repo: ConfigRepository;
-  const testProviderName = `test-provider-${randomUUID().slice(0, 8)}`;
-  const testModelId = `test-model-${randomUUID().slice(0, 8)}`;
-
-  beforeAll(() => {
-    repo = new ConfigRepository(db);
-  });
-
-  test("providers and model configs each round-trip through their table", async () => {
-    createdProviderNames.push(testProviderName);
-    await db.insert(providerConfigs).values({
-      name: testProviderName,
-      providerType: "openai-compatible",
-      baseUrl: "http://localhost:11434/v1",
-    });
-    const providers = await repo.listProviderConfigs();
-    const provider = providers.find((p) => p.name === testProviderName);
-    expect(provider?.providerType).toBe("openai-compatible");
-    expect(provider?.baseUrl).toBe("http://localhost:11434/v1");
-    expect(provider).not.toHaveProperty("apiKey");
-
-    createdModelIds.push(testModelId);
-    await db.insert(modelConfigs).values({
-      modelId: testModelId,
-      providerName: testProviderName,
-      capability: "Strong",
-      capabilityThinkingOff: "Strong",
-      inputCostPer1m: 3.0,
-      outputCostPer1m: 0,
-      maxContextTokens: 128000,
-    });
-    const models = await repo.listModelConfigs();
-    const model = models.find((m) => m.modelId === testModelId);
-    expect(model?.providerName).toBe(testProviderName);
-    expect(model?.capability).toBe("Strong");
   });
 });
 

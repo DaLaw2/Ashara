@@ -3,7 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { LlmCallRepository } from "@ashara/finance";
 import { PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";

@@ -1,8 +1,8 @@
-import type { SecretRepository } from "@ashara/db";
 import { decryptSecret, encryptSecret } from "./cipher.js";
 import { EmptySecretValue, SecretNotFound } from "./errors.js";
 import type { MasterKey } from "./master-key.js";
 import { parseSecretName } from "./secret-name.js";
+import type { SecretRepository } from "./secret-repository.js";
 
 /**
  * Secret values in, ciphertext to Postgres; the master key never leaves the process.

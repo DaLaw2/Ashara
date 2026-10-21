@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_LIFECYCLES, clientMessages, projects } from "@ashara/db";
+import { PROJECT_LIFECYCLES, projects } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { openHaltKind } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, guaranteeEvidence, projects, taskChecks, undecidedItems } from "@ashara/db";
+import { projects } from "@ashara/db";
+import { acceptanceSweeps, guaranteeEvidence, taskChecks, undecidedItems } from "@ashara/db/schema/quality";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";

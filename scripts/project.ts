@@ -19,7 +19,8 @@
  */
 
 import { userInfo } from "node:os";
-import { createDb, DEFAULT_DATABASE_URL, WorkGrantRepository } from "@ashara/db";
+import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { WorkGrantRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { describeErrorChain, parseProjectId, type ProjectId } from "@ashara/shared";
 

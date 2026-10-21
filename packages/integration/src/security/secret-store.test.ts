@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDb, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { SecretRepository } from "@ashara/security";
 import { EmptySecretValue, InvalidSecretName, MasterKey, SecretKeyMismatch, SecretNotFound, SecretStore } from "@ashara/security";
 
 // Runs against the shared dev database: every row this suite writes carries a

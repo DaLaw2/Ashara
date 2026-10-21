@@ -9,56 +9,19 @@ export { insertedRow } from "./inserted-row.js";
 export { qualifiedColumn } from "./qualified-column.js";
 export { isDatabaseConnectionFault } from "./connection-fault.js";
 
-export {
-  PROJECT_BLOCK_KINDS,
-  PROJECT_LIFECYCLES,
-  acceptanceSweeps,
-  checkDisputes,
-  checkSetFreezes,
-  clientMessages,
-  correctionHolds,
-  deliveredReportAttempts,
-  dependencies,
-  domainEvents,
-  devSessions,
-  failedApproaches,
-  guaranteeEvidence,
-  guaranteeVerdicts,
-  intakeReadings,
-  knowledgeEntries,
-  planRepairs,
-  planRevisions,
-  projectBlocks,
-  projects,
-  reviewerOutcomes,
-  suiteReviewClaims,
-  suiteReviewFindings,
-  suiteReviewJudgements,
-  taskChecks,
-  toldReports,
-  undecidedItemClaims,
-  undecidedItems,
-  visionDocuments,
-  visionRevisions,
-  workBurnWarnings,
-  workItems,
-} from "./schema/index.js";
+// The shared tables only: a context's own tables are reached through its @ashara/db/schema/<context>
+// entry, which boundary-rules.toml admits to that context, the composition root and the test harness.
+export { PROJECT_LIFECYCLES, projects } from "./schema/project.js";
+export { domainEvents } from "./schema/events.js";
 
 export { ProjectRepository, projectRowColumns, toProjectRow } from "./repositories/project.js";
 export type { ProjectRow } from "./repositories/project.js";
-export { hasRoster, latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster, roleOfLatestRoster } from "./repositories/roster.js";
 export { stepFaultLedger } from "./repositories/step-fault.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";
 export type { LoginAttemptCaps } from "./repositories/client-login-failure.js";
 export { EventStoreRepository } from "./repositories/event-store.js";
-export { ConfigRepository } from "./repositories/config.js";
-export { SecretRepository } from "./repositories/secret.js";
-export { LlmCallRepository } from "./repositories/llm-call.js";
-export type { LlmCallMeasurement } from "./repositories/llm-call.js";
-export { WorkGrantRepository } from "./repositories/work-grant.js";
-export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export { legacyMigrationFile } from "./legacy-migrations.js";
 export {
   INIT_MIGRATION,

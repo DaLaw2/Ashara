@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { deliveredReportAttempts, intakeReadings, isDatabaseConnectionFault } from "@ashara/db";
+import { isDatabaseConnectionFault } from "@ashara/db";
+import { deliveredReportAttempts, intakeReadings } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";

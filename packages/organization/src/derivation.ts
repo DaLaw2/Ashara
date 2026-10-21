@@ -6,7 +6,7 @@ import type { LadderAttemptEvent, StructuredValidation } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { VisionUnreadable, rosterVisionOf } from "./acl/engagement-acl.js";
-import type { RosterVision, StoredVision } from "./acl/engagement-acl.js";
+import type { RosterVision } from "./acl/engagement-acl.js";
 import { CapabilityClassSchema, describeViolation, nonEmptyOrNull, validateRoster } from "./roster.js";
 import type { Role, Roster } from "./roster.js";
 import { assignmentViolations } from "./work-kind.js";
@@ -21,10 +21,10 @@ import { assignmentViolations } from "./work-kind.js";
 /** The first revision of a project's roster; later revisions append. */
 const FIRST_REVISION = 1;
 
-/** Vision v1 of a project with no roster, as the store reads it; read through Engagement's published reader. */
+/** Vision v1 of a project with no roster, as stored; read inside the step through Engagement's published reader. */
 interface VisionAwaitingRoster {
   readonly projectId: ProjectId;
-  readonly vision: StoredVision;
+  readonly vision: unknown;
 }
 
 /** What derivation reads of the project: its vision v1, read. */
@@ -190,7 +190,7 @@ export class RosterDerivation implements RosterDerivationStep {
     const awaiting = await this.deps.store.projectsAwaitingRoster();
     return containEach(this.deps.containment, "roster", awaiting, (project) => ({ id: project.projectId, projectId: project.projectId }), async (project) => {
       try {
-        return await this.derive({ projectId: project.projectId, ...rosterVisionOf(project.vision) });
+        return await this.derive({ projectId: project.projectId, ...rosterVisionOf(project.projectId, project.vision) });
       } catch (err) {
         if (!(err instanceof RosterDerivationExhausted || err instanceof VisionUnreadable)) throw err;
         const refusal: RosterRefusal = { errorClass: err.name, reason: describeErrorChain(err), error: err };

@@ -63,8 +63,8 @@ const STATUS_COMPARISON = `\\bstatus\\b['"]?\\s*(?:===|!==|==|!=|=|<>)\\s*${STAT
 const STATUS_PARTITION = "\\b(?:OPEN_|SETTLED_)?WORK_ITEM_STATUSES";
 const ENGAGEMENT_REPORT_SUBJECTS = "packages/engagement/src/report-subjects.ts";
 const QUALITY_STORED_CHECKS = "packages/quality/src/stored-checks.ts";
-/** Model Access's catalog: read by Model Access itself, by Finance in front of it, and by the catalog repository that loads it at boot. */
-const MODEL_CATALOG_OWNERS = ["packages/model-access/src/", "packages/finance/src/", "packages/db/src/repositories/config.ts"];
+/** Model Access's catalog: read by Model Access itself (its catalog repository loads it at boot) and by Finance in front of it. */
+const MODEL_CATALOG_OWNERS = ["packages/model-access/src/", "packages/finance/src/"];
 
 const PREDICATE_RULES: readonly PredicateRule[] = [
   {

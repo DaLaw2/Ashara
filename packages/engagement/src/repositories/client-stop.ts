@@ -1,7 +1,8 @@
 import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, projects } from "@ashara/db";
+import { projects } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { tasksWithMerge } from "@ashara/delivery/reads";

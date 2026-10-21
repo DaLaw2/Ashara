@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { ProjectRepository, projectBlocks, projectRowColumns, projects, toProjectRow } from "@ashara/db";
+import { ProjectRepository, projectRowColumns, projects, toProjectRow } from "@ashara/db";
+import { projectBlocks } from "@ashara/db/schema/delivery";
 import type { DbHandle, ProjectRow } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { restartClientReadings } from "../acl/engagement-acl.js";

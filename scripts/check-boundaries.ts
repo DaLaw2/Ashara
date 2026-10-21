@@ -27,6 +27,18 @@
  *   module-allow.<name> = [...]     the other modules of the package <name> may import; none when absent.
  *                                   An item `<module>:<glob>` allows only those files of <module> to <name>
  *   module-entry.<name> = [glob, ...] the only files of <name> another module may import
+ *   subpath-importers.<subpath> = [...] the only packages that may import `@ashara/<this>/<subpath>`
+ *
+ * A package that states `subpath-importers` is reached only by its root entry and the subpaths it
+ * lists: each subpath its package.json exports needs a list and each list an exported subpath, an
+ * import of a subpath by a package its list does not name is a violation, and so is a relative path
+ * into the package from another one (it reaches the files around their lists) and any import of a
+ * listed subpath from scripts/, whose files are read for that alone. A subpath whose entry declares
+ * tables (`pgTable`) is held to the [tables] owner map: it may list only the package that owns each
+ * table it declares, plus a package that composes every context (`allow = ["*"]`) or that none may
+ * import (`importers = []`); and the root entry, with every file it re-exports from by a relative
+ * `export ... from`, may declare no table a package owns. So a context's table object is importable
+ * only by its owner, and a drizzle read of another context's table cannot be written.
  *
  * A package that declares `module.*` is checked inside, against its modules. Every .ts file under
  * its src/ belongs to exactly one module: a test file to its subject's (`x.test.ts` and
@@ -56,7 +68,7 @@
  * on a packages/integration/src/simulator test file over its budget of simulator runs
  * (scripts/simulator-run-budget.ts), on a raw copy of a cross-context predicate outside the
  * context that owns it (scripts/predicate-copies.ts), and on a write to a table another context
- * owns or a read of one (raw SQL or a drizzle builder) no allowed edge admits, against the owner map of the rules file's [tables]
+ * owns or a raw SQL read of one no allowed edge admits, against the owner map of the rules file's [tables]
  * section, itself held to the schema modules (scripts/table-ownership.ts).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
@@ -67,7 +79,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { describeErrorChain } from "@ashara/shared";
+import { z } from "zod";
+import { describeErrorChain, parseJson } from "@ashara/shared";
 import { OPTIONAL_MEMBER_ALLOWLIST, findUnsuppliedOptionalMembers } from "./optional-deps.js";
 import { findPredicateCopies } from "./predicate-copies.js";
 import { findPriceColumnDefaults } from "./price-defaults.js";
@@ -137,6 +150,8 @@ interface PackageRule {
   readonly moduleAllowFiles: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
   /** module -> the only files of it another module may import; a module absent here admits all its files. */
   readonly moduleEntry: ReadonlyMap<string, readonly string[]>;
+  /** subpath of this package -> the only packages that may import it; empty when the section states none. */
+  readonly subpathImporters: ReadonlyMap<string, readonly string[]>;
 }
 
 /** The module that may import every other module and that none may import: the package's barrel. */
@@ -166,6 +181,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       moduleAllow: Map<string, string[]>;
       moduleAllowFiles: Map<string, Map<string, string[]>>;
       moduleEntry: Map<string, string[]>;
+      subpathImporters: Map<string, string[]>;
     }
   >();
   let currentSection: string | null = null;
@@ -186,7 +202,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), subpathImporters: new Map() });
       }
       continue;
     }
@@ -307,6 +323,15 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
+    const subpathMatch = /^subpath-importers\.([a-z0-9][a-z0-9/-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (subpathMatch) {
+      const importers = parseList(subpathMatch[2]);
+      if (importers.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "subpath-importers list is empty (drop the subpath from the exports instead)");
+      if (rule.subpathImporters.has(subpathMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `subpath-importers.${subpathMatch[1]} is stated twice`);
+      rule.subpathImporters.set(subpathMatch[1], importers);
+      continue;
+    }
+
     // Fail closed: a typo in a rule key must not silently disable the gate.
     throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
   }
@@ -356,6 +381,11 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
       }
     }
+    for (const [subpath, importers] of rule.subpathImporters) {
+      for (const importer of importers) {
+        if (!rules.has(importer)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] subpath-importers.${subpath}`, `names "${importer}", which has no section`);
+      }
+    }
     checkModuleRules(rulesPath, pkg, rule.modules, rule.moduleAllow, rule.moduleEntry);
     result.set(pkg, {
       allow: rule.allow,
@@ -370,6 +400,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       moduleAllow: rule.moduleAllow,
       moduleAllowFiles: rule.moduleAllowFiles,
       moduleEntry: rule.moduleEntry,
+      subpathImporters: rule.subpathImporters,
     });
   }
 
@@ -970,6 +1001,111 @@ function tableOwnershipViolations(root: string, packagesDir: string, packageDirs
 }
 
 // ---------------------------------------------------------------------------
+// Subpath entries (subpath-importers)
+// ---------------------------------------------------------------------------
+
+/** The package that composes every context, and the one none may import: each may hold every context's entry. */
+function composesEveryContext(rule: PackageRule | undefined): boolean {
+  return rule !== undefined && ((rule.allow.length === 1 && rule.allow[0] === "*") || (rule.importers !== null && rule.importers.length === 0));
+}
+
+/**
+ * Why `importer` may not import `specifier` of `pkg` under its subpath-importers; null when it may or
+ * the package states none. A relative specifier into the package reaches its files around the lists.
+ */
+function subpathRefusalOf(rules: BoundaryRules, pkg: string, specifier: string, importer: string): string | null {
+  const lists = rules.get(pkg)?.subpathImporters;
+  if (lists === undefined || lists.size === 0) return null;
+  const prefix = `@ashara/${pkg}`;
+  if (!specifier.startsWith(prefix)) return `a relative path into package "${pkg}", whose subpaths admit only the importers its subpath-importers list; import it by its @ashara/ name`;
+  if (specifier === prefix) return null;
+  const subpath = specifier.slice(prefix.length + 1);
+  const admitted = lists.get(subpath);
+  if (admitted === undefined) return `package "${pkg}" states no subpath-importers.${subpath}, so no package may import it`;
+  return admitted.includes(importer) ? null : `only [${admitted.join(", ")}] may import "${specifier}" (subpath-importers.${subpath})`;
+}
+
+const PackageExportsSchema = z.object({ exports: z.record(z.string(), z.string()) });
+
+/** The package-relative files a relative `export ... from` statement of `file` re-exports from. */
+const RELATIVE_REEXPORT_RE = /\bexport\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*["'](\.{1,2}\/[^"']*)["']/g;
+
+/** `entry` and every file it reaches by relative re-exports, followed file to file. */
+function reexportClosure(entry: string): string[] {
+  const reached = new Set<string>([entry]);
+  const queue = [entry];
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    for (const match of fs.readFileSync(file, "utf-8").matchAll(RELATIVE_REEXPORT_RE)) {
+      const base = path.resolve(path.dirname(file), match[1]);
+      const target = [base.replace(/\.js$/, ".ts"), `${base}.ts`, path.join(base, "index.ts")].find((candidate) => fs.existsSync(candidate));
+      if (target === undefined || reached.has(target)) continue;
+      reached.add(target);
+      queue.push(target);
+    }
+  }
+  return [...reached];
+}
+
+/**
+ * Each package's subpath-importers held to its package.json exports, each subpath that declares
+ * tables held to the [tables] owner of every one, and the root entry held to re-export no table a
+ * package owns (header).
+ */
+function subpathEntryViolations(root: string, packagesDir: string, rules: BoundaryRules, toml: string, rulesRelative: string): Violation[] {
+  const owners = parseTableOwnershipRules(toml, rulesRelative).owners;
+  const violations: Violation[] = [];
+  for (const [pkg, rule] of rules) {
+    if (rule.subpathImporters.size === 0) continue;
+    const manifestPath = path.join(packagesDir, pkg, "package.json");
+    const manifest = path.relative(root, manifestPath).split(path.sep).join("/");
+    const exportsMap = parseJson(PackageExportsSchema, fs.readFileSync(manifestPath, "utf-8"), manifestPath).exports;
+    const at = (file: string, specifier: string, reason: string): Violation => ({ file, line: 0, fromPkg: pkg, specifier, reason });
+    for (const key of Object.keys(exportsMap)) {
+      if (key !== "." && !rule.subpathImporters.has(key.slice(2))) violations.push(at(manifest, key, `exports a subpath [${pkg}] states no subpath-importers for, so any package could import it`));
+    }
+    const declaredIn = (file: string) => declaredTables(fs.readFileSync(file, "utf-8"), file).map((table) => ({ ...table, owner: owners.get(table.name) }));
+    for (const [subpath, importers] of rule.subpathImporters) {
+      const target = exportsMap[`./${subpath}`];
+      if (target === undefined) {
+        violations.push(at(rulesRelative, `subpath-importers.${subpath}`, `${manifest} exports no "./${subpath}"; a rule that holds nothing passes everything`));
+        continue;
+      }
+      for (const table of declaredIn(path.join(packagesDir, pkg, target))) {
+        for (const importer of importers) {
+          if (importer === table.owner || composesEveryContext(rules.get(importer))) continue;
+          const owner = table.owner === undefined ? "no [tables] entry" : `"${table.owner}"`;
+          violations.push(at(rulesRelative, `subpath-importers.${subpath}`, `admits "${importer}" to ${table.name}, which ${owner} owns`));
+        }
+      }
+    }
+    const rootTarget = exportsMap["."];
+    if (rootTarget === undefined) continue;
+    const rootEntry = path.join(packagesDir, pkg, rootTarget);
+    for (const file of reexportClosure(rootEntry)) {
+      const owned = declaredIn(file).filter((table) => table.owner !== undefined && table.owner !== DB_OWNER && table.owner !== SHARED_OWNER);
+      if (owned.length === 0) continue;
+      const listed = owned.map((table) => `${table.name} ("${table.owner}")`).join(", ");
+      violations.push(at(path.relative(root, rootEntry).split(path.sep).join("/"), path.relative(root, file).split(path.sep).join("/"), `the root entry re-exports from a file declaring tables a package owns: ${listed}; each is reached only through its subpath`));
+    }
+  }
+  return violations;
+}
+
+/** Every import of a subpath a subpath-importers list holds, from scripts/, which no list admits (header). */
+function scriptSubpathViolations(root: string, rules: BoundaryRules): Violation[] {
+  const violations: Violation[] = [];
+  for (const filePath of collectTsFiles(path.join(root, "scripts"))) {
+    scanLines(fs.readFileSync(filePath, "utf-8"), PACKAGE_IMPORT_RE, (line, match) => {
+      const [, specifier, pkg] = match;
+      const lists = rules.get(pkg)?.subpathImporters;
+      if (specifier === `@ashara/${pkg}` || lists === undefined || lists.size === 0) return;
+      violations.push({ file: path.relative(root, filePath), line, fromPkg: "scripts", specifier, reason: `scripts/ imports no subpath of package "${pkg}", whose subpath-importers admit only packages` });
+    });
+  }
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
 // Simulator run budget (not an import rule; run here so it needs no gate of its own in `just check`)
 // ---------------------------------------------------------------------------
 
@@ -1167,7 +1303,11 @@ function main(): void {
         const soleImporters = rule.restrict.get(ref.pkg);
         if (soleImporters !== undefined && !matchesAnyGlob(pkgRelative, soleImporters)) {
           violations.push(violation(`only ${soleImporters.join(", ")} may import package "${ref.pkg}"`));
+          continue;
         }
+
+        const subpathRefusal = subpathRefusalOf(rules, ref.pkg, ref.specifier, pkgName);
+        if (subpathRefusal !== null) violations.push(violation(subpathRefusal));
       }
     }
 
@@ -1266,6 +1406,8 @@ function main(): void {
   // Not an import rule either: a context writes only the tables it owns, and reads another's only
   // through its typed read or a reviewed exemption (scripts/table-ownership.ts).
   violations.push(...tableOwnershipViolations(root, packagesDir, packageDirs, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
+  violations.push(...subpathEntryViolations(root, packagesDir, rules, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
+  violations.push(...scriptSubpathViolations(root, rules));
   violations.push(...simulatorRunBudgetViolations(root));
   // Not an import rule either: a cross-context predicate re-spelled outside its owner, which drifts
   // from the owner's one spelling (scripts/predicate-copies.ts).

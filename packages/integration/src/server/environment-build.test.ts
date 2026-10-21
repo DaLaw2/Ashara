@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, EnvironmentBuildRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { EnvironmentBuildRepository } from "@ashara/execution-infra";
 import {
   EnvironmentBuildFailed,
   EnvironmentBuildUnrecorded,

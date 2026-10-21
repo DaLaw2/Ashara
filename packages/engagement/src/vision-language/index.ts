@@ -6,4 +6,4 @@ export { VisionSourceSchema, checkDecides, taskMayCite, visionSourceCitation, vi
 export type { InterfaceEntry, VisionGuarantee } from "./guarantee.js";
 export { basisOf } from "./guarantee.js";
 export type { PublishedStoredVision } from "./stored-vision.js";
-export { currentStoredVision, currentVisionVersion, hasVision, parseStoredVision } from "./stored-vision.js";
+export { currentStoredVision, currentVisionVersion, hasVision, parseStoredVision, storedVisionVersion } from "./stored-vision.js";

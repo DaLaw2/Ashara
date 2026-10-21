@@ -21,6 +21,9 @@
 #                               an item "<module>:<glob>" lets <name> import only those files of it
 # module-entry.<name> = [glob, ...] the only files of <name> another module may import
 #                               The module `entry` (the barrel) may import every module; none may import it.
+# subpath-importers.<subpath> = [...] the only packages that may import @ashara/<this>/<subpath>; once a
+#                               section states any, each subpath its package.json exports needs one, a
+#                               relative path into the package is refused, and scripts/ may import none
 #
 # [stack-literals] is no package's section: it holds the stack-literal denylist (see its comment).
 
@@ -33,6 +36,20 @@ allow = []
 [db]
 # Generic persistence: connection, listener, migrations, event store and the schema per context.
 allow = ["shared"]
+# A context's tables are its own: each schema/<context> entry admits that context, the composition
+# root and the test harness, and the root entry re-exports no table a context owns. The checker holds
+# each list to the [tables] owner of every table its entry declares, so a foreign table object fails
+# the import here and a drizzle read of it cannot be written.
+subpath-importers.schema/delivery = ["delivery", "server", "integration"]
+subpath-importers.schema/engagement = ["engagement", "server", "integration"]
+subpath-importers.schema/execution-infra = ["execution-infra", "server", "integration"]
+subpath-importers.schema/finance = ["finance", "server", "integration"]
+subpath-importers.schema/knowledge = ["knowledge", "server", "integration"]
+subpath-importers.schema/model-access = ["model-access", "server", "integration"]
+subpath-importers.schema/organization = ["organization", "server", "integration"]
+subpath-importers.schema/quality = ["quality", "server", "integration"]
+subpath-importers.schema/security = ["security", "server", "integration"]
+subpath-importers.schema/workplace = ["workplace", "server", "integration"]
 
 # --- Generic and supporting contexts ----------------------------------------------------------
 
@@ -40,8 +57,8 @@ allow = ["shared"]
 # Model Access (generic): providers, models, the structured-output ladder. Finance is its
 # only customer, so every model call goes through Finance's guarded port; the composition root
 # builds the gateway and the integration harness composes it as the root does. Every other context
-# reads the model language Finance re-publishes.
-allow = ["shared"]
+# reads the model language Finance re-publishes. Its catalog tables go through db.
+allow = ["shared", "db"]
 importers = ["finance", "server", "integration"]
 
 [finance]
@@ -54,19 +71,20 @@ allow = ["shared", "db", "model-access"]
 # Security: db holds the ciphertext rows; the master key stays outside it.
 allow = ["db"]
 # Only the composition root and the integration harness may hold a key or a store. The operator
-# tools in scripts/ also import it; this checker does not scan scripts/.
+# tools in scripts/ also import it; this checker reads scripts/ only for subpath-importers.
 importers = ["server", "integration"]
 
 [execution-infra]
-# Execution Infrastructure: cells on the container substrate. Imports no other context.
-allow = ["shared"]
+# Execution Infrastructure: cells on the container substrate. Imports no other context; its
+# environment builds go through db.
+allow = ["shared", "db"]
 # Its modules by business purpose: the cells on the container substrate, the target checkout and task
 # worktrees on the host, the environment versions (a cell on a checkout), and the package's typed errors,
 # its kernel. A cell reads the host only to snapshot a repository into itself; checkout's lock and tree
 # reads stay behind its worktree and repository entry files.
 module.cells       = ["src/podman.ts", "src/cell-probes.ts", "src/cell-probes-callers.test.ts", "src/process-runner.ts", "src/cell-backend.ts", "src/cell-limits.ts", "src/cells.ts", "src/base-cell.ts", "src/workspace-path.ts"]
 module.checkout    = ["src/worktree.ts", "src/tree-read.ts", "src/checkout-lock.ts", "src/host-git.ts", "src/target-repo.ts", "src/worktree-boundary.test.ts"]
-module.environment = ["src/environment-build.ts", "src/environment.ts", "src/current-environment.ts", "src/checkout-cell.ts", "src/environment-report.ts"]
+module.environment = ["src/environment-build.ts", "src/environment-build-repository.ts", "src/environment.ts", "src/current-environment.ts", "src/checkout-cell.ts", "src/environment-report.ts"]
 module.errors      = ["src/errors.ts"]
 module.entry       = ["src/index.ts"]
 module-allow.environment = ["cells", "checkout", "errors"]
@@ -128,8 +146,9 @@ module-entry.inbound = ["src/repositories/client-message.ts"]
 # Roster derivation is Organization's language, so its structured call on the `roster` site lives
 # here, through Finance's guarded port. It reads the client vision in Engagement's published
 # language, and the conventions Workplace's tools enforce (stated in its role charters) in
-# Workplace's published language, each through its ACL; Workplace never reads Organization.
-allow = ["shared", "finance", "engagement", "workplace"]
+# Workplace's published language, each through its ACL; Workplace never reads Organization. Its
+# roster goes through db.
+allow = ["shared", "db", "finance", "engagement", "workplace"]
 restrict.engagement = ["src/acl/*.ts"]
 restrict.workplace = ["src/acl/*.ts"]
 
@@ -212,7 +231,7 @@ importers = []
 # replaces its second reading, and no oracle reads anything of it. contendedWait is read only to see
 # that a run put the process's wait observer back: with none installed it returns its argument.
 named-only = ["src/simulator/**"]
-names.db = ["ClientRepository", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "resolveTestDatabaseUrl", "runMigrations"]
+names.db = ["ClientRepository", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "TargetCheckoutClaimedElsewhere", "createDb", "resolveTestDatabaseUrl", "runMigrations"]
 names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "DELIVERY_MODEL_SCHEMAS", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
 names.engagement = ["ENGAGEMENT_MODEL_SCHEMAS", "PROJECT_STATUSES", "TenderIntake", "VisionSource"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
@@ -220,7 +239,7 @@ names.finance = ["SPEND_CAP_ERROR_CLASS"]
 names.model-access = ["LanguageModelFactory", "PROVIDER_TYPES", "ProviderType", "schemaRefusalsFor", "wireSchemaOf"]
 names.organization = ["ORGANIZATION_MODEL_SCHEMAS"]
 names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "QUALITY_MODEL_SCHEMAS", "observeAcceptanceSweeps"]
-names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
+names.security = ["MasterKey", "SecretRepository", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "contendedWait", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "parseJson"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchemas"]
@@ -248,7 +267,8 @@ bounds-tables = ["src/simulator/work-bounds.ts"]
 # Every insert, update or delete a context's source issues lands on a table that context owns;
 # anything it does to another context's table goes through that owner's exported write entry or
 # typed read. scripts/check-boundaries.ts fails on a write to a table another package owns, and on a
-# read of one, in raw SQL or through drizzle's builder, that no allowed edge below admits
+# raw SQL read of one that no allowed edge below admits; a drizzle read needs the table object, which
+# [db] subpath-importers keep inside its owner
 # (scripts/table-ownership.ts states what is read and its blind spots). Every table a
 # packages/db/src/schema/<module>.ts declares has one entry: owned by <module> when it is a package,
 # otherwise by "db" (generic persistence, reached through db's repositories) or "shared".

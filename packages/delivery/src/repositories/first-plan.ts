@@ -1,9 +1,11 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { hasRoster, projects, roleOfLatestRoster, workItems } from "@ashara/db";
+import { projects } from "@ashara/db";
+import { workItems } from "@ashara/db/schema/delivery";
 import { noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { currentStoredVision, hasVision } from "../acl/engagement-vision-acl.js";
+import { hasRoster, roleOfLatestRoster } from "../acl/organization-roster-acl.js";
 import { WorkItemRowRepository } from "./work-item.js";
 import { haltForPlanningStopped } from "./project-halt.js";
 

@@ -2,7 +2,8 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, type SQL
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { correctionHolds, domainEvents, planRepairs, planRevisions, projects, workItems } from "@ashara/db";
+import { domainEvents, projects } from "@ashara/db";
+import { correctionHolds, planRepairs, planRevisions, workItems } from "@ashara/db/schema/delivery";
 import { clientMessageBodies, firstPlanTold, noOpenAnswer, noOpenStop, planRevisionTold, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { currentStoredVision, currentVisionVersion, parseStoredVision, type PublishedStoredVision } from "../acl/engagement-vision-acl.js";
 import { CapabilityLevelSchema } from "../acl/finance-acl.js";

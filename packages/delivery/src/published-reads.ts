@@ -1,7 +1,8 @@
 import { SQL, and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, sql, type AnyColumn } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { dependencies, planRepairs, planRevisions, qualifiedColumn, workItems } from "@ashara/db";
+import { qualifiedColumn } from "@ashara/db";
+import { dependencies, planRepairs, planRevisions, workItems } from "@ashara/db/schema/delivery";
 import type { DbHandle } from "@ashara/db";
 import { givenUpItem, goalTaskSql, inCurrentPlan, liveInCurrentPlan, productScaffoldTask, reviewTask } from "./predicates.js";
 import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/index.js";

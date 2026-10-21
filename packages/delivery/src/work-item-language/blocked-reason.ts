@@ -172,7 +172,7 @@ const suiteReviewUnresolvedSchema = z.object({
  * the owner. `ownerRoleId` is the stored owner, null when there is none.
  * `rosterRevision` is the latest roster revision the decision was made against, null when the
  * project had none (or, on a legacy row, when it was not recorded). No production
- * path appends a roster revision after the first (db roster.ts recordFirstRoster), so the task is
+ * path appends a roster revision after the first (Organization's recordFirstRoster), so the task is
  * given up (Abandoned) and its plan repaired, which staffs the new tasks from the latest roster.
  */
 const ownerUnresolvedSchema = z.object({

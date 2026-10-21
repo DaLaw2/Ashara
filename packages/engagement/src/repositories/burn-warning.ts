@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, insertedRow, projects, workBurnWarnings } from "@ashara/db";
+import { insertedRow, projects } from "@ashara/db";
+import { clientMessages, workBurnWarnings } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { currentPlanImplementationTasks, currentPlanRevision } from "@ashara/delivery/reads";
 import { projectWork } from "@ashara/finance";

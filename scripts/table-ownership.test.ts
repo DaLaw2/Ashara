@@ -33,25 +33,14 @@ describe("findTableUses", () => {
     ]);
   });
 
-  test("reports a drizzle builder read: a from, every join and an alias of a table the schema exports", () => {
+  test("reads no drizzle builder read: the import boundary keeps a table object inside its owner", () => {
     const source = [
       'import { alias } from "drizzle-orm/pg-core";',
       "await db.select({ id: acceptanceSweeps.id }).from(acceptanceSweeps).where(eq(acceptanceSweeps.blockId, id));",
       "await db.select().from(checkDisputes).innerJoin(workItems, eq(workItems.id, checkDisputes.taskId));",
-      "await db.select().from(clientMessages).leftJoin(projectBlocks, on).rightJoin(planRepairs, on).fullJoin(llmCalls, on);",
       'const w = alias(workItems, "w");',
-      "const rows = [].join(separator); items.from(somethingElse);",
     ].join("\n");
-    expect(findTableUses(source, "probe.ts", identifiers).map((use) => [use.line, use.kind, use.table])).toEqual([
-      [2, "builder-read", "acceptance_sweeps"],
-      [3, "builder-read", "work_items"],
-      [3, "builder-read", "check_disputes"],
-      [4, "builder-read", "llm_calls"],
-      [4, "builder-read", "plan_repairs"],
-      [4, "builder-read", "project_blocks"],
-      [4, "builder-read", "client_messages"],
-      [5, "builder-read", "work_items"],
-    ]);
+    expect(findTableUses(source, "probe.ts", identifiers)).toEqual([]);
   });
 
   test("reports a raw FOR UPDATE lock as a read of the locked table", () => {

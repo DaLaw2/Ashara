@@ -1,8 +1,8 @@
-import type { LlmCallRepository } from "@ashara/db";
 import type { ModelConfig } from "@ashara/model-access";
 import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid, WorkBudgetSpent } from "./errors.js";
 import type { WorkAtBudget } from "./errors.js";
 import type { PendingLlmCall } from "./guarded-model-access.js";
+import type { LlmCallRepository } from "./llm-call-repository.js";
 import { DEFAULT_WORK_BUDGETS, WorkLedger } from "./work-ledger.js";
 import type { WorkBudgets } from "./work-ledger.js";
 

@@ -1,7 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationBaselineError, MigrationDriftError } from "@ashara/db";
+import {
+  createDb,
+  EventStoreRepository,
+  ClientSessionRepository,
+  ClientRepository,
+  ClientLoginFailureRepository,
+  assertMigrationsCurrent,
+  claimTargetCheckouts,
+  MIGRATIONS_DIR,
+  MigrationBaselineError,
+  MigrationDriftError,
+} from "@ashara/db";
+import { EnvironmentBuildRepository } from "@ashara/execution-infra";
+import { LlmCallRepository } from "@ashara/finance";
+import { ConfigRepository } from "@ashara/model-access";
+import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
+import { SecretRepository } from "@ashara/security";
 import type { PoolFactory } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";

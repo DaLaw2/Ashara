@@ -1,6 +1,6 @@
-import { LlmCallRepository } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
+import { LlmCallRepository } from "./llm-call-repository.js";
 
 // Finance's published reads of the work ledger, for the contexts that tell the client or the operator
 // of it: the requests a project drew and the requests the owner granted it, counted as the ledger

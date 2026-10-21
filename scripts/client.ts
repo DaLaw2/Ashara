@@ -21,13 +21,8 @@
  * the old code valid until it expires.
  */
 
-import {
-  ClientRepository,
-  ClientSessionRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  SecretRepository,
-} from "@ashara/db";
+import { ClientRepository, ClientSessionRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { SecretRepository } from "@ashara/security";
 import {
   MIN_CLIENT_ACCESS_CODE_LENGTH,
   SecretStore,

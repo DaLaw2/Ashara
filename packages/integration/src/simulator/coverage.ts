@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 import { EXECUTION_STATUSES, observeAcceptanceSweeps as observeQualitySweeps } from "@ashara/quality";
 import type { AcceptanceSweep } from "@ashara/quality";
 import { ATTEMPT_TERMINALS } from "@ashara/workplace";

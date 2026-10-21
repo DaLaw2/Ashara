@@ -1,5 +1,5 @@
 import { and, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
-import { devSessions } from "@ashara/db";
+import { devSessions } from "@ashara/db/schema/workplace";
 import type { DbHandle } from "@ashara/db";
 import { TERMINAL_SESSION_PHASES, type AttemptTerminal } from "./session-vocabulary.js";
 

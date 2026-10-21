@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { ClientRepository, ProjectRepository, createDb, devSessions, workItems, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { workItems } from "@ashara/db/schema/delivery";
+import { devSessions } from "@ashara/db/schema/workplace";
 import type { Database, DbTransaction } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { DevSessionRepository, ORPHANED_SESSION_RESOLVER, terminalizeOrphanedSessions } from "@ashara/workplace";

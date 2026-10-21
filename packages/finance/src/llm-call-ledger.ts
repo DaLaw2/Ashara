@@ -1,9 +1,9 @@
-import type { LlmCallMeasurement, LlmCallRepository } from "@ashara/db";
 import type { ModelConfig } from "@ashara/model-access";
 import { describeUnmeasuredCost, measureCost } from "./cost.js";
 import type { CostMeasurement } from "./cost.js";
 import { UnpricedModel } from "./errors.js";
 import type { LlmCallRecorder, LlmProviderCall, PendingLlmCall } from "./guarded-model-access.js";
+import type { LlmCallMeasurement, LlmCallRepository } from "./llm-call-repository.js";
 import { worstCaseCostUsd } from "./spend-cap.js";
 import type { SpendCap } from "./spend-cap.js";
 

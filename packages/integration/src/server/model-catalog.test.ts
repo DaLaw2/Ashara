@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ConfigRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { ConfigRepository } from "@ashara/model-access";
 import { measureCost } from "@ashara/finance";
 import {
   buildGateway,

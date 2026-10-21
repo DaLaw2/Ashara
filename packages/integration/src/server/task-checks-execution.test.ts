@@ -9,14 +9,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  EnvironmentBuildRepository,
-  LlmCallRepository,
-  ProjectRepository,
-  resolveTestDatabaseUrl,
-} from "@ashara/db";
+import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { EnvironmentBuildRepository } from "@ashara/execution-infra";
+import { LlmCallRepository } from "@ashara/finance";
 import { CheckDisputeRepository, TaskCheckRepository } from "@ashara/quality";
 import { DispatchService, FailureRouter } from "@ashara/delivery";
 import type { TaskDescriptor } from "@ashara/delivery";

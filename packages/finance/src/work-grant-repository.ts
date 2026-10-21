@@ -1,9 +1,8 @@
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
-import type { DbHandle } from "../connection.js";
-import { insertedRow } from "../inserted-row.js";
-import { projects, workGrants } from "../schema/index.js";
+import { insertedRow, projects, type DbHandle } from "@ashara/db";
+import { workGrants } from "@ashara/db/schema/finance";
 
 /** One owner grant of model requests to a project, as asked for. */
 interface WorkGrant {

@@ -9,7 +9,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { LlmCallRepository } from "@ashara/finance";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import {
   CoreLoop,

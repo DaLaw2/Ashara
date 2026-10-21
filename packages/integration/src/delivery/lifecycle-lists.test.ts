@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { createDb, PROJECT_BLOCK_KINDS, PROJECT_LIFECYCLES, resolveTestDatabaseUrl } from "@ashara/db";
+import { createDb, PROJECT_LIFECYCLES, resolveTestDatabaseUrl } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 import { WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { ATTEMPT_TERMINALS } from "@ashara/workplace";
 

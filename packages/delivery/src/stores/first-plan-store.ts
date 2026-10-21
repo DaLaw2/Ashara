@@ -1,8 +1,8 @@
-import { latestRosterRoles } from "@ashara/db";
 import type { createDb } from "@ashara/db";
 import { readEach } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { parseStoredVision } from "../acl/engagement-vision-acl.js";
+import { latestRosterRoles } from "../acl/organization-roster-acl.js";
 import { createBulkPlan } from "../bulk-plan.js";
 import type { FirstPlanStore } from "../first-plan.js";
 import { listProjectsAwaitingFirstPlan, recordFirstPlanFailure, stopFirstPlanning, withFirstPlanTransaction } from "../repositories/first-plan.js";

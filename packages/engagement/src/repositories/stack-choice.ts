@@ -1,5 +1,6 @@
 import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
-import { clientMessages, projects } from "@ashara/db";
+import { projects } from "@ashara/db";
+import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { latestEnvironmentStatement } from "@ashara/delivery/reads";

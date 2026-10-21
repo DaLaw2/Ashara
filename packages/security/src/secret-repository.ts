@@ -1,6 +1,6 @@
 import { asc, eq, sql } from "drizzle-orm";
-import type { DbHandle } from "../connection.js";
-import { secrets } from "../schema/index.js";
+import type { DbHandle } from "@ashara/db";
+import { secrets } from "@ashara/db/schema/security";
 
 /** One encrypted secret as stored. Plaintext never reaches this layer. */
 interface EncryptedSecretRow {

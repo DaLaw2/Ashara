@@ -1,10 +1,9 @@
 import { and, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
-import { endedHaltEpisodesWhere, haltEpisodeOf, haltEpisodesWhere, type HaltEpisodeRef } from "@ashara/delivery/predicates";
+import { PROJECT_BLOCK_KINDS, endedHaltEpisodesWhere, haltEpisodeOf, haltEpisodesWhere, type HaltEpisodeRef } from "@ashara/delivery/predicates";
 import { awaitedRepairsRecordedBy, workItemSummaries } from "@ashara/delivery/reads";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 import { lastDisputeBy, sweepOfTerminal } from "@ashara/quality/published-reads";

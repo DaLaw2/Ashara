@@ -8,6 +8,7 @@ export type { ResolvedModel } from "./gateway.js";
 export type { TurnRequest, TurnResult, TurnToolSchema } from "./turn.js";
 export { buildGatewayConfig, toModelConfig } from "./config.js";
 export type { ProviderCredential } from "./config.js";
+export { ConfigRepository } from "./config-repository.js";
 export { resolveModelsConfigPath } from "./paths.js";
 export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { loadThinkingPolicyFromToml } from "./thinking.js";
