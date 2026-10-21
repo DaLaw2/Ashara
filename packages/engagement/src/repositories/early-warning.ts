@@ -6,6 +6,7 @@ import type { BurnZone } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { goalTaskSql, inCurrentPlan } from "@ashara/delivery/predicates";
 import { WORK_ITEM_STATUSES, parseStoredTaskSpec } from "@ashara/delivery/work-item";
+import { inLatestCheckRevision, StoredDecidesSchema } from "@ashara/quality/stored-checks";
 import type { RiskRecords } from "../early-warning.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import { VisionRepository } from "./vision.js";
@@ -16,8 +17,6 @@ import { VisionRepository } from "./vision.js";
 
 const StatusSchema = z.enum(WORK_ITEM_STATUSES);
 const ZoneSchema = z.enum(["yellow", "red"]);
-/** task_checks.decides: null on a row written before it, which decides nothing on record. */
-const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
 
 /** A record the register reads does not parse. */
 class RiskRecordUnreadable extends Error {
@@ -60,7 +59,7 @@ async function decidedBy(db: DbHandle, taskIds: readonly string[]): Promise<stri
     .where(
       and(
         inArray(taskChecks.taskId, [...taskIds]),
-        sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
+        inLatestCheckRevision(taskChecks.revision, taskChecks.taskId),
       ),
     );
   return rows.flatMap((row) => {

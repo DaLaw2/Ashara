@@ -25,7 +25,6 @@ export {
   guaranteeVerdicts,
   intakeReadings,
   knowledgeEntries,
-  modelConfigs,
   planRepairs,
   planRevisions,
   projectBlocks,

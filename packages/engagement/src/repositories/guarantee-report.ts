@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { acceptanceSweeps, clientMessages, guaranteeEvidence, guaranteeVerdicts, visionDocuments, visionRevisions } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
@@ -10,6 +10,7 @@ import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { VisionVersion } from "../vision.js";
 import { ContractRevisionMismatch, GuaranteeEvidenceMismatch, guaranteeTableOf } from "../guarantee-report.js";
 import type { ContractRevision, GuaranteeRecords, GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
+import { REPORT_SUBJECT } from "../report-subjects.js";
 
 // What a terminal message's guarantee table is read from: its sweep, the evidence that sweep
 // recorded per guarantee and the vision version the evidence was recorded against, or, for a message
@@ -124,7 +125,7 @@ async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise<Guaran
 const terminalReport = sql`(
   EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.report_id = ${clientMessages.id})
   OR EXISTS (SELECT 1 FROM project_blocks b WHERE b.report_id = ${clientMessages.id})
-  OR ${clientMessages.reportsOn} IN ('client-stop', 'planning-stopped'))`;
+  OR ${inArray(clientMessages.reportsOn, [REPORT_SUBJECT.clientStop, REPORT_SUBJECT.planningStopped])})`;
 
 /**
  * The verdict rows the project's last terminal report carries, as stored and unparsed; that the last terminal report

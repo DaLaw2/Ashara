@@ -2,9 +2,10 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, ty
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, correctionHolds, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
+import { clientMessages, correctionHolds, devSessions, domainEvents, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
 import { firstPlanTold, noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
-import { CapabilityLevelSchema, higherCapability } from "../acl/finance-acl.js";
+import { attemptGrade, CapabilityLevelSchema } from "../acl/finance-acl.js";
+import { inLatestCheckRevision, StoredDecidesSchema } from "../acl/quality-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 import { holdForCorrection, takeEvents } from "../domain/index.js";
 import { pendingCorrection, pendingRepair } from "../predicates.js";
@@ -246,9 +247,6 @@ async function insertEvent(db: DbHandle, event: DomainEvent): Promise<void> {
   });
 }
 
-/** task_checks.decides: the ids of the vision items one stored check decides; null on a legacy row that records none. */
-const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
-
 /** A stored check's decides does not parse, or names an item its check task's task_spec.sources does not hold. */
 class StoredDecisionUnreadable extends Error {
   constructor(
@@ -275,7 +273,7 @@ export async function decidedByLatestChecks(db: DbHandle, projectId: string): Pr
     .where(
       and(
         eq(taskChecks.projectId, projectId),
-        sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
+        inLatestCheckRevision(taskChecks.revision, taskChecks.taskId),
       ),
     )
     .orderBy(asc(taskChecks.taskId), asc(taskChecks.name));
@@ -299,34 +297,31 @@ export async function decidedByLatestChecks(db: DbHandle, projectId: string): Pr
 }
 
 /**
- * The catalog grade of the model each of the project's tasks last completed an attempt on
- * (dev_sessions.attempt_model, model_configs). The thinking mode an attempt was called in is not
- * recorded, so its grade is the higher of the model's two: the work's tier is never understated. A
- * task with no completed attempt that names its model is absent; one whose model the catalog no
- * longer holds is unrecorded, naming the model.
+ * The catalog grade (Finance's attemptGrade) of the model each of the project's tasks last
+ * completed an attempt on. A task with no completed attempt that names its model is absent; one
+ * whose model the catalog no longer holds under the attempt's provider is unrecorded, naming both.
  */
 export async function completedAttemptGrades(db: DbHandle, projectId: string): Promise<Map<string, AttemptGrade>> {
   const rows = await db
     .selectDistinctOn([devSessions.taskId], {
       taskId: devSessions.taskId,
       model: devSessions.attemptModel,
-      thinkingOn: modelConfigs.capability,
-      thinkingOff: modelConfigs.capabilityThinkingOff,
+      provider: devSessions.attemptProvider,
+      grade: attemptGrade(devSessions.attemptModel, devSessions.attemptProvider),
     })
     .from(devSessions)
     .innerJoin(workItems, eq(workItems.id, devSessions.taskId))
-    .leftJoin(modelConfigs, and(eq(modelConfigs.modelId, devSessions.attemptModel), eq(modelConfigs.providerName, devSessions.attemptProvider)))
     .where(and(eq(workItems.projectId, projectId), eq(devSessions.phase, "Completed"), isNotNull(devSessions.attemptModel)))
     .orderBy(asc(devSessions.taskId), desc(devSessions.updatedAt), desc(devSessions.id));
   const grades = new Map<string, AttemptGrade>();
   for (const row of rows) {
     const model = z.string().min(1).parse(row.model);
-    if (row.thinkingOn === null || row.thinkingOff === null) {
-      grades.set(row.taskId, { kind: "unrecorded", why: `its last completed attempt ran on ${model}, which the model catalog does not hold` });
+    const provider = z.string().min(1).parse(row.provider);
+    if (row.grade === null) {
+      grades.set(row.taskId, { kind: "unrecorded", why: `its last completed attempt ran on ${model} from provider ${provider}, which the model catalog does not hold` });
       continue;
     }
-    const grade = higherCapability(CapabilityLevelSchema.parse(row.thinkingOn), CapabilityLevelSchema.parse(row.thinkingOff));
-    grades.set(row.taskId, { kind: "graded", model, grade });
+    grades.set(row.taskId, { kind: "graded", model, grade: CapabilityLevelSchema.parse(row.grade) });
   }
   return grades;
 }

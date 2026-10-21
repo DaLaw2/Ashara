@@ -18,3 +18,6 @@ export {
   releaseSettledBranches,
   taskMergeOnMain,
 } from "@ashara/quality";
+// Which revision of a task's stored checks is in force and what a stored check decides: Quality's
+// published language for its task_checks rows, read by Delivery's plan revision.
+export { inLatestCheckRevision, StoredDecidesSchema } from "@ashara/quality/stored-checks";

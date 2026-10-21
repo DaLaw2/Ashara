@@ -1,12 +1,14 @@
 import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { projects, qualifiedColumn } from "@ashara/db";
 import { projectHalted, projectHaltedOnModelWork } from "@ashara/delivery/predicates";
+import { REPORT_SUBJECT } from "./report-subjects.js";
 
 // Engagement's published predicates: the facts about a project's engagement lifecycle and the
 // client's messages that other contexts read the shared tables by. Each is spelled here once; a
 // reader in another context imports it (`@ashara/engagement/predicates`) instead of writing the SQL
 // again. A halt is Delivery's, read in its published predicates. This module imports nothing else
-// of Engagement, so a context Engagement reads can import it without a cycle at load time.
+// of Engagement but its report-subject vocabulary, which imports nothing, so a context Engagement
+// reads can import it without a cycle at load time.
 
 /** Engagement's lifecycle is 'active': neither stopped by the client nor accepted, halted or not. */
 export const projectActive = (): SQL => sql`${qualifiedColumn(projects.lifecycle)} = 'active'`;
@@ -44,7 +46,7 @@ export const noOpenAnswer = (): SQL =>
 
 /** The Liaison's report of the project's first plan (reports_on 'first-plan') is posted. */
 export const firstPlanTold = (projectId: AnyColumn): SQL =>
-  sql`EXISTS (SELECT 1 FROM client_messages fr WHERE fr.project_id = ${qualifiedColumn(projectId)} AND fr.reports_on = 'first-plan')`;
+  sql`EXISTS (SELECT 1 FROM client_messages fr WHERE fr.project_id = ${qualifiedColumn(projectId)} AND fr.reports_on = ${REPORT_SUBJECT.firstPlan})`;
 
 /**
  * The project's first plan is written and the Liaison's report of it is not yet posted. Its dispatch

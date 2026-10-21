@@ -18,6 +18,8 @@
  *   rule restated through a column the patterns do not name, or a cross-context predicate split across
  *   lines (only the work-item status patterns cross a line break).
  * - A rule no pattern below names; only the shapes listed here are enumerated.
+ * - A report subject's literal that reaches the column through a name the patterns do not read, such
+ *   as a function argument (`unreported("planning-stopped")`) or a constant not named *subject*.
  * - Comparison inside the owner itself is not checked: an owner may spell its rule twice.
  * - A list of work-item statuses whose literals are not adjacent (`["Pending", x, "Failed"]`), a
  *   chain of comparisons on a name other than `status`, or a chain whose comparisons a `;`, `{` or
@@ -45,6 +47,10 @@ const INTEGRATION = "packages/integration/";
 
 const STATUS_LITERAL = `['"](?:${WORK_ITEM_STATUSES.join("|")})['"]`;
 const STATUS_COMPARISON = `\\bstatus\\b['"]?\\s*(?:===|!==|==|!=|=|<>)\\s*${STATUS_LITERAL}`;
+const ENGAGEMENT_REPORT_SUBJECTS = "packages/engagement/src/report-subjects.ts";
+const QUALITY_STORED_CHECKS = "packages/quality/src/stored-checks.ts";
+/** Model Access's catalog: read by Model Access itself, by Finance in front of it, and by the catalog repository that loads it at boot. */
+const MODEL_CATALOG_OWNERS = ["packages/model-access/src/", "packages/finance/src/", "packages/db/src/repositories/config.ts"];
 
 const PREDICATE_RULES: readonly PredicateRule[] = [
   {
@@ -90,6 +96,40 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [new RegExp(`${STATUS_LITERAL}\\s*,\\s*${STATUS_LITERAL}`), new RegExp(`${STATUS_COMPARISON}[^;{}]*?${STATUS_COMPARISON}`)],
     use: "OPEN_WORK_ITEM_STATUSES or SETTLED_WORK_ITEM_STATUSES from @ashara/delivery/work-item, or a named subset derived from one",
     exempt: ["packages/integration/src/simulator/", "packages/workplace/src/session-vocabulary.ts"],
+  },
+  {
+    name: "an attempt's model grade (the model catalog read outside Finance)",
+    owners: MODEL_CATALOG_OWNERS,
+    patterns: [/\b(?:join|from)\s+model_configs\b/i, /\b(?:leftJoin|innerJoin|rightJoin|fullJoin|join|from)\(\s*modelConfigs\b/],
+    use: "attemptGrade from @ashara/finance",
+    exempt: [INTEGRATION],
+  },
+  {
+    name: "the latest stored check revision",
+    owners: [QUALITY_STORED_CHECKS],
+    patterns: [/max\(\s*(?:\w+\.)?revision\s*\).*\bfrom\s+task_checks\b/i, /max\(\s*taskChecks\.revision\s*\)/],
+    use: "latestCheckRevision or inLatestCheckRevision from @ashara/quality/stored-checks",
+    exempt: [INTEGRATION],
+  },
+  {
+    name: "the stored check decides schema",
+    owners: [QUALITY_STORED_CHECKS],
+    patterns: [/\b\w*Decides\w*\s*=\s*z\./],
+    use: "StoredDecidesSchema from @ashara/quality/stored-checks",
+    exempt: [INTEGRATION],
+  },
+  {
+    name: "a report subject (client_messages.reports_on)",
+    owners: [ENGAGEMENT_REPORT_SUBJECTS],
+    // A literal a report's subject is compared with, stored as or named by; the same words name the
+    // core loop's contained steps (shared ContainedStep), which are another vocabulary and not read.
+    patterns: [
+      /reports_?[oO]n\b.*['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/,
+      /\bsubject\w*\s*(?:===?|!==?|=|:)\s*['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/i,
+      /\b(?:type|interface)\s+PlanReportSubject\b/,
+    ],
+    use: "REPORT_SUBJECT or PlanReportSubject from @ashara/engagement/report-subjects",
+    exempt: [INTEGRATION],
   },
 ];
 

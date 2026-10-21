@@ -45,8 +45,9 @@ const MAP: Readonly<Record<string, PackageMap>> = {
   knowledge: { allow: ["shared", "db"] },
   workplace: { allow: ["shared", "db", "finance", "execution-infra"] },
   engagement: {
-    allow: ["shared", "db", "finance", "delivery"],
+    allow: ["shared", "db", "finance", "delivery", "quality"],
     restrict: {
+      quality: ["src/repositories/early-warning.ts"],
       delivery: [
         "src/answers.ts",
         "src/block-report.ts",
@@ -130,7 +131,7 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
   },
   engagement: {
     vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
-    intake: { allow: ["vision", "inbound"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
+    intake: { allow: ["vision", "inbound", "predicates"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
     inbound: { allow: ["vision", "reports", "predicates"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
     reports: { allow: ["vision", "predicates"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
     predicates: { allow: [], host: "src/predicates.ts", target: "src/predicates.ts" },

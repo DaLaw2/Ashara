@@ -3,7 +3,7 @@ import { acceptanceSweeps, clientMessages, guaranteeEvidence, projectBlocks, pro
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { SETTLED_WORK_ITEM_STATUSES, completedGoalTasks, goalTaskSql, pendingCorrection, pendingRepair, productScaffoldTask } from "../acl/delivery-acl.js";
-import { noOpenAnswer, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-acl.js";
+import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, REPORT_SUBJECT } from "../acl/engagement-acl.js";
 import type { FailedCheck, SweptCheck } from "../verification.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
@@ -317,7 +317,7 @@ export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSw
         eq(projects.lifecycle, "stopped"),
         // The stop that stopped the project, as it records (stop_found_halted), or, on a stop that
         // records nothing of it, as its stop report answers it.
-        sql`(${clientMessages.stopFoundHalted} IS NOT NULL OR EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = 'client-stop'))`,
+        sql`(${clientMessages.stopFoundHalted} IS NOT NULL OR EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = ${REPORT_SUBJECT.clientStop}))`,
         sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${clientMessages.id})`,
       ),
     )

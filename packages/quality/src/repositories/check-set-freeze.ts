@@ -4,6 +4,7 @@ import { z } from "zod";
 import { checkSetFreezes, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { reviewTask } from "../acl/delivery-acl.js";
+import { inLatestCheckRevision } from "../stored-checks.js";
 
 // Quality's freeze of a plan revision's check set: written when
 // the first task depending on the revision's review task is dispatched, with the check set the
@@ -42,10 +43,10 @@ export class CheckSetFreezeRepository {
           FROM dependencies under_review
           JOIN work_items checker ON checker.id = under_review.to_id
           LEFT JOIN LATERAL (
-            SELECT stored.task_id, max(stored.revision) AS revision
+            SELECT stored.task_id, stored.revision
             FROM task_checks stored
-            WHERE stored.task_id::text = checker.task_spec->>'checksFor'
-            GROUP BY stored.task_id
+            WHERE stored.task_id::text = checker.task_spec->>'checksFor' AND ${inLatestCheckRevision(sql`stored.revision`, sql`stored.task_id`)}
+            LIMIT 1
           ) latest ON true
           WHERE under_review.from_id = review.id AND checker.work_kind = 'check'
         ), '[]'::jsonb)

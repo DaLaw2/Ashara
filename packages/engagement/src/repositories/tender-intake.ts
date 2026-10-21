@@ -2,6 +2,7 @@ import { clientMessages, intakeReadings } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { IntakeReading } from "../intake.js";
+import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { FirstVision } from "../vision.js";
 import { ClientMessageRepository } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
@@ -87,7 +88,7 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
       kind: "report",
       body: write.contractDraft,
       inReplyTo: write.tenderId,
-      reportsOn: "contract-draft",
+      reportsOn: REPORT_SUBJECT.contractDraft,
     });
     // Once per project with no reports_on subject of its own: it commits only with vision v1, which
     // UNIQUE (project_id, version) lets exactly one intake write.

@@ -6,6 +6,7 @@ import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 import { noOpenStop } from "../predicates.js";
+import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
@@ -267,7 +268,7 @@ class BlockEpisodeNotFound extends Error {
  */
 const notCoveredByPlanningStoppedReport = sql`(${projectBlocks.kind} <> 'planning_stopped' OR EXISTS (
   SELECT 1 FROM client_messages m WHERE m.project_id = ${projectBlocks.projectId}
-    AND m.reports_on = 'planning-stopped' AND m.created_at < ${projectBlocks.blockedAt}))`;
+    AND m.reports_on = ${REPORT_SUBJECT.planningStopped} AND m.created_at < ${projectBlocks.blockedAt}))`;
 
 /**
  * The halt is told before its resumption: its own report is posted, or it is a planning_stopped

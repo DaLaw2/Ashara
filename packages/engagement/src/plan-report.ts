@@ -7,6 +7,8 @@ import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
 import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { REPORT_SUBJECT } from "./report-subjects.js";
+import type { PlanReportSubject } from "./report-subjects.js";
 
 // The Liaison's report on a project's first plan: Delivery records the planning outcome on the project, and the
 // Liaison, the only writer to the client, tells the client about it. Reports are
@@ -17,8 +19,6 @@ import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 // be told what changed. The report of a first planning that stopped is the report of that halt, a
 // terminal message, so it carries the guarantee table: no sweep is on record for it (nothing was
 // built), so every guarantee of the version in force reads unjudged for want of a sweep on a commit.
-
-type PlanReportSubject = "first-plan" | "planning-stopped";
 
 /** The plan's tasks by producer, as task_spec.origin records it. */
 interface PlanTaskCounts {
@@ -51,7 +51,7 @@ type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number 
 /** A recorded planning outcome the client has not been told about. */
 type DuePlanReport =
   | {
-      readonly subject: "first-plan";
+      readonly subject: typeof REPORT_SUBJECT.firstPlan;
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
       readonly tasks: PlanTaskCounts;
@@ -62,7 +62,7 @@ type DuePlanReport =
        */
       readonly revisions: readonly RevisionBeforeReport[];
     }
-  | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
+  | { readonly subject: typeof REPORT_SUBJECT.planningStopped; readonly projectId: ProjectId; readonly attempts: number }
   /** A first plan the store could not read back (a work item that does not parse). */
   | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
@@ -378,7 +378,7 @@ export class PlanReports implements LiaisonPlanReports {
       (due) => ({ id: `${due.subject}:${due.projectId}`, projectId: due.projectId }),
       async (due): Promise<PlanReportOutcome> => {
         if (due.subject === "first-plan-unreadable") return this.block(due.projectId, due.cause);
-        if (due.subject === "planning-stopped") {
+        if (due.subject === REPORT_SUBJECT.planningStopped) {
           const guarantees = await this.store.guaranteesWithoutSweep(due.projectId);
           const body = `${planningStoppedReport(due.attempts)}\n\n${guaranteeSection(guarantees)}`;
           const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), [], tableVerdicts(guarantees));
@@ -441,7 +441,7 @@ export class PlanReports implements LiaisonPlanReports {
     return { kind: "project-blocked", projectId, cause };
   }
 
-  private compose(due: Extract<DuePlanReport, { readonly subject: "first-plan" }>): string {
+  private compose(due: Extract<DuePlanReport, { readonly subject: typeof REPORT_SUBJECT.firstPlan }>): string {
     const { tasks, droppedOrderingHints: dropped } = due;
     if (
       due.epicTitles.length === 0 ||

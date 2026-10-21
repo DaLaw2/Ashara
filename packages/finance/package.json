@@ -11,6 +11,7 @@
   "dependencies": {
     "@ashara/db": "*",
     "@ashara/model-access": "*",
-    "@ashara/shared": "*"
+    "@ashara/shared": "*",
+    "drizzle-orm": "0.45.2"
   }
 }

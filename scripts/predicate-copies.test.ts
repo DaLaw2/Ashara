@@ -16,6 +16,24 @@ const PLANTED = [
   "// a comment naming p.lifecycle = 'active' decides nothing",
 ].join("\n");
 
+/** One raw copy per shape of the model grade, the latest check revision, the decides schema and a report subject, each on its own line. */
+const PLANTED_OWNED = [
+  "const f = sql`(SELECT m.capability FROM dev_sessions s LEFT JOIN model_configs m ON m.model_id = s.attempt_model)`;",
+  ".leftJoin(modelConfigs, eq(modelConfigs.modelId, devSessions.attemptModel))",
+  "const g = sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`;",
+  "const [h] = await db.select({ revision: max(taskChecks.revision) }).from(taskChecks);",
+  "const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();",
+  'await tx.insert(clientMessages).values({ reportsOn: "contract-draft" });',
+  'if (due.subject === "planning-stopped") return;',
+  'type PlanReportSubject = "first-plan" | "planning-stopped";',
+  'const step = await this.step("client-stop", () => deps.clientStops.runPending());',
+].join("\n");
+
+const MODEL_GRADE = "an attempt's model grade (the model catalog read outside Finance)";
+const LATEST_REVISION = "the latest stored check revision";
+const DECIDES_SCHEMA = "the stored check decides schema";
+const REPORT_SUBJECT = "a report subject (client_messages.reports_on)";
+
 let scratch: string | null = null;
 
 afterEach(() => {
@@ -43,7 +61,42 @@ describe("findPredicateCopies", () => {
       ["packages/engagement/src/planted.ts", 3, "task origin (goal task, product scaffold, review, ...)"],
       ["packages/engagement/src/planted.ts", 4, "project at work (engagement lifecycle 'active')"],
       ["packages/engagement/src/planted.ts", 5, "first plan told"],
+      ["packages/engagement/src/planted.ts", 5, REPORT_SUBJECT],
     ]);
+  });
+
+  test("a copy of each shape of the model grade, the latest check revision, the decides schema and a report subject is reported, with its line; a contained step's name is not", () => {
+    const root = treeOf({ "packages/delivery/src/planted.ts": PLANTED_OWNED });
+    expect(findPredicateCopies(root).map((copy) => [copy.line, copy.rule])).toEqual([
+      [1, MODEL_GRADE],
+      [2, MODEL_GRADE],
+      [3, LATEST_REVISION],
+      [4, LATEST_REVISION],
+      [5, DECIDES_SCHEMA],
+      [6, REPORT_SUBJECT],
+      [7, REPORT_SUBJECT],
+      [8, REPORT_SUBJECT],
+    ]);
+  });
+
+  test("each owner may spell its own rule: Finance and Model Access the catalog read, Quality's stored checks the revision and schema, Engagement's vocabulary the subjects", () => {
+    const root = treeOf({
+      "packages/finance/src/attempt-grade.ts": PLANTED_OWNED,
+      "packages/model-access/src/catalog.ts": PLANTED_OWNED,
+      "packages/quality/src/stored-checks.ts": PLANTED_OWNED,
+      "packages/engagement/src/report-subjects.ts": PLANTED_OWNED,
+    });
+    const copies = findPredicateCopies(root);
+    const rulesIn = (file: string) => new Set(copies.filter((copy) => copy.file === file).map((copy) => copy.rule));
+    expect(rulesIn("packages/finance/src/attempt-grade.ts")).toEqual(new Set([LATEST_REVISION, DECIDES_SCHEMA, REPORT_SUBJECT]));
+    expect(rulesIn("packages/model-access/src/catalog.ts")).toEqual(new Set([LATEST_REVISION, DECIDES_SCHEMA, REPORT_SUBJECT]));
+    expect(rulesIn("packages/quality/src/stored-checks.ts")).toEqual(new Set([MODEL_GRADE, REPORT_SUBJECT]));
+    expect(rulesIn("packages/engagement/src/report-subjects.ts")).toEqual(new Set([MODEL_GRADE, LATEST_REVISION, DECIDES_SCHEMA]));
+  });
+
+  test("Quality's repositories own neither the latest revision nor the decides schema: only its stored-checks module does", () => {
+    const root = treeOf({ "packages/quality/src/repositories/task-check.ts": PLANTED_OWNED });
+    expect(new Set(findPredicateCopies(root).map((copy) => copy.rule))).toEqual(new Set([MODEL_GRADE, LATEST_REVISION, DECIDES_SCHEMA, REPORT_SUBJECT]));
   });
 
   test("the owner of each rule may spell it: the same lines in the owners' files report only the other context's rules", () => {
@@ -54,9 +107,11 @@ describe("findPredicateCopies", () => {
     expect(findPredicateCopies(root).map((copy) => [copy.file, copy.rule])).toEqual([
       ["packages/delivery/src/predicates.ts", "project at work (engagement lifecycle 'active')"],
       ["packages/delivery/src/predicates.ts", "first plan told"],
+      ["packages/delivery/src/predicates.ts", REPORT_SUBJECT],
       ["packages/engagement/src/predicates.ts", "superseded"],
       ["packages/engagement/src/predicates.ts", "current plan, given-up tasks left out"],
       ["packages/engagement/src/predicates.ts", "task origin (goal task, product scaffold, review, ...)"],
+      ["packages/engagement/src/predicates.ts", REPORT_SUBJECT],
     ]);
   });
 

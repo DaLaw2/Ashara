@@ -3,14 +3,13 @@ import { clientMessages, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { noOpenStop, projectAtWork } from "../predicates.js";
+import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { VisionRepository } from "./vision.js";
 
 // The stack Sprint 0 chose, told to the client once: a completed environment task
 // with a statement is due while its project has no 'stack-choice' report.
-
-const SUBJECT = "stack-choice";
 
 interface DueStackChoiceRow {
   readonly projectId: ProjectId;
@@ -33,7 +32,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
       and(
         projectAtWork(),
         noOpenStop(projects.id),
-        sql`NOT EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = projects.id AND m.reports_on = ${SUBJECT})`,
+        sql`NOT EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = projects.id AND m.reports_on = ${REPORT_SUBJECT.stackChoice})`,
       ),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
@@ -107,7 +106,7 @@ export async function recordStackChoice(db: Database, write: StackChoiceWrite): 
     if (due === undefined) return "not-due";
     const inserted = await tx
       .insert(clientMessages)
-      .values({ projectId: write.projectId, direction: "outbound", kind: "report", body: write.report, inReplyTo: null, reportsOn: SUBJECT })
+      .values({ projectId: write.projectId, direction: "outbound", kind: "report", body: write.report, inReplyTo: null, reportsOn: REPORT_SUBJECT.stackChoice })
       .onConflictDoNothing({ target: [clientMessages.projectId, clientMessages.reportsOn], where: isNotNull(clientMessages.reportsOn) })
       .returning({ id: clientMessages.id });
     if (inserted.length === 0) return "already-reported";

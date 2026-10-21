@@ -8,12 +8,14 @@
   "exports": {
     ".": "./src/index.ts",
     "./predicates": "./src/predicates.ts",
+    "./report-subjects": "./src/report-subjects.ts",
     "./vision": "./src/vision-language/index.ts"
   },
   "dependencies": {
     "@ashara/db": "*",
     "@ashara/delivery": "*",
     "@ashara/finance": "*",
+    "@ashara/quality": "*",
     "@ashara/shared": "*",
     "drizzle-orm": "0.45.2",
     "zod": "4.4.3"

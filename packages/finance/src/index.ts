@@ -8,6 +8,7 @@ export type { SpendAtCap } from "./spend-cap.js";
 export { DEFAULT_WORK_BUDGETS, projectWorkBudget } from "./work-ledger.js";
 export type { WorkBudgets } from "./work-ledger.js";
 export { burnZoneOf } from "./work-burn.js";
+export { attemptGrade } from "./attempt-grade.js";
 export type { BurnZone } from "./work-burn.js";
 export type { WorkAtBudget } from "./errors.js";
 export { WorkBudgetSpent } from "./errors.js";

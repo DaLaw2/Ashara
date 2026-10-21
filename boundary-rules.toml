@@ -95,23 +95,26 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # read the work item's recorded cause and task specification in Delivery's work-item
 # language; its predicates, its lifecycle guard and the reads that admit a project by its halt
 # or a task by the plan it belongs to read them in Delivery's published predicates; each only in the
-# files listed.
-allow = ["shared", "db", "finance", "delivery"]
+# files listed. The early-warning register reads which revision of a task's stored checks is in force
+# and what each decides in Quality's published stored-checks language, only in its repository.
+allow = ["shared", "db", "finance", "delivery", "quality"]
 restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/client-change.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-receipt.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/stack-choice.ts"]
+restrict.quality = ["src/repositories/early-warning.ts"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it (answers, stops, and changes read
 # into corrections of the contract), and the reports back.
 # Every module reads the vision; intake reads only the tender message inbound recorded. The client's
 # stop is answered with a terminal report, so inbound reads the reports' guarantee table. The
 # published predicates (a project at work, a stop or an answer awaiting the Liaison, the first plan
-# told) import no other module; inbound and reports admit projects by them.
+# told) and the vocabulary of the subjects a report is on import no other module; intake, inbound and
+# reports admit projects by them and name a report's subject in it.
 module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories/vision.ts"]
 module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
 module.inbound = ["src/answers.ts", "src/client-*.ts", "src/correction.ts", "src/project-lifecycle.ts", "src/repositories/client-*.ts"]
 module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts"]
-module.predicates = ["src/predicates.ts"]
+module.predicates = ["src/predicates.ts", "src/report-subjects.ts"]
 module.entry   = ["src/index.ts", "src/model-schemas.ts"]
-module-allow.intake  = ["vision", "inbound"]
+module-allow.intake  = ["vision", "inbound", "predicates"]
 module-allow.inbound = ["vision", "reports", "predicates"]
 module-allow.reports = ["vision", "predicates"]
 module-entry.inbound = ["src/repositories/client-message.ts"]
@@ -143,7 +146,7 @@ restrict.engagement = ["src/acl/*.ts"]
 # reviewer record, written beside the evidence a re-authored check revision or a failed sweep is.
 module.verification   = ["src/verification.ts", "src/merge.ts", "src/gates/*.ts", "src/settled-branches.ts", "src/host-git.test.ts", "src/merge-queue.test.ts", "src/workspace-*.test.ts"]
 module.verdict        = ["src/dispatch-result.ts", "src/fault-class.ts", "src/task-verdict.ts"]
-module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
+module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/stored-checks.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
 module.suite-review   = ["src/suite-review.ts", "src/repositories/suite-review.ts"]
 module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts", "src/environment-definition.ts"]
 module.acceptance     = ["src/repositories/acceptance.ts"]

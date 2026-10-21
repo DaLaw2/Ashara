@@ -6,6 +6,7 @@ import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { stopProject } from "../project-lifecycle.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
+import { REPORT_SUBJECT } from "../report-subjects.js";
 import { ClientMessageRepository } from "./client-message.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
@@ -69,7 +70,7 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
 
 /** Whether the project's stop report is posted. */
 function stopReportPosted(projectId: string | SQL): SQL<boolean> {
-  return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = 'client-stop')`;
+  return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = ${REPORT_SUBJECT.clientStop})`;
 }
 
 /**
@@ -181,7 +182,7 @@ export async function postClientStopReport(db: Database, stopId: string, body: s
     if (stop === undefined) throw new StopNotFound(stopId);
     const inserted = await tx
       .insert(clientMessages)
-      .values({ projectId: stop.projectId, direction: "outbound", kind: "report", body, inReplyTo: stopId, reportsOn: "client-stop" })
+      .values({ projectId: stop.projectId, direction: "outbound", kind: "report", body, inReplyTo: stopId, reportsOn: REPORT_SUBJECT.clientStop })
       .onConflictDoNothing({
         target: [clientMessages.projectId, clientMessages.reportsOn],
         where: isNotNull(clientMessages.reportsOn),

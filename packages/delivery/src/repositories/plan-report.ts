@@ -4,6 +4,8 @@ import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@a
 import type { DbHandle } from "@ashara/db";
 import { clientMessages, planRevisions, projects, workItems } from "@ashara/db";
 import { firstPlanTold, noOpenStop } from "../acl/engagement-predicates-acl.js";
+import { REPORT_SUBJECT } from "../acl/engagement-report-subjects-acl.js";
+import type { PlanReportSubject } from "../acl/engagement-report-subjects-acl.js";
 import { isSupersededItem, pendingCorrection, projectHalted } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
@@ -14,8 +16,6 @@ import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 
 // The Liaison's reports on planning outcomes. A report is due
 // while the outcome is stamped on the project and no report on it exists.
-
-type PlanReportSubject = "first-plan" | "planning-stopped";
 
 /** A plan's tasks counted by the producer task_spec.origin records. */
 interface TaskCounts {
@@ -71,7 +71,7 @@ function droppedOrderingHints(projectId: ProjectId, raw: unknown): DroppedOrderi
 
 type DuePlanReportRow =
   | {
-      readonly subject: "first-plan";
+      readonly subject: typeof REPORT_SUBJECT.firstPlan;
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
       readonly tasks: TaskCounts;
@@ -79,7 +79,7 @@ type DuePlanReportRow =
       /** Revisions written before this report, oldest first: the report describes the plan they left. */
       readonly revisions: readonly RevisionBeforeReport[];
     }
-  | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
+  | { readonly subject: typeof REPORT_SUBJECT.planningStopped; readonly projectId: ProjectId; readonly attempts: number }
   /**
    * A planned project with a work item whose jsonb does not parse (WorkItemRowCorrupt), or whose
    * recorded dropped ordering hints do not (PlanDroppedDependenciesCorrupt).
@@ -167,7 +167,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
         .orderBy(asc(planRevisions.revision))
     ).map((revision) => ({ ...revision, answersTaken: parseAnswersTaken(revision.revisionId, revision.answersTaken) }));
     return {
-      subject: "first-plan",
+      subject: REPORT_SUBJECT.firstPlan,
       projectId,
       epicTitles: standing.filter((i) => i.level === "Epic").map((i) => i.title),
       revisions,
@@ -188,10 +188,10 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
     .select({ id: projects.id, attempts: projects.planAttempts })
     .from(projects)
     .where(
-      and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), unreported("planning-stopped"), noOpenStop(projects.id)),
+      and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), unreported(REPORT_SUBJECT.planningStopped), noOpenStop(projects.id)),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
-  const stops = stopped.map((row): DuePlanReportRow => ({ subject: "planning-stopped", projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts }));
+  const stops = stopped.map((row): DuePlanReportRow => ({ subject: REPORT_SUBJECT.planningStopped, projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts }));
   return [...firstPlans, ...stops];
 }
 

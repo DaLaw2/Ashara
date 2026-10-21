@@ -1,12 +1,13 @@
-import { and, asc, eq, max, ne, sql } from "drizzle-orm";
+import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { dependencies, taskChecks, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
-import { CapabilityLevelSchema } from "@ashara/finance";
+import { attemptGrade, CapabilityLevelSchema } from "@ashara/finance";
 import type { CapabilityLevel } from "@ashara/finance";
 import { isProductScaffoldOrigin, parseWorkItemJsonb, productScaffoldTask } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
+import { inLatestCheckRevision, latestCheckRevision, StoredDecidesSchema } from "../stored-checks.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
 // Quality's task checks: the checks that decide an implementation
@@ -14,15 +15,15 @@ import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
 const TaskCheckFilesSchema = z.array(z.object({ path: z.string().min(1), content: z.string() }).strict());
 
-/** task_checks.decides: the ids of the vision items a check decides; null on a row written before it. */
-const TaskCheckDecidesSchema = z.tuple([z.string().min(1)], z.string().min(1)).nullable();
-
 type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
 
 /** A count of suite_review_findings rows as Postgres returns it cast to int. */
 const ReopenCountSchema = z.number().int().nonnegative();
 
-/** The models a task's attempts ran on (dev_sessions.attempt_model), each with its grade in model_configs, as the query aggregates them. */
+/** A task's latest stored revision of checks as latestCheckRevision reads it: null when none is stored. */
+const StoredRevisionSchema = z.number().int().positive().nullable();
+
+/** The models a task's attempts ran on (dev_sessions.attempt_model), each with its catalog grade (Finance's attemptGrade), as the query aggregates them. */
 const AttemptModelsSchema = z.array(z.strictObject({ model: z.string().min(1), grade: CapabilityLevelSchema.nullable() }));
 
 type AttemptModels = z.infer<typeof AttemptModelsSchema>;
@@ -126,7 +127,7 @@ interface CheckTaskUnderReview {
   readonly reviewReopens: number;
   /** The grade its task was dispatched at (task_spec.capability); null when the row records none. */
   readonly grade: CapabilityLevel | null;
-  /** Every model an attempt on it ran on, oldest first, each with its model_configs grade; null for a model the catalog does not hold. */
+  /** Every model an attempt on it ran on, oldest first, each with its catalog grade; null for a model the catalog does not hold under the attempt's provider. */
   readonly attemptModels: AttemptModels;
 }
 
@@ -259,8 +260,8 @@ export class TaskCheckRepository {
         blockedReason: workItems.blockedReason,
         checkedTitle: sql<string | null>`(SELECT checked.title FROM work_items checked WHERE checked.id::text = ${workItems.taskSpec}->>'checksFor')`,
         reviewReopens: sql<unknown>`(SELECT count(*) FROM suite_review_findings named WHERE named.check_task_id = ${workItems.id})::int`,
-        attemptModels: sql<unknown>`(SELECT coalesce(jsonb_agg(jsonb_build_object('model', s.attempt_model, 'grade', m.capability) ORDER BY s.created_at, s.id), '[]'::jsonb)
-          FROM dev_sessions s LEFT JOIN model_configs m ON m.model_id = s.attempt_model
+        attemptModels: sql<unknown>`(SELECT coalesce(jsonb_agg(jsonb_build_object('model', s.attempt_model, 'grade', ${attemptGrade(sql`s.attempt_model`, sql`s.attempt_provider`)}) ORDER BY s.created_at, s.id), '[]'::jsonb)
+          FROM dev_sessions s
           WHERE s.task_id = ${workItems.id} AND s.attempt_model IS NOT NULL)`,
       })
       .from(dependencies)
@@ -324,7 +325,7 @@ export class TaskCheckRepository {
       .where(
         and(
           eq(taskChecks.projectId, projectId),
-          sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
+          inLatestCheckRevision(taskChecks.revision, taskChecks.taskId),
         ),
       )
       .orderBy(asc(taskChecks.taskId));
@@ -366,9 +367,10 @@ export class TaskCheckRepository {
       // Serializes revisions of one task: the row lock is held until commit.
       const locked = await tx.execute(sql`SELECT id FROM work_items WHERE id = ${write.taskId} FOR UPDATE`);
       if (locked.rows.length !== 1) throw new CheckedTaskMissing(write.taskId);
-      const [latest] = await tx.select({ revision: max(taskChecks.revision) }).from(taskChecks).where(eq(taskChecks.taskId, write.taskId));
-      // eslint-disable-next-line no-restricted-syntax -- policy default: max() over no stored revision is null, so this write is the task's first revision
-      const revision = (latest?.revision ?? 0) + 1;
+      const [latest] = await tx.select({ revision: latestCheckRevision(workItems.id) }).from(workItems).where(eq(workItems.id, write.taskId));
+      if (latest === undefined) throw new CheckedTaskMissing(write.taskId);
+      // eslint-disable-next-line no-restricted-syntax -- policy default: no stored revision reads null, so this write is the task's first revision
+      const revision = (StoredRevisionSchema.parse(latest.revision) ?? 0) + 1;
       await tx.insert(taskChecks).values(
         write.checks.map((check) => ({
           projectId: write.projectId,
@@ -377,7 +379,7 @@ export class TaskCheckRepository {
           revision,
           name: check.name,
           command: check.command,
-          decides: TaskCheckDecidesSchema.unwrap().parse(check.decides),
+          decides: StoredDecidesSchema.unwrap().parse(check.decides),
           files,
           environmentVersion: write.environmentVersion,
           baselineCommit: write.baselineCommit,
@@ -396,16 +398,14 @@ export class TaskCheckRepository {
 
   /** The task's latest revision of checks, or null when none was ever recorded. */
   async latest(taskId: string): Promise<TaskChecksRecord | null> {
-    const [latest] = await this.db.select({ revision: max(taskChecks.revision) }).from(taskChecks).where(eq(taskChecks.taskId, taskId));
-    const revision = latest?.revision ?? null;
-    if (revision === null) return null;
     const rows = await this.db
       .select()
       .from(taskChecks)
-      .where(and(eq(taskChecks.taskId, taskId), eq(taskChecks.revision, revision)))
+      .where(and(eq(taskChecks.taskId, taskId), inLatestCheckRevision(taskChecks.revision, taskChecks.taskId)))
       .orderBy(asc(taskChecks.createdAt), asc(taskChecks.name));
     const [first] = rows;
-    if (first === undefined) throw new TaskChecksCorrupt(taskId, revision, "the revision has no rows");
+    if (first === undefined) return null;
+    const { revision } = first;
     const parsed = TaskCheckFilesSchema.safeParse(first.files);
     if (!parsed.success) throw new TaskChecksCorrupt(taskId, revision, `files: ${z.prettifyError(parsed.error)}`);
     const filesText = JSON.stringify(parsed.data);
@@ -428,7 +428,7 @@ export class TaskCheckRepository {
       environmentVersion: first.environmentVersion,
       baselineCommit: first.baselineCommit,
       checks: rows.map((row) => {
-        const decides = TaskCheckDecidesSchema.safeParse(row.decides);
+        const decides = StoredDecidesSchema.safeParse(row.decides);
         if (!decides.success) throw new TaskChecksCorrupt(taskId, revision, `decides of check ${JSON.stringify(row.name)}: ${z.prettifyError(decides.error)}`);
         return { name: row.name, command: row.command, decides: decides.data };
       }),
