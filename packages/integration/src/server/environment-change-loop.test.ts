@@ -210,6 +210,7 @@ async function harness(name: string): Promise<Harness> {
     failureRouter: new FailureRouter(3),
     spendCap,
     clientStops: { runPending: async () => [], reportPending: async () => [] },
+    clientReceipts: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },

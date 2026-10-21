@@ -127,8 +127,9 @@ export class ClientStops implements LiaisonClientStops {
   ) {}
 
   /**
-   * The open stops. A second stop on a stopped project is consumed and not answered: the client
-   * already holds, or is owed, the stop report, and a second one would say nothing new. A stop whose
+   * The open stops. A second stop on a stopped project is consumed with no second stop report: the
+   * client already holds, or is owed, the stop report, and its receipt (client-receipt.ts) says this
+   * stop changes nothing. A stop whose
    * recording fails is contained to it (containEach) and stays unconsumed, so its project is still
    * held from all work (noOpenStop) while the other stops are taken.
    */

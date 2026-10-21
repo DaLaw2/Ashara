@@ -2,6 +2,7 @@ import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
 import { correctionHoldMissesReturned, correctionHoldsWholePlan } from "./correction-plants.js";
 import { intakeSecondReadingDropped } from "./intake-plants.js";
+import { receiptSkipped } from "./receipts.js";
 import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
 import { ledgerDrawSkipped, reviewCountReset, reviewLoopUnbounded, suiteReviewBoundIgnored } from "./loop-plants.js";
@@ -81,7 +82,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - correction-holds-whole-plan: a client's correction parks every task not yet started, not only
  *   the ones citing a key it affects (I2's correction clause);
  * - correction-hold-misses-returned: a correction holds a task only as it stood when recorded, so a
- *   citing task back at Pending after the hold is dispatched before its revision (I2, dispatched-held).
+ *   citing task back at Pending after the hold is dispatched before its revision (I2, dispatched-held);
+ * - receipt-skipped: the listing of the messages owed a receipt lists none, so no message the client
+ *   sends is answered (I4's receipt clause).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -113,6 +116,7 @@ export const MUTATIONS = [
   "review-loop-unbounded",
   "correction-holds-whole-plan",
   "correction-hold-misses-returned",
+  "receipt-skipped",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -154,6 +158,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "review-loop-unbounded": { bypassed: [], queries: reviewLoopUnbounded, code: null },
   "correction-holds-whole-plan": { bypassed: [], queries: correctionHoldsWholePlan, code: null },
   "correction-hold-misses-returned": { bypassed: [], queries: correctionHoldMissesReturned, code: null },
+  "receipt-skipped": { bypassed: [], queries: receiptSkipped, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

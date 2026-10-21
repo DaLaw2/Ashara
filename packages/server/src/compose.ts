@@ -29,6 +29,7 @@ import {
   BurnWarnings,
   ClientAnswers,
   ClientChanges,
+  ClientReceipts,
   ClientStops,
   PlanReports,
   StackChoiceReports,
@@ -96,6 +97,7 @@ import {
 import { loadWebClientAssets } from "./web-client.js";
 import { createAnswerStore } from "./answer-store.js";
 import { createClientChangeStore } from "./client-change-store.js";
+import { createClientReceiptStore } from "./client-receipt-store.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createPlanReportStore } from "./plan-report-store.js";
@@ -461,6 +463,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     spendCap,
     containment,
     clientStops: new ClientStops(createClientStopStore(db), containment),
+    clientReceipts: new ClientReceipts(createClientReceiptStore(db), containment),
     clientChanges: new ClientChanges({
       llm: modelCalls,
       store: createClientChangeStore(db, config.workBudgets),

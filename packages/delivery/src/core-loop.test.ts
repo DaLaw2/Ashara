@@ -139,6 +139,7 @@ function buildDeps(
     spendCap,
     failureRouter: { route: notExercised("route") },
     clientStops,
+    clientReceipts: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     liaisonIntake,
     liaisonAnswers: { runPending: async () => [] },
@@ -406,11 +407,61 @@ describe("CoreLoop first plan", () => {
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
+  // A message sent between cycles is answered right after the stops, one sent while the cycle ran at
+  // its end, and one sent while the loop is halted at the cap by the halted cycle.
+  test("the client's messages get their receipts right after the stops, at the end of a full cycle, and in a halted cycle", async () => {
+    const order: string[] = [];
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
+      order.push("dispatch");
+      return { taskId: task.id, status: "completed" as const, detail: "ok" };
+    });
+    const step = (name: string) =>
+      vi.fn(async () => {
+        order.push(name);
+        return [];
+      });
+    const deps = buildDeps({ runPending: step("intake") }, undefined, undefined, { runPending: step("stop"), reportPending: step("stop-report") });
+    const loop = new CoreLoop({ ...deps, clientReceipts: { runPending: step("receipt") }, clientChanges: { runPending: step("change") } });
+
+    await loop.runCycle();
+    expect(order).toEqual(["stop", "receipt", "stop-report", "intake", "change", "dispatch", "dispatch", "receipt"]);
+
+    order.length = 0;
+    await loop.runHaltedCycle();
+    expect(order).toEqual(["stop", "receipt", "stop-report"]);
+  });
+
+  // A halted cycle runs no round of work again in this process, so its receipts never promise one; a
+  // full cycle whose recorded spend is at the cap stops before any reading, so its receipts say so too.
+  test("the receipts are told all work is stopped in a halted cycle and when recorded spend is at the deployment's cap, and that it runs otherwise", async () => {
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({ taskId: task.id, status: "completed" as const, detail: "ok" }));
+    const asked: unknown[] = [];
+    const receipts = { runPending: vi.fn(async (work: unknown) => (asked.push(work), [])) };
+    let atCap = false;
+    const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => atCap));
+    const loop = new CoreLoop({ ...deps, clientReceipts: receipts });
+
+    await loop.runCycle();
+    expect(asked).toEqual([{ kind: "running" }, { kind: "running" }]);
+
+    asked.length = 0;
+    atCap = true;
+    await loop.runCycle();
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((work) => JSON.stringify(work) === JSON.stringify({ kind: "stopped-at-cap" }))).toBe(true);
+
+    asked.length = 0;
+    atCap = false;
+    await loop.runHaltedCycle();
+    expect(asked).toEqual([{ kind: "stopped-at-cap" }]);
+  });
+
   test("every step the cycle runs with no model call is either run by a halted cycle or excluded from it with its reason", () => {
     // A step with no model call that posts what the client is owed and is left out of runHaltedCycle
     // waits, after a cap halt, for a full cycle this process never runs. A new step is classified here.
     const classified: Record<string, "halted" | { readonly excluded: string }> = {
       "client-stop": "halted",
+      "client-receipt": "halted",
       "client-stop-report": "halted",
       "settled-branches": "halted",
       "block-report": "halted",

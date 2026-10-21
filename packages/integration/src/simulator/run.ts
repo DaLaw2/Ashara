@@ -35,6 +35,7 @@ import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
 import { Personas } from "./personas.js";
 import { PLANTED, plantSeamsOf, plantsBypassing } from "./plants.js";
+import { lateReceipts, unansweredMessages } from "./receipts.js";
 import type { Mutation } from "./plants.js";
 import { FAULTS, drawRates } from "./profile.js";
 import type { Profile } from "./profile.js";
@@ -1216,6 +1217,8 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
       const statuses: string[] = [];
       let processed = 0;
       let crashed = false;
+      // I4's receipt clause: every message on record now is answered by the time this cycle ends.
+      const owedReceipts = new Set((await unansweredMessages(observing, projectIds)).map((message) => message.id));
       const window = await openChargeWindow(observing, projectIds, scheduler, tape, consulted);
       for (let r = 0; r < repeats && !crashed; r++) {
         const faultsBefore = scheduler.faults().length;
@@ -1333,6 +1336,9 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
       const faulted = scheduler.faults().length > faultsSeen || restarts > restartsSeen || repeats > 1;
       faultsSeen = scheduler.faults().length;
       restartsSeen = restarts;
+      if (!faulted) {
+        for (const { project, violation } of lateReceipts(owedReceipts, await unansweredMessages(observing, projectIds), projectIds, cycles)) report(ofProject(project, violation));
+      }
       if (fresh > 0) quiet = 0;
       else if (!faulted) quiet += 1;
       longestQuiet = Math.max(longestQuiet, quiet);

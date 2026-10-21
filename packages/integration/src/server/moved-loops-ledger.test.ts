@@ -255,6 +255,7 @@ function loopWith(
     dispatchService: { execute: notExercised("execute") },
     failureRouter: new FailureRouter(),
     clientStops: { runPending: async () => [], reportPending: async () => [] },
+    clientReceipts: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },

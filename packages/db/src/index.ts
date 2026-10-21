@@ -42,7 +42,7 @@ export {
   workItems,
 } from "./schema/index.js";
 
-export { ProjectRepository, noOpenAnswer, noOpenStop, pendingCorrection, pendingRepair, projectAtWork, projectHalted } from "./repositories/project.js";
+export { ProjectRepository, noOpenAnswer, noOpenStop, pendingCorrection, pendingRepair, projectAtWork, projectHalted, projectReadsClientInput } from "./repositories/project.js";
 export type { ProjectRecord } from "./repositories/project.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
 export { completedGoalTasks, goalTaskSql, isGoalTask } from "./repositories/goal-tasks.js";

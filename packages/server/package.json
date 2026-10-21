@@ -12,6 +12,7 @@
     "./app": "./src/app.ts",
     "./block-report-store": "./src/block-report-store.ts",
     "./client-change-store": "./src/client-change-store.ts",
+    "./client-receipt-store": "./src/client-receipt-store.ts",
     "./client-stop-store": "./src/client-stop-store.ts",
     "./compose": "./src/compose.ts",
     "./intake-store": "./src/intake-store.ts",

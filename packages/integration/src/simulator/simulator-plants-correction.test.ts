@@ -20,6 +20,14 @@ describe("lifecycle simulator, directed: a client's correction", () => {
     expect(clean.records.some((r) => r.event === "delivery.revision-written" && r.fields?.["cause"] === "client-change"), clean.trace.join("\n")).toBe(true);
   }, 90_000);
 
+  // Every message the client sends (the tender, the correction) has its receipt by the end of the
+  // next clean cycle; a listing that owes none leaves each one unanswered.
+  it("catches a message left without its receipt", async (ctx) => {
+    const run = await directed(ctx, CORRECTED, { mutation: "receipt-skipped" });
+    const planted = keys(run);
+    expect(planted.some((key) => key.startsWith("I4:receipt-late:")), planted.join(", ")).toBe(true);
+  }, 90_000);
+
   it("catches a correction that holds the whole plan", async (ctx) => {
     const run = await directed(ctx, CORRECTED, { mutation: "correction-holds-whole-plan" });
     const planted = keys(run);

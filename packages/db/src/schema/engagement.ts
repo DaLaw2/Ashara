@@ -70,6 +70,10 @@ export const clientMessages = pgTable(
     position: integer(),
     // On the inbound stop that moved its project to 'stopped': whether Delivery had it halted then.
     stopFoundHalted: boolean("stop_found_halted"),
+    // On an outbound receipt: the inbound message it acknowledges, one receipt per message.
+    receiptOf: uuid("receipt_of").references((): AnyPgColumn => clientMessages.id),
+    // On an inbound message consumed before receipts existed: it is owed none.
+    receiptWaived: boolean("receipt_waived").notNull().default(false),
   },
   (t) => ({
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),

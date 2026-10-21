@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { clientMessages, noOpenStop, projectAtWork, projects } from "@ashara/db";
+import { clientMessages, noOpenStop, projectHalted, projectReadsClientInput, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
@@ -27,12 +27,16 @@ interface OpenAnswerRow {
   readonly planned: boolean;
   /** The project's current vision, or null when it has none. */
   readonly vision: StoredVision | null;
+  /** Whether Delivery had the project halted when this answer was read. */
+  readonly paused: boolean;
 }
 
 /**
- * Unconsumed inbound answers of active projects, oldest first, each with its
- * project's current vision. A project with a stop awaiting the Liaison is not
- * listed, as for tenders.
+ * Unconsumed inbound answers of active projects, those at work first, each oldest first, with its
+ * project's current vision and whether it is halted. A halted project's answer is
+ * read all the same (a halt pauses the work, not the reading), except under a
+ * budget halt, which refuses the reading's model call. A project with a stop
+ * awaiting the Liaison is not listed, as for tenders.
  */
 export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
   return openAnswerRows(db, null);
@@ -59,6 +63,8 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
       intakeLastError: clientMessages.intakeLastError,
       intakeLastFailure: clientMessages.intakeLastFailure,
       firstPlannedAt: projects.firstPlannedAt,
+      // An EXISTS is never null: the driver yields a boolean, decoded as one with no per-row parse to fail.
+      halted: projectHalted(projects.id).mapWith(Boolean),
     })
     .from(clientMessages)
     .innerJoin(questions, eq(questions.id, clientMessages.inReplyTo))
@@ -68,12 +74,14 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
         eq(clientMessages.direction, "inbound"),
         eq(clientMessages.kind, "answer"),
         isNull(clientMessages.consumedAt),
-        projectAtWork(),
+        projectReadsClientInput(),
         noOpenStop(clientMessages.projectId),
         answerId === null ? undefined : eq(clientMessages.id, answerId),
       ),
     )
-    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+    // A project at work first: a halted project's reading refused by its spend cap ends the step for the
+    // rest of the cycle (CoreLoop.step), and never ahead of a project at work.
+    .orderBy(asc(projectHalted(projects.id)), asc(clientMessages.createdAt), asc(clientMessages.id));
 
   const visions = new VisionRepository(db);
   const open: OpenAnswerRow[] = [];
@@ -89,6 +97,7 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
       intakeLastFailure: row.intakeLastFailure,
       planned: row.firstPlannedAt !== null,
       vision: await visions.getCurrent(projectId),
+      paused: row.halted,
     });
   }
   return open;

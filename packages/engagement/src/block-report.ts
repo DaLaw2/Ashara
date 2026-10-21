@@ -324,27 +324,35 @@ function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: 
   return [opening, recordedCause(episodeId, halt, cause), nextStep(halt)].join("\n\n");
 }
 
-/** Plain words: what stopped, why, and what the client can do (a halt kind only older records hold). */
+/**
+ * What a change the client sends during a halt the operator alone ends does: it is read at once
+ * (a halt pauses the work, never the reading) and does not end the halt, whose exits are the
+ * operator's resumption and the substrate probe, and the probe ends only an infrastructure halt.
+ */
+const CHANGE_DURING_PAUSE =
+  "A change you send meanwhile does not end this pause: Ashara reads it and records it at once, and the plan is revised for it once work resumes.";
+
+/** Plain words: what stopped, why, and what ends it (a halt kind only older records hold). */
 function disputeBoundReport(dispute: BlockingDispute): string {
   return [
     `Work on this project is paused. While building "${dispute.taskTitle}", the developer found that one of the checks ` +
       `written to confirm it ("${dispute.checkName}") cannot be passed by correct work, and the team has not been able ` +
       `to settle this after ${dispute.disputes} attempts.`,
     `The developer's last explanation: ${dispute.reason}`,
-    `Nothing more will be built until this is resolved. If you can say what this part should do, send a change describing it: ` +
-      `the team takes it in when work resumes, and you will be told when it does.`,
+    `Nothing more will be built until the team's operator resolves this and resumes the project; you will be told when work resumes.`,
+    CHANGE_DURING_PAUSE,
   ].join("\n\n");
 }
 
-/** Plain words: what stopped, what the review found, and what the client can do (a halt kind only older records hold). */
+/** Plain words: what stopped, what the review found, and what ends it (a halt kind only older records hold). */
 function suiteReviewBoundReport(review: BlockingReview): string {
   return [
     `Work on this project is paused. Before building starts, the team reviews all the checks written to confirm the ` +
       `work, together with what you asked for. The review keeps finding checks that cannot all be passed at once, or ` +
       `that test something you did not ask for, and the team has not been able to settle this after ${review.times} reviews.`,
     `What the last review found:\n${review.problems.map((problem) => `- ${problem}`).join("\n")}`,
-    `Nothing will be built until this is resolved. If you can say what the product should do in these cases, send a ` +
-      `change describing it: the team takes it in when work resumes, and you will be told when it does.`,
+    `Nothing will be built until the team's operator resolves this and resumes the project; you will be told when work resumes.`,
+    CHANGE_DURING_PAUSE,
   ].join("\n\n");
 }
 
@@ -401,7 +409,7 @@ function givenUpCategory(cause: StoredBlockedReason): string {
   }
 }
 
-/** Plain words: which work the team gave up again and the recorded cause of each, and what can resume the project. */
+/** Plain words: which work the team gave up again and the recorded cause of each, and what resumes the project: the operator alone. */
 function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): string {
   return [
     `Work on this project has stopped: the team cannot deliver it as planned. The plan has already been revised around ` +
@@ -413,8 +421,8 @@ function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): strin
           `${givenUpCategory(task.cause)}. Ashara keeps the detail in its own record of that task, record ${task.workItemId}.`,
       )
       .join("\n"),
-    `Nothing more is built until the scope changes or the operator looks the project over; you will be told when work ` +
-      `resumes. If you can say more about what this part should do, or what can be left out, send a change describing it.`,
+    `Nothing more is built until the team's operator looks the project over and resumes it; you will be told when work resumes.`,
+    CHANGE_DURING_PAUSE,
   ].join("\n\n");
 }
 

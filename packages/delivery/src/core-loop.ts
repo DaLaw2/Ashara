@@ -116,7 +116,20 @@ export class CoreLoop {
     this.deps = deps;
   }
 
+  /**
+   * One full cycle, closed by the receipts of the client's messages that arrived while it ran, so a
+   * message sent during a cycle is answered in it. A cycle that stopped the loop posted them in
+   * haltAtCap.
+   */
   async runCycle(): Promise<CycleResult> {
+    const result = await this.cycleSteps();
+    if (result.stop !== null) return result;
+    const stop = await this.postReceipts("read-cap");
+    if (stop !== null) return { ...(await this.haltAtCap(stop)), tasksProcessed: result.tasksProcessed, results: result.results };
+    return result;
+  }
+
+  private async cycleSteps(): Promise<CycleResult> {
     const { deps } = this;
 
     // The client's stops first, even at the spend cap (no LLM call): a project
@@ -125,6 +138,10 @@ export class CoreLoop {
     // for it now: the previous cycle awaited every task it dispatched.
     const stops = await this.takeClientStops();
     if (stops !== null) return this.haltAtCap(stops);
+    // Then every message of the client's still unanswered gets its receipt (no LLM call), stating its
+    // project's state as the stops just left it and what happens to the message.
+    const receipts = await this.postReceipts("read-cap");
+    if (receipts !== null) return this.haltAtCap(receipts);
 
     // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
@@ -300,12 +317,14 @@ export class CoreLoop {
   /**
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
    * stops, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds,
-   * the release of what attempts held, and the block, delivered and plan reports still due. A project stopped here
+   * the receipt of every message the client sends meanwhile, the release of what attempts held, and
+   * the block, delivered and plan reports still due. A project stopped here
    * stays stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
     // The loop is already stopped at the cap: a stop any of these returns is that same stop.
     await this.takeClientStops();
+    await this.postReceipts("stopped-at-cap");
     await this.releaseHeld();
     // A stop taken here, and a halt recorded at the cap, is owed its terminal sweep (no LLM call)
     // before its report; no full cycle runs again in this process to sweep it.
@@ -345,6 +364,23 @@ export class CoreLoop {
     if (stops.kind === "stop") return stops.stop;
     for (const stop of stops.kind === "ran" ? stops.value : []) {
       if (stop.kind !== "step-faulted") this.deps.logger.info("delivery.client-stop", `stop ${stop.stopId}: ${stop.kind}`, { projectId: stop.projectId, stopId: stop.stopId, outcome: stop.kind });
+    }
+    return null;
+  }
+
+  /**
+   * The receipts due, each posted once; the deployment cap's stop when a refusal named it, else null.
+   * Each states whether rounds of work still run: never once the loop is stopped at the cap, and in a
+   * full cycle not when recorded spend is already at the cap, since that cycle stops before any reading.
+   */
+  private async postReceipts(work: "stopped-at-cap" | "read-cap"): Promise<LoopStop | null> {
+    const stoppedAtCap = work === "stopped-at-cap" || (await this.deps.spendCap.deploymentStop()) !== null;
+    const receipts = await this.step("client-receipt", () => this.deps.clientReceipts.runPending({ kind: stoppedAtCap ? "stopped-at-cap" : "running" }));
+    if (receipts.kind === "stop") return receipts.stop;
+    for (const receipt of receipts.kind === "ran" ? receipts.value : []) {
+      if (receipt.kind !== "step-faulted") {
+        this.deps.logger.info("delivery.client-receipt", `receipt for message ${receipt.messageId}: ${receipt.kind}`, { projectId: receipt.projectId, messageId: receipt.messageId, outcome: receipt.kind });
+      }
     }
     return null;
   }
@@ -437,6 +473,7 @@ export class CoreLoop {
     await this.sweepTerminals();
     await this.postStopReports();
     await this.postBlockReports();
+    await this.postReceipts("stopped-at-cap");
     return stopped(stop);
   }
 

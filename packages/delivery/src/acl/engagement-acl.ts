@@ -30,6 +30,7 @@ export type {
   LiaisonBlockReports,
   LiaisonBurnWarnings,
   LiaisonClientChanges,
+  LiaisonClientReceipts,
   LiaisonClientStops,
   LiaisonDeliveredReports,
   LiaisonIntake,

@@ -40,6 +40,16 @@ export const projectHalted = (projectId: AnyColumn): SQL =>
  */
 export const projectAtWork = (): SQL => sql`(${qualified(projects.lifecycle)} = 'active' AND NOT ${projectHalted(projects.id)})`;
 
+/**
+ * The project reads the client's answers and changes: Engagement's lifecycle is 'active', halted or
+ * not, since a halt pauses the work and never the reading of what the client said; except under a
+ * budget halt (a spend cap's or the work ledger's), which refuses the reading's own model call.
+ * Whether the work resumes stays with the halt's own exits.
+ */
+export const projectReadsClientInput = (): SQL =>
+  sql`(${qualified(projects.lifecycle)} = 'active' AND NOT EXISTS (SELECT 1 FROM project_blocks rb
+    WHERE rb.project_id = ${qualified(projects.id)} AND rb.ended_at IS NULL AND rb.kind IN ('budget_cap', 'work_budget')))`;
+
 const LifecycleSchema = z.enum(PROJECT_LIFECYCLES);
 
 /** The columns a ProjectRecord is read from, the halt among them, in one statement. */

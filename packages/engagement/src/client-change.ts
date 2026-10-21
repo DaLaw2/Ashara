@@ -28,6 +28,8 @@ import type { StoredVision, VisionAppend } from "./vision.js";
 // operations are applied as vision vN+1 with a revision record (author, approver, direction, cause),
 // or, when the Liaison pushes back, recorded as a proposal awaiting the client's confirmation. Either
 // way one impact note goes out in reply to it, in the same transaction. No outcome refuses a change.
+// A halted project's changes are read too: a halt pauses the work, never the reading of what the client
+// said, so the contract is corrected at once and the work it touches waits for the halt's own end.
 
 /** Failed attempts to read one change after which the Liaison stops and blocks the project. */
 const MAX_CHANGE_ATTEMPTS = 3;
@@ -47,6 +49,8 @@ export interface OpenChange {
   readonly usedKeys: readonly string[];
   /** The project's revisions awaiting the client's confirmation, oldest first. */
   readonly proposals: readonly StoredProposal[];
+  /** Whether Delivery has the project halted: the change is read and applied, and the work it touches waits for the halt to end. */
+  readonly paused: boolean;
 }
 
 /** A proposed revision as stored: its operations, unread, and the message they were read from. */
@@ -346,7 +350,7 @@ export class ClientChanges implements LiaisonClientChanges {
         }
       }
     }
-    const note = correctionReport({ vision: before, confirmed: confirmedNotes, ops: checked, affected, outcome: noted, impact, band });
+    const note = correctionReport({ vision: before, confirmed: confirmedNotes, ops: checked, affected, outcome: noted, impact, band, paused: change.paused });
     return {
       write: { changeId: change.id, projectId: change.projectId, basedOnVersion: context.vision.current.version, confirmations, revision, note },
       confirmed: confirmations.map((c) => c.proposalId),

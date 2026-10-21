@@ -5,6 +5,8 @@ export { ClientAnswers } from "./answers.js";
 export type { AnswerOutcome, AnswerStore, LiaisonAnswers } from "./answers.js";
 export { ClientStops } from "./client-stop.js";
 export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
+export { ClientReceipts } from "./client-receipt.js";
+export type { ClientReceiptStore, LiaisonClientReceipts } from "./client-receipt.js";
 export { ClientChanges } from "./client-change.js";
 export type { ClientChangeOutcome, ClientChangeStore, LiaisonClientChanges } from "./client-change.js";
 export { PlanReports } from "./plan-report.js";
@@ -36,6 +38,7 @@ export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.j
 export { readRiskRecords } from "./repositories/early-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listDueStopReports, listUnconsumedStops, postClientStopReport, recordClientStop } from "./repositories/client-stop.js";
+export { listDueReceipts, postClientReceipt } from "./repositories/client-receipt.js";
 export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "./repositories/client-change.js";
 export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
 export { insertGuaranteeVerdicts, lastReportGuaranteeVerdictsOf, readGuaranteeTable } from "./repositories/guarantee-report.js";

@@ -28,6 +28,7 @@ export type CycleStep =
   | "stack-choice"
   | "client-stop"
   | "client-change"
+  | "client-receipt"
   | "acceptance"
   | "terminal-sweep"
   | "gate"

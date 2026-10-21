@@ -13,7 +13,10 @@ import type { ProjectId } from "@ashara/shared";
 // The client channel's handlers, shared by the operator's bearer API and the
 // web client's session API so both speak through one validation path.
 // Inbound only: no handler writes an outbound message; the Liaison writes those
-// server-side. Every inbound insert NOTIFYs the loop (a database trigger).
+// server-side. Every inbound insert NOTIFYs the loop (a database trigger), and every
+// inbound row is owed one receipt, whatever its project's state: the row with no
+// receipt naming it is that obligation, kept across a restart, and the Liaison's next
+// cycle answers it (Engagement's ClientReceipts).
 
 export interface ClientChannelDeps {
   readonly projectRepo: ProjectRepository;

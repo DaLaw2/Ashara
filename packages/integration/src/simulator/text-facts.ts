@@ -37,9 +37,9 @@ export interface TextFactRecords {
   /** Every recorded brief, with the latest vision version written before its session was. */
   readonly briefs: ReadonlyArray<z.infer<typeof briefRow>>;
   readonly questions: ReadonlyArray<z.infer<typeof messageRow>>;
-  /** Outbound reports posted in reply to a client answer, other than the plan revision's report (which replies to the answer that asked for it). */
+  /** Outbound reports posted in reply to a client answer, other than its receipt and the plan revision's report (which replies to the answer that asked for it). */
   readonly answerReplies: ReadonlyArray<z.infer<typeof replyRow>>;
-  /** Outbound reports posted in reply to the tender: the contract draft and the reading report. */
+  /** Outbound reports posted in reply to the tender, other than its receipt: the contract draft and the reading report. */
   readonly tenderReports: ReadonlyArray<z.infer<typeof messageRow>>;
   /** The tender's reading as intake_readings records it, or null when none is. */
   readonly intakeReading: z.infer<typeof intakeReadingRow> | null;
@@ -133,13 +133,14 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
       replyRow,
       sql`SELECT a.id AS "answerId", r.body FROM client_messages r JOIN client_messages a ON a.id = r.in_reply_to
           WHERE r.project_id = ${projectId} AND r.direction = 'outbound' AND a.direction = 'inbound' AND a.kind = 'answer'
-            AND NOT EXISTS (SELECT 1 FROM plan_revisions p WHERE p.report_id = r.id)
+            AND r.receipt_of IS NULL AND NOT EXISTS (SELECT 1 FROM plan_revisions p WHERE p.report_id = r.id)
           ORDER BY r.created_at, r.id`,
     ),
     tenderReports: await rows(
       messageRow,
       sql`SELECT r.id, r.body FROM client_messages r JOIN client_messages t ON t.id = r.in_reply_to
           WHERE r.project_id = ${projectId} AND r.direction = 'outbound' AND r.kind = 'report' AND t.direction = 'inbound' AND t.kind = 'tender'
+            AND r.receipt_of IS NULL
           ORDER BY r.created_at, r.id`,
     ),
     delivered: await rows(
@@ -828,6 +829,7 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
   { source: `${ENGAGEMENT}/correction.ts#correctionPrompt`, kind: "not-kept", reason: "the prompt that reads a client change" },
   { source: `${ENGAGEMENT}/correction.ts#correctionReport`, kind: "unjudged", reason: "states a correction's operations, the tasks citing its keys and its cost band; no oracle compares them with the records" },
 
+  { source: `${ENGAGEMENT}/client-receipt.ts#receiptReport`, kind: "unjudged", reason: "states the project's state and what happens to the message; I4's receipt clause (receipts.ts) judges only that every message has its one receipt by the end of the next clean cycle" },
   { source: `${ENGAGEMENT}/block-report.ts#projectResumedReport`, kind: "unjudged", reason: "states how the halt ended; I4 judges only that it is its episode's one report" },
   { source: `${ENGAGEMENT}/plan-report.ts#planRevisionReport`, kind: "unjudged", reason: "states the revision's task counts and what it set aside; I4 judges only that it is its revision's one report" },
   { source: `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`, kind: "unjudged", reason: "states the count of failed planning attempts" },
@@ -873,6 +875,7 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   { source: `${ENGAGEMENT}/repositories/tender-intake.ts#recordTenderIntake`, posts: [`${ENGAGEMENT}/intake.ts#contractDraftReport`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`, posts: [`${ENGAGEMENT}/intake.ts#questionBody`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`, posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`], clientWords: false },
+  { source: `${ENGAGEMENT}/repositories/client-receipt.ts#postClientReceipt`, posts: [`${ENGAGEMENT}/client-receipt.ts#receiptReport`], clientWords: false },
   {
     source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`,
     posts: [`${ENGAGEMENT}/delivered-report.ts#deliveredReport`, `${ENGAGEMENT}/delivered-report.ts#unreadNotice`],

@@ -15,6 +15,7 @@ import type {
   LiaisonBlockReports,
   LiaisonBurnWarnings,
   LiaisonClientChanges,
+  LiaisonClientReceipts,
   LiaisonClientStops,
   LiaisonDeliveredReports,
   LiaisonIntake,
@@ -176,9 +177,14 @@ export interface CoreLoopDeps {
    */
   readonly clientStops: LiaisonClientStops;
   /**
-   * The Liaison's reply to each of the client's changes of direction, which are not yet applied:
-   * run right after the stops, before the spend-cap check (no LLM call), so no change is
-   * left unanswered.
+   * The Liaison's receipt for each of the client's messages, in every project state: run right after
+   * the stops, at the end of every full cycle, and in every halted cycle (no LLM call), so no message
+   * waits a cycle unanswered.
+   */
+  readonly clientReceipts: LiaisonClientReceipts;
+  /**
+   * The Liaison's reading of each of the client's changes of direction into a correction of the
+   * contract, answered with its impact note; a halted project's changes are read too.
    */
   readonly clientChanges: LiaisonClientChanges;
   /** The Liaison's tender intake, run each cycle before work-item gating. */

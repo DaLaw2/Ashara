@@ -186,6 +186,7 @@ function loopDeps(sweep: (projectId: ProjectId) => AcceptanceSweep): CoreLoopDep
     failureRouter: { route: notExercised("route") },
     spendCap: { deploymentStop: async () => null, refusalOf: () => null },
     clientStops: new ClientStops({ ...stops, openStops: async () => (await stops.openStops()).filter((stop) => ourProjects.has(stop.projectId)) }, containment),
+    clientReceipts: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },

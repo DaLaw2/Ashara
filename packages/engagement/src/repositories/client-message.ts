@@ -48,6 +48,7 @@ class TenderNotOpen extends Error {
 export class ClientMessageRepository {
   constructor(private readonly db: DbHandle) {}
 
+  /** The row is owed one receipt from its insert on (repositories/client-receipt.ts): none is written here. */
   async insertInbound(message: NewClientMessage): Promise<ClientMessageRow> {
     return this.insert("inbound", message);
   }

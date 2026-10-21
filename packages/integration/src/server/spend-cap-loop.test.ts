@@ -128,6 +128,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
     dispatchService: { execute: notExercised("execute") },
     failureRouter: { route: notExercised("route") },
     clientStops: { runPending: async () => [], reportPending: async () => [] },
+    clientReceipts: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },

@@ -238,6 +238,21 @@ describe("halt reports state the observed cause", () => {
     for (const stored of ["attempts exhausted", "flock", "checks 2 and 5", "exited 1", "orchestrator error"]) expect(body).not.toContain(stored);
   });
 
+  // Only the operator's resumption ends these halts (the probe ends only an infrastructure halt): a
+  // report asking for a change would ask for something that cannot end the pause.
+  test.each([
+    { kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port the importer", attempts: 2, cause: { source: "api", reason: "r" } }] },
+    { kind: "check_dispute", dispute: { taskTitle: "Port the importer", checkName: "imports", reason: "r", disputes: 3 } },
+    { kind: "suite_review", review: { times: 3, problems: ["p"] } },
+  ] as const)("a $kind halt names the operator's resumption as its end and asks for no change", async (halt) => {
+    const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, ...halt }]);
+    await reports.runPending();
+    const body = posted[0].body;
+    expect(body).not.toMatch(/send a change|send it as|takes it in when work resumes/);
+    expect(body).toContain("until the team's operator");
+    expect(body).toContain("A change you send meanwhile does not end this pause: Ashara reads it and records it at once");
+  });
+
   test("a task given up through the API is told as moved by hand, whatever its caller stored", async () => {
     const { reports, posted } = reportsFor([
       {

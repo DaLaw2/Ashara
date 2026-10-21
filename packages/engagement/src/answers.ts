@@ -22,6 +22,8 @@ import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 // holds only the tasks citing that assumption (Delivery's hold), the rest of the plan goes on, and it
 // is reported to the client once. Delivery replaces the held work once none of it is in progress
 // (planning replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
+// A halted project's answers are read too: a halt pauses the work, never the reading of what the client said,
+// and the work an answer touches waits for the halt's own end.
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
 const MAX_ANSWER_ATTEMPTS = 3;
@@ -43,6 +45,8 @@ interface OpenAnswer {
   readonly planned: boolean;
   /** The project's current vision, as stored; null when it has none. */
   readonly vision: StoredVision | null;
+  /** Whether Delivery has the project halted: the answer is read and recorded, and the work it touches waits for the halt to end. */
+  readonly paused: boolean;
 }
 
 interface AnswerWrite {
@@ -226,9 +230,13 @@ function replanReport(context: AnswerContext, statement: string): string {
     `Your answer to "${context.question.text}" changes an assumption the current plan was built on.`,
     `The plan assumed: ${context.assumption.statement}`,
     `Work now proceeds on: ${statement}`,
-    `The plan has to be revised for this change. Only the work that rests on it waits: work on it already ` +
-      `running finishes first, then the team revises that part of the plan, and you will be told what changes. ` +
-      `The rest of the work goes on meanwhile.`,
+    context.answer.paused
+      ? `The plan has to be revised for this change. Work on this project is paused, for the reason Ashara's report of the ` +
+        `pause gives, and this answer does not end the pause: once work resumes, the team revises the part of the plan that ` +
+        `rests on it before that part goes on, and you will be told what changes.`
+      : `The plan has to be revised for this change. Only the work that rests on it waits: work on it already ` +
+        `running finishes first, then the team revises that part of the plan, and you will be told what changes. ` +
+        `The rest of the work goes on meanwhile.`,
   ].join("\n\n");
 }
 

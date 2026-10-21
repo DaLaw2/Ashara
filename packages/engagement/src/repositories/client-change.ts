@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, noOpenStop, projectAtWork, projects, visionDocuments } from "@ashara/db";
+import { clientMessages, noOpenStop, projectHalted, projectReadsClientInput, projects, visionDocuments } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { projectWorkBudget } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
@@ -62,9 +62,11 @@ export async function affectedKeysOf(db: DbHandle, projectId: ProjectId, version
 }
 
 /**
- * Unconsumed inbound changes of active projects, oldest first, each with its project's current vision,
- * every key its versions used and its proposals awaiting confirmation. A project with a stop awaiting
- * the Liaison is not listed, as for answers.
+ * Unconsumed inbound changes of active projects, those at work first, each oldest first, with its project's current vision,
+ * every key its versions used, its proposals awaiting confirmation and whether it is halted. A halted
+ * project's change is read all the same (a halt pauses the work, not the reading), except under a
+ * budget halt, which refuses the reading's model call. A project with a stop awaiting the Liaison is
+ * not listed, as for answers.
  */
 export async function listUnconsumedChanges(db: DbHandle): Promise<OpenChange[]> {
   return openChangeRows(db, null);
@@ -90,6 +92,7 @@ async function openChangeRows(db: DbHandle, changeId: string | null): Promise<Op
       intakeAttempts: clientMessages.intakeAttempts,
       intakeLastError: clientMessages.intakeLastError,
       intakeLastFailure: clientMessages.intakeLastFailure,
+      halted: projectHalted(projects.id),
     })
     .from(clientMessages)
     .innerJoin(projects, eq(projects.id, clientMessages.projectId))
@@ -98,20 +101,24 @@ async function openChangeRows(db: DbHandle, changeId: string | null): Promise<Op
         eq(clientMessages.direction, "inbound"),
         eq(clientMessages.kind, "change"),
         isNull(clientMessages.consumedAt),
-        projectAtWork(),
+        projectReadsClientInput(),
         noOpenStop(clientMessages.projectId),
         changeId === null ? undefined : eq(clientMessages.id, changeId),
       ),
     )
-    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+    // A project at work first: a halted project's reading refused by its spend cap ends the step for the
+    // rest of the cycle (CoreLoop.step), and never ahead of a project at work.
+    .orderBy(asc(projectHalted(projects.id)), asc(clientMessages.createdAt), asc(clientMessages.id));
 
   const visions = new VisionRepository(db);
   const open: OpenChange[] = [];
   for (const row of rows) {
+    const { halted, ...change } = row;
     const projectId = parseProjectId(row.projectId, "client_messages.project_id");
     open.push({
-      ...row,
+      ...change,
       projectId,
+      paused: z.boolean().parse(halted),
       vision: await visions.getCurrent(projectId),
       usedKeys: await usedKeysOf(db, projectId),
       proposals: await proposalsOf(db, projectId),

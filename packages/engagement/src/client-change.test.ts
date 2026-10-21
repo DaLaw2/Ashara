@@ -49,7 +49,7 @@ const CHANGE: OpenChange = {
   intakeLastFailure: null,
   vision: VISION,
   usedKeys: ["I1", "G1", "G2"],
-  proposals: [],
+  proposals: [],  paused: false,
 };
 
 /** The merged task delivering G1, as the project's current plan holds it. */

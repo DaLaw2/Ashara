@@ -228,6 +228,8 @@ export interface CorrectionNote {
     | { readonly status: "unchanged"; readonly unapplied: readonly UnappliedOp[] };
   readonly impact: ChangeImpact | null;
   readonly band: CostBand | null;
+  /** Whether the project was halted when the correction was read: the contract changes, the work waits for the halt to end. */
+  readonly paused: boolean;
 }
 
 const DIRECTION_WORDS: Readonly<Record<Direction, string>> = {
@@ -235,6 +237,11 @@ const DIRECTION_WORDS: Readonly<Record<Direction, string>> = {
   narrows: "narrows what Ashara promises",
   neutral: "leaves what Ashara promises as wide as it was",
 };
+
+/** What a correction read while the project is halted does meanwhile: the contract changes, the work waits for the halt's own end. */
+const PAUSED_CLOSE =
+  "Work on this project is paused, for the reason Ashara's report of the pause gives, and this message does not end the pause. " +
+  "The contract stands as this note says now, and the work it touches is planned for it once work resumes.";
 
 /** The fixed close of a pushback: the correction is held, never refused. */
 const CONFIRM_CLOSE = "This change will be made as you sent it once you confirm; nothing else waits.";
@@ -334,7 +341,7 @@ export function correctionReport(note: CorrectionNote): string {
       case "applied":
         return [
           ...unappliedLines(outcome.unapplied, vision),
-          `The contract is now version ${outcome.version}; this revision ${DIRECTION_WORDS[outcome.direction]}. Work already planned continues meanwhile.`,
+          `The contract is now version ${outcome.version}; this revision ${DIRECTION_WORDS[outcome.direction]}.${note.paused ? "" : " Work already planned continues meanwhile."}`,
         ];
       case "proposed":
         return [...outcome.pushback.reasons.map(pushbackLine), ...unappliedLines(outcome.unapplied, vision), CONFIRM_CLOSE];
@@ -342,7 +349,7 @@ export function correctionReport(note: CorrectionNote): string {
         return note.ops.length === 0 ? [] : [...unappliedLines(outcome.unapplied, vision), "Nothing in the contract changed."];
     }
   })();
-  return [...confirmed, ...read, ...impactLines(note), ...close].join("\n\n");
+  return [...confirmed, ...read, ...impactLines(note), ...close, ...(note.paused ? [PAUSED_CLOSE] : [])].join("\n\n");
 }
 
 /** The prompt that reads a change message against the contract in force and the proposals awaiting confirmation. */

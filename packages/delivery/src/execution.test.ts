@@ -131,6 +131,7 @@ function coreLoopDeps(
     failureRouter: { route: notExercised("route") },
     spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
     clientStops: { runPending: notExercised("clientStops"), reportPending: notExercised("clientStops") },
+    clientReceipts: { runPending: notExercised("clientReceipts") },
     clientChanges: { runPending: notExercised("clientChanges") },
     liaisonIntake: { runPending: notExercised("liaisonIntake") },
     liaisonAnswers: { runPending: notExercised("liaisonAnswers") },

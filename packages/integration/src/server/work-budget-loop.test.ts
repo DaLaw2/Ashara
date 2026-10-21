@@ -209,6 +209,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     dispatchService,
     failureRouter: new FailureRouter(),
     clientStops: { runPending: async () => [], reportPending: async () => [] },
+    clientReceipts: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },
