@@ -113,7 +113,22 @@ async function listFiles(root: string, under = ""): Promise<string[]> {
   return files.sort();
 }
 
-const imageListFilter = z.string().regex(/^label=([^=]+)=(.*)$/);
+/** `label=<key>` (the key present, any value) or `label=<key>=<value>`, the two forms of podman's label filter. */
+const LABEL_FILTER = /^label=([^=]+)(?:=(.*))?$/;
+
+interface LabelFilter {
+  readonly key: string;
+  /** Null: any value of `key` matches. */
+  readonly value: string | null;
+}
+
+function unsupportedFilter(raw: string): string {
+  return `Error: fake podman: unsupported --filter ${JSON.stringify(raw)}; only label=<key> and label=<key>=<value> are interpreted`;
+}
+
+function matchesLabel(labels: Readonly<Record<string, string>>, filter: LabelFilter): boolean {
+  return Object.hasOwn(labels, filter.key) && (filter.value === null || labels[filter.key] === filter.value);
+}
 
 /**
  * A ProcessRunner that answers every podman subcommand the substrate and the environment build
@@ -170,15 +185,17 @@ export class FakePodman {
       // gives, so a listing is a superset the code under test must select from by labels itself.
       case "ps": {
         const filters = this.labelFilters(args);
+        if ("unsupported" in filters) return fail(125, unsupportedFilter(filters.unsupported));
         const rows = [...this.cells.values()]
-          .filter((cell) => filters.length === 0 || filters.some(([key, value]) => cell.labels[key] === value))
+          .filter((cell) => filters.length === 0 || filters.some((filter) => matchesLabel(cell.labels, filter)))
           .map((cell) => ({ Id: cell.id, Labels: cell.labels, ImageID: cell.imageId }));
         return ok(JSON.stringify(rows));
       }
       case "images": {
         const filters = this.labelFilters(args);
+        if ("unsupported" in filters) return fail(125, unsupportedFilter(filters.unsupported));
         const rows = [...this.images.values()]
-          .filter((image) => filters.length === 0 || filters.some(([key, value]) => image.labels[key] === value))
+          .filter((image) => filters.length === 0 || filters.some((filter) => matchesLabel(image.labels, filter)))
           .map((image) => ({ Id: image.id, Labels: image.labels }));
         return ok(JSON.stringify(rows));
       }
@@ -209,14 +226,17 @@ export class FakePodman {
     }
   }
 
-  private labelFilters(args: readonly string[]): Array<[string, string]> {
-    const filters: Array<[string, string]> = [];
-    args.forEach((arg, i) => {
-      if (arg !== "--filter") return;
-      const parsed = imageListFilter.safeParse(args[i + 1]);
-      const match = parsed.success ? /^label=([^=]+)=(.*)$/.exec(parsed.data) : null;
-      if (match?.[1] !== undefined && match[2] !== undefined) filters.push([match[1], match[2]]);
-    });
+  /** A filter it cannot interpret is refused, never dropped: a dropped filter would list every row. */
+  private labelFilters(args: readonly string[]): LabelFilter[] | { readonly unsupported: string } {
+    const filters: LabelFilter[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] !== "--filter") continue;
+      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing filter value is refused below as unsupported
+      const raw = args[i + 1] ?? "";
+      const match = LABEL_FILTER.exec(raw);
+      if (match?.[1] === undefined) return { unsupported: raw };
+      filters.push({ key: match[1], value: match[2] ?? null });
+    }
     return filters;
   }
 

@@ -64,7 +64,7 @@ allow = ["shared"]
 # worktrees on the host, the environment versions (a cell on a checkout), and the package's typed errors,
 # its kernel. A cell reads the host only to snapshot a repository into itself; checkout's lock and tree
 # reads stay behind its worktree and repository entry files.
-module.cells       = ["src/podman.ts", "src/cell-probes.ts", "src/process-runner.ts", "src/cell-backend.ts", "src/cell-limits.ts", "src/cells.ts", "src/base-cell.ts", "src/workspace-path.ts"]
+module.cells       = ["src/podman.ts", "src/cell-probes.ts", "src/cell-probes-callers.test.ts", "src/process-runner.ts", "src/cell-backend.ts", "src/cell-limits.ts", "src/cells.ts", "src/base-cell.ts", "src/workspace-path.ts"]
 module.checkout    = ["src/worktree.ts", "src/tree-read.ts", "src/checkout-lock.ts", "src/host-git.ts", "src/target-repo.ts", "src/worktree-boundary.test.ts"]
 module.environment = ["src/environment-build.ts", "src/environment.ts", "src/current-environment.ts", "src/checkout-cell.ts", "src/environment-report.ts"]
 module.errors      = ["src/errors.ts"]
