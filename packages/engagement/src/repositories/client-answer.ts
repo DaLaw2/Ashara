@@ -1,13 +1,14 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, not, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { clientMessages, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { noOpenStop, projectReadsClientInput } from "../predicates.js";
+import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
-import { affectedKeysOf } from "./client-change.js";
+import { affectedKeysOf, lockClientInputStanding, standingMoved } from "./client-change.js";
 import type { HoldCorrection } from "./client-change.js";
 import { VisionRepository } from "./vision.js";
 
@@ -37,8 +38,9 @@ interface OpenAnswerRow {
  * Unconsumed inbound answers of active projects, those at work first, each oldest first, with its
  * project's current vision and whether it is halted. A halted project's answer is
  * read all the same (a halt pauses the work, not the reading), except under a
- * budget halt, which refuses the reading's model call. A project with a stop
- * awaiting the Liaison is not listed, as for tenders.
+ * halt the reading cannot get past (projectReadsClientInput). An answer at its
+ * cap of failed readings waits out any halt: its reading would only halt the
+ * project again. A project with a stop awaiting the Liaison is not listed, as for tenders.
  */
 export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
   return openAnswerRows(db, null);
@@ -77,12 +79,13 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
         eq(clientMessages.kind, "answer"),
         isNull(clientMessages.consumedAt),
         projectReadsClientInput(),
+        or(lt(clientMessages.intakeAttempts, MAX_ANSWER_ATTEMPTS), not(projectHalted(projects.id))),
         noOpenStop(clientMessages.projectId),
         answerId === null ? undefined : eq(clientMessages.id, answerId),
       ),
     )
-    // A project at work first: a halted project's reading refused by its spend cap ends the step for the
-    // rest of the cycle (CoreLoop.step), and never ahead of a project at work.
+    // A project at work first, whose reading refused by its own spend cap ends the step (CoreLoop.step) and
+    // halts it; a halted project's refusal waits for its limit without ending the step (waitForLimit).
     .orderBy(asc(projectHalted(projects.id)), asc(clientMessages.createdAt), asc(clientMessages.id));
 
   const visions = new VisionRepository(db);
@@ -134,6 +137,20 @@ export async function recordAnswerFailure(db: DbHandle, answerId: string, error:
   return row.intakeAttempts;
 }
 
+/**
+ * Sets an unconsumed answer's count of failed readings back to none, keeping the last error's text on
+ * record (whose failure it was goes with the count it qualifies): the answer is read again from no attempts
+ * once its project is unblocked.
+ */
+export async function resetAnswerAttempts(db: DbHandle, answerId: string): Promise<void> {
+  const [row] = await db
+    .update(clientMessages)
+    .set({ intakeAttempts: 0, intakeLastFailure: null })
+    .where(and(eq(clientMessages.id, answerId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "answer"), isNull(clientMessages.consumedAt)))
+    .returning({ id: clientMessages.id });
+  if (!row) throw new AnswerNotOpen(answerId, "reset its failed readings");
+}
+
 /** What was composed against no longer holds when the write's transaction reads it: nothing was written. */
 class AnswerContextMoved extends Error {
   constructor(
@@ -158,6 +175,8 @@ interface AnswerWrite {
    * and the report posted in reply to the answer.
    */
   readonly replanReport: string | null;
+  /** Whether the project was halted when the answer was composed. */
+  readonly paused: boolean;
 }
 
 /** A write asks to hold the work an answer changed, but appends no vision version for the hold to name. */
@@ -178,8 +197,9 @@ class AnswerCorrectionUnversioned extends Error {
  * assumption it changed (`hold`) and the report posted. An answer
  * already consumed gets nothing new ("already-consumed"). One composed against a
  * state that no longer holds (another answer of the project wrote a vision version
- * first, or the first plan was written meanwhile) is rolled back whole and returned
- * as "moved", for the Liaison to compose again against the current state.
+ * first, the first plan was written meanwhile, or the project no longer reads the
+ * client's input or was halted or resumed, which the report states) is rolled back
+ * whole and returned as "moved", for the Liaison to compose again against the current state.
  */
 export async function recordClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<AnswerRecording> {
   try {
@@ -198,6 +218,8 @@ type AnswerRecording =
 
 function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
+    const standing = standingMoved(await lockClientInputStanding(tx, write.projectId), write.paused);
+    if (standing !== null) throw new AnswerContextMoved(write.answerId, write.projectId, standing);
     const [project] = await tx
       .select({ firstPlannedAt: projects.firstPlannedAt })
       .from(projects)

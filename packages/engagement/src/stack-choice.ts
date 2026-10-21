@@ -34,15 +34,18 @@ export interface StackChoiceStore {
   dueStackChoices(): Promise<readonly DueStackChoice[]>;
   /**
    * Posts the report and appends the vision version after the one it was composed against together,
-   * in one transaction; a project already reported on gets nothing new.
+   * in one transaction; a project already reported on gets nothing new, and one no longer at work
+   * under the project row's lock gets nothing ("not-due").
    */
-  recordStackChoice(write: StackChoiceWrite): Promise<"recorded" | "already-reported">;
+  recordStackChoice(write: StackChoiceWrite): Promise<"recorded" | "already-reported" | "not-due">;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
 type StackChoiceOutcome =
   | { readonly kind: "recorded" | "already-reported"; readonly projectId: ProjectId; readonly visionVersion: number }
+  /** The project stopped being at work between the listing and the write: nothing is posted, and it is listed again once at work. */
+  | { readonly kind: "not-due"; readonly projectId: ProjectId }
   /** The project's record cannot carry the assumption truthfully: nothing is posted and the project is blocked. */
   | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause }
   | StepFaulted;
@@ -101,6 +104,7 @@ export class StackChoiceReports implements LiaisonStackChoices {
         return { kind: "project-blocked", projectId: choice.projectId, cause };
       }
       const kind = await this.store.recordStackChoice(write);
+      if (kind === "not-due") return { kind, projectId: choice.projectId };
       return { kind, projectId: choice.projectId, visionVersion: write.vision.basedOnVersion + 1 };
     });
   }

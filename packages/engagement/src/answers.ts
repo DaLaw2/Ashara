@@ -6,6 +6,7 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
+import { ownSpendRefusal } from "./client-spend-refusal.js";
 import type { RevisionRecord } from "./vision-language/contract-op.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { Vision, VisionUnreadable } from "./vision.js";
@@ -23,10 +24,11 @@ import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 // is reported to the client once. Delivery replaces the held work once none of it is in progress
 // (planning replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
 // A halted project's answers are read too: a halt pauses the work, never the reading of what the client said,
-// and the work an answer touches waits for the halt's own end.
+// and the work an answer touches waits for the halt's own end; except under a halt the reading cannot get
+// past (projectReadsClientInput), which the answer waits out.
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
-const MAX_ANSWER_ATTEMPTS = 3;
+export const MAX_ANSWER_ATTEMPTS = 3;
 /** Writes of one answer per cycle: the first, and one more composed against the state that moved it. */
 const MAX_ANSWER_WRITES = 2;
 
@@ -55,6 +57,8 @@ interface AnswerWrite {
   readonly planned: boolean;
   readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
   readonly replanReport: string | null;
+  /** Whether the project was halted when the answer was composed: its report says so, so a write finding otherwise writes nothing. */
+  readonly paused: boolean;
 }
 
 /** What recording an answer did; "moved" wrote nothing: what it was composed against changed meanwhile. */
@@ -79,6 +83,12 @@ export interface AnswerStore {
   recordFailedAttempt(answerId: string, error: string, failure: Exclude<ModelCallFailure, "ashara">): Promise<number>;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
+  /**
+   * Blocks the project on an answer no reading of which succeeded and, when that opened the halt, sets
+   * the answer's count of failed readings back to none in the same transaction, so the unblock reads
+   * it again from no attempts; a project already blocked keeps its first cause and the answer its count.
+   */
+  blockUnreadAnswer(answer: OpenAnswer, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
 export type AnswerOutcome =
@@ -103,6 +113,13 @@ export type AnswerOutcome =
    */
   | { readonly kind: "moved"; readonly answerId: string; readonly projectId: ProjectId; readonly detail: string }
   | { readonly kind: "failed"; readonly answerId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
+  /**
+   * The paused project's own spend cap or work budget refused the reading's model call: no attempt is
+   * counted, and the answer is read once the limit is raised; the other projects' answers go on.
+   */
+  | { readonly kind: "waits-for-limit"; readonly answerId: string; readonly projectId: ProjectId; readonly reason: string }
+  /** The project's record cannot take the answer and the project is halted already: nothing is written, and it blocks once the halt ends. */
+  | { readonly kind: "waits-for-halt"; readonly answerId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause }
   /** The answer's read failed on Ashara's side: recorded on it and read again after the backoff; the other answers go on. */
   | StepFaulted
   | { readonly kind: "project-blocked"; readonly answerId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
@@ -262,7 +279,7 @@ export class ClientAnswers implements LiaisonAnswers {
    * answers are still read. Any other failure that is not the read's own (a price
    * refusal, a ledger or store failure, an error nothing names) is that answer's,
    * contained to it (containEach), never counted against it; a spend-cap refusal throws
-   * through to the core loop, which halts at the cap.
+   * through to the core loop, which halts at the cap, except a paused project's own (waitForLimit).
    */
   async runPending(): Promise<readonly AnswerOutcome[]> {
     const answers = await this.deps.store.openAnswers();
@@ -278,13 +295,24 @@ export class ClientAnswers implements LiaisonAnswers {
           err instanceof AnswerVisionUnusable || err instanceof AnswerReadingExhausted || err instanceof AnswerFailureUnrecorded;
         if (!blocks) throw err;
         const cause = projectBlockCause(err);
-        return this.block(listed, err instanceof AnswerReadingExhausted ? { ...cause, category: modelCallBlockCategory(err.failure) } : cause);
+        return err instanceof AnswerReadingExhausted ? this.block(listed, { ...cause, category: modelCallBlockCategory(err.failure) }, "unread") : this.block(listed, cause, "record");
       }
     });
   }
 
-  private async block(answer: OpenAnswer, cause: ProjectBlockCause): Promise<AnswerOutcome> {
-    const result = await this.deps.store.blockProject(answer.projectId, cause);
+  private async block(answer: OpenAnswer, cause: ProjectBlockCause, why: "unread" | "record"): Promise<AnswerOutcome> {
+    const { store } = this.deps;
+    // A record no answer can be read against stays so until the operator acts: under a halt, blocking would
+    // find the project halted already, every cycle, with nothing changed. Its halt is opened once the project
+    // is at work again, blamed as it is.
+    if (why === "record" && answer.paused) {
+      this.deps.containment.logger.debug("engagement.answer-waits-for-halt", `answer ${answer.id} waits for its project's halt to end: ${cause.errorClass}: ${cause.reason}`, {
+        projectId: answer.projectId,
+        answerId: answer.id,
+      });
+      return { kind: "waits-for-halt", answerId: answer.id, projectId: answer.projectId, cause };
+    }
+    const result = why === "unread" ? await store.blockUnreadAnswer(answer, cause) : await store.blockProject(answer.projectId, cause);
     console.warn(
       `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): ${cause.errorClass}; project ${result}: ${cause.reason}`,
     );
@@ -295,7 +323,8 @@ export class ClientAnswers implements LiaisonAnswers {
     const base = { answerId: answer.id, projectId: answer.projectId };
     if (answer.intakeAttempts >= MAX_ANSWER_ATTEMPTS) {
       if (answer.intakeLastError === null) throw new AnswerFailureUnrecorded(answer.id, answer.intakeAttempts);
-      // The operator's unblock resets none of an answer's attempts: it halts again, blamed as it was.
+      // At the cap with no halt to wait out: a block that opened the halt set the count back to none,
+      // and one that found the project halted left it, so the halt's end leads here and halts it again, blamed as it was.
       throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError, recordedFailureOf(answer.intakeLastFailure));
     }
     let context = contextOf(answer);
@@ -341,10 +370,26 @@ export class ClientAnswers implements LiaisonAnswers {
     try {
       return { kind: "read", reading: await this.callModel(context) };
     } catch (err) {
+      const refused = context.answer.paused ? ownSpendRefusal(err, context.answer.projectId) : null;
+      if (refused !== null) return { kind: "failed", outcome: this.waitForLimit(context.answer, refused.message) };
       const failure = modelCallFailureOf(err);
       if (failure === "ashara") throw err;
       return { kind: "failed", outcome: await this.fail(context.answer, err, failure) };
     }
+  }
+
+  /**
+   * A paused project's reading refused by its own spend limit waits for the limit, charged nothing. It
+   * does not throw to the core loop: the loop's halt for the refusal would find the project halted
+   * already, and the step it ended would leave every later project's answer unread for as long as the
+   * limit stands.
+   */
+  private waitForLimit(answer: OpenAnswer, reason: string): AnswerOutcome {
+    this.deps.containment.logger.info("engagement.answer-waits-for-limit", `answer ${answer.id} waits for its paused project's spend limit: ${reason}`, {
+      projectId: answer.projectId,
+      answerId: answer.id,
+    });
+    return { kind: "waits-for-limit", answerId: answer.id, projectId: answer.projectId, reason };
   }
 
   private async callModel(context: AnswerContext): Promise<AnswerReading> {
@@ -434,7 +479,7 @@ function contextOf(answer: OpenAnswer): AnswerContext {
 
 function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWrite {
   const { answer } = context;
-  const base = { answerId: answer.id, projectId: answer.projectId, planned: answer.planned };
+  const base = { answerId: answer.id, projectId: answer.projectId, planned: answer.planned, paused: answer.paused };
   if (reading.verdict === "does-not-answer") return { ...base, vision: null, replanReport: null };
 
   const statement = reading.verdict === "confirms" ? context.assumption.statement : reading.statement;

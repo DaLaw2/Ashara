@@ -24,10 +24,12 @@ const openEpisode = (projectId: AnyColumn, also: SQL | null): SQL =>
 export const projectHalted = (projectId: AnyColumn): SQL => openEpisode(projectId, null);
 
 /**
- * The project is halted on its budget: a spend cap's or the work ledger's halt, which refuses every
- * model call the project would make.
+ * The project is halted on its model work: on its budget (a spend cap's or the work ledger's halt,
+ * which refuses every model call the project would make), or on a model's or its provider's failure,
+ * the plan revision's among them, which a model call the project makes meanwhile would meet again.
  */
-export const projectHaltedOnBudget = (projectId: AnyColumn): SQL => openEpisode(projectId, sql`hb.kind IN ('budget_cap', 'work_budget')`);
+export const projectHaltedOnModelWork = (projectId: AnyColumn): SQL =>
+  openEpisode(projectId, sql`hb.kind IN ('budget_cap', 'work_budget', 'model_failed', 'provider_failed', 'replan_stopped', 'replan_provider_failed')`);
 
 /** The kind of the project's open block episode; null while it is not halted. */
 export const openHaltKind = (projectId: AnyColumn): SQL<unknown> =>

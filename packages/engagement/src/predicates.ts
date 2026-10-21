@@ -1,6 +1,6 @@
 import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { projects, qualifiedColumn } from "@ashara/db";
-import { projectHalted, projectHaltedOnBudget } from "@ashara/delivery/predicates";
+import { projectHalted, projectHaltedOnModelWork } from "@ashara/delivery/predicates";
 
 // Engagement's published predicates: the facts about a project's engagement lifecycle and the
 // client's messages that other contexts read the shared tables by. Each is spelled here once; a
@@ -21,10 +21,11 @@ export const projectAtWork = (): SQL => sql`(${projectActive()} AND NOT ${projec
 /**
  * The project reads the client's answers and changes: Engagement's lifecycle is 'active', halted or
  * not, since a halt pauses the work and never the reading of what the client said; except under a
- * budget halt, which refuses the reading's own model call. Whether the work resumes stays with the
- * halt's own exits.
+ * halt on the project's model work (projectHaltedOnModelWork), which the reading's own model call
+ * cannot get past: a budget halt refuses it, and a model's or provider's failure would charge it an
+ * attempt for meeting that failure again. Whether the work resumes stays with the halt's own exits.
  */
-export const projectReadsClientInput = (): SQL => sql`(${projectActive()} AND NOT ${projectHaltedOnBudget(projects.id)})`;
+export const projectReadsClientInput = (): SQL => sql`(${projectActive()} AND NOT ${projectHaltedOnModelWork(projects.id)})`;
 
 /**
  * True while the project has no inbound stop the Liaison has yet to consume.

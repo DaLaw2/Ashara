@@ -41,9 +41,9 @@ describe("I3's review clause", () => {
 });
 
 describe("I10, charged only for agent work", () => {
-  const charges = (dispatches: number, lessons: number, intakeAttempts: number): Charges => ({
+  const charges = (dispatches: number, lessons: number, intakeAttempts: number, unreadHalt: string | null = null): Charges => ({
     tasks: new Map([["impl", { title: "Deliver b1", dispatches, lessons }]]),
-    projects: new Map([["p1", { intakeAttempts, planAttempts: 0, replanAttempts: 0 }]]),
+    projects: new Map([["p1", { intakeAttempts, planAttempts: 0, replanAttempts: 0, unreadHalt }]]),
   });
   const fault = (task: string | null, kind: FaultRecord["fault"], response: FaultRecord["response"] = null): FaultRecord => ({
     ticket: 1, instance: "sim-1", seam: kind === "provider-error" ? "model" : "podman", label: "run", fault: kind, task, response,
@@ -82,6 +82,15 @@ describe("I10, charged only for agent work", () => {
     expect(checkCharges(rejected).map((violation) => violation.key)).toEqual(["I10:intakeAttempts"]);
     expect(checkCharges({ ...rejected, misbehaved: true })).toEqual([]);
     expect(checkCharges(window({ after: charges(0, 0, 1), faults: [fault(null, "provider-error", throttled)] }))).toEqual([]);
+  });
+
+  it("names a client message's reading charged while a halt it cannot get past stayed open, whatever the window's faults", () => {
+    const halted = window({ before: charges(0, 0, 0, "e1"), after: charges(0, 0, 1, "e1"), faults: [fault(null, "provider-error", throttled)], misbehaved: true });
+    expect(checkCharges(halted).map((violation) => violation.key)).toEqual(["I10:halted-intakeAttempts"]);
+    // The halt opened or ended inside the window: a reading before it opened, or after it ended, may be charged.
+    expect(checkCharges(window({ before: charges(0, 0, 0), after: charges(0, 0, 1, "e1"), misbehaved: true }))).toEqual([]);
+    expect(checkCharges(window({ before: charges(0, 0, 0, "e1"), after: charges(0, 0, 1), misbehaved: true }))).toEqual([]);
+    expect(checkCharges(window({ before: charges(0, 0, 0, "e1"), after: charges(0, 0, 1, "e2"), misbehaved: true }))).toEqual([]);
   });
 });
 

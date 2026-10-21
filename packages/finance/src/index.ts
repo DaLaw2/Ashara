@@ -10,7 +10,6 @@ export type { WorkBudgets } from "./work-ledger.js";
 export { burnZoneOf } from "./work-burn.js";
 export type { BurnZone } from "./work-burn.js";
 export type { WorkAtBudget } from "./errors.js";
-/** @testseam the integration work-ledger.test.ts asserts the refusal's scope and figures; WorkLedger.draw throws it */
 export { WorkBudgetSpent } from "./errors.js";
 export type { CostMeasurement } from "./cost.js";
 export { ModelAnswerUnfit, PreCallRefusal } from "./errors.js";
@@ -20,7 +19,6 @@ export type { ModelCallFailure } from "./model-call-failure.js";
 export { measureCost } from "./cost.js";
 /** @testseam the integration spend-cap.test.ts checks the tiered worst-case estimate; SpendCap.admit is its production caller */
 export { worstCaseCostUsd } from "./spend-cap.js";
-/** @testseam a caller's test refuses a call with it, and the integration spend-cap.test.ts asserts it; SpendCap.admit throws it */
 export { BudgetExceeded } from "./errors.js";
 /** @testseam the integration llm-call-ledger.test.ts asserts the refusal class; LlmCallLedger throws it */
 export { UnpricedModel } from "./errors.js";

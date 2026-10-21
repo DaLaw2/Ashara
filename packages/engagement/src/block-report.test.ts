@@ -250,7 +250,10 @@ describe("halt reports state the observed cause", () => {
     const body = posted[0].body;
     expect(body).not.toMatch(/send a change|send it as|takes it in when work resumes/);
     expect(body).toContain("until the team's operator");
-    expect(body).toContain("A change you send meanwhile does not end this pause: Ashara reads it and records it at once");
+    expect(body).toContain("A change you send meanwhile does not end this pause: Ashara reads it and records it during the pause");
+    // The report may be posted, or a spend limit reached, while that limit refuses the reading: the deployment's or the project's own.
+    expect(body).toContain("unless a spending limit stops that reading (this project's own, or the one for all of Ashara's work), in which case it is read once that limit is raised");
+    expect(body).not.toContain("records it at once");
   });
 
   test("a task given up through the API is told as moved by hand, whatever its caller stored", async () => {

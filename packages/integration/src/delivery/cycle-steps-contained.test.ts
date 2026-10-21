@@ -158,6 +158,8 @@ const SAFE_READERS = new Set(["describeErrorChain"]);
 /** A reading of the error before the classifier that routes it apart from any count, with why. */
 const EARLIER_READERS: Readonly<Record<string, string>> = {
   "packages/quality/src/verification.ts#preCallRefusalOf": "a call refused before it was sent ends the review as a refusal, which counts toward nothing",
+  "packages/engagement/src/answers.ts#ownSpendRefusal": "a paused project's reading refused by its own spend limit before it was sent waits for that limit, which counts toward nothing",
+  "packages/engagement/src/client-change.ts#ownSpendRefusal": "a paused project's reading refused by its own spend limit before it was sent waits for that limit, which counts toward nothing",
 };
 
 function read(file: string): string {

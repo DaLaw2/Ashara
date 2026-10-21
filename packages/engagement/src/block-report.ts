@@ -325,12 +325,18 @@ function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: 
 }
 
 /**
- * What a change the client sends during a halt the operator alone ends does: it is read at once
- * (a halt pauses the work, never the reading) and does not end the halt, whose exits are the
- * operator's resumption and the substrate probe, and the probe ends only an infrastructure halt.
+ * What a change the client sends during a halt the operator alone ends does: it does not end the
+ * halt, whose exits are the operator's resumption and the substrate probe, and the probe ends only
+ * an infrastructure halt. It is read during the halt (a halt of these kinds pauses the work, never
+ * the reading: projectReadsClientInput), except while a spend limit refuses the reading's model call:
+ * the deployment's, which stops all work, or the project's own, which the reading meets under this
+ * halt and waits out without holding up any other project's reading. The report may be posted
+ * before either limit is reached, and either may be reached after it, so it states both.
  */
 const CHANGE_DURING_PAUSE =
-  "A change you send meanwhile does not end this pause: Ashara reads it and records it at once, and the plan is revised for it once work resumes.";
+  "A change you send meanwhile does not end this pause: Ashara reads it and records it during the pause, unless a spending " +
+  "limit stops that reading (this project's own, or the one for all of Ashara's work), in which case it is read once that " +
+  "limit is raised; the plan is revised for it once work resumes.";
 
 /** Plain words: what stopped, why, and what ends it (a halt kind only older records hold). */
 function disputeBoundReport(dispute: BlockingDispute): string {

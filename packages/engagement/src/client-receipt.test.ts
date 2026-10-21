@@ -41,6 +41,8 @@ describe("the receipt of a client message", () => {
   test("paused under a halt that reads input: read all the same, the pause not ended, its end named", async () => {
     const { body, closes } = await bodyOf(due("change", { kind: "paused", halt: "plan_repair", readsInput: true }));
     expect(body).toContain("Ashara reads it all the same");
+    // The paused project's own spend limit refuses the reading's model call, which then waits for that limit.
+    expect(body).toContain("unless this project has reached its own spending limit, in which case it is read once that limit is raised");
     expect(body).toContain("This change does not end the pause");
     expect(body).toContain("The pause ends when the team's operator resumes the project");
     expect(closes).toBe(false);
@@ -50,6 +52,25 @@ describe("the receipt of a client message", () => {
     const { body } = await bodyOf(due("answer", { kind: "paused", halt: "budget_cap", readsInput: false }));
     expect(body).toContain("Ashara reads it once the pause ends");
     expect(body).not.toContain("all the same");
+  });
+
+  test.each([
+    ["the project's spend cap", "budget_cap", "the budget that paused this project does not allow"],
+    ["the work ledger", "work_budget", "the budget that paused this project does not allow"],
+    ["a model's failure", "model_failed", "what paused this project is model work failing"],
+    ["a provider's failure", "provider_failed", "what paused this project is model work failing"],
+    ["a plan revision's model failing", "replan_stopped", "what paused this project is model work failing"],
+    ["a plan revision's provider failing", "replan_provider_failed", "what paused this project is model work failing"],
+  ] as const)("paused on %s, which the reading cannot get past: it waits for the pause's end, for the halt's own reason", async (_, halt, reason) => {
+    for (const kind of ["change", "answer"] as const) {
+      const { body, closes } = await bodyOf(due(kind, { kind: "paused", halt, readsInput: false }));
+      expect(body).toContain(reason);
+      expect(body).toContain("so Ashara reads it once the pause ends");
+      expect(body).not.toContain("all the same");
+      expect(body).not.toContain("round of work");
+      expect(body).toContain("The pause ends when the team's operator resumes the project");
+      expect(closes).toBe(false);
+    }
   });
 
   test("paused on infrastructure: the project resumes by itself", async () => {

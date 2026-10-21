@@ -817,7 +817,17 @@ interface ProjectCharges {
   readonly intakeAttempts: number;
   readonly planAttempts: number;
   readonly replanAttempts: number;
+  /** The open halt episode no reading of the client's messages may run under (UNREAD_HALT_KINDS), or null. */
+  readonly unreadHalt: string | null;
 }
+
+/**
+ * The halts under which nothing reads the client's messages, the oracle's own copy: a budget halt
+ * refuses the reading's model call, and one on a model's or its provider's failure, the plan
+ * revision's too, would charge the reading for meeting it again (Delivery's projectHaltedOnModelWork,
+ * which Engagement's projectReadsClientInput excludes).
+ */
+const UNREAD_HALT_KINDS = ["budget_cap", "work_budget", "model_failed", "provider_failed", "replan_stopped", "replan_provider_failed"] as const;
 
 /** Every attempt counter of the run's projects at one instant (I10), the projects in the run's order. */
 export interface Charges {
@@ -826,7 +836,7 @@ export interface Charges {
 }
 
 const taskChargesRow = z.object({ id: z.string(), title: z.string(), dispatches: z.number().int(), lessons: z.number().int() });
-const projectChargesRow = z.object({ intakeAttempts: z.number().int(), planAttempts: z.number().int(), replanAttempts: z.number().int() });
+const projectChargesRow = z.object({ intakeAttempts: z.number().int(), planAttempts: z.number().int(), replanAttempts: z.number().int(), unreadHalt: z.string().nullable() });
 
 /** The attempt counters of `projectIds`, read by the observer outside every seam. */
 export async function readCharges(db: Database, projectIds: readonly string[]): Promise<Charges> {
@@ -846,7 +856,9 @@ export async function readCharges(db: Database, projectIds: readonly string[]): 
       (
         await db.execute(sql`
           SELECT plan_attempts AS "planAttempts", replan_attempts AS "replanAttempts",
-                 (SELECT coalesce(sum(m.intake_attempts), 0) FROM client_messages m WHERE m.project_id = projects.id)::int AS "intakeAttempts"
+                 (SELECT coalesce(sum(m.intake_attempts), 0) FROM client_messages m WHERE m.project_id = projects.id)::int AS "intakeAttempts",
+                 (SELECT b.id::text FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL
+                    AND b.kind IN (${sql.join(UNREAD_HALT_KINDS.map((kind) => sql`${kind}`), sql`, `)})) AS "unreadHalt"
           FROM projects WHERE id = ${projectId}`)
       ).rows,
     );
@@ -933,6 +945,10 @@ function describeFaults(faults: readonly FaultRecord[]): string {
  *   as failed was charged for the fault (a provider's rejection of Ashara's request included:
  *   model-access gateway.ts providerFailureOf).
  *
+ * - halt clause: in any window, no project's intake_attempts grows while one halt under which nothing
+ *   reads the client's messages (UNREAD_HALT_KINDS) stayed open from its start to its end: a reading
+ *   charged there met the halt it could not get past.
+ *
  * Blind spots: the stand-ins never fault the way a real provider does (a status whose body
  * misleads, a stream cut part way), so the transport's statuses are the gateway's whole input here;
  * a task's window in which its model answered is not judged (the fault may have struck after work
@@ -968,12 +984,20 @@ export function checkCharges(window: ChargeWindow): Violation[] {
     }
   }
 
+  const label = (index: number): { readonly key: string; readonly words: string } => ({ key: index === 0 ? "" : `p${index + 1}:`, words: index === 0 ? "" : `project ${index + 1}: ` });
+  for (const [index, [projectId, after]] of [...window.after.projects].entries()) {
+    const before = window.before.projects.get(projectId);
+    if (before?.unreadHalt == null || before.unreadHalt !== after.unreadHalt || after.intakeAttempts <= before.intakeAttempts) continue;
+    const project = label(index);
+    add(`${project.key}halted-intakeAttempts`, `${project.words}intakeAttempts grew ${before.intakeAttempts} -> ${after.intakeAttempts} while halt ${after.unreadHalt}, under which nothing reads the client's messages, stayed open`);
+  }
+
   const outside = asharas(ofLane(null));
   if (outside.length === 0 || window.misbehaved || exempting(window.faults)) return violations;
   const counters = ["intakeAttempts", "planAttempts", "replanAttempts"] as const;
   for (const [index, [projectId, after]] of [...window.after.projects].entries()) {
     // A project first read after the window began started from no attempt at all.
-    const before = window.before.projects.get(projectId) ?? { intakeAttempts: 0, planAttempts: 0, replanAttempts: 0 };
+    const before = window.before.projects.get(projectId) ?? { intakeAttempts: 0, planAttempts: 0, replanAttempts: 0, unreadHalt: null };
     const project = index === 0 ? "" : `p${index + 1}:`;
     for (const counter of counters) {
       if (after[counter] <= before[counter]) continue;

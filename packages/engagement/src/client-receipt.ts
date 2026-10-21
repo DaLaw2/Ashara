@@ -132,6 +132,26 @@ function stopFate(due: DueReceipt): string {
   return "No new work starts on this project from now on, and Ashara takes the stop in at the start of its next round of work.";
 }
 
+/**
+ * Why a paused project's message waits for the pause's end, by the halt that holds it
+ * (projectReadsClientInput): a budget halt refuses the reading's model call, and a halt on a model's or
+ * its provider's failure would meet the reading's model call too.
+ */
+function unreadWhilePaused(halt: string): string {
+  switch (halt) {
+    case "budget_cap":
+    case "work_budget":
+      return "Reading it takes model work, which the budget that paused this project does not allow, so Ashara reads it once the pause ends.";
+    case "model_failed":
+    case "provider_failed":
+    case "replan_stopped":
+    case "replan_provider_failed":
+      return "Reading it takes model work, and what paused this project is model work failing, so Ashara reads it once the pause ends rather than while it lasts.";
+    default:
+      return "Ashara reads it once the pause ends.";
+  }
+}
+
 function messageFate(due: DueReceipt & { readonly kind: Exclude<InboundKind, "stop"> }, work: DeploymentWork): string {
   const { standing } = due;
   if (due.consumed) return "It has been read and taken into the project's record.";
@@ -146,11 +166,11 @@ function messageFate(due: DueReceipt & { readonly kind: Exclude<InboundKind, "st
       return `Ashara reads it in this or the next round of work, ${afterReading(due.kind)}.`;
     case "paused":
       if (due.kind === "tender") return "Ashara reads it once the pause ends.";
-      if (!standing.readsInput) {
-        return "Reading it takes model work, which the budget that paused this project does not allow, so Ashara reads it once the pause ends.";
-      }
+      if (!standing.readsInput) return unreadWhilePaused(standing.halt);
+      // A paused project at its own spend limit has the reading's model call refused; the reading waits for the limit.
       return (
-        `Ashara reads it all the same, in this or the next round of work, ${afterReading(due.kind)}. ` +
+        `Ashara reads it all the same, in this or the next round of work, ${afterReading(due.kind)}, unless this project has ` +
+        `reached its own spending limit, in which case it is read once that limit is raised. ` +
         `This ${NOUN[due.kind]} does not end the pause: the work it touches is planned for it once work resumes.`
       );
   }

@@ -5,9 +5,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
+import { ClientAnswers, ClientReceipts, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
-import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SPEND_CAP_ERROR_CLASS, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
@@ -17,6 +17,7 @@ import type { FirstPlanStore } from "@ashara/delivery";
 import { recordingLogger, systemClock, type ProjectId } from "@ashara/shared";
 import type { StepContainment } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
+import { createClientReceiptStore } from "@ashara/server/client-receipt-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
@@ -213,10 +214,9 @@ async function awaitedChangesOf(projectId: ProjectId): Promise<string[]> {
   return z.array(z.object({ answerId: z.string() })).parse(result.rows).map((row) => row.answerId);
 }
 
-beforeAll(async () => {
-  db = createDb(DATABASE_URL);
-  clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
-  gateway = new GuardedModelAccess(buildGateway({
+/** Model access through the stub provider under `caps`. */
+function modelAccess(caps: typeof TEST_SPEND_CAPS): GuardedModelAccess {
+  return new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -236,8 +236,14 @@ beforeAll(async () => {
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps }),
   ), recordingLogger());
+}
+
+beforeAll(async () => {
+  db = createDb(DATABASE_URL);
+  clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
+  gateway = modelAccess(TEST_SPEND_CAPS);
 });
 
 beforeEach(() => {
@@ -490,7 +496,7 @@ describe("the client's answers", () => {
     expect(await visionsOf(projectId)).toHaveLength(1);
   });
 
-  test("an answer whose readings ran out halts again as the model's after the operator unblocks, read from its record", async () => {
+  test("an answer whose readings ran out on a project at work is read afresh after the operator unblocks, not halted again", async () => {
     const { projectId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
@@ -498,17 +504,138 @@ describe("the client's answers", () => {
     const mock = pipelineModel({ verdict: "maybe" });
     for (let i = 0; i < 3; i++) await answers().runPending();
     expect(await haltKindOf(projectId)).toBe("model_failed");
-    const stored = await db.execute(sql`SELECT intake_last_failure AS "failure" FROM client_messages WHERE id = ${answerId}`);
-    expect(z.array(z.object({ failure: z.string().nullable() })).parse(stored.rows)).toEqual([{ failure: "model" }]);
+    // The block that opened the halt set the count back to none, the last error kept on record.
+    const stored = await db.execute(sql`SELECT intake_attempts AS "attempts", intake_last_error IS NOT NULL AS "kept" FROM client_messages WHERE id = ${answerId}`);
+    expect(z.array(z.object({ attempts: z.number(), kept: z.boolean() })).parse(stored.rows)).toEqual([{ attempts: 0, kept: true }]);
     const calls = mock.doGenerateCalls.length;
+    // Not read under the model's halt: no reading paid for, no attempt charged.
+    for (let i = 0; i < 3; i++) expect(await answers().runPending()).toEqual([]);
+    expect(mock.doGenerateCalls).toHaveLength(calls);
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "looked at the answer");
-    const outcomes = await answers().runPending();
+    pipelineModel({ verdict: "confirms" });
+    expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["stated"]);
+    expect(await haltKindOf(projectId)).toBeNull();
+  });
 
-    expect(outcomes.map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
+  test("an answer whose readings ran out under another halt keeps its count, waits that halt out unread, then halts the project as the model's, read from its record", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [first] = questionIds;
+    if (first === undefined) throw new Error("intake posted no question");
+    expect(await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
+    const answerId = await answer(projectId, first, "Harbour.");
+    const mock = pipelineModel({ verdict: "maybe" });
+    const kinds: string[] = [];
+    for (let i = 0; i < 3; i++) for (const outcome of await answers().runPending()) kinds.push(outcome.kind);
+    expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
+    expect(await haltKindOf(projectId)).toBe("plan_repair");
+    const calls = mock.doGenerateCalls.length;
+    for (let i = 0; i < 3; i++) expect(await answers().runPending()).toEqual([]);
+
+    await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "repaired the plan");
+    expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
     // The exhaustion is read from the record, no reading paid for, and blamed as the cycle that counted it blamed it.
     expect(mock.doGenerateCalls).toHaveLength(calls);
     expect(await haltKindOf(projectId)).toBe("model_failed");
+    const stored = await db.execute(sql`SELECT intake_attempts AS "attempts" FROM client_messages WHERE id = ${answerId}`);
+    expect(z.array(z.object({ attempts: z.number() })).parse(stored.rows)).toEqual([{ attempts: 0 }]);
+  });
+
+  test.each(["model_failed", "provider_failed", "replan_stopped", "replan_provider_failed", "budget_cap"] as const)(
+    "an answer to a project halted on %s is not read and not charged through many cycles, its receipt says why, and after the unblock it is read once",
+    async (category) => {
+      const { projectId, questionIds } = await intakenProject();
+      const [first] = questionIds;
+      if (first === undefined) throw new Error("intake posted no question");
+      const cause =
+        category === "budget_cap"
+          ? { category, errorClass: SPEND_CAP_ERROR_CLASS.project, reason: "the project's cap", spend: { spentUsd: 5, capUsd: 5, inFlightUsd: 0, nextCallUsd: 1 } }
+          : { category, errorClass: "ScriptedHalt", reason: `halted on ${category} by the test` };
+      expect(await new ProjectHaltRepository(db).block(projectId, cause)).toBe("blocked");
+      const answerId = await answer(projectId, first, "Harbour.");
+      const mock = pipelineModel({ verdict: "maybe" });
+
+      for (let i = 0; i < 5; i++) expect(await answers().runPending()).toEqual([]);
+
+      expect(mock.doGenerateCalls).toHaveLength(0);
+      const stored = await db.execute(sql`SELECT intake_attempts AS "attempts", consumed_at IS NOT NULL AS consumed FROM client_messages WHERE id = ${answerId}`);
+      expect(z.array(z.object({ attempts: z.number(), consumed: z.boolean() })).parse(stored.rows)).toEqual([{ attempts: 0, consumed: false }]);
+      expect(await haltKindOf(projectId)).toBe(category);
+      const receipts = createClientReceiptStore(db);
+      await new ClientReceipts({ ...receipts, dueReceipts: ours(() => receipts.dueReceipts()) }, containment()).runPending({ kind: "running" });
+      const receipt = await db.execute(sql`SELECT body FROM client_messages WHERE receipt_of = ${answerId}`);
+      expect(z.array(z.object({ body: z.string() })).parse(receipt.rows)).toEqual([{ body: expect.stringContaining("so Ashara reads it once the pause ends") }]);
+
+      await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "cleared the halt");
+      pipelineModel({ verdict: "confirms" });
+      expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["stated"]);
+      expect(await haltKindOf(projectId)).toBeNull();
+    },
+  );
+
+  test("an answer to a project halted on a plan repair is read all the same, the halt left open", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [, second] = questionIds;
+    if (second === undefined) throw new Error("intake posted no second question");
+    expect(await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
+    const answerId = await answer(projectId, second, "Yes, twelve seats.");
+    pipelineModel({ verdict: "confirms" });
+
+    expect(await answers().runPending()).toEqual([
+      { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 2, replanRequested: false },
+    ]);
+    expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeInstanceOf(Date);
+    expect(await haltKindOf(projectId)).toBe("plan_repair");
+  });
+
+  test("a paused project at its own spend cap: its answer waits uncharged, and a later paused project's answer is read in the same cycle", async () => {
+    const atCap = await intakenProject();
+    const other = await intakenProject();
+    const halts = new ProjectHaltRepository(db);
+    expect(await halts.block(atCap.projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
+    expect(await halts.block(other.projectId, { category: "check_dispute", errorClass: "CheckDisputeBound", reason: "disputed its bound of times" })).toBe("blocked");
+    // A call in flight at the whole cap: the project's reading is refused before it is sent.
+    await db.execute(sql`INSERT INTO llm_calls (project_id, call_site, provider, model, estimated_cost_usd, state)
+      VALUES (${atCap.projectId}, 'liaison-intake', 'deepseek', 'answer-strong', 5, 'pending')`);
+    const waiting = await answer(atCap.projectId, atCap.questionIds[1] ?? "", "Yes, twelve seats.");
+    const read = await answer(other.projectId, other.questionIds[1] ?? "", "Yes, twelve seats.");
+    pipelineModel({ verdict: "confirms" });
+    const store = createAnswerStore(db);
+    const capped = new ClientAnswers({
+      containment: containment(),
+      llm: modelAccess({ deploymentUsd: 1_000_000, perProjectUsd: 5 }),
+      store: { ...store, openAnswers: ours(() => store.openAnswers()) },
+    });
+
+    expect((await capped.runPending()).map((outcome) => [outcome.kind, "answerId" in outcome ? outcome.answerId : null])).toEqual([
+      ["waits-for-limit", waiting],
+      ["stated", read],
+    ]);
+    expect((await capped.runPending()).map((outcome) => outcome.kind)).toEqual(["waits-for-limit"]);
+    const row = await new ClientMessageRepository(db).findById(waiting);
+    expect([row?.consumedAt ?? null, row?.intakeAttempts]).toEqual([null, 0]);
+    expect(await haltKindOf(atCap.projectId)).toBe("plan_repair");
+  });
+
+  test("an answer composed while at work, its project stopped before the write: nothing is written, and it is not read again", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [, second] = questionIds;
+    if (second === undefined) throw new Error("intake posted no second question");
+    const answerId = await answer(projectId, second, "Yes, twelve seats.");
+    pipelineModel({ verdict: "confirms" });
+    const store = createAnswerStore(db);
+    const racing: AnswerStore = {
+      ...store,
+      openAnswers: ours(() => store.openAnswers()),
+      recordAnswer: async (write) => {
+        await db.execute(sql`UPDATE projects SET lifecycle = 'stopped' WHERE id = ${projectId}`);
+        return store.recordAnswer(write);
+      },
+    };
+
+    expect(await new ClientAnswers({ containment: containment(), llm: gateway, store: racing }).runPending()).toEqual([{ kind: "not-open", answerId, projectId }]);
+    expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeNull();
+    expect(await visionsOf(projectId)).toHaveLength(1);
   });
 
   test("a store failure on one answer is that answer's fault: recorded with a backoff, never counted, and the other project's answer is read", async () => {

@@ -89,12 +89,22 @@ interface StackChoiceWrite {
 }
 
 /**
- * In one transaction: posts the stack-choice report and appends the next vision version, a copy of
- * the one it was composed against with the new inferences. A project already reported on gets nothing new
- * ("already-reported"): the unique index on (project_id, reports_on) admits one report.
+ * In one transaction, with the project row locked: posts the stack-choice report and appends the next
+ * vision version, a copy of the one it was composed against with the new inferences. A project already
+ * reported on gets nothing new ("already-reported"): the unique index on (project_id, reports_on)
+ * admits one report. A project no longer at work under the lock (stopped, accepted or halted since it
+ * was listed, or with a stop awaiting the Liaison) gets nothing ("not-due"): the report says work
+ * proceeds, and it is posted once the project is at work again.
  */
-export async function recordStackChoice(db: Database, write: StackChoiceWrite): Promise<"recorded" | "already-reported"> {
+export async function recordStackChoice(db: Database, write: StackChoiceWrite): Promise<"recorded" | "already-reported" | "not-due"> {
   return db.transaction(async (tx) => {
+    // The lifecycle guard and the halt guard each lock the row to write: read after the lock, the standing holds until commit.
+    await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, write.projectId)).for("update");
+    const [due] = await tx
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.id, write.projectId), projectAtWork(), noOpenStop(projects.id)));
+    if (due === undefined) return "not-due";
     const inserted = await tx
       .insert(clientMessages)
       .values({ projectId: write.projectId, direction: "outbound", kind: "report", body: write.report, inReplyTo: null, reportsOn: SUBJECT })
