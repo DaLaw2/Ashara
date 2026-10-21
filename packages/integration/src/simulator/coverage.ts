@@ -7,6 +7,7 @@ import { ATTEMPT_TERMINALS } from "@ashara/workplace";
 import { BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { PROJECT_STATUSES } from "@ashara/engagement";
 import type { WorkItemStatus } from "@ashara/delivery";
+import { CORRECTION_PAIRS } from "./correction-draws.js";
 import type { Database } from "./database.js";
 import { APPLICABLE_FAULTS, SEAM_KINDS } from "./faults.js";
 import type { FaultRecord } from "./faults.js";
@@ -39,6 +40,8 @@ export interface Coverage {
   readonly models: Set<string>;
   /** Each mutation whose seam the run reached (plants.ts): a query it would rewrite, or a wait it would skip. */
   readonly plants: Set<string>;
+  /** The client correction the run posted, as `<arrival>:<kind>` (correction-draws.ts), recorded by the run as it posts it. */
+  readonly corrections: Set<string>;
 }
 
 /**
@@ -85,6 +88,7 @@ export function emptyCoverage(): Coverage {
     attempts: new Set(),
     models: new Set(),
     plants: new Set(),
+    corrections: new Set(),
   };
 }
 
@@ -101,6 +105,7 @@ const COVERAGE_KEYS = [
   "attempts",
   "models",
   "plants",
+  "corrections",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
 
 const coverageSet = z.set(z.string());
@@ -119,6 +124,7 @@ export const CoverageSchema = z.strictObject({
   attempts: coverageSet,
   models: coverageSet,
   plants: coverageSet,
+  corrections: coverageSet,
 }) satisfies z.ZodType<Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
@@ -295,6 +301,7 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("attempt terminals (ATTEMPT_TERMINALS)", ATTEMPT_TERMINALS, coverage.attempts),
     split("model misbehaviour met (MODEL_PATHS)", MODEL_PATHS, coverage.models),
     split("plant seams reached (MUTATIONS)", MUTATIONS, coverage.plants),
+    split("corrections by arrival and kind (CORRECTION_PAIRS)", CORRECTION_PAIRS, coverage.corrections),
   ];
 }
 

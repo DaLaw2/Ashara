@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { RARE_UNDER_OWN_PROFILES, behavioursBelowFloor, countBehaviours, emptyBehaviourCounts, emptyCoverage, modelPathOf, sample } from "./coverage.js";
+import { CORRECTION_PAIRS, correctionPair, drawCorrection } from "./correction-draws.js";
+import { RARE_UNDER_OWN_PROFILES, behavioursBelowFloor, countBehaviours, coverageReport, emptyBehaviourCounts, emptyCoverage, modelPathOf, sample } from "./coverage.js";
 import type { Snapshot } from "./invariants.js";
+import { Tape } from "./tape.js";
 
 function snapshotWith(events: Snapshot["events"]): Snapshot {
   return {
     projectId: "p1",
-    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, deliveredReported: false },
+    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryPending: false, passedSweepId: null, passedSweepReportId: null },
     items: [],
     episodes: [],
+    stops: [],
     checks: [],
     reviewFindings: [],
     corrections: [],
@@ -68,6 +71,40 @@ describe("modelPathOf", () => {
     expect(row("decomposition", "stop", "ok", 200, null)).toBeNull();
     // A turn that stopped with output but no tool call is a refusal or a plain stop, not one of these.
     expect(row("agent-runner", "stop", "ok", 200, null)).toBeNull();
+  });
+});
+
+describe("the corrections a soak draws", () => {
+  // The draw run.ts makes, gate included: a seed that posts no correction draws no pair.
+  const pairOf = (seed: number): string | null => {
+    const draw = drawCorrection(new Tape({ kind: "seeded", seed }));
+    return draw === null ? null : correctionPair(draw);
+  };
+
+  it("posts a correction on every seed, and draws every arrival state with every kind over seeds 1..160", () => {
+    const pairs = Array.from({ length: 160 }, (_, index) => pairOf(index + 1));
+    expect(pairs.filter((pair) => pair === null)).toEqual([]);
+    expect(CORRECTION_PAIRS).toHaveLength(24);
+    expect(CORRECTION_PAIRS.filter((pair) => !pairs.includes(pair))).toEqual([]);
+  });
+
+  it("draws every pair in any run of consecutive seeds as long as the pair list, wherever a soak starts", () => {
+    for (const start of [1, 81, 1000]) {
+      const drawn = new Set(Array.from({ length: CORRECTION_PAIRS.length }, (_, index) => pairOf(start + index)));
+      expect(CORRECTION_PAIRS.filter((pair) => !drawn.has(pair)), `seeds from ${start}`).toEqual([]);
+    }
+  });
+
+  it("posts none on the zero draw a replayed or directed run takes", () => {
+    expect(drawCorrection(new Tape({ kind: "replay", decisions: [] }))).toBeNull();
+  });
+
+  it("names a run's posted correction in its coverage and every pair in the report", () => {
+    const coverage = emptyCoverage();
+    coverage.corrections.add("halted:change-interface");
+    const corrections = coverageReport(coverage).find((machine) => machine.machine.startsWith("corrections"));
+    expect(corrections?.reached).toEqual(["halted:change-interface"]);
+    expect(corrections?.unreached).toHaveLength(23);
   });
 });
 

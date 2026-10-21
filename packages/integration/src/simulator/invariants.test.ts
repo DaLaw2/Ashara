@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FaultRecord } from "./faults.js";
 import { TRANSPORT_RESPONSES } from "./faults.js";
-import { cellRoleViolations, checkCharges, checkSnapshot, checkTotality, misreadRejections } from "./invariants.js";
+import { REPORT_BOUND_CYCLES, SilenceWatch, cellRoleViolations, checkCharges, checkSnapshot, checkTotality, misreadRejections } from "./invariants.js";
 import type { ChargeWindow, Charges, Snapshot } from "./invariants.js";
 import { MISREAD_REJECTION_MARKER } from "./product.js";
 
@@ -89,9 +89,10 @@ describe("I10, charged only for agent work", () => {
 function plantedSnapshot(items: Snapshot["items"]): Snapshot {
   return {
     projectId: "p1",
-    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, deliveredReported: false },
+    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryPending: false, passedSweepId: null, passedSweepReportId: null },
     items,
     episodes: [],
+    stops: [],
     checks: [],
     reviewFindings: [],
     corrections: [],
@@ -135,5 +136,58 @@ describe("a state with no exit", () => {
     const stalled = plantedSnapshot([task("Pending", null)]);
     expect(checkTotality(9, stalled, 6).map((violation) => violation.key)).toEqual(["I8:Pending"]);
     expect(checkTotality(9, plantedSnapshot([task("Completed", null)]), 6)).toEqual([]);
+  });
+});
+
+describe("every terminal event is told within the bound (I2's and I4's silence clause)", () => {
+  type Episode = Snapshot["episodes"][number];
+  const episode = (over: Partial<Episode>): Episode => ({ id: "e1", kind: "infrastructure", reportId: null, ended: false, endKind: null, resumedReportId: null, ...over });
+  const at = (status: string, over: Partial<Snapshot> = {}, project: Partial<Snapshot["project"]> = {}): Snapshot => {
+    const base = plantedSnapshot([]);
+    return { ...base, ...over, project: { ...base.project, status, ...project } };
+  };
+  const context = (final: boolean) => ({ spendCapUsd: 25, cells: [], final, reviews: [], intakes: [] });
+  /** The keys a watch names over `cycles` cycles of one snapshot, the first being the cycle that recorded the event. */
+  const silentFor = (snapshot: Snapshot, cycles: number, counted = true): string[] => {
+    const watch = new SilenceWatch();
+    const keys: string[] = [];
+    for (let step = 1; step <= cycles; step++) keys.push(...watch.observe(step, 0, snapshot, counted).map((violation) => violation.key));
+    return keys;
+  };
+  const past = REPORT_BOUND_CYCLES + 2;
+  const openHalt = at("blocked", { episodes: [episode({})] });
+
+  const untold: ReadonlyArray<readonly [string, Snapshot, string]> = [
+    ["an open halt", openHalt, "I2:episode:infrastructure"],
+    ["a halt unblocked before it was told", at("active", { episodes: [episode({ ended: true, endKind: "unblocked" })] }), "I2:episode:infrastructure"],
+    ["a told halt's resumption", at("active", { episodes: [episode({ reportId: "r1", ended: true, endKind: "probe_passed" })] }), "I2:episode-resumed:infrastructure"],
+    ["a planning stop", at("blocked", { episodes: [episode({ kind: "planning_stopped" })] }), "I2:episode:planning_stopped"],
+    ["a client stop", at("stopped", { stops: [{ id: "s1", stoppedProject: true, reported: false }] }), "I4:stop-unreported"],
+    ["an acceptance", at("accepted", {}, { passedSweepId: "w1", passedSweepReportId: null }), "I4:accepted-unreported"],
+  ];
+  for (const [what, snapshot, key] of untold) {
+    it(`names ${what} untold past the bound, and not within it`, () => {
+      expect(silentFor(snapshot, REPORT_BOUND_CYCLES + 1)).toEqual([]);
+      expect(silentFor(snapshot, past)).toEqual([key]);
+      expect(checkSnapshot(9, snapshot, context(true)).map((violation) => violation.key)).toContain(key);
+      expect(checkSnapshot(9, snapshot, context(false)).map((violation) => violation.key)).not.toContain(key);
+    });
+  }
+
+  it("counts no cycle that carried a fault, or in which the project waited out a step's backoff", () => {
+    expect(silentFor(openHalt, past, false)).toEqual([]);
+    expect(silentFor(at("blocked", { episodes: openHalt.episodes }, { retryPending: true }), past)).toEqual([]);
+  });
+
+  it("names nothing told in time, nor what the stop report tells instead", () => {
+    const watch = new SilenceWatch();
+    expect(watch.observe(1, 0, openHalt, true)).toEqual([]);
+    expect(watch.observe(2, 0, openHalt, true)).toEqual([]);
+    const told = at("blocked", { episodes: [episode({ reportId: "r1" })] });
+    for (let step = 3; step <= past + 2; step++) expect(watch.observe(step, 0, told, true)).toEqual([]);
+    const stoppedHalt = at("stopped", { episodes: [episode({ ended: true, endKind: "client_stop" })], stops: [{ id: "s1", stoppedProject: true, reported: true }] });
+    expect(silentFor(stoppedHalt, past)).toEqual([]);
+    expect(silentFor(at("stopped", { stops: [{ id: "s2", stoppedProject: false, reported: false }] }), past)).toEqual([]);
+    expect(silentFor(at("accepted", {}, { passedSweepId: "w1", passedSweepReportId: "m1" }), past)).toEqual([]);
   });
 });

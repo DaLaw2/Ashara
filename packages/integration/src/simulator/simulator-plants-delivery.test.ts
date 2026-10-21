@@ -58,8 +58,11 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed(ctx, [], { mutation: "delivered-report-passes-unjudged" }))).toEqual(["I4:guarantee-table:delivered", ...SKIPPED_ITEM]);
   }, 90_000);
 
+  // Its sweep never records it, so the acceptance reads as untold too (I4's silence clause).
   it("catches a delivered report posted with no record of it", async (ctx) => {
-    expect(keys(await directed(ctx, [], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
+    const planted = keys(await directed(ctx, [], { mutation: "delivered-report-unrecorded" }));
+    expect(planted).toContain("I4:unrecorded-report");
+    expect(planted).toContain("I4:accepted-unreported");
   }, 90_000);
 
   // The first review finds nothing. The simulator's catalog holds one model family, so the second

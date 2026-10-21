@@ -110,13 +110,13 @@ export class Tape {
     this.directions = mode.kind === "directed" ? mode.directions.map((direction) => ({ direction, seen: 0, taken: 0, refused: null })) : [];
   }
 
-  private draw(site: string, scope: string | undefined, choose: (u: number) => number, n: number): number {
+  private draw(site: string, scope: string | undefined, choose: (u: number, seed: number) => number, n: number): number {
     // eslint-disable-next-line no-restricted-syntax -- policy default: a site not yet drawn has drawn 0 times, the counter's start
     const occurrence = (this.counts.get(site) ?? 0) + 1;
     this.counts.set(site, occurrence);
     const key = `${site}#${occurrence}`;
     let value: number;
-    if (this.seed !== null) value = choose(seededUniform(this.seed, key));
+    if (this.seed !== null) value = choose(seededUniform(this.seed, key), this.seed);
     // eslint-disable-next-line no-restricted-syntax -- policy default: a replay file records only the non-zero draws (taken below), so an absent key is the zero draw
     else if (this.fixed !== null) value = this.fixed.get(key) ?? 0;
     // eslint-disable-next-line no-restricted-syntax -- policy default: a site no direction steers takes the zero draw, the undisturbed path
@@ -149,6 +149,16 @@ export class Tape {
   pick(site: string, n: number, scope?: string): number {
     if (!Number.isInteger(n) || n < 1) throw new RangeError(`Tape.pick(${site}): n must be a positive integer, got ${n}`);
     return this.draw(site, scope, (u) => Math.min(n - 1, Math.floor(u * n)), n);
+  }
+
+  /**
+   * 0..n-1; 0 is benign. A seeded run takes its seed modulo n, so any n consecutive seeds take
+   * every value once: what a soak must cover whole is not left to n independent draws, which at a
+   * few seeds per value leave one untaken in most soaks. Replayed and directed as `pick`.
+   */
+  rotate(site: string, n: number, scope?: string): number {
+    if (!Number.isInteger(n) || n < 1) throw new RangeError(`Tape.rotate(${site}): n must be a positive integer, got ${n}`);
+    return this.draw(site, scope, (_u, seed) => ((seed % n) + n) % n, n);
   }
 
   /**

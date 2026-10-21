@@ -17,8 +17,12 @@ import {
   deliveredReportPassesUnjudged,
   deliveredReportUnrecorded,
   haltReportFixedCause,
+  haltReportSuppressed,
+  planningStoppedReportSuppressed,
   questionMisstatesAssumption,
+  resumptionReportSuppressed,
   stopReportOmitsMerge,
+  stopReportSuppressed,
   unconfirmedClaimDropped,
 } from "./report-plants.js";
 import { abandonedReleaseSkipped } from "./residue.js";
@@ -42,7 +46,10 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - delivered-report-drops-guarantee: the delivered report's guarantee table leaves out a
  *   guarantee in force (I4);
  * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
- *   it is posted again (I4, exactly once);
+ *   it is posted again (I4, exactly once) and its acceptance reads as untold (I4:accepted-unreported);
+ * - halt-report-suppressed, resumption-report-suppressed, stop-report-suppressed,
+ *   planning-stopped-report-suppressed: no halt, resumption, stop or planning stop is ever listed as
+ *   due its report, so the client is never told of it (I2's and I4's silence clause);
  * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
  *   (I9);
  * - delivered-report-misstates-standing: the delivered report's table says an assumption the
@@ -117,6 +124,10 @@ export const MUTATIONS = [
   "correction-holds-whole-plan",
   "correction-hold-misses-returned",
   "receipt-skipped",
+  "halt-report-suppressed",
+  "resumption-report-suppressed",
+  "stop-report-suppressed",
+  "planning-stopped-report-suppressed",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -159,6 +170,10 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "correction-holds-whole-plan": { bypassed: [], queries: correctionHoldsWholePlan, code: null },
   "correction-hold-misses-returned": { bypassed: [], queries: correctionHoldMissesReturned, code: null },
   "receipt-skipped": { bypassed: [], queries: receiptSkipped, code: null },
+  "halt-report-suppressed": { bypassed: [], queries: haltReportSuppressed, code: null },
+  "resumption-report-suppressed": { bypassed: [], queries: resumptionReportSuppressed, code: null },
+  "stop-report-suppressed": { bypassed: [], queries: stopReportSuppressed, code: null },
+  "planning-stopped-report-suppressed": { bypassed: [], queries: planningStoppedReportSuppressed, code: null },
 };
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */

@@ -69,17 +69,33 @@ const projectRow = z.object({
   blockedReason: z.string().nullable(),
   planStopped: z.boolean(),
   workspacePath: z.string().nullable(),
-  /** A passed acceptance sweep's delivered report is posted. */
-  deliveredReported: z.boolean(),
+  /** A contained step of the project waits out a fault's backoff (an unparked step_faults row): a report it owes may wait with it. */
+  retryPending: z.boolean(),
+  /** The project's latest passed acceptance sweep, and the delivered report recorded on it; null when none passed. */
+  passedSweepId: z.string().nullable(),
+  passedSweepReportId: z.string().nullable(),
 });
 type ProjectRow = z.infer<typeof projectRow>;
 
 /**
- * A halt episode and the report that told the client of it. A planning stop is told by the
- * planning-stopped report (one client message, reports_on 'planning-stopped', posted after the stop),
- * which its episode row does not link: that message is its report.
+ * A halt episode, how it ended, and the reports that told the client of it and of its resumption. A
+ * planning stop is told by the planning-stopped report (one client message, reports_on
+ * 'planning-stopped', posted after the stop), which its episode row does not link: that message is its report.
  */
-const episodeRow = z.object({ id: z.string(), kind: z.string(), reportId: z.string().nullable(), ended: z.boolean() });
+const episodeRow = z.object({
+  id: z.string(),
+  kind: z.string(),
+  reportId: z.string().nullable(),
+  ended: z.boolean(),
+  /** unblocked, probe_passed or client_stop once ended; null while open. */
+  endKind: z.string().nullable(),
+  resumedReportId: z.string().nullable(),
+});
+/**
+ * A client stop: whether it is the one that stopped the project (stop_found_halted is written only
+ * then), and whether the stop report was posted in reply to it.
+ */
+const stopRow = z.object({ id: z.string(), stoppedProject: z.boolean(), reported: z.boolean() });
 const checkRow = z.object({
   taskId: z.string(),
   checkTaskId: z.string(),
@@ -105,6 +121,8 @@ export interface Snapshot {
   readonly project: ProjectRow;
   readonly items: readonly ItemRow[];
   readonly episodes: ReadonlyArray<z.infer<typeof episodeRow>>;
+  /** Every stop the client sent, oldest first. */
+  readonly stops: ReadonlyArray<z.infer<typeof stopRow>>;
   readonly checks: ReadonlyArray<z.infer<typeof checkRow>>;
   /** Every problem a suite review's recorded findings route to a check task, as recorded. */
   readonly reviewFindings: ReadonlyArray<z.infer<typeof findingRow>>;
@@ -141,7 +159,9 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
       await db.execute(sql`
         SELECT ${projectState} AS status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
                plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath",
-               EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed AND s.report_id IS NOT NULL) AS "deliveredReported"
+               EXISTS (SELECT 1 FROM step_faults f WHERE f.project_id = projects.id AND f.parked_at IS NULL) AS "retryPending",
+               (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
+               (SELECT s.report_id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
         FROM projects WHERE id = ${projectId}`)
     ).rows,
   );
@@ -161,11 +181,19 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const episodes = z.array(episodeRow).parse(
     (
       await db.execute(sql`
-        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended,
+        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", b.resumed_report_id AS "resumedReportId",
                COALESCE(b.report_id, CASE WHEN b.kind = 'planning_stopped' THEN (
                  SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id AND m.reports_on = 'planning-stopped'
                    AND m.created_at >= b.blocked_at ORDER BY m.created_at, m.id LIMIT 1) END) AS "reportId"
         FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`)
+    ).rows,
+  );
+  const stops = z.array(stopRow).parse(
+    (
+      await db.execute(sql`
+        SELECT m.id, m.stop_found_halted IS NOT NULL AS "stoppedProject",
+               EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = m.id AND r.direction = 'outbound' AND r.reports_on = 'client-stop') AS reported
+        FROM client_messages m WHERE m.project_id = ${projectId} AND m.direction = 'inbound' AND m.kind = 'stop' ORDER BY m.created_at, m.id`)
     ).rows,
   );
   const checks = z.array(checkRow).parse(
@@ -223,6 +251,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     project,
     items,
     episodes,
+    stops,
     checks,
     reviewFindings,
     corrections,
@@ -448,6 +477,108 @@ export function cellRoleViolations(
   return found;
 }
 
+/** A report the client is owed for a terminal event on record and has not been sent. */
+export interface OwedReport {
+  readonly invariant: "I2" | "I4";
+  /** The event, by its record's id: the same event owed across snapshots. */
+  readonly subject: string;
+  /** The violation's subject, by what a seed reproduces (Violation.key), without its invariant. */
+  readonly key: string;
+  readonly statement: string;
+}
+
+/** The ends of a halt episode after which work resumes and the client is told so. */
+const RESUMING_ENDS = new Set(["unblocked", "probe_passed"]);
+
+/**
+ * Every terminal event the project's records hold that the client has not been told of, as the
+ * contract states who is owed what, never as production's listings select it:
+ * - a halt episode is told, whether it is still open or ended by an unblock or a passing probe
+ *   before it was told; one the client's stop ended, or of a stopped project, is told by the stop
+ *   report. A first planning stop is told by the planning-stopped report (episodeRow);
+ * - a halt that ended by an unblock or a passing probe is told it resumed, once it was told it began;
+ * - the stop that stopped the project is answered by the stop report while the project is stopped;
+ * - an accepted project's latest passed sweep carries its delivered report.
+ * An episode of a kind outside the code's list has no report production can write; it is owed one
+ * all the same, so a corrupted kind is named, never passed as told.
+ */
+export function owedReports(snapshot: Snapshot): OwedReport[] {
+  const { project } = snapshot;
+  const owed: OwedReport[] = [];
+  const stopped = project.status === "stopped";
+  for (const episode of stopped ? [] : snapshot.episodes) {
+    const resumed = episode.endKind !== null && RESUMING_ENDS.has(episode.endKind);
+    if (episode.reportId === null && (!episode.ended || resumed)) {
+      owed.push({
+        invariant: "I2",
+        subject: `halt:${episode.id}`,
+        key: `episode:${episode.kind}`,
+        statement: `project block episode ${episode.kind}${episode.ended ? ` (ended ${episode.endKind ?? "with no end kind"})` : ""} has no report to the client`,
+      });
+    } else if (resumed && episode.reportId !== null && episode.resumedReportId === null) {
+      owed.push({
+        invariant: "I2",
+        subject: `resumed:${episode.id}`,
+        key: `episode-resumed:${episode.kind}`,
+        statement: `project block episode ${episode.kind} ended (${episode.endKind ?? "with no end kind"}) with no report to the client that work resumed`,
+      });
+    }
+  }
+  for (const stop of stopped ? snapshot.stops : []) {
+    if (!stop.stoppedProject || stop.reported) continue;
+    owed.push({ invariant: "I4", subject: `stop:${stop.id}`, key: "stop-unreported", statement: "the client's stop stopped the project but its stop report was never posted" });
+  }
+  if (project.status === "accepted" && project.passedSweepId !== null && project.passedSweepReportId === null) {
+    owed.push({ invariant: "I4", subject: `accepted:${project.passedSweepId}`, key: "accepted-unreported", statement: "the project is accepted but its delivered report was never posted" });
+  }
+  return owed;
+}
+
+/**
+ * The cycles a terminal event may go untold, counting only cycles that ran with no injected fault,
+ * no restart and no duplicated wake, and in which the project had no contained step waiting out a
+ * fault's backoff. Why 2: every report is posted on the cycle that records its event or the next (a
+ * cycle's report steps run after the steps that record a stop, a sweep or a planning outcome, and a
+ * halt recorded during dispatch is told by the next cycle's, or the next halted cycle's, report
+ * steps), so one cycle is the longest a report waits; the bound is twice that, and below the cycles
+ * an ended run settles on (run.ts SETTLE_CYCLES), so an ended run's silence is named before it ends.
+ * @testseam invariants.test.ts judges the silence clause at the bound and past it
+ */
+export const REPORT_BOUND_CYCLES = 2;
+
+/**
+ * I2's and I4's silence clause, cycle by cycle: every terminal event (owedReports) is told within
+ * REPORT_BOUND_CYCLES counted cycles of the one whose snapshot first held it. Each project of the
+ * run is watched by its index in the run's order.
+ */
+export class SilenceWatch {
+  private readonly owed = new Map<string, number>();
+
+  /** The silences one project's snapshot after cycle `step` shows; `counted` is whether that cycle counts against the bound. */
+  observe(step: number, project: number, snapshot: Snapshot, counted: boolean): Violation[] {
+    const counts = counted && !snapshot.project.retryPending;
+    const now = owedReports(snapshot);
+    const subjects = new Set(now.map((owed) => `${project}:${owed.subject}`));
+    for (const subject of this.owed.keys()) if (subject.startsWith(`${project}:`) && !subjects.has(subject)) this.owed.delete(subject);
+    const violations: Violation[] = [];
+    for (const owed of now) {
+      const subject = `${project}:${owed.subject}`;
+      const seen = this.owed.get(subject);
+      const cycles = seen === undefined ? 0 : seen + (counts ? 1 : 0);
+      this.owed.set(subject, cycles);
+      if (cycles > REPORT_BOUND_CYCLES) {
+        violations.push({
+          invariant: owed.invariant,
+          step,
+          statement: `${owed.statement} ${cycles} counted cycles after it was recorded (bound ${REPORT_BOUND_CYCLES})`,
+          key: `${owed.invariant}:${owed.key}`,
+        });
+      }
+    }
+    return violations;
+  }
+}
+
 /**
  * I2-I7 and I9, judged on one project's snapshot. I1, I8 (checkTotality) and I5's admission
  * clause (admissions.ts, the deployment's) are judged by the run over its whole course.
@@ -508,10 +639,10 @@ export function checkSnapshot(
       );
     }
   }
-  for (const episode of context.final ? snapshot.episodes : []) {
-    if (!episode.ended && episode.reportId === null && snapshot.project.status === "blocked") {
-      add("I2", `episode:${episode.kind}`, `project block episode ${episode.kind} has no report to the client`);
-    }
+  // Every halt episode, its resumption and a planning stop is told (owedReports): judged cycle by
+  // cycle against the bound (SilenceWatch), and once a run that settled ends, on its last records.
+  if (context.final) {
+    for (const owed of owedReports(snapshot)) if (owed.invariant === "I2") add("I2", owed.key, `${owed.statement}, and the run ended`);
   }
 
   // I3: independence.
@@ -535,12 +666,13 @@ export function checkSnapshot(
     for (const found of lazyIntakes(snapshot.projectId, snapshot.intake, context.intakes)) add("I3", found.key, found.statement);
   }
 
-  // I4: an accepted project has its delivered report, once the run ends; that a halt episode
-  // has its report is I2's. What each report states is judged against the records it is rendered
-  // from (client-reports.ts): the halt's recorded cause, the merges recorded at a stop, the goals'
-  // closes and the unchecked tasks at acceptance, and no report posted twice.
-  if (context.final && snapshot.project.status === "accepted" && !snapshot.project.deliveredReported) {
-    add("I4", "accepted-unreported", "the project is accepted but its delivered report was never posted");
+  // I4: a client stop and an acceptance are told (owedReports), as I2's halts are; that a halt
+  // episode has its report is I2's. What each report states is judged against the records it is
+  // rendered from (client-reports.ts): the halt's recorded cause, the merges recorded at a stop, the
+  // goals' closes and the unchecked tasks at acceptance, every terminal message's guarantee table,
+  // and no report posted twice.
+  if (context.final) {
+    for (const owed of owedReports(snapshot)) if (owed.invariant === "I4") add("I4", owed.key, `${owed.statement}, and the run ended`);
   }
   if (context.final) {
     const checked = new Set(snapshot.checks.map((check) => check.taskId));

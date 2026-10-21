@@ -198,6 +198,35 @@ export const questionMisstatesAssumption = rewriteInsert("client_messages", (par
   param.replace(/(Until you answer, we proceed on this assumption: )(.*)/, "$1Messages are in Latin."),
 );
 
+/**
+ * Plants on whether the client is told at all (I2's and I4's silence clause): each sends one
+ * listing of the reports due so that it lists none, as a listing that passes over a terminal event
+ * would, so that report is never posted. Matched on what drizzle renders of the listing's columns.
+ */
+function suppressListing(matches: (text: string) => boolean): QueryPlant {
+  return (args) => {
+    const text = textOf(args);
+    if (text === null || !text.startsWith("select ") || !matches(text)) return null;
+    const at = text.indexOf(" where ");
+    if (at < 0) return null;
+    const planted = `${text.slice(0, at)} where false and ${text.slice(at + " where ".length)}`;
+    const parsed = sentText.safeParse(args[0]);
+    return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];
+  };
+}
+
+/** No halt is ever due its report (Engagement listDueBlockReports, the halts it lists). */
+export const haltReportSuppressed = suppressListing((text) => text.includes(`"project_blocks"."error_class"`) && text.includes(`from "project_blocks"`));
+
+/** No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueBlockReports, the resumptions it lists). */
+export const resumptionReportSuppressed = suppressListing((text) => text.includes(`"project_blocks"."end_kind" from "project_blocks"`));
+
+/** No stop is ever due its stop report (Engagement listDueStopReports). */
+export const stopReportSuppressed = suppressListing((text) => text.includes(`from "client_messages"`) && text.includes(`"stop_found_halted" is not null`));
+
+/** No first planning that stopped is ever due its planning-stopped report (Delivery's plan report listing). */
+export const planningStoppedReportSuppressed = suppressListing((text) => text.includes(`"plan_attempts" from "projects"`) && text.includes(`"plan_stopped_at" is not null`));
+
 /** The delivered report is posted but its sweep never records it, so it is due, and posted, again. */
 export const deliveredReportUnrecorded: QueryPlant = (args) => {
   const text = textOf(args);

@@ -26,10 +26,12 @@ import type { FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { GitBroker } from "./git-broker.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
-import { asharaFaultHaltOf, blockedReasonOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
+import { SilenceWatch, asharaFaultHaltOf, blockedReasonOf, checkCharges, checkSnapshot, checkTotality, mainFiles, outcomeOf, owedReports, progressFacts, readCharges, readSnapshot, sourceOf } from "./invariants.js";
 import type { Charges, Outcome, Snapshot, Violation } from "./invariants.js";
 import { LogCorrelationJudge, judgingSink, readCorrelationRows } from "./log-correlation.js";
 import { refusedModelSchemas } from "./model-schemas.js";
+import { correctionPair, drawCorrection } from "./correction-draws.js";
+import type { CorrectionDraw } from "./correction-draws.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
@@ -472,7 +474,9 @@ async function corruptRows(db: Database, projectId: string, snapshot: Snapshot, 
     corruption.taskSpec = true;
     trace.push("plant: the second project's first task_spec corrupted");
   }
-  const episode = snapshot.episodes.find((each) => !each.ended && each.reportId === null);
+  // The open episode the silence clause owes a halt report (owedReports), so the one corrupted is one I2 then names untold.
+  const owed = new Set(owedReports(snapshot).map((each) => each.subject));
+  const episode = snapshot.episodes.find((each) => !each.ended && owed.has(`halt:${each.id}`));
   if (!corruption.blockKind && episode !== undefined) {
     await db.execute(sql`ALTER TABLE project_blocks DROP CONSTRAINT IF EXISTS project_blocks_kind_check`);
     await db.execute(sql`UPDATE project_blocks SET kind = 'planted-unknown-kind' WHERE id = ${episode.id}`);
@@ -504,6 +508,24 @@ async function returnHeldTask(db: Database, projectId: string, snapshot: Snapsho
   if (written.rows.length === 0) return false;
   trace.push(`held task "${held.title}" back at Pending before its correction's revision`);
   return true;
+}
+
+/**
+ * Whether the client's correction arrives after this cycle (correction-draws.ts): a goal task has
+ * merged; the first plan is on record and no suite review has been answered; the project is halted.
+ * The in-progress arrival is posted during an agent turn instead (runAlone duringAgentTurn).
+ */
+function correctionArrives(arrival: CorrectionDraw["arrival"], snapshot: Snapshot, reviewsAnswered: number): boolean {
+  switch (arrival) {
+    case "after-merge":
+      return snapshot.items.some((item) => item.origin === "decomposition" && item.status === "Completed");
+    case "before-review":
+      return reviewsAnswered === 0 && snapshot.items.some((item) => item.level === "Task");
+    case "halted":
+      return snapshot.project.status === "blocked";
+    case "in-progress":
+      return false;
+  }
 }
 
 /** A cycle's I10 window as it opened: the counters, and how many faults and decisions the run had made by then. */
@@ -781,8 +803,8 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
   if (options.corruptSecondProject === true && projectCount < 2) throw new CorruptionWithoutSecondProject(options.seed);
   const corruption: Corruption | null = options.corruptSecondProject === true ? { taskSpec: false, blockKind: false, contained: new Set() } : null;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
-  const correction = tape.chance("client.correction", rates.lateChange);
-  const heldReturns = correction && tape.chance("correction.held-returns", rates.lateChange);
+  const correctionDraw = drawCorrection(tape);
+  const heldReturns = correctionDraw !== null && tape.chance("correction.held-returns", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
   const trace: string[] = [
     `universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`,
@@ -850,6 +872,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
   const termination = new TerminationWatch();
   const admissions = new AdmissionLedger();
   const residue = new ResidueWatch();
+  const silence = new SilenceWatch();
   const gitDates = new GitDates();
   let longestQuiet = 0;
   /** The tasks a stand-in answered for in the cycle running now (I10's window). */
@@ -907,6 +930,8 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     for (let index = 1; index < projectCount; index++) others.push(await register(`-p${index + 1}`));
     // Filled as the server creates each client's project; the stand-ins answer for these only.
     const projectIds: string[] = [];
+    /** What the run does before each agent turn: set once the client can post (the in-progress correction). */
+    let duringAgentTurn: (task: { readonly id: string; readonly projectId: string }) => Promise<void> = () => Promise.resolve();
 
     const standIns = new StandIns({
       tape,
@@ -922,6 +947,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
       },
       onRequest: () => port.record(interleaver.currentTask()),
       laneTask: () => interleaver.currentTask(),
+      onAgentTurn: (task) => duringAgentTurn(task),
       onSchemaRefused: (refused) => {
         trace.push(`model ${refused.model} refused the ${refused.what} schema`);
         report({
@@ -1189,6 +1215,48 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     let changed = false;
     let corrected = false;
     let returned = false;
+    const isCorrection = (message: { readonly kind: string; readonly body: string }): boolean => message.kind === "change" && message.body === CORRECTION_BODY;
+    /** A correction post mid-cycle that may have landed: read back before it is sent again. */
+    let correctionUnsure = false;
+    // The in-progress arrival: posted before an agent turn of a task citing a contract key of the first project, once,
+    // while that task is InProgress. A request that fails is tried again at a later turn or cycle;
+    // the instance it failed on is restarted by the loop after its cycle, never from inside it.
+    duringAgentTurn = async (task) => {
+      if (correctionDraw?.arrival !== "in-progress" || corrected || task.projectId !== projectId) return;
+      const current = instance;
+      if (current === null || current.handle.dead || current.handle.sigtermed) return;
+      const [row] = z.array(z.object({ cites: z.boolean() })).parse(
+        (await observing.execute(sql`SELECT CASE WHEN jsonb_typeof(task_spec->'sources') = 'array' THEN jsonb_array_length(task_spec->'sources') > 0 ELSE false END AS cites FROM work_items WHERE id = ${task.id}`)).rows,
+      );
+      if (row?.cites !== true) return;
+      try {
+        if (correctionUnsure) {
+          const seen = await onRecord(current.ashara.app, isCorrection);
+          if (!seen.ok) return;
+          correctionUnsure = false;
+          if (seen.value.found) {
+            corrected = true;
+            coverage.corrections.add(correctionPair(correctionDraw));
+            return;
+          }
+        }
+        standIns.askCorrection(correctionDraw.kind, task.id);
+        const reply = await client.post(current.ashara.app, projectId, { kind: "change", body: CORRECTION_BODY });
+        if (!reply.ok) {
+          correctionUnsure = true;
+          trace.push(`client change during an agent turn: answered ${reply.status}`);
+          return;
+        }
+        corrected = true;
+        coverage.corrections.add(correctionPair(correctionDraw));
+        trace.push(`client correction ${correctionPair(correctionDraw)} at cycle ${cycles}, while its task is InProgress`);
+      } catch (err) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: a post the server's process failed under is read back and sent again at a later turn; the cycle's own fault handling judges the fault
+        correctionUnsure = true;
+        trace.push(`client change during an agent turn: ${err instanceof SimulatedCrash ? "SimulatedCrash" : err instanceof Error ? err.name : "error"}`);
+        log.push(`client change during an agent turn: ${describeErrorChain(err)}`);
+      }
+    };
     let settleLeft: number | null = null;
     let settledOn = "";
     while (cycles < options.maxCycles) {
@@ -1276,10 +1344,13 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
       const corrupted = projectIds[1];
       const second = snapshots[1];
       if (corruption !== null && corrupted !== undefined && second !== undefined) await corruptRows(observing, corrupted, second, corruption, trace);
+      // A cycle that carried an injected fault, a duplicated wake or a restart does not count against a report's bound.
+      const counted = scheduler.faults().length === faultsSeen && restarts === restartsSeen && repeats === 1;
       for (const [index, each] of snapshots.entries()) {
         for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: false, reviews: standIns.observedReviews(), intakes: standIns.observedIntakes() })) {
           report(ofProject(index, violation));
         }
+        for (const violation of silence.observe(cycles, index, each, counted)) report(ofProject(index, violation));
         sample(coverage, each, scheduler.faults(), executionEvidence(each, statuses));
         residue.observe(each);
       }
@@ -1312,14 +1383,16 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
         }
       }
 
-      if (correction && !corrected && snapshot.items.some((i) => i.origin === "decomposition" && i.status === "Completed")) {
+      if (correctionDraw !== null && !corrected && correctionArrives(correctionDraw.arrival, snapshot, standIns.observedReviews().length)) {
+        standIns.askCorrection(correctionDraw.kind, null);
         await clientAct<null>(
           "change",
           (app) => client.post(app, projectId, { kind: "change", body: CORRECTION_BODY }),
-          (app) => onRecord(app, (message) => message.kind === "change" && message.body === CORRECTION_BODY),
+          (app) => onRecord(app, isCorrection),
         );
         corrected = true;
-        trace.push(`client correction at cycle ${cycles}`);
+        coverage.corrections.add(correctionPair(correctionDraw));
+        trace.push(`client correction ${correctionPair(correctionDraw)} at cycle ${cycles}`);
       }
       if (heldReturns && !returned) returned = await returnHeldTask(observing, projectId, snapshot, trace);
 
