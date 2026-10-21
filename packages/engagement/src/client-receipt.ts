@@ -168,9 +168,12 @@ function messageFate(due: DueReceipt & { readonly kind: Exclude<InboundKind, "st
       if (due.kind === "tender") return "Ashara reads it once the pause ends.";
       if (!standing.readsInput) return unreadWhilePaused(standing.halt);
       // A paused project at its own spend limit has the reading's model call refused; the reading waits for the limit.
+      // A reading that fails on every attempt, or a message the record cannot take while paused, waits for the
+      // pause's end, whose every exit sets its count of failed readings back to none (restartClientReadings).
       return (
         `Ashara reads it all the same, in this or the next round of work, ${afterReading(due.kind)}, unless this project has ` +
         `reached its own spending limit, in which case it is read once that limit is raised. ` +
+        `If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh once work resumes. ` +
         `This ${NOUN[due.kind]} does not end the pause: the work it touches is planned for it once work resumes.`
       );
   }

@@ -826,8 +826,9 @@ interface ProjectCharges {
  * refuses the reading's model call, and one on a model's or its provider's failure, the plan
  * revision's too, would charge the reading for meeting it again (Delivery's projectHaltedOnModelWork,
  * which Engagement's projectReadsClientInput excludes).
+ * @testseam model-work-halt-kinds.test.ts holds it to Delivery's and the receipt's spelling of the same set
  */
-const UNREAD_HALT_KINDS = ["budget_cap", "work_budget", "model_failed", "provider_failed", "replan_stopped", "replan_provider_failed"] as const;
+export const UNREAD_HALT_KINDS = ["budget_cap", "work_budget", "model_failed", "provider_failed", "replan_stopped", "replan_provider_failed"] as const;
 
 /** Every attempt counter of the run's projects at one instant (I10), the projects in the run's order. */
 export interface Charges {

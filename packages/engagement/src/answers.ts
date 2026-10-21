@@ -83,12 +83,6 @@ export interface AnswerStore {
   recordFailedAttempt(answerId: string, error: string, failure: Exclude<ModelCallFailure, "ashara">): Promise<number>;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
-  /**
-   * Blocks the project on an answer no reading of which succeeded and, when that opened the halt, sets
-   * the answer's count of failed readings back to none in the same transaction, so the unblock reads
-   * it again from no attempts; a project already blocked keeps its first cause and the answer its count.
-   */
-  blockUnreadAnswer(answer: OpenAnswer, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
 export type AnswerOutcome =
@@ -312,7 +306,7 @@ export class ClientAnswers implements LiaisonAnswers {
       });
       return { kind: "waits-for-halt", answerId: answer.id, projectId: answer.projectId, cause };
     }
-    const result = why === "unread" ? await store.blockUnreadAnswer(answer, cause) : await store.blockProject(answer.projectId, cause);
+    const result = await store.blockProject(answer.projectId, cause);
     console.warn(
       `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): ${cause.errorClass}; project ${result}: ${cause.reason}`,
     );
@@ -323,8 +317,8 @@ export class ClientAnswers implements LiaisonAnswers {
     const base = { answerId: answer.id, projectId: answer.projectId };
     if (answer.intakeAttempts >= MAX_ANSWER_ATTEMPTS) {
       if (answer.intakeLastError === null) throw new AnswerFailureUnrecorded(answer.id, answer.intakeAttempts);
-      // At the cap with no halt to wait out: a block that opened the halt set the count back to none,
-      // and one that found the project halted left it, so the halt's end leads here and halts it again, blamed as it was.
+      // At the cap with no halt to wait out: whatever ends a halt sets the count back to none
+      // (restartClientReadings), so only a count left by no halt at all leads here, and halts the project, blamed as it was.
       throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError, recordedFailureOf(answer.intakeLastFailure));
     }
     let context = contextOf(answer);

@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { ProjectRepository, clientMessages, insertedRow, projects } from "@ashara/db";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
@@ -40,6 +40,30 @@ class TenderNotOpen extends Error {
     super(`cannot ${operation}: client message ${messageId} is not an unconsumed inbound tender`);
     this.name = "TenderNotOpen";
   }
+}
+
+/**
+ * Sets the failed-reading count of every unconsumed change and answer of the project back to none,
+ * keeping the last error's text on record (whose failure it was goes with the count it qualifies): run
+ * in the transaction that ends the project's halt, so a message whose readings ran out while the halt
+ * was open is read afresh once work resumes, and the resumption is not halted again at once for a
+ * count no new reading made. Returns how many messages it set back.
+ */
+export async function restartClientReadings(db: DbHandle, projectId: ProjectId): Promise<number> {
+  const rows = await db
+    .update(clientMessages)
+    .set({ intakeAttempts: 0, intakeLastFailure: null })
+    .where(
+      and(
+        eq(clientMessages.projectId, projectId),
+        eq(clientMessages.direction, "inbound"),
+        inArray(clientMessages.kind, ["change", "answer"]),
+        isNull(clientMessages.consumedAt),
+        sql`${clientMessages.intakeAttempts} > 0`,
+      ),
+    )
+    .returning({ id: clientMessages.id });
+  return rows.length;
 }
 
 /**

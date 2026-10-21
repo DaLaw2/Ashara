@@ -48,6 +48,23 @@ describe("the receipt of a client message", () => {
     expect(closes).toBe(false);
   });
 
+  // A reading under such a halt is not certain: one whose readings run out, or that the record cannot take
+  // while paused (waits-for-halt), waits for the pause's end, whose exits set its count of failed readings back to none.
+  test.each([
+    ["its readings run out", "If reading it fails on every attempt"],
+    ["the record cannot take it while paused", "or the project's record cannot take it while the pause lasts"],
+  ] as const)("paused under a halt that reads input, when %s: the receipt says it is read afresh once work resumes", async (_, path) => {
+    for (const kind of ["change", "answer"] as const) {
+      for (const halt of ["plan_repair", "check_dispute", "suite_review", "fault", "infrastructure"]) {
+        const { body } = await bodyOf(due(kind, { kind: "paused", halt, readsInput: true }));
+        expect(body).toContain(path);
+        expect(body).toContain(
+          "If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh once work resumes.",
+        );
+      }
+    }
+  });
+
   test("paused on a budget: read once the pause ends, since reading it is model work the budget refuses", async () => {
     const { body } = await bodyOf(due("answer", { kind: "paused", halt: "budget_cap", readsInput: false }));
     expect(body).toContain("Ashara reads it once the pause ends");

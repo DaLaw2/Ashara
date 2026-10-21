@@ -28,7 +28,7 @@ export {
 export { VisionUnreadable, readVisionVersion } from "./vision.js";
 export type { StoredVision, VisionVersion } from "./vision.js";
 export { VisionRepository, guaranteesInForce } from "./repositories/vision.js";
-export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
+export { ClientMessageRepository, createProjectWithTender, restartClientReadings } from "./repositories/client-message.js";
 /** @testseam the integration client-message.test.ts asserts markConsumed's typed rejection */
 export { ClientMessageNotConsumable } from "./repositories/client-message.js";
 export type { CreatedTender } from "./repositories/client-message.js";
@@ -39,9 +39,9 @@ export { readRiskRecords } from "./repositories/early-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listDueStopReports, listUnconsumedStops, postClientStopReport, recordClientStop } from "./repositories/client-stop.js";
 export { listDueReceipts, postClientReceipt } from "./repositories/client-receipt.js";
-export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection, resetChangeAttempts } from "./repositories/client-change.js";
+export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "./repositories/client-change.js";
 export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
 export { insertGuaranteeVerdicts, lastReportGuaranteeVerdictsOf, readGuaranteeTable } from "./repositories/guarantee-report.js";
-export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer, resetAnswerAttempts } from "./repositories/client-answer.js";
+export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { PROJECT_STATUSES, acceptProject } from "./project-lifecycle.js";
 export type { VisionSource } from "./vision-language/index.js";

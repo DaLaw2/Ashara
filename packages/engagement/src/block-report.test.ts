@@ -256,6 +256,28 @@ describe("halt reports state the observed cause", () => {
     expect(body).not.toContain("records it at once");
   });
 
+  // The reading during the pause is not certain: a change whose readings run out, or that the record cannot take
+  // while paused (waits-for-halt), waits for the pause's end, whose exits set its count of failed readings back to none.
+  test.each([
+    ["its readings run out", "If reading it fails on every attempt"],
+    ["the record cannot take it while paused", "or the project's record cannot take it while the pause lasts"],
+  ] as const)("a halt's change-during-pause sentence, when %s, says the change is read afresh once work resumes", async (_, path) => {
+    for (const halt of [
+      { kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port the importer", attempts: 2, cause: { source: "api", reason: "r" } }] },
+      { kind: "check_dispute", dispute: { taskTitle: "Port the importer", checkName: "imports", reason: "r", disputes: 3 } },
+      { kind: "suite_review", review: { times: 3, problems: ["p"] } },
+    ] as const) {
+      const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, ...halt }]);
+      await reports.runPending();
+      const body = posted[0].body;
+      expect(body).toContain(path);
+      expect(body).toContain(
+        "If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh once work resumes. " +
+          "The plan is revised for it once work resumes.",
+      );
+    }
+  });
+
   test("a task given up through the API is told as moved by hand, whatever its caller stored", async () => {
     const { reports, posted } = reportsFor([
       {

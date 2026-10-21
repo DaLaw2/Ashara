@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ProjectRepository, projectBlocks, projectRowColumns, projects, toProjectRow } from "@ashara/db";
 import type { DbHandle, ProjectRow } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { restartClientReadings } from "../acl/engagement-acl.js";
 import { firstPlanUnreported, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import { pendingRepair, projectHalted } from "../predicates.js";
@@ -227,7 +228,8 @@ export class ProjectHaltRepository extends ProjectRepository {
   /**
    * The automatic way out of an infrastructure halt: in one transaction with the
    * project row locked, its open episode is ended as 'probe_passed' with what the probe observed,
-   * and its cause cleared. The Liaison then tells the client, once, that work resumed. A project no
+   * and its cause cleared, and the client's unconsumed changes and answers are read afresh
+   * (restartClientReadings). The Liaison then tells the client, once, that work resumed. A project no
    * longer halted on infrastructure is left as it is: "moved". A halt whose own report is not yet
    * posted is left as it is too, "unreported": its report is due only while the episode is open,
    * so it is told before it can end.
@@ -248,6 +250,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         .update(projects)
         .set({ blockedCategory: null, blockedErrorClass: null, blockedReason: null })
         .where(eq(projects.id, id));
+      await restartClientReadings(tx, id);
       return "resumed";
     });
   }
@@ -257,7 +260,8 @@ export class ProjectHaltRepository extends ProjectRepository {
    * transaction with the project row locked, the open block episode is ended with who and why,
    * and the cause cleared. A project whose first planning gave up has its planning record reset,
    * so first planning runs again from no attempts; a plan revision's failed attempts are reset
-   * likewise. The Liaison then tells the client, once, that work resumed. Only a
+   * likewise, and so is every reading of the client's unconsumed changes and answers that ran out
+   * (restartClientReadings). The Liaison then tells the client, once, that work resumed. Only a
    * halted project is unblocked: any other throws ProjectNotBlocked, and nothing is written.
    */
   async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
@@ -287,6 +291,7 @@ export class ProjectHaltRepository extends ProjectRepository {
           ...planningReset,
         })
         .where(eq(projects.id, id));
+      await restartClientReadings(tx, id);
       return { episodeId: episode.id };
     });
   }

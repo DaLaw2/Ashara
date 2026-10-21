@@ -108,12 +108,6 @@ export interface ClientChangeStore {
   recordFailedAttempt(changeId: string, error: string, failure: Exclude<ModelCallFailure, "ashara">): Promise<number>;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
-  /**
-   * Blocks the project on a change no reading of which succeeded and, when that opened the halt, sets
-   * the change's count of failed readings back to none in the same transaction, so the unblock reads
-   * it again from no attempts; a project already blocked keeps its first cause and the change its count.
-   */
-  blockUnreadChange(change: OpenChange, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
 /** What the change's own operations did: applied as a version, held for confirmation, or nothing to apply. */
@@ -220,8 +214,8 @@ interface ClientChangesDeps {
 /**
  * The Liaison's reading of the client's changes. Each unconsumed change is read by one structured call
  * at the intake site; what it does is recorded whole or not at all. A failed attempt leaves the change
- * unconsumed with the failure counted; at the cap the project is blocked and the change kept, its
- * count set back to none when that block opened the halt, so the operator's unblock reads it afresh.
+ * unconsumed with the failure counted; at the cap the project is blocked and the change kept, and
+ * whatever ends the halt sets its count back to none (restartClientReadings), so it is read afresh then.
  */
 export class ClientChanges implements LiaisonClientChanges {
   constructor(private readonly deps: ClientChangesDeps) {}
@@ -259,7 +253,7 @@ export class ClientChanges implements LiaisonClientChanges {
       });
       return { kind: "waits-for-halt", changeId: change.id, projectId: change.projectId, cause };
     }
-    const result = why === "unread" ? await store.blockUnreadChange(change, cause) : await store.blockProject(change.projectId, cause);
+    const result = await store.blockProject(change.projectId, cause);
     console.warn(`[liaison-change] change ${change.id} (project ${change.projectId}): ${cause.errorClass}; project ${result}: ${cause.reason}`);
     return { kind: "project-blocked", changeId: change.id, projectId: change.projectId, cause };
   }

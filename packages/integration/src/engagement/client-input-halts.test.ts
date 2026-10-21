@@ -16,8 +16,9 @@ import { createClientChangeStore } from "@ashara/server/client-change-store";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
 
 // A client's change is read only while its reading can succeed: never under a halt on a model's or
-// its provider's failure (nor a budget halt), so no attempt is charged there and the operator's
-// unblock does not halt the project again. Every write made on the client's behalf (a change's
+// its provider's failure (nor a budget halt), so no attempt is charged there. Whatever ends a halt (the
+// operator's unblock, a passing probe) sets the count of a change whose readings ran out back to none,
+// so the resumption reads it afresh instead of halting the project again at once. Every write made on the client's behalf (a change's
 // correction, the stack-choice report) checks the project's lifecycle and halt again under the
 // project row's lock and writes nothing when either moved since the listing. Every row belongs to a
 // project this suite creates under a unique name, and each step is narrowed to those projects. No
@@ -131,7 +132,10 @@ async function openHalts(projectId: ProjectId): Promise<string[]> {
   return z.array(z.object({ kind: z.string() })).parse(result.rows).map((row) => row.kind);
 }
 
-function halt(projectId: ProjectId, category: "model_failed" | "provider_failed" | "replan_stopped" | "replan_provider_failed" | "plan_repair" | "check_dispute" | "suite_review" | "fault") {
+/** The halts under which the client's changes are still read: none of them is on the project's model work. */
+type ReadAllowedHalt = "plan_repair" | "check_dispute" | "suite_review" | "fault" | "infrastructure";
+
+function halt(projectId: ProjectId, category: "model_failed" | "provider_failed" | "replan_stopped" | "replan_provider_failed" | ReadAllowedHalt) {
   return new ProjectHaltRepository(db).block(projectId, { category, errorClass: "ScriptedHalt", reason: `halted on ${category} by the test` });
 }
 
@@ -215,7 +219,7 @@ describe("a change is read only while its reading can succeed", () => {
     },
   );
 
-  test("a reading exhausted on a project at work halts it and sets its count back to none, so the unblock reads it afresh", async () => {
+  test("a reading exhausted on a project at work halts it, keeping its count while the halt lasts, and the unblock sets it back to none and reads it afresh", async () => {
     const projectId = await contractedProject();
     const changeId = await sendChange(projectId);
     const failing = readingModel({ unreadable: true });
@@ -223,39 +227,58 @@ describe("a change is read only while its reading can succeed", () => {
     for (let cycle = 0; cycle < 3; cycle++) for (const outcome of await changes().runPending()) kinds.push(outcome.kind);
     expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
     expect(await openHalts(projectId)).toEqual(["model_failed"]);
-    expect(await messageState(changeId)).toEqual({ attempts: 0, consumed: false });
+    expect(await messageState(changeId)).toEqual({ attempts: 3, consumed: false });
 
     const calls = failing.doGenerateCalls.length;
     for (let cycle = 0; cycle < 3; cycle++) expect(await changes().runPending()).toEqual([]);
     expect(failing.doGenerateCalls).toHaveLength(calls);
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "the model answers again");
+    expect(await messageState(changeId)).toEqual({ attempts: 0, consumed: false });
     readingModel(LEAVE_OUT_COLOUR);
     expect((await changes().runPending()).map((outcome) => outcome.kind)).toEqual(["recorded"]);
     expect(await openHalts(projectId)).toEqual([]);
   });
 
-  test("a reading exhausted under another halt keeps its count, waits that halt out unread, then halts the project under its own cause", async () => {
-    const projectId = await contractedProject();
-    expect(await halt(projectId, "fault")).toBe("blocked");
-    const changeId = await sendChange(projectId);
-    const failing = readingModel({ unreadable: true });
-    const kinds: string[] = [];
-    for (let cycle = 0; cycle < 3; cycle++) for (const outcome of await changes().runPending()) kinds.push(outcome.kind);
-    expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
-    expect(await openHalts(projectId)).toEqual(["fault"]);
-    expect(await messageState(changeId)).toEqual({ attempts: 3, consumed: false });
+  /** Ends the project's open halt the way its kind is ended: the substrate probe for infrastructure, the operator's unblock for any other. */
+  async function endHalt(projectId: ProjectId, category: ReadAllowedHalt): Promise<void> {
+    const projects = new ProjectHaltRepository(db);
+    if (category !== "infrastructure") {
+      await projects.unblock(projectId, "operator-a", "repaired the cause");
+      return;
+    }
+    // The probe ends only a halt whose report the client has been told.
+    const report = await new ClientMessageRepository(db).insertOutbound({ projectId, kind: "report", body: "Work on this project is paused.", inReplyTo: null });
+    await db.execute(sql`UPDATE project_blocks SET report_id = ${report.id} WHERE project_id = ${projectId} AND ended_at IS NULL`);
+    expect(await projects.resumeFromInfrastructureHalt(projectId, "the substrate answered")).toBe("resumed");
+  }
 
-    // Not listed while that halt stays open: no paid reading and no block found already open, cycle after cycle.
-    const calls = failing.doGenerateCalls.length;
-    for (let cycle = 0; cycle < 3; cycle++) expect(await changes().runPending()).toEqual([]);
+  test.each(["plan_repair", "check_dispute", "suite_review", "fault", "infrastructure"] as const)(
+    "a reading exhausted under a %s halt keeps its count while that halt lasts, unread; the halt's end sets it back to none, and the next cycle reads it with the model before any halt of its own",
+    async (category) => {
+      const projectId = await contractedProject();
+      expect(await halt(projectId, category)).toBe("blocked");
+      const changeId = await sendChange(projectId);
+      const failing = readingModel({ unreadable: true });
+      const kinds: string[] = [];
+      for (let cycle = 0; cycle < 3; cycle++) for (const outcome of await changes().runPending()) kinds.push(outcome.kind);
+      expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
+      expect(await openHalts(projectId)).toEqual([category]);
+      expect(await messageState(changeId)).toEqual({ attempts: 3, consumed: false });
 
-    await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "repaired the fault");
-    expect((await changes().runPending()).map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
-    expect(failing.doGenerateCalls).toHaveLength(calls);
-    expect(await openHalts(projectId)).toEqual(["model_failed"]);
-    expect(await messageState(changeId)).toEqual({ attempts: 0, consumed: false });
-  });
+      // Not listed while that halt stays open: no paid reading and no block found already open, cycle after cycle.
+      const calls = failing.doGenerateCalls.length;
+      for (let cycle = 0; cycle < 3; cycle++) expect(await changes().runPending()).toEqual([]);
+      expect(failing.doGenerateCalls).toHaveLength(calls);
+
+      await endHalt(projectId, category);
+      expect(await messageState(changeId)).toEqual({ attempts: 0, consumed: false });
+      const outcomes = await changes().runPending();
+      expect(outcomes.map((outcome) => [outcome.kind, "attempt" in outcome ? outcome.attempt : null])).toEqual([["failed", 1]]);
+      expect(failing.doGenerateCalls.length).toBeGreaterThan(calls);
+      expect(await openHalts(projectId)).toEqual([]);
+    },
+  );
 
   /** A call of `projectId` in flight at `usd`, which counts against its spend cap as a recorded one does. */
   async function spent(projectId: ProjectId, usd: number): Promise<void> {

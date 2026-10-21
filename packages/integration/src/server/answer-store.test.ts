@@ -207,6 +207,14 @@ async function haltKindOf(projectId: ProjectId): Promise<string | null> {
   return z.array(z.object({ kind: z.string() })).parse(result.rows)[0]?.kind ?? null;
 }
 
+/** The answer's count of failed readings, and whether the last reading's error is kept on record. */
+async function attemptsOf(answerId: string): Promise<{ attempts: number; kept: boolean }> {
+  const stored = await db.execute(sql`SELECT intake_attempts AS "attempts", intake_last_error IS NOT NULL AS "kept" FROM client_messages WHERE id = ${answerId}`);
+  const [row] = z.array(z.object({ attempts: z.number(), kept: z.boolean() })).length(1).parse(stored.rows);
+  if (row === undefined) throw new Error(`no client message ${answerId}`);
+  return row;
+}
+
 /** The client messages whose correction's plan revision the project awaits (correction_holds), oldest first. */
 async function awaitedChangesOf(projectId: ProjectId): Promise<string[]> {
   const result = await db.execute(sql`
@@ -504,41 +512,78 @@ describe("the client's answers", () => {
     const mock = pipelineModel({ verdict: "maybe" });
     for (let i = 0; i < 3; i++) await answers().runPending();
     expect(await haltKindOf(projectId)).toBe("model_failed");
-    // The block that opened the halt set the count back to none, the last error kept on record.
-    const stored = await db.execute(sql`SELECT intake_attempts AS "attempts", intake_last_error IS NOT NULL AS "kept" FROM client_messages WHERE id = ${answerId}`);
-    expect(z.array(z.object({ attempts: z.number(), kept: z.boolean() })).parse(stored.rows)).toEqual([{ attempts: 0, kept: true }]);
+    // The count stands while the halt lasts.
+    expect(await attemptsOf(answerId)).toEqual({ attempts: 3, kept: true });
     const calls = mock.doGenerateCalls.length;
     // Not read under the model's halt: no reading paid for, no attempt charged.
     for (let i = 0; i < 3; i++) expect(await answers().runPending()).toEqual([]);
     expect(mock.doGenerateCalls).toHaveLength(calls);
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "looked at the answer");
+    // The unblock set the count back to none, the last error kept on record.
+    expect(await attemptsOf(answerId)).toEqual({ attempts: 0, kept: true });
     pipelineModel({ verdict: "confirms" });
     expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["stated"]);
     expect(await haltKindOf(projectId)).toBeNull();
   });
 
-  test("an answer whose readings ran out under another halt keeps its count, waits that halt out unread, then halts the project as the model's, read from its record", async () => {
+  test.each(["plan_repair", "check_dispute", "suite_review", "fault", "infrastructure"] as const)(
+    "an answer whose readings ran out under a %s halt keeps its count while that halt lasts, unread; the halt's end sets it back to none, and the next cycle reads it with the model before any halt of its own",
+    async (category) => {
+      const { projectId, questionIds } = await intakenProject();
+      const [first] = questionIds;
+      if (first === undefined) throw new Error("intake posted no question");
+      const projects = new ProjectHaltRepository(db);
+      expect(await projects.block(projectId, { category, errorClass: "ScriptedHalt", reason: `halted on ${category} by the test` })).toBe("blocked");
+      const answerId = await answer(projectId, first, "Harbour.");
+      const mock = pipelineModel({ verdict: "maybe" });
+      const kinds: string[] = [];
+      for (let i = 0; i < 3; i++) for (const outcome of await answers().runPending()) kinds.push(outcome.kind);
+      expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
+      expect(await haltKindOf(projectId)).toBe(category);
+      expect(await attemptsOf(answerId)).toEqual({ attempts: 3, kept: true });
+      const calls = mock.doGenerateCalls.length;
+      for (let i = 0; i < 3; i++) expect(await answers().runPending()).toEqual([]);
+      expect(mock.doGenerateCalls).toHaveLength(calls);
+
+      if (category === "infrastructure") {
+        // The probe ends only a halt whose report the client has been told.
+        const report = await new ClientMessageRepository(db).insertOutbound({ projectId, kind: "report", body: "Work on this project is paused.", inReplyTo: null });
+        await db.execute(sql`UPDATE project_blocks SET report_id = ${report.id} WHERE project_id = ${projectId} AND ended_at IS NULL`);
+        expect(await projects.resumeFromInfrastructureHalt(projectId, "the substrate answered")).toBe("resumed");
+      } else {
+        await projects.unblock(projectId, "operator-a", "repaired the cause");
+      }
+      expect(await attemptsOf(answerId)).toEqual({ attempts: 0, kept: true });
+      const outcomes = await answers().runPending();
+      expect(outcomes.map((outcome) => [outcome.kind, "attempt" in outcome ? outcome.attempt : null])).toEqual([["failed", 1]]);
+      expect(mock.doGenerateCalls.length).toBeGreaterThan(calls);
+      expect(await haltKindOf(projectId)).toBeNull();
+    },
+  );
+
+  test("an answer no record can take, under a halt already open, writes no block and warns nothing each cycle, and halts the project under its own cause once the halt ends", async () => {
     const { projectId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
+    // A vision whose open questions no longer hold the one answered: no reading of the answer can be recorded against it.
+    await db.execute(sql`UPDATE vision_documents SET open_questions = '[]'::jsonb WHERE project_id = ${projectId}`);
     expect(await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
     const answerId = await answer(projectId, first, "Harbour.");
-    const mock = pipelineModel({ verdict: "maybe" });
-    const kinds: string[] = [];
-    for (let i = 0; i < 3; i++) for (const outcome of await answers().runPending()) kinds.push(outcome.kind);
-    expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
+    const mock = pipelineModel({ verdict: "confirms" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+
+    for (let i = 0; i < 3; i++) expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["waits-for-halt"]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(mock.doGenerateCalls).toHaveLength(0);
     expect(await haltKindOf(projectId)).toBe("plan_repair");
-    const calls = mock.doGenerateCalls.length;
-    for (let i = 0; i < 3; i++) expect(await answers().runPending()).toEqual([]);
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "repaired the plan");
     expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
-    // The exhaustion is read from the record, no reading paid for, and blamed as the cycle that counted it blamed it.
-    expect(mock.doGenerateCalls).toHaveLength(calls);
-    expect(await haltKindOf(projectId)).toBe("model_failed");
-    const stored = await db.execute(sql`SELECT intake_attempts AS "attempts" FROM client_messages WHERE id = ${answerId}`);
-    expect(z.array(z.object({ attempts: z.number() })).parse(stored.rows)).toEqual([{ attempts: 0 }]);
+    const blocks = await db.execute(sql`SELECT kind, error_class AS "errorClass" FROM project_blocks WHERE project_id = ${projectId} AND ended_at IS NULL`);
+    expect(blocks.rows).toEqual([{ kind: "fault", errorClass: "AnswerVisionUnusable" }]);
+    expect(await attemptsOf(answerId)).toEqual({ attempts: 0, kept: false });
   });
 
   test.each(["model_failed", "provider_failed", "replan_stopped", "replan_provider_failed", "budget_cap"] as const)(

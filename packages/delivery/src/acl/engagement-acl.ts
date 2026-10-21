@@ -1,4 +1,4 @@
-import { VisionUnreadable, readVisionVersion } from "@ashara/engagement";
+import { VisionUnreadable, readVisionVersion, restartClientReadings } from "@ashara/engagement";
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
 import type { AgentBrief } from "@ashara/workplace";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
@@ -39,7 +39,7 @@ export type {
   LiaisonStackChoices,
 } from "@ashara/engagement";
 
-export { VisionUnreadable };
+export { VisionUnreadable, restartClientReadings };
 export type { StoredVision };
 
 /** The stored vision read as planning input, before any counted attempt. */

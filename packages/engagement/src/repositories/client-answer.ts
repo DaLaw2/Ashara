@@ -137,20 +137,6 @@ export async function recordAnswerFailure(db: DbHandle, answerId: string, error:
   return row.intakeAttempts;
 }
 
-/**
- * Sets an unconsumed answer's count of failed readings back to none, keeping the last error's text on
- * record (whose failure it was goes with the count it qualifies): the answer is read again from no attempts
- * once its project is unblocked.
- */
-export async function resetAnswerAttempts(db: DbHandle, answerId: string): Promise<void> {
-  const [row] = await db
-    .update(clientMessages)
-    .set({ intakeAttempts: 0, intakeLastFailure: null })
-    .where(and(eq(clientMessages.id, answerId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "answer"), isNull(clientMessages.consumedAt)))
-    .returning({ id: clientMessages.id });
-  if (!row) throw new AnswerNotOpen(answerId, "reset its failed readings");
-}
-
 /** What was composed against no longer holds when the write's transaction reads it: nothing was written. */
 class AnswerContextMoved extends Error {
   constructor(

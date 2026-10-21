@@ -84,7 +84,6 @@ function recordingStore(change: OpenChange, impact: ChangeImpact): { readonly st
     },
     recordFailedAttempt: async () => 1,
     blockProject: async () => "blocked",
-    blockUnreadChange: async () => "blocked",
   };
   return { store, writes };
 }

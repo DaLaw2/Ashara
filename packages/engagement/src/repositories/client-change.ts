@@ -261,20 +261,6 @@ export async function recordChangeFailure(db: DbHandle, changeId: string, error:
   return row.intakeAttempts;
 }
 
-/**
- * Sets an unconsumed change's count of failed readings back to none, keeping the last error's text on
- * record (whose failure it was goes with the count it qualifies): the change is read again from no attempts
- * once its project is unblocked.
- */
-export async function resetChangeAttempts(db: DbHandle, changeId: string): Promise<void> {
-  const [row] = await db
-    .update(clientMessages)
-    .set({ intakeAttempts: 0, intakeLastFailure: null })
-    .where(and(eq(clientMessages.id, changeId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "change"), isNull(clientMessages.consumedAt)))
-    .returning({ id: clientMessages.id });
-  if (!row) throw new ChangeNotOpen(changeId, "reset its failed readings");
-}
-
 const StandingSchema = z.object({ lifecycle: z.string(), readsInput: z.boolean(), halted: z.boolean() });
 
 /**

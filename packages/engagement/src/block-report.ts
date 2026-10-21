@@ -331,12 +331,16 @@ function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: 
  * the reading: projectReadsClientInput), except while a spend limit refuses the reading's model call:
  * the deployment's, which stops all work, or the project's own, which the reading meets under this
  * halt and waits out without holding up any other project's reading. The report may be posted
- * before either limit is reached, and either may be reached after it, so it states both.
+ * before either limit is reached, and either may be reached after it, so it states both. A reading
+ * that fails on every attempt, or a change the record cannot take while the halt lasts, waits for the
+ * halt's end, whose every exit sets its count of failed readings back to none (restartClientReadings),
+ * so it is read afresh once work resumes.
  */
 const CHANGE_DURING_PAUSE =
   "A change you send meanwhile does not end this pause: Ashara reads it and records it during the pause, unless a spending " +
   "limit stops that reading (this project's own, or the one for all of Ashara's work), in which case it is read once that " +
-  "limit is raised; the plan is revised for it once work resumes.";
+  "limit is raised. If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, " +
+  "Ashara reads it afresh once work resumes. The plan is revised for it once work resumes.";
 
 /** Plain words: what stopped, why, and what ends it (a halt kind only older records hold). */
 function disputeBoundReport(dispute: BlockingDispute): string {
