@@ -17,7 +17,7 @@ import type { ExecutionResult, TaskCheckStore, TaskChecks } from "@ashara/qualit
 import { CHECK_MISSING_EXIT, attemptSummary, withSessionLifecycle } from "@ashara/workplace";
 import type { AssignmentStaff, SessionStore } from "@ashara/workplace";
 import { DispatchService } from "./dispatch-service.js";
-import type { TaskDescriptor } from "./dispatch-service.js";
+import type { TaskDescriptor } from "./dispatch-types.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.

@@ -420,4 +420,42 @@ export default tseslint.config(
       "no-console": "error",
     },
   },
+  {
+    // Delivery's jobs stay one reviewable function each. Blind spot: a long job cut into helpers
+    // that are each under the bound but still share no seam.
+    files: ["packages/delivery/src/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "max-lines-per-function": ["error", { max: 200, skipBlankLines: false, skipComments: false }],
+    },
+  },
+  {
+    // The dispatch and its routing take a named-parameter object past five values, so no call
+    // site can swap two of the same type unseen.
+    files: ["packages/delivery/src/execution/**/*.ts", "packages/delivery/src/dispatch/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "max-params": ["error", 5],
+    },
+  },
+  {
+    // Every route that reopens, requeues, parks or gives up an item after a dispatch goes through
+    // reopen(), which alone reads an InvalidStatusTransition as "the item moved". A config object's
+    // rule options replace an earlier object's, so the production selectors are repeated here.
+    // Blind spot: a route that catches it under another name, or never catches it at all.
+    files: ["packages/delivery/src/execution/**/*.ts"],
+    ignores: ["**/*.test.ts", "packages/delivery/src/execution/reopen.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...BASE_SYNTAX,
+        ...PRODUCTION_SYNTAX,
+        {
+          selector: "BinaryExpression[operator='instanceof'][right.name='InvalidStatusTransition']",
+          message:
+            "A route that reopens, requeues, parks or gives up a work item supplies its exit to reopen() (execution/reopen.ts), which owns the find, the transition, the InvalidStatusTransition handling, the save or refund, the events and the log. A branch that is no reopen keeps an argued disable.",
+        },
+      ],
+    },
+  },
 );

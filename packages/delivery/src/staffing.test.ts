@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { ResolvedModel } from "./acl/finance-acl.js";
-import type { TaskDescriptor } from "./dispatch/dispatch-service.js";
+import type { TaskDescriptor } from "./dispatch/dispatch-types.js";
 import { createAgentStaffing } from "./staffing.js";
 
 const projectId = parseProjectId("22222222-2222-4222-8222-222222222222", "test");

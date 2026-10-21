@@ -82,7 +82,7 @@ describe("lifecycle simulator, directed", () => {
 
   // The process dies on the
   // merge-record write right after the merge commit landed on main (Quality merge.ts
-  // commitMerge, then orchestrator execution.ts writes the record). The startup reconciler reads
+  // commitMerge, then delivery's verdict-routing.ts writes the record). The startup reconciler reads
   // main before it requeues an orphan, and records the merge it finds instead of dispatching the
   // merged work again.
   it("records a merge on main whose record a crash lost, never re-dispatching it", async (ctx) => {

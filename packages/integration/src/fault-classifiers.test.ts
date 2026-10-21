@@ -66,7 +66,7 @@ const CLASSIFIERS: Readonly<Record<string, { readonly verdict: (thrown: unknown)
 
 /** Functions named as blame classifiers that blame no party by what they are given, with why. */
 const NOT_CLASSIFIERS: Readonly<Record<string, string>> = {
-  "packages/delivery/src/execution.ts#asharaFaultOf": "names Ashara's fault for every input; it reads nothing to blame",
+  "packages/delivery/src/execution/halt-causes.ts#asharaFaultOf": "names Ashara's fault for every input; it reads nothing to blame",
   "packages/model-access/src/gateway.ts#structuredFailureOf": "builds the ladder's failed attempt from a response that did not validate; it blames no party",
 };
 

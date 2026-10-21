@@ -939,7 +939,7 @@ function describeFaults(faults: readonly FaultRecord[]): string {
  * - task clause: a task whose lane carried a fault of Ashara's (blameOf), none of the provider's
  *   or the process's, and for which no stand-in model answered in the window, did no work: its
  *   dispatch_count and its failed_approaches must not grow over the window (production refunds such
- *   a dispatch and writes no lesson: delivery execution.ts routeAsInfrastructureFault);
+ *   a dispatch and writes no lesson: delivery verdict-routing.ts routeAsInfrastructureFault);
  * - project clause: in a window that carried a fault of Ashara's outside every lane, none of the
  *   provider's or the process's, and no stand-in misbehaviour, no project's intake_attempts,
  *   plan_attempts or replan_attempts grows: every model read answered as asked, so a read counted

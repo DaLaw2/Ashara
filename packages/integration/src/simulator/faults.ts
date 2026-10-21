@@ -315,7 +315,7 @@ export const skipMergeRecord: QueryPlant = (args) => {
 };
 
 /**
- * The task's infrastructure-fault count stops at 4, the fault that halts its project (execution.ts:
+ * The task's infrastructure-fault count stops at 4, the fault that halts its project (halt-causes.ts:
  * a budget of 3 uncharged requeues, the 4th halts, the 5th gives the task up): every fault after
  * the halt counts nothing toward giving the task up, so a standing outage halts and resumes the
  * project forever. The count is written `infrastructure_faults + 1` (WorkItemRepository).

@@ -424,7 +424,7 @@ describe("independent verification", () => {
     expect(await git("branch", "--list", `check/${vacuous.check.id}`)).toBe("");
 
     // The retry's actual brief, from the envelope as the orchestrator stores it for a replan
-    // (execution.ts raw, failure-recovery.ts replanContext): it renders the chain, and names no commit.
+    // (dispatch-run.ts raw, failure-recovery.ts replanContext): it renders the chain, and names no commit.
     const retry = await runTask(
       {
         ...vacuous.check,

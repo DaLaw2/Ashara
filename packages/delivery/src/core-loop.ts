@@ -7,7 +7,7 @@ import type { ReplanOutcome } from "./replan.js";
 import type { WorkItem } from "./domain/index.js";
 import { PlanningService } from "./domain/index.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from "./types.js";
-import { processTask, handleProcessingError } from "./execution.js";
+import { processTask, handleProcessingError } from "./execution/dispatch-run.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import { runTerminalSweeps } from "./terminal-sweep.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";

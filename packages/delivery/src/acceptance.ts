@@ -7,7 +7,7 @@ import type { TaskVerification } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
 import type { InterfaceDefect } from "./domain/index.js";
-import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution.js";
+import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 
 // Delivering -> Accepted: each cycle, every project
 // whose plan has no open task and at least one goal task done gets one acceptance sweep on main

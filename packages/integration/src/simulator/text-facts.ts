@@ -761,7 +761,7 @@ const i4 = (key: string): TextJudge => ({ by: "I4", check: checkReports, key });
  */
 export const TEXT_COVERED: readonly CoveredText[] = [
   // The brief's vision version and assumptions, its assumption lines, and its task section against the work item's task_spec.
-  { source: `${DELIVERY}/dispatch/dispatch-service.ts#DispatchService.buildBrief`, judges: [i9(checkBriefs)] },
+  { source: `${DELIVERY}/dispatch/execute-task.ts#buildBrief`, judges: [i9(checkBriefs)] },
   { source: `${WORKPLACE}/prompt.ts#buildTaskPrompt`, judges: [i9(checkBriefs)] },
   { source: `${WORKPLACE}/prompt.ts#assumptionsSection`, judges: [i9(checkBriefs)] },
   { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions)] },

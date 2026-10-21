@@ -20,9 +20,9 @@ export { ContinuousRunner } from "./runner.js";
 export type { CycleRunner } from "./runner.js";
 
 export { DispatchService } from "./dispatch/dispatch-service.js";
-export type { AgentStaffing } from "./dispatch/dispatch-service.js";
+export type { AgentStaffing } from "./dispatch/dispatch-types.js";
 /** @testseam the integration execution tests dispatch a task descriptor against real cells; the core loop builds it in production */
-export type { TaskDescriptor } from "./dispatch/dispatch-service.js";
+export type { TaskDescriptor } from "./dispatch/dispatch-types.js";
 export { createAgentStaffing, gradedCapability } from "./staffing.js";
 
 export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";

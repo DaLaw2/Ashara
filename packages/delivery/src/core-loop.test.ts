@@ -26,7 +26,7 @@ const mockProcessTask = vi.fn<(
   task: WorkItem,
 ) => Promise<TaskResult>>();
 
-vi.mock("./execution.js", () => ({
+vi.mock("./execution/dispatch-run.js", () => ({
   processTask: (deps: CoreLoopDeps, task: WorkItem) =>
     mockProcessTask(deps, task),
   handleProcessingError: async (_deps: CoreLoopDeps, task: WorkItem) => ({
