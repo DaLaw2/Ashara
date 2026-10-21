@@ -6,7 +6,7 @@ import { higherCapability, withStructuredLadder } from "./acl/finance-acl.js";
 import type { CapabilityLevel, LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
-import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
+import { OPEN_WORK_ITEM_STATUSES, SETTLED_WORK_ITEM_STATUSES, type WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { projectBlockCause, recordedFailureOf } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
@@ -671,13 +671,19 @@ interface RegatedTask {
 }
 
 /**
- * Not started, Blocked or Failed: work a revision may supersede. A task Blocked as merge_unrecorded is
- * merged work, its code on main and only its record unwritten, so it is kept as a Completed task is
- * (its exit completes it): a correction citing its key plans that key again beside it.
+ * Open and not in progress: work a revision may supersede, since an attempt in progress is waited
+ * on instead. A task Blocked as merge_unrecorded is merged work, its code on main and only its record
+ * unwritten, so it is kept as a Completed task is (its exit completes it): a correction citing its
+ * key plans that key again beside it.
  */
-function isOpen(item: WorkItem): boolean {
-  if (item.status === "Blocked") return item.blockedReason?.source !== "merge_unrecorded";
-  return item.status === "Pending" || item.status === "Failed";
+function isSupersedable(item: WorkItem): boolean {
+  if (!OPEN_WORK_ITEM_STATUSES.includes(item.status) || item.status === "InProgress") return false;
+  return item.status !== "Blocked" || item.blockedReason?.source !== "merge_unrecorded";
+}
+
+/** Not settled: an Epic a revision may still close or keep. */
+function isUnsettled(item: WorkItem): boolean {
+  return !SETTLED_WORK_ITEM_STATUSES.includes(item.status);
 }
 
 /** The vision keys a task cites in its task_spec's sources; none when its spec records no sources. */
@@ -692,10 +698,10 @@ function citedKeys(item: WorkItem): string[] {
  */
 function wholePlanScope(project: ProjectAwaitingReplan, vision: PlanningVision): RevisionScope {
   const tasks = project.items.filter(isTask);
-  const openEpics = project.items.filter(({ item }) => item.level === "Epic" && item.status !== "Completed" && item.status !== "Abandoned");
+  const openEpics = project.items.filter(({ item }) => item.level === "Epic" && isUnsettled(item));
   return {
     waitsOn: tasks.find(({ item }) => item.status === "InProgress") ?? null,
-    replaced: [...tasks.filter(({ item }) => isOpen(item)), ...openEpics],
+    replaced: [...tasks.filter(({ item }) => isSupersedable(item)), ...openEpics],
     planned: vision.items,
     regated: [],
   };
@@ -710,7 +716,7 @@ function wholePlanScope(project: ProjectAwaitingReplan, vision: PlanningVision):
  * checks, as dependency resolution reads it; and a task citing no affected key that waits on a
  * superseded review task is kept, moved to wait on the revision's own review (regated), unless the
  * revision plans nothing and so writes no review, when it is replaced with the review. Merged work
- * citing an affected key is kept (isOpen), a held task that finished its attempt and merged included: its key is not decided by the checks it merged with, which
+ * citing an affected key is kept (isSupersedable), a held task that finished its attempt and merged included: its key is not decided by the checks it merged with, which
  * decide the contract before the correction (checkedByDone), so it is planned again. An
  * open environment or layout task is replaced too while none is completed, since the revision then
  * plans its own. An open Epic left with no open task of its own is closed with the work it held,
@@ -722,7 +728,7 @@ function correctionScope(project: ProjectAwaitingReplan, affected: readonly stri
   const byId = new Map<string, PlannedItem>(tasks.map((task) => [task.item.id, task]));
   const citing = tasks.filter(({ item }) => citedKeys(item).some((key) => keys.has(key)));
   const waitsOn = citing.find(({ item }) => item.status === "InProgress") ?? null;
-  const openIds = new Set<string>(tasks.filter(({ item }) => isOpen(item)).map(({ item }) => item.id));
+  const openIds = new Set<string>(tasks.filter(({ item }) => isSupersedable(item)).map(({ item }) => item.id));
   // A dependent not read as a task is replaced: nothing shows it untouched.
   const citesAffected = (id: string) => {
     const task = byId.get(id);
@@ -750,9 +756,9 @@ function correctionScope(project: ProjectAwaitingReplan, affected: readonly stri
     }
     const replaced = tasks.filter(({ item }) => replacedIds.has(item.id));
     const closedEpics = project.items.filter(({ item }) => {
-      if (item.level !== "Epic" || item.status === "Completed" || item.status === "Abandoned") return false;
+      if (item.level !== "Epic" || !isUnsettled(item)) return false;
       const children = tasks.filter((task) => task.item.parentId === item.id);
-      return children.some((task) => replacedIds.has(task.item.id)) && children.every((task) => !isOpen(task.item) || replacedIds.has(task.item.id)) && !children.some((task) => task.item.status === "InProgress");
+      return children.some((task) => replacedIds.has(task.item.id)) && children.every((task) => !isSupersedable(task.item) || replacedIds.has(task.item.id)) && !children.some((task) => task.item.status === "InProgress");
     });
     const regated = [...regatedOn].flatMap(([taskId, review]): RegatedTask[] =>
       replacedIds.has(taskId)
@@ -772,7 +778,7 @@ function correctionScope(project: ProjectAwaitingReplan, affected: readonly stri
     return { waitsOn, replaced: [...replaced, ...closedEpics], planned: vision.items.filter((item) => cited.has(item.id)), regated };
   };
 
-  const held = citing.filter(({ item }) => isOpen(item));
+  const held = citing.filter(({ item }) => isSupersedable(item));
   const regating = closeOver(held, "regate");
   // A revision that plans nothing writes no review for a kept task to wait on: it is replaced instead.
   const reviewWaits = regating.regated.length > 0 && stillToCheck(regating.planned, checked).length === 0 ? "replace" : "regate";
@@ -786,7 +792,7 @@ function correctionScope(project: ProjectAwaitingReplan, affected: readonly stri
   const setsUpAgain = (item: WorkItem) => (isEnvironmentTask(item) && setUpAgain(isEnvironmentTask)) || (isScaffold(item) && setUpAgain(isScaffold));
   // One of them in progress is waited for, as a held task is: its result decides whether the revision sets up its own.
   const settingUp = tasks.find(({ item }) => item.status === "InProgress" && setsUpAgain(item)) ?? null;
-  const duplicated = tasks.filter(({ item }) => isOpen(item) && setsUpAgain(item));
+  const duplicated = tasks.filter(({ item }) => isSupersedable(item) && setsUpAgain(item));
   const full = duplicated.length === 0 ? scope : closeOver([...held, ...duplicated], reviewWaits);
   return { ...full, waitsOn: waitsOn ?? settingUp };
 }

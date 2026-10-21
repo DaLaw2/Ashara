@@ -1,5 +1,5 @@
 import type { WorkItemId, DomainEvent } from "@ashara/shared";
-import { WorkItemNotFound } from "../work-item-language/transitions.js";
+import { WorkItemNotFound, canTransitionTo } from "../work-item-language/transitions.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import type { WorkItemRepository } from "./repository.js";
 import type { WorkItem } from "./work-item.js";
@@ -85,13 +85,12 @@ export class LifecycleRouter {
     while (parentId) {
       const siblings = await repo.findChildren(parentId);
       if (siblings.length === 0) break;
-      if (!siblings.every(isSettled)) break;
+      if (!siblings.every(deliveredItsWork)) break;
 
       const parent = await repo.findById(parentId);
       if (!parent) throw new WorkItemNotFound(parentId);
 
-      // A superseded Epic is closed: a merged task a revision kept under it (merge_unrecorded) completes alone.
-      if (parent.status === "Completed" || parent.status === "Blocked" || parent.status === "Failed" || parent.status === "Abandoned") break;
+      if (!completableByCascade(parent)) break;
 
       if (parent.status === "Pending") {
         startWorkItem(parent);
@@ -110,17 +109,28 @@ export class LifecycleRouter {
 }
 
 /**
- * A sibling settles its parent when:
+ * A parent the cascade completes: one already running, or one it can start, since an item completes
+ * only from InProgress. A settled parent is done with; a Blocked one is closed (a superseded Epic: a
+ * merged task a revision kept under it, merge_unrecorded, completes alone); a Failed one is the
+ * FailureRouter's.
+ */
+function completableByCascade(parent: WorkItem): boolean {
+  return parent.status === "InProgress" || canTransitionTo(parent.status, "InProgress");
+}
+
+/**
+ * Whether a child delivered its share of its parent's work, which is narrower than settled: a
+ * sibling counts toward completing its parent when it is
  *  1. Completed — the canonical happy path.
  *  2. Abandoned with a salvaged completed result — the agent succeeded but
  *     the item was preempted to Abandoned during execution. The work is done;
  *     keeping the item terminal is correct, and the salvage makes it visible.
  *
- * An Abandoned item outside these two cases is genuinely missing work and
- * must not settle its parent — the parent stays incomplete rather than
- * silently rolling up.
+ * An Abandoned item outside these two cases is settled but genuinely missing
+ * work, and must not complete its parent — the parent stays incomplete rather
+ * than silently rolling up.
  */
-function isSettled(item: WorkItem): boolean {
+function deliveredItsWork(item: WorkItem): boolean {
   if (item.status === "Completed") return true;
   return item.status === "Abandoned" && item.blockedReason?.salvagedOutcome === "completed";
 }

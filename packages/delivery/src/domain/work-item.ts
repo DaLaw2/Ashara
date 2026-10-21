@@ -1,5 +1,5 @@
 import { type ProjectId, type WorkItemId, type DomainEvent, createWorkItemId, createDomainEvent } from "@ashara/shared";
-import type { WorkItemLevel, WorkItemStatus } from "../work-item-language/work-item-status.js";
+import { OPEN_WORK_ITEM_STATUSES, type WorkItemLevel, type WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { StoredTaskSpec } from "../work-item-language/task-spec.js";
 import { type StoredBlockedReason, blockedReasonToRecord } from "../work-item-language/blocked-reason.js";
 import type { StoredSuccessCriteria } from "../work-item-language/success-criteria.js";
@@ -262,8 +262,8 @@ type GiveUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded"
  * clears by itself. A Failed item is the FailureRouter's to abandon.
  */
 export function giveUpWorkItem(item: WorkItem, reason: GiveUpReason): void {
-  const open = item.status === "InProgress" || item.status === "Pending" || item.status === "Blocked";
-  if (!open || !canTransitionTo(item.status, "Abandoned")) {
+  const decidedHere = OPEN_WORK_ITEM_STATUSES.includes(item.status) && item.status !== "Failed";
+  if (!decidedHere || !canTransitionTo(item.status, "Abandoned")) {
     throw new InvalidStatusTransition(item.id, item.status, "Abandoned");
   }
   item.status = "Abandoned";
@@ -339,12 +339,8 @@ export function supersedeWorkItem(
   item: WorkItem,
   reason: Extract<StoredBlockedReason, { readonly source: "superseded" }>,
 ): void {
-  const open =
-    item.status === "Pending" ||
-    item.status === "Blocked" ||
-    item.status === "Failed" ||
-    (item.level === "Epic" && item.status === "InProgress");
-  if (!open || !canTransitionTo(item.status, "Abandoned")) {
+  const supersedable = OPEN_WORK_ITEM_STATUSES.includes(item.status) && (item.status !== "InProgress" || item.level === "Epic");
+  if (!supersedable || !canTransitionTo(item.status, "Abandoned")) {
     throw new InvalidStatusTransition(item.id, item.status, "Abandoned");
   }
   item.status = "Abandoned";

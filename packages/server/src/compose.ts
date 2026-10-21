@@ -88,6 +88,7 @@ import type { Clock, LogSink, Logger, ProjectId } from "@ashara/shared";
 import { contendedWait, createLogger, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
+import { keptWorktreeTaskIds } from "./kept-worktrees.js";
 import type { AppDeps } from "./routes.js";
 import {
   ServerStartupRefused,
@@ -621,10 +622,9 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
       // Each context reconciles its own resources, in this order. Workplace's sessions after
       // Delivery's work items: a session a crash left open is Delivery's evidence that a dispatch
       // never finished. Execution Infrastructure's task worktrees after both, kept for every task
-      // still active once its orphans are settled. Neither refuses the start; each logs its result.
+      // still open once its orphans are settled. Neither refuses the start; each logs its result.
       await terminalizeOrphanedSessions(devSessionRepo, inProgressAtStart);
-      // Ids only: a row whose jsonb does not parse still keeps its worktree.
-      await sweepOrphanedWorktrees(config.coreLoop.workdirBase, () => workItemRepo.listIdsByStatus(["Pending", "InProgress", "Blocked"]));
+      await sweepOrphanedWorktrees(config.coreLoop.workdirBase, keptWorktreeTaskIds(workItemRepo));
 
       // Cells a previous process of this instance leaked, removed before any dispatch.
       await reconcileCellsAtStartup(cellSubstrate, cellInstance);

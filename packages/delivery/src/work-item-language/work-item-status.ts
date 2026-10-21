@@ -26,7 +26,11 @@ const WORK_ITEM_STATUS_STANDING = {
 
 export const SETTLED_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = WORK_ITEM_STATUSES.filter((status) => WORK_ITEM_STATUS_STANDING[status] === "settled");
 
-/** @testseam the partition and acceptance readiness tests enumerate the open half; readers ask for the settled half, so a status no one placed reads as open */
+/**
+ * The open half, read where an open item keeps something (its worktree) or where a subset of open
+ * statuses is named and derived from it. A reader asking whether anything is still open asks for the
+ * settled half instead, so a status no one placed reads as open there.
+ */
 export const OPEN_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = WORK_ITEM_STATUSES.filter((status) => WORK_ITEM_STATUS_STANDING[status] === "open");
 
 const WorkItemLevelSchema = z.enum(["Epic", "Task"]);

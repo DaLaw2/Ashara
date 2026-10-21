@@ -60,7 +60,7 @@ describe("findPredicateCopies", () => {
     ]);
   });
 
-  test("test files and the integration package are not read; a tree with no production source fails closed", () => {
+  test("test files, and the integration package for the cross-context rules, are not read; a tree with no production source fails closed", () => {
     expect(findPredicateCopies(treeOf({ "packages/engagement/src/planted.test.ts": PLANTED, "packages/integration/src/oracle.ts": PLANTED, "packages/shared/src/x.ts": "" }))).toEqual([]);
     expect(() => findPredicateCopies(treeOf({ "packages/engagement/src/planted.test.ts": PLANTED }))).toThrow(/a scan of nothing would pass/);
   });
@@ -70,6 +70,32 @@ describe("findPredicateCopies", () => {
     expect(findPredicateCopies(root).map((copy) => copy.rule)).toEqual([
       "task origin (goal task, product scaffold, review, ...)",
     ]);
+  });
+
+  test("a hand-written work-item status list outside Delivery's work-item language is a copy, in SQL, a literal or a comparison chain, on one line or split across lines; the language and the simulator oracle may spell one", () => {
+    const planted = [
+      "const a = sql`${workItems.status} IN ('Pending','Blocked')`;",
+      'const b = new Set(["Completed","Abandoned"]);',
+      'const c = item.status !== "Completed" && item.status !== "Abandoned";',
+      'const d = item.status === "InProgress" || canTransitionTo(item.status, "InProgress");',
+      'const e = listIdsByStatus(["InProgress"]);',
+      "const f =",
+      '  item.status === "Pending" ||',
+      '  item.status === "Failed";',
+      'const g = ["Pending",',
+      '  "Blocked"];',
+    ].join("\n");
+    const root = treeOf({
+      "packages/server/src/planted.ts": planted,
+      "packages/delivery/src/domain/planted.ts": planted,
+      "packages/integration/src/server/planted.ts": planted,
+      "packages/delivery/src/work-item-language/planted.ts": planted,
+      "packages/integration/src/simulator/planted.ts": planted,
+    });
+    const rule = "work-item status list (open or settled)";
+    expect(findPredicateCopies(root).map((copy) => `${copy.file}:${copy.line} ${copy.rule}`).sort()).toEqual(
+      ["packages/delivery/src/domain/planted.ts", "packages/integration/src/server/planted.ts", "packages/server/src/planted.ts"].flatMap((file) => [1, 2, 3, 7, 9].map((line) => `${file}:${line} ${rule}`)),
+    );
   });
 
   test("the repository holds no copy outside an owner", () => {

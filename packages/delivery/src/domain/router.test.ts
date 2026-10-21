@@ -8,7 +8,7 @@ import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
 import { LifecycleRouter } from "./router.js";
 
-// Minimal in-memory repo for testing cascade-completion through isSettled.
+// Minimal in-memory repo for testing cascade-completion through deliveredItsWork.
 function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
   const store = new Map(items.map((i) => [i.id as string, i]));
   return {

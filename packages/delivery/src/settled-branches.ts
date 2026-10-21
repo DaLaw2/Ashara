@@ -1,16 +1,8 @@
 import type { Logger, ProjectId } from "@ashara/shared";
 import type { WorkItemRepository } from "./domain/index.js";
-import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
+import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/work-item-status.js";
 import { assertValidTargetProjectPath } from "./acl/execution-infra-acl.js";
 import { releaseSettledBranches } from "./acl/quality-acl.js";
-
-/**
- * The statuses whose tasks hold a branch nothing reads: no attempt runs for them, and the next one,
- * if any, starts fresh. Abandoned is terminal. A Completed task's work is on main (its branch merged,
- * or discarded as already delivered there), and the one edge out of Completed reopens a check task,
- * whose attempt drops its throwaway branch before it starts.
- */
-const SETTLED_STATUSES: readonly WorkItemStatus[] = ["Completed", "Abandoned"];
 
 type Target = { readonly id: ProjectId; readonly workspacePath: string };
 
@@ -43,14 +35,17 @@ interface SettledBranchSummary {
  * is in flight: a checkout outlives its check only when a crash or a faulted cleanup cut it short.
  * Release follows the settled status itself, not the path that reached it: every path that gives a
  * task up or completes it is covered, a new one included, and a release a settle path tried and
- * failed is retried here. A leftover is logged at
+ * failed is retried here. A settled task's branch is one nothing reads: no attempt runs for it, and
+ * the next one, if any, starts fresh. Abandoned is terminal. A Completed task's work is on main (its
+ * branch merged, or discarded as already delivered there), and the one edge out of Completed reopens
+ * a check task, whose attempt drops its throwaway branch before it starts. A leftover is logged at
  * warn, never a verdict; a store that cannot be read releases nothing this pass, and the next retries.
  */
 export async function releaseBranchesOfSettledTasks(deps: SettledBranchDeps): Promise<SettledBranchSummary> {
   let settled: ReadonlySet<string>;
   let targets: readonly Target[];
   try {
-    settled = new Set(await deps.workItemRepo.listIdsByStatus(SETTLED_STATUSES));
+    settled = new Set(await deps.workItemRepo.listIdsByStatus(SETTLED_WORK_ITEM_STATUSES));
     targets = await deps.projects.listWithWorkspace();
   } catch (err) {
     deps.logger.warn("delivery.settled-branches-unread", "the settled tasks or the targets could not be read; no branch is released this pass", {}, err);

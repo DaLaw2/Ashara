@@ -1365,7 +1365,7 @@ async function publishBestEffort(
 
 /**
  * Durably records a returning agent result on an Abandoned work item's
- * blockedReason, so cascade-completion (isSettled) can see the work's outcome
+ * blockedReason, so cascade-completion (deliveredItsWork) can see the work's outcome
  * without reopening the terminal status. The existing blockedReason is
  * spread with salvaged fields and saved as an Abandoned → Abandoned metadata
  * write (no status transition, no outbound edge needed).
@@ -1407,7 +1407,7 @@ async function salvagePreemptedResult(
   } catch (salvageError) {
     // The item is already terminal — a salvage failure does not change its status.
     // Log structured context (Discipline C) so the lost result is visible.
-    // eslint-disable-next-line ashara/catch-continue -- best effort: the item is already terminal (Abandoned by the operator's preemption); without the salvaged outcome its parent stays unsettled (isSettled), the fail-closed direction, and its abandonment opens a plan repair
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the item is already terminal (Abandoned by the operator's preemption); without the salvaged outcome its parent stays incomplete (deliveredItsWork), the fail-closed direction, and its abandonment opens a plan repair
     deps.logger.warn(
       "delivery.salvage-failed",
       `failed to salvage preempted result (outcome: ${outcome}, detail: ${detail.slice(0, 200)}); item remains Abandoned, result data lost`,
@@ -1552,7 +1552,7 @@ async function runCountedDispatch(
   // was preempted to Abandoned (by HTTP PATCH) during
   // execution, executeTask catches the InvalidStatusTransition from routeAsSuccess
   // and returns a completed result. The result's value — "the work is done" — must
-  // be durably recorded on the Abandoned item so cascade-completion (isSettled)
+  // be durably recorded on the Abandoned item so cascade-completion (deliveredItsWork)
   // can see the work was done without reopening the terminal status.
   if (result.status === "completed") {
     const currentForSalvage = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
