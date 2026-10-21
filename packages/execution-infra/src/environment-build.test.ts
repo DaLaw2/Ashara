@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId, recordingLogger } from "@ashara/shared";
 import { pruneEnvironmentImages } from "./environment-build.js";
-import { PodmanCommandFailed } from "./errors.js";
 import { PodmanSubstrate } from "./podman.js";
 
 // Every build_environment call leaves a tagged image. Pruning keeps main's current
@@ -87,13 +86,21 @@ describe("pruneEnvironmentImages", () => {
     ]);
   });
 
-  test("an image without both Ashara labels in the listing: nothing is removed", async () => {
+  test("a listing that holds images with only one of the two labels, as a podman that ORs its filters returns: they are neither judged nor removed", async () => {
+    const other = parseProjectId("44444444-4444-4444-8444-444444444444", "test");
     const { substrate, calls } = substrateListing(
-      [image(id("1"), ours("a".repeat(64))), image(id("2"), { "ashara.project": projectId, "ashara.env.version": "b".repeat(64) })],
+      [
+        image(id("1"), ours("a".repeat(64))),
+        image(id("2"), { "ashara.project": projectId, "ashara.env.version": "b".repeat(64) }),
+        image(id("3"), { "ashara.managed": "1", "ashara.project": other, "ashara.env.version": "b".repeat(64) }),
+        image(id("4"), null),
+      ],
       [],
     );
 
-    await expect(pruneEnvironmentImages(substrate, projectId, CURRENT)).rejects.toThrow(PodmanCommandFailed);
-    expect(calls.filter((c) => c[0] === "image")).toEqual([]);
+    const pruned = await pruneEnvironmentImages(substrate, projectId, CURRENT);
+
+    expect(pruned).toEqual({ removed: [{ imageId: id("1"), version: "a".repeat(64) }], kept: [] });
+    expect(calls.filter((c) => c[0] === "image")).toEqual([["image", "rm", id("1")]]);
   });
 });

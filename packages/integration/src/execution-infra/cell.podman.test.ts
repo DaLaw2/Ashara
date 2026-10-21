@@ -35,6 +35,8 @@ const ALPINE_IMAGE = TEST_IMAGES.alpine;
 /** An image with a git client and no entrypoint, pinned. */
 const GIT_IMAGE = TEST_IMAGES.git;
 const instance = testCellInstance();
+/** How many times the self-kill case runs in one cell. */
+const SELF_KILL_ROUNDS = 50;
 const task = `task-${randomUUID()}`;
 const strayIds: string[] = [];
 let mountRoot = "";
@@ -402,19 +404,23 @@ describe("cell on real podman", () => {
       `kill -9 $(read -r me _ < /proc/self/stat; for p in /proc/[0-9]*; do [ "\${p#/proc/}" = "$me" ] && continue; ` +
       `tr '\\0' ' ' < "$p/cmdline" 2>/dev/null | grep -qF -- ${pattern} && echo "\${p#/proc/}"; done)`;
     try {
-      // The marker is in the command's own text, so it matches its own processes.
-      const own = await cell.exec(
-        ["sh", "-c", `sleep 41 & echo started; ${pkill("'flock-x-ltest3'")}; sleep 2; echo survived`],
-        { timeoutSeconds: 20 },
-      );
-      expect(own, own.stderr).toMatchObject({ exitCode: 137, statusLost: false, timedOut: false, stdout: "started\n" });
+      // Repeated, since whether a killed process is gone by the sweep's next look depends on the
+      // scheduler: every round must end the same way, never in CellExecFailed.
+      for (let round = 0; round < SELF_KILL_ROUNDS; round++) {
+        // The marker is in the command's own text, so it matches its own processes.
+        const own = await cell.exec(
+          ["sh", "-c", `sleep 41 & echo started; ${pkill("'flock-x-ltest3'")}; sleep 2; echo survived`],
+          { timeoutSeconds: 20 },
+        );
+        expect(own, `round ${round}: ${own.stderr}`).toMatchObject({ exitCode: 137, statusLost: false, timedOut: false, stdout: "started\n" });
 
-      // A pattern only the wrapper's script holds (split, so this command's text does not): the
-      // wrapper dies, the cell answers its probe, and its sweep ends what the command left.
-      const wrapper = await cell.exec(["sh", "-c", `sleep 42 & echo started; ${pkill('"ashara""_sweep"')}; sleep 5`], { timeoutSeconds: 20 });
-      expect(wrapper).toMatchObject({ exitCode: null, statusLost: true, timedOut: false, stdout: "started\n" });
-      const { stdout: left } = await run("podman", ["top", cell.id, "args"]);
-      expect(left).not.toMatch(/sleep 4[12]/);
+        // A pattern only the wrapper's script holds (split, so this command's text does not): the
+        // wrapper dies, the cell answers its probe, and its sweep ends what the command left.
+        const wrapper = await cell.exec(["sh", "-c", `sleep 42 & echo started; ${pkill('"ashara""_sweep"')}; sleep 5`], { timeoutSeconds: 20 });
+        expect(wrapper, `round ${round}`).toMatchObject({ exitCode: null, statusLost: true, timedOut: false, stdout: "started\n" });
+        const { stdout: left } = await run("podman", ["top", cell.id, "args"]);
+        expect(left, `round ${round}`).not.toMatch(/sleep 4[12]/);
+      }
       expect(await cell.exec(["sh", "-c", "echo usable"], { timeoutSeconds: 10 })).toMatchObject({ exitCode: 0, stdout: "usable\n" });
     } finally {
       await cell.teardown();

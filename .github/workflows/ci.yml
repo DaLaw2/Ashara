@@ -155,6 +155,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman catatonit
           podman --version
+          # What a real-podman test's outcome depends on, in the job's log: the OCI runtime, the cgroup
+          # version and manager, and the controllers delegated to this user's cells.
+          podman info --format 'runtime {{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Version}}; cgroups {{.Host.CgroupsVersion}} via {{.Host.CgroupManager}}; controllers {{.Host.CgroupControllers}}'
           podman_version="$(podman --version | sed -n 's/^podman version \([0-9][0-9.]*\)$/\1/p')"
           test -n "$podman_version"
           if ! grep -qF "podman ${podman_version}" README.md; then

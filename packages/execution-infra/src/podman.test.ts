@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,12 +15,11 @@ import {
   InvalidCellRequest,
   MountPathRejected,
   PathOutsideWorkspace,
-  PodmanCommandFailed,
   ProcessSpawnFailed,
   SubstrateUnavailable,
   TeardownIncomplete,
 } from "./errors.js";
-import { PodmanSubstrate, type CellSpec } from "./podman.js";
+import { PodmanSubstrate, sweepOver, type CellSpec } from "./podman.js";
 import type { ProcessRequest, ProcessResult } from "./process-runner.js";
 
 const run = promisify(execFile);
@@ -92,7 +91,7 @@ describe("PodmanSubstrate argv", () => {
     expect(requests[0]?.args).toEqual([
       "run", "-d", "--name", expect.stringMatching(/^ashara-cell-[0-9a-f-]{36}$/), "--init", "--pull=never", "--network=none", "--cap-drop=all",
       "--security-opt=no-new-privileges",
-      "--memory=536870912", "--memory-swap=536870912", "--cpus=1.5", "--pids-limit=256",
+      "--memory=536870912", "--memory-swap=536870912", "--cpu-period=100000", "--cpu-quota=150000", "--pids-limit=256",
       "--userns=keep-id",
       `--user=${process.getuid?.()}:${process.getgid?.()}`,
       "--label", "ashara.managed=1",
@@ -462,13 +461,17 @@ describe("PodmanSubstrate argv", () => {
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toBeInstanceOf(CellExecFailed);
   });
 
-  it("reconciles by both labels, skips live cells, and refuses a foreign result", async () => {
+  it("reconciles by both labels, skips live cells, and leaves alone what a podman that ORs its filters lists with one label", async () => {
     const labels = { "ashara.managed": "1", "ashara.instance": "inst-1" };
     const { requests, substrate } = recorder([
       ok(ID),
       ok(JSON.stringify([{ Id: ID, Labels: labels }, { Id: OTHER_ID, Labels: labels }])),
       ok(),
-      ok(JSON.stringify([{ Id: OTHER_ID, Labels: { "ashara.managed": "1" } }])),
+      ok(JSON.stringify([
+        { Id: OTHER_ID, Labels: { "ashara.managed": "1", "ashara.instance": "inst-2" } },
+        { Id: "c".repeat(64), Labels: { "ashara.instance": "inst-1" } },
+        { Id: "d".repeat(64), Labels: null },
+      ])),
     ]);
     await substrate.createCell(spec);
     expect(await substrate.reconcileOrphans("inst-1")).toEqual([OTHER_ID]);
@@ -476,7 +479,7 @@ describe("PodmanSubstrate argv", () => {
       "ps", "-a", "--filter", "label=ashara.managed=1", "--filter", "label=ashara.instance=inst-1", "--format", "json",
     ]);
     expect(requests[2]?.args).toEqual(["rm", "-f", OTHER_ID]);
-    await expect(substrate.reconcileOrphans("inst-1")).rejects.toBeInstanceOf(PodmanCommandFailed);
+    expect(await substrate.reconcileOrphans("inst-1")).toEqual([]);
     expect(requests).toHaveLength(4);
   });
 
@@ -486,6 +489,55 @@ describe("PodmanSubstrate argv", () => {
     expect(await substrate.probeSubstrate()).toEqual({ version: "5.8.2", rootless: true });
     expect(requests[0]?.args).toEqual(["info", "--format", "json"]);
     await expect(substrate.probeSubstrate()).rejects.toBeInstanceOf(SubstrateUnavailable);
+  });
+});
+
+describe("the sweep, over a fake process table", () => {
+  // Its pids exceed every pid_max (at most 2^22), so the sweep's kill -9 reaches no host process.
+  const LINGERING_PID = "9999999";
+  let table = "";
+
+  beforeAll(async () => {
+    table = await mkdtemp(join(tmpdir(), "ashara-fake-proc-"));
+  });
+
+  afterAll(async () => {
+    await rm(table, { recursive: true, force: true });
+  });
+
+  function sweepExit(procRoot: string): Promise<number | null> {
+    return new Promise((resolve, reject) => {
+      const child = spawn("sh", ["-c", sweepOver(procRoot)], { stdio: "ignore" });
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+  }
+
+  it("waits for a killed process that stays listed, as one in uninterruptible I/O does, and succeeds once it is gone", async () => {
+    const root = await mkdtemp(join(table, "lingering-"));
+    await mkdir(join(root, "1"));
+    await writeFile(join(root, "1", "stat"), "1 (catatonit) S 0 1 1 0 -1\n");
+    await mkdir(join(root, "2"));
+    await writeFile(join(root, "2", "stat"), "2 (sleep) S 1 2 1 0 -1\n");
+    await mkdir(join(root, LINGERING_PID));
+    await writeFile(join(root, LINGERING_PID, "stat"), `${LINGERING_PID} (dd) D 1 ${LINGERING_PID} ${LINGERING_PID} 0 -1\n`);
+    const lingerMs = 1500;
+    const startedAt = Date.now();
+    const [exit] = await Promise.all([
+      sweepExit(root),
+      new Promise((resolve) => setTimeout(resolve, lingerMs)).then(() => rm(join(root, LINGERING_PID), { recursive: true })),
+    ]);
+    expect(exit).toBe(0);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(lingerMs);
+  });
+
+  it("succeeds at once when only the init's session and the dead are listed", async () => {
+    const root = await mkdtemp(join(table, "clean-"));
+    await mkdir(join(root, "1"));
+    await writeFile(join(root, "1", "stat"), "1 (catatonit) S 0 1 1 0 -1\n");
+    await mkdir(join(root, LINGERING_PID));
+    await writeFile(join(root, LINGERING_PID, "stat"), `${LINGERING_PID} (dd) Z 1 ${LINGERING_PID} ${LINGERING_PID} 0 -1\n`);
+    expect(await sweepExit(root)).toBe(0);
   });
 });
 

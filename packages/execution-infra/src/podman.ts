@@ -44,6 +44,11 @@ type GitEntryKind = "file" | "directory";
 const KILL_GRACE_SECONDS = 5;
 /** Host-side backstop beyond the in-cell timeout, for a podman client that itself hangs. */
 const HOST_BACKSTOP_SECONDS = 30;
+/**
+ * How long a sweep waits for what it killed to be gone. The wrapper sweeps after timeout(1)'s
+ * grace, so the sweep fits inside the host backstop with room for podman's own exit.
+ */
+const SWEEP_SECONDS = 10;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const PODMAN_ADMIN_TIMEOUT_MS = 120_000;
 /**
@@ -76,33 +81,50 @@ export function cellRunBoundMs(execTimeoutsSeconds: readonly number[]): number {
  * comm field may hold ") ", so the longest prefix through ") " is dropped). `ashara_sweep` SIGKILLs
  * every live process outside the session of the cell's init (the init and its keepalive), except
  * the sweeping shell and its ancestors in the cell, round after round until none is left; it fails
- * after 50 rounds. The ancestors are what runs the sweep, never what the command started: a process
- * cannot become an ancestor of one that already runs. podman's exec process has none (its parent
- * is outside the cell); a shell that runs the wrapper as its child has one, and killing it would
- * lose the exec's own exit.
+ * once SWEEP_SECONDS have passed on the cell's /proc/uptime with one still listed. The bound is
+ * time, never a count of rounds: a killed process stays listed until the kernel has run its exit,
+ * which waits for the scheduler to give it a CPU and for any uninterruptible I/O it is in (an
+ * fsync), however fast the sweeping shell loops. The ancestors are what runs the sweep, never what
+ * the command started: a process cannot become an ancestor of one that already runs. podman's exec
+ * process has none (its parent is outside the cell); a shell that runs the wrapper as its child has
+ * one, and killing it would lose the exec's own exit. `ashara_clock` reads the whole seconds of
+ * /proc/uptime into ashara_now. `procRoot` is where the process table is read: /proc in every cell.
  */
-const SWEEP_FUNCTIONS = [
-  'ashara_stat() { ashara_l=; read -r ashara_l 2>/dev/null < "$1/stat" || return 1; set -- ${ashara_l##*) }; ashara_state=$1; ashara_ppid=$2; ashara_sid=$4; }',
-  "ashara_sweep() {",
-  "  ashara_stat /proc/1 || return 1; ashara_keep=$ashara_sid; ashara_round=0",
-  '  ashara_spare=" $$ "; ashara_p=$$',
-  '  while ashara_stat "/proc/$ashara_p" && [ "$ashara_ppid" -gt 1 ]; do ashara_p=$ashara_ppid; ashara_spare="$ashara_spare$ashara_p "; done',
-  '  while [ "$ashara_round" -lt 50 ]; do',
-  "    ashara_live=0",
-  "    for ashara_d in /proc/[0-9]*; do",
-  '      case $ashara_spare in *" ${ashara_d#/proc/} "*) continue;; esac',
-  '      ashara_stat "$ashara_d" || continue',
-  "      case $ashara_state in Z|X|x) continue;; esac",
-  '      [ "$ashara_sid" = "$ashara_keep" ] && continue',
-  "      ashara_live=1",
-  '      kill -9 "${ashara_d#/proc/}" 2>/dev/null',
-  "    done",
-  '    [ "$ashara_live" = 0 ] && return 0',
-  "    ashara_round=$((ashara_round + 1))",
-  "  done",
-  "  return 1",
-  "}",
-];
+function sweepFunctions(procRoot: string): string[] {
+  return [
+    'ashara_stat() { ashara_l=; read -r ashara_l 2>/dev/null < "$1/stat" || return 1; set -- ${ashara_l##*) }; ashara_state=$1; ashara_ppid=$2; ashara_sid=$4; }',
+    "ashara_clock() { ashara_l=; read -r ashara_l _ 2>/dev/null < /proc/uptime || return 1; ashara_now=${ashara_l%%.*}; case $ashara_now in ''|*[!0-9]*) return 1;; esac; }",
+    "ashara_sweep() {",
+    `  ashara_stat ${procRoot}/1 || return 1; ashara_keep=$ashara_sid`,
+    `  ashara_clock || return 1; ashara_until=$((ashara_now + ${SWEEP_SECONDS}))`,
+    '  ashara_spare=" $$ "; ashara_p=$$',
+    `  while ashara_stat "${procRoot}/$ashara_p" && [ "$ashara_ppid" -gt 1 ]; do ashara_p=$ashara_ppid; ashara_spare="$ashara_spare$ashara_p "; done`,
+    "  while :; do",
+    "    ashara_live=0",
+    `    for ashara_d in ${procRoot}/[0-9]*; do`,
+    `      case $ashara_spare in *" \${ashara_d#${procRoot}/} "*) continue;; esac`,
+    '      ashara_stat "$ashara_d" || continue',
+    "      case $ashara_state in Z|X|x) continue;; esac",
+    '      [ "$ashara_sid" = "$ashara_keep" ] && continue',
+    "      ashara_live=1",
+    `      kill -9 "\${ashara_d#${procRoot}/}" 2>/dev/null`,
+    "    done",
+    '    [ "$ashara_live" = 0 ] && return 0',
+    '    ashara_clock && [ "$ashara_now" -lt "$ashara_until" ] || return 1',
+    "  done",
+    "}",
+  ];
+}
+
+const SWEEP_FUNCTIONS = sweepFunctions("/proc");
+
+/**
+ * The sweep alone, over a process table at `procRoot` laid out as /proc is; its exit is the sweep's.
+ * @testseam a unit test sweeps a fake process table on the host, whose pids cannot exist
+ */
+export function sweepOver(procRoot: string): string {
+  return [...sweepFunctions(procRoot), "ashara_sweep"].join("\n");
+}
 
 /**
  * The sweep spares the init's session, so what the command starts must never be in it: the wrapper
@@ -974,7 +996,9 @@ export class PodmanSubstrate {
   /**
    * Removes every container labelled ashara.managed=1 AND ashara.instance=<instance>, except the
    * cells this process still holds, then every state dir of that instance no held or starting cell
-   * owns. Never selects a container by name: other services share this podman.
+   * owns. Never selects a container by name: other services share this podman. podman's label
+   * filters narrow the listing but do not select, since a podman may OR repeated `--filter label=`
+   * (podman 4.9.3 does on `podman images`): the selection is made here on each container's own labels.
    */
   async reconcileOrphans(instance: string): Promise<string[]> {
     const parsedInstance = instanceValue.safeParse(instance);
@@ -990,20 +1014,10 @@ export class PodmanSubstrate {
       throw new PodmanCommandFailed("ps", args, result.exitCode, result.stderr.trim() || "(no stderr)");
     }
     const entries = podmanOutput(z.array(psEntrySchema), result.stdout, "podman ps stdout", (detail) => new PodmanCommandFailed("ps", args, result.exitCode, detail));
-    // The label filter is the selector; re-checking it here means a change in podman's filter
-    // semantics refuses to delete rather than deleting someone else's container.
-    const foreign = entries.filter(
-      (entry) => entry.Labels?.[LABEL_MANAGED] !== "1" || entry.Labels[LABEL_INSTANCE] !== instance,
-    );
-    if (foreign.length > 0) {
-      throw new PodmanCommandFailed(
-        "ps",
-        args,
-        result.exitCode,
-        `the label filter returned ${foreign.length} container(s) without both labels (${foreign.map((e) => e.Id).join(", ")}); refusing to remove anything`,
-      );
-    }
-    const orphans = entries.map((entry) => entry.Id).filter((id) => !this.cells.has(id));
+    const orphans = entries
+      .filter((entry) => entry.Labels?.[LABEL_MANAGED] === "1" && entry.Labels[LABEL_INSTANCE] === instance)
+      .map((entry) => entry.Id)
+      .filter((id) => !this.cells.has(id));
     const containers = await this.removeAll(orphans);
     // Only once their containers are gone: a state dir is removed only when nothing mounts it.
     const state = await this.sweepState(instance);

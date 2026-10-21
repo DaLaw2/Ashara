@@ -166,17 +166,19 @@ export class FakePodman {
         }
         return ok();
       }
+      // Repeated label filters are OR-ed, as podman 4.9.3's `images` ORs them: the weakest a podman
+      // gives, so a listing is a superset the code under test must select from by labels itself.
       case "ps": {
         const filters = this.labelFilters(args);
         const rows = [...this.cells.values()]
-          .filter((cell) => filters.every(([key, value]) => cell.labels[key] === value))
+          .filter((cell) => filters.length === 0 || filters.some(([key, value]) => cell.labels[key] === value))
           .map((cell) => ({ Id: cell.id, Labels: cell.labels, ImageID: cell.imageId }));
         return ok(JSON.stringify(rows));
       }
       case "images": {
         const filters = this.labelFilters(args);
         const rows = [...this.images.values()]
-          .filter((image) => filters.every(([key, value]) => image.labels[key] === value))
+          .filter((image) => filters.length === 0 || filters.some(([key, value]) => image.labels[key] === value))
           .map((image) => ({ Id: image.id, Labels: image.labels }));
         return ok(JSON.stringify(rows));
       }

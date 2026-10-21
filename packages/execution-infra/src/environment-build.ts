@@ -148,10 +148,11 @@ async function podmanJson<S extends z.ZodType>(substrate: PodmanSubstrate, opera
 /**
  * Removes the project's environment images of every version other than `keepVersion` (main's
  * current one) that no container uses, live or stopped: every build_environment call leaves a
- * tagged image. Only images labelled ashara.managed=1
- * and ashara.project=<projectId> are selected, and both labels are checked again on what podman
- * returns, so a change in its filter semantics removes nothing of anyone else's. An image that
- * cannot be removed is kept and reported; a podman failure listing images or containers throws.
+ * tagged image. Only images labelled both ashara.managed=1 and ashara.project=<projectId> are
+ * judged. podman's label filters narrow the listing but do not select: podman 4.9.3 ORs repeated
+ * `--filter label=` on `podman images`, so the listing can hold other projects' and other services'
+ * images, and the selection is made here on each image's own labels. An image that cannot be
+ * removed is kept and reported; a podman failure listing images or containers throws.
  */
 export async function pruneEnvironmentImages(
   substrate: PodmanSubstrate,
@@ -162,14 +163,8 @@ export async function pruneEnvironmentImages(
   if (!tag.success) throw new InvalidCellRequest("pruneEnvironmentImages", tag.error.issues.map((issue) => issue.message));
 
   const listArgs = ["images", "--filter", `label=${LABEL_MANAGED}=1`, "--filter", `label=${LABEL_PROJECT}=${projectId}`, "--format", "json"];
-  const images = await podmanJson(substrate, "images", listArgs, imageListSchema);
-  const foreign = images.filter((image) => image.Labels?.[LABEL_MANAGED] !== "1" || image.Labels[LABEL_PROJECT] !== projectId);
-  if (foreign.length > 0) {
-    throw new PodmanCommandFailed(
-      "images", listArgs, 0,
-      `the label filter returned ${foreign.length} image(s) without both labels (${foreign.map((image) => image.Id).join(", ")}); refusing to remove anything`,
-    );
-  }
+  const listed = await podmanJson(substrate, "images", listArgs, imageListSchema);
+  const images = listed.filter((image) => image.Labels?.[LABEL_MANAGED] === "1" && image.Labels[LABEL_PROJECT] === projectId);
 
   const psArgs = ["ps", "-a", "--format", "json"];
   const containers = await podmanJson(substrate, "ps", psArgs, containerListSchema);

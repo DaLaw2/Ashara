@@ -48,15 +48,17 @@ function unobserved(probe: string, result: ExecResult): ProbeVerdict {
 }
 
 const CGROUP_SCRIPT = [
-  "for f in memory.max memory.swap.max cpu.max pids.max; do",
+  "for f in cgroup.controllers memory.max memory.swap.max cpu.max pids.max; do",
   '  if IFS= read -r l < "/sys/fs/cgroup/$f"; then printf \'%s=%s\\n\' "$f" "$l"; else printf \'%s=unreadable\\n\' "$f"; fi',
   "done",
 ].join("\n");
 
 /**
- * The cell's own cgroup (v2) shows the configured memory, swap, CPU and pids caps. A cap read with
- * another value is breached; a cap the cell could not read shows nothing either way, so with no
- * mismatch among those read the probe is unverifiable, never breached for a cause it did not see.
+ * The cell's own cgroup (v2) shows the configured memory, swap, CPU and pids caps. A host need not
+ * delegate a controller to the cell's cgroup: one missing from its cgroup.controllers caps nothing.
+ * A cap read with another value is breached; a cap the cell could not read, or whose controller
+ * its cgroup.controllers does not list, shows nothing either way, so with no mismatch among those
+ * observed the probe is unverifiable, never held and never breached for a cause it did not see.
  */
 export async function probeResourceCaps(cell: Cell, limits: CellResourceLimits): Promise<ProbeVerdict> {
   const probe = "resource caps";
@@ -68,25 +70,36 @@ export async function probeResourceCaps(cell: Cell, limits: CellResourceLimits):
       .filter((line) => line.includes("="))
       .map((line): [string, string] => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
   );
-  const expected: ReadonlyArray<readonly [string, string]> = [
-    ["memory.max", String(limits.memoryBytes)],
-    ["memory.swap.max", "0"],
-    ["cpu.max", expectedCpuMax(limits)],
-    ["pids.max", String(limits.pids)],
+  const expected: ReadonlyArray<readonly [file: string, value: string, controller: string]> = [
+    ["memory.max", String(limits.memoryBytes), "memory"],
+    ["memory.swap.max", "0", "memory"],
+    ["cpu.max", expectedCpuMax(limits), "cpu"],
+    ["pids.max", String(limits.pids), "pids"],
   ];
   const read = (file: string): string | null => {
     const value = seen.get(file);
     return value === undefined || value === "unreadable" ? null : value;
   };
-  const unobservedCaps = expected.filter(([file]) => read(file) === null);
-  const mismatches = expected.filter(([file, value]) => read(file) !== null && read(file) !== value);
+  const controllersLine = read("cgroup.controllers");
+  const delegated = new Set(controllersLine === null ? [] : controllersLine.split(" ").filter((name) => name !== ""));
+  const undelegated = [...new Set(expected.map(([, , controller]) => controller))].filter((controller) => !delegated.has(controller));
+  const observed = (file: string, controller: string): boolean => read(file) !== null && delegated.has(controller);
+  const unobservedCaps = expected.filter(([file, , controller]) => !observed(file, controller));
+  const mismatches = expected.filter(([file, value, controller]) => observed(file, controller) && read(file) !== value);
   const outcome: ProbeOutcome = mismatches.length > 0 ? "breached" : unobservedCaps.length > 0 ? "unverifiable" : "held";
+  const controllersEvidence =
+    controllersLine === null
+      ? `; cgroup.controllers=${seen.get("cgroup.controllers") ?? "(not printed)"}`
+      : undelegated.length === 0
+        ? ""
+        : `; controllers not delegated to the cell: ${undelegated.join(", ")} (cgroup.controllers=${controllersLine})`;
   return {
     probe,
     outcome,
     evidence:
       expected.map(([file]) => `${file}=${seen.get(file) ?? "(not printed)"}`).join(", ") +
       (mismatches.length === 0 ? "" : `; expected ${mismatches.map(([file, value]) => `${file}=${value}`).join(", ")}`) +
+      controllersEvidence +
       (unobservedCaps.length === 0 ? "" : `; not observed: ${unobservedCaps.map(([file]) => file).join(", ")}`),
   };
 }

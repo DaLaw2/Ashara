@@ -47,7 +47,8 @@ describe("probeCredentialRead", () => {
 
 describe("probeResourceCaps", () => {
   const limits = { memoryBytes: 1024, cpus: 1, pids: 64 };
-  const printed = (memory: string): string => `memory.max=${memory}\nmemory.swap.max=0\ncpu.max=${expectedCpuMax(limits)}\npids.max=64\n`;
+  const printed = (memory: string, controllers = "cpuset cpu io memory pids"): string =>
+    `cgroup.controllers=${controllers}\nmemory.max=${memory}\nmemory.swap.max=0\ncpu.max=${expectedCpuMax(limits)}\npids.max=64\n`;
 
   it("holds when every cap reads as configured", async () => {
     expect((await probeResourceCaps(cellPrinting(printed("1024")), limits)).outcome).toBe("held");
@@ -61,6 +62,19 @@ describe("probeResourceCaps", () => {
 
   it("is breached when a cap reads with another value", async () => {
     expect((await probeResourceCaps(cellPrinting(printed("max")), limits)).outcome).toBe("breached");
+  });
+
+  it("is unverifiable, naming the controller, when the host did not delegate one to the cell, whatever its file reads", async () => {
+    const verdict = await probeResourceCaps(cellPrinting(printed("1024", "cpu memory")), limits);
+    expect(verdict.outcome).toBe("unverifiable");
+    expect(verdict.evidence).toContain("controllers not delegated to the cell: pids (cgroup.controllers=cpu memory)");
+    expect(verdict.evidence).toContain("not observed: pids.max");
+  });
+
+  it("is unverifiable when the cell's cgroup.controllers could not be read", async () => {
+    const verdict = await probeResourceCaps(cellPrinting(printed("1024", "unreadable")), limits);
+    expect(verdict.outcome).toBe("unverifiable");
+    expect(verdict.evidence).toContain("; cgroup.controllers=unreadable");
   });
 });
 

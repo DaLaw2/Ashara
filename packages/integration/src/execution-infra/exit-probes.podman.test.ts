@@ -57,6 +57,9 @@ afterAll(async () => {
 describe("exit 6 probes from inside a real cell", () => {
   it("the cell's cgroup holds the configured memory, swap, CPU and pids caps; other caps do not match", async () => {
     const caps = await probeResourceCaps(cell, LIMITS);
+    // A host that does not delegate memory, cpu and pids to the cell's cgroup is reported as such,
+    // apart from a cap that reads wrong.
+    expect(caps.evidence, `the host delegates every capped controller to the cell: ${caps.evidence}`).not.toMatch(/cgroup\.controllers=/);
     expect(caps.evidence).toBe("memory.max=268435456, memory.swap.max=0, cpu.max=50000 100000, pids.max=64");
     expect(caps.outcome).toBe("held");
     expect((await probeResourceCaps(cell, { ...LIMITS, pids: 65 })).outcome).toBe("breached");

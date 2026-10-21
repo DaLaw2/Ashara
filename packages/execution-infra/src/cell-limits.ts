@@ -9,7 +9,7 @@ import { CellLimitsInvalid } from "./errors.js";
 export interface CellResourceLimits {
   /** The memory cap in bytes; swap beyond it is denied (--memory-swap equals --memory). */
   readonly memoryBytes: number;
-  /** CPUs as a fraction of whole cores (--cpus; a CFS quota over a 100 ms period for builds). */
+  /** CPUs as a fraction of whole cores: a CFS quota over a 100 ms period, set explicitly for cells and builds alike. */
   readonly cpus: number;
   /** The most processes and threads a cell may hold at once (--pids-limit). */
   readonly pids: number;
@@ -81,20 +81,24 @@ export function runLimitArgs(limits: CellResourceLimits): string[] {
   return [
     `--memory=${limits.memoryBytes}`,
     `--memory-swap=${limits.memoryBytes}`,
-    `--cpus=${limits.cpus}`,
+    `--cpu-period=${CFS_PERIOD_MICROS}`,
+    `--cpu-quota=${cpuQuotaMicros(limits.cpus)}`,
     `--pids-limit=${limits.pids}`,
   ];
 }
 
-/** The CFS quota `--cpus` stands for, over CFS_PERIOD_MICROS. */
+/**
+ * The CFS quota of `cpus`, over CFS_PERIOD_MICROS. The period is passed, never left to podman's
+ * default for --cpus, so the cell's cpu.max is what expectedCpuMax names on any podman.
+ */
 function cpuQuotaMicros(cpus: number): number {
   return Math.round(cpus * CFS_PERIOD_MICROS);
 }
 
 /**
  * The `podman build` options that cap each build container. podman build has no --cpus and no
- * --pids-limit (podman 5.8.2 `podman build --help`): the CPU cap is the same CFS quota --cpus sets,
- * and the pids cap is not applied to builds.
+ * --pids-limit (podman 5.8.2 `podman build --help`): the CPU cap is the same CFS quota and period a
+ * cell runs under, and the pids cap is not applied to builds.
  */
 export function buildLimitArgs(limits: CellResourceLimits): string[] {
   return [
