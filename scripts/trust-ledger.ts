@@ -50,6 +50,7 @@ import { createDb, DEFAULT_DATABASE_URL, type DbHandle } from "@ashara/db";
 import { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import { describeErrorChain, JsonParseFailed, parseJson, parseProjectId, type ProjectId } from "@ashara/shared";
 import { projectHalted } from "@ashara/delivery/predicates";
+import { projectWorkItems } from "@ashara/delivery/reads";
 import { readRunEvidence } from "@ashara/workplace";
 import type { JudgedVerdict } from "./hidden-verdict.js";
 import { armSchema, type MappingFile, PoolMappingRefused, refuseInsideGitTree } from "./pool-mapping.js";
@@ -586,7 +587,7 @@ export async function appendRun(db: DbHandle, options: AppendOptions): Promise<n
     const recorded = before.pairs.filter((row) => row.run === pick.run && row.arm === "ashara").map((row) => row.intended);
     if (recorded.length === 0) {
       const ashara = asharaGuaranteesOf(options.projectId, await lastReportGuaranteeVerdictsOf(db, options.projectId));
-      const spend = spendOf(pick.run, (await readRunEvidence(db, options.projectId, projectHalted)).calls);
+      const spend = spendOf(pick.run, (await readRunEvidence(db, options.projectId, projectHalted, projectWorkItems)).calls);
       rows.push(...pairRows({ options, pick, facts, readers, hidden, ashara, spend }));
     } else if (!sameSet(recorded, facts.intended.map((entry) => entry.id))) {
       throw new TrustLedgerAppendRefused(pick.run, `the ledger records pair rows for ${recorded.join(", ")}, not the intended guarantees the facts name`);

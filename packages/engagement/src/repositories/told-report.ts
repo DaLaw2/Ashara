@@ -1,6 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import { clientMessages, insertedRow, toldReports } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
+import { haltEpisodeOf } from "@ashara/delivery/predicates";
+import { planRevisionProjects } from "@ashara/delivery/reads";
+import { recordedSweep } from "@ashara/quality/published-reads";
 import type { ToldSubjectKind } from "../predicates.js";
 
 // The Liaison's told record: one told_reports row per subject it told the client of, written in the
@@ -30,9 +33,56 @@ export async function insertOutboundReport(tx: DbHandle, projectId: string, body
   return insertedRow(rows, "client_messages", what).id;
 }
 
-/** Records `reportId` as telling each of `subjectIds`; returns how many were recorded, the others being told already. */
+/** A told record was asked for a subject its owner does not publish as the project's: a report on it tells the client of nothing of theirs. */
+class ToldSubjectNotOfProject extends Error {
+  constructor(
+    readonly kind: ToldSubjectKind,
+    readonly subjectIds: readonly string[],
+    readonly projectId: string,
+  ) {
+    super(`cannot record a told ${kind} report of project ${projectId}: ${subjectIds.join(", ")} is no ${kind} subject of that project`);
+    this.name = "ToldSubjectNotOfProject";
+  }
+}
+
+/**
+ * The project each subject belongs to, as the subject's owner publishes it: a halt episode
+ * Delivery's, a plan revision Delivery's, a delivered report's passed sweep Quality's. A subject
+ * its owner holds no record of is absent.
+ */
+async function subjectProjects(tx: DbHandle, kind: ToldSubjectKind, subjectIds: readonly string[]): Promise<Map<string, string>> {
+  switch (kind) {
+    case "plan-revision":
+      return planRevisionProjects(tx, subjectIds);
+    case "project-blocked":
+    case "project-resumed": {
+      const projects = new Map<string, string>();
+      for (const id of subjectIds) {
+        const episode = await haltEpisodeOf(tx, id);
+        if (episode !== null) projects.set(id, episode.projectId);
+      }
+      return projects;
+    }
+    case "delivered": {
+      const projects = new Map<string, string>();
+      for (const id of subjectIds) {
+        const sweep = await recordedSweep(tx, id, true);
+        if (sweep !== null) projects.set(id, sweep.projectId);
+      }
+      return projects;
+    }
+  }
+}
+
+/**
+ * Records `reportId` as telling each of `subjectIds`; returns how many were recorded, the others
+ * being told already. A subject that is not the project's, as its owner publishes it, throws.
+ */
 export async function recordTold(tx: DbHandle, kind: ToldSubjectKind, subjectIds: readonly string[], projectId: string, reportId: string): Promise<number> {
   if (subjectIds.length === 0) return 0;
+  const owners = await subjectProjects(tx, kind, subjectIds);
+  const foreign = subjectIds.filter((id) => owners.get(id) !== projectId);
+  if (foreign.length > 0) throw new ToldSubjectNotOfProject(kind, foreign, projectId);
   const recorded = await tx
     .insert(toldReports)
     .values(subjectIds.map((subjectId) => ({ subjectKind: kind, subjectId, projectId, reportId })))

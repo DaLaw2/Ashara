@@ -1,5 +1,6 @@
-import { SQL, sql, type AnyColumn } from "drizzle-orm";
-import { projects, qualifiedColumn } from "@ashara/db";
+import { SQL, and, asc, eq, inArray, isNotNull, sql, type AnyColumn } from "drizzle-orm";
+import { clientMessages, projects, qualifiedColumn } from "@ashara/db";
+import type { DbHandle } from "@ashara/db";
 import { projectHalted, projectHaltedOnModelWork } from "@ashara/delivery/predicates";
 import { REPORT_SUBJECT } from "./report-subjects.js";
 
@@ -35,7 +36,7 @@ export const projectReadsClientInput = (): SQL => sql`(${projectActive()} AND NO
  * must already hold, so every reader that admits only active projects to take in, plan, report on
  * or dispatch also requires this. A stop committed before such a read is honoured by it.
  */
-export const noOpenStop = (projectId: AnyColumn): SQL =>
+export const noOpenStop = (projectId: AnyColumn | SQL): SQL =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages s WHERE s.project_id = ${projectId}
     AND s.direction = 'inbound' AND s.kind = 'stop' AND s.consumed_at IS NULL)`;
 
@@ -74,3 +75,39 @@ export const planRevisionTold = (revisionId: AnyColumn | SQL): SQL => reportTold
 /** The Liaison's report on the project's planning-stopped outcome (reports_on 'planning-stopped') is posted. */
 export const planningStoppedTold = (projectId: AnyColumn): SQL =>
   sql`EXISTS (SELECT 1 FROM client_messages ps WHERE ps.project_id = ${qualifiedColumn(projectId)} AND ps.reports_on = ${REPORT_SUBJECT.planningStopped})`;
+
+/** The words of each client message `ids` names that exists. */
+export async function clientMessageBodies(db: DbHandle, ids: readonly string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db.select({ id: clientMessages.id, body: clientMessages.body }).from(clientMessages).where(inArray(clientMessages.id, [...ids]));
+  return new Map(rows.map((row) => [row.id, row.body]));
+}
+
+/** A consumed stop as a reader's filter names it: its id, an SQL expression over the stop the read is of. */
+export interface StopRef {
+  readonly id: SQL;
+}
+
+/**
+ * Every consumed stop that stopped its project, the project still stopped, that `where` admits,
+ * earliest consumed first. The stop that stopped the project is the one that records it
+ * (stop_found_halted), or, on a stop that records nothing of it, the one its stop report answers; a
+ * second stop of a project already stopped stopped nothing.
+ */
+export async function stopsThatStopped(db: DbHandle, where: (stop: StopRef) => SQL | undefined): Promise<Array<{ readonly stopId: string; readonly projectId: string }>> {
+  return db
+    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId })
+    .from(clientMessages)
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    .where(
+      and(
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.kind, "stop"),
+        isNotNull(clientMessages.consumedAt),
+        eq(projects.lifecycle, "stopped"),
+        sql`(${clientMessages.stopFoundHalted} IS NOT NULL OR EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = ${REPORT_SUBJECT.clientStop}))`,
+        where({ id: qualifiedColumn(clientMessages.id) }),
+      ),
+    )
+    .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
+}

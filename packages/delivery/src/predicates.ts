@@ -127,8 +127,30 @@ export function isSprint0Origin(origin: string | null | undefined): boolean {
 /** A plan revision's review task: the task that reviews the revision's check suites. */
 export const reviewTask = (w: WorkItemColumns): SQL => sql`${w.taskSpec}->>'origin' = ${REVIEW_ORIGIN}`;
 
-/** The columns of a project_blocks row a reader's filter of the halt episodes names. */
-export type HaltEpisodeColumns = Pick<typeof projectBlocks, "id" | "projectId" | "kind" | "blockedAt" | "endedAt" | "endKind">;
+/**
+ * A halt episode as a reader's filter names it: its id, project, kind and when it began, and whether
+ * it is open or ended by the project's return to work, each an SQL expression over the episode the
+ * read is of. A reader composes its own conditions on them and never names Delivery's columns.
+ */
+export interface HaltEpisodeRef {
+  readonly id: SQL;
+  readonly projectId: SQL;
+  readonly kind: SQL;
+  readonly blockedAt: SQL;
+  /** Nothing ended the episode yet. */
+  readonly open: SQL;
+  /** An unblock or a passing probe ended it: the project returned to work. */
+  readonly resumed: SQL;
+}
+
+const HALT_EPISODE: HaltEpisodeRef = {
+  id: qualifiedColumn(projectBlocks.id),
+  projectId: qualifiedColumn(projectBlocks.projectId),
+  kind: qualifiedColumn(projectBlocks.kind),
+  blockedAt: qualifiedColumn(projectBlocks.blockedAt),
+  open: sql`${qualifiedColumn(projectBlocks.endedAt)} IS NULL`,
+  resumed: sql`${qualifiedColumn(projectBlocks.endKind)} IN ('unblocked', 'probe_passed')`,
+};
 
 /**
  * A halt episode as Delivery publishes it to the readers that tell the client of it: what halted
@@ -147,7 +169,7 @@ export interface HaltEpisode {
 }
 
 /** The halt episodes `where` admits, oldest halt first. */
-export async function haltEpisodesWhere(db: DbHandle, where: (episode: HaltEpisodeColumns) => SQL | undefined): Promise<HaltEpisode[]> {
+export async function haltEpisodesWhere(db: DbHandle, where: (episode: HaltEpisodeRef) => SQL | undefined): Promise<HaltEpisode[]> {
   return db
     .select({
       id: projectBlocks.id,
@@ -160,7 +182,16 @@ export async function haltEpisodesWhere(db: DbHandle, where: (episode: HaltEpiso
       work: projectBlocks.work,
     })
     .from(projectBlocks)
-    .where(where(projectBlocks))
+    .where(where(HALT_EPISODE))
+    .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
+}
+
+/** The open halt episodes `where` admits, each by its id and project, oldest halt first. */
+export async function openHaltEpisodesWhere(db: DbHandle, where: (episode: HaltEpisodeRef) => SQL | undefined): Promise<Array<{ readonly id: string; readonly projectId: string }>> {
+  return db
+    .select({ id: projectBlocks.id, projectId: projectBlocks.projectId })
+    .from(projectBlocks)
+    .where(and(HALT_EPISODE.open, where(HALT_EPISODE)))
     .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
 }
 
@@ -172,11 +203,11 @@ export interface EndedHaltEpisode {
 }
 
 /** The ended halt episodes `where` admits, earliest end first. */
-export async function endedHaltEpisodesWhere(db: DbHandle, where: (episode: HaltEpisodeColumns) => SQL | undefined): Promise<EndedHaltEpisode[]> {
+export async function endedHaltEpisodesWhere(db: DbHandle, where: (episode: HaltEpisodeRef) => SQL | undefined): Promise<EndedHaltEpisode[]> {
   return db
     .select({ id: projectBlocks.id, projectId: projectBlocks.projectId, endKind: projectBlocks.endKind })
     .from(projectBlocks)
-    .where(and(isNotNull(projectBlocks.endedAt), where(projectBlocks)))
+    .where(and(isNotNull(projectBlocks.endedAt), where(HALT_EPISODE)))
     .orderBy(asc(projectBlocks.endedAt), asc(projectBlocks.id));
 }
 

@@ -45,8 +45,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  *   out a goal's close, or states the wrong tasks as not checked by a stored check (I4);
  * - delivered-report-drops-guarantee: the delivered report's guarantee table leaves out a
  *   guarantee in force (I4);
- * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
- *   it is posted again (I4, exactly once) and its acceptance reads as untold (I4:accepted-unreported);
+ * - delivered-report-unrecorded: the delivered report is posted but its told record names another
+ *   subject than its sweep, so it is posted again (I4, exactly once) and its acceptance reads as
+ *   untold (I4:accepted-unreported);
  * - halt-report-suppressed, resumption-report-suppressed, stop-report-suppressed,
  *   planning-stopped-report-suppressed: no halt, resumption, stop or planning stop is ever listed as
  *   due its report, so the client is never told of it (I2's and I4's silence clause);

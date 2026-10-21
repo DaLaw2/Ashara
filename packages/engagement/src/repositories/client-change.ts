@@ -1,9 +1,9 @@
 import { and, asc, eq, inArray, isNull, lt, not, or, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { clientMessages, projects, visionDocuments, workItems } from "@ashara/db";
+import { clientMessages, projects, visionDocuments } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import { liveInCurrentPlan, projectHalted } from "@ashara/delivery/predicates";
+import { projectHalted } from "@ashara/delivery/predicates";
+import { completedImplementationTaskIds, currentTasksCiting } from "@ashara/delivery/reads";
 import { projectWork, projectWorkBudget, tasksWorkDrawn } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
@@ -151,7 +151,6 @@ async function proposalsOf(db: DbHandle, projectId: ProjectId): Promise<StoredPr
   }));
 }
 
-const CitingRowsSchema = z.array(z.object({ id: z.string(), title: z.string(), status: z.string(), cites: z.array(z.string()) }));
 
 /** Finance's read of the requests each task drew names no figure for a task it was asked of. */
 class TaskDrawnUnread extends Error {
@@ -194,44 +193,19 @@ function citingStatus(taskId: string, status: string): CitingTask["status"] {
   }
 }
 
-const w = alias(workItems, "w");
-
-/**
- * The implementation tasks live in the project's current plan (liveInCurrentPlan) and the vision keys
- * each cites. A given-up task is not one: the plan was repaired around it, and no work of it is left
- * for a correction to touch.
- */
-const currentTasks = sql`w.level = 'Task' AND w.work_kind = 'implementation' AND ${liveInCurrentPlan(w)}
-  AND jsonb_typeof(w.task_spec->'sources') = 'array'`;
-
 /**
  * What a correction of `ids` touches: the implementation tasks of the project's current plan citing
  * any of them, the requests each completed implementation task drew, and what the project's work
  * budget has left.
  */
 export async function readChangeImpact(db: DbHandle, projectId: ProjectId, ids: readonly string[], budgets: WorkBudgets): Promise<ChangeImpact> {
-  // The keys are vision keys (a letter and a number), so the array literal needs no quoting.
-  const keys = `{${ids.join(",")}}`;
-  const citing = await db.execute(sql`
-    SELECT w.id, w.title, w.status,
-      ARRAY(SELECT DISTINCT s->>'id' FROM jsonb_array_elements(w.task_spec->'sources') s
-            WHERE s->>'id' = ANY(${keys}::text[])) AS cites
-    FROM work_items w
-    WHERE w.project_id = ${projectId} AND ${currentTasks}
-    ORDER BY w.created_at, w.id`);
-  const tasks = CitingRowsSchema.parse(citing.rows)
-    .filter((row) => row.cites.length > 0)
-    .map((row): CitingTask => ({ id: row.id, title: row.title, status: citingStatus(row.id, row.status), cites: row.cites }));
-  const completed = await db
-    .select({ id: workItems.id })
-    .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), eq(workItems.workKind, "implementation"), eq(workItems.status, "Completed")))
-    .orderBy(asc(workItems.createdAt), asc(workItems.id));
-  const drawnByTask = await tasksWorkDrawn(db, completed.map((row) => row.id));
+  const tasks = (await currentTasksCiting(db, projectId, ids)).map((row): CitingTask => ({ id: row.id, title: row.title, status: citingStatus(row.id, row.status), cites: row.cites }));
+  const completed = await completedImplementationTaskIds(db, projectId, null, "planned");
+  const drawnByTask = await tasksWorkDrawn(db, completed);
   const work = await projectWork(db, projectId);
   return {
     tasks,
-    completedTaskRequests: completed.map((row) => drawnOf(drawnByTask, row.id)),
+    completedTaskRequests: completed.map((id) => drawnOf(drawnByTask, id)),
     budgetLeftRequests: Math.max(0, projectWorkBudget(budgets, work.granted).budgetRequests - work.drawn),
   };
 }

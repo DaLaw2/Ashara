@@ -2,6 +2,7 @@ import { latestRosterRoles } from "@ashara/db";
 import type { createDb } from "@ashara/db";
 import { readEach } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { parseStoredVision } from "../acl/engagement-vision-acl.js";
 import { createBulkPlan } from "../bulk-plan.js";
 import type { FirstPlanStore } from "../first-plan.js";
 import { listProjectsAwaitingFirstPlan, recordFirstPlanFailure, stopFirstPlanning, withFirstPlanTransaction } from "../repositories/first-plan.js";
@@ -31,7 +32,7 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
         async (row) => ({
           projectId: row.projectId,
           projectName: row.projectName,
-          vision: row.vision,
+          vision: parseStoredVision(row.projectId, row.vision),
           planAttempts: row.planAttempts,
           planLastError: row.planLastError,
           rosterRows: await latestRosterRoles(db, row.projectId),

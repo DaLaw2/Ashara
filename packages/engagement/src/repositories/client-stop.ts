@@ -1,9 +1,11 @@
 import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, projects, workItems } from "@ashara/db";
+import { clientMessages, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import { tasksWithMerge } from "@ashara/delivery/reads";
+import { sweepOfTerminal } from "@ashara/quality/published-reads";
 import type { EndHaltOnStop } from "../ports.js";
 import { stopProject } from "../project-lifecycle.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
@@ -101,11 +103,7 @@ export async function recordClientStop(db: Database, stop: OpenStopRow, endHalt:
  * before the preemption, and a session's terminal write is fail-soft.
  */
 async function mergedTasksOf(db: DbHandle, projectId: ProjectId): Promise<MergedTaskRow[]> {
-  const rows = await db
-    .select({ id: workItems.id, title: workItems.title, commit: workItems.mergeCommit, kind: workItems.mergeKind })
-    .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), isNotNull(workItems.mergeCommit)))
-    .orderBy(asc(workItems.updatedAt), asc(workItems.id));
+  const rows = await tasksWithMerge(db, projectId);
   const merged: MergedTaskRow[] = [];
   for (const row of rows) {
     if (row.commit === null) continue;
@@ -132,10 +130,9 @@ interface DueStopReportRow {
  */
 export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopReportRow | UnreadSubject>> {
   const rows = await db
-    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted, sweepId: acceptanceSweeps.id })
+    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted })
     .from(clientMessages)
     .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    .leftJoin(acceptanceSweeps, eq(acceptanceSweeps.stopId, clientMessages.id))
     .where(
       and(
         eq(clientMessages.direction, "inbound"),
@@ -151,12 +148,13 @@ export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopRep
     (row) => ({ id: `report:${row.stopId}`, projectId: parseProjectId(row.projectId, "client_messages.project_id") }),
     async (row): Promise<DueStopReportRow> => {
       const projectId = parseProjectId(row.projectId, "client_messages.project_id");
+      const sweepId = await sweepOfTerminal(db, { kind: "stop", stopId: row.stopId });
       return {
         stopId: row.stopId,
         projectId,
         merged: await mergedTasksOf(db, projectId),
         paused: row.paused === true,
-        guarantees: await readGuaranteeTable(db, row.sweepId === null ? { kind: "no-sweep", projectId } : { kind: "sweep", sweepId: row.sweepId }),
+        guarantees: await readGuaranteeTable(db, sweepId === null ? { kind: "no-sweep", projectId } : { kind: "sweep", sweepId }),
       };
     },
   );

@@ -10,6 +10,7 @@ export type { WorkBudgets } from "./work-ledger.js";
 export { burnZoneOf } from "./work-burn.js";
 export { attemptGrade } from "./attempt-grade.js";
 export { projectWork, tasksWorkDrawn } from "./work-drawn.js";
+export { callTotalsByTaskAndProvider, siteCostOf, taskCallsOf } from "./ledger-reads.js";
 export type { BurnZone } from "./work-burn.js";
 export type { WorkAtBudget } from "./errors.js";
 export { WorkBudgetSpent } from "./errors.js";

@@ -5,6 +5,7 @@ export { createAgentBrief } from "./agent-brief.js";
 export { ATTEMPT_TERMINALS, CONVERSATION_RECORDS_DIR, TERMINAL_SESSION_PHASES, createSessionId } from "./session-vocabulary.js";
 export type { ErrorEnvelope } from "./error-envelope.js";
 export { DevSessionRepository } from "./dev-session-repository.js";
+export { attemptsWithModel, lastCompletedAttempts } from "./attempt-reads.js";
 export { readRunEvidence } from "./run-evidence.js";
 export { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 export { environmentDefinitionRules } from "./environment-rules.js";

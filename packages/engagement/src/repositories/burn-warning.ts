@@ -1,9 +1,8 @@
 import { and, eq, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { clientMessages, insertedRow, projects, workBurnWarnings, workItems } from "@ashara/db";
+import { clientMessages, insertedRow, projects, workBurnWarnings } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import { inCurrentPlan } from "@ashara/delivery/predicates";
+import { currentPlanImplementationTasks, currentPlanRevision } from "@ashara/delivery/reads";
 import { projectWork } from "@ashara/finance";
 import { parseProjectId, readEach, type UnreadSubject } from "@ashara/shared";
 import { noOpenStop, projectAtWork } from "../predicates.js";
@@ -36,12 +35,6 @@ class ProjectBurnUnreadable extends Error {
   }
 }
 
-const w = alias(workItems, "w");
-
-/** An implementation task of the project's current plan (inCurrentPlan): given-up tasks count, superseded ones do not. */
-const ofCurrentPlan = sql`w.project_id = projects.id AND w.level = 'Task' AND w.work_kind = 'implementation'
-  AND ${inCurrentPlan(w)}`;
-
 const ListedSchema = z.array(z.looseObject({ projectId: z.string() }));
 
 /**
@@ -56,9 +49,9 @@ export async function listProjectBurns(db: DbHandle): Promise<Array<ProjectBurn 
              WHERE b.project_id = listed."projectId" AND b.plan_revision = listed."planRevision") AS reported
     FROM (
       SELECT projects.id AS "projectId", projects.created_at,
-             (SELECT COALESCE(max(r.revision), 1) FROM plan_revisions r WHERE r.project_id = projects.id) AS "planRevision",
-             (SELECT count(*) FROM work_items w WHERE ${ofCurrentPlan}) AS "plannedTasks",
-             (SELECT count(*) FROM work_items w WHERE ${ofCurrentPlan} AND w.status = 'Completed') AS "completedTasks"
+             ${currentPlanRevision(projects.id)} AS "planRevision",
+             ${currentPlanImplementationTasks(projects.id, "planned")} AS "plannedTasks",
+             ${currentPlanImplementationTasks(projects.id, "completed")} AS "completedTasks"
       FROM projects
       WHERE ${projectAtWork()} AND ${noOpenStop(projects.id)}
     ) listed

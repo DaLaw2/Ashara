@@ -1,10 +1,12 @@
-import { and, asc, eq, inArray, isNull, lte, or, sql, type AnyColumn } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, deliveredReportAttempts, intakeReadings, isDatabaseConnectionFault, projects, workItems } from "@ashara/db";
+import { deliveredReportAttempts, intakeReadings, isDatabaseConnectionFault } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { completedGoalTasks, givenUpItem, goalTaskSql } from "@ashara/delivery/predicates";
+import { completedGoalTasks } from "@ashara/delivery/predicates";
+import { givenUpGoalTitles, mergedCommitsOf, workItemSummaries } from "@ashara/delivery/reads";
+import { passedSweepsWhere, recordedSweep } from "@ashara/quality/published-reads";
 import { noOpenStop, reportTold } from "../predicates.js";
 import type { DeliveredReportFailureRecord, ReadingTold } from "../delivered-report.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
@@ -108,8 +110,7 @@ class SweepTaskMissing extends ReportRecordUnreadable {
 /** The titles of the tasks `ids` names, in its order. */
 async function sweepTaskTitles(db: DbHandle, sweepId: string, ids: readonly string[]): Promise<string[]> {
   if (ids.length === 0) return [];
-  const rows = await db.select({ id: workItems.id, title: workItems.title }).from(workItems).where(inArray(workItems.id, [...ids]));
-  const titles = new Map(rows.map((row) => [row.id, row.title]));
+  const titles = new Map((await workItemSummaries(db, ids)).map((row) => [row.id, row.title]));
   return ids.map((id) => {
     const title = titles.get(id);
     if (title === undefined) throw new SweepTaskMissing(sweepId, id);
@@ -122,8 +123,7 @@ async function passedChecksOf(db: DbHandle, sweepId: string, recorded: SweepOutc
   if (recorded.kind === "unrecorded") return { kind: "unrecorded" };
   const passed = recorded.checks.filter((check) => check.outcome === "passed");
   const ids = [...new Set(passed.map((check) => check.taskId))];
-  const rows = ids.length === 0 ? [] : await db.select({ id: workItems.id, title: workItems.title }).from(workItems).where(inArray(workItems.id, ids));
-  const titles = new Map(rows.map((row) => [row.id, row.title]));
+  const titles = new Map((await workItemSummaries(db, ids)).map((row) => [row.id, row.title]));
   return {
     kind: "recorded",
     checks: passed.map((check) => {
@@ -134,32 +134,9 @@ async function passedChecksOf(db: DbHandle, sweepId: string, recorded: SweepOutc
   };
 }
 
-/**
- * The project's goal tasks given up (Abandoned), oldest first: each is a task the plan was repaired
- * around. A task a plan revision replaced while it was open (blocked_reason source `superseded`) was
- * set aside, not given up, and is not one.
- */
-async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<string[]> {
-  const rows = await db
-    .select({ title: workItems.title })
-    .from(workItems)
-    .where(
-      and(
-        eq(workItems.projectId, projectId),
-        goalTaskSql,
-        givenUpItem(workItems),
-      ),
-    )
-    .orderBy(asc(workItems.updatedAt), asc(workItems.id));
-  return rows.map((row) => row.title);
-}
-
 async function goalCloses(db: DbHandle, projectId: string): Promise<DueDeliveredReportRow["goals"]> {
   const goals = await completedGoalTasks(db, projectId);
-  const merges = await db
-    .select({ title: workItems.title, commit: workItems.mergeCommit })
-    .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.mergeKind, "merged")));
+  const merges = await mergedCommitsOf(db, projectId);
   return goals.map((goal) => {
     const commit = goal.mergeCommit;
     if (commit === null) return { title: goal.title, close: { kind: "no-record" } };
@@ -232,6 +209,14 @@ class AcceptedProjectWithoutWorkspace extends ReportRecordUnreadable {
   }
 }
 
+/** What Engagement keeps of a passed sweep beside it: its project's target checkout and the counts of its failed attempts. */
+const DueSweepRecordSchema = z.strictObject({
+  workspacePath: z.string().nullable(),
+  failures: z.number().int().nonnegative(),
+  interfaceReadFailures: z.number().int().nonnegative(),
+  recordFailures: z.number().int().nonnegative(),
+});
+
 /** One passed sweep's row, as listDueDeliveredReports reads it. */
 interface DueSweep {
   readonly id: string;
@@ -268,9 +253,6 @@ async function dueReportOf(db: DbHandle, row: DueSweep, sweepOutcome: SweepOutco
   };
 }
 
-/** A count of the sweep's failed attempts: none while no attempt failed, so no attempts row is on file. */
-const attemptCount = (column: AnyColumn) => sql<number>`COALESCE(${column}, 0)::int`.mapWith(Number);
-
 /**
  * Every passed sweep whose delivered report is not yet told and is not waiting out the backoff of
  * a failed attempt, oldest first, with what the report is rendered from. A sweep
@@ -279,29 +261,21 @@ const attemptCount = (column: AnyColumn) => sql<number>`COALESCE(${column}, 0)::
  * stop report is what it is told.
  */
 export async function listDueDeliveredReports(db: DbHandle, sweepOutcome: SweepOutcomeReader): Promise<Array<DueDeliveredReportRow | UnreadDeliveredReportRow>> {
-  const rows = await db
-    .select({
-      id: acceptanceSweeps.id,
-      projectId: acceptanceSweeps.projectId,
-      mainCommit: acceptanceSweeps.mainCommit,
-      workspacePath: projects.workspacePath,
-      failures: attemptCount(deliveredReportAttempts.failures),
-      interfaceReadFailures: attemptCount(deliveredReportAttempts.interfaceReadFailures),
-      recordFailures: attemptCount(deliveredReportAttempts.recordFailures),
-    })
-    .from(acceptanceSweeps)
-    .innerJoin(projects, eq(projects.id, acceptanceSweeps.projectId))
-    .leftJoin(deliveredReportAttempts, eq(deliveredReportAttempts.sweepId, acceptanceSweeps.id))
-    .where(
-      and(
-        eq(acceptanceSweeps.passed, true),
-        sql`NOT ${reportTold("delivered", acceptanceSweeps.id)}`,
-        eq(projects.lifecycle, "accepted"),
-        noOpenStop(projects.id),
-        or(isNull(deliveredReportAttempts.retryAt), lte(deliveredReportAttempts.retryAt, sql`now()`)),
-      ),
-    )
-    .orderBy(asc(acceptanceSweeps.createdAt), asc(acceptanceSweeps.id));
+  const sweeps = await passedSweepsWhere(
+    db,
+    (sweep) =>
+      sql`(NOT ${reportTold("delivered", sweep.id)}
+        AND EXISTS (SELECT 1 FROM projects ap WHERE ap.id = ${sweep.projectId} AND ap.lifecycle = 'accepted')
+        AND ${noOpenStop(sweep.projectId)}
+        AND NOT EXISTS (SELECT 1 FROM delivered_report_attempts da WHERE da.sweep_id = ${sweep.id} AND da.retry_at > now()))`,
+    // A count of the sweep's failed attempts is none while no attempt failed: no attempts row is on file.
+    (sweep) => sql<unknown>`(SELECT jsonb_build_object('workspacePath', ap.workspace_path,
+        'failures', COALESCE(da.failures, 0), 'interfaceReadFailures', COALESCE(da.interface_read_failures, 0),
+        'recordFailures', COALESCE(da.record_failures, 0))
+      FROM projects ap LEFT JOIN delivered_report_attempts da ON da.sweep_id = ${sweep.id}
+      WHERE ap.id = ${sweep.projectId})`,
+  );
+  const rows = sweeps.map((sweep) => ({ id: sweep.id, projectId: sweep.projectId, mainCommit: sweep.mainCommit, ...DueSweepRecordSchema.parse(sweep.annotation) }));
   const due: Array<DueDeliveredReportRow | UnreadDeliveredReportRow> = [];
   for (const row of rows) {
     const projectId = parseProjectId(row.projectId, "acceptance_sweeps.project_id");
@@ -329,11 +303,8 @@ class DeliveredReportFailureUnrecorded extends Error {
 
 /** The passed sweep's project; null when no passed sweep has that id. */
 async function passedSweepProject(db: DbHandle, sweepId: string): Promise<string | null> {
-  const [sweep] = await db
-    .select({ projectId: acceptanceSweeps.projectId })
-    .from(acceptanceSweeps)
-    .where(and(eq(acceptanceSweeps.id, sweepId), eq(acceptanceSweeps.passed, true)));
-  return sweep === undefined ? null : sweep.projectId;
+  const sweep = await recordedSweep(db, sweepId, true);
+  return sweep === null ? null : sweep.projectId;
 }
 
 /**

@@ -1,12 +1,12 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { planRevisions, taskChecks, workBurnWarnings, workItems } from "@ashara/db";
+import { workBurnWarnings } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import type { BurnZone } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
-import { goalTaskSql, inCurrentPlan } from "@ashara/delivery/predicates";
+import { currentGoalTasks, currentPlanRevision } from "@ashara/delivery/reads";
 import { WORK_ITEM_STATUSES, parseStoredTaskSpec } from "@ashara/delivery/work-item";
-import { inLatestCheckRevision, StoredDecidesSchema } from "@ashara/quality/stored-checks";
+import { StoredDecidesSchema, latestStoredChecks } from "@ashara/quality/stored-checks";
 import type { RiskRecords } from "../early-warning.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import { VisionRepository } from "./vision.js";
@@ -35,11 +35,7 @@ function specOf(taskId: string, raw: unknown): ReturnType<typeof parseStoredTask
 }
 
 async function delivering(db: DbHandle, projectId: ProjectId): Promise<Array<{ readonly id: string; readonly done: boolean; readonly cites: readonly string[] }>> {
-  const rows = await db
-    .select({ id: workItems.id, status: workItems.status, taskSpec: workItems.taskSpec })
-    .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), goalTaskSql, inCurrentPlan(workItems)))
-    .orderBy(asc(workItems.id));
+  const rows = await currentGoalTasks(db, projectId);
   return rows.flatMap((row) => {
     const spec = specOf(row.id, row.taskSpec);
     if (spec === undefined) throw new RiskRecordUnreadable(`work item ${row.id}: a goal task that records no task_spec`);
@@ -52,16 +48,7 @@ async function delivering(db: DbHandle, projectId: ProjectId): Promise<Array<{ r
 
 /** The vision item ids decided by the latest stored revision of each given task's checks. */
 async function decidedBy(db: DbHandle, taskIds: readonly string[]): Promise<string[]> {
-  if (taskIds.length === 0) return [];
-  const rows = await db
-    .select({ taskId: taskChecks.taskId, name: taskChecks.name, decides: taskChecks.decides })
-    .from(taskChecks)
-    .where(
-      and(
-        inArray(taskChecks.taskId, [...taskIds]),
-        inLatestCheckRevision(taskChecks.revision, taskChecks.taskId),
-      ),
-    );
+  const rows = await latestStoredChecks(db, { taskIds });
   return rows.flatMap((row) => {
     const decides = StoredDecidesSchema.safeParse(row.decides);
     if (!decides.success) throw new RiskRecordUnreadable(`task ${row.taskId}: stored check "${row.name}" records decides that do not parse: ${z.prettifyError(decides.error)}`);
@@ -77,7 +64,7 @@ async function burnZone(db: DbHandle, projectId: ProjectId): Promise<BurnZone | 
     .where(
       and(
         eq(workBurnWarnings.projectId, projectId),
-        sql`${workBurnWarnings.planRevision} = (SELECT COALESCE(max(${planRevisions.revision}), 1) FROM ${planRevisions} WHERE ${planRevisions.projectId} = ${projectId})`,
+        sql`${workBurnWarnings.planRevision} = ${currentPlanRevision(sql`${projectId}::uuid`)}`,
       ),
     );
   const zones = rows.map((row) => {

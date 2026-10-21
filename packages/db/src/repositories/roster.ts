@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
+import { qualifiedColumn } from "../qualified-column.js";
 import { projects, rosterRoles, visionDocuments } from "../schema/index.js";
 
 // A project's roster: the rows of its latest revision. Derived
@@ -47,6 +48,15 @@ class RosterProjectMissing extends Error {
 }
 
 const noRoster = () => sql`NOT EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = ${projects.id})`;
+
+/** The project has a roster: a row of any revision. */
+export const hasRoster = (projectId: AnyColumn): SQL => sql`EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = ${qualifiedColumn(projectId)})`;
+
+/** The role `roleId` names is a role of the project's latest roster revision. */
+export const roleOfLatestRoster = (projectId: string, roleId: AnyColumn): SQL => sql`EXISTS (
+  SELECT 1 FROM roster_roles r
+  WHERE r.project_id = ${projectId} AND r.role_id = ${roleId}
+    AND r.revision = (SELECT MAX(l.revision) FROM roster_roles l WHERE l.project_id = ${projectId}))`;
 
 /**
  * Projects every condition of `admitted` admits, with vision v1, no roster and nothing planned yet,

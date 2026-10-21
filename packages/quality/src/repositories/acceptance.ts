@@ -1,10 +1,10 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, guaranteeEvidence, projectBlocks, projects, taskChecks, undecidedItems, workItems } from "@ashara/db";
+import { acceptanceSweeps, guaranteeEvidence, projects, taskChecks, undecidedItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { SETTLED_WORK_ITEM_STATUSES, completedGoalTasks, goalTaskSql, pendingCorrection, pendingRepair, productScaffoldTask } from "../acl/delivery-acl.js";
-import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, REPORT_SUBJECT, type AcceptProject } from "../acl/engagement-acl.js";
+import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
+import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
 import type { FailedCheck, SweptCheck } from "../verification.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
@@ -19,9 +19,6 @@ import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 // sweep is recorded with the outcome of each stored check it ran and one evidence row per guarantee
 // in force, together.
 
-/** A status Delivery does not name settled reads as open, so a status it adds never lets a project read ready. */
-const settledStatuses = sql.join(SETTLED_WORK_ITEM_STATUSES.map((status) => sql`${status}`), sql`, `);
-
 /** Every condition of readiness, on the projects row in scope. */
 const readyForAcceptance = sql`(${projectAtWork()}
   AND ${projects.firstPlannedAt} IS NOT NULL
@@ -29,10 +26,8 @@ const readyForAcceptance = sql`(${projectAtWork()}
   AND NOT ${pendingRepair(projects.id)}
   AND ${noOpenStop(projects.id)}
   AND ${noOpenAnswer()}
-  AND NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id AND w.level = 'Task'
-    AND w.status NOT IN (${settledStatuses}))
-  AND EXISTS (SELECT 1 FROM ${workItems} WHERE ${workItems.projectId} = projects.id
-    AND ${workItems.status} = 'Completed' AND ${goalTaskSql}))`;
+  AND ${noTaskOpen(projects.id)}
+  AND ${completedGoalTaskExists(projects.id)})`;
 
 /** A Completed product scaffold with the merge its completion recorded; null when none is on record. */
 interface RecordedScaffold {
@@ -48,23 +43,6 @@ interface ReadyProjectRow {
   readonly goalTaskIds: readonly string[];
   /** The project's Completed product scaffolds with their recorded merges, oldest completion first. */
   readonly scaffoldMerges: readonly RecordedScaffold[];
-}
-
-/** The project's Completed product scaffolds, each with the merge its completion recorded. */
-async function completedScaffolds(db: DbHandle, projectId: string): Promise<RecordedScaffold[]> {
-  const rows = await db
-    .select({ taskId: workItems.id, mergeCommit: workItems.mergeCommit })
-    .from(workItems)
-    .where(
-      and(
-        eq(workItems.projectId, projectId),
-        eq(workItems.level, "Task"),
-        eq(workItems.status, "Completed"),
-        productScaffoldTask(workItems),
-      ),
-    )
-    .orderBy(asc(workItems.updatedAt), asc(workItems.id));
-  return rows.map((row) => ({ taskId: row.taskId, mergeCommit: row.mergeCommit }));
 }
 
 /** The projects ready for their acceptance sweep, oldest first. */
@@ -289,6 +267,25 @@ export async function recordAcceptanceDefect(
   });
 }
 
+/** A terminal's project has no projects row, which its foreign key forbids. */
+class TerminalProjectMissing extends Error {
+  constructor(readonly projectId: string) {
+    super(`a terminal owed its sweep names project ${projectId}, which has no projects row`);
+    this.name = "TerminalProjectMissing";
+  }
+}
+
+/** Each project's target checkout (null when none was ever minted), looked up by project; a project with no row throws. */
+async function workspacePaths(db: DbHandle, projectIds: readonly string[]): Promise<(projectId: string) => string | null> {
+  const rows = projectIds.length === 0 ? [] : await db.select({ id: projects.id, workspacePath: projects.workspacePath }).from(projects).where(inArray(projects.id, [...new Set(projectIds)]));
+  const paths = new Map(rows.map((row) => [row.id, row.workspacePath]));
+  return (projectId) => {
+    const path = paths.get(projectId);
+    if (path === undefined) throw new TerminalProjectMissing(projectId);
+    return path;
+  };
+}
+
 /** What a terminal sweep is run for: the client's consumed stop, or a halt episode (project_blocks). */
 type Terminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
 
@@ -307,35 +304,15 @@ interface DueTerminalSweepRow {
  * sweeps, so it carries this sweep when it is recorded, and is still posted, with no sweep, when it is not.
  */
 export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSweepRow[]> {
-  const stops = await db
-    .select({ projectId: projects.id, workspacePath: projects.workspacePath, stopId: clientMessages.id })
-    .from(clientMessages)
-    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    .where(
-      and(
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.kind, "stop"),
-        sql`${clientMessages.consumedAt} IS NOT NULL`,
-        eq(projects.lifecycle, "stopped"),
-        // The stop that stopped the project, as it records (stop_found_halted), or, on a stop that
-        // records nothing of it, as its stop report answers it.
-        sql`(${clientMessages.stopFoundHalted} IS NOT NULL OR EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = ${REPORT_SUBJECT.clientStop}))`,
-        sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${clientMessages.id})`,
-      ),
-    )
-    .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
-  const halts = await db
-    .select({ projectId: projects.id, workspacePath: projects.workspacePath, blockId: projectBlocks.id })
-    .from(projectBlocks)
-    .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
-    .where(
-      and(
-        isNull(projectBlocks.endedAt),
-        projectActive(),
-        sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.block_id = ${projectBlocks.id})`,
-      ),
-    )
-    .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
+  const stopped = await stopsThatStopped(db, (stop) => sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id})`);
+  const open = await openHaltEpisodesWhere(
+    db,
+    (episode) => sql`(EXISTS (SELECT 1 FROM projects WHERE projects.id = ${episode.projectId} AND ${projectActive()})
+      AND NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.block_id = ${episode.id}))`,
+  );
+  const workspaceOf = await workspacePaths(db, [...stopped.map((stop) => stop.projectId), ...open.map((episode) => episode.projectId)]);
+  const stops = stopped.map((stop) => ({ projectId: stop.projectId, workspacePath: workspaceOf(stop.projectId), stopId: stop.stopId }));
+  const halts = open.map((episode) => ({ projectId: episode.projectId, workspacePath: workspaceOf(episode.projectId), blockId: episode.id }));
   return [
     ...stops.map((row) => ({
       projectId: parseProjectId(row.projectId, "projects.id"),

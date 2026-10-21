@@ -48,7 +48,14 @@ const MAP: Readonly<Record<string, PackageMap>> = {
   engagement: {
     allow: ["shared", "db", "finance", "delivery", "quality"],
     restrict: {
-      quality: ["src/repositories/early-warning.ts"],
+      quality: [
+        "src/repositories/block-report.ts",
+        "src/repositories/client-stop.ts",
+        "src/repositories/delivered-report.ts",
+        "src/repositories/early-warning.ts",
+        "src/repositories/guarantee-report.ts",
+        "src/repositories/told-report.ts",
+      ],
       delivery: [
         "src/answers.ts",
         "src/block-report.ts",
@@ -63,8 +70,11 @@ const MAP: Readonly<Record<string, PackageMap>> = {
         "src/repositories/client-answer.ts",
         "src/repositories/client-change.ts",
         "src/repositories/client-receipt.ts",
+        "src/repositories/client-stop.ts",
         "src/repositories/delivered-report.ts",
         "src/repositories/early-warning.ts",
+        "src/repositories/stack-choice.ts",
+        "src/repositories/told-report.ts",
         "src/stack-choice.ts",
       ],
     },
@@ -121,6 +131,7 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
     acceptance: { allow: ["verification", "reviewer-record", "acl"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
     "reviewer-record": { allow: [], host: "src/repositories/reviewer-outcome.ts", target: "src/repositories/reviewer-outcome.ts" },
     acl: { allow: [], host: "src/acl/engagement-acl.ts", target: "src/acl/delivery-acl.ts" },
+    published: { allow: [], host: "src/published-reads.ts", target: "src/published-reads.ts" },
     [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
   },
   "execution-infra": {
@@ -293,10 +304,13 @@ const STACK_LITERAL_PROBE = {
 const TABLE_PROBE_FILE = "packages/delivery/src/__boundary_probe__/table-ownership.ts";
 const TABLE_PROBE_CONTENT = [
   'import { sql } from "drizzle-orm";',
-  'import { clientMessages } from "@ashara/db";',
+  'import { acceptanceSweeps, clientMessages, taskChecks } from "@ashara/db";',
   "export const write = (tx: { insert(table: unknown): unknown }) => tx.insert(clientMessages);",
   "export const rawWrite = sql`UPDATE acceptance_sweeps SET details = 'x'`;",
   "export const rawRead = sql`SELECT count(*) FROM llm_calls`;",
+  "export const builderRead = (db: { select(): { from(table: unknown): unknown } }) => db.select().from(acceptanceSweeps);",
+  "export const builderJoin = (q: { innerJoin(table: unknown, on: unknown): unknown }) => q.innerJoin(taskChecks, true);",
+  "export const rawLock = sql`SELECT id FROM dev_sessions WHERE id = ${1} FOR UPDATE`;",
   "",
 ].join("\n");
 const TABLE_PROBES = [
@@ -314,12 +328,39 @@ const TABLE_PROBES = [
     violation: `${TABLE_PROBE_FILE}:4  delivery -> "acceptance_sweeps"  (writes a table "quality" owns: UPDATE acceptance_sweeps SET details = 'x'; go through quality's exported write entry)`,
   },
   {
-    name: "a raw SQL read of another context's table no exemption admits is refused",
+    name: "a raw SQL read of another context's table no allowed edge admits is refused",
     file: TABLE_PROBE_FILE,
     content: null,
     violation:
       `${TABLE_PROBE_FILE}:5  delivery -> "llm_calls"  (raw SQL reads a table "finance" owns: SELECT count(*) FROM llm_calls; ` +
-      "read it through finance's typed read, or exempt it in [tables] with a reason)",
+      "read it through finance's typed read, or admit it in [tables] as an allowed edge with its reason)",
+  },
+  {
+    // Planted by the first probe, on its sixth line: this entry adds nothing to the file.
+    name: "a drizzle builder read (select().from) of another context's table is refused",
+    file: TABLE_PROBE_FILE,
+    content: null,
+    violation:
+      `${TABLE_PROBE_FILE}:6  delivery -> "acceptance_sweeps"  (a drizzle builder reads a table "quality" owns: db.select().from(acceptanceSweeps); ` +
+      "read it through quality's typed read, or admit it in [tables] as an allowed edge with its reason)",
+  },
+  {
+    // Planted by the first probe, on its seventh line: this entry adds nothing to the file.
+    name: "a drizzle builder join of another context's table is refused",
+    file: TABLE_PROBE_FILE,
+    content: null,
+    violation:
+      `${TABLE_PROBE_FILE}:7  delivery -> "task_checks"  (a drizzle builder reads a table "quality" owns: q.innerJoin(taskChecks, true); ` +
+      "read it through quality's typed read, or admit it in [tables] as an allowed edge with its reason)",
+  },
+  {
+    // Planted by the first probe, on its eighth line: this entry adds nothing to the file.
+    name: "a raw FOR UPDATE lock on another context's table is refused",
+    file: TABLE_PROBE_FILE,
+    content: null,
+    violation:
+      `${TABLE_PROBE_FILE}:8  delivery -> "dev_sessions"  (raw SQL reads a table "workplace" owns: SELECT id FROM dev_sessions WHERE id = ? FOR UPDATE; ` +
+      "read it through workplace's typed read, or admit it in [tables] as an allowed edge with its reason)",
   },
 ];
 

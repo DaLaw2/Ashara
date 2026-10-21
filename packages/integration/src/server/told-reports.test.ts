@@ -174,6 +174,21 @@ describe("a report on another context's subject is told once across a restart", 
     expect(await outboundReports(session.db, projectId)).toBe(2);
   });
 
+  test("a told record names only a subject of the report's own project", async () => {
+    const projectId = await newProject();
+    const other = await newProject();
+    await session.db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id IN (${projectId}, ${other})`);
+    const othersRevision = await idOf(
+      session.db,
+      sql`INSERT INTO plan_revisions (project_id, revision, vision_version, kind, summary) VALUES (${other}, 2, 1, 'repair', '{}'::jsonb) RETURNING id`,
+    );
+
+    await expect(postPlanReport(session.db, projectId, "first-plan", "The plan.", [othersRevision], null)).rejects.toMatchObject({ name: "ToldSubjectNotOfProject" });
+    await expect(postPlanReport(session.db, projectId, "first-plan", "The plan.", [randomUUID()], null)).rejects.toMatchObject({ name: "ToldSubjectNotOfProject" });
+    expect(await outboundReports(session.db, projectId)).toBe(0);
+    expect(await countOf(session.db, sql`SELECT count(*)::int AS n FROM told_reports WHERE project_id = ${projectId}`)).toBe(0);
+  });
+
   test("the client's stop ends the halt it finds through Delivery's write; no trigger ends it", async () => {
     expect(await countOf(session.db, sql`SELECT count(*)::int AS n FROM pg_trigger WHERE tgname = 'projects_stop_ends_halt'`)).toBe(0);
     const projectId = await newProject();

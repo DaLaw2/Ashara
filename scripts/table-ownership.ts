@@ -1,9 +1,9 @@
 /**
- * Finds a write to another context's table, and a raw SQL read of one. Every insert, update or
+ * Finds a write to another context's table, and a read of one in raw SQL or through drizzle's builder. Every insert, update or
  * delete a context's source issues lands on a table that context owns; anything it does to another
  * context's table goes through that owner's exported write entry or typed read. Run by
- * check-boundaries.ts inside `just check`; the owner of every table and the reviewed read
- * exemptions live in the [tables] section of boundary-rules.toml.
+ * check-boundaries.ts inside `just check`; the owner of every table and the reads the context map
+ * allows live in the [tables] section of boundary-rules.toml.
  *
  * The owner map is held to the schema: every table a packages/db/src/schema/<module>.ts declares
  * (`pgTable("<name>", ...)`) has exactly one entry, owned by <module> when <module> is a package, by
@@ -17,13 +17,19 @@
  *   `sql`-tagged template or a `sql.raw` string. A table owned by another package fails; "shared"
  *   admits every writer. No exemption admits a write.
  * - A raw read: a table named after `from` or `join` inside a `sql`-tagged template or a `sql.raw`
- *   string, a substitution that is a table's identifier read as its name. A table owned by another
- *   package or by "db" fails unless an exemption names the file and the table; an exemption no read
- *   uses is itself a finding, so the list only shrinks.
+ *   string (a `for update` lock included), a substitution that is a table's identifier read as its
+ *   name.
+ * - A builder read: a call `.from(T)`, `.innerJoin(T, ...)`, `.leftJoin`, `.rightJoin`, `.fullJoin`,
+ *   `.crossJoin` or `.join`, or `alias(T, ...)`, whose first argument is the identifier of a table the
+ *   schema exports.
+ * A read of a table owned by another package or by "db" fails unless an allowed edge names the file
+ * and the table; an edge no read uses is itself a finding. There is no exemption: a key other than an
+ * owner or an edge is a parse error.
  *
  * Blind spots, each a finding this check passes:
- * - A drizzle builder read (`.from(T)`, `.innerJoin(T, ...)`, a column `T.c` in a select) of another
- *   context's table, and its jsonb parsed in place: only raw SQL text is read.
+ * - A column `T.c` of another context's table named in a select or a predicate without a from or join
+ *   of `T` in the same file, and its jsonb parsed in place.
+ * - A read through a variable holding the table under another name.
  * - A write through an alias or a variable holding the table, a write built from pieces, and SQL
  *   held in a plain string or template that is not `sql`-tagged.
  * - A write the database makes for the context (a trigger, a cascade).
@@ -51,9 +57,9 @@ export const SHARED_OWNER = "shared";
 /** The owner of generic persistence a context reaches only through db's repositories. */
 export const DB_OWNER = "db";
 
-interface ReadExemption {
+interface AllowedReadEdge {
   readonly id: string;
-  /** Repository-relative path of the one file the exemption covers. */
+  /** Repository-relative path of the one file the edge covers. */
   readonly file: string;
   readonly tables: readonly string[];
   readonly reason: string;
@@ -64,20 +70,20 @@ export interface TableOwnershipRules {
   readonly owners: ReadonlyMap<string, string>;
   /** table -> the line of its entry, for findings about the map. */
   readonly lines: ReadonlyMap<string, number>;
-  readonly exemptions: readonly ReadExemption[];
+  readonly edges: readonly AllowedReadEdge[];
 }
 
 const SECTION_RE = /^\[([^\]]+)\]$/;
 const OWNER_RE = /^([a-z][a-z0-9_]*)\s*=\s*"([a-z][a-z0-9-]*)"$/;
-const EXEMPT_RE =
-  /^exempt\.([a-z0-9][a-z0-9-]*)\s*=\s*\{\s*file\s*=\s*"([^"]+)"\s*,\s*tables\s*=\s*\[([^\]]*)\]\s*,\s*reason\s*=\s*"([^"]+)"\s*\}$/;
+const EDGE_RE =
+  /^edge\.([a-z0-9][a-z0-9-]*)\s*=\s*\{\s*file\s*=\s*"([^"]+)"\s*,\s*tables\s*=\s*\[([^\]]*)\]\s*,\s*reason\s*=\s*"([^"]+)"\s*\}$/;
 const QUOTED_RE = /^"([^"]+)"$/;
 
 /** Reads the [tables] section; a missing or empty section, a table stated twice or an unknown key fails closed. */
 export function parseTableOwnershipRules(toml: string, rulesPath: string): TableOwnershipRules {
   const owners = new Map<string, string>();
   const lines = new Map<string, number>();
-  const exemptions: ReadExemption[] = [];
+  const edges: AllowedReadEdge[] = [];
   let inSection = false;
   let sawSection = false;
   const all = toml.split("\n");
@@ -100,10 +106,10 @@ export function parseTableOwnershipRules(toml: string, rulesPath: string): Table
       continue;
     }
 
-    const exempt = EXEMPT_RE.exec(line);
-    if (exempt !== null) {
-      const [, id, file, tableList, reason] = exempt;
-      if (exemptions.some((e) => e.id === id)) throw new TableOwnershipRulesError(rulesPath, lineNumber, line, `exemption "${id}" is stated twice`);
+    const edge = EDGE_RE.exec(line);
+    if (edge !== null) {
+      const [, id, file, tableList, reason] = edge;
+      if (edges.some((e) => e.id === id)) throw new TableOwnershipRulesError(rulesPath, lineNumber, line, `edge "${id}" is stated twice`);
       const tables = tableList
         .split(",")
         .map((item) => item.trim())
@@ -113,21 +119,21 @@ export function parseTableOwnershipRules(toml: string, rulesPath: string): Table
           if (quoted === null) throw new TableOwnershipRulesError(rulesPath, lineNumber, line, `${item} is not a double-quoted string`);
           return quoted[1];
         });
-      if (tables.length === 0) throw new TableOwnershipRulesError(rulesPath, lineNumber, line, "exemption names no table");
-      exemptions.push({ id, file, tables, reason });
+      if (tables.length === 0) throw new TableOwnershipRulesError(rulesPath, lineNumber, line, "edge names no table");
+      edges.push({ id, file, tables, reason });
       continue;
     }
 
-    throw new TableOwnershipRulesError(rulesPath, lineNumber, line, 'unrecognised key (expected <table> = "<owner>" or exempt.<id>)');
+    throw new TableOwnershipRulesError(rulesPath, lineNumber, line, 'unrecognised key (expected <table> = "<owner>" or edge.<id>; a read the context map does not allow has no exemption)');
   }
   if (!sawSection) throw new TableOwnershipRulesError(rulesPath, 0, `[${TABLES_SECTION}]`, "section is missing");
   if (owners.size === 0) throw new TableOwnershipRulesError(rulesPath, 0, `[${TABLES_SECTION}]`, "states no table; an owner map of nothing would pass every write");
-  for (const exemption of exemptions) {
-    for (const table of exemption.tables) {
-      if (!owners.has(table)) throw new TableOwnershipRulesError(rulesPath, 0, `exempt.${exemption.id}`, `exempts "${table}", which the owner map does not list`);
+  for (const edge of edges) {
+    for (const table of edge.tables) {
+      if (!owners.has(table)) throw new TableOwnershipRulesError(rulesPath, 0, `edge.${edge.id}`, `allows "${table}", which the owner map does not list`);
     }
   }
-  return { owners, lines, exemptions };
+  return { owners, lines, edges };
 }
 
 /** One table a schema module declares: its SQL name and the identifier the module exports it as. */
@@ -156,11 +162,11 @@ export function declaredTables(source: string, fileName: string): DeclaredTable[
   return tables;
 }
 
-/** What a context's source does to a table: writes it, or reads it in raw SQL. */
+/** What a context's source does to a table: writes it, or reads it in raw SQL or through the builder. */
 export interface TableUse {
   readonly line: number;
   readonly table: string;
-  readonly kind: "write" | "raw-read";
+  readonly kind: "write" | "raw-read" | "builder-read";
   /** The call or the SQL as written, cut to a readable length. */
   readonly text: string;
 }
@@ -169,6 +175,7 @@ const RAW_WRITE_RES = [/\binsert\s+into\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?/gi
 // A `delete from` is the write's own table, reported as the write.
 const RAW_READ_RE = /(?<!\bdelete\s+)\b(?:from|join)\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?/gi;
 const WRITE_METHODS = new Set(["insert", "update", "delete"]);
+const READ_METHODS = new Set(["from", "innerJoin", "leftJoin", "rightJoin", "fullJoin", "crossJoin", "join"]);
 
 function cut(text: string): string {
   const flat = text.replace(/\s+/g, " ");
@@ -201,7 +208,7 @@ function sqlText(node: ts.Node, tables: ReadonlyMap<string, string>): string | n
 }
 
 /**
- * Every write and raw read of a table in `source`; `tables` maps each table identifier the schema
+ * Every write, raw read and builder read of a table in `source`; `tables` maps each table identifier the schema
  * exports to its SQL name. Only tables the map names are reported.
  */
 export function findTableUses(source: string, fileName: string, tables: ReadonlyMap<string, string>): TableUse[] {
@@ -214,6 +221,14 @@ export function findTableUses(source: string, fileName: string, tables: Readonly
       const [first] = node.arguments;
       const table = first !== undefined && ts.isIdentifier(first) ? tables.get(first.text) : undefined;
       if (table !== undefined && node.arguments.length === 1) uses.push({ line, table, kind: "write", text: cut(node.getText(sourceFile)) });
+    }
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const reads =
+        (ts.isPropertyAccessExpression(callee) && READ_METHODS.has(callee.name.text)) || (ts.isIdentifier(callee) && callee.text === "alias");
+      const [first] = node.arguments;
+      const table = reads && first !== undefined && ts.isIdentifier(first) ? tables.get(first.text) : undefined;
+      if (table !== undefined) uses.push({ line, table, kind: "builder-read", text: cut(node.getText(sourceFile)) });
     }
     const text = sqlText(node, tables);
     if (text !== null) {

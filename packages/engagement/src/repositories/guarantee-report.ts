@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, guaranteeEvidence, guaranteeVerdicts, visionDocuments, visionRevisions } from "@ashara/db";
+import { clientMessages, guaranteeVerdicts, visionDocuments, visionRevisions } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
+import { recordedSweep, sweepEvidence } from "@ashara/quality/published-reads";
 import type { Evidence } from "../vision-language/index.js";
 import { CheckEvidenceSchema } from "../vision-language/index.js";
 import { StoredRevisionOpsSchema } from "../vision-language/contract-op.js";
@@ -76,16 +77,10 @@ async function revisionsOf(db: DbHandle, projectId: string): Promise<ContractRev
  * when it ran, its evidence unrecorded. No version by then is no contract on record.
  */
 async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise<GuaranteeRecords> {
-  const [sweep] = await db
-    .select({ id: acceptanceSweeps.id, projectId: acceptanceSweeps.projectId, mainCommit: acceptanceSweeps.mainCommit, createdAt: acceptanceSweeps.createdAt })
-    .from(acceptanceSweeps)
-    .where(eq(acceptanceSweeps.id, sweepId));
-  if (sweep === undefined) throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, "no acceptance_sweeps row has that id");
+  const sweep = await recordedSweep(db, sweepId);
+  if (sweep === null) throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, "no acceptance_sweeps row has that id");
   const judged = { id: sweep.id, mainCommit: sweep.mainCommit };
-  const rows = await db
-    .select({ guaranteeId: guaranteeEvidence.guaranteeId, visionVersion: guaranteeEvidence.visionVersion, checks: guaranteeEvidence.checks, reviewLowers: guaranteeEvidence.reviewLowers })
-    .from(guaranteeEvidence)
-    .where(eq(guaranteeEvidence.sweepId, sweepId));
+  const rows = await sweepEvidence(db, sweepId);
   const versions = [...new Set(rows.map((row) => row.visionVersion))];
   if (versions.length > 1) throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, `its evidence names vision versions ${versions.join(", ")}, not one`);
   const [version] = versions;

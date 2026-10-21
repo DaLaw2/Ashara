@@ -1,11 +1,13 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, correctionHolds, devSessions, domainEvents, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
-import { firstPlanTold, noOpenAnswer, noOpenStop, planRevisionTold, projectAtWork } from "../acl/engagement-predicates-acl.js";
-import { attemptGrade, CapabilityLevelSchema } from "../acl/finance-acl.js";
-import { inLatestCheckRevision, StoredDecidesSchema } from "../acl/quality-acl.js";
+import { correctionHolds, domainEvents, planRepairs, planRevisions, projects, workItems } from "@ashara/db";
+import { clientMessageBodies, firstPlanTold, noOpenAnswer, noOpenStop, planRevisionTold, projectAtWork } from "../acl/engagement-predicates-acl.js";
+import { currentStoredVision, currentVisionVersion, parseStoredVision, type PublishedStoredVision } from "../acl/engagement-vision-acl.js";
+import { CapabilityLevelSchema } from "../acl/finance-acl.js";
+import { latestStoredChecks, StoredDecidesSchema } from "../acl/quality-acl.js";
+import { lastCompletedAttempts } from "../acl/workplace-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 import { holdForCorrection, takeEvents } from "../domain/index.js";
 import { pendingCorrection, pendingRepair } from "../predicates.js";
@@ -42,7 +44,7 @@ interface ProjectAwaitingReplanRow {
   readonly revisionsSinceReview: number;
   readonly repairsSinceReview: number;
   readonly nextRevision: number;
-  readonly vision: typeof visionDocuments.$inferSelect;
+  readonly vision: PublishedStoredVision;
 }
 
 const CountsSchema = z.object({
@@ -77,19 +79,13 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
       revisionsSinceReview: revisionsSince("client_change", "replan_bound"),
       repairsSinceReview: revisionsSince("repair", "plan_repair"),
       nextRevision: sql<unknown>`(SELECT COALESCE(max(r.revision), 1) + 1 FROM plan_revisions r WHERE r.project_id = projects.id)`,
-      vision: visionDocuments,
+      vision: currentStoredVision(projects.id),
     })
     .from(projects)
-    .innerJoin(
-      visionDocuments,
-      and(
-        eq(visionDocuments.projectId, projects.id),
-        sql`${visionDocuments.version} = (SELECT MAX(v.version) FROM vision_documents v WHERE v.project_id = projects.id)`,
-      ),
-    )
     .where(
       and(
         projectAtWork(),
+        sql`${currentStoredVision(projects.id)} IS NOT NULL`,
         isNotNull(projects.firstPlannedAt),
         sql`((${pendingCorrection(projects.id)} AND NOT ${heldTaskInProgress(projects.id)})
           OR (${pendingRepair(projects.id)} AND NOT ${taskInProgress(projects.id)}))`,
@@ -122,7 +118,7 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
         replanLastError: row.replanLastError,
         replanLastFailure: row.replanLastFailure,
         ...counts,
-        vision: row.vision,
+        vision: parseStoredVision(row.id, row.vision),
       };
     },
   );
@@ -166,17 +162,19 @@ class CorrectionHoldUnreadable extends Error {
 /** The corrections whose revision the project awaits, in the order they were recorded. */
 async function awaitedCorrections(db: DbHandle, projectId: string): Promise<AwaitedCorrection[]> {
   const rows = await db
-    .select({ visionVersion: correctionHolds.visionVersion, requestedBy: correctionHolds.requestedBy, words: clientMessages.body, affected: correctionHolds.affected })
+    .select({ visionVersion: correctionHolds.visionVersion, requestedBy: correctionHolds.requestedBy, affected: correctionHolds.affected })
     .from(correctionHolds)
-    .innerJoin(clientMessages, eq(clientMessages.id, correctionHolds.requestedBy))
     .where(and(eq(correctionHolds.projectId, projectId), isNull(correctionHolds.planRevisionId)))
     .orderBy(asc(correctionHolds.createdAt), asc(correctionHolds.visionVersion));
+  const words = await clientMessageBodies(db, rows.map((row) => row.requestedBy));
   return rows.map((row) => {
     const affected = AffectedSchema.safeParse(row.affected);
     if (!affected.success) throw new CorrectionHoldUnreadable(projectId, row.visionVersion, z.prettifyError(affected.error));
     const [first, ...rest] = affected.data;
     if (first === undefined) throw new CorrectionHoldUnreadable(projectId, row.visionVersion, "it names no affected key");
-    return { visionVersion: row.visionVersion, requestedBy: row.requestedBy, words: row.words, affected: [first, ...rest] };
+    const said = words.get(row.requestedBy);
+    if (said === undefined) throw new CorrectionHoldUnreadable(projectId, row.visionVersion, `the client message ${row.requestedBy} it answers is not on record`);
+    return { visionVersion: row.visionVersion, requestedBy: row.requestedBy, words: said, affected: [first, ...rest] };
   });
 }
 
@@ -266,19 +264,15 @@ class StoredDecisionUnreadable extends Error {
  * a citation never stands in for a check.
  */
 export async function decidedByLatestChecks(db: DbHandle, projectId: string): Promise<Map<string, VisionItem[]>> {
-  const rows = await db
-    .select({ taskId: taskChecks.taskId, checkTaskId: taskChecks.checkTaskId, name: taskChecks.name, decides: taskChecks.decides, taskSpec: workItems.taskSpec })
-    .from(taskChecks)
-    .innerJoin(workItems, eq(workItems.id, taskChecks.checkTaskId))
-    .where(
-      and(
-        eq(taskChecks.projectId, projectId),
-        inLatestCheckRevision(taskChecks.revision, taskChecks.taskId),
-      ),
-    )
-    .orderBy(asc(taskChecks.taskId), asc(taskChecks.name));
+  const checks = await latestStoredChecks(db, { projectId });
+  const checkTaskIds = [...new Set(checks.map((check) => check.checkTaskId))];
+  const specs =
+    checkTaskIds.length === 0 ? [] : await db.select({ id: workItems.id, taskSpec: workItems.taskSpec }).from(workItems).where(inArray(workItems.id, checkTaskIds));
   const decided = new Map<string, VisionItem[]>();
-  for (const row of rows) {
+  for (const check of checks) {
+    const spec = specs.find((each) => each.id === check.checkTaskId);
+    if (spec === undefined) throw new StoredDecisionUnreadable(check.checkTaskId, check.name, "names a check task that has no work_items row");
+    const row = { ...check, taskSpec: spec.taskSpec };
     const decides = StoredDecidesSchema.safeParse(row.decides);
     if (!decides.success) throw new StoredDecisionUnreadable(row.checkTaskId, row.name, `records decides that do not parse: ${z.prettifyError(decides.error)}`);
     if (decides.data === null) continue;
@@ -302,17 +296,8 @@ export async function decidedByLatestChecks(db: DbHandle, projectId: string): Pr
  * whose model the catalog no longer holds under the attempt's provider is unrecorded, naming both.
  */
 export async function completedAttemptGrades(db: DbHandle, projectId: string): Promise<Map<string, AttemptGrade>> {
-  const rows = await db
-    .selectDistinctOn([devSessions.taskId], {
-      taskId: devSessions.taskId,
-      model: devSessions.attemptModel,
-      provider: devSessions.attemptProvider,
-      grade: attemptGrade(devSessions.attemptModel, devSessions.attemptProvider),
-    })
-    .from(devSessions)
-    .innerJoin(workItems, eq(workItems.id, devSessions.taskId))
-    .where(and(eq(workItems.projectId, projectId), eq(devSessions.phase, "Completed"), isNotNull(devSessions.attemptModel)))
-    .orderBy(asc(devSessions.taskId), desc(devSessions.updatedAt), desc(devSessions.id));
+  const tasks = await db.select({ id: workItems.id }).from(workItems).where(eq(workItems.projectId, projectId));
+  const rows = await lastCompletedAttempts(db, tasks.map((task) => task.id));
   const grades = new Map<string, AttemptGrade>();
   for (const row of rows) {
     const model = z.string().min(1).parse(row.model);
@@ -463,14 +448,11 @@ export async function withPlanRevisionTransaction(
       }
       const [stopFree] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), noOpenStop(projects.id)));
       if (!stopFree) throw new RevisionReadMoved(projectId, "a stop awaits the Liaison");
-      const [current] = await tx
-        .select({ version: visionDocuments.version })
-        .from(visionDocuments)
-        .where(eq(visionDocuments.projectId, projectId))
-        .orderBy(desc(visionDocuments.version))
-        .limit(1);
-      if (current?.version !== record.visionVersion) {
-        throw new RevisionReadMoved(projectId, `planned from vision v${record.visionVersion}, current is v${current?.version ?? "none"}`);
+      const [current] = await tx.select({ version: currentVisionVersion(projects.id) }).from(projects).where(eq(projects.id, projectId));
+      if (!current) throw new RevisionReadMoved(projectId, "the project does not exist");
+      const version = z.number().int().positive().nullable().parse(current.version);
+      if (version !== record.visionVersion) {
+        throw new RevisionReadMoved(projectId, `planned from vision v${record.visionVersion}, current is v${version ?? "none"}`);
       }
       // A correction's revision replaces only the work citing a key it affects, so it waits only for that.
       const held = corrections === null ? sql`TRUE` : citesAnyOf(sql`${`{${corrections.affected.join(",")}}`}::text[]`);

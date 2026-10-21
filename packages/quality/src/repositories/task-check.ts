@@ -1,11 +1,20 @@
-import { and, asc, eq, ne, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { dependencies, taskChecks, workItems } from "@ashara/db";
+import { suiteReviewFindings, taskChecks } from "@ashara/db";
 import type { Database } from "@ashara/db";
-import { attemptGrade, CapabilityLevelSchema } from "@ashara/finance";
+import { CapabilityLevelSchema } from "@ashara/finance";
 import type { CapabilityLevel } from "@ashara/finance";
-import { isProductScaffoldOrigin, parseWorkItemJsonb, productScaffoldTask } from "../acl/delivery-acl.js";
+import { attemptsWithModel } from "@ashara/workplace";
+import {
+  checkTasksOfReview,
+  completedImplementationTaskIds,
+  foundationCandidates,
+  implementationTasksCheckedBy,
+  isProductScaffoldOrigin,
+  lockTask,
+  parseWorkItemJsonb,
+  workItemSummaries,
+} from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
 import { inLatestCheckRevision, latestCheckRevision, StoredDecidesSchema } from "../stored-checks.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
@@ -17,16 +26,22 @@ const TaskCheckFilesSchema = z.array(z.object({ path: z.string().min(1), content
 
 type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
 
+/** A task the plan gave up or superseded: its checks never run again. */
+const ABANDONED = "Abandoned";
+
+/** The count of a check task no suite_review_findings row names. */
+const NO_REOPEN = 0;
+
 /** A count of suite_review_findings rows as Postgres returns it cast to int. */
 const ReopenCountSchema = z.number().int().nonnegative();
 
 /** A task's latest stored revision of checks as latestCheckRevision reads it: null when none is stored. */
 const StoredRevisionSchema = z.number().int().positive().nullable();
 
-/** The models a task's attempts ran on (dev_sessions.attempt_model), each with its catalog grade (Finance's attemptGrade), as the query aggregates them. */
-const AttemptModelsSchema = z.array(z.strictObject({ model: z.string().min(1), grade: CapabilityLevelSchema.nullable() }));
+/** The models a task's attempts ran on, each with its catalog grade (Workplace's attempt log, graded by Finance's attemptGrade). */
+const AttemptModelSchema = z.strictObject({ model: z.string().min(1), grade: CapabilityLevelSchema.nullable() });
 
-type AttemptModels = z.infer<typeof AttemptModelsSchema>;
+type AttemptModels = ReadonlyArray<z.infer<typeof AttemptModelSchema>>;
 
 interface TaskCheckDefinition {
   readonly name: string;
@@ -73,19 +88,6 @@ interface TaskChecksRecord {
 type CheckFoundation =
   | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
   | { readonly kind: "none"; readonly reason: string };
-
-/** A project's product scaffolds, read beside a check task's foundations. */
-const scaffolds = alias(workItems, "s");
-
-const FoundationRowSchema = z.object({
-  id: z.string(),
-  status: z.string(),
-  mergeCommit: z.string().nullable(),
-  origin: z.string().nullable(),
-  workKind: z.string().nullable(),
-  completedAt: z.coerce.date(),
-  scaffoldCompletedAt: z.coerce.date().nullable(),
-});
 
 /** A revision with no check: an empty revision would read as "nothing to check". */
 class TaskChecksEmpty extends Error {
@@ -170,17 +172,7 @@ export class TaskCheckRepository {
    * revision depends on every check task of it.
    */
   async checkedTasksOf(checkTaskId: string): Promise<string[]> {
-    const rows = await this.db
-      .select({ id: workItems.id })
-      .from(workItems)
-      .where(
-        and(
-          eq(workItems.workKind, "implementation"),
-          sql`${workItems.id}::text = (SELECT check_task.task_spec->>'checksFor' FROM work_items check_task WHERE check_task.id = ${checkTaskId})`,
-        ),
-      )
-      .orderBy(asc(workItems.id));
-    return rows.map((row) => row.id);
+    return implementationTasksCheckedBy(this.db, checkTaskId);
   }
 
   /**
@@ -194,16 +186,7 @@ export class TaskCheckRepository {
    * the scaffold is no foundation: the reason says which.
    */
   async foundationOf(checkTaskId: string): Promise<CheckFoundation> {
-    const result = await this.db.execute(sql`
-      SELECT w.id, w.status, w.merge_commit AS "mergeCommit", w.task_spec->>'origin' AS origin, w.work_kind AS "workKind",
-             w.updated_at AS "completedAt",
-             (SELECT max(s.updated_at) FROM work_items s
-               WHERE s.project_id = w.project_id AND s.status = 'Completed'
-                 AND ${productScaffoldTask(scaffolds)}) AS "scaffoldCompletedAt"
-      FROM dependencies d JOIN work_items w ON w.id = d.to_id
-      WHERE d.from_id = ${checkTaskId}
-      ORDER BY w.updated_at DESC, w.id`);
-    const rows = z.array(FoundationRowSchema).parse(result.rows);
+    const rows = await foundationCandidates(this.db, checkTaskId);
     const scaffold = rows.find((row) => isProductScaffoldOrigin(row.origin));
     const [only] = rows;
     const foundation = scaffold ?? (rows.length === 1 ? only : undefined);
@@ -250,24 +233,17 @@ export class TaskCheckRepository {
    * checks decide (null when task_spec.checksFor names no work item). Oldest first.
    */
   async checkTasksUnderReview(reviewTaskId: string): Promise<CheckTaskUnderReview[]> {
-    const rows = await this.db
-      .select({
-        id: workItems.id,
-        projectId: workItems.projectId,
-        status: workItems.status,
-        taskSpec: workItems.taskSpec,
-        successCriteria: workItems.successCriteria,
-        blockedReason: workItems.blockedReason,
-        checkedTitle: sql<string | null>`(SELECT checked.title FROM work_items checked WHERE checked.id::text = ${workItems.taskSpec}->>'checksFor')`,
-        reviewReopens: sql<unknown>`(SELECT count(*) FROM suite_review_findings named WHERE named.check_task_id = ${workItems.id})::int`,
-        attemptModels: sql<unknown>`(SELECT coalesce(jsonb_agg(jsonb_build_object('model', s.attempt_model, 'grade', ${attemptGrade(sql`s.attempt_model`, sql`s.attempt_provider`)}) ORDER BY s.created_at, s.id), '[]'::jsonb)
-          FROM dev_sessions s
-          WHERE s.task_id = ${workItems.id} AND s.attempt_model IS NOT NULL)`,
-      })
-      .from(dependencies)
-      .innerJoin(workItems, eq(workItems.id, dependencies.toId))
-      .where(and(eq(dependencies.fromId, reviewTaskId), eq(workItems.workKind, "check")))
-      .orderBy(asc(workItems.createdAt), asc(workItems.id));
+    const rows = await checkTasksOfReview(this.db, reviewTaskId);
+    const ids = rows.map((row) => row.id);
+    const reopens =
+      ids.length === 0
+        ? []
+        : await this.db
+            .select({ checkTaskId: suiteReviewFindings.checkTaskId, reopens: sql<unknown>`count(*)::int` })
+            .from(suiteReviewFindings)
+            .where(inArray(suiteReviewFindings.checkTaskId, ids))
+            .groupBy(suiteReviewFindings.checkTaskId);
+    const attempts = await attemptsWithModel(this.db, ids);
     return rows.map((row) => {
       const { taskSpec } = parseWorkItemJsonb(row);
       return {
@@ -277,9 +253,10 @@ export class TaskCheckRepository {
         visionItems: taskSpec?.visionItems ?? null,
         sources: taskSpec?.sources ?? null,
         checkedTitle: row.checkedTitle,
-        reviewReopens: ReopenCountSchema.parse(row.reviewReopens),
+        // A check task no review named has no suite_review_findings row: none reopened it.
+        reviewReopens: ReopenCountSchema.parse(reopens.find((counted) => counted.checkTaskId === row.id)?.reopens ?? NO_REOPEN),
         grade: taskSpec?.capability ?? null,
-        attemptModels: AttemptModelsSchema.parse(row.attemptModels),
+        attemptModels: attempts.filter((attempt) => attempt.taskId === row.id).map((attempt) => AttemptModelSchema.parse({ model: attempt.model, grade: attempt.grade })),
       };
     });
   }
@@ -291,23 +268,12 @@ export class TaskCheckRepository {
    * regress".
    */
   async completedOf(projectId: string, exceptTaskId: string | null): Promise<CompletedChecks> {
-    const tasks = await this.db
-      .select({ id: workItems.id })
-      .from(workItems)
-      .where(
-        and(
-          eq(workItems.projectId, projectId),
-          eq(workItems.workKind, "implementation"),
-          eq(workItems.status, "Completed"),
-          exceptTaskId === null ? undefined : ne(workItems.id, exceptTaskId),
-        ),
-      )
-      .orderBy(asc(workItems.updatedAt), asc(workItems.id));
+    const tasks = await completedImplementationTaskIds(this.db, projectId, exceptTaskId, "completed");
     const checked: TaskChecksRecord[] = [];
     const unchecked: string[] = [];
-    for (const task of tasks) {
-      const record = await this.latest(task.id);
-      if (record === null) unchecked.push(task.id);
+    for (const taskId of tasks) {
+      const record = await this.latest(taskId);
+      if (record === null) unchecked.push(taskId);
       else checked.push(record);
     }
     return { checked, unchecked };
@@ -344,12 +310,10 @@ export class TaskCheckRepository {
    * a check author is shown so the checks it writes do not contradict them.
    */
   async storedOfProject(projectId: string, exceptTaskId: string): Promise<Array<TaskChecksRecord & { readonly title: string }>> {
-    const tasks = await this.db
-      .selectDistinct({ id: workItems.id, title: workItems.title, createdAt: workItems.createdAt })
-      .from(taskChecks)
-      .innerJoin(workItems, eq(workItems.id, taskChecks.taskId))
-      .where(and(eq(taskChecks.projectId, projectId), ne(workItems.id, exceptTaskId), ne(workItems.status, "Abandoned")))
-      .orderBy(asc(workItems.createdAt), asc(workItems.id));
+    const checkedIds = await this.db.selectDistinct({ taskId: taskChecks.taskId }).from(taskChecks).where(eq(taskChecks.projectId, projectId));
+    const tasks = (await workItemSummaries(this.db, checkedIds.map((row) => row.taskId).filter((id) => id !== exceptTaskId)))
+      .filter((task) => task.status !== ABANDONED)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const stored: Array<TaskChecksRecord & { readonly title: string }> = [];
     for (const task of tasks) {
       const record = await this.latest(task.id);
@@ -364,10 +328,10 @@ export class TaskCheckRepository {
     if (write.checks.length === 0) throw new TaskChecksEmpty(write.taskId);
     const files = TaskCheckFilesSchema.parse(write.files);
     return this.db.transaction(async (tx) => {
-      // Serializes revisions of one task: the row lock is held until commit.
-      const locked = await tx.execute(sql`SELECT id FROM work_items WHERE id = ${write.taskId} FOR UPDATE`);
-      if (locked.rows.length !== 1) throw new CheckedTaskMissing(write.taskId);
-      const [latest] = await tx.select({ revision: latestCheckRevision(workItems.id) }).from(workItems).where(eq(workItems.id, write.taskId));
+      // Serializes revisions of one task: Delivery's lock on the task row is held until commit.
+      if (!(await lockTask(tx, write.taskId))) throw new CheckedTaskMissing(write.taskId);
+      const latestRows = await tx.execute(sql`SELECT ${latestCheckRevision(sql`${write.taskId}::uuid`)} AS revision`);
+      const [latest] = z.array(z.object({ revision: z.unknown() })).parse(latestRows.rows);
       if (latest === undefined) throw new CheckedTaskMissing(write.taskId);
       // eslint-disable-next-line no-restricted-syntax -- policy default: no stored revision reads null, so this write is the task's first revision
       const revision = (StoredRevisionSchema.parse(latest.revision) ?? 0) + 1;

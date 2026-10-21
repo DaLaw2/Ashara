@@ -1,11 +1,13 @@
-import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, planRepairs, workItems } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
-import { endedHaltEpisodesWhere, haltEpisodeOf, haltEpisodesWhere, type HaltEpisodeColumns } from "@ashara/delivery/predicates";
+import { endedHaltEpisodesWhere, haltEpisodeOf, haltEpisodesWhere, type HaltEpisodeRef } from "@ashara/delivery/predicates";
+import { awaitedRepairsRecordedBy, workItemSummaries } from "@ashara/delivery/reads";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
+import { lastDisputeBy, sweepOfTerminal } from "@ashara/quality/published-reads";
 import { haltReported, noOpenStop, reportTold } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
@@ -71,14 +73,9 @@ class BlockingRepairMissing extends Error {
 
 /** The given-up tasks whose awaited repair the plan_repair block stopped, oldest first. */
 async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonmentRow[]> {
-  const rows = await db
-    .select({ id: workItems.id, title: workItems.title, attempts: workItems.dispatchCount, reason: workItems.blockedReason })
-    .from(planRepairs)
-    .innerJoin(workItems, eq(workItems.id, planRepairs.workItemId))
-    .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), lte(planRepairs.createdAt, blockedAt)))
-    .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
+  const rows = await awaitedRepairsRecordedBy(db, projectId, blockedAt);
   if (rows.length === 0) throw new BlockingRepairMissing(episodeId, projectId);
-  return rows.map((row) => ({ workItemId: row.id, title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.id, row.reason) }));
+  return rows.map((row) => ({ workItemId: row.workItemId, title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.workItemId, row.blockedReason) }));
 }
 
 /**
@@ -241,20 +238,11 @@ class BlockingDisputeMissing extends Error {
 
 /** The last dispute of the project recorded at or before `blockedAt`, with its check task's count then. */
 async function blockingDispute(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingDisputeRow> {
-  const [last] = await db
-    .select({ checkTaskId: checkDisputes.checkTaskId, checkName: checkDisputes.checkName, reason: checkDisputes.reason, taskTitle: workItems.title })
-    .from(checkDisputes)
-    .innerJoin(workItems, eq(workItems.id, checkDisputes.taskId))
-    .where(and(eq(checkDisputes.projectId, projectId), lte(checkDisputes.createdAt, blockedAt)))
-    .orderBy(desc(checkDisputes.createdAt), desc(checkDisputes.id))
-    .limit(1);
-  if (!last) throw new BlockingDisputeMissing(episodeId, projectId);
-  const [counted] = await db
-    .select({ disputes: count() })
-    .from(checkDisputes)
-    .where(and(eq(checkDisputes.checkTaskId, last.checkTaskId), lte(checkDisputes.createdAt, blockedAt)));
-  if (counted === undefined || counted.disputes < 1) throw new BlockingDisputeMissing(episodeId, projectId);
-  return { taskTitle: last.taskTitle, checkName: last.checkName, reason: last.reason, disputes: counted.disputes };
+  const last = await lastDisputeBy(db, projectId, blockedAt);
+  if (last === null || last.disputes < 1) throw new BlockingDisputeMissing(episodeId, projectId);
+  const [task] = await workItemSummaries(db, [last.taskId]);
+  if (task === undefined) throw new BlockingDisputeMissing(episodeId, projectId);
+  return { taskTitle: task.title, checkName: last.checkName, reason: last.reason, disputes: last.disputes };
 }
 
 /** A report was asked to be posted for a block episode that does not exist. */
@@ -279,14 +267,14 @@ class BlockEpisodeNotResumed extends Error {
 }
 
 /** The project is not stopped by the client and has no stop awaiting the Liaison: its halts are told. */
-const haltsToldOf = (projectId: AnyColumn): SQL =>
+const haltsToldOf = (projectId: SQL): SQL =>
   sql`(EXISTS (SELECT 1 FROM projects hp WHERE hp.id = ${projectId} AND hp.lifecycle <> 'stopped') AND ${noOpenStop(projectId)})`;
 
 /**
  * A planning_stopped block is first told by the planning-stopped report (plan-report.ts), one per
  * project; only a later stop, blocked after that report was posted, is due here.
  */
-const notCoveredByPlanningStoppedReport = (episode: HaltEpisodeColumns): SQL => sql`(${episode.kind} <> 'planning_stopped' OR EXISTS (
+const notCoveredByPlanningStoppedReport = (episode: HaltEpisodeRef): SQL => sql`(${episode.kind} <> 'planning_stopped' OR EXISTS (
   SELECT 1 FROM client_messages m WHERE m.project_id = ${episode.projectId}
     AND m.reports_on = ${REPORT_SUBJECT.planningStopped} AND m.created_at < ${episode.blockedAt}))`;
 
@@ -294,7 +282,7 @@ const notCoveredByPlanningStoppedReport = (episode: HaltEpisodeColumns): SQL => 
  * The halt is told before its resumption: its own report is posted, or it is a planning_stopped
  * block the planning-stopped report tells.
  */
-const haltTold = (episode: HaltEpisodeColumns): SQL => sql`(${haltReported(episode.id)} OR NOT ${notCoveredByPlanningStoppedReport(episode)})`;
+const haltTold = (episode: HaltEpisodeRef): SQL => sql`(${haltReported(episode.id)} OR NOT ${notCoveredByPlanningStoppedReport(episode)})`;
 
 /** The report's subject in the block-report step's ledger: one per episode and side (BlockReports). */
 function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id: string; readonly projectId: string }) {
@@ -310,7 +298,7 @@ function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id
 export async function listDueBlockReports(db: DbHandle, blockingReview: BlockingReviewReader): Promise<Array<DueBlockReportRow | UnreadSubject>> {
   const resumed = await endedHaltEpisodesWhere(db, (episode) =>
     and(
-      inArray(episode.endKind, RESUMED_END_KINDS),
+      episode.resumed,
       sql`NOT ${reportTold("project-resumed", episode.id)}`,
       haltTold(episode),
       haltsToldOf(episode.projectId),
@@ -332,7 +320,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       // A halt ended by an unblock or a passing probe before its report was posted is still told,
       // and its resumption after it; one the client's stop ended is told by the stop report. An episode
       // whose resumption the client has already heard is never told the halt after it.
-      or(isNull(episode.endedAt), and(inArray(episode.endKind, RESUMED_END_KINDS), sql`NOT ${reportTold("project-resumed", episode.id)}`)),
+      or(episode.open, and(episode.resumed, sql`NOT ${reportTold("project-resumed", episode.id)}`)),
       sql`NOT ${haltReported(episode.id)}`,
       haltsToldOf(episode.projectId),
       notCoveredByPlanningStoppedReport(episode),
@@ -345,8 +333,8 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       const kind = ProjectBlockKindSchema.safeParse(row.kind);
       if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
       const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
-      const [sweep] = await db.select({ id: acceptanceSweeps.id }).from(acceptanceSweeps).where(eq(acceptanceSweeps.blockId, row.id));
-      const guarantees = await readGuaranteeTable(db, sweep === undefined ? { kind: "no-sweep", projectId: row.projectId } : { kind: "sweep", sweepId: sweep.id });
+      const sweepId = await sweepOfTerminal(db, { kind: "halt", blockId: row.id });
+      const guarantees = await readGuaranteeTable(db, sweepId === null ? { kind: "no-sweep", projectId: row.projectId } : { kind: "sweep", sweepId });
       if (kind.data === "check_dispute") {
         const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
         return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute, guarantees };

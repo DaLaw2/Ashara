@@ -8,3 +8,7 @@
 
 export type { InterfaceEntry, VisionGuarantee, VisionSource } from "@ashara/engagement/vision";
 export { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, VisionSourceSchema, checkDecides, taskMayCite, visionSourceCitation, visionSourceLine } from "@ashara/engagement/vision";
+// Whether a project has a vision, which version is in force and that version as stored, read inside
+// Delivery's own admitting statement in Engagement's published reads.
+export type { PublishedStoredVision } from "@ashara/engagement/vision";
+export { currentStoredVision, currentVisionVersion, hasVision, parseStoredVision } from "@ashara/engagement/vision";

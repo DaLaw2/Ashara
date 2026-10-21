@@ -1,17 +1,13 @@
 import { eq, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { checkSetFreezes, workItems } from "@ashara/db";
+import { checkSetFreezes } from "@ashara/db";
 import type { Database } from "@ashara/db";
-import { reviewTask } from "../acl/delivery-acl.js";
+import { checkTasksUnderReview, reviewTasksHeldBy } from "../acl/delivery-acl.js";
 import { inLatestCheckRevision } from "../stored-checks.js";
 
 // Quality's freeze of a plan revision's check set: written when
 // the first task depending on the revision's review task is dispatched, with the check set the
 // review read as it then stood. After it, a review of that set reopens nothing.
-
-/** The review tasks a dispatched task depends on. */
-const review = alias(workItems, "review");
 
 const FrozenReviewsSchema = z.array(z.strictObject({ reviewTaskId: z.guid() }));
 
@@ -31,8 +27,8 @@ export class CheckSetFreezeRepository {
         coalesce((
           SELECT jsonb_agg(jsonb_build_object(
               'checkTaskId', checker.id,
-              'checksFor', checker.task_spec->'checksFor',
-              'cited', checker.task_spec->'sources',
+              'checksFor', checker.checks_for,
+              'cited', checker.cited,
               'revision', latest.revision,
               'checks', (
                 SELECT jsonb_agg(jsonb_build_object('name', stored.name, 'decides', stored.decides) ORDER BY stored.name)
@@ -40,19 +36,15 @@ export class CheckSetFreezeRepository {
                 WHERE stored.task_id = latest.task_id AND stored.revision = latest.revision
               )
             ) ORDER BY checker.created_at, checker.id)
-          FROM dependencies under_review
-          JOIN work_items checker ON checker.id = under_review.to_id
+          FROM ${checkTasksUnderReview(sql`review.id`)} checker
           LEFT JOIN LATERAL (
             SELECT stored.task_id, stored.revision
             FROM task_checks stored
-            WHERE stored.task_id::text = checker.task_spec->>'checksFor' AND ${inLatestCheckRevision(sql`stored.revision`, sql`stored.task_id`)}
+            WHERE stored.task_id::text = checker.checks_for #>> '{}' AND ${inLatestCheckRevision(sql`stored.revision`, sql`stored.task_id`)}
             LIMIT 1
           ) latest ON true
-          WHERE under_review.from_id = review.id AND checker.work_kind = 'check'
         ), '[]'::jsonb)
-      FROM dependencies held
-      JOIN work_items review ON review.id = held.to_id
-      WHERE held.from_id = ${taskId}::uuid AND ${reviewTask(review)}
+      FROM ${reviewTasksHeldBy(sql`${taskId}::uuid`)} review
       ON CONFLICT (review_task_id) DO NOTHING
       RETURNING review_task_id AS "reviewTaskId"`);
     return FrozenReviewsSchema.parse(result.rows).map((row) => row.reviewTaskId);

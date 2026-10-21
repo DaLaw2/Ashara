@@ -2,6 +2,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { checkDisputes, reviewerOutcomes, suiteReviewJudgements } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
+import { siteCostOf } from "@ashara/finance";
 
 // Quality's reviewer record: each reviewer's verdict set against what later evidence showed of it.
 // A suite review claim is a pass on the check tasks it covers; a witness against one of those check
@@ -235,11 +236,7 @@ export async function reviewerRecordOf(db: DbHandle, projectId: string): Promise
   const lines: ReviewerRecordLine[] = [];
   for (const row of z.array(ReviewerRecordRowSchema).parse(result.rows)) {
     const site = SITE_OF_VERDICT[row.verdictKind];
-    const cost = await db.execute(sql`
-      SELECT count(*)::int AS calls, count(cost_usd)::int AS "measuredCalls", coalesce(sum(cost_usd), 0)::float8 AS "measuredUsd"
-      FROM llm_calls
-      WHERE project_id = ${projectId} AND call_site = ${site} AND provider || '/' || model = ${row.reviewerModel}`);
-    const [spent] = z.array(SiteCostRowSchema).length(1).parse(cost.rows);
+    const [spent] = z.array(SiteCostRowSchema).length(1).parse(await siteCostOf(db, projectId, site, row.reviewerModel));
     if (spent === undefined) throw new ReviewerCostUnreadable(row.reviewerModel, site);
     lines.push({ ...row, site, cost: spent });
   }

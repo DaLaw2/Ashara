@@ -12,7 +12,7 @@ import type { WorkKind } from "./organization-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./quality-acl.js";
 
 export type { DevSessionRepository, ErrorEnvelope, Outcome } from "@ashara/workplace";
-export { ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, toRecordedOutcome } from "@ashara/workplace";
+export { ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, lastCompletedAttempts, toRecordedOutcome } from "@ashara/workplace";
 
 /**
  * The tools and Z0 ports an attempt at each kind of work is given, in Workplace's language. Total

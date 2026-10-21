@@ -33,6 +33,32 @@ describe("findTableUses", () => {
     ]);
   });
 
+  test("reports a drizzle builder read: a from, every join and an alias of a table the schema exports", () => {
+    const source = [
+      'import { alias } from "drizzle-orm/pg-core";',
+      "await db.select({ id: acceptanceSweeps.id }).from(acceptanceSweeps).where(eq(acceptanceSweeps.blockId, id));",
+      "await db.select().from(checkDisputes).innerJoin(workItems, eq(workItems.id, checkDisputes.taskId));",
+      "await db.select().from(clientMessages).leftJoin(projectBlocks, on).rightJoin(planRepairs, on).fullJoin(llmCalls, on);",
+      'const w = alias(workItems, "w");',
+      "const rows = [].join(separator); items.from(somethingElse);",
+    ].join("\n");
+    expect(findTableUses(source, "probe.ts", identifiers).map((use) => [use.line, use.kind, use.table])).toEqual([
+      [2, "builder-read", "acceptance_sweeps"],
+      [3, "builder-read", "work_items"],
+      [3, "builder-read", "check_disputes"],
+      [4, "builder-read", "llm_calls"],
+      [4, "builder-read", "plan_repairs"],
+      [4, "builder-read", "project_blocks"],
+      [4, "builder-read", "client_messages"],
+      [5, "builder-read", "work_items"],
+    ]);
+  });
+
+  test("reports a raw FOR UPDATE lock as a read of the locked table", () => {
+    const source = "await tx.execute(sql`SELECT id FROM work_items WHERE id = ${taskId} FOR UPDATE`);";
+    expect(findTableUses(source, "probe.ts", identifiers).map((use) => [use.kind, use.table])).toEqual([["raw-read", "work_items"]]);
+  });
+
   test("the told record kept on another context's row, as Engagement and Delivery wrote it, is a write of that row", () => {
     const blockReport = "await tx.update(projectBlocks).set(on === \"blocked\" ? { reportId } : { resumedReportId: reportId }).where(eq(projectBlocks.id, episodeId));";
     const deliveredReport = "await tx.update(acceptanceSweeps).set({ reportId: message.id }).where(eq(acceptanceSweeps.id, sweepId));";
@@ -47,12 +73,20 @@ describe("parseTableOwnershipRules", () => {
     expect([...identifiers.values()].filter((table) => !rules.owners.has(table))).toEqual([]);
   });
 
-  test("refuses a missing section, a table stated twice, an exemption of an unlisted table and an unknown key", () => {
+  test("the rules hold no exemption: every foreign read the map admits is an allowed edge with its reason", () => {
+    expect(rules.edges.map((edge) => edge.id)).toEqual(["finance-model-catalog"]);
+    for (const edge of rules.edges) expect(edge.reason.length).toBeGreaterThan(0);
+  });
+
+  test("refuses a missing section, a table stated twice, an edge to an unlisted table, an exemption and an unknown key", () => {
     expect(() => parseTableOwnershipRules("[shared]\nallow = []\n", "r.toml")).toThrow(/section is missing/);
     expect(() => parseTableOwnershipRules('[tables]\nprojects = "shared"\nprojects = "db"\n', "r.toml")).toThrow(/stated twice/);
     expect(() =>
-      parseTableOwnershipRules('[tables]\nprojects = "shared"\nexempt.a = { file = "f.ts", tables = ["llm_calls"], reason = "r" }\n', "r.toml"),
+      parseTableOwnershipRules('[tables]\nprojects = "shared"\nedge.a = { file = "f.ts", tables = ["llm_calls"], reason = "r" }\n', "r.toml"),
     ).toThrow(/does not list/);
+    expect(() =>
+      parseTableOwnershipRules('[tables]\nllm_calls = "finance"\nexempt.a = { file = "f.ts", tables = ["llm_calls"], reason = "r" }\n', "r.toml"),
+    ).toThrow(/has no exemption/);
     expect(() => parseTableOwnershipRules('[tables]\nprojects = "shared"\nallow = []\n', "r.toml")).toThrow(/unrecognised key/);
   });
 });

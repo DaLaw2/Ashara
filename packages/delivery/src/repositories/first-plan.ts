@@ -1,8 +1,9 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { projects, visionDocuments, workItems } from "@ashara/db";
+import { hasRoster, projects, roleOfLatestRoster, workItems } from "@ashara/db";
 import { noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
+import { currentStoredVision, hasVision } from "../acl/engagement-vision-acl.js";
 import { WorkItemRowRepository } from "./work-item.js";
 import { haltForPlanningStopped } from "./project-halt.js";
 
@@ -44,10 +45,7 @@ export async function tasksWithoutRosterOwner(db: DbHandle, projectId: ProjectId
       and(
         eq(workItems.projectId, projectId),
         eq(workItems.level, "Task"),
-        sql`(${workItems.ownerRoleId} IS NULL OR NOT EXISTS (
-          SELECT 1 FROM roster_roles r
-          WHERE r.project_id = ${projectId} AND r.role_id = ${workItems.ownerRoleId}
-            AND r.revision = (SELECT MAX(l.revision) FROM roster_roles l WHERE l.project_id = ${projectId})))`,
+        sql`(${workItems.ownerRoleId} IS NULL OR NOT ${roleOfLatestRoster(projectId, workItems.ownerRoleId)})`,
       ),
     );
   return rows.map((row) => row.id);
@@ -58,7 +56,8 @@ interface ProjectAwaitingPlanRow {
   readonly projectName: string;
   readonly planAttempts: number;
   readonly planLastError: string | null;
-  readonly vision: typeof visionDocuments.$inferSelect;
+  /** The project's current vision as Engagement's currentStoredVision selects it, read by its parseStoredVision. */
+  readonly vision: unknown;
 }
 
 const awaitingPlan = () =>
@@ -66,10 +65,10 @@ const awaitingPlan = () =>
     projectAtWork(),
     isNull(projects.firstPlannedAt),
     isNull(projects.planStoppedAt),
-    sql`EXISTS (SELECT 1 FROM vision_documents v WHERE v.project_id = projects.id)`,
+    hasVision(projects.id),
     sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id)`,
     // First planning requires a roster: every task gets an owner.
-    sql`EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = projects.id)`,
+    hasRoster(projects.id),
   );
 
 /**
@@ -86,16 +85,9 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
       name: projects.name,
       planAttempts: projects.planAttempts,
       planLastError: projects.planLastError,
-      vision: visionDocuments,
+      vision: currentStoredVision(projects.id),
     })
     .from(projects)
-    .innerJoin(
-      visionDocuments,
-      and(
-        eq(visionDocuments.projectId, projects.id),
-        sql`${visionDocuments.version} = (SELECT MAX(v.version) FROM vision_documents v WHERE v.project_id = projects.id)`,
-      ),
-    )
     .where(and(awaitingPlan(), noOpenStop(projects.id), noOpenAnswer()))
     .orderBy(asc(projects.createdAt), asc(projects.id));
 

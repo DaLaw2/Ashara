@@ -46,7 +46,7 @@ export {
 
 export { ProjectRepository, projectRowColumns, toProjectRow } from "./repositories/project.js";
 export type { ProjectRow } from "./repositories/project.js";
-export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
+export { hasRoster, latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster, roleOfLatestRoster } from "./repositories/roster.js";
 export { stepFaultLedger } from "./repositories/step-fault.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";

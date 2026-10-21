@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
-import { clientMessages, projects, workItems } from "@ashara/db";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { clientMessages, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { latestEnvironmentStatement } from "@ashara/delivery/reads";
 import { noOpenStop, projectAtWork } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
@@ -40,25 +41,11 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
   const visions = new VisionRepository(db);
   const due: DueStackChoiceRow[] = [];
   for (const candidate of candidates) {
-    const [task] = await db
-      .select({ id: workItems.id, statement: workItems.environmentStatement })
-      .from(workItems)
-      .where(
-        and(
-          eq(workItems.projectId, candidate.id),
-          eq(workItems.workKind, "environment"),
-          eq(workItems.status, "Completed"),
-          isNotNull(workItems.environmentStatement),
-          // The report tells the client the environment is set up: only a task whose merge is
-          // on record did that, not one an operator marked Completed.
-          isNotNull(workItems.mergeCommit),
-        ),
-      )
-      .orderBy(desc(workItems.updatedAt), desc(workItems.id))
-      .limit(1);
-    if (task === undefined || task.statement === null) continue;
+    // The report tells the client the environment is set up: only a task whose merge is on record did that.
+    const task = await latestEnvironmentStatement(db, candidate.id);
+    if (task === null) continue;
     const projectId = parseProjectId(candidate.id, "projects.id");
-    due.push({ projectId, taskId: task.id, statement: task.statement, vision: await visions.getCurrent(projectId) });
+    due.push({ projectId, taskId: task.taskId, statement: task.statement, vision: await visions.getCurrent(projectId) });
   }
   return due;
 }

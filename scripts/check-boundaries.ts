@@ -56,7 +56,7 @@
  * on a packages/integration/src/simulator test file over its budget of simulator runs
  * (scripts/simulator-run-budget.ts), on a raw copy of a cross-context predicate outside the
  * context that owns it (scripts/predicate-copies.ts), and on a write to a table another context
- * owns or an unexempted raw SQL read of one, against the owner map of the rules file's [tables]
+ * owns or a read of one (raw SQL or a drizzle builder) no allowed edge admits, against the owner map of the rules file's [tables]
  * section, itself held to the schema modules (scripts/table-ownership.ts).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
@@ -881,7 +881,8 @@ const OWNERSHIP_UNSCANNED = new Set(["db", "integration"]);
 
 /**
  * The [tables] owner map held to the schema modules, every write of a table another package owns,
- * every raw SQL read of one no exemption admits, and every exempted table no read uses
+ * every read of one, in raw SQL or through drizzle's builder, no allowed edge admits, and every
+ * edge table no read uses
  * (scripts/table-ownership.ts).
  */
 function tableOwnershipViolations(root: string, packagesDir: string, packageDirs: readonly string[], toml: string, rulesRelative: string): Violation[] {
@@ -922,7 +923,7 @@ function tableOwnershipViolations(root: string, packagesDir: string, packageDirs
     if (!declared.has(table)) violations.push(atRules(table, "no schema module declares this table; remove its entry"));
   }
 
-  const exemptionsUsed = new Set<string>();
+  const edgesUsed = new Set<string>();
   let scanned = 0;
   for (const pkgName of packageDirs.filter((pkg) => !OWNERSHIP_UNSCANNED.has(pkg))) {
     for (const filePath of collectTsFiles(path.join(packagesDir, pkgName, "src")).filter((file) => !file.endsWith(".test.ts"))) {
@@ -941,9 +942,9 @@ function tableOwnershipViolations(root: string, packagesDir: string, packageDirs
           });
           continue;
         }
-        const exemption = rules.exemptions.find((e) => e.file === file && e.tables.includes(use.table));
-        if (exemption !== undefined) {
-          exemptionsUsed.add(`${exemption.id}\0${use.table}`);
+        const edge = rules.edges.find((e) => e.file === file && e.tables.includes(use.table));
+        if (edge !== undefined) {
+          edgesUsed.add(`${edge.id}\0${use.table}`);
           continue;
         }
         violations.push({
@@ -951,16 +952,16 @@ function tableOwnershipViolations(root: string, packagesDir: string, packageDirs
           line: use.line,
           fromPkg: pkgName,
           specifier: use.table,
-          reason: `raw SQL reads a table "${owner}" owns: ${use.text}; read it through ${owner}'s typed read, or exempt it in [${TABLES_SECTION}] with a reason`,
+          reason: `${use.kind === "raw-read" ? "raw SQL" : "a drizzle builder"} reads a table "${owner}" owns: ${use.text}; read it through ${owner}'s typed read, or admit it in [${TABLES_SECTION}] as an allowed edge with its reason`,
         });
       }
     }
   }
   if (scanned === 0) violations.push({ file: "packages", line: 0, fromPkg: "*", specifier: TABLES_SECTION, reason: "no source module to scan for table writes; a scan of nothing would pass" });
-  for (const exemption of rules.exemptions) {
-    for (const table of exemption.tables) {
-      if (!exemptionsUsed.has(`${exemption.id}\0${table}`)) {
-        violations.push({ file: rulesRelative, line: 0, fromPkg: TABLES_SECTION, specifier: `exempt.${exemption.id}`, reason: `"${table}" is exempted in ${exemption.file}, but no raw read there names it; remove it` });
+  for (const edge of rules.edges) {
+    for (const table of edge.tables) {
+      if (!edgesUsed.has(`${edge.id}\0${table}`)) {
+        violations.push({ file: rulesRelative, line: 0, fromPkg: TABLES_SECTION, specifier: `edge.${edge.id}`, reason: `"${table}" is allowed in ${edge.file}, but no read there names it; remove it` });
       }
     }
   }

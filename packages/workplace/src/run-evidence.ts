@@ -2,6 +2,7 @@ import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
 import { INIT_MIGRATION, legacyMigrationFile, projects } from "@ashara/db";
+import { callTotalsByTaskAndProvider, taskCallsOf } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { AGENT_CALL_SITE } from "./attempt.js";
 import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
@@ -68,8 +69,6 @@ const SessionRowSchema = z.object({
   attemptModel: z.string().nullable(),
   attemptCell: z.string().nullable(),
 });
-
-const TaskRowSchema = z.object({ taskId: z.guid(), title: z.string(), status: z.string() });
 
 const CallTotalsRowSchema = z.object({
   taskId: z.guid().nullable(),
@@ -230,7 +229,12 @@ function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: D
  * project reads 'blocked' while `projectHalted` holds of it: Delivery's halt, which the caller
  * supplies from Delivery's published predicates, since Workplace is upstream of Delivery.
  */
-export async function readRunEvidence(db: DbHandle, projectId: ProjectId, projectHalted: (projectId: AnyColumn) => SQL): Promise<RunEvidence> {
+export async function readRunEvidence(
+  db: DbHandle,
+  projectId: ProjectId,
+  projectHalted: (projectId: AnyColumn) => SQL,
+  workItemsOf: (db: DbHandle, projectId: ProjectId) => Promise<readonly unknown[]>,
+): Promise<RunEvidence> {
   const projectRows = await db.execute(
     sql`SELECT id, name, CASE WHEN ${projectHalted(projects.id)} THEN 'blocked' ELSE lifecycle END AS status FROM projects WHERE id = ${projectId}`,
   );
@@ -247,60 +251,27 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId, projec
   if (migrationRow === undefined) throw new RunReportAttemptMigrationUnrecorded([columnsFile, initFile]);
   const attemptColumnsSince = z.object({ appliedAt: z.coerce.date() }).parse(migrationRow).appliedAt;
 
-  const sessionRows = await db.execute(sql`
+  const workItems = z.array(WorkItemRowSchema).parse(await workItemsOf(db, projectId));
+  const itemIds = workItems.map((item) => item.id);
+  const sessionRows =
+    itemIds.length === 0
+      ? { rows: [] }
+      : await db.execute(sql`
     SELECT s.id AS "sessionId", s.task_id AS "taskId", s.phase, s.environment_version AS "environmentVersion",
            s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.verification_result ->> 'resolvedBy' AS "resolvedBy",
            s.verification_result ->> 'outcome' AS "endOutcome",
            s.verification_result ->> 'detail' AS "endDetail",s.attempt_prompt_digest AS "attemptPromptDigest",
            s.attempt_terminal AS "attemptTerminal", s.attempt_turns AS "attemptTurns",
            s.attempt_provider AS "attemptProvider", s.attempt_model AS "attemptModel", s.attempt_cell AS "attemptCell"
-    FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
-    WHERE w.project_id = ${projectId}
+    FROM dev_sessions s
+    WHERE s.task_id IN (${sql.join(itemIds.map((id) => sql`${id}::uuid`), sql`, `)})
     ORDER BY s.created_at, s.id`);
   const sessions = z.array(SessionRowSchema).parse(sessionRows.rows);
-
-  const taskRows = await db.execute(sql`
-    SELECT w.id AS "taskId", w.title, w.status
-    FROM work_items w
-    WHERE w.project_id = ${projectId}
-      AND (EXISTS (SELECT 1 FROM dev_sessions s WHERE s.task_id = w.id)
-           OR EXISTS (SELECT 1 FROM llm_calls c WHERE c.task_id = w.id))
-    ORDER BY w.created_at, w.id`);
-  const tasks = z.array(TaskRowSchema).parse(taskRows.rows);
-
-  const callRows = await db.execute(sql`
-    SELECT task_id AS "taskId", provider,
-           COUNT(*)::int AS calls,
-           COUNT(cost_usd)::int AS "measuredCalls",
-           COALESCE(SUM(cost_usd), 0)::float8 AS "measuredUsd",
-           COALESCE(SUM(estimated_cost_usd) FILTER (WHERE cost_usd IS NULL), 0)::float8 AS "unmeasuredEstimateUsd",
-           COUNT(*) FILTER (WHERE state = 'pending')::int AS "pendingCalls",
-           COUNT(*) FILTER (WHERE state = 'unmeasured_after_crash')::int AS "lostCalls",
-           COUNT(*) FILTER (WHERE cost_usd = 0)::int AS "zeroCostCalls",
-           COUNT(*) FILTER (WHERE input_tokens IS NOT NULL AND cache_read_tokens IS NOT NULL)::int AS "cacheCountedCalls",
-           COALESCE(SUM(input_tokens) FILTER (WHERE cache_read_tokens IS NOT NULL), 0)::bigint AS "inputTokens",
-           COALESCE(SUM(cache_read_tokens) FILTER (WHERE input_tokens IS NOT NULL), 0)::bigint AS "cacheReadTokens"
-    FROM llm_calls
-    WHERE project_id = ${projectId}
-    GROUP BY task_id, provider
-    ORDER BY task_id NULLS FIRST, provider`);
-  const calls = z.array(CallTotalsRowSchema).parse(callRows.rows);
-
-  const taskCallRows = await db.execute(sql`
-    SELECT task_id AS "taskId", call_site AS "callSite", created_at AS "createdAt",
-           cost_usd::float8 AS "costUsd", input_tokens AS "inputTokens", context_window_tokens AS "contextWindowTokens"
-    FROM llm_calls
-    WHERE project_id = ${projectId} AND task_id IS NOT NULL
-    ORDER BY created_at, id`);
-  const taskCalls = z.array(TaskCallRowSchema).parse(taskCallRows.rows);
-
-  const workItemRows = await db.execute(sql`
-    SELECT w.id, w.level, w.parent_id AS "parentId", w.title, w.status, w.work_kind AS "workKind",
-           w.task_spec->>'origin' AS origin, w.task_spec->>'checksFor' AS "checksFor", w.repairs_task_id AS "repairsTaskId"
-    FROM work_items w
-    WHERE w.project_id = ${projectId}
-    ORDER BY w.created_at, w.id`);
-  const workItems = z.array(WorkItemRowSchema).parse(workItemRows.rows);
+  const calls = z.array(CallTotalsRowSchema).parse(await callTotalsByTaskAndProvider(db, projectId));
+  const taskCalls = z.array(TaskCallRowSchema).parse(await taskCallsOf(db, projectId));
+  // The tasks that spent anything: a dev session, or a call made for it.
+  const spent = new Set([...sessions.map((session) => session.taskId), ...taskCalls.map((call) => call.taskId)]);
+  const tasks = workItems.filter((item) => spent.has(item.id)).map((item) => ({ taskId: item.id, title: item.title, status: item.status }));
 
   return {
     project,

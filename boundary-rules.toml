@@ -94,12 +94,15 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # read its cause in Delivery's published language (project-halt), and its block and delivered reports and the early-warning register
 # read the work item's recorded cause and task specification in Delivery's work-item
 # language; its predicates, its lifecycle guard and the reads that admit a project by its halt
-# or a task by the plan it belongs to read them in Delivery's published predicates; each only in the
+# or a task by the plan it belongs to read them in Delivery's published predicates, and what its
+# reports and its told record name of the board in Delivery's published reads; each only in the
 # files listed. The early-warning register reads which revision of a task's stored checks is in force
-# and what each decides in Quality's published stored-checks language, only in its repository.
+# and what each decides in Quality's published stored-checks language, and the reports and the told
+# record read the sweeps, their evidence and the check disputes in Quality's published reads, only in
+# the repositories listed.
 allow = ["shared", "db", "finance", "delivery", "quality"]
-restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/client-change.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-receipt.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/stack-choice.ts"]
-restrict.quality = ["src/repositories/early-warning.ts"]
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/client-change.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-receipt.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/told-report.ts", "src/stack-choice.ts"]
+restrict.quality = ["src/repositories/block-report.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it (answers, stops, and changes read
 # into corrections of the contract), and the reports back.
@@ -153,6 +156,7 @@ module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts
 module.acceptance     = ["src/repositories/acceptance.ts"]
 module.reviewer-record = ["src/repositories/reviewer-outcome.ts"]
 module.acl            = ["src/acl/*.ts"]
+module.published      = ["src/published-reads.ts"]
 module.entry          = ["src/index.ts"]
 module-allow.verification = ["verdict", "checks", "environment", "suite-review", "acl"]
 module-allow.verdict      = ["checks", "environment", "acl"]
@@ -244,16 +248,18 @@ bounds-tables = ["src/simulator/work-bounds.ts"]
 # Every insert, update or delete a context's source issues lands on a table that context owns;
 # anything it does to another context's table goes through that owner's exported write entry or
 # typed read. scripts/check-boundaries.ts fails on a write to a table another package owns, and on a
-# raw SQL read of one no exemption below admits (scripts/table-ownership.ts states what is read and
-# its blind spots). Every table a packages/db/src/schema/<module>.ts declares has one entry: owned by
-# <module> when it is a package, otherwise by "db" (generic persistence, reached through db's
-# repositories) or "shared".
+# read of one, in raw SQL or through drizzle's builder, that no allowed edge below admits
+# (scripts/table-ownership.ts states what is read and its blind spots). Every table a
+# packages/db/src/schema/<module>.ts declares has one entry: owned by <module> when it is a package,
+# otherwise by "db" (generic persistence, reached through db's repositories) or "shared".
 #
-# <table>     = "<owner>"   the package that owns it, "db", or "shared": projects is the record every
-#                           context keys its rows by, and domain_events the log every context appends to
-# exempt.<id> = { file = "<repo-relative path>", tables = ["..."], reason = "..." }
-#                           a reviewed raw SQL read of another context's table; an exempted table no
-#                           read of its file names is itself a violation, so the list only shrinks
+# <table>   = "<owner>"   the package that owns it, "db", or "shared": projects is the record every
+#                         context keys its rows by, and domain_events the log every context appends to
+# edge.<id> = { file = "<repo-relative path>", tables = ["..."], reason = "..." }
+#                         a read of another context's table the context map allows, with the
+#                         relationship that allows it; an edge table no read of its file names is
+#                         itself a violation. There is no exemption: a read the map does not draw
+#                         goes through the owner's typed read.
 client_login_failures = "db"
 clients = "db"
 client_sessions = "db"
@@ -299,19 +305,9 @@ secrets = "security"
 dev_sessions = "workplace"
 domain_events = "shared"
 projects = "shared"
-# Raw reads of another context's table that predate its owner's typed read; each owner is to publish
-# one and the reader to move to it, so each line below goes as that read lands.
-exempt.delivery-first-plan = { file = "packages/delivery/src/repositories/first-plan.ts", tables = ["roster_roles", "vision_documents"], reason = "first planning admits a project by its roster and its vision version in raw SQL" }
-exempt.delivery-replan = { file = "packages/delivery/src/repositories/replan.ts", tables = ["vision_documents"], reason = "the revision reads the vision version in force in raw SQL" }
-exempt.engagement-burn-warning = { file = "packages/engagement/src/repositories/burn-warning.ts", tables = ["plan_revisions", "work_items"], reason = "the burn warning counts the current plan's revision and tasks in raw SQL" }
-exempt.engagement-client-change = { file = "packages/engagement/src/repositories/client-change.ts", tables = ["work_items"], reason = "a correction's impact lists the current plan's tasks citing its keys in raw SQL" }
-exempt.engagement-early-warning = { file = "packages/engagement/src/repositories/early-warning.ts", tables = ["plan_revisions"], reason = "the early-warning register reads the plan revision in raw SQL" }
-exempt.quality-acceptance = { file = "packages/quality/src/repositories/acceptance.ts", tables = ["work_items", "client_messages"], reason = "readiness reads the open tasks, and the terminal sweep the stop report, in raw SQL" }
-exempt.quality-check-set-freeze = { file = "packages/quality/src/repositories/check-set-freeze.ts", tables = ["dependencies", "work_items"], reason = "the freeze selects the reviewed check set from the plan's tasks in raw SQL" }
-exempt.finance-attempt-grade = { file = "packages/finance/src/attempt-grade.ts", tables = ["model_configs"], reason = "Finance's attempt grade reads the catalog's two grades as one scalar expression every reader embeds in its own query" }
-exempt.quality-reviewer-outcome = { file = "packages/quality/src/repositories/reviewer-outcome.ts", tables = ["llm_calls"], reason = "the reviewer record counts the ledger's calls in raw SQL" }
-exempt.quality-task-check = { file = "packages/quality/src/repositories/task-check.ts", tables = ["work_items", "dependencies", "dev_sessions"], reason = "stored checks read their tasks and the attempt models in raw SQL" }
-exempt.workplace-run-evidence = { file = "packages/workplace/src/run-evidence.ts", tables = ["work_items", "llm_calls"], reason = "the run evidence reads the tasks and the ledger's calls in raw SQL" }
+# Finance is Model Access's only customer and re-publishes its model language to every other context
+# (the [finance] and [model-access] sections): the attempt grade is that language read from the catalog.
+edge.finance-model-catalog = { file = "packages/finance/src/attempt-grade.ts", tables = ["model_configs"], reason = "Finance, the gateway in front of Model Access, reads the catalog's two grades as the one scalar expression every reader of an attempt's grade embeds" }
 # --- Stack literals (no package's section) ----------------------------------------------------
 
 [stack-literals]

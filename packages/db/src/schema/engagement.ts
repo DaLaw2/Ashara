@@ -2,6 +2,7 @@ import { pgTable, uuid, varchar, text, jsonb, integer, boolean, unique, index, p
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
 import { projects } from "./project.js";
+import { acceptanceSweeps } from "./quality.js";
 
 // Engagement: the vision versions and the client channel.
 
@@ -238,7 +239,9 @@ export const toldReports = pgTable(
 // report each counted apart, the last error, and when it is tried again.
 
 export const deliveredReportAttempts = pgTable("delivered_report_attempts", {
-  sweepId: uuid("sweep_id").primaryKey(),
+  sweepId: uuid("sweep_id")
+    .primaryKey()
+    .references(() => acceptanceSweeps.id, { onDelete: "cascade" }),
   projectId: uuid("project_id")
     .notNull()
     .references(() => projects.id, { onDelete: "cascade" }),

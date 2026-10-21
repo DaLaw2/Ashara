@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
+import { projectWorkItems } from "@ashara/delivery/reads";
 import { DevSessionRepository, createAgentBrief, createSessionId, readRunEvidence, toSessionAttempt, withSessionLifecycle, runAttempt } from "@ashara/workplace";
 import type { SessionStore } from "@ashara/workplace";
 import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
@@ -229,7 +230,7 @@ describe("the trace contract on a scripted run", () => {
     await repo.fail(oldSession, { outcome: "failed", detail: "a row from before the attempt columns" }, null);
     await db.execute(sql`UPDATE dev_sessions SET created_at = '2000-01-01T00:00:00Z' WHERE id = ${oldSession}`);
 
-    const evidence = await readRunEvidence(db, projectId, projectHalted);
+    const evidence = await readRunEvidence(db, projectId, projectHalted, projectWorkItems);
 
     const sessions = evidence.tasks.flatMap((t) => t.sessions);
     expect(sessions.map((s) => s.sessionId).sort()).toEqual([attemptSession, idleSession, deliveredSession, openSession, orphanSession, oldSession].sort());
@@ -294,7 +295,7 @@ describe("the trace contract on a scripted run", () => {
     await db.execute(sql`
       INSERT INTO llm_calls (id, project_id, task_id, call_site, provider, model, estimated_cost_usd, state, created_at)
       VALUES (${randomUUID()}, ${projectId}, ${idleTaskId}, 'agent-runner', 'deepseek', 'deepseek-scripted', 0.001, 'unmeasured_after_crash', '1999-01-01T00:00:00Z')`);
-    const untied = formatRunReport(await readRunEvidence(db, projectId, projectHalted)).text;
+    const untied = formatRunReport(await readRunEvidence(db, projectId, projectHalted, projectWorkItems)).text;
     expect(untied).toContain("UNTIED: 1 of 1 agent call(s) on this task fall in no session with a recorded attempt (admitted at 1999-01-01T00:00:00.000Z)");
     expect(untied).toContain("1 task(s) UNTIED");
     await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId} AND created_at = '1999-01-01T00:00:00Z'`);
@@ -308,7 +309,7 @@ describe("the trace contract on a scripted run", () => {
         INSERT INTO llm_calls (id, project_id, task_id, call_site, provider, model, estimated_cost_usd, state)
         VALUES (${randomUUID()}, ${projectId}, ${idleTaskId}, 'attempt', 'deepseek', 'deepseek-scripted', 0.5, ${state})`);
     }
-    const evidence = await readRunEvidence(db, projectId, projectHalted);
+    const evidence = await readRunEvidence(db, projectId, projectHalted, projectWorkItems);
     expect(evidence.calls.find((c) => c.taskId === idleTaskId)).toMatchObject({ calls: 2, measuredCalls: 0, pendingCalls: 1, lostCalls: 1 });
     // The run's totals hold the earlier test's recorded call with no measured cost as well.
     expect(formatRunReport(evidence).text).toContain(
