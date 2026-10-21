@@ -2,13 +2,13 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { acceptanceSweeps, clientMessages, guaranteeEvidence, projectBlocks, projects, taskChecks, undecidedItems, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { completedGoalTasks, goalTaskSql, pendingCorrection, pendingRepair, productScaffoldTask } from "../acl/delivery-acl.js";
+import { SETTLED_WORK_ITEM_STATUSES, completedGoalTasks, goalTaskSql, pendingCorrection, pendingRepair, productScaffoldTask } from "../acl/delivery-acl.js";
 import { noOpenAnswer, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-acl.js";
 import type { FailedCheck, SweptCheck } from "../verification.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
 // A delivered project is accepted on one sweep of main HEAD. A project is ready for it once its first plan exists,
-// no task of it is open (Pending, InProgress, Blocked, Failed), at least one goal task is Completed,
+// no task of it is open (any status Delivery does not name settled), at least one goal task is Completed,
 // no repair or revision is awaited, and no stop or answer awaits the Liaison. A passed sweep is
 // recorded with the project's move to 'accepted' in one transaction, the project row locked and
 // readiness read again; a failed one with the defect item it opens. Engagement's delivered report
@@ -16,6 +16,9 @@ import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 // stopped or halted short of acceptance gets one terminal sweep per stop or halt episode. Every
 // sweep is recorded with the outcome of each stored check it ran and one evidence row per guarantee
 // in force, together.
+
+/** A status Delivery does not name settled reads as open, so a status it adds never lets a project read ready. */
+const settledStatuses = sql.join(SETTLED_WORK_ITEM_STATUSES.map((status) => sql`${status}`), sql`, `);
 
 /** Every condition of readiness, on the projects row in scope. */
 const readyForAcceptance = sql`(${projectAtWork()}
@@ -25,7 +28,7 @@ const readyForAcceptance = sql`(${projectAtWork()}
   AND ${noOpenStop(projects.id)}
   AND ${noOpenAnswer()}
   AND NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id AND w.level = 'Task'
-    AND w.status IN ('Pending', 'InProgress', 'Blocked', 'Failed'))
+    AND w.status NOT IN (${settledStatuses}))
   AND EXISTS (SELECT 1 FROM ${workItems} WHERE ${workItems.projectId} = projects.id
     AND ${workItems.status} = 'Completed' AND ${goalTaskSql}))`;
 
