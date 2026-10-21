@@ -458,4 +458,15 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The simulator is the oracle every run is judged by, so its source is kept reviewable: no line
+    // over 120 characters, a string, a comment or a directive included (a long directive is written
+    // as a block comment over several lines). Its tests are not held to it.
+    // Blind spot: a long line in a simulator test file.
+    files: ["packages/integration/src/simulator/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "max-len": ["error", { code: 120, tabWidth: 2 }],
+    },
+  },
 );

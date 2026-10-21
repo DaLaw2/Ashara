@@ -138,7 +138,11 @@ describe("I9's covered and excluded lists", () => {
   });
 
   it("name for I4 only violation keys I4 reports", () => {
-    const i4 = fs.readFileSync(fileURLToPath(new URL("./client-reports.ts", import.meta.url)), "utf8");
+    // I4 is client-reports.ts and the checker of each report kind beside it (client-report-<kind>.ts).
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const checkers = fs.readdirSync(here).filter((name) => /^client-reports?(-[a-z-]+)?\.ts$/.test(name));
+    expect(checkers).toContain("client-reports.ts");
+    const i4 = checkers.map((name) => fs.readFileSync(path.join(here, name), "utf8")).join("\n");
     const keys = TEXT_COVERED.flatMap((entry) => entry.judges.flatMap((judge) => (judge.by === "I4" ? [judge.key] : [])));
     expect(keys.length).toBeGreaterThan(0);
     expect(keys.filter((key) => !i4.includes(`"${key}`) && !i4.includes(`\`${key}`))).toEqual([]);

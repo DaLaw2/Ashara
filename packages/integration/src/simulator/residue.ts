@@ -76,18 +76,27 @@ function parseWorktrees(porcelain: string): Array<{ path: string; branch: string
  * cell still running. Read through the run's git broker, never a faulted seam. A target with no
  * repository yet holds no branch or worktree.
  */
-async function readHostResidue(git: GitRunner, workdirBase: string, repository: string | null, cells: readonly FakeCell[]): Promise<HostResidue> {
+async function readHostResidue(
+  git: GitRunner,
+  workdirBase: string,
+  repository: string | null,
+  cells: readonly FakeCell[],
+): Promise<HostResidue> {
   let branches: string[] = [];
   let worktrees: Array<{ path: string; branch: string | null }> = [];
   if (repository !== null && (await exists(`${repository}/.git`))) {
     branches = (await gitText(git, repository, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"]))
       .split("\n")
       .filter((name) => name !== "" && name !== "main");
-    worktrees = parseWorktrees(await gitText(git, repository, ["worktree", "list", "--porcelain"])).filter((tree) => tree.path !== repository);
+    worktrees = parseWorktrees(await gitText(git, repository, ["worktree", "list", "--porcelain"])).filter(
+      (tree) => tree.path !== repository,
+    );
   }
   let directories: string[];
   try {
-    directories = (await readdir(workdirBase, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    directories = (await readdir(workdirBase, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
   } catch (err) {
     throw new ResidueUnreadable("the workdir base's entries", workdirBase, err);
   }
@@ -129,19 +138,27 @@ export async function checkResidue(
   const violations: Violation[] = [];
   for (const item of settled) {
     const left = [
-      ...residue.branches.filter((branch) => branch.includes(item.id)).map((branch) => ({ kind: "branch", what: `branch ${branch}` })),
+      ...residue.branches
+        .filter((branch) => branch.includes(item.id))
+        .map((branch) => ({ kind: "branch", what: `branch ${branch}` })),
       ...residue.worktrees
         .filter((tree) => tree.path.includes(item.id) || (tree.branch !== null && tree.branch.includes(item.id)))
         .map((tree) => ({ kind: "worktree", what: `worktree ${tree.path} (${tree.branch ?? "detached"})` })),
-      ...residue.directories.filter((name) => name.includes(item.id)).map((name) => ({ kind: "directory", what: `directory ${name} under the workdir base` })),
-      ...residue.cells.filter((cell) => cell.labels[CELL_TASK_LABEL] === item.id).map((cell) => ({ kind: "cell", what: `cell ${cell.name}` })),
+      ...residue.directories
+        .filter((name) => name.includes(item.id))
+        .map((name) => ({ kind: "directory", what: `directory ${name} under the workdir base` })),
+      ...residue.cells
+        .filter((cell) => cell.labels[CELL_TASK_LABEL] === item.id)
+        .map((cell) => ({ kind: "cell", what: `cell ${cell.name}` })),
     ];
     for (const kind of new Set(left.map((each) => each.kind))) {
       const named = left.filter((each) => each.kind === kind).map((each) => each.what);
       violations.push({
         invariant: "I7",
         step,
-        statement: `"${item.title}" is ${item.status}, yet the host still holds its ${named.join(", ")}: a cleanup the path that settled it skipped`,
+        statement:
+          `"${item.title}" is ${item.status}, yet the host still holds its ${named.join(", ")}: a cleanup the ` +
+          `path that settled it skipped`,
         key: `I7:residue:${kind}:${item.title}`,
       });
     }

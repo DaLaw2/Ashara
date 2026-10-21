@@ -40,7 +40,8 @@ const callRows = z.array(
 type Seen = { readonly kind: "admitted" | "recorded"; readonly uuids: readonly string[] };
 
 /**
- * I5, the admission clause, for two admissions racing the spend cap: what the spend cap's admission promises, judged from outside it.
+ * I5, the admission clause, for two admissions racing the spend cap: what the spend cap's admission promises, judged
+ * from outside it.
  * At every instant, the deployment's recorded spend (each row at its cost, or its estimate when
  * unmeasured, as the cap counts it) plus the worst-case estimate of every call admitted and not yet
  * recorded is within the cap. A call is admitted when its pending row's insert returns and recorded
@@ -76,19 +77,27 @@ export class AdmissionLedger {
       const ids = event.uuids.filter((uuid) => byId.has(uuid));
       const [id] = ids;
       if (id === undefined || ids.length > 1) {
-        throw new AdmissionsUnobservable(`an llm_calls ${event.kind === "admitted" ? "insert" : "update"} named ${ids.length} llm_calls rows, not one`);
+        throw new AdmissionsUnobservable(
+          `an llm_calls ${event.kind === "admitted" ? "insert" : "update"} named ${ids.length} llm_calls rows, not one`,
+        );
       }
       const row = byId.get(id);
       if (row === undefined) throw new AdmissionsUnobservable(`the llm_calls row ${id} vanished while it was judged`);
-      if (row.estimate === null) throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) carries no estimate`);
+      if (row.estimate === null)
+        throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) carries no estimate`);
       if (event.kind === "recorded") {
-        if (!admitted.has(id) || recorded.has(id)) throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) was recorded ${recorded.has(id) ? "twice" : "before it was admitted"}`);
+        if (!admitted.has(id) || recorded.has(id))
+          throw new AdmissionsUnobservable(
+            `the llm_calls row ${id} (${row.callSite}) was recorded ` +
+              `${recorded.has(id) ? "twice" : "before it was admitted"}`,
+          );
         recorded.add(id);
         inFlight -= row.estimate;
         spent += row.cost ?? row.estimate;
         continue;
       }
-      if (admitted.has(id)) throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) was admitted twice`);
+      if (admitted.has(id))
+        throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) was admitted twice`);
       admitted.add(id);
       inFlight += row.estimate;
       if (spent + inFlight > capUsd + 1e-9) {
@@ -96,14 +105,19 @@ export class AdmissionLedger {
           invariant: "I5",
           step,
           statement:
-            `the spend cap admitted past itself: when ${row.callSite} was admitted, recorded spend $${spent.toFixed(6)} plus ` +
-            `${admitted.size - recorded.size} call(s) in flight at their worst case $${inFlight.toFixed(6)} exceeds the cap $${capUsd}`,
+            `the spend cap admitted past itself: when ${row.callSite} was admitted, recorded spend ` +
+            `$${spent.toFixed(6)} plus ` +
+            (`${admitted.size - recorded.size} call(s) in flight at their worst case $${inFlight.toFixed(6)} ` +
+              `exceeds the cap $${capUsd}`),
           key: "I5:over-committed",
         };
       }
     }
     const unseen = rows.find((row) => !admitted.has(row.id));
-    if (unseen !== undefined) throw new AdmissionsUnobservable(`the llm_calls row ${unseen.id} (${unseen.callSite}) was written where the db seam did not see it`);
+    if (unseen !== undefined)
+      throw new AdmissionsUnobservable(
+        `the llm_calls row ${unseen.id} (${unseen.callSite}) was written where the db seam did not see it`,
+      );
     return null;
   }
 }

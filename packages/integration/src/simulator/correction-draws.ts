@@ -20,7 +20,14 @@ type CorrectionArrival = (typeof CORRECTION_ARRIVALS)[number];
  * - change-assumption: an assumption restated;
  * - change-interface: an interface entry restated.
  */
-const CORRECTION_KINDS = ["rewrite-guarantee", "add-exclusion", "add-guarantee", "withdraw-guarantee", "change-assumption", "change-interface"] as const;
+const CORRECTION_KINDS = [
+  "rewrite-guarantee",
+  "add-exclusion",
+  "add-guarantee",
+  "withdraw-guarantee",
+  "change-assumption",
+  "change-interface",
+] as const;
 export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
 
 export interface CorrectionDraw {
@@ -41,7 +48,8 @@ export function drawCorrection(tape: Tape): CorrectionDraw | null {
   const pair = tape.rotate("correction.pair", CORRECTION_ARRIVALS.length * CORRECTION_KINDS.length);
   const arrival = CORRECTION_ARRIVALS[pair % CORRECTION_ARRIVALS.length];
   const kind = CORRECTION_KINDS[Math.floor(pair / CORRECTION_ARRIVALS.length)];
-  if (arrival === undefined || kind === undefined) throw new RangeError(`the correction draw ${pair} fell outside its lists`);
+  if (arrival === undefined || kind === undefined)
+    throw new RangeError(`the correction draw ${pair} fell outside its lists`);
   return { arrival, kind };
 }
 
@@ -51,4 +59,6 @@ export function correctionPair(draw: CorrectionDraw): string {
 }
 
 /** Every arrival and kind together: what a soak's corrections cover. */
-export const CORRECTION_PAIRS: readonly string[] = CORRECTION_ARRIVALS.flatMap((arrival) => CORRECTION_KINDS.map((kind) => correctionPair({ arrival, kind })));
+export const CORRECTION_PAIRS: readonly string[] = CORRECTION_ARRIVALS.flatMap((arrival) =>
+  CORRECTION_KINDS.map((kind) => correctionPair({ arrival, kind })),
+);

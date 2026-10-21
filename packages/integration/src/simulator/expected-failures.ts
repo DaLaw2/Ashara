@@ -16,7 +16,10 @@ interface ExpectedFailure {
   readonly seed: number;
   /** The profile the failure was observed under (`--profile`); the seed's own when absent. */
   readonly profile?: Profile;
-  /** The run mode the seed fails in (RunOptions.projects, RunOptions.capUsd); one project and the tape's cap when absent. */
+  /**
+   * The run mode the seed fails in (RunOptions.projects, RunOptions.capUsd); one project and the tape's cap when
+   * absent.
+   */
   readonly projects?: 1 | 2;
   readonly capUsd?: number;
   readonly keys: readonly string[];
@@ -43,14 +46,21 @@ function entryOf(run: Pick<RunResult, "seed" | "profile">, mode: RunMode): Expec
   );
 }
 
-/** How a seed's violations differ from its entry: keys it failed and is not listed for, and listed keys it no longer fails. */
+/**
+ * How a seed's violations differ from its entry: keys it failed and is not listed for, and listed keys it no longer
+ * fails.
+ */
 interface ExpectedFailureDiff {
   readonly unexpected: readonly string[];
   readonly missing: readonly string[];
 }
 
-export function diffExpected(run: Pick<RunResult, "seed" | "profile" | "violations">, mode: RunMode): ExpectedFailureDiff {
-  // eslint-disable-next-line no-restricted-syntax -- policy default: a seed with no entry expects no failure, so every violation it has is unexpected
+export function diffExpected(
+  run: Pick<RunResult, "seed" | "profile" | "violations">,
+  mode: RunMode,
+): ExpectedFailureDiff {
+  /* eslint-disable-next-line no-restricted-syntax -- policy default: a seed with no entry expects no failure, so
+     every violation it has is unexpected */
   const listed = new Set(entryOf(run, mode)?.keys ?? []);
   const failed = new Set(run.violations.map((violation) => violation.key));
   return {

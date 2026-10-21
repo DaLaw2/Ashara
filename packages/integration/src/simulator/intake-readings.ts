@@ -56,12 +56,17 @@ export async function readIntakeRecords(db: Database, projectId: string): Promis
     (
       await db.execute(sql`
         SELECT (SELECT count(*) FROM vision_documents WHERE project_id = ${projectId}) AS visions,
-               (SELECT count(*) FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound' AND kind = 'question') AS questions`)
+               (SELECT count(*) FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound'
+                 AND kind = 'question') AS questions`)
     ).rows,
   );
   if (counts === undefined) throw new IntakeCountsMissing(projectId);
   const [row] = reading;
-  return { visionWritten: counts.visions > 0, reading: row === undefined ? null : row, questionsPosted: counts.questions };
+  return {
+    visionWritten: counts.visions > 0,
+    reading: row === undefined ? null : row,
+    questionsPosted: counts.questions,
+  };
 }
 
 /** The count query returned no row, which it always returns: the clause would judge against nothing. */
@@ -86,10 +91,17 @@ function strengthOf(first: ObservedIntake, second: ObservedIntake): string {
  * posted, or the record says none answered. A reading that asked questions is recorded as needing no
  * confirmation.
  */
-export function lazyIntakes(projectId: string, records: IntakeRecords, observed: readonly ObservedIntake[]): Array<{ readonly key: string; readonly statement: string }> {
+export function lazyIntakes(
+  projectId: string,
+  records: IntakeRecords,
+  observed: readonly ObservedIntake[],
+): Array<{ readonly key: string; readonly statement: string }> {
   const found: Array<{ readonly key: string; readonly statement: string }> = [];
   if (observed.some((each) => each.projectId === null)) {
-    found.push({ key: "intake-unattributed", statement: "a tender reading the stand-ins were asked for names no project's pending intake call" });
+    found.push({
+      key: "intake-unattributed",
+      statement: "a tender reading the stand-ins were asked for names no project's pending intake call",
+    });
   }
   if (!records.visionWritten) return found;
   const ours = observed.map((each, at) => ({ each, at })).filter(({ each }) => each.projectId === projectId);
@@ -100,25 +112,41 @@ export function lazyIntakes(projectId: string, records: IntakeRecords, observed:
   const { reading } = records;
   if (first.questions > 0) {
     if (reading !== null && reading.confirmation !== "not-needed") {
-      found.push({ key: "intake-reading-record", statement: `the tender's reading asked ${first.questions} question(s), yet intake_readings records it ${reading.confirmation}` });
+      found.push({
+        key: "intake-reading-record",
+        statement:
+          `the tender's reading asked ${first.questions} question(s), yet intake_readings records it ` +
+          `${reading.confirmation}`,
+      });
     }
     return found;
   }
   if (!after.some((each) => each.kind === "second-asked")) {
     found.push({
       key: "lazy-intake",
-      statement: `the tender's reading by ${first.provider}/${first.model} asked the client nothing, and no second reading of it was asked`,
+      statement:
+        `the tender's reading by ${first.provider}/${first.model} asked the client nothing, and no second ` +
+        `reading of it was asked`,
     });
     return found;
   }
   if (reading === null) {
-    found.push({ key: "intake-reading-record", statement: "the tender's reading asked the client nothing and was put to a second reading, but intake_readings records no reading" });
+    found.push({
+      key: "intake-reading-record",
+      statement:
+        "the tender's reading asked the client nothing and was put to a second reading, but intake_readings " +
+        "records no reading",
+    });
     return found;
   }
   const answered = after.filter((each) => each.kind === "second-answered").at(-1);
   if (answered === undefined) {
     if (reading.confirmation !== "unconfirmed") {
-      found.push({ key: "intake-reading-record", statement: `no second reading of the tender answered whole, yet intake_readings records it ${reading.confirmation}` });
+      found.push({
+        key: "intake-reading-record",
+        statement:
+          `no second reading of the tender answered whole, yet intake_readings records it ` + `${reading.confirmation}`,
+      });
     }
     return found;
   }
@@ -128,12 +156,18 @@ export function lazyIntakes(projectId: string, records: IntakeRecords, observed:
     found.push({
       key: "intake-reading-record",
       statement:
-        `the second reading by ${answered.provider}/${answered.model} (${strength}) asked ${answered.questions} question(s), ` +
+        `the second reading by ${answered.provider}/${answered.model} (${strength}) asked ` +
+        `${answered.questions} question(s), ` +
         `yet intake_readings records ${reading.confirmation} at ${reading.secondStrength ?? "no strength"}`,
     });
   }
   if (records.questionsPosted !== answered.questions) {
-    found.push({ key: "intake-questions", statement: `the second reading asked ${answered.questions} question(s), but ${records.questionsPosted} were posted to the client` });
+    found.push({
+      key: "intake-questions",
+      statement:
+        `the second reading asked ${answered.questions} question(s), but ${records.questionsPosted} were ` +
+        `posted to the client`,
+    });
   }
   return found;
 }

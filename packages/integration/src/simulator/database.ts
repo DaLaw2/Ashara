@@ -108,7 +108,11 @@ export async function dropDatabase(client: AdminQuery, name: string, pauseMs: nu
 async function migrationsHash(): Promise<string> {
   const hash = createHash("sha256");
   for (const file of (await readdir(MIGRATIONS_DIR)).filter((name) => name.endsWith(".sql")).sort()) {
-    hash.update(file).update("\0").update(await readFile(join(MIGRATIONS_DIR, file))).update("\0");
+    hash
+      .update(file)
+      .update("\0")
+      .update(await readFile(join(MIGRATIONS_DIR, file)))
+      .update("\0");
   }
   return hash.digest("hex").slice(0, 12);
 }
@@ -151,7 +155,9 @@ export async function dropStaleRunDatabases(baseUrl: string): Promise<string[]> 
       const stamp = /^ashara_sim_r_(\d+)_/.exec(name)?.[1];
       // A name whose creation time does not parse is not known to be stale: kept, never dropped.
       if (stamp === undefined) {
-        console.warn(`[simulator] run database ${name} names no creation time; left in place, drop it by hand if no run holds it`);
+        console.warn(
+          `[simulator] run database ${name} names no creation time; left in place, drop it by hand if no run holds it`,
+        );
         continue;
       }
       if (Number(stamp) < cutoff) {
@@ -197,7 +203,8 @@ async function seedDatabaseIds(baseUrl: string, name: string, seed: number): Pro
   await client.connect();
   try {
     await client.query("CREATE SEQUENCE sim_uuid_seq");
-    // Version 4 and variant 8 are written into the digest, so the id parses as a v4 uuid wherever production validates one.
+    // Version 4 and variant 8 are written into the digest, so the id parses as a v4 uuid wherever production validates
+    // one.
     await client.query(
       `CREATE FUNCTION sim_uuid() RETURNS uuid LANGUAGE sql AS $$
          SELECT (substr(h, 1, 12) || '4' || substr(h, 14, 3) || '8' || substr(h, 18))::uuid
@@ -212,7 +219,12 @@ async function seedDatabaseIds(baseUrl: string, name: string, seed: number): Pro
         )
       ).rows,
     );
-    if (columns.length === 0) throw new ScratchDatabaseFailed("seed ids", name, "no column defaults to gen_random_uuid(), so the schema changed under the simulator");
+    if (columns.length === 0)
+      throw new ScratchDatabaseFailed(
+        "seed ids",
+        name,
+        "no column defaults to gen_random_uuid(), so the schema changed under the simulator",
+      );
     for (const { table, column } of columns) {
       await client.query(`ALTER TABLE ${quoted(table)} ALTER COLUMN ${quoted(column)} SET DEFAULT sim_uuid()`);
     }

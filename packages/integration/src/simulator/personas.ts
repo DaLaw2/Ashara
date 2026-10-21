@@ -30,7 +30,16 @@ import type { Tape } from "./tape.js";
  * the client nothing, whatever the tender leaves open; a second reading, another model, is honest.
  */
 const CATALOG = {
-  "suite-review": ["honest", "never-satisfied", "rotating", "resurrecting", "flip-flop", "self-refuting", "correlated-second", "lazy-pass"],
+  "suite-review": [
+    "honest",
+    "never-satisfied",
+    "rotating",
+    "resurrecting",
+    "flip-flop",
+    "self-refuting",
+    "correlated-second",
+    "lazy-pass",
+  ],
   planner: ["honest", "oscillating"],
   classifier: ["honest", "flipping"],
   "check-author": ["honest", "sticky-bad"],
@@ -130,6 +139,7 @@ export class Personas {
 
   /** The trace's line for them. */
   describe(): string {
-    return `personas ${ROLES.map((role) => `${role}=${this.drawn[role]}`).join(" ")}${this.onset === null ? "" : ` from cycle ${this.onset}`}`;
+    const drawn = ROLES.map((role) => `${role}=${this.drawn[role]}`).join(" ");
+    return `personas ${drawn}${this.onset === null ? "" : ` from cycle ${this.onset}`}`;
   }
 }

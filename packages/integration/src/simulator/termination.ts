@@ -42,12 +42,14 @@ export class PortCount {
       this.outside += 1;
       return;
     }
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a task not yet counted has made no request, the counter's start
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a task not yet counted has made no request,
+       the counter's start */
     this.byTask.set(task, (this.byTask.get(task) ?? 0) + 1);
   }
 
   of(task: string): number {
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a task the port never served made no request through it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a task the port never served made no request
+       through it */
     return this.byTask.get(task) ?? 0;
   }
 
@@ -60,7 +62,11 @@ export class PortCount {
   }
 }
 
-const requestRow = z.object({ taskId: z.string().nullable(), title: z.string().nullable(), requests: z.number().int() });
+const requestRow = z.object({
+  taskId: z.string().nullable(),
+  title: z.string().nullable(),
+  requests: z.number().int(),
+});
 
 /** One project's llm_calls rows, by the task each names (null: the project's own calls). */
 interface ProjectRequests {
@@ -83,7 +89,8 @@ export async function readRequests(db: Database, projectIds: readonly string[]):
     const tasks = new Map<string, { readonly title: string; readonly requests: number }>();
     for (const row of rows) {
       // A row naming a task that is no work item is named by its id: W1 judges it all the same.
-      if (row.taskId !== null) tasks.set(row.taskId, { title: row.title === null ? row.taskId : row.title, requests: row.requests });
+      if (row.taskId !== null)
+        tasks.set(row.taskId, { title: row.title === null ? row.taskId : row.title, requests: row.requests });
     }
     projects.push({ total: rows.reduce((sum, row) => sum + row.requests, 0), tasks });
   }
@@ -111,26 +118,51 @@ export function checkWork(step: number, port: PortCount, projects: readonly Proj
   const recorded = new Set<string>();
   for (const [index, project] of projects.entries()) {
     if (project.total > perProject) {
-      add(index, "project", `the project drew ${project.total} model requests, past the bound of ${perProject} (${WORK_BOUNDS.requestsPerProject.decided})`);
+      add(
+        index,
+        "project",
+        `the project drew ${project.total} model requests, past the bound of ${perProject} ` +
+          `(${WORK_BOUNDS.requestsPerProject.decided})`,
+      );
     }
     for (const [taskId, task] of project.tasks) {
       recorded.add(taskId);
       const served = port.of(taskId);
       const most = Math.max(served, task.requests);
       if (most > perTask) {
-        add(index, `task:${task.title}`, `"${task.title}" drew ${task.requests} model requests on record and ${served} at the model port, past the bound of ${perTask} (${WORK_BOUNDS.requestsPerTask.decided})`);
+        add(
+          index,
+          `task:${task.title}`,
+          `"${task.title}" drew ${task.requests} model requests on record and ${served} at the model port, ` +
+            `past the bound of ${perTask} (${WORK_BOUNDS.requestsPerTask.decided})`,
+        );
       }
       if (served > task.requests) {
-        add(index, `unrecorded:${task.title}`, `the model port answered ${served} requests of "${task.title}", but llm_calls holds ${task.requests}: a request was sent that no ledger drew`);
+        add(
+          index,
+          `unrecorded:${task.title}`,
+          `the model port answered ${served} requests of "${task.title}", but llm_calls holds ` +
+            `${task.requests}: a request was sent that no ledger drew`,
+        );
       }
     }
   }
   for (const taskId of port.tasks().filter((id) => !recorded.has(id))) {
-    add(0, `unrecorded:${taskId}`, `the model port answered ${port.of(taskId)} requests of task ${taskId}, which no llm_calls row names: requests were sent that no ledger drew`);
+    add(
+      0,
+      `unrecorded:${taskId}`,
+      `the model port answered ${port.of(taskId)} requests of task ${taskId}, which no llm_calls row names: ` +
+        `requests were sent that no ledger drew`,
+    );
   }
   const rows = projects.reduce((sum, project) => sum + project.total, 0);
   if (port.total() > rows) {
-    add(0, "unrecorded", `the model port answered ${port.total()} requests over the run, but llm_calls holds ${rows}: requests were sent that no ledger drew`);
+    add(
+      0,
+      "unrecorded",
+      `the model port answered ${port.total()} requests over the run, but llm_calls holds ${rows}: requests ` +
+        `were sent that no ledger drew`,
+    );
   }
   return found;
 }
@@ -164,9 +196,11 @@ async function readLoopRecords(db: Database, projectId: string): Promise<LoopRec
         SELECT w.id, w.title, w.status,
           (SELECT count(*) FROM suite_review_findings f WHERE f.check_task_id = w.id)::int AS namings,
           (SELECT count(*) FROM check_disputes c WHERE c.check_task_id = w.id)::int AS disputes,
-          (SELECT count(*) FROM work_item_transitions t WHERE t.work_item_id = w.id AND t.from_status = 'Completed' AND t.to_status = 'Pending'
+          (SELECT count(*) FROM work_item_transitions t WHERE t.work_item_id = w.id AND t.from_status = 'Completed'
+            AND t.to_status = 'Pending'
              AND t.blocked_reason->'replanContext'->'raw' ? 'reviewTaskId')::int AS "reviewReopens",
-          (SELECT count(*) FROM work_item_transitions t WHERE t.work_item_id = w.id AND t.from_status = 'Completed' AND t.to_status = 'Pending'
+          (SELECT count(*) FROM work_item_transitions t WHERE t.work_item_id = w.id AND t.from_status = 'Completed'
+            AND t.to_status = 'Pending'
              AND t.blocked_reason->'replanContext'->'raw' ? 'disputedCheck')::int AS "disputeReopens"
         FROM work_items w WHERE w.project_id = ${projectId} AND w.work_kind = 'check' ORDER BY w.created_at, w.id`)
     ).rows,
@@ -205,14 +239,22 @@ class LoopRecordsMissing extends Error {
   }
 }
 
-/** W3's measure: (plan revisions, negated; review namings left; disputes left; requests left). Smaller is further along. */
+/**
+ * W3's measure: (plan revisions, negated; review namings left; disputes left; requests left). Smaller is further along.
+ */
 type Measure = readonly [number, number, number, number];
 
 const MEASURE_PARTS = ["plan revisions (negated)", "review namings left", "disputes left", "requests left"] as const;
 
 function measureOf(records: LoopRecords): Measure {
-  const reviewsLeft = records.checkTasks.reduce((sum, task) => sum + WORK_BOUNDS.reviewNamingsPerCheckTask.value - task.namings, 0);
-  const disputesLeft = records.checkTasks.reduce((sum, task) => sum + WORK_BOUNDS.disputesPerCheckTask.value - task.disputes, 0);
+  const reviewsLeft = records.checkTasks.reduce(
+    (sum, task) => sum + WORK_BOUNDS.reviewNamingsPerCheckTask.value - task.namings,
+    0,
+  );
+  const disputesLeft = records.checkTasks.reduce(
+    (sum, task) => sum + WORK_BOUNDS.disputesPerCheckTask.value - task.disputes,
+    0,
+  );
   return [-records.revisions, reviewsLeft, disputesLeft, WORK_BOUNDS.requestsPerProject.value - records.requests];
 }
 
@@ -229,13 +271,19 @@ function compareMeasures(a: Measure, b: Measure): -1 | 0 | 1 {
 /** The check tasks reopened and not yet done again: the open blockers a round may shrink. */
 function openSet(records: LoopRecords): readonly string[] {
   return records.checkTasks
-    .filter((task) => task.status !== "Completed" && task.status !== "Abandoned" && task.reviewReopens + task.disputeReopens > 0)
+    .filter(
+      (task) =>
+        task.status !== "Completed" && task.status !== "Abandoned" && task.reviewReopens + task.disputeReopens > 0,
+    )
     .map((task) => task.id);
 }
 
 /** What a loop round leaves in the records: any count of it grown. */
 function rounds(records: LoopRecords): number {
-  return records.checkTasks.reduce((sum, task) => sum + task.namings + task.disputes + task.reviewReopens + task.disputeReopens, 0);
+  return records.checkTasks.reduce(
+    (sum, task) => sum + task.namings + task.disputes + task.reviewReopens + task.disputeReopens,
+    0,
+  );
 }
 
 /** The counts W2 holds monotone, per check task: what an earlier snapshot saw is never lost. */
@@ -246,7 +294,12 @@ const COUNTS = ["namings", "disputes", "reviewReopens", "disputeReopens"] as con
  * was ever read at (W2's restart clause); `previous` the last snapshot's records, null for the first.
  * @testseam termination.test.ts judges each clause on records it writes; TerminationWatch is its production caller
  */
-export function checkLoops(step: number, records: LoopRecords, previous: LoopRecords | null, seen: ReadonlyMap<string, number>): Violation[] {
+export function checkLoops(
+  step: number,
+  records: LoopRecords,
+  previous: LoopRecords | null,
+  seen: ReadonlyMap<string, number>,
+): Violation[] {
   const found: Violation[] = [];
   const add = (invariant: "W2" | "W3", key: string, statement: string): void => {
     found.push({ invariant, step, statement, key: `${invariant}:${key}` });
@@ -255,31 +308,76 @@ export function checkLoops(step: number, records: LoopRecords, previous: LoopRec
   const disputeBound = WORK_BOUNDS.disputesPerCheckTask;
   for (const task of records.checkTasks) {
     if (task.reviewReopens > task.namings) {
-      add("W2", `review-uncounted:${task.title}`, `"${task.title}" was reopened by a review ${task.reviewReopens} time(s), but suite_review_findings counts ${task.namings} naming(s) of it: a review round left no count`);
+      add(
+        "W2",
+        `review-uncounted:${task.title}`,
+        `"${task.title}" was reopened by a review ${task.reviewReopens} time(s), but suite_review_findings ` +
+          `counts ${task.namings} naming(s) of it: a review round left no count`,
+      );
     }
     if (task.disputeReopens > task.disputes) {
-      add("W2", `dispute-uncounted:${task.title}`, `"${task.title}" was reopened by a dispute ${task.disputeReopens} time(s), but check_disputes counts ${task.disputes}: a dispute round left no count`);
+      add(
+        "W2",
+        `dispute-uncounted:${task.title}`,
+        `"${task.title}" was reopened by a dispute ${task.disputeReopens} time(s), but check_disputes counts ` +
+          `${task.disputes}: a dispute round left no count`,
+      );
     }
     if (task.namings > reviewBound.value) {
-      add("W2", `review-bound:${task.title}`, `reviews named "${task.title}" ${task.namings} times, past the bound of ${reviewBound.value} (${reviewBound.decided})`);
-      add("W3", `unfounded:review:${task.title}`, `"${task.title}" has ${reviewBound.value - task.namings} review naming(s) left: the measure left its well-founded order`);
+      add(
+        "W2",
+        `review-bound:${task.title}`,
+        `reviews named "${task.title}" ${task.namings} times, past the bound of ${reviewBound.value} ` +
+          `(${reviewBound.decided})`,
+      );
+      add(
+        "W3",
+        `unfounded:review:${task.title}`,
+        `"${task.title}" has ${reviewBound.value - task.namings} review naming(s) left: the measure left its ` +
+          `well-founded order`,
+      );
     }
     if (task.disputes > disputeBound.value) {
-      add("W2", `dispute-bound:${task.title}`, `"${task.title}" drew ${task.disputes} disputes, past the bound of ${disputeBound.value} (${disputeBound.decided})`);
-      add("W3", `unfounded:dispute:${task.title}`, `"${task.title}" has ${disputeBound.value - task.disputes} dispute(s) left: the measure left its well-founded order`);
+      add(
+        "W2",
+        `dispute-bound:${task.title}`,
+        `"${task.title}" drew ${task.disputes} disputes, past the bound of ${disputeBound.value} ` +
+          `(${disputeBound.decided})`,
+      );
+      add(
+        "W3",
+        `unfounded:dispute:${task.title}`,
+        `"${task.title}" has ${disputeBound.value - task.disputes} dispute(s) left: the measure left its ` +
+          `well-founded order`,
+      );
     }
     for (const count of COUNTS) {
       const highest = seen.get(`${task.id}:${count}`);
       if (highest !== undefined && task[count] < highest) {
-        add("W2", `count-fell:${task.title}:${count}`, `the ${count} count of "${task.title}" fell from ${highest} to ${task[count]}: a persisted count was lost (a restart included)`);
+        add(
+          "W2",
+          `count-fell:${task.title}:${count}`,
+          `the ${count} count of "${task.title}" fell from ${highest} to ${task[count]}: a persisted count ` +
+            `was lost (a restart included)`,
+        );
       }
     }
   }
   if (records.requests > WORK_BOUNDS.requestsPerProject.value) {
-    add("W3", "unfounded:requests", `the project has ${WORK_BOUNDS.requestsPerProject.value - records.requests} model requests left: the measure left its well-founded order`);
+    add(
+      "W3",
+      "unfounded:requests",
+      `the project has ${WORK_BOUNDS.requestsPerProject.value - records.requests} model requests left: the ` +
+        `measure left its well-founded order`,
+    );
   }
   for (const review of records.grownAfterFreeze) {
-    add("W3", `grew-after-freeze:${review.title}`, `"${review.title}" recorded ${review.findings} finding(s) after a task depending on it was dispatched: the open blockers grew after the check set froze, and a frozen check set only shrinks`);
+    add(
+      "W3",
+      `grew-after-freeze:${review.title}`,
+      `"${review.title}" recorded ${review.findings} finding(s) after a task depending on it was dispatched: ` +
+        `the open blockers grew after the check set froze, and a frozen check set only shrinks`,
+    );
   }
   if (previous !== null && rounds(records) > rounds(previous)) {
     const before = measureOf(previous);
@@ -287,7 +385,11 @@ export function checkLoops(step: number, records: LoopRecords, previous: LoopRec
     const shrank = openSet(records).length < openSet(previous).length;
     if (compareMeasures(after, before) >= 0 && !shrank) {
       const parts = MEASURE_PARTS.map((part, i) => `${part} ${before[i]} -> ${after[i]}`).join(", ");
-      add("W3", "no-decrease", `a loop round left the measure no smaller (${parts}) and the reopened check tasks no fewer`);
+      add(
+        "W3",
+        "no-decrease",
+        `a loop round left the measure no smaller (${parts}) and the reopened check tasks no fewer`,
+      );
     }
   }
   return found;
@@ -304,7 +406,8 @@ export class TerminationWatch {
       const records = await readLoopRecords(db, projectId);
       const seen = this.seen.get(projectId) ?? new Map<string, number>();
       // A project's first snapshot has no earlier one to compare against.
-      for (const violation of checkLoops(step, records, this.previous.get(projectId) ?? null, seen)) found.push({ project, violation });
+      for (const violation of checkLoops(step, records, this.previous.get(projectId) ?? null, seen))
+        found.push({ project, violation });
       for (const task of records.checkTasks) {
         for (const count of COUNTS) {
           const key = `${task.id}:${count}`;
@@ -325,10 +428,23 @@ export class TerminationWatch {
  */
 export function checkLiveness(step: number, end: Outcome, stalled: boolean, maxCycles: number): Violation[] {
   const at = (key: string, statement: string): Violation[] => [{ invariant: "W4", step, statement, key: `W4:${key}` }];
-  if (stalled) return at("stalled", "under a permanent adversary the project stalled, making no progress, instead of ending through a typed, reported state");
-  if (end.kind === "open") return at("open", `under a permanent adversary the project did not end within ${maxCycles} cycles: some loop never exited`);
+  if (stalled)
+    return at(
+      "stalled",
+      "under a permanent adversary the project stalled, making no progress, instead of ending through a " +
+        "typed, reported state",
+    );
+  if (end.kind === "open")
+    return at(
+      "open",
+      `under a permanent adversary the project did not end within ${maxCycles} cycles: some loop never exited`,
+    );
   if (end.kind === "halted" && end.cause === "spend_cap") {
-    return at("spend-cap", `under a permanent adversary the project ran to the dollar cap instead of ending through a typed, reported state: ${end.detail}`);
+    return at(
+      "spend-cap",
+      `under a permanent adversary the project ran to the dollar cap instead of ending through a typed, ` +
+        `reported state: ${end.detail}`,
+    );
   }
   return [];
 }

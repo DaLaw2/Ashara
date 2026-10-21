@@ -56,8 +56,19 @@ export interface FakeCell {
 export type PodmanEvent =
   | { readonly kind: "cell-started"; readonly cell: FakeCell }
   | { readonly kind: "cell-removed"; readonly id: string }
-  | { readonly kind: "image-built"; readonly id: string; readonly tokens: readonly string[]; readonly contextFiles: readonly string[] }
-  | { readonly kind: "command"; readonly cellId: string; readonly command: string; readonly exitCode: number; readonly hung: boolean };
+  | {
+      readonly kind: "image-built";
+      readonly id: string;
+      readonly tokens: readonly string[];
+      readonly contextFiles: readonly string[];
+    }
+  | {
+      readonly kind: "command";
+      readonly cellId: string;
+      readonly command: string;
+      readonly exitCode: number;
+      readonly hung: boolean;
+    };
 
 interface FakePodmanOptions {
   /** The BaseCell image reference (config/base-cell.toml): known to the runtime, with no recipe tokens. */
@@ -74,8 +85,15 @@ function sha256(text: string): string {
 function result(request: ProcessRequest, outcome: SimOutcome): ProcessResult {
   if (outcome.hung) {
     return {
-      exitCode: null, signal: "SIGKILL", stdout: outcome.stdout, stdoutCut: null, stderr: outcome.stderr,
-      stderrCut: null, killedByHost: true, stdinError: null, statusReport: request.statusChannel === true ? "" : null,
+      exitCode: null,
+      signal: "SIGKILL",
+      stdout: outcome.stdout,
+      stdoutCut: null,
+      stderr: outcome.stderr,
+      stderrCut: null,
+      killedByHost: true,
+      stdinError: null,
+      statusReport: request.statusChannel === true ? "" : null,
     };
   }
   return {
@@ -123,7 +141,10 @@ interface LabelFilter {
 }
 
 function unsupportedFilter(raw: string): string {
-  return `Error: fake podman: unsupported --filter ${JSON.stringify(raw)}; only label=<key> and label=<key>=<value> are interpreted`;
+  return (
+    `Error: fake podman: unsupported --filter ${JSON.stringify(raw)}; only label=<key> and label=<key>=<value> ` +
+    `are interpreted`
+  );
 }
 
 function matchesLabel(labels: Readonly<Record<string, string>>, filter: LabelFilter): boolean {
@@ -170,7 +191,8 @@ export class FakePodman {
       case "exec":
         return this.exec(request);
       case "rm": {
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty and is refused as podman refuses it; no oracle reads it */
         const target = args.at(-1) ?? "";
         const cell = [...this.cells.values()].find((c) => c.id === target || c.name === target);
         if (cell !== undefined) {
@@ -200,22 +222,27 @@ export class FakePodman {
         return ok(JSON.stringify(rows));
       }
       case "image": {
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty and is refused as podman refuses it; no oracle reads it */
         const ref = args.at(-1) ?? "";
         const image = this.imageOf(ref);
         switch (args[1]) {
           case "exists":
             return image === null ? fail(1, "") : ok();
           case "inspect":
-            return image === null ? fail(125, `Error: ${ref}: image not known`) : ok(JSON.stringify([{ Id: image.id, Labels: image.labels }]));
+            return image === null
+              ? fail(125, `Error: ${ref}: image not known`)
+              : ok(JSON.stringify([{ Id: image.id, Labels: image.labels }]));
           case "rm": {
             if (image === null) return fail(1, `Error: ${ref}: image not known`);
-            if ([...this.cells.values()].some((cell) => cell.imageId === image.id)) return fail(2, `Error: image ${image.id} is in use by a container`);
+            if ([...this.cells.values()].some((cell) => cell.imageId === image.id))
+              return fail(2, `Error: image ${image.id} is in use by a container`);
             this.images.delete(image.id);
             return ok(`Untagged: ${[...image.refs].join(", ")}\nDeleted: ${image.id}\n`);
           }
           default:
-            // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, message text only
+            /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, message
+               text only */
             return fail(125, `fake podman: unknown image subcommand ${args[1] ?? ""}`);
         }
       }
@@ -231,7 +258,8 @@ export class FakePodman {
     const filters: LabelFilter[] = [];
     for (let i = 0; i < args.length; i++) {
       if (args[i] !== "--filter") continue;
-      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing filter value is refused below as unsupported
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing filter
+         value is refused below as unsupported */
       const raw = args[i + 1] ?? "";
       const match = LABEL_FILTER.exec(raw);
       if (match?.[1] === undefined) return { unsupported: raw };
@@ -252,9 +280,11 @@ export class FakePodman {
     let name = "";
     let image: string | null = null;
     for (let i = 0; i < args.length && image === null; i++) {
-      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+         argument reads as empty and is refused as podman refuses it; no oracle reads it */
       const arg = args[i] ?? "";
-      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+         argument reads as empty and is refused as podman refuses it; no oracle reads it */
       const value = args[i + 1] ?? "";
       if (arg === "--name") {
         name = value;
@@ -284,34 +314,52 @@ export class FakePodman {
   private async exec(request: ProcessRequest): Promise<ProcessResult> {
     const args = request.args;
     // The standalone sweep after a host-killed exec: nothing is left running in a fake cell.
-    if (args[2] === "sh" && args[4] !== undefined && args.at(-1) === "ashara-sweep") return result(request, exited(0, ""));
-    // exec -i --preserve-fds=1 -w <workdir> (-e ASHARA_ARGC=<n> -e ASHARA_ARG_<i>=<arg>)... <cell> sh -c WRAPPER ashara-exec <grace> <seconds>
+    if (args[2] === "sh" && args[4] !== undefined && args.at(-1) === "ashara-sweep")
+      return result(request, exited(0, ""));
+    // exec -i --preserve-fds=1 -w <workdir> (-e ASHARA_ARGC=<n> -e ASHARA_ARG_<i>=<arg>)... <cell> sh -c WRAPPER
+    // ashara-exec <grace> <seconds>
     const workdirAt = args.indexOf("-w");
     const workdir = args[workdirAt + 1] ?? WORKSPACE;
     const environment = new Map<string, string>();
     let at = workdirAt + 2;
     while (args[at] === "-e") {
-      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+         argument reads as empty and is refused as podman refuses it; no oracle reads it */
       const variable = args[at + 1] ?? "";
       const eq = variable.indexOf("=");
       environment.set(variable.slice(0, eq), variable.slice(eq + 1));
       at += 2;
     }
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing cell id names no cell; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing cell id
+       names no cell; no oracle reads it */
     const cell = this.cells.get(args[at] ?? "");
-    if (cell === undefined) return result(request, { exitCode: 125, stdout: "", stderr: "Error: no such container", hung: false });
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, an unset variable reads as empty as in a shell; no oracle reads it
+    if (cell === undefined)
+      return result(request, { exitCode: 125, stdout: "", stderr: "Error: no such container", hung: false });
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, an unset variable
+       reads as empty as in a shell; no oracle reads it */
     const argc = Number(environment.get("ASHARA_ARGC") ?? "");
-    if (!Number.isInteger(argc) || argc < 1) return result(request, { exitCode: 125, stdout: "", stderr: "ashara-exec: no argv in ASHARA_ARGC", hung: false });
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, an unset variable reads as empty as in a shell; no oracle reads it
+    if (!Number.isInteger(argc) || argc < 1)
+      return result(request, { exitCode: 125, stdout: "", stderr: "ashara-exec: no argv in ASHARA_ARGC", hung: false });
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, an unset variable
+       reads as empty as in a shell; no oracle reads it */
     const argv = Array.from({ length: argc }, (_, i) => environment.get(`ASHARA_ARG_${i}`) ?? "");
     const outcome = await this.command(cell, workdir, argv, request.stdin);
-    this.options.observe({ kind: "command", cellId: cell.id, command: argv.join(" ").slice(0, 200), exitCode: outcome.exitCode, hung: outcome.hung });
+    this.options.observe({
+      kind: "command",
+      cellId: cell.id,
+      command: argv.join(" ").slice(0, 200),
+      exitCode: outcome.exitCode,
+      hung: outcome.hung,
+    });
     return result(request, outcome);
   }
 
   /** The host path of a cell path, and whether its mount is read-only; null outside every mount. */
-  private hostOf(cell: FakeCell, workdir: string, path: string): { readonly host: string; readonly readOnly: boolean } | null {
+  private hostOf(
+    cell: FakeCell,
+    workdir: string,
+    path: string,
+  ): { readonly host: string; readonly readOnly: boolean } | null {
     const absolute = posix.resolve(workdir, path);
     const mount = [...cell.mounts]
       .sort((a, b) => b.containerPath.length - a.containerPath.length)
@@ -321,21 +369,29 @@ export class FakePodman {
     return { host: rest === "" ? mount.hostPath : join(mount.hostPath, ...rest.split("/")), readOnly: mount.readOnly };
   }
 
-  private async command(cell: FakeCell, workdir: string, argv: readonly string[], stdin: string | Buffer | undefined): Promise<SimOutcome> {
+  private async command(
+    cell: FakeCell,
+    workdir: string,
+    argv: readonly string[],
+    stdin: string | Buffer | undefined,
+  ): Promise<SimOutcome> {
     const [program, ...rest] = argv;
     switch (program) {
       case "cat": {
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty and is refused as podman refuses it; no oracle reads it */
         const path = rest.at(-1) ?? "";
         const host = this.hostOf(cell, workdir, path);
-        if (host === null || !(await exists(host.host))) return exited(1, "", `cat: ${path}: No such file or directory`);
+        if (host === null || !(await exists(host.host)))
+          return exited(1, "", `cat: ${path}: No such file or directory`);
         return exited(0, await readFile(host.host, "utf8"));
       }
       case "find": {
         const path = rest[1] ?? ".";
         const depth = Number(rest[rest.indexOf("-maxdepth") + 1] ?? "1");
         const host = this.hostOf(cell, workdir, path);
-        if (host === null || !(await exists(host.host))) return exited(1, "", `find: '${path}': No such file or directory`);
+        if (host === null || !(await exists(host.host)))
+          return exited(1, "", `find: '${path}': No such file or directory`);
         const lines: string[] = [];
         const walk = async (dir: string, shown: string, level: number): Promise<void> => {
           for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -349,7 +405,8 @@ export class FakePodman {
         return exited(0, lines.map((line) => `${line}\n`).join(""));
       }
       case "grep": {
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty as in a shell; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty as in a shell; no oracle reads it */
         const pattern = rest[rest.indexOf("-e") + 1] ?? "";
         const path = rest.at(-1) ?? ".";
         const host = this.hostOf(cell, workdir, path);
@@ -372,17 +429,20 @@ export class FakePodman {
       case "sh": {
         if (rest[0] !== "-c") return exited(127, "", "sh: only -c is interpreted in a fake cell");
         if (rest[1] === WRITE_SCRIPT) {
-          // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+          /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+             argument reads as empty and is refused as podman refuses it; no oracle reads it */
           const path = rest[3] ?? "";
           const host = this.hostOf(cell, workdir, path);
           if (host === null) return exited(1, "", `sh: ${path}: outside every mount`);
           if (host.readOnly) return exited(1, "", `sh: ${path}: Read-only file system`);
           await mkdir(dirname(host.host), { recursive: true });
-          // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, no stdin writes an empty file as a shell redirect does; no oracle reads it
+          /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, no stdin
+             writes an empty file as a shell redirect does; no oracle reads it */
           await writeFile(host.host, stdin ?? "");
           return exited(0, "");
         }
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty as in a shell; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty as in a shell; no oracle reads it */
         return this.shell(cell, workdir, rest[1] ?? "");
       }
       default:
@@ -401,25 +461,32 @@ export class FakePodman {
     const has = (path: string): Promise<boolean> => exists(join(root.host, ...path.split("/")));
     switch (words[1]) {
       case "probe":
-        return cell.tokens.includes(TOOLCHAIN_TOKEN) ? exited(0, "sim toolchain ok\n") : exited(1, "", "sim: no toolchain in this image\n");
+        return cell.tokens.includes(TOOLCHAIN_TOKEN)
+          ? exited(0, "sim toolchain ok\n")
+          : exited(1, "", "sim: no toolchain in this image\n");
       case "build":
-        if (cell.tokens.includes(RECIPE_DEFECT_TOKEN)) return exited(1, "", `sim build: permission denied: ${RECIPE_DEFECT_SYMPTOM}\n`);
-        if (!(await has(LAYOUT_FILE))) return exited(1, "", `sim build: ${LAYOUT_FILE} is missing: the product has no layout\n`);
+        if (cell.tokens.includes(RECIPE_DEFECT_TOKEN))
+          return exited(1, "", `sim build: permission denied: ${RECIPE_DEFECT_SYMPTOM}\n`);
+        if (!(await has(LAYOUT_FILE)))
+          return exited(1, "", `sim build: ${LAYOUT_FILE} is missing: the product has no layout\n`);
         return exited(0, "sim build ok\n");
       case "test":
-        if (cell.tokens.includes(RECIPE_DEFECT_TOKEN)) return exited(1, "", `sim test: permission denied: ${RECIPE_DEFECT_SYMPTOM}\n`);
+        if (cell.tokens.includes(RECIPE_DEFECT_TOKEN))
+          return exited(1, "", `sim test: permission denied: ${RECIPE_DEFECT_SYMPTOM}\n`);
         if (!(await has(LAYOUT_FILE))) return exited(1, "", `sim test: ${LAYOUT_FILE} is missing\n`);
         return exited(0, "sim tests ok\n");
       case "rm": {
         if (root.readOnly) return exited(1, "", "sim rm: Read-only file system\n");
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty as in a shell; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty as in a shell; no oracle reads it */
         await rm(join(root.host, ...(words[2] ?? "").split("/")), { force: true });
         return exited(0, "");
       }
       case "resolve": {
         // A model resolving a conflict by keeping both sides: every marker line goes, every side's line stays.
         if (root.readOnly) return exited(1, "", "sim resolve: Read-only file system\n");
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty as in a shell; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument reads as empty as in a shell; no oracle reads it */
         const path = words[2] ?? "";
         const file = join(root.host, ...path.split("/"));
         if (!(await exists(file))) return exited(1, "", `sim resolve: ${path}: no such file\n`);
@@ -430,7 +497,8 @@ export class FakePodman {
       case "sleep":
         return HUNG;
       case "check":
-        // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument names no check file, which the check refuses; no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+           argument names no check file, which the check refuses; no oracle reads it */
         return this.check(root.host, root.readOnly, words[2] ?? "", has);
       default:
         // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, message text only
@@ -438,7 +506,12 @@ export class FakePodman {
     }
   }
 
-  private async check(root: string, readOnly: boolean, specPath: string, has: (path: string) => Promise<boolean>): Promise<SimOutcome> {
+  private async check(
+    root: string,
+    readOnly: boolean,
+    specPath: string,
+    has: (path: string) => Promise<boolean>,
+  ): Promise<SimOutcome> {
     const file = join(root, ...specPath.split("/"));
     if (!(await exists(file))) return exited(2, "", `sim check: ${specPath}: no such check file\n`);
     let spec: z.infer<typeof CheckSpecSchema>;
@@ -463,9 +536,14 @@ export class FakePodman {
         return exited(0, "ok\n");
       case "interface": {
         const path = join(root, ...PUBLIC_INTERFACE_PATH.split("/"));
-        if (!(await exists(path))) return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: ${PUBLIC_INTERFACE_PATH} is missing\n`);
+        if (!(await exists(path)))
+          return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: ${PUBLIC_INTERFACE_PATH} is missing\n`);
         if (isScaffoldInterface(await readFile(path, "utf8"))) {
-          return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: ${PUBLIC_INTERFACE_PATH} is still the scaffold's\n`);
+          return exited(
+            CHECK_MISSING_EXIT,
+            "",
+            `sim check ${specPath}: ${PUBLIC_INTERFACE_PATH} is still the scaffold's\n`,
+          );
         }
         return exited(0, `sim check ${specPath}: pass\n`);
       }
@@ -479,7 +557,11 @@ export class FakePodman {
     // The scripted author's check states its verdict as the check-author brief asks (CHECK_MISSING_EXIT);
     // its own failures above (no such file, not JSON, unrunnable) exit otherwise. A flake is a wrong verdict.
     if (missing.length > 0 || present.length > 0) {
-      return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: missing [${missing.join(", ")}], forbidden present [${present.join(", ")}]\n`);
+      return exited(
+        CHECK_MISSING_EXIT,
+        "",
+        `sim check ${specPath}: missing [${missing.join(", ")}], forbidden present [${present.join(", ")}]\n`,
+      );
     }
     if (spec.kind === "flaky" && this.options.tape.chance("podman.flaky-check", 0.3)) {
       return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: flaked\n`);
@@ -494,9 +576,11 @@ export class FakePodman {
     let containerfile = "";
     let tag = "";
     for (let i = 1; i < args.length - 1; i++) {
-      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+         argument reads as empty and is refused as podman refuses it; no oracle reads it */
       const arg = args[i] ?? "";
-      // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing
+         argument reads as empty and is refused as podman refuses it; no oracle reads it */
       const value = args[i + 1] ?? "";
       if (arg === "--label") {
         const at = value.indexOf("=");
@@ -513,13 +597,18 @@ export class FakePodman {
         i++;
       }
     }
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument reads as empty and is refused as podman refuses it; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fake-podman test plumbing, a missing argument
+       reads as empty and is refused as podman refuses it; no oracle reads it */
     const context = args.at(-1) ?? "";
-    if (!(await exists(containerfile))) return result(request, exited(125, "", `Error: ${containerfile}: no such file\n`));
+    if (!(await exists(containerfile)))
+      return result(request, exited(125, "", `Error: ${containerfile}: no such file\n`));
     const text = await readFile(containerfile, "utf8");
-    if (!/^FROM\s+\S+/m.test(text)) return result(request, exited(125, "", "Error: the containerfile has no FROM instruction\n"));
+    if (!/^FROM\s+\S+/m.test(text))
+      return result(request, exited(125, "", "Error: the containerfile has no FROM instruction\n"));
     const files = await listFiles(context);
-    const contents = await Promise.all(files.map(async (file) => `${file}\0${await readFile(join(context, file), "utf8")}`));
+    const contents = await Promise.all(
+      files.map(async (file) => `${file}\0${await readFile(join(context, file), "utf8")}`),
+    );
     const id = sha256(contents.join("\0\0"));
     const tokens = recipeTokens(text);
     const existing = this.images.get(id);

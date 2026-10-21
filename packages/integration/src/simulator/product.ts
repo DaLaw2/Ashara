@@ -28,7 +28,8 @@ export type InterfaceForm = "short" | "oversized";
 export function publicInterfaceText(form: InterfaceForm): string {
   const usage = "Run: sim <behaviour>\n\nEach behaviour prints its name:\n```\nsim b1\n```\n";
   if (form === "short") return usage;
-  return `${usage}${Array.from({ length: 400 }, (_, i) => `- behaviour note ${i + 1}: unchanged by every task\n`).join("")}End of interface.\n`;
+  const notes = Array.from({ length: 400 }, (_, i) => `- behaviour note ${i + 1}: unchanged by every task\n`).join("");
+  return `${usage}${notes}End of interface.\n`;
 }
 
 /**
@@ -40,12 +41,20 @@ export function publicInterfaceText(form: InterfaceForm): string {
  * line would pass on exactly that loophole. Like the scaffold's, it carries blank lines and a fence.
  */
 export function deliveredInterfaceText(form: InterfaceForm): string {
-  const usage = "To use the delivered product, run: sim <behaviour>\n\nA delivered behaviour, run, prints its own name:\n```console\n$ sim b1\nb1\n```\n";
+  const usage =
+    "To use the delivered product, run: sim <behaviour>\n\nA delivered behaviour, run, prints its own " +
+    "name:\n```console\n$ sim b1\nb1\n```\n";
   if (form === "short") return usage;
-  return `${usage}${Array.from({ length: 400 }, (_, i) => `- delivered behaviour reference ${i + 1}\n`).join("")}End of the delivered interface.\n`;
+  return (
+    `${usage}${Array.from({ length: 400 }, (_, i) => `- delivered behaviour reference ${i + 1}\n`).join("")}End ` +
+    `of the delivered interface.\n`
+  );
 }
 
-/** Whether `text` is a scripted scaffold's public interface file byte for byte: the placeholder's, not the delivered product's. */
+/**
+ * Whether `text` is a scripted scaffold's public interface file byte for byte: the placeholder's, not the delivered
+ * product's.
+ */
 export function isScaffoldInterface(text: string): boolean {
   return text === publicInterfaceText("short") || text === publicInterfaceText("oversized");
 }
@@ -55,7 +64,8 @@ export function isScaffoldInterface(text: string): boolean {
  * interface file is still the scaffold's: Quality's sweep states it so (verification.ts), and the
  * planner answers it with a task of its own, since no goal task's checks ask for that file.
  */
-export const PLACEHOLDER_INTERFACE_EVIDENCE = `${PUBLIC_INTERFACE_PATH} on main is byte-identical to the one the product scaffold wrote`;
+export const PLACEHOLDER_INTERFACE_EVIDENCE =
+  `${PUBLIC_INTERFACE_PATH} on main is byte-identical ` + `to the one the product scaffold wrote`;
 
 /** What the planner reads when acceptance refused a main that holds no public interface file at all. */
 export const MISSING_INTERFACE_EVIDENCE = `${PUBLIC_INTERFACE_PATH} is missing from main`;
@@ -90,7 +100,10 @@ export interface Universe {
 /** How often a seed's plan has independent tasks. */
 const INDEPENDENT_PLAN_RATE = 0.5;
 
-/** 2-4 behaviours, one guarantee each (keyed by its place, as the scripted intake drafts them), cut into 1-3 vertical tasks, in order or independent. */
+/**
+ * 2-4 behaviours, one guarantee each (keyed by its place, as the scripted intake drafts them), cut into 1-3 vertical
+ * tasks, in order or independent.
+ */
 export function drawUniverse(tape: Tape): Universe {
   const count = 2 + tape.pick("universe.extra-behaviours", 3);
   const behaviours = Array.from({ length: count }, (_, i) => `b${i + 1}`);
@@ -100,7 +113,12 @@ export function drawUniverse(tape: Tape): Universe {
     const mine = behaviours.filter((_, i) => i % taskCount === t);
     tasks.push({ ref: `t${t + 1}`, behaviours: mine });
   }
-  return { behaviours, outOfVision: "x1", tasks, independent: tape.chance("universe.independent-tasks", INDEPENDENT_PLAN_RATE) };
+  return {
+    behaviours,
+    outOfVision: "x1",
+    tasks,
+    independent: tape.chance("universe.independent-tasks", INDEPENDENT_PLAN_RATE),
+  };
 }
 
 const TASK_MARKER = /\[sim (t\d+|iface)\]/;
@@ -116,7 +134,8 @@ export function taskOfTitle(universe: Universe, title: string): SimTask | null {
 }
 
 /** The title a repair's planner gives the task that updates the public interface file. */
-export const INTERFACE_TASK_TITLE = `Update ${PUBLIC_INTERFACE_PATH} to describe the delivered product [sim ${INTERFACE_TASK_REF}]`;
+export const INTERFACE_TASK_TITLE =
+  `Update ${PUBLIC_INTERFACE_PATH} to describe the delivered product ` + `[sim ${INTERFACE_TASK_REF}]`;
 
 /** Whether `title` is that task's, or a check task's for it. */
 export function isInterfaceTaskTitle(title: string): boolean {
@@ -127,7 +146,17 @@ export function isInterfaceTaskTitle(title: string): boolean {
  * `interface`: passes iff the public interface file exists and is not a scripted scaffold's, the
  * check of the task a repair plans to update it.
  */
-const CHECK_KINDS = ["correct", "wrong", "contradictory", "vacuous", "flaky", "out_of_vision", "unrunnable", "slow", "interface"] as const;
+const CHECK_KINDS = [
+  "correct",
+  "wrong",
+  "contradictory",
+  "vacuous",
+  "flaky",
+  "out_of_vision",
+  "unrunnable",
+  "slow",
+  "interface",
+] as const;
 
 /**
  * A check as the scripted check author writes it, in a file of the check set. `sim check <file>`

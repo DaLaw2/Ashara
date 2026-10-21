@@ -15,7 +15,13 @@ process.on("message", (request) => {
   const options = { cwd: request.cwd, env: request.env, encoding: request.bytes ? "buffer" : "utf8" };
   if (request.maxBuffer !== null) options.maxBuffer = request.maxBuffer;
   execFile("git", request.args, options, (error, stdout, stderr) => {
-    const failure = error === null ? null : { message: error.message, code: error.code ?? null, killed: error.killed ?? null, signal: error.signal ?? null, cmd: error.cmd ?? null };
+    const failure = error === null ? null : {
+      message: error.message,
+      code: error.code ?? null,
+      killed: error.killed ?? null,
+      signal: error.signal ?? null,
+      cmd: error.cmd ?? null,
+    };
     process.send({ id: request.id, failure, stdout, stderr });
   });
 });
@@ -58,30 +64,41 @@ function asText(value: string | Uint8Array): string {
 /**
  * The host's git, spawned by a small helper process instead of the simulator's own: a mechanical
  * cost, not behaviour. A spawn from Node forks the spawning process, and the simulator's is a few
- * hundred MB, so each spawn blocks its event loop for the fork. The commands, their arguments, working directories and environments are the
+ * hundred MB, so each spawn blocks its event loop for the fork. The commands, their arguments, working directories and
+ * environments are the
  * ones production passes, and a non-zero exit rejects as execFile's does: the error's message,
  * `code`, `killed`, `signal`, `cmd`, `stdout` and `stderr` are execFile's own.
  */
 export class GitBroker {
   private readonly child: ChildProcess;
-  private readonly pending = new Map<number, { readonly settle: (reply: Reply) => void; readonly fail: (err: GitBrokerFailed) => void }>();
+  private readonly pending = new Map<
+    number,
+    { readonly settle: (reply: Reply) => void; readonly fail: (err: GitBrokerFailed) => void }
+  >();
   private nextId = 0;
   private broken: GitBrokerFailed | null = null;
 
   constructor() {
-    this.child = spawn(process.execPath, ["-e", BROKER_SOURCE], { stdio: ["ignore", "inherit", "inherit", "ipc"], serialization: "advanced" });
+    this.child = spawn(process.execPath, ["-e", BROKER_SOURCE], {
+      stdio: ["ignore", "inherit", "inherit", "ipc"],
+      serialization: "advanced",
+    });
     this.child.on("message", (raw: unknown) => {
       const reply = replySchema.safeParse(raw);
       const waiter = reply.success ? this.pending.get(reply.data.id) : undefined;
       if (!reply.success || waiter === undefined) {
-        this.breakDown(`answered out of protocol: ${reply.success ? `unknown call ${reply.data.id}` : reply.error.message}`);
+        this.breakDown(
+          `answered out of protocol: ${reply.success ? `unknown call ${reply.data.id}` : reply.error.message}`,
+        );
         return;
       }
       this.pending.delete(reply.data.id);
       waiter.settle(reply.data);
     });
     this.child.on("error", (err) => this.breakDown(`failed: ${describeErrorChain(err)}`));
-    this.child.on("exit", (code, signal) => this.breakDown(`exited (code ${code ?? "none"}, signal ${signal ?? "none"})`));
+    this.child.on("exit", (code, signal) =>
+      this.breakDown(`exited (code ${code ?? "none"}, signal ${signal ?? "none"})`),
+    );
   }
 
   readonly runner: GitRunner = {
@@ -102,7 +119,8 @@ export class GitBroker {
     if (this.broken === null) this.broken = new GitBrokerFailed(detail);
     for (const waiter of this.pending.values()) waiter.fail(this.broken);
     this.pending.clear();
-    if (this.child.exitCode === null && this.child.signalCode === null && detail !== "closed") this.child.kill("SIGKILL");
+    if (this.child.exitCode === null && this.child.signalCode === null && detail !== "closed")
+      this.child.kill("SIGKILL");
   }
 
   private call(invocation: Parameters<GitRunner["text"]>[0], bytes: boolean): Promise<Reply> {
@@ -120,12 +138,30 @@ export class GitBroker {
         }
         const out = bytes ? asBuffer(reply.stdout) : asText(reply.stdout);
         const err = bytes ? asBuffer(reply.stderr) : asText(reply.stderr);
-        // eslint-disable-next-line no-restricted-syntax -- rebuilds execFile's own throw across the broker's process boundary: a plain Error with execFile's fields, which the product must meet as it is
-        reject(Object.assign(new Error(reply.failure.message), { code: reply.failure.code, killed: reply.failure.killed, signal: reply.failure.signal, cmd: reply.failure.cmd, stdout: out, stderr: err }));
+        reject(
+          /* eslint-disable-next-line no-restricted-syntax -- rebuilds execFile's own throw across the broker's process
+             boundary: a plain Error with execFile's fields, which the product must meet as it is */
+          Object.assign(new Error(reply.failure.message), {
+            code: reply.failure.code,
+            killed: reply.failure.killed,
+            signal: reply.failure.signal,
+            cmd: reply.failure.cmd,
+            stdout: out,
+            stderr: err,
+          }),
+        );
       };
       this.pending.set(id, { settle, fail: reject });
-      // Absent `env` is the simulator's own environment as it stands now (simulatedEnvironment sets it per run), as execFile's is.
-      this.child.send({ id, args: [...invocation.args], cwd: invocation.cwd, env: invocation.env ?? { ...process.env }, maxBuffer: invocation.maxBuffer ?? null, bytes });
+      // Absent `env` is the simulator's own environment as it stands now (simulatedEnvironment sets it per run), as
+      // execFile's is.
+      this.child.send({
+        id,
+        args: [...invocation.args],
+        cwd: invocation.cwd,
+        env: invocation.env ?? { ...process.env },
+        maxBuffer: invocation.maxBuffer ?? null,
+        bytes,
+      });
     });
   }
 }

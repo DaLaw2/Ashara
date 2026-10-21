@@ -38,7 +38,8 @@ const MessageListSchema = z.array(
 type ListedMessage = z.infer<typeof MessageListSchema>[number];
 
 /** One request's answer: what it returned, or the status it failed with. */
-export type ClientReply<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly status: number; readonly detail: string };
+export type ClientReply<T> =
+  { readonly ok: true; readonly value: T } | { readonly ok: false; readonly status: number; readonly detail: string };
 
 /** A route answered a well-formed request of the client with a body outside the channel's language. */
 class ClientReplyUnreadable extends Error {
@@ -57,7 +58,8 @@ class ClientReplyUnreadable extends Error {
 function cookiePair(response: Response): string | null {
   const header = response.headers.get("set-cookie");
   if (header === null) return null;
-  // eslint-disable-next-line no-restricted-syntax -- policy default: client test plumbing, a header with no pair is refused below as no cookie
+  /* eslint-disable-next-line no-restricted-syntax -- policy default: client test plumbing, a header with no pair is
+     refused below as no cookie */
   const pair = header.split(";")[0]?.trim() ?? "";
   return pair.includes("=") ? pair : null;
 }
@@ -72,24 +74,37 @@ export class SimulatedClient {
 
   /** Posts a tender for a new project; its id when the server created it. */
   async tender(app: ClientRoutes, projectName: string, body: string): Promise<ClientReply<string>> {
-    return this.call(app, "POST", "/client/api/tenders", { projectName, body }, 201, (value) => TenderCreatedSchema.parse(value).projectId);
+    return this.call(
+      app,
+      "POST",
+      "/client/api/tenders",
+      { projectName, body },
+      201,
+      (value) => TenderCreatedSchema.parse(value).projectId,
+    );
   }
 
   /** The projects this client owns, as the server lists them. */
-  async projects(app: ClientRoutes): Promise<ClientReply<ReadonlyArray<{ readonly id: string; readonly name: string }>>> {
+  async projects(
+    app: ClientRoutes,
+  ): Promise<ClientReply<ReadonlyArray<{ readonly id: string; readonly name: string }>>> {
     return this.call(app, "GET", "/client/api/projects", null, 200, (value) => ProjectListSchema.parse(value));
   }
 
   /** One project's messages, both ways, in the server's order. */
   async messages(app: ClientRoutes, projectId: string): Promise<ClientReply<readonly ListedMessage[]>> {
-    return this.call(app, "GET", `/client/api/projects/${projectId}/messages`, null, 200, (value) => MessageListSchema.parse(value));
+    return this.call(app, "GET", `/client/api/projects/${projectId}/messages`, null, 200, (value) =>
+      MessageListSchema.parse(value),
+    );
   }
 
   /** Posts a stop, a change or an answer on one project. */
   async post(
     app: ClientRoutes,
     projectId: string,
-    message: { readonly kind: "stop" | "change"; readonly body: string } | { readonly kind: "answer"; readonly body: string; readonly inReplyTo: string },
+    message:
+      | { readonly kind: "stop" | "change"; readonly body: string }
+      | { readonly kind: "answer"; readonly body: string; readonly inReplyTo: string },
   ): Promise<ClientReply<null>> {
     return this.call(app, "POST", `/client/api/projects/${projectId}/messages`, message, 201, () => null);
   }
@@ -97,12 +112,18 @@ export class SimulatedClient {
   private async login(app: ClientRoutes): Promise<ClientReply<null>> {
     const response = await app.request(
       `${ORIGIN}/client/login`,
-      { method: "POST", headers: { "Content-Type": "application/json", ...CLIENT_HEADER }, body: JSON.stringify({ client: this.name, code: this.code }) },
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...CLIENT_HEADER },
+        body: JSON.stringify({ client: this.name, code: this.code }),
+      },
       LOOPBACK,
     );
-    if (response.status !== 204) return { ok: false, status: response.status, detail: `login: ${await response.text()}` };
+    if (response.status !== 204)
+      return { ok: false, status: response.status, detail: `login: ${await response.text()}` };
     const pair = cookiePair(response);
-    if (pair === null) throw new ClientReplyUnreadable("POST /client/login", response.status, "no session cookie was set");
+    if (pair === null)
+      throw new ClientReplyUnreadable("POST /client/login", response.status, "no session cookie was set");
     this.cookie = pair;
     return { ok: true, value: null };
   }
@@ -112,20 +133,36 @@ export class SimulatedClient {
    * next request logs in again. A failure is returned, not thrown: the run decides what the client
    * does next. A success whose body the client cannot read throws: the route broke its language.
    */
-  private async call<T>(app: ClientRoutes, method: "GET" | "POST", path: string, body: unknown, expected: number, read: (value: unknown) => T): Promise<ClientReply<T>> {
+  private async call<T>(
+    app: ClientRoutes,
+    method: "GET" | "POST",
+    path: string,
+    body: unknown,
+    expected: number,
+    read: (value: unknown) => T,
+  ): Promise<ClientReply<T>> {
     if (this.cookie === null) {
       const login = await this.login(app);
       if (!login.ok) return login;
     }
-    // eslint-disable-next-line no-restricted-syntax -- policy default: client test plumbing, the login above sets the cookie; an empty one is answered 401 by the route
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: client test plumbing, the login above sets
+       the cookie; an empty one is answered 401 by the route */
     const headers: Record<string, string> = { Cookie: this.cookie ?? "" };
     if (method === "POST") Object.assign(headers, { "Content-Type": "application/json" }, CLIENT_HEADER);
-    const response = await app.request(`${ORIGIN}${path}`, body === null ? { method, headers } : { method, headers, body: JSON.stringify(body) }, LOOPBACK);
+    const response = await app.request(
+      `${ORIGIN}${path}`,
+      body === null ? { method, headers } : { method, headers, body: JSON.stringify(body) },
+      LOOPBACK,
+    );
     const text = await response.text();
     if (response.status === 401) this.cookie = null;
-    if (response.status !== expected) return { ok: false, status: response.status, detail: `${method} ${path}: ${text}` };
+    if (response.status !== expected)
+      return { ok: false, status: response.status, detail: `${method} ${path}: ${text}` };
     try {
-      return { ok: true, value: read(text === "" ? null : parseJson(z.unknown(), text, `${method} ${path} response body`)) };
+      return {
+        ok: true,
+        value: read(text === "" ? null : parseJson(z.unknown(), text, `${method} ${path} response body`)),
+      };
     } catch (err) {
       throw new ClientReplyUnreadable(`${method} ${path}`, response.status, describeErrorChain(err), { cause: err });
     }

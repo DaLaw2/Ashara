@@ -50,7 +50,9 @@ class StandInUnanswerable extends Error {
   }
 }
 
-/** A request carried a schema its provider type refuses: the stand-in refuses the whole request, as that provider does. */
+/**
+ * A request carried a schema its provider type refuses: the stand-in refuses the whole request, as that provider does.
+ */
 class StandInRefusedSchema extends Error {
   constructor(
     readonly model: string,
@@ -83,7 +85,10 @@ interface StandInContext {
   readonly projectIds: readonly string[];
   /** Set by the run once the first merge of an implementation is recorded: a late client change may follow. */
   readonly onModelCall: (call: ModelCallRecord) => void;
-  /** Once per request the model port receives, before it is answered: W1 counts work here, outside production (termination.ts). */
+  /**
+   * Once per request the model port receives, before it is answered: W1 counts work here, outside production
+   * (termination.ts).
+   */
   readonly onRequest: () => void;
   /** A request carried a schema its provider type refuses: the run reports it as a violation. */
   readonly onSchemaRefused: (refused: RefusedSchema) => void;
@@ -105,10 +110,18 @@ const USAGE = {
 };
 
 function textResult(text: string): LanguageModelV4GenerateResult {
-  return { content: [{ type: "text", text }], finishReason: { unified: "stop", raw: "stop" }, usage: USAGE, warnings: [] };
+  return {
+    content: [{ type: "text", text }],
+    finishReason: { unified: "stop", raw: "stop" },
+    usage: USAGE,
+    warnings: [],
+  };
 }
 
-/** `callNumber` counts within one run's stand-ins: a count kept across runs made a seed's prompts depend on the seeds before it. */
+/**
+ * `callNumber` counts within one run's stand-ins: a count kept across runs made a seed's prompts depend on the seeds
+ * before it.
+ */
 function toolCall(callNumber: number, toolName: string, input: unknown): LanguageModelV4GenerateResult {
   const content: LanguageModelV4Content[] = [
     { type: "tool-call", toolCallId: `sim-call-${callNumber}`, toolName, input: JSON.stringify(input) },
@@ -171,13 +184,16 @@ function reasoningOnly(bound: number): LanguageModelV4GenerateResult {
  * error data the gateway reads it by (model-access context-window.ts), never a provider name.
  */
 function contextOverflow(modelId: string): APICallError {
-  const message = `This model's maximum context length is 131072 tokens. However, you requested 140000 tokens (simulated).`;
+  const message =
+    `This model's maximum context length is 131072 tokens. ` + `However, you requested 140000 tokens (simulated).`;
   return new APICallError({
     message,
     url: `simulated://${modelId}`,
     requestBodyValues: {},
     statusCode: 400,
-    responseBody: JSON.stringify({ error: { message, type: "invalid_request_error", code: "context_length_exceeded" } }),
+    responseBody: JSON.stringify({
+      error: { message, type: "invalid_request_error", code: "context_length_exceeded" },
+    }),
     isRetryable: false,
   });
 }
@@ -212,9 +228,11 @@ const jsonSchemaShape = z.object({
 function schemaKeys(schema: unknown): string[] {
   const parsed = jsonSchemaShape.safeParse(schema);
   if (!parsed.success) return [];
-  // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a JSON schema without variants has none; no oracle reads it
+  /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a JSON schema without
+     variants has none; no oracle reads it */
   const variants = [...(parsed.data.anyOf ?? []), ...(parsed.data.oneOf ?? [])];
-  // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a JSON schema without properties has none; no oracle reads it
+  /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a JSON schema without
+     properties has none; no oracle reads it */
   return [...Object.keys(parsed.data.properties ?? {}), ...variants.flatMap((v) => Object.keys(v.properties ?? {}))];
 }
 
@@ -255,7 +273,9 @@ interface ReviewRound {
   first: unknown[] | null;
 }
 
-/** What one suite review call read: its review task and the check revisions under review, each `<task id>@<revision>`. */
+/**
+ * What one suite review call read: its review task and the check revisions under review, each `<task id>@<revision>`.
+ */
 type ReviewRead = Omit<ObservedReview, "provider" | "blindSpots" | "problems">;
 
 /**
@@ -285,7 +305,15 @@ type StickyKind = (typeof STICKY_KINDS)[number];
  * - reasoning-exhausted: the turn's whole output bound goes to reasoning, no content;
  * - context-overflow: the provider rejects the turn as longer than the model's context window.
  */
-type AttemptEnd = "complete" | "refusal" | "stall" | "stall-mid-edit" | "truncated" | "empty" | "reasoning-exhausted" | "context-overflow";
+type AttemptEnd =
+  | "complete"
+  | "refusal"
+  | "stall"
+  | "stall-mid-edit"
+  | "truncated"
+  | "empty"
+  | "reasoning-exhausted"
+  | "context-overflow";
 
 /** What an attempt is for, as its tools and its task's origin show: the scope of its draws (Tape Direction). */
 type WorkKind = "environment" | "checks" | "scaffold" | "implementation";
@@ -319,16 +347,23 @@ const storedGuaranteeSchema = z.object({
  * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
  */
 function itemsToCheck(prompt: string): string[] {
-  const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
+  const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(
+    prompt,
+  )?.[1];
   return listed === undefined ? [] : listed.split(", ");
 }
 
 /** The guarantees the planner's prompt lists, each by its id with its whole line, in the prompt's order. */
 function guaranteesListed(prompt: string): Array<{ readonly id: string; readonly line: string }> {
-  return [...prompt.matchAll(/^- ([A-Za-z0-9_-]+) \(guarantee[;)].*$/gm)].flatMap((match) => (match[1] === undefined ? [] : [{ id: match[1], line: match[0] }]));
+  return [...prompt.matchAll(/^- ([A-Za-z0-9_-]+) \(guarantee[;)].*$/gm)].flatMap((match) =>
+    match[1] === undefined ? [] : [{ id: match[1], line: match[0] }],
+  );
 }
 
-/** The `- <id>: <text>` entries of the prompt's section opening with `heading`, in order; none when it has no such section. */
+/**
+ * The `- <id>: <text>` entries of the prompt's section opening with `heading`, in order; none when it has no such
+ * section.
+ */
 function promptEntries(prompt: string, heading: string): Array<{ readonly id: string; readonly text: string }> {
   const lines = prompt.split("\n");
   const at = lines.indexOf(heading);
@@ -352,14 +387,16 @@ function namesBehaviour(text: string, b: string): boolean {
  */
 function guaranteeOf(prompt: string, b: string): string {
   const found = guaranteesListed(prompt).find((guarantee) => namesBehaviour(guarantee.line, b));
-  if (found === undefined) throw new StandInUnanswerable("decomposition.tasks", `the planner's prompt lists no guarantee naming ${b}`);
+  if (found === undefined)
+    throw new StandInUnanswerable("decomposition.tasks", `the planner's prompt lists no guarantee naming ${b}`);
   return found.id;
 }
 
 /** The repair task that writes the public interface file, citing the first guarantee the planner's prompt lists. */
 function interfaceTaskCiting(prompt: string): ScriptedTask {
   const first = guaranteesListed(prompt)[0];
-  if (first === undefined) throw new StandInUnanswerable("decomposition.tasks", "the planner's prompt lists no guarantee");
+  if (first === undefined)
+    throw new StandInUnanswerable("decomposition.tasks", "the planner's prompt lists no guarantee");
   return {
     ref: INTERFACE_TASK_REF,
     title: INTERFACE_TASK_TITLE,
@@ -387,17 +424,25 @@ interface ScriptedPlan {
  * `tasks` as an honest planner cites what `toCheck` lists: each line cites only the items its own text
  * tests, so an item no line cites yet gets a line of its own on the first task, stating it.
  */
-function citingPerLine<T extends { readonly acceptance: readonly ScriptedLine[] }>(tasks: readonly T[], toCheck: readonly string[]): T[] {
+function citingPerLine<T extends { readonly acceptance: readonly ScriptedLine[] }>(
+  tasks: readonly T[],
+  toCheck: readonly string[],
+): T[] {
   const cited = new Set(tasks.flatMap((task) => task.acceptance.flatMap((line) => line.sources)));
-  const lines = toCheck.filter((id) => !cited.has(id)).map((id) => ({ text: `A user sees what ${id} states hold.`, sources: [id] }));
-  return tasks.map((task, i) => (i > 0 || lines.length === 0 ? task : { ...task, acceptance: [...task.acceptance, ...lines] }));
+  const lines = toCheck
+    .filter((id) => !cited.has(id))
+    .map((id) => ({ text: `A user sees what ${id} states hold.`, sources: [id] }));
+  return tasks.map((task, i) =>
+    i > 0 || lines.length === 0 ? task : { ...task, acceptance: [...task.acceptance, ...lines] },
+  );
 }
 
 /**
  * `plan` as an honest planner answers `prompt`: every item the prompt says a task must cite
  * that no line cites yet gets an acceptance line of its own that cites it alone.
  *
- * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's planner does
+ * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's
+ * planner does
  */
 export function citingItemsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
   return { tasks: citingPerLine(plan.tasks, itemsToCheck(prompt)) };
@@ -440,7 +485,9 @@ export class StandIns {
   private classifications = 0;
   /** Persona findings worded so far: each new one is worded anew. */
   private personaWords = 0;
-  /** Each review task's current round: the check revisions it reads, how many calls read them, the first call's answer. */
+  /**
+   * Each review task's current round: the check revisions it reads, how many calls read them, the first call's answer.
+   */
   private readonly reviewRounds = new Map<string, ReviewRound>();
   /** The first rejection a resurrecting reviewer made in each project, raised again word for word ever after. */
   private readonly resurrected = new Map<string, unknown>();
@@ -448,12 +495,21 @@ export class StandIns {
   private readonly stickyBad = new Set<string>();
   /** The bad check a sticky-bad check author writes, drawn once per run. */
   private stickyKind: StickyKind | null = null;
-  /** Every suite review the stand-ins answered with a whole answer, in order (client-reports.ts unconfirmedAtPassedSweeps). */
+  /**
+   * Every suite review the stand-ins answered with a whole answer, in order (client-reports.ts
+   * unconfirmedAtPassedSweeps).
+   */
   private readonly answeredReviews: ObservedReview[] = [];
   /** Every tender reading the stand-ins were asked for or answered whole, in order (intake-readings.ts lazyIntakes). */
   private readonly intakeReadings: ObservedIntake[] = [];
-  /** What the client's correction asks, set by the run as it posts it, and the task it was posted while InProgress, if any. */
-  private asked: { readonly kind: CorrectionKind; readonly during: string | null } = { kind: "rewrite-guarantee", during: null };
+  /**
+   * What the client's correction asks, set by the run as it posts it, and the task it was posted while InProgress, if
+   * any.
+   */
+  private asked: { readonly kind: CorrectionKind; readonly during: string | null } = {
+    kind: "rewrite-guarantee",
+    during: null,
+  };
 
   constructor(private readonly context: StandInContext) {}
 
@@ -479,7 +535,8 @@ export class StandIns {
     this.asked = { kind, during };
   }
 
-  readonly factory: LanguageModelFactory = (provider, model) => this.model(`${provider.name}/${model.id}`, provider.providerType);
+  readonly factory: LanguageModelFactory = (provider, model) =>
+    this.model(`${provider.name}/${model.id}`, provider.providerType);
 
   private model(modelId: string, providerType: ProviderType): LanguageModelV4 {
     return {
@@ -503,11 +560,18 @@ export class StandIns {
    * restrictions, and a refusal is reported to the run, so a soak fails on a schema a provider would
    * refuse even when nothing else in the run notices.
    */
-  private refuseUnacceptableSchemas(modelId: string, providerType: ProviderType, options: LanguageModelV4CallOptions): void {
+  private refuseUnacceptableSchemas(
+    modelId: string,
+    providerType: ProviderType,
+    options: LanguageModelV4CallOptions,
+  ): void {
     const sent: Array<readonly [string, "structured-output" | "tool-input", unknown]> = [];
-    if (options.responseFormat?.type === "json" && options.responseFormat.schema !== undefined) sent.push(["structured output", "structured-output", options.responseFormat.schema]);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a request with no tools sends no tool schema
-    for (const tool of options.tools ?? []) if (tool.type === "function") sent.push([`tool "${tool.name}" input`, "tool-input", tool.inputSchema]);
+    if (options.responseFormat?.type === "json" && options.responseFormat.schema !== undefined)
+      sent.push(["structured output", "structured-output", options.responseFormat.schema]);
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a request with no
+       tools sends no tool schema */
+    for (const tool of options.tools ?? [])
+      if (tool.type === "function") sent.push([`tool "${tool.name}" input`, "tool-input", tool.inputSchema]);
     for (const [what, use, schema] of sent) {
       const refusals = schemaRefusalsFor(providerType, use, schema);
       if (refusals.length === 0) continue;
@@ -521,26 +585,50 @@ export class StandIns {
     this.context.onRequest();
     if (options.tools !== undefined && options.tools.length > 0) return this.agentTurn(options);
     const format = options.responseFormat;
-    if (format?.type !== "json") throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
+    if (format?.type !== "json")
+      throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
     const keys = schemaKeys(format.schema);
     if (keys.includes("guarantees")) {
       const projectId = await this.intakeProject();
       const model = modelId.slice(providerOf(modelId).length + 1);
-      return this.structured(options, "liaison-intake", () => this.intake(), (answer) => {
-        this.intakeReadings.push({ projectId, kind: "reading", provider: providerOf(modelId), model, questions: answer.questions.length });
-      });
+      return this.structured(
+        options,
+        "liaison-intake",
+        () => this.intake(),
+        (answer) => {
+          this.intakeReadings.push({
+            projectId,
+            kind: "reading",
+            provider: providerOf(modelId),
+            model,
+            questions: answer.questions.length,
+          });
+        },
+      );
     }
     // A second reading of a tender answers only the questions it would put to the client.
     if (keys.length === 1 && keys[0] === "questions") {
       const projectId = await this.intakeProject();
       const model = modelId.slice(providerOf(modelId).length + 1);
       this.intakeReadings.push({ projectId, kind: "second-asked", provider: providerOf(modelId), model, questions: 0 });
-      return this.structured(options, "liaison-intake.second", () => ({ questions: this.intakeQuestions(false) }), (answer) => {
-        this.intakeReadings.push({ projectId, kind: "second-answered", provider: providerOf(modelId), model, questions: answer.questions.length });
-      });
+      return this.structured(
+        options,
+        "liaison-intake.second",
+        () => ({ questions: this.intakeQuestions(false) }),
+        (answer) => {
+          this.intakeReadings.push({
+            projectId,
+            kind: "second-answered",
+            provider: providerOf(modelId),
+            model,
+            questions: answer.questions.length,
+          });
+        },
+      );
     }
     if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
-    if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan(promptText(options)));
+    if (keys.includes("tasks"))
+      return this.structured(options, "decomposition.tasks", () => this.plan(promptText(options)));
     if (keys.includes("problems")) {
       // Kept per call, never on the instance: two lanes' reviews interleave between answer and delivery.
       let read: ReviewRead | null = null;
@@ -554,13 +642,19 @@ export class StandIns {
         },
         (answer) => {
           if (read !== null) {
-            this.answeredReviews.push({ ...read, provider: providerOf(modelId), blindSpots: promptText(options).includes(BLIND_SPOTS_ASKED), problems: answer.problems });
+            this.answeredReviews.push({
+              ...read,
+              provider: providerOf(modelId),
+              blindSpots: promptText(options).includes(BLIND_SPOTS_ASKED),
+              problems: answer.problems,
+            });
           }
         },
       );
     }
     if (keys.includes("reading")) return this.structured(options, "liaison-answer", () => this.answer());
-    if (keys.includes("correction")) return this.structured(options, "liaison-change", () => this.correction(promptText(options)));
+    if (keys.includes("correction"))
+      return this.structured(options, "liaison-change", () => this.correction(promptText(options)));
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
       const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);
@@ -568,7 +662,9 @@ export class StandIns {
         const environmentChange = this.classifierFlips() ? !defect : defect;
         return {
           environmentChange,
-          reason: environmentChange ? "The build cannot write its cache directory: the environment's recipe must change." : "The change is to product behaviour the environment already builds and tests.",
+          reason: environmentChange
+            ? "The build cannot write its cache directory: the environment's recipe must change."
+            : "The change is to product behaviour the environment already builds and tests.",
         };
       });
     }
@@ -580,11 +676,16 @@ export class StandIns {
    * that does not parse, no content, the whole bound spent on reasoning, or the answer cut at the
    * bound mid-object.
    */
-  private async structured<T>(options: LanguageModelV4CallOptions, site: string, answer: () => T | Promise<T>, delivered?: (value: T) => void): Promise<LanguageModelV4GenerateResult> {
+  private async structured<T>(
+    options: LanguageModelV4CallOptions,
+    site: string,
+    answer: () => T | Promise<T>,
+    delivered?: (value: T) => void,
+  ): Promise<LanguageModelV4GenerateResult> {
     const { tape, rates, onModelCall } = this.context;
     if (tape.chance(`model.${site}.invalid`, rates.invalidOutput)) {
       onModelCall({ site, action: "invalid-output" });
-      return textResult("{\"not\": \"what was asked\"");
+      return textResult('{"not": "what was asked"');
     }
     if (tape.chance(`model.${site}.empty`, rates.emptyStructured)) {
       onModelCall({ site, action: "empty" });
@@ -615,7 +716,11 @@ export class StandIns {
     const { universe, personas, tape, rates } = this.context;
     const persona = personas.of("intake") === "lazy" && personas.fires("intake");
     const lazy = persona || tape.chance("model.liaison-intake.unasked", rates.unaskedReading);
-    if (lazy) this.context.onModelCall({ site: "liaison-intake", action: persona ? "persona lazy: no question asked" : "unasked: no question asked" });
+    if (lazy)
+      this.context.onModelCall({
+        site: "liaison-intake",
+        action: persona ? "persona lazy: no question asked" : "unasked: no question asked",
+      });
     const tender = (quote: string) => ({ kind: "tender", quote });
     const guarantee = (id: string, statement: string, quote: string) => ({
       id,
@@ -629,14 +734,31 @@ export class StandIns {
       interface: [{ id: "I1", text: "The product, run as the tender asks.", source: tender("Build a product") }],
       guarantees: [
         ...universe.behaviours.map((b, i) => guarantee(`G${i + 1}`, `The product does ${b}.`, b)),
-        // It names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that line's check decides it.
-        guarantee(messagesGuarantee(universe.behaviours.length), "Every message reads the same on every run.", "Build a product"),
+        // It names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that
+        // line's check decides it.
+        guarantee(
+          messagesGuarantee(universe.behaviours.length),
+          "Every message reads the same on every run.",
+          "Build a product",
+        ),
       ],
       questions: lazy ? [] : this.intakeQuestions(true),
       assumptions: [
-        { id: "A2", statement: "The product keeps no state between runs.", rationale: "The tender names no stored data.", kind: "internal-design", underpins: [] },
+        {
+          id: "A2",
+          statement: "The product keeps no state between runs.",
+          rationale: "The tender names no stored data.",
+          kind: "internal-design",
+          underpins: [],
+        },
         // A design choice, so no check decides it and the asked assumption stays the last item a check set decides.
-        { id: "A3", statement: "The product runs as one local program.", rationale: "The tender names no service to run.", kind: "internal-design", underpins: [] },
+        {
+          id: "A3",
+          statement: "The product runs as one local program.",
+          rationale: "The tender names no service to run.",
+          kind: "internal-design",
+          underpins: [],
+        },
       ],
       exclusions: [{ id: "X1", text: "Any network service.", source: { kind: "assumption", id: "A3" } }],
     };
@@ -685,7 +807,12 @@ export class StandIns {
       { name: "QA", responsibility: "Writes the checks.", capabilities: ["author-checks"] },
     ];
     if (this.context.tape.chance("model.roster.duplicate-environment", this.context.rates.invalidOutput)) {
-      return { roles: [...roles, { name: "Platform 2", responsibility: "Also defines the environment.", capabilities: ["write-environment"] }] };
+      return {
+        roles: [
+          ...roles,
+          { name: "Platform 2", responsibility: "Also defines the environment.", capabilities: ["write-environment"] },
+        ],
+      };
     }
     return { roles };
   }
@@ -698,9 +825,10 @@ export class StandIns {
   private plan(prompt: string): unknown {
     const { universe } = this.context;
     const toCheck = itemsToCheck(prompt);
-    const interfaceTask = prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE) || prompt.includes(MISSING_INTERFACE_EVIDENCE)
-      ? [interfaceTaskCiting(prompt)]
-      : [];
+    const interfaceTask =
+      prompt.includes(PLACEHOLDER_INTERFACE_EVIDENCE) || prompt.includes(MISSING_INTERFACE_EVIDENCE)
+        ? [interfaceTaskCiting(prompt)]
+        : [];
     // Answering that evidence, it plans only what is still to do: a done task planned again could
     // never have a check fail on its foundation.
     // A correction's revision lists only the guarantees it plans again: it plans only the tasks naming them.
@@ -708,22 +836,29 @@ export class StandIns {
     const corrected = prompt.includes(CORRECTION_REVISION)
       ? universe.tasks.filter((task) => task.behaviours.every((b) => listed.some((g) => namesBehaviour(g.line, b))))
       : universe.tasks;
-    const todo = interfaceTask.length === 0 ? corrected : corrected.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
+    const todo =
+      interfaceTask.length === 0 ? corrected : corrected.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
     const planned = this.plannerReverses() ? [...todo].reverse() : todo;
     return {
-      tasks: citingPerLine([...planned.map((task, i) => ({
-        ref: task.ref,
-        title: taskTitle(task),
-        description: `Delivers ${task.behaviours.join(", ")}.`,
-        dependsOn: i === 0 || universe.independent ? [] : [planned[i - 1]?.ref ?? task.ref],
-        goal: `Deliver ${task.behaviours.join(", ")}`,
-        endState: `${task.behaviours.join(", ")} can be used end to end.`,
-        scope: `The ${task.behaviours.join(", ")} part of the product.`,
-        deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [guaranteeOf(prompt, b)] })),
-        acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [guaranteeOf(prompt, b)] })),
-        capability: "Medium",
-        capabilityReason: "One small behaviour.",
-      })), ...interfaceTask], toCheck),
+      tasks: citingPerLine(
+        [
+          ...planned.map((task, i) => ({
+            ref: task.ref,
+            title: taskTitle(task),
+            description: `Delivers ${task.behaviours.join(", ")}.`,
+            dependsOn: i === 0 || universe.independent ? [] : [planned[i - 1]?.ref ?? task.ref],
+            goal: `Deliver ${task.behaviours.join(", ")}`,
+            endState: `${task.behaviours.join(", ")} can be used end to end.`,
+            scope: `The ${task.behaviours.join(", ")} part of the product.`,
+            deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [guaranteeOf(prompt, b)] })),
+            acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [guaranteeOf(prompt, b)] })),
+            capability: "Medium",
+            capabilityReason: "One small behaviour.",
+          })),
+          ...interfaceTask,
+        ],
+        toCheck,
+      ),
     };
   }
 
@@ -760,7 +895,14 @@ export class StandIns {
     const task = await this.taskInProgress();
     const rows = await this.latestChecks(task.projectId);
     const underReview = await this.checkTasksUnderReview(task.id);
-    const read: ReviewRead = { reviewTaskId: task.id, checks: [...new Set(rows.filter((row) => underReview.includes(row.checkTaskId)).map((row) => `${row.taskId}@${row.revision}`))].sort() };
+    const read: ReviewRead = {
+      reviewTaskId: task.id,
+      checks: [
+        ...new Set(
+          rows.filter((row) => underReview.includes(row.checkTaskId)).map((row) => `${row.taskId}@${row.revision}`),
+        ),
+      ].sort(),
+    };
     const honest = await this.honestReview(rows);
     if (this.context.personas.of("suite-review") === "honest") return { answer: { problems: honest }, read };
     return { answer: { problems: await this.reviewAsPersona(task, rows, honest) }, read };
@@ -770,8 +912,14 @@ export class StandIns {
     const problems: unknown[] = [];
     for (const row of rows) {
       const own = ownSpecOf(row);
-      if (own?.kind !== "contradictory" || !this.context.tape.chance("model.suite-review.catch", this.context.rates.reviewCatch)) continue;
-      const partner = rows.find((other) => other.checkTaskId !== row.checkTaskId && requiresAny(ownSpecOf(other), own.forbids));
+      if (
+        own?.kind !== "contradictory" ||
+        !this.context.tape.chance("model.suite-review.catch", this.context.rates.reviewCatch)
+      )
+        continue;
+      const partner = rows.find(
+        (other) => other.checkTaskId !== row.checkTaskId && requiresAny(ownSpecOf(other), own.forbids),
+      );
       if (partner === undefined) continue;
       problems.push({
         checkTasks: [row.checkTaskId, partner.checkTaskId],
@@ -795,15 +943,21 @@ export class StandIns {
           check: row.name,
           judgedItems: cited.map((item) => item.id),
           missingClause: `does ${spec.requires.join(" and ")}`,
-          problem: `Check ${row.name} asks for behaviour no vision item names: it requires [${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`,
+          problem:
+            `Check ${row.name} asks for behaviour no vision item names: it requires ` +
+            `[${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`,
           evidence: row.command,
         });
       }
     }
     // A misread: a correct check rejected as outside the vision, quoting as missing the very text its cited item
-    // states. Z0 must find that text in the cited item and discard the rejection, so a correct check is never reopened on it.
+    // states. Z0 must find that text in the cited item and discard the rejection, so a correct check is never reopened
+    // on it.
     const correct = rows.find((row) => specsOf(row.files).some((spec) => spec.kind === "correct"));
-    if (correct !== undefined && this.context.tape.chance("model.suite-review.misread", this.context.rates.reviewMisread)) {
+    if (
+      correct !== undefined &&
+      this.context.tape.chance("model.suite-review.misread", this.context.rates.reviewMisread)
+    ) {
       const [item] = await this.citedBy(correct.checkTaskId);
       if (item !== undefined) {
         this.context.onModelCall({ site: "suite-review", action: "misread" });
@@ -819,11 +973,20 @@ export class StandIns {
       }
     }
     const sound = rows.find((row) => ownSpecOf(row)?.kind === "correct");
-    if (sound !== undefined && this.context.tape.chance("model.suite-review.undecided", this.context.rates.reviewMisread)) {
+    if (
+      sound !== undefined &&
+      this.context.tape.chance("model.suite-review.undecided", this.context.rates.reviewMisread)
+    ) {
       const [item] = await this.citedBy(sound.checkTaskId);
       if (item !== undefined) {
         this.context.onModelCall({ site: "suite-review", action: "undecided" });
-        problems.push({ checkTasks: [sound.checkTaskId], kind: "undecided-item", item: item.id, problem: `No check of the suite is read as deciding ${item.id}.`, evidence: sound.command });
+        problems.push({
+          checkTasks: [sound.checkTaskId],
+          kind: "undecided-item",
+          item: item.id,
+          problem: `No check of the suite is read as deciding ${item.id}.`,
+          evidence: sound.command,
+        });
       }
     }
     return problems;
@@ -834,7 +997,11 @@ export class StandIns {
    * correct checks of the check tasks under review, read from the universe's own check kinds, so
    * what it raises is plausible and wrong; how production weighs it is production's.
    */
-  private async reviewAsPersona(task: z.infer<typeof taskRowSchema>, rows: ReadonlyArray<z.infer<typeof checkRowSchema>>, honest: readonly unknown[]): Promise<unknown[]> {
+  private async reviewAsPersona(
+    task: z.infer<typeof taskRowSchema>,
+    rows: ReadonlyArray<z.infer<typeof checkRowSchema>>,
+    honest: readonly unknown[],
+  ): Promise<unknown[]> {
     const { personas, onModelCall } = this.context;
     const persona = personas.of("suite-review");
     const underReview = await this.checkTasksUnderReview(task.id);
@@ -847,7 +1014,9 @@ export class StandIns {
     }
     if (!personas.fires("suite-review")) return this.answered(round, [...honest]);
     onModelCall({ site: "suite-review", action: `persona ${persona} (round ${round.round}, review ${round.calls})` });
-    const targets = [...new Set(read.filter((row) => ownSpecOf(row)?.kind === "correct").map((row) => row.checkTaskId))];
+    const targets = [
+      ...new Set(read.filter((row) => ownSpecOf(row)?.kind === "correct").map((row) => row.checkTaskId)),
+    ];
     const target = (n: number): z.infer<typeof checkRowSchema> | undefined => {
       const id = targets[n % Math.max(1, targets.length)];
       return read.find((row) => row.checkTaskId === id && ownSpecOf(row)?.kind === "correct");
@@ -858,7 +1027,18 @@ export class StandIns {
         if (row === undefined) return this.answered(round, [...honest]);
         const cited = await this.citedBy(row.checkTaskId);
         const item = cited[(round.round + round.calls) % Math.max(1, cited.length)];
-        const undecided = item === undefined ? [] : [{ checkTasks: [row.checkTaskId], kind: "undecided-item", item: item.id, problem: `No check is read as deciding ${item.id} (reading ${this.nextWording()}).`, evidence: row.command }];
+        const undecided =
+          item === undefined
+            ? []
+            : [
+                {
+                  checkTasks: [row.checkTaskId],
+                  kind: "undecided-item",
+                  item: item.id,
+                  problem: `No check is read as deciding ${item.id} (reading ${this.nextWording()}).`,
+                  evidence: row.command,
+                },
+              ];
         return this.answered(round, [...honest, await this.rejection(row), ...undecided]);
       }
       case "rotating": {
@@ -877,7 +1057,10 @@ export class StandIns {
       case "flip-flop": {
         if (round.round % 2 === 0) return this.answered(round, []);
         const row = target(0);
-        return this.answered(round, row === undefined ? [...honest] : [...honest, await this.rejection(row, `its round ${round.round}`)]);
+        return this.answered(
+          round,
+          row === undefined ? [...honest] : [...honest, await this.rejection(row, `its round ${round.round}`)],
+        );
       }
       case "self-refuting": {
         const row = target(0);
@@ -885,7 +1068,13 @@ export class StandIns {
         const side = { checkTask: row.checkTaskId, check: row.name, requires: row.command };
         return this.answered(round, [
           ...honest,
-          { checkTasks: [row.checkTaskId], kind: "contradiction", conflict: { first: side, second: side }, problem: `Check ${row.name} both requires and forbids what it runs.`, evidence: row.command },
+          {
+            checkTasks: [row.checkTaskId],
+            kind: "contradiction",
+            conflict: { first: side, second: side },
+            problem: `Check ${row.name} both requires and forbids what it runs.`,
+            evidence: row.command,
+          },
         ]);
       }
       case "correlated-second": {
@@ -917,7 +1106,8 @@ export class StandIns {
    */
   private async rejection(row: z.infer<typeof checkRowSchema>, wording?: string): Promise<unknown> {
     const spec = ownSpecOf(row);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a check whose spec is unreadable requires nothing the clause can name; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a check whose spec is
+       unreadable requires nothing the clause can name; no oracle reads it */
     const requires = spec?.requires ?? [];
     const cited = await this.citedBy(row.checkTaskId);
     return {
@@ -950,15 +1140,21 @@ export class StandIns {
       SELECT w.id FROM dependencies d JOIN work_items w ON w.id = d.to_id
       WHERE d.from_id = ${reviewTaskId} AND w.work_kind = 'check' AND w.status = 'Completed'
       ORDER BY w.created_at, w.id`);
-    return z.array(z.object({ id: z.string() })).parse(result.rows).map((row) => row.id);
+    return z
+      .array(z.object({ id: z.string() }))
+      .parse(result.rows)
+      .map((row) => row.id);
   }
 
   /** The vision items a check task cites, as its task_spec stores them. */
   private async citedBy(checkTaskId: string): Promise<Array<z.infer<typeof citedItemSchema>>> {
-    const result = await this.context.observer.execute(sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${checkTaskId}`);
+    const result = await this.context.observer.execute(
+      sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${checkTaskId}`,
+    );
     const [row] = z.array(z.object({ sources: z.array(citedItemSchema).nullable() })).parse(result.rows);
     if (row === undefined) throw new StandInUnanswerable("suite-review", `check task ${checkTaskId} is not on record`);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a check task with no sources cites none; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a check task with no
+       sources cites none; no oracle reads it */
     return row.sources ?? [];
   }
 
@@ -982,18 +1178,23 @@ export class StandIns {
    * A kind with nothing on record to act on (no target, no such guarantee, assumption or entry) adds the exclusion.
    */
   private async correction(prompt: string): Promise<unknown> {
-    const exclusion = { correction: { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "narrows" }], confirms: [] } };
-    const read = (op: Record<string, unknown> | null): unknown => (op === null ? exclusion : { correction: { ops: [op], confirms: [] } });
+    const exclusion = {
+      correction: { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "narrows" }], confirms: [] },
+    };
+    const read = (op: Record<string, unknown> | null): unknown =>
+      op === null ? exclusion : { correction: { ops: [op], confirms: [] } };
     const { observer, projectIds, universe } = this.context;
     const { kind, during } = this.asked;
     for (const projectId of projectIds) {
       const open = await observer.execute(sql`
-        SELECT 1 FROM client_messages WHERE project_id = ${projectId} AND direction = 'inbound' AND kind = 'change' AND consumed_at IS NULL`);
+        SELECT 1 FROM client_messages WHERE project_id = ${projectId} AND direction = 'inbound' AND kind = 'change'
+          AND consumed_at IS NULL`);
       if (open.rows.length === 0) continue;
       const vision = await observer.execute(sql`
         SELECT guarantees FROM vision_documents WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`);
       const [latest] = z.array(z.object({ guarantees: z.array(storedGuaranteeSchema) })).parse(vision.rows);
-      if (latest === undefined || !latest.guarantees.every((g) => prompt.includes(`- ${g.id}: ${g.statement} (`))) continue;
+      if (latest === undefined || !latest.guarantees.every((g) => prompt.includes(`- ${g.id}: ${g.statement} (`)))
+        continue;
       if (kind === "add-exclusion") return exclusion;
       if (kind === "withdraw-guarantee") {
         const unnamed = latest.guarantees.find((g) => !universe.behaviours.some((b) => namesBehaviour(g.statement, b)));
@@ -1001,11 +1202,29 @@ export class StandIns {
       }
       if (kind === "change-assumption") {
         const [assumption] = promptEntries(prompt, "Assumptions:");
-        return read(assumption === undefined ? null : { op: "amend-assumption", id: assumption.id, statement: `${assumption.text} The client's correction restates it.`, direction: "neutral" });
+        return read(
+          assumption === undefined
+            ? null
+            : {
+                op: "amend-assumption",
+                id: assumption.id,
+                statement: `${assumption.text} The client's correction restates it.`,
+                direction: "neutral",
+              },
+        );
       }
       if (kind === "change-interface") {
         const [entry] = promptEntries(prompt, "Interface:");
-        return read(entry === undefined ? null : { op: "amend-interface", id: entry.id, text: `${entry.text} (as the client's correction states it)`, direction: "neutral" });
+        return read(
+          entry === undefined
+            ? null
+            : {
+                op: "amend-interface",
+                id: entry.id,
+                text: `${entry.text} (as the client's correction states it)`,
+                direction: "neutral",
+              },
+        );
       }
       const cited = await this.correctionCites(projectId, during);
       const target = latest.guarantees.find((g) => cited.includes(g.id));
@@ -1036,18 +1255,24 @@ export class StandIns {
     return exclusion;
   }
 
-  /** The vision keys a correction's target is read from: the task it was posted during, else the goal tasks not yet started that no open task waits on, latest first. */
+  /**
+   * The vision keys a correction's target is read from: the task it was posted during, else the goal tasks not yet
+   * started that no open task waits on, latest first.
+   */
   private async correctionCites(projectId: string, during: string | null): Promise<string[]> {
     const { observer } = this.context;
     const rows =
       during === null
         ? await observer.execute(sql`
             SELECT w.task_spec->'sources' AS sources FROM work_items w
-            WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'Pending' AND w.task_spec->>'origin' = 'decomposition'
+            WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'Pending'
+              AND w.task_spec->>'origin' = 'decomposition'
               AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN work_items o ON o.id = d.from_id
                               WHERE d.to_id = w.id AND o.status IN ('Pending', 'Blocked', 'Failed'))
             ORDER BY w.created_at DESC, w.id DESC`)
-        : await observer.execute(sql`SELECT w.task_spec->'sources' AS sources FROM work_items w WHERE w.id = ${during}`);
+        : await observer.execute(
+            sql`SELECT w.task_spec->'sources' AS sources FROM work_items w WHERE w.id = ${during}`,
+          );
     return z
       .array(z.object({ sources: z.array(citedItemSchema).nullable() }))
       .parse(rows.rows)
@@ -1069,14 +1294,19 @@ export class StandIns {
   private async taskInProgress(): Promise<z.infer<typeof taskRowSchema>> {
     const { observer, projectIds } = this.context;
     const taskId = this.context.laneTask();
-    if (taskId === null) throw new StandInUnanswerable("agent-runner", "an agent turn was made outside every task of a batch");
+    if (taskId === null)
+      throw new StandInUnanswerable("agent-runner", "an agent turn was made outside every task of a batch");
     const result = await observer.execute(sql`
-      SELECT id, project_id AS "projectId", title, task_spec AS "taskSpec", work_kind AS "workKind", dispatch_count AS "dispatchCount",
+      SELECT id, project_id AS "projectId", title, task_spec AS "taskSpec", work_kind AS "workKind",
+        dispatch_count AS "dispatchCount",
         infrastructure_faults AS "infrastructureFaults"
       FROM work_items WHERE id = ${taskId} AND level = 'Task' AND status = 'InProgress'`);
     const [row] = z.array(taskRowSchema).parse(result.rows);
     if (row === undefined || !projectIds.includes(row.projectId)) {
-      throw new StandInUnanswerable("agent-runner", `the lane's task ${taskId} is not an InProgress task of the run's projects`);
+      throw new StandInUnanswerable(
+        "agent-runner",
+        `the lane's task ${taskId} is not an InProgress task of the run's projects`,
+      );
     }
     return row;
   }
@@ -1091,7 +1321,8 @@ export class StandIns {
   private async agentTurn(options: LanguageModelV4CallOptions): Promise<LanguageModelV4GenerateResult> {
     const task = await this.taskInProgress();
     await this.context.onAgentTurn({ id: task.id, projectId: task.projectId });
-    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a call with no tools offers none; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a call with no tools
+       offers none; no oracle reads it */
     const toolNames = new Set((options.tools ?? []).map((tool) => tool.name));
     // A requeue after a fault that was not the task's work refunds its dispatch, but its next
     // attempt is a new request to the model, so it draws a new script.
@@ -1119,7 +1350,12 @@ export class StandIns {
         const [toolName, input] = script.cut ?? ["finish", { status: "done", summary: "Done." }];
         const content: LanguageModelV4Content[] = [
           { type: "text", text: "Next I write the change." },
-          { type: "tool-call", toolCallId: `sim-call-${++this.toolCalls}`, toolName, input: firstHalf(JSON.stringify(input)) },
+          {
+            type: "tool-call",
+            toolCallId: `sim-call-${++this.toolCalls}`,
+            toolName,
+            input: firstHalf(JSON.stringify(input)),
+          },
         ];
         return cutAtBound(content, outputBoundOf(options));
       }
@@ -1139,7 +1375,11 @@ export class StandIns {
     }
   }
 
-  private async scriptFor(task: z.infer<typeof taskRowSchema>, tools: ReadonlySet<string>, prompt: string): Promise<AttemptScript> {
+  private async scriptFor(
+    task: z.infer<typeof taskRowSchema>,
+    tools: ReadonlySet<string>,
+    prompt: string,
+  ): Promise<AttemptScript> {
     const { tape, rates } = this.context;
     const spec = taskSpecShape.safeParse(task.taskSpec);
     const origin = spec.success ? spec.data.origin : undefined;
@@ -1150,21 +1390,34 @@ export class StandIns {
       steps = this.environmentWork();
     } else if (tools.has("define_check")) {
       work = "checks";
-      // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a task spec with no sources cites none; no oracle reads it
-      steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined, spec.success ? (spec.data.sources ?? []) : []);
+      steps = await this.checkWork(
+        spec.success ? spec.data.checksFor : undefined,
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a task spec with no
+           sources cites none; no oracle reads it */
+        spec.success ? (spec.data.sources ?? []) : [],
+      );
     } else if (origin === "product-scaffold") {
       work = "scaffold";
-      steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], ...this.publicInterfaceWork(task.projectId), finished("Set up the product layout.")];
+      steps = [
+        ["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }],
+        ...this.publicInterfaceWork(task.projectId),
+        finished("Set up the product layout."),
+      ];
     } else if (isInterfaceTaskTitle(task.title)) {
       work = "implementation";
       const form = this.interfaceForms.get(task.projectId) ?? "short";
-      steps = [["write_file", { path: PUBLIC_INTERFACE_PATH, content: deliveredInterfaceText(form) }], finished(`Updated ${PUBLIC_INTERFACE_PATH}.`)];
+      steps = [
+        ["write_file", { path: PUBLIC_INTERFACE_PATH, content: deliveredInterfaceText(form) }],
+        finished(`Updated ${PUBLIC_INTERFACE_PATH}.`),
+      ];
     } else {
       work = "implementation";
       steps = await this.implementationWork(task, tools, conflictFilesOf(prompt));
     }
-    if (tape.chance("agent.timeout", rates.timeout, work)) return { steps: steps.slice(0, -1), end: "stall", cut: null };
-    if (tape.chance("agent.refusal", rates.refusal, work)) return { steps: steps.slice(0, -1), end: "refusal", cut: null };
+    if (tape.chance("agent.timeout", rates.timeout, work))
+      return { steps: steps.slice(0, -1), end: "stall", cut: null };
+    if (tape.chance("agent.refusal", rates.refusal, work))
+      return { steps: steps.slice(0, -1), end: "refusal", cut: null };
     return this.misbehaved(steps, work);
   }
 
@@ -1179,7 +1432,11 @@ export class StandIns {
     const { tape, rates } = this.context;
     const edits = steps.length - 1;
     if (edits >= 1 && tape.chance("agent.turn-cap-mid-edit", rates.turnCapMidEdit, work)) {
-      return { steps: steps.slice(0, 1 + tape.pick("agent.turn-cap-mid-edit.after", edits, work)), end: "stall-mid-edit", cut: null };
+      return {
+        steps: steps.slice(0, 1 + tape.pick("agent.turn-cap-mid-edit.after", edits, work)),
+        end: "stall-mid-edit",
+        cut: null,
+      };
     }
     const end: AttemptEnd | null = tape.chance("agent.truncated-turn", rates.truncatedTurn, work)
       ? "truncated"
@@ -1211,7 +1468,8 @@ export class StandIns {
   private interfaceUpdate(projectId: string): ToolStep[] {
     const form = this.interfaceForms.get(projectId) ?? null;
     if (form === null) return [];
-    if (this.context.tape.chance("agent.interface-left-stale", this.context.rates.interfaceLeftStale, "implementation")) return [];
+    if (this.context.tape.chance("agent.interface-left-stale", this.context.rates.interfaceLeftStale, "implementation"))
+      return [];
     return [["write_file", { path: PUBLIC_INTERFACE_PATH, content: deliveredInterfaceText(form) }]];
   }
 
@@ -1226,7 +1484,12 @@ export class StandIns {
       'test = "sim test"',
       "",
     ].join("\n");
-    const containerfile = ["FROM scratch", `# sim: ${TOOLCHAIN_TOKEN}`, ...(defect ? [`# sim: ${RECIPE_DEFECT_TOKEN}`] : []), ""].join("\n");
+    const containerfile = [
+      "FROM scratch",
+      `# sim: ${TOOLCHAIN_TOKEN}`,
+      ...(defect ? [`# sim: ${RECIPE_DEFECT_TOKEN}`] : []),
+      "",
+    ].join("\n");
     return [
       ["write_file", { path: "environment/environment.toml", content: definition }],
       ["write_file", { path: "environment/Containerfile", content: containerfile }],
@@ -1247,12 +1510,16 @@ export class StandIns {
    * decides the cited guarantee that names it, and every cited item no such check decides gets a check
    * of its own, so the set decides every item its task cites, as an honest author writes it.
    */
-  private async checkWork(checksFor: string | undefined, sources: ReadonlyArray<{ readonly id: string; readonly text: string }>): Promise<ToolStep[]> {
+  private async checkWork(
+    checksFor: string | undefined,
+    sources: ReadonlyArray<{ readonly id: string; readonly text: string }>,
+  ): Promise<ToolStep[]> {
     const { tape, rates, universe } = this.context;
     const cited = sources.map((source) => source.id);
     if (checksFor === undefined) throw new StandInUnanswerable("agent-runner", "a check task names no task it checks");
     const [firstCited] = cited;
-    if (firstCited === undefined) throw new StandInUnanswerable("agent-runner", `the check task for ${checksFor} cites no vision item`);
+    if (firstCited === undefined)
+      throw new StandInUnanswerable("agent-runner", `the check task for ${checksFor} cites no vision item`);
     const checkedTitle = await this.titleOf(checksFor);
     if (isInterfaceTaskTitle(checkedTitle)) {
       const path = `checks/${checksFor}/interface.json`;
@@ -1264,40 +1531,64 @@ export class StandIns {
       ];
     }
     const checked = taskOfTitle(universe, checkedTitle);
-    if (checked === null) throw new StandInUnanswerable("agent-runner", `check task for ${checksFor}: its title carries no simulator marker`);
+    if (checked === null)
+      throw new StandInUnanswerable(
+        "agent-runner",
+        `check task for ${checksFor}: its title carries no simulator marker`,
+      );
     const decidedBy = (b: string): readonly string[] => {
       const naming = sources.find((source) => namesBehaviour(source.text, b));
       return naming === undefined ? [firstCited] : [naming.id];
     };
-    const checks: Array<{ readonly name: string; readonly spec: CheckSpec; readonly decides: readonly string[] }> = checked.behaviours.map((b) => ({
-      name: `has-${b}`,
-      spec: { kind: "correct", requires: [b], forbids: [], harness: [] },
-      decides: decidedBy(b),
-    }));
+    const checks: Array<{ readonly name: string; readonly spec: CheckSpec; readonly decides: readonly string[] }> =
+      checked.behaviours.map((b) => ({
+        name: `has-${b}`,
+        spec: { kind: "correct", requires: [b], forbids: [], harness: [] },
+        decides: decidedBy(b),
+      }));
     for (const id of cited.filter((each) => !checks.some((check) => check.decides.includes(each)))) {
-      checks.push({ name: `holds-${id}`, spec: { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [] }, decides: [id] });
+      checks.push({
+        name: `holds-${id}`,
+        spec: { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [] },
+        decides: [id],
+      });
     }
     const other = universe.tasks.find((t) => t.ref !== checked.ref);
     const extra = (name: string, spec: CheckSpec): void => void checks.push({ name, spec, decides: [firstCited] });
-    if (tape.chance("agent.check.wrong", rates.wrongCheck, "checks")) extra("wrong", { kind: "wrong", requires: ["b-never"], forbids: [], harness: [] });
+    if (tape.chance("agent.check.wrong", rates.wrongCheck, "checks"))
+      extra("wrong", { kind: "wrong", requires: ["b-never"], forbids: [], harness: [] });
     if (other !== undefined && tape.chance("agent.check.contradictory", rates.contradictoryCheck, "checks")) {
       extra("contradicts", { kind: "contradictory", requires: [], forbids: [...other.behaviours], harness: [] });
     }
-    if (tape.chance("agent.check.vacuous", rates.vacuousCheck, "checks")) extra("vacuous", { kind: "vacuous", requires: [], forbids: [], harness: [] });
+    if (tape.chance("agent.check.vacuous", rates.vacuousCheck, "checks"))
+      extra("vacuous", { kind: "vacuous", requires: [], forbids: [], harness: [] });
     if (tape.chance("agent.check.out-of-vision", rates.outOfVisionCheck, "checks")) {
       extra("extra", { kind: "out_of_vision", requires: [universe.outOfVision], forbids: [], harness: [] });
     }
-    if (tape.chance("agent.check.flaky", rates.flakyCheck, "checks")) extra("flaky", { kind: "flaky", requires: [...checked.behaviours], forbids: [], harness: [] });
+    if (tape.chance("agent.check.flaky", rates.flakyCheck, "checks"))
+      extra("flaky", { kind: "flaky", requires: [...checked.behaviours], forbids: [], harness: [] });
     if (tape.chance("agent.check.unrunnable", rates.unrunnableCheck, "checks")) {
-      extra("unrunnable", { kind: tape.pick("agent.check.unrunnable-kind", 2, "checks") === 0 ? "unrunnable" : "slow", requires: [], forbids: [], harness: [] });
+      extra("unrunnable", {
+        kind: tape.pick("agent.check.unrunnable-kind", 2, "checks") === 0 ? "unrunnable" : "slow",
+        requires: [],
+        forbids: [],
+        harness: [],
+      });
     }
     if (tape.chance("agent.check.harness", rates.flakyCheck, "checks")) {
-      extra("harness", { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [{ path: `product/harness/${checked.ref}`, content: "harness\n" }] });
+      extra("harness", {
+        kind: "correct",
+        requires: [...checked.behaviours],
+        forbids: [],
+        harness: [{ path: `product/harness/${checked.ref}`, content: "harness\n" }],
+      });
     }
     const sticky = this.stickyBadCheck(checksFor, other);
     if (sticky !== null) extra(`sticky-${sticky.kind}`, sticky);
     const allGuard = tape.chance("agent.check.all-guard", rates.allGuardSet, "checks");
-    const kept = allGuard ? checks.map((check) => ({ ...check, spec: { ...check.spec, kind: "vacuous" as const } })) : checks;
+    const kept = allGuard
+      ? checks.map((check) => ({ ...check, spec: { ...check.spec, kind: "vacuous" as const } }))
+      : checks;
     const steps: ToolStep[] = [];
     for (const check of kept) {
       // The checks directory the brief names (checkAreaOf): the checked task's id, not the simulator's ref.
@@ -1307,7 +1598,8 @@ export class StandIns {
     }
     // The author also writes the product it checks, in its own workspace.
     if (tape.chance("agent.check.writes-product", rates.authorWritesProduct, "checks")) {
-      for (const b of checked.behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b} by the check author\n` }]);
+      for (const b of checked.behaviours)
+        steps.push(["write_file", { path: behaviourPath(b), content: `${b} by the check author\n` }]);
     }
     steps.push(finished(`Defined ${kept.length} check(s).`));
     return steps;
@@ -1330,7 +1622,8 @@ export class StandIns {
     onModelCall({ site: "agent-runner", action: `persona sticky-bad: writes a ${kind} check again` });
     switch (kind) {
       case "contradictory":
-        // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, the contradictory kind is only chosen with another task (above); no oracle reads it
+        /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, the contradictory
+           kind is only chosen with another task (above); no oracle reads it */
         return { kind, requires: [], forbids: [...(other?.behaviours ?? [])], harness: [] };
       case "wrong":
         return { kind, requires: ["b-never"], forbids: [], harness: [] };
@@ -1344,23 +1637,38 @@ export class StandIns {
    * names), it first resolves each by keeping both sides (`sim resolve`), or leaves one's markers
    * in, and never writes a conflicted file over its resolution afterwards.
    */
-  private async implementationWork(task: z.infer<typeof taskRowSchema>, tools: ReadonlySet<string>, conflicted: readonly string[]): Promise<ToolStep[]> {
+  private async implementationWork(
+    task: z.infer<typeof taskRowSchema>,
+    tools: ReadonlySet<string>,
+    conflicted: readonly string[],
+  ): Promise<ToolStep[]> {
     const { tape, rates, universe } = this.context;
     const mine = taskOfTitle(universe, task.title);
-    if (mine === null) throw new StandInUnanswerable("agent-runner", `implementation ${task.id} "${task.title}" carries no simulator marker`);
+    if (mine === null)
+      throw new StandInUnanswerable(
+        "agent-runner",
+        `implementation ${task.id} "${task.title}" carries no simulator marker`,
+      );
     const index = universe.tasks.indexOf(mine);
     const steps: ToolStep[] = [];
     for (const file of conflicted) {
       const leaves = tape.chance("agent.conflict.markers-left", rates.conflictMarkersLeft, "implementation");
-      this.context.onModelCall({ site: "agent-runner", action: `handed a conflict in ${file}: ${leaves ? "leaves its markers" : "resolves it"}` });
+      this.context.onModelCall({
+        site: "agent-runner",
+        action: `handed a conflict in ${file}: ${leaves ? "leaves its markers" : "resolves it"}`,
+      });
       if (!leaves) steps.push(["run_command", { command: `sim resolve ${file}` }]);
     }
     let behaviours = [...mine.behaviours];
-    const underDelivers = behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery, "implementation");
+    const underDelivers =
+      behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery, "implementation");
     if (underDelivers) behaviours = behaviours.slice(0, -1);
     const later: SimTask[] = universe.tasks.slice(index + 1);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a later task with no behaviours adds none; no oracle reads it
-    if (later.length > 0 && tape.chance("agent.over-delivery", rates.overDelivery, "implementation")) behaviours.push(...(later[0]?.behaviours ?? []));
+    if (later.length > 0 && tape.chance("agent.over-delivery", rates.overDelivery, "implementation")) {
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: stand-in test plumbing, a later task with no
+         behaviours adds none; no oracle reads it */
+      behaviours.push(...(later[0]?.behaviours ?? []));
+    }
     for (const b of behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b}\n` }]);
     const earlier = universe.tasks.slice(0, index).flatMap((t) => t.behaviours);
     const victim = earlier[0];
@@ -1368,11 +1676,17 @@ export class StandIns {
       steps.push(["run_command", { command: `sim rm ${behaviourPath(victim)}` }]);
     }
     if (!conflicted.includes(PUBLIC_INTERFACE_PATH)) steps.push(...this.interfaceUpdate(task.projectId));
-    if (tape.chance("agent.manifest", rates.overDelivery / 3, "implementation") && !conflicted.includes(MANIFEST_FILE)) {
+    if (
+      tape.chance("agent.manifest", rates.overDelivery / 3, "implementation") &&
+      !conflicted.includes(MANIFEST_FILE)
+    ) {
       steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
     }
     // One file two tasks of a batch both write, so the second merge conflicts.
-    if (tape.chance("agent.shared-file", rates.sharedFileEdit, "implementation") && !conflicted.includes(SHARED_INDEX_FILE)) {
+    if (
+      tape.chance("agent.shared-file", rates.sharedFileEdit, "implementation") &&
+      !conflicted.includes(SHARED_INDEX_FILE)
+    ) {
       steps.push(["write_file", { path: SHARED_INDEX_FILE, content: `${mine.ref}: ${behaviours.join(", ")}\n` }]);
     }
     if (tools.has("dispute_check")) {
@@ -1388,14 +1702,26 @@ export class StandIns {
   }
 
   /** A dispute of one of the task's own stored checks: right when the check is bad, wrong otherwise. */
-  private async disputeOf(task: z.infer<typeof taskRowSchema>, underDelivered: boolean): Promise<{ name: string; reason: string } | null> {
+  private async disputeOf(
+    task: z.infer<typeof taskRowSchema>,
+    underDelivered: boolean,
+  ): Promise<{ name: string; reason: string } | null> {
     const { tape, rates } = this.context;
     const own = (await this.latestChecks(task.projectId)).filter((row) => row.taskId === task.id);
     for (const row of own) {
       for (const spec of specsOf(row.files)) {
-        const bad = spec.kind === "wrong" || spec.kind === "contradictory" || spec.kind === "out_of_vision" || spec.kind === "unrunnable" || spec.kind === "slow";
+        const bad =
+          spec.kind === "wrong" ||
+          spec.kind === "contradictory" ||
+          spec.kind === "out_of_vision" ||
+          spec.kind === "unrunnable" ||
+          spec.kind === "slow";
         if (bad && tape.chance("agent.dispute.right", rates.disputeRight, "implementation")) {
-          return { name: row.name, reason: `The check ${spec.kind === "out_of_vision" ? "asks for behaviour the vision does not name" : "cannot pass on correct work"}.` };
+          const why =
+            spec.kind === "out_of_vision"
+              ? "asks for behaviour the vision does not name"
+              : "cannot pass on correct work";
+          return { name: row.name, reason: `The check ${why}.` };
         }
         if (!bad && underDelivered && tape.chance("agent.dispute.wrong", rates.disputeWrong, "implementation")) {
           return { name: row.name, reason: "The check is too strict." };
@@ -1409,7 +1735,8 @@ export class StandIns {
 /** `list[at]`, where the tape drew `at` from `list.length`. */
 function nthOf<T>(list: readonly T[], at: number): T {
   const value = list[at];
-  if (value === undefined) throw new StandInUnanswerable("persona", `the tape drew ${at} from a list of ${list.length}`);
+  if (value === undefined)
+    throw new StandInUnanswerable("persona", `the tape drew ${at} from a list of ${list.length}`);
   return value;
 }
 
@@ -1434,11 +1761,15 @@ function specsOf(files: ReadonlyArray<{ readonly path: string; readonly content:
     if (!file.path.endsWith(".json")) continue;
     let raw: unknown;
     try {
-      // eslint-disable-next-line no-restricted-syntax -- a stand-in model may import no product package (boundary-rules.toml stand-ins), so it cannot reach parseJson; CheckSpecSchema validates the value below
+      /* eslint-disable-next-line no-restricted-syntax -- a stand-in model may import no product package
+         (boundary-rules.toml stand-ins), so it cannot reach parseJson; CheckSpecSchema validates the value below */
       raw = JSON.parse(file.content);
     } catch (err) {
-      // eslint-disable-next-line ashara/catch-continue -- best effort: a stand-in model skips a check file that is not JSON; the real checks judge the task's work
-      console.warn(`[simulator] check file ${file.path} is not JSON, skipped: ${err instanceof Error ? err.message : String(err)}`);
+      /* eslint-disable-next-line ashara/catch-continue -- best effort: a stand-in model skips a check file that is
+         not JSON; the real checks judge the task's work */
+      console.warn(
+        `[simulator] check file ${file.path} is not JSON, skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
       continue;
     }
     const spec = CheckSpecSchema.safeParse(raw);

@@ -42,7 +42,10 @@ function rewriteReport(matches: (body: string) => boolean, rewrite: (body: strin
   };
 }
 
-/** Drops the first line opening with `prefix` (by default one naming a task, `- "<title>"...`) from the paragraph opening with `head`. */
+/**
+ * Drops the first line opening with `prefix` (by default one naming a task, `- "<title>"...`) from the paragraph
+ * opening with `head`.
+ */
 function dropFirstNamed(body: string, head: string, prefix = `- "`): string {
   const parts = body.split("\n\n");
   const at = parts.findIndex((part) => part.startsWith(head));
@@ -57,17 +60,23 @@ function dropFirstNamed(body: string, head: string, prefix = `- "`): string {
 
 const PAUSED = ["Work on this project is paused.", "Work on this project has stopped: the team cannot deliver"];
 
-/** The paragraphs of a terminal message from its guarantee table on: its punch list, or that no contract is on record. */
+/**
+ * The paragraphs of a terminal message from its guarantee table on: its punch list, or that no contract is on record.
+ */
 function tableOf(body: string): string {
   const parts = body.split("\n\n");
-  const at = parts.findIndex((part) => part.startsWith("The punch list") || part.startsWith("No contract is on record"));
+  const at = parts.findIndex(
+    (part) => part.startsWith("The punch list") || part.startsWith("No contract is on record"),
+  );
   return at < 0 ? "" : `\n\n${parts.slice(at).join("\n\n")}`;
 }
 
 /** A halt report that states a fixed cause, chosen by nothing that happened, above the table it carries. */
 export const haltReportFixedCause = rewriteReport(
   (body) => PAUSED.some((opening) => body.startsWith(opening)),
-  (body) => `Work on this project is paused.\n\nThe cause: a temporary problem on our side.\n\nYou will be told when work resumes.${tableOf(body)}`,
+  (body) =>
+    `Work on this project is paused.\n\nThe cause: a temporary problem on our side.\n\nYou will be told when ` +
+    `work resumes.${tableOf(body)}`,
 );
 
 /** A stop report that leaves out the first merge on record. */
@@ -84,16 +93,27 @@ export const deliveredReportOmitsGoal = rewriteReport(
 
 const UNCHECKED_HEAD = "These tasks are done but not checked by a stored check";
 
-/** A delivered report whose unchecked list is wrong: dropped when there is one, the first goal named in it when there is none. */
+/**
+ * A delivered report whose unchecked list is wrong: dropped when there is one, the first goal named in it when there is
+ * none.
+ */
 export const deliveredReportMisstatesUnchecked = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
   (body) => {
     const parts = body.split("\n\n");
-    if (parts.some((part) => part.startsWith(UNCHECKED_HEAD))) return parts.filter((part) => !part.startsWith(UNCHECKED_HEAD)).join("\n\n");
-    const goal = parts.find((part) => part.startsWith("What was delivered:"))?.split("\n").find((line) => line.startsWith(`- "`));
+    if (parts.some((part) => part.startsWith(UNCHECKED_HEAD)))
+      return parts.filter((part) => !part.startsWith(UNCHECKED_HEAD)).join("\n\n");
+    const goal = parts
+      .find((part) => part.startsWith("What was delivered:"))
+      ?.split("\n")
+      .find((line) => line.startsWith(`- "`));
     const title = goal === undefined ? null : /^- "(.*)": /.exec(goal)?.[1];
     if (title === null || title === undefined) return body;
-    return [...parts.slice(0, 2), `${UNCHECKED_HEAD}: none was written for them, so nothing in the run above confirms them:\n- "${title}"`, ...parts.slice(2)].join("\n\n");
+    return [
+      ...parts.slice(0, 2),
+      `${UNCHECKED_HEAD}: none was written for them, so nothing in the run above confirms them:\n- "${title}"`,
+      ...parts.slice(2),
+    ].join("\n\n");
   },
 );
 
@@ -124,9 +144,9 @@ function rewriteInsert(table: string, rewrite: (param: string) => string): Query
  * and the suite review is a structured call with no brief, so text-facts.test.ts holds the
  * assumption-line clause.
  */
-export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => param.replaceAll(`"note":"Inferred; asked of the client, not yet answered;`, `"note":"Stated by the client;`));
-
-
+export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) =>
+  param.replaceAll(`"note":"Inferred; asked of the client, not yet answered;`, `"note":"Stated by the client;`),
+);
 
 /**
  * A delivered report whose how-to-run section is not main's: the quoted interface names another command, or, where
@@ -143,7 +163,10 @@ export const deliveredReportMisquotesInterface = rewriteReport(
 
 const decidesParam = z.array(z.string().min(1)).min(1);
 
-/** A parameter that is a stored check's `decides` (a JSON array of ids), or null: every other parameter of the insert is not one. */
+/**
+ * A parameter that is a stored check's `decides` (a JSON array of ids), or null: every other parameter of the insert is
+ * not one.
+ */
 function decidesOf(param: unknown): string[] | null {
   if (typeof param !== "string") return null;
   try {
@@ -164,7 +187,8 @@ export const checkSetSkipsItem: QueryPlant = (args) => {
   const text = textOf(args);
   const params = args[1];
   if (text === null || !text.startsWith(`insert into "task_checks"`) || !Array.isArray(params)) return null;
-  // eslint-disable-next-line no-restricted-syntax -- policy default: plant test plumbing, a parameter that is no decides array adds no id; no oracle reads it
+  /* eslint-disable-next-line no-restricted-syntax -- policy default: plant test plumbing, a parameter that is no
+     decides array adds no id; no oracle reads it */
   const decided = [...new Set(params.flatMap((param: unknown) => decidesOf(param) ?? []))];
   const [first] = decided;
   const skipped = decided.at(-1);
@@ -212,23 +236,41 @@ function suppressListing(matches: (text: string) => boolean): QueryPlant {
     if (at < 0) return null;
     const planted = `${text.slice(0, at)} where false and ${text.slice(at + " where ".length)}`;
     const parsed = sentText.safeParse(args[0]);
-    return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];
+    return [
+      parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted,
+      ...args.slice(1),
+    ];
   };
 }
 
-/** No halt is ever due its report (Engagement listDueBlockReports, the halts it lists through Delivery's haltEpisodesWhere). */
+/**
+ * No halt is ever due its report (Engagement listDueBlockReports, the halts it lists through Delivery's
+ * haltEpisodesWhere).
+ */
 export const haltReportSuppressed = suppressListing((text) =>
-  text.startsWith(`select "id", "project_id", "kind", "blocked_at", "error_class", "reason", "spend", "work" from "project_blocks" where `),
+  text.startsWith(
+    `select "id", "project_id", "kind", "blocked_at", "error_class", "reason", "spend", "work" from ` +
+      `"project_blocks" where `,
+  ),
 );
 
-/** No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueBlockReports, the resumptions it lists through Delivery's endedHaltEpisodesWhere). */
-export const resumptionReportSuppressed = suppressListing((text) => text.startsWith(`select "id", "project_id", "end_kind" from "project_blocks" where `));
+/**
+ * No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueBlockReports, the
+ * resumptions it lists through Delivery's endedHaltEpisodesWhere).
+ */
+export const resumptionReportSuppressed = suppressListing((text) =>
+  text.startsWith(`select "id", "project_id", "end_kind" from "project_blocks" where `),
+);
 
 /** No stop is ever due its stop report (Engagement listDueStopReports). */
-export const stopReportSuppressed = suppressListing((text) => text.includes(`from "client_messages"`) && text.includes(`"stop_found_halted" is not null`));
+export const stopReportSuppressed = suppressListing(
+  (text) => text.includes(`from "client_messages"`) && text.includes(`"stop_found_halted" is not null`),
+);
 
 /** No first planning that stopped is ever due its planning-stopped report (Delivery's plan report listing). */
-export const planningStoppedReportSuppressed = suppressListing((text) => text.includes(`"plan_attempts" from "projects"`) && text.includes(`"plan_stopped_at" is not null`));
+export const planningStoppedReportSuppressed = suppressListing(
+  (text) => text.includes(`"plan_attempts" from "projects"`) && text.includes(`"plan_stopped_at" is not null`),
+);
 
 /**
  * The delivered report is posted but its told record names another subject than its sweep, so the
@@ -237,7 +279,13 @@ export const planningStoppedReportSuppressed = suppressListing((text) => text.in
 export const deliveredReportUnrecorded: QueryPlant = (args) => {
   const text = textOf(args);
   const params = args[1];
-  if (text === null || !text.startsWith(`insert into "told_reports"`) || !Array.isArray(params) || params[0] !== "delivered") return null;
+  if (
+    text === null ||
+    !text.startsWith(`insert into "told_reports"`) ||
+    !Array.isArray(params) ||
+    params[0] !== "delivered"
+  )
+    return null;
   return [args[0], [params[0], randomUUID(), ...params.slice(2)], ...args.slice(2)];
 };
 
@@ -266,5 +314,8 @@ export const unconfirmedClaimDropped: QueryPlant = (args) => {
   if (!claimed) return null;
   const planted = `select ${params.map((_, i) => `$${i + 1}::text`).join(", ")} where false`;
   const parsed = sentText.safeParse(args[0]);
-  return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];
+  return [
+    parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted,
+    ...args.slice(1),
+  ];
 };

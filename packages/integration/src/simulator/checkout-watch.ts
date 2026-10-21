@@ -1,7 +1,21 @@
 import type { Violation } from "./invariants.js";
 
 /** git subcommands that change a checkout's index or work tree. */
-const MUTATING = new Set(["merge", "commit", "reset", "checkout", "clean", "add", "rm", "stash", "cherry-pick", "rebase", "revert", "am", "apply"]);
+const MUTATING = new Set([
+  "merge",
+  "commit",
+  "reset",
+  "checkout",
+  "clean",
+  "add",
+  "rm",
+  "stash",
+  "cherry-pick",
+  "rebase",
+  "revert",
+  "am",
+  "apply",
+]);
 
 /** What ends a staged merge when its own task runs it. */
 const ENDS_STAGING = new Set(["commit", "reset", "merge --abort"]);
@@ -43,7 +57,9 @@ export class CheckoutWatch {
       this.report({
         invariant: "I7",
         step,
-        statement: `task ${taskId} ran git ${phrase} on ${tree} while task ${owner}'s tentative merge was staged there: two finalizes overlapped on one checkout`,
+        statement:
+          `task ${taskId} ran git ${phrase} on ${tree} while task ${owner}'s tentative merge was staged there: ` +
+          `two finalizes overlapped on one checkout`,
         key: `I7:checkout-overlap:${phrase}`,
       });
       return;

@@ -52,7 +52,13 @@ export type Direction =
       readonly nth: number | "every";
       readonly value: number;
     }
-  | { readonly kind: "fault"; readonly seam: SeamKind; readonly label: SiteMatch; readonly nth: number; readonly fault: FaultKind };
+  | {
+      readonly kind: "fault";
+      readonly seam: SeamKind;
+      readonly label: SiteMatch;
+      readonly nth: number;
+      readonly fault: FaultKind;
+    };
 
 export type TapeMode =
   | { readonly kind: "seeded"; readonly seed: number }
@@ -88,7 +94,10 @@ interface DirectionState {
 
 /** How a direction is named in an error and the trace. */
 function describeDirection(direction: Direction): string {
-  const at = direction.kind === "draw" ? `${String(direction.site)}${direction.scope === undefined ? "" : ` (${direction.scope})`}` : `${direction.seam} ${String(direction.label)}`;
+  const at =
+    direction.kind === "draw"
+      ? `${String(direction.site)}${direction.scope === undefined ? "" : ` (${direction.scope})`}`
+      : `${direction.seam} ${String(direction.label)}`;
   const what = direction.kind === "draw" ? `= ${direction.value}` : direction.fault;
   return `${direction.kind} ${at} #${direction.nth} ${what}`;
 }
@@ -106,20 +115,32 @@ export class Tape {
 
   constructor(readonly mode: TapeMode) {
     this.seed = mode.kind === "seeded" ? mode.seed : null;
-    this.fixed = mode.kind === "replay" ? new Map(mode.decisions.map((decision) => [decision.key, decision.value])) : null;
-    this.directions = mode.kind === "directed" ? mode.directions.map((direction) => ({ direction, seen: 0, taken: 0, refused: null })) : [];
+    this.fixed =
+      mode.kind === "replay" ? new Map(mode.decisions.map((decision) => [decision.key, decision.value])) : null;
+    this.directions =
+      mode.kind === "directed"
+        ? mode.directions.map((direction) => ({ direction, seen: 0, taken: 0, refused: null }))
+        : [];
   }
 
-  private draw(site: string, scope: string | undefined, choose: (u: number, seed: number) => number, n: number): number {
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a site not yet drawn has drawn 0 times, the counter's start
+  private draw(
+    site: string,
+    scope: string | undefined,
+    choose: (u: number, seed: number) => number,
+    n: number,
+  ): number {
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a site not yet drawn has drawn 0 times, the
+       counter's start */
     const occurrence = (this.counts.get(site) ?? 0) + 1;
     this.counts.set(site, occurrence);
     const key = `${site}#${occurrence}`;
     let value: number;
     if (this.seed !== null) value = choose(seededUniform(this.seed, key), this.seed);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a replay file records only the non-zero draws (taken below), so an absent key is the zero draw
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a replay file records only the non-zero draws
+       (taken below), so an absent key is the zero draw */
     else if (this.fixed !== null) value = this.fixed.get(key) ?? 0;
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a site no direction steers takes the zero draw, the undisturbed path
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a site no direction steers takes the zero draw,
+       the undisturbed path */
     else value = this.directedDraw(site, scope) ?? 0;
     if (value < 0 || value >= n) throw new DrawOutOfRange(key, value, n);
     if (value !== 0) this.taken.push({ key, value });
@@ -147,7 +168,8 @@ export class Tape {
 
   /** 0..n-1, uniform; 0 is benign. */
   pick(site: string, n: number, scope?: string): number {
-    if (!Number.isInteger(n) || n < 1) throw new RangeError(`Tape.pick(${site}): n must be a positive integer, got ${n}`);
+    if (!Number.isInteger(n) || n < 1)
+      throw new RangeError(`Tape.pick(${site}): n must be a positive integer, got ${n}`);
     return this.draw(site, scope, (u) => Math.min(n - 1, Math.floor(u * n)), n);
   }
 
@@ -157,7 +179,8 @@ export class Tape {
    * few seeds per value leave one untaken in most soaks. Replayed and directed as `pick`.
    */
   rotate(site: string, n: number, scope?: string): number {
-    if (!Number.isInteger(n) || n < 1) throw new RangeError(`Tape.rotate(${site}): n must be a positive integer, got ${n}`);
+    if (!Number.isInteger(n) || n < 1)
+      throw new RangeError(`Tape.rotate(${site}): n must be a positive integer, got ${n}`);
     return this.draw(site, scope, (_u, seed) => ((seed % n) + n) % n, n);
   }
 
@@ -186,7 +209,11 @@ export class Tape {
   untaken(): string[] {
     return this.directions
       .filter((state) => state.taken === 0)
-      .map((state) => `${describeDirection(state.direction)}: ${state.refused ?? `${state.seen} matching draw(s) or call(s), none its #${state.direction.nth}`}`);
+      .map(
+        (state) =>
+          `${describeDirection(state.direction)}: ` +
+          `${state.refused ?? `${state.seen} matching draw(s) or call(s), none its #${state.direction.nth}`}`,
+      );
   }
 
   /** The non-benign decisions taken so far, in order. */

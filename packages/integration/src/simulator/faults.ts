@@ -45,7 +45,16 @@ export type FaultKind = (typeof FAULT_KINDS)[number];
 export const APPLICABLE_FAULTS: Readonly<Record<SeamKind, readonly FaultKind[]>> = {
   db: ["crash-before", "crash-after", "sigterm", "db-unreachable", "db-query-failed", "db-transaction-killed"],
   git: ["crash-before", "crash-after", "sigterm", "git-failed"],
-  podman: ["crash-before", "crash-after", "sigterm", "cell-start-failed", "cell-exec-failed", "cell-teardown-failed", "substrate-down", "image-build-failed"],
+  podman: [
+    "crash-before",
+    "crash-after",
+    "sigterm",
+    "cell-start-failed",
+    "cell-exec-failed",
+    "cell-teardown-failed",
+    "substrate-down",
+    "image-build-failed",
+  ],
   model: ["crash-before", "sigterm", "provider-error", "clock-jump"],
 };
 
@@ -113,7 +122,12 @@ export interface FaultRecord {
 }
 
 /** A seam call's fate, decided before it runs. */
-type Fate = { readonly kind: "run"; readonly fault: FaultKind | null; readonly crashAfter: boolean; readonly response: TransportResponse | null };
+type Fate = {
+  readonly kind: "run";
+  readonly fault: FaultKind | null;
+  readonly crashAfter: boolean;
+  readonly response: TransportResponse | null;
+};
 
 /** The faults that end or stop the process itself, whatever the call: each seam carries them. */
 const PROCESS_FAULTS: ReadonlySet<FaultKind> = new Set(["crash-before", "crash-after", "sigterm"]);
@@ -134,7 +148,12 @@ class FaultNotInCatalogue extends Error {
  * The faults one call can carry: the seam's process faults (a SIGTERM only while it can still stop
  * a composed, unstopped process) and the call-specific faults its wrapper applies.
  */
-function offeredFaults(instance: InstanceHandle, seam: SeamKind, label: string, effective: readonly FaultKind[]): FaultKind[] {
+function offeredFaults(
+  instance: InstanceHandle,
+  seam: SeamKind,
+  label: string,
+  effective: readonly FaultKind[],
+): FaultKind[] {
   const catalogue = APPLICABLE_FAULTS[seam];
   for (const fault of effective) {
     if (!catalogue.includes(fault) || PROCESS_FAULTS.has(fault)) throw new FaultNotInCatalogue(seam, label, fault);
@@ -192,8 +211,20 @@ export class Scheduler {
     }
     if (fault === null) return { kind: "run", fault: null, crashAfter: false, response: null };
     this.budgetLeft -= 1;
-    const response = fault === "provider-error" ? (TRANSPORT_RESPONSES[this.tape.pick(`${site}.response`, TRANSPORT_RESPONSES.length)] ?? TRANSPORT_RESPONSES[0]) : null;
-    this.records.push({ ticket, instance: instance.name, seam, label, fault, task: this.interleaver.currentTask(), response });
+    const response =
+      fault === "provider-error"
+        ? (TRANSPORT_RESPONSES[this.tape.pick(`${site}.response`, TRANSPORT_RESPONSES.length)] ??
+          TRANSPORT_RESPONSES[0])
+        : null;
+    this.records.push({
+      ticket,
+      instance: instance.name,
+      seam,
+      label,
+      fault,
+      task: this.interleaver.currentTask(),
+      response,
+    });
     if (fault === "crash-before") {
       instance.dead = true;
       throw new SimulatedCrash(instance.name, ticket, `${seam} ${label}`);
@@ -344,21 +375,27 @@ export function rewriteText(args: readonly unknown[], rewrite: (text: string) =>
  * saveRefunded, the startup reconciler's and every routing's refund) stays as it was, so a
  * dispatch stopped by a fault beneath it stays charged (I10).
  */
-export const skipDispatchRefund: QueryPlant = (args) => rewriteText(args, (text) => text.replace(/((?:"work_items"\.)?"dispatch_count") - 1/, "$1 - 0"));
+export const skipDispatchRefund: QueryPlant = (args) =>
+  rewriteText(args, (text) => text.replace(/((?:"work_items"\.)?"dispatch_count") - 1/, "$1 - 0"));
 
 /**
  * A contained subject's fault cannot be kept (the step_faults write fails), so containEach throws
  * it through as if the step contained nothing: one project's unreadable row fails the cycle for
  * every project (I1:cycle-error, I8).
  */
-export const unrecordedStepFault: QueryPlant = (args) => rewriteText(args, (text) => text.replace(/^insert into "step_faults"/, 'insert into "step_faults_planted_absent"'));
+export const unrecordedStepFault: QueryPlant = (args) =>
+  rewriteText(args, (text) => text.replace(/^insert into "step_faults"/, 'insert into "step_faults_planted_absent"'));
 
 /**
  * The listing of the projects whose work may be dispatched names a table that does not exist, so it
  * throws on every cycle with no fault beneath it (I1:cycle-error). ProjectRepository listActiveIds.
  */
 export const throwingActiveListing: QueryPlant = (args) =>
-  rewriteText(args, (text) => (/^select "id" from "projects" where .*"lifecycle"/.test(text) ? text.replace(/^select "id" from "projects"/, 'select "id" from "projects_planted_absent"') : text));
+  rewriteText(args, (text) =>
+    /^select "id" from "projects" where .*"lifecycle"/.test(text)
+      ? text.replace(/^select "id" from "projects"/, 'select "id" from "projects_planted_absent"')
+      : text,
+  );
 
 const clientPid = z.object({ processID: z.number().int() });
 /** How long a killed connection's client may take to see its end: past it, the harness is wrong. */
@@ -370,7 +407,10 @@ class TerminationUnseen extends Error {
     readonly instance: string,
     readonly pid: number,
   ) {
-    super(`${instance}: backend ${pid} was terminated, yet its client saw no end of the connection within ${TERMINATION_SEEN_MS} ms`);
+    super(
+      `${instance}: backend ${pid} was terminated, yet its client saw no end of the connection within ` +
+        `${TERMINATION_SEEN_MS} ms`,
+    );
     this.name = "TerminationUnseen";
   }
 }
@@ -381,11 +421,19 @@ const CHECKOUT_LABELS = 8;
  * The pool factory of one instance: `application_name` names the instance so a crash can
  * terminate exactly its backends, and every query and connect takes a ticket.
  */
-export function faultingPools(context: SeamContext, applicationName: string, plant: QueryPlant | null = null): PoolFactory {
+export function faultingPools(
+  context: SeamContext,
+  applicationName: string,
+  plant: QueryPlant | null = null,
+): PoolFactory {
   return (config) => {
     const pool = new pg.Pool({ ...config, application_name: applicationName, max: 4 });
     context.instance.pools.push(pool);
-    const query = async (given: readonly unknown[], send: (args: unknown[]) => Promise<unknown>, kill: (() => Promise<void>) | null): Promise<unknown> => {
+    const query = async (
+      given: readonly unknown[],
+      send: (args: unknown[]) => Promise<unknown>,
+      kill: (() => Promise<void>) | null,
+    ): Promise<unknown> => {
       context.queried(given);
       const args = plant?.(given) ?? [...given];
       const run = (): Promise<unknown> => send(args);
@@ -393,7 +441,8 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
       // Killing the transaction needs a checked-out connection's backend: a pool query has none.
       const effective: FaultKind[] = kill === null ? ["db-query-failed"] : ["db-query-failed", "db-transaction-killed"];
       const fate = await context.scheduler.enter(context.instance, "db", label, effective);
-      if (fate.fault === "db-query-failed") throw pgError("40001", "could not serialize access due to concurrent update (simulated)");
+      if (fate.fault === "db-query-failed")
+        throw pgError("40001", "could not serialize access due to concurrent update (simulated)");
       if (fate.fault === "db-transaction-killed" && kill !== null) await kill();
       const value = await run();
       context.admissions.written(label, args);
@@ -410,8 +459,11 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
           return async () => {
             const fate = await context.scheduler.enter(context.instance, "db", "connect", ["db-unreachable"]);
             if (fate.fault === "db-unreachable") {
-              // eslint-disable-next-line no-restricted-syntax -- the simulated fault is node-postgres's own throw: a plain Error with a code, which the product's fault classifier must meet as it is
-              throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432 (simulated)"), { code: "ECONNREFUSED" });
+              /* eslint-disable-next-line no-restricted-syntax -- the simulated fault is node-postgres's own throw: a
+                 plain Error with a code, which the product's fault classifier must meet as it is */
+              throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432 (simulated)"), {
+                code: "ECONNREFUSED",
+              });
             }
             const client = await target.connect();
             const handBack = context.interleaver.connectionHeld();
@@ -447,7 +499,10 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
                   await context.terminateBackend(pid.data.processID);
                   let timer: NodeJS.Timeout | undefined;
                   const unseen = new Promise<never>((_, reject) => {
-                    timer = setTimeout(() => reject(new TerminationUnseen(context.instance.name, pid.data.processID)), TERMINATION_SEEN_MS);
+                    timer = setTimeout(
+                      () => reject(new TerminationUnseen(context.instance.name, pid.data.processID)),
+                      TERMINATION_SEEN_MS,
+                    );
                   });
                   try {
                     await Promise.race([ended, unseen]);
@@ -493,11 +548,15 @@ export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
     const label = args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? "git";
     const fate = await context.scheduler.enter(context.instance, "git", label, ["git-failed"]);
     if (fate.fault === "git-failed") {
-      // eslint-disable-next-line no-restricted-syntax -- the simulated fault is execFile's own throw: a plain Error with code and stderr, which the product must meet as it is
-      throw Object.assign(new Error(`Command failed: git ${label}\nfatal: Unable to create 'index.lock': File exists. (simulated)`), {
-        code: 128,
-        stderr: "fatal: Unable to create 'index.lock': File exists. (simulated)\n",
-      });
+      throw Object.assign(
+        /* eslint-disable-next-line no-restricted-syntax -- the simulated fault is execFile's own throw: a plain Error
+           with code and stderr, which the product must meet as it is */
+        new Error(`Command failed: git ${label}\nfatal: Unable to create 'index.lock': File exists. (simulated)`),
+        {
+          code: 128,
+          stderr: "fatal: Unable to create 'index.lock': File exists. (simulated)\n",
+        },
+      );
     }
     context.checkouts.observe(context.interleaver.currentTask(), args, cwd, context.cycle());
     const value = await run();
@@ -507,7 +566,10 @@ export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
   };
   const dated = (invocation: Parameters<GitRunner["text"]>[0]): Parameters<GitRunner["text"]>[0] => {
     const date = context.gitDates.next();
-    return { ...invocation, env: { ...(invocation.env ?? process.env), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } };
+    return {
+      ...invocation,
+      env: { ...(invocation.env ?? process.env), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+    };
   };
   return {
     text: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.text(dated(invocation))),
@@ -527,22 +589,38 @@ const PODMAN_FAULT_OF: Readonly<Partial<Record<string, FaultKind>>> = {
 /** The container runtime of one instance: each subcommand's own fault answers like podman would. */
 export function faultingPodman(context: SeamContext, inner: ProcessRunner): ProcessRunner {
   return async (request) => {
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, a request with no subcommand keys no specific fault; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, a request with no
+       subcommand keys no specific fault; no oracle reads it */
     const subcommand = request.args[0] ?? "";
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, the label keys the fault draw only; no oracle reads it
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fault-seam test plumbing, the label keys the
+       fault draw only; no oracle reads it */
     const label = subcommand === "image" ? `image ${request.args[1] ?? ""}` : subcommand;
     const specific = PODMAN_FAULT_OF[subcommand];
-    const fate = await context.scheduler.enter(context.instance, "podman", label, specific === undefined ? [] : [specific]);
+    const fate = await context.scheduler.enter(
+      context.instance,
+      "podman",
+      label,
+      specific === undefined ? [] : [specific],
+    );
     const failed = (exitCode: number, stderr: string): Awaited<ReturnType<ProcessRunner>> => ({
-      exitCode, signal: null, stdout: "", stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null,
+      exitCode,
+      signal: null,
+      stdout: "",
+      stdoutCut: null,
+      stderr,
+      stderrCut: null,
+      killedByHost: false,
+      stdinError: null,
       statusReport: request.statusChannel === true ? "" : null,
     });
     if (fate.fault === "substrate-down") return failed(125, "Error: unable to connect to Podman socket (simulated)");
     if (fate.fault === "cell-start-failed") return failed(126, "Error: crun: cannot start the container (simulated)");
     if (fate.fault === "cell-exec-failed") return failed(125, "Error: exec session exited unexpectedly (simulated)");
     if (fate.fault === "cell-teardown-failed") return failed(125, "Error: container is busy (simulated)");
-    if (fate.fault === "image-build-failed") return failed(1, "Error: building at STEP \"RUN\": exit status 1 (simulated)");
-    if (context.cellOutage && subcommand === "run") return failed(126, "Error: crun: cannot start the container (simulated outage)");
+    if (fate.fault === "image-build-failed")
+      return failed(1, 'Error: building at STEP "RUN": exit status 1 (simulated)');
+    if (context.cellOutage && subcommand === "run")
+      return failed(126, "Error: crun: cannot start the container (simulated outage)");
     const value = await inner(request);
     context.scheduler.leave(context.instance, fate, "podman", label);
     await context.scheduler.returned("podman", label);
@@ -559,9 +637,16 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
 function transportFailure(response: TransportResponse, provider: string, modelId: string): APICallError {
   const url = `simulated://${provider}/${modelId}`;
   if (response.status === null) {
-    // eslint-disable-next-line no-restricted-syntax -- the simulated cause is node's own socket error: a plain Error with a code, wrapped as the provider SDK wraps it
+    /* eslint-disable-next-line no-restricted-syntax -- the simulated cause is node's own socket error: a plain Error
+       with a code, wrapped as the provider SDK wraps it */
     const cause = Object.assign(new Error("socket hang up (simulated)"), { code: "ECONNRESET" });
-    return new APICallError({ message: `Cannot connect to API: ${cause.message}`, cause, url, requestBodyValues: {}, isRetryable: true });
+    return new APICallError({
+      message: `Cannot connect to API: ${cause.message}`,
+      cause,
+      url,
+      requestBodyValues: {},
+      isRetryable: true,
+    });
   }
   const responseBody = JSON.stringify({ error: { message: `simulated HTTP ${response.status}` } });
   return new APICallError({
@@ -580,7 +665,10 @@ class TransportResponseMissing extends Error {
     readonly modelId: string,
     readonly fate: Fate,
   ) {
-    super(`model call ${modelId} carries fault ${fate.fault ?? "none"} with no transport response drawn (Scheduler.enter draws one for every provider-error)`);
+    super(
+      `model call ${modelId} carries fault ${fate.fault ?? "none"} with no transport response drawn ` +
+        `(Scheduler.enter draws one for every provider-error)`,
+    );
     this.name = "TransportResponseMissing";
   }
 }
@@ -593,7 +681,10 @@ export function faultingModels(context: SeamContext, inner: LanguageModelFactory
     return {
       ...resolved,
       doGenerate: async (options: LanguageModelV4CallOptions) => {
-        const fate = await context.scheduler.enter(context.instance, "model", model.id, ["provider-error", "clock-jump"]);
+        const fate = await context.scheduler.enter(context.instance, "model", model.id, [
+          "provider-error",
+          "clock-jump",
+        ]);
         if (fate.fault === "provider-error") {
           if (fate.response === null) throw new TransportResponseMissing(model.id, fate);
           throw transportFailure(fate.response, provider.name, model.id);

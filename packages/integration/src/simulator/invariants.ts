@@ -8,7 +8,12 @@ import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";
-import { checkReports, readReportRecords, unconfirmedAtPassedSweeps, uncheckedAtPassedSweeps } from "./client-reports.js";
+import {
+  checkReports,
+  readReportRecords,
+  unconfirmedAtPassedSweeps,
+  uncheckedAtPassedSweeps,
+} from "./client-reports.js";
 import type { ObservedReview, ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
@@ -69,7 +74,10 @@ const projectRow = z.object({
   blockedReason: z.string().nullable(),
   planStopped: z.boolean(),
   workspacePath: z.string().nullable(),
-  /** A contained step of the project waits out a fault's backoff (an unparked step_faults row): a report it owes may wait with it. */
+  /**
+   * A contained step of the project waits out a fault's backoff (an unparked step_faults row): a report it owes may
+   * wait with it.
+   */
   retryPending: z.boolean(),
   /** The project's latest passed acceptance sweep, and the delivered report recorded on it; null when none passed. */
   passedSweepId: z.string().nullable(),
@@ -110,7 +118,11 @@ const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
  * A client correction recorded as holding work: the vision version it wrote, the keys it affects, and
  * the tasks citing one of them that were started after it was recorded and before its revision.
  */
-const correctionRow = z.object({ visionVersion: z.number(), affected: z.array(z.string()), startedWhileHeld: z.array(z.string()) });
+const correctionRow = z.object({
+  visionVersion: z.number(),
+  affected: z.array(z.string()),
+  startedWhileHeld: z.array(z.string()),
+});
 
 interface MainCommit {
   readonly commit: string;
@@ -161,9 +173,13 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
       await db.execute(sql`
         SELECT ${projectState} AS status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
                plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath",
-               EXISTS (SELECT 1 FROM step_faults f WHERE f.project_id = projects.id AND f.parked_at IS NULL) AS "retryPending",
-               (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
-               (SELECT (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered' AND t.subject_id = s.id) FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
+               EXISTS (SELECT 1 FROM step_faults f WHERE f.project_id = projects.id
+                 AND f.parked_at IS NULL) AS "retryPending",
+               (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
+                 ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
+               (SELECT (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered'
+                 AND t.subject_id = s.id) FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
+                   ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
         FROM projects WHERE id = ${projectId}`)
     ).rows,
   );
@@ -172,10 +188,12 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     (
       await db.execute(sql`
         SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
-               task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit", merge_kind AS "mergeKind",
+               task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
+                 merge_kind AS "mergeKind",
                owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount",
                infrastructure_faults AS "infrastructureFaults",
-               COALESCE((SELECT json_agg(s->>'id') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(task_spec->'sources') = 'array'
+               COALESCE((SELECT json_agg(s->>'id') FROM jsonb_array_elements(CASE
+                 WHEN jsonb_typeof(task_spec->'sources') = 'array'
                  THEN task_spec->'sources' ELSE '[]'::jsonb END) s), '[]'::json) AS cites
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
     ).rows,
@@ -183,9 +201,12 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const episodes = z.array(episodeRow).parse(
     (
       await db.execute(sql`
-        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = b.id) AS "resumedReportId",
-               COALESCE((SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked' AND t.subject_id = b.id), CASE WHEN b.kind = 'planning_stopped' THEN (
-                 SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id AND m.reports_on = 'planning-stopped'
+        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", (SELECT t.report_id
+          FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = b.id) AS "resumedReportId",
+               COALESCE((SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked'
+                 AND t.subject_id = b.id), CASE WHEN b.kind = 'planning_stopped' THEN (
+                 SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id
+                   AND m.reports_on = 'planning-stopped'
                    AND m.created_at >= b.blocked_at ORDER BY m.created_at, m.id LIMIT 1) END) AS "reportId"
         FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`)
     ).rows,
@@ -194,8 +215,10 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     (
       await db.execute(sql`
         SELECT m.id, m.stop_found_halted IS NOT NULL AS "stoppedProject",
-               EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = m.id AND r.direction = 'outbound' AND r.reports_on = 'client-stop') AS reported
-        FROM client_messages m WHERE m.project_id = ${projectId} AND m.direction = 'inbound' AND m.kind = 'stop' ORDER BY m.created_at, m.id`)
+               EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = m.id AND r.direction = 'outbound'
+                 AND r.reports_on = 'client-stop') AS reported
+        FROM client_messages m WHERE m.project_id = ${projectId} AND m.direction = 'inbound' AND m.kind = 'stop'
+          ORDER BY m.created_at, m.id`)
     ).rows,
   );
   const checks = z.array(checkRow).parse(
@@ -220,10 +243,12 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
                COALESCE((SELECT json_agg(DISTINCT w.title) FROM work_items w
                  JOIN work_item_transitions t ON t.work_item_id = w.id AND t.to_status = 'InProgress'
                  WHERE w.project_id = ch.project_id AND w.level = 'Task'
-                   AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
+                   AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE
+                     WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
                      THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(ch.affected))
                    AND t.created_at > ch.created_at
-                   AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
+                   AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r
+                     WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
                  '[]'::json) AS "startedWhileHeld"
         FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
     ).rows,
@@ -406,7 +431,11 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
   if (project.status === "stopped") return { kind: "stopped" };
   if (project.status === "blocked") {
     const category = project.blockedCategory ?? (project.planStopped ? "planning_stopped" : "unknown");
-    return { kind: "halted", cause: haltCauseOf(category), detail: `${category}: ${project.blockedReason ?? "(no reason)"}` };
+    return {
+      kind: "halted",
+      cause: haltCauseOf(category),
+      detail: `${category}: ${project.blockedReason ?? "(no reason)"}`,
+    };
   }
   // Accepted is production's own state: every goal task done is not acceptance
   // until the sweep on main passes.
@@ -423,7 +452,10 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
  * port only environment work's attempt is given. None is a roster role's id, so none is another
  * role of the team, and none is the cell the agent's own tools run in.
  */
-const Z0_CELL_ROLES: ReadonlyMap<string, (workKind: string | null) => boolean> = new Map<string, (workKind: string | null) => boolean>([
+const Z0_CELL_ROLES: ReadonlyMap<string, (workKind: string | null) => boolean> = new Map<
+  string,
+  (workKind: string | null) => boolean
+>([
   ["verifier", () => true],
   ["ci", () => true],
   ["environment-check", (workKind: string | null) => workKind === "environment"],
@@ -446,7 +478,9 @@ export function misreadRejections(
       const title = items.find((item) => item.id === finding.checkTaskId)?.title ?? finding.checkTaskId;
       return {
         key: `misread-rejection:${title}`,
-        statement: `a suite review's rejection of "${title}", whose missing clause its cited item states, was recorded and routed: ${finding.problem}`,
+        statement:
+          `a suite review's rejection of "${title}", whose missing clause its cited item states, was recorded ` +
+          `and routed: ${finding.problem}`,
       };
     });
 }
@@ -472,7 +506,8 @@ export function cellRoleViolations(
     if (role !== undefined && Z0_CELL_ROLES.get(role)?.(task.workKind) === true) continue;
     found.push({
       key: `cell-role:${task.title}:${role ?? "none"}`,
-      statement: `a cell of "${task.title}" ran as role ${role ?? "(no role label)"}, not its owner ${task.ownerRoleId}`,
+      statement:
+        `a cell of "${task.title}" ran as role ${role ?? "(no role label)"}, ` + `not its owner ${task.ownerRoleId}`,
     });
   }
   return found;
@@ -514,23 +549,38 @@ export function owedReports(snapshot: Snapshot): OwedReport[] {
         invariant: "I2",
         subject: `halt:${episode.id}`,
         key: `episode:${episode.kind}`,
-        statement: `project block episode ${episode.kind}${episode.ended ? ` (ended ${episode.endKind ?? "with no end kind"})` : ""} has no report to the client`,
+        statement:
+          `project block episode ` +
+          `${episode.kind}${episode.ended ? ` (ended ${episode.endKind ?? "with no end kind"})` : ""} has no ` +
+          `report to the client`,
       });
     } else if (resumed && episode.reportId !== null && episode.resumedReportId === null) {
       owed.push({
         invariant: "I2",
         subject: `resumed:${episode.id}`,
         key: `episode-resumed:${episode.kind}`,
-        statement: `project block episode ${episode.kind} ended (${episode.endKind ?? "with no end kind"}) with no report to the client that work resumed`,
+        statement:
+          `project block episode ${episode.kind} ended (${episode.endKind ?? "with no end kind"}) with no ` +
+          `report to the client that work resumed`,
       });
     }
   }
   for (const stop of stopped ? snapshot.stops : []) {
     if (!stop.stoppedProject || stop.reported) continue;
-    owed.push({ invariant: "I4", subject: `stop:${stop.id}`, key: "stop-unreported", statement: "the client's stop stopped the project but its stop report was never posted" });
+    owed.push({
+      invariant: "I4",
+      subject: `stop:${stop.id}`,
+      key: "stop-unreported",
+      statement: "the client's stop stopped the project but its stop report was never posted",
+    });
   }
   if (project.status === "accepted" && project.passedSweepId !== null && project.passedSweepReportId === null) {
-    owed.push({ invariant: "I4", subject: `accepted:${project.passedSweepId}`, key: "accepted-unreported", statement: "the project is accepted but its delivered report was never posted" });
+    owed.push({
+      invariant: "I4",
+      subject: `accepted:${project.passedSweepId}`,
+      key: "accepted-unreported",
+      statement: "the project is accepted but its delivered report was never posted",
+    });
   }
   return owed;
 }
@@ -555,12 +605,16 @@ export const REPORT_BOUND_CYCLES = 2;
 export class SilenceWatch {
   private readonly owed = new Map<string, number>();
 
-  /** The silences one project's snapshot after cycle `step` shows; `counted` is whether that cycle counts against the bound. */
+  /**
+   * The silences one project's snapshot after cycle `step` shows; `counted` is whether that cycle counts against the
+   * bound.
+   */
   observe(step: number, project: number, snapshot: Snapshot, counted: boolean): Violation[] {
     const counts = counted && !snapshot.project.retryPending;
     const now = owedReports(snapshot);
     const subjects = new Set(now.map((owed) => `${project}:${owed.subject}`));
-    for (const subject of this.owed.keys()) if (subject.startsWith(`${project}:`) && !subjects.has(subject)) this.owed.delete(subject);
+    for (const subject of this.owed.keys())
+      if (subject.startsWith(`${project}:`) && !subjects.has(subject)) this.owed.delete(subject);
     const violations: Violation[] = [];
     for (const owed of now) {
       const subject = `${project}:${owed.subject}`;
@@ -610,7 +664,11 @@ export function checkSnapshot(
     if (item.status !== "Blocked") continue;
     const source = sourceOf(item.blockedReason);
     if (blockedReasonOf(item.blockedReason) === null) {
-      add("I2", `${item.title}:${source ?? "none"}`, `task "${item.title}" is Blocked (${source ?? "no reason"}) with no exit the loop takes`);
+      add(
+        "I2",
+        `${item.title}:${source ?? "none"}`,
+        `task "${item.title}" is Blocked (${source ?? "no reason"}) with no exit the loop takes`,
+      );
     }
   }
   // I2's correction clause: a client's correction holds only the tasks citing a key it affects; a
@@ -623,7 +681,8 @@ export function checkSnapshot(
       add(
         "I2",
         `held-unaffected:${item.title}`,
-        `task "${item.title}" (citing ${item.cites.join(", ") || "nothing"}) is held for the correction of vision v${reason.visionVersion}, ` +
+        `task "${item.title}" (citing ${item.cites.join(", ") || "nothing"}) is held for the correction of ` +
+          `vision v${reason.visionVersion}, ` +
           (correction === undefined ? "which records no hold" : `which affects only ${correction.affected.join(", ")}`),
       );
     }
@@ -635,7 +694,8 @@ export function checkSnapshot(
       add(
         "I2",
         `dispatched-held:${title}`,
-        `task "${title}" cites a key the correction of vision v${correction.visionVersion} affects (${correction.affected.join(", ")}) ` +
+        `task "${title}" cites a key the correction of vision v${correction.visionVersion} affects ` +
+          `(${correction.affected.join(", ")}) ` +
           `and was dispatched while that correction awaited its revision`,
       );
     }
@@ -643,19 +703,30 @@ export function checkSnapshot(
   // Every halt episode, its resumption and a planning stop is told (owedReports): judged cycle by
   // cycle against the bound (SilenceWatch), and once a run that settled ends, on its last records.
   if (context.final) {
-    for (const owed of owedReports(snapshot)) if (owed.invariant === "I2") add("I2", owed.key, `${owed.statement}, and the run ended`);
+    for (const owed of owedReports(snapshot))
+      if (owed.invariant === "I2") add("I2", owed.key, `${owed.statement}, and the run ended`);
   }
 
   // I3: independence.
   for (const check of snapshot.checks) {
     const task = byId.get(check.taskId);
     const author = byId.get(check.checkTaskId);
-    if (task !== undefined && author !== undefined && task.ownerRoleId !== null && task.ownerRoleId === author.ownerRoleId) {
+    if (
+      task !== undefined &&
+      author !== undefined &&
+      task.ownerRoleId !== null &&
+      task.ownerRoleId === author.ownerRoleId
+    ) {
       add("I3", `same-role:${task.title}`, `the checks of "${task.title}" were written by its own owner role`);
     }
     for (const file of check.files) {
       if (file.path.startsWith("product/")) {
-        add("I3", `product-file:${task?.title ?? check.taskId}:${file.path}`, `check set r${check.revision} of "${task?.title ?? check.taskId}" holds product file ${file.path}: a check that supplies what it checks`);
+        add(
+          "I3",
+          `product-file:${task?.title ?? check.taskId}:${file.path}`,
+          `check set r${check.revision} of "${task?.title ?? check.taskId}" holds product file ${file.path}: ` +
+            `a check that supplies what it checks`,
+        );
       }
     }
   }
@@ -664,7 +735,8 @@ export function checkSnapshot(
   // A tender's reading that asked the client nothing is put to a second reading by another model, and
   // the record and the questions posted are that reading's (intake-readings.ts). Judged once the run ends.
   if (context.final) {
-    for (const found of lazyIntakes(snapshot.projectId, snapshot.intake, context.intakes)) add("I3", found.key, found.statement);
+    for (const found of lazyIntakes(snapshot.projectId, snapshot.intake, context.intakes))
+      add("I3", found.key, found.statement);
   }
 
   // I4: a client stop and an acceptance are told (owedReports), as I2's halts are; that a halt
@@ -673,11 +745,13 @@ export function checkSnapshot(
   // goals' closes and the unchecked tasks at acceptance, every terminal message's guarantee table,
   // and no report posted twice.
   if (context.final) {
-    for (const owed of owedReports(snapshot)) if (owed.invariant === "I4") add("I4", owed.key, `${owed.statement}, and the run ended`);
+    for (const owed of owedReports(snapshot))
+      if (owed.invariant === "I4") add("I4", owed.key, `${owed.statement}, and the run ended`);
   }
   if (context.final) {
     const checked = new Set(snapshot.checks.map((check) => check.taskId));
-    for (const found of checkReports(snapshot.reports, snapshot.project, snapshot.items, checked)) add("I4", found.key, found.statement);
+    for (const found of checkReports(snapshot.reports, snapshot.project, snapshot.items, checked))
+      add("I4", found.key, found.statement);
   }
 
   // I9: every fact a brief, a question or a report states is the one the store held when it was
@@ -701,8 +775,10 @@ export function checkSnapshot(
   // review found clean on it by a second model family, as the stand-ins answered it.
   // Judged on every passed sweep once the run ends, whatever the project's status then.
   if (context.final) {
-    for (const found of uncheckedAtPassedSweeps(snapshot.reports)) add("I6", `unchecked-item:${found.key}`, found.statement);
-    for (const found of unconfirmedAtPassedSweeps(snapshot.reports, context.reviews)) add("I6", `unconfirmed-clean:${found.key}`, found.statement);
+    for (const found of uncheckedAtPassedSweeps(snapshot.reports))
+      add("I6", `unchecked-item:${found.key}`, found.statement);
+    for (const found of unconfirmedAtPassedSweeps(snapshot.reports, context.reviews))
+      add("I6", `unconfirmed-clean:${found.key}`, found.statement);
   }
   const checkedTasks = new Set(snapshot.checks.map((check) => check.taskId));
   for (const item of snapshot.items) {
@@ -711,7 +787,11 @@ export function checkSnapshot(
       add("I6", `no-record:${item.title}`, `"${item.title}" is Completed with no merge record`);
     }
     if (item.origin === "check" && item.checksFor !== null && !checkedTasks.has(item.checksFor)) {
-      add("I6", `no-checks:${item.title}`, `check task "${item.title}" is Completed with no checks stored for the task it checks`);
+      add(
+        "I6",
+        `no-checks:${item.title}`,
+        `check task "${item.title}" is Completed with no checks stored for the task it checks`,
+      );
     }
   }
 
@@ -719,22 +799,36 @@ export function checkSnapshot(
   const recorded = new Map<string, ItemRow[]>();
   for (const item of snapshot.items) {
     if (item.mergeCommit === null) continue;
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a commit not yet seen has no record yet; the accumulator's start
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a commit not yet seen has no record yet; the
+       accumulator's start */
     recorded.set(item.mergeCommit, [...(recorded.get(item.mergeCommit) ?? []), item]);
   }
   const onMain = new Set(snapshot.main.map((entry) => entry.commit));
   for (const entry of snapshot.main) {
     const named = /^merge: task (\S+)$/.exec(entry.subject)?.[1];
     if (named === undefined) continue;
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a merge on main with no record is held to exactly one record below and reported
-    const records = (recorded.get(entry.commit) ?? []).filter((item) => item.id === named && item.status === "Completed");
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a merge on main with no record is held to
+       exactly one record below and reported */
+    const records = (recorded.get(entry.commit) ?? []).filter(
+      (item) => item.id === named && item.status === "Completed",
+    );
     if (records.length !== 1) {
       const item = byId.get(named);
-      add("I7", `unrecorded:${item?.title ?? named}`, `main commit ${entry.commit.slice(0, 12)} ("${entry.subject}") has no item Completed recording it (the item is ${item?.status ?? "absent"})`);
+      add(
+        "I7",
+        `unrecorded:${item?.title ?? named}`,
+        `main commit ${entry.commit.slice(0, 12)} ("${entry.subject}") has no item Completed recording it ` +
+          `(the item is ${item?.status ?? "absent"})`,
+      );
     }
   }
   for (const [commit, items] of recorded) {
-    if (!onMain.has(commit)) add("I7", `off-main:${items.map((i) => i.title).join(",")}`, `${items.map((i) => `"${i.title}"`).join(", ")} record ${commit.slice(0, 12)}, which is not on main`);
+    if (!onMain.has(commit))
+      add(
+        "I7",
+        `off-main:${items.map((i) => i.title).join(",")}`,
+        `${items.map((i) => `"${i.title}"`).join(", ")} record ${commit.slice(0, 12)}, which is not on main`,
+      );
   }
   return violations;
 }
@@ -756,11 +850,13 @@ export function checkSnapshot(
  */
 export function progressFacts(snapshot: Snapshot): string[] {
   const { project } = snapshot;
-  // eslint-disable-next-line no-restricted-syntax -- policy default: fact text; a project with no category and one with a category are still distinct facts
+  /* eslint-disable-next-line no-restricted-syntax -- policy default: fact text; a project with no category and one
+     with a category are still distinct facts */
   const facts = [`project:${project.status}(${project.blockedCategory ?? ""})`];
   for (const item of snapshot.items) {
     const source = sourceOf(item.blockedReason);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: fact text; a task with no reason source and one with a source are still distinct facts
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: fact text; a task with no reason source and
+       one with a source are still distinct facts */
     facts.push(`status:${item.id}:${item.status}(${source ?? ""})`);
     if (item.mergeCommit !== null) facts.push(`merge:${item.id}:${item.mergeCommit}`);
     facts.push(`attempts:${item.id}:${item.dispatchCount}`, `infrastructure:${item.id}:${item.infrastructureFaults}`);
@@ -782,7 +878,8 @@ export function checkTotality(step: number, stalled: Snapshot, cycles: number): 
     if (item.level !== "Task" || item.status === "Completed" || item.status === "Abandoned") continue;
     const source = sourceOf(item.blockedReason);
     const state = source === null ? item.status : `${item.status}(${source})`;
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a state not yet seen has no title yet; the accumulator's start
+    /* eslint-disable-next-line no-restricted-syntax -- policy default: a state not yet seen has no title yet; the
+       accumulator's start */
     states.set(state, [...(states.get(state) ?? []), `"${item.title}"`]);
   }
   return [...states].map(([state, titles]) => ({
@@ -828,7 +925,14 @@ interface ProjectCharges {
  * which Engagement's projectReadsClientInput excludes).
  * @testseam model-work-halt-kinds.test.ts holds it to Delivery's and the receipt's spelling of the same set
  */
-export const UNREAD_HALT_KINDS = ["budget_cap", "work_budget", "model_failed", "provider_failed", "replan_stopped", "replan_provider_failed"] as const;
+export const UNREAD_HALT_KINDS = [
+  "budget_cap",
+  "work_budget",
+  "model_failed",
+  "provider_failed",
+  "replan_stopped",
+  "replan_provider_failed",
+] as const;
 
 /** Every attempt counter of the run's projects at one instant (I10), the projects in the run's order. */
 export interface Charges {
@@ -836,8 +940,18 @@ export interface Charges {
   readonly projects: ReadonlyMap<string, ProjectCharges>;
 }
 
-const taskChargesRow = z.object({ id: z.string(), title: z.string(), dispatches: z.number().int(), lessons: z.number().int() });
-const projectChargesRow = z.object({ intakeAttempts: z.number().int(), planAttempts: z.number().int(), replanAttempts: z.number().int(), unreadHalt: z.string().nullable() });
+const taskChargesRow = z.object({
+  id: z.string(),
+  title: z.string(),
+  dispatches: z.number().int(),
+  lessons: z.number().int(),
+});
+const projectChargesRow = z.object({
+  intakeAttempts: z.number().int(),
+  planAttempts: z.number().int(),
+  replanAttempts: z.number().int(),
+  unreadHalt: z.string().nullable(),
+});
 
 /** The attempt counters of `projectIds`, read by the observer outside every seam. */
 export async function readCharges(db: Database, projectIds: readonly string[]): Promise<Charges> {
@@ -857,9 +971,13 @@ export async function readCharges(db: Database, projectIds: readonly string[]): 
       (
         await db.execute(sql`
           SELECT plan_attempts AS "planAttempts", replan_attempts AS "replanAttempts",
-                 (SELECT coalesce(sum(m.intake_attempts), 0) FROM client_messages m WHERE m.project_id = projects.id)::int AS "intakeAttempts",
+                 (SELECT coalesce(sum(m.intake_attempts), 0) FROM client_messages m
+                   WHERE m.project_id = projects.id)::int AS "intakeAttempts",
                  (SELECT b.id::text FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL
-                    AND b.kind IN (${sql.join(UNREAD_HALT_KINDS.map((kind) => sql`${kind}`), sql`, `)})) AS "unreadHalt"
+                    AND b.kind IN (${sql.join(
+                      UNREAD_HALT_KINDS.map((kind) => sql`${kind}`),
+                      sql`, `,
+                    )})) AS "unreadHalt"
           FROM projects WHERE id = ${projectId}`)
       ).rows,
     );
@@ -872,7 +990,10 @@ export async function readCharges(db: Database, projectIds: readonly string[]): 
 /** A provider error was recorded with no transport answer: whose failure it was cannot be told. */
 class FaultBlameUnknown extends Error {
   constructor(readonly fault: FaultRecord) {
-    super(`fault at ticket ${fault.ticket} (${fault.seam} ${fault.label}: ${fault.fault}) carries no transport response, so I10 cannot tell whose failure it was`);
+    super(
+      `fault at ticket ${fault.ticket} (${fault.seam} ${fault.label}: ${fault.fault}) carries no transport ` +
+        `response, so I10 cannot tell whose failure it was`,
+    );
     this.name = "FaultBlameUnknown";
   }
 }
@@ -923,14 +1044,23 @@ export interface ChargeWindow {
   readonly after: Charges;
   /** The faults injected in the window, each with the batch lane it was injected in. */
   readonly faults: readonly FaultRecord[];
-  /** The tasks a stand-in model answered for in the window (an agent turn or a structured answer made in the task's lane). */
+  /**
+   * The tasks a stand-in model answered for in the window (an agent turn or a structured answer made in the task's
+   * lane).
+   */
   readonly consulted: ReadonlySet<string>;
   /** A stand-in misbehaved in the window (a tape decision at a `model.` or `agent.` site). */
   readonly misbehaved: boolean;
 }
 
 function describeFaults(faults: readonly FaultRecord[]): string {
-  return faults.map((fault) => `${fault.seam} ${fault.label}: ${fault.fault}${fault.response?.status == null ? "" : ` ${fault.response.status}`}`).join("; ");
+  return faults
+    .map(
+      (fault) =>
+        `${fault.seam} ${fault.label}: ` +
+        `${fault.fault}${fault.response?.status == null ? "" : ` ${fault.response.status}`}`,
+    )
+    .join("; ");
 }
 
 /**
@@ -965,9 +1095,11 @@ export function checkCharges(window: ChargeWindow): Violation[] {
     violations.push({ invariant: "I10", step: window.step, statement, key: `I10:${key}` });
   };
   const ofLane = (task: string | null): readonly FaultRecord[] => window.faults.filter((fault) => fault.task === task);
-  const asharas = (faults: readonly FaultRecord[]): FaultRecord[] => faults.filter((fault) => blameOf(fault) === "ashara");
+  const asharas = (faults: readonly FaultRecord[]): FaultRecord[] =>
+    faults.filter((fault) => blameOf(fault) === "ashara");
   // A window that carried a fault production may charge for by design is not judged.
-  const exempting = (faults: readonly FaultRecord[]): boolean => faults.some((fault) => blameOf(fault) === "provider" || blameOf(fault) === "process");
+  const exempting = (faults: readonly FaultRecord[]): boolean =>
+    faults.some((fault) => blameOf(fault) === "provider" || blameOf(fault) === "process");
   // A crash, a SIGTERM or a killed transaction stops every lane of the process, whichever lane it was injected in.
   const processStopped = window.faults.some((fault) => blameOf(fault) === "process");
 
@@ -978,19 +1110,39 @@ export function checkCharges(window: ChargeWindow): Violation[] {
     // A task first read after the window began (a plan written in it) started from no attempt at all.
     const before = window.before.tasks.get(id) ?? { title: after.title, dispatches: 0, lessons: 0 };
     if (after.dispatches > before.dispatches) {
-      add(`dispatch:${after.title}`, `"${after.title}" was charged an attempt (dispatch_count ${before.dispatches} -> ${after.dispatches}) in a cycle its model did no work for, under ${describeFaults(faults)}`);
+      add(
+        `dispatch:${after.title}`,
+        `"${after.title}" was charged an attempt (dispatch_count ${before.dispatches} -> ` +
+          `${after.dispatches}) in a cycle its model did no work for, under ${describeFaults(faults)}`,
+      );
     }
     if (after.lessons > before.lessons) {
-      add(`lesson:${after.title}`, `"${after.title}" was written a failed-approach lesson in a cycle its model did no work for, under ${describeFaults(faults)}`);
+      add(
+        `lesson:${after.title}`,
+        `"${after.title}" was written a failed-approach lesson in a cycle its model did no work for, under ` +
+          `${describeFaults(faults)}`,
+      );
     }
   }
 
-  const label = (index: number): { readonly key: string; readonly words: string } => ({ key: index === 0 ? "" : `p${index + 1}:`, words: index === 0 ? "" : `project ${index + 1}: ` });
+  const label = (index: number): { readonly key: string; readonly words: string } => ({
+    key: index === 0 ? "" : `p${index + 1}:`,
+    words: index === 0 ? "" : `project ${index + 1}: `,
+  });
   for (const [index, [projectId, after]] of [...window.after.projects].entries()) {
     const before = window.before.projects.get(projectId);
-    if (before?.unreadHalt == null || before.unreadHalt !== after.unreadHalt || after.intakeAttempts <= before.intakeAttempts) continue;
+    if (
+      before?.unreadHalt == null ||
+      before.unreadHalt !== after.unreadHalt ||
+      after.intakeAttempts <= before.intakeAttempts
+    )
+      continue;
     const project = label(index);
-    add(`${project.key}halted-intakeAttempts`, `${project.words}intakeAttempts grew ${before.intakeAttempts} -> ${after.intakeAttempts} while halt ${after.unreadHalt}, under which nothing reads the client's messages, stayed open`);
+    add(
+      `${project.key}halted-intakeAttempts`,
+      `${project.words}intakeAttempts grew ${before.intakeAttempts} -> ${after.intakeAttempts} while halt ` +
+        `${after.unreadHalt}, under which nothing reads the client's messages, stayed open`,
+    );
   }
 
   const outside = asharas(ofLane(null));
@@ -998,11 +1150,21 @@ export function checkCharges(window: ChargeWindow): Violation[] {
   const counters = ["intakeAttempts", "planAttempts", "replanAttempts"] as const;
   for (const [index, [projectId, after]] of [...window.after.projects].entries()) {
     // A project first read after the window began started from no attempt at all.
-    const before = window.before.projects.get(projectId) ?? { intakeAttempts: 0, planAttempts: 0, replanAttempts: 0, unreadHalt: null };
+    const before = window.before.projects.get(projectId) ?? {
+      intakeAttempts: 0,
+      planAttempts: 0,
+      replanAttempts: 0,
+      unreadHalt: null,
+    };
     const project = index === 0 ? "" : `p${index + 1}:`;
     for (const counter of counters) {
       if (after[counter] <= before[counter]) continue;
-      add(`${project}${counter}`, `${index === 0 ? "" : `project ${index + 1}: `}${counter} grew ${before[counter]} -> ${after[counter]} in a cycle whose every model read answered as asked, under ${describeFaults(outside)}`);
+      add(
+        `${project}${counter}`,
+        `${index === 0 ? "" : `project ${index + 1}: `}${counter} grew ${before[counter]} -> ` +
+          `${after[counter]} in a cycle whose every model read answered as asked, under ` +
+          `${describeFaults(outside)}`,
+      );
     }
   }
   return violations;

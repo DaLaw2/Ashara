@@ -15,7 +15,11 @@ interface Minimized {
  * halves the chunk size, until no single decision can be removed. Each probe is one replay, so the
  * replay budget bounds it.
  */
-export async function minimize(failing: readonly Decision[], stillFails: StillFails, maxReplays: number): Promise<Minimized> {
+export async function minimize(
+  failing: readonly Decision[],
+  stillFails: StillFails,
+  maxReplays: number,
+): Promise<Minimized> {
   let current = [...failing];
   let granularity = 2;
   let replays = 0;

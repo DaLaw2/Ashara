@@ -7,6 +7,7 @@ import { sql } from "drizzle-orm";
  * under test, so an oracle that reads it judges that code instead of restating it.
  */
 export const projectState = sql.raw(
-  `(CASE WHEN EXISTS (SELECT 1 FROM project_blocks ps_b WHERE ps_b.project_id = projects.id AND ps_b.ended_at IS NULL) ` +
+  `(CASE WHEN EXISTS (SELECT 1 FROM project_blocks ps_b WHERE ps_b.project_id = projects.id AND ` +
+    `ps_b.ended_at IS NULL) ` +
     `THEN 'blocked' ELSE projects.lifecycle END)`,
 );

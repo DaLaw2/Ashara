@@ -27,7 +27,11 @@ export function intakeSecondReadingDropped(): () => void {
     writable: true,
     value: async <Grade>(_tender: unknown, first: { readonly model: { readonly grade: Grade } }) => ({
       kind: "confirmed",
-      second: { strength: "other-family", model: { provider: "planted", model: "unasked", grade: first.model.grade }, questions: [] },
+      second: {
+        strength: "other-family",
+        model: { provider: "planted", model: "unasked", grade: first.model.grade },
+        questions: [],
+      },
       passedOver: [],
     }),
   });

@@ -35,7 +35,8 @@ function describeRecheck(recheck: DeterminismRecheck): string {
 function firstDifference(first: readonly string[], second: readonly string[]): string | null {
   for (let index = 0; index < Math.max(first.length, second.length); index++) {
     if (first[index] !== second[index]) {
-      const line = (trace: readonly string[]): string => (index < trace.length ? JSON.stringify(trace[index]) : "(the trace ended)");
+      const line = (trace: readonly string[]): string =>
+        index < trace.length ? JSON.stringify(trace[index]) : "(the trace ended)";
       return `line ${index + 1}: ${line(first)} the first time, ${line(second)} the second`;
     }
   }
@@ -55,7 +56,9 @@ export async function recheckDeterminism(
     const first = await run(recheck.seed, recheck.mode);
     const second = await run(recheck.seed, recheck.mode);
     const difference = firstDifference(first.trace, second.trace);
-    return difference === null ? { line: `${named}: the same trace`, failed: false } : { line: `${named}: the traces differ at ${difference}`, failed: true };
+    return difference === null
+      ? { line: `${named}: the same trace`, failed: false }
+      : { line: `${named}: the traces differ at ${difference}`, failed: true };
   } catch (err) {
     return { line: `${named}: no verdict: the run threw: ${describeErrorChain(err)}`, failed: true };
   }

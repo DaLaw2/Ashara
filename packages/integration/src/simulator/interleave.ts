@@ -90,7 +90,10 @@ export class Interleaver {
     return this.current.getStore()?.taskId ?? null;
   }
 
-  readonly lanes: TaskLanes = async <I extends { readonly id: string }, T>(items: readonly I[], run: (item: I) => Promise<T>): Promise<Array<PromiseSettledResult<T>>> => {
+  readonly lanes: TaskLanes = async <I extends { readonly id: string }, T>(
+    items: readonly I[],
+    run: (item: I) => Promise<T>,
+  ): Promise<Array<PromiseSettledResult<T>>> => {
     if (this.lanesNow.length > 0) throw new BatchesOverlapped(this.lanesNow.map((lane) => lane.taskId));
     const work = items.map((item, index) => ({ item, lane: newLane(index, item.id) }));
     this.lanesNow = work.map((w) => w.lane);
@@ -161,7 +164,11 @@ export class Interleaver {
     if (this.bypass.has(kind)) {
       this.observe({ kind: "bypassed", wait: kind });
       // The skipped wait still settles later; its rejection has no reader now but the log.
-      waiting.catch((err: unknown) => console.warn(`[simulator] a bypassed ${kind} wait rejected: ${err instanceof Error ? err.message : String(err)}`));
+      waiting.catch((err: unknown) =>
+        console.warn(
+          `[simulator] a bypassed ${kind} wait rejected: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
       return undefined;
     }
     const lane = this.laneOfBatch();
@@ -230,7 +237,10 @@ export class Interleaver {
 
   private passOn(site: string): void {
     if (this.stalled) return;
-    const next = this.pick(this.lanesNow.filter((lane) => lane.state === "ready"), `interleave.next:${site}`);
+    const next = this.pick(
+      this.lanesNow.filter((lane) => lane.state === "ready"),
+      `interleave.next:${site}`,
+    );
     if (next === null) {
       this.holder = null;
       return;
@@ -259,8 +269,13 @@ export class Interleaver {
     const waiting = this.lanesNow.filter((lane) => lane.state === "ready");
     if (waiting.length === 0) return;
     this.stalled = true;
-    const states = this.lanesNow.map((lane) => `task ${lane.index} ${lane.state}${lane === this.holder ? " (holds the turn)" : ""}`).join(", ");
-    this.observe({ kind: "stall", detail: `no scheduling step for ${STALL_MS} ms while a task waited for its turn: ${states}` });
+    const states = this.lanesNow
+      .map((lane) => `task ${lane.index} ${lane.state}${lane === this.holder ? " (holds the turn)" : ""}`)
+      .join(", ");
+    this.observe({
+      kind: "stall",
+      detail: `no scheduling step for ${STALL_MS} ms while a task waited for its turn: ${states}`,
+    });
     this.holder = null;
     for (const lane of this.lanesNow) {
       if (lane.state === "ready") this.give(lane);

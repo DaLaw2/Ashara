@@ -67,7 +67,11 @@ export function runSignal(test: TestScope): AbortSignal {
 }
 
 /** @testseam the fast tier's test files run a seed under its own profile through it */
-export function seeded(test: TestScope, seed: number, scenario: Pick<RunOptions, "projects" | "capUsd"> = {}): Promise<RunResult> {
+export function seeded(
+  test: TestScope,
+  seed: number,
+  scenario: Pick<RunOptions, "projects" | "capUsd"> = {},
+): Promise<RunResult> {
   return runSeed({
     signal: runSignal(test),
     seed,
@@ -100,19 +104,29 @@ export function replayed(test: TestScope, seed: number, decisions: RunResult["de
   });
 }
 
-/** A directed run's shape; its `signal` stops the run before its test ends, as the test's own signal does at the end. */
-type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject" | "alterDatabase" | "signal"> & { readonly profile?: Profile };
+/**
+ * A directed run's shape; its `signal` stops the run before its test ends, as the test's own signal does at the end.
+ */
+type Scenario = Pick<
+  RunOptions,
+  "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject" | "alterDatabase" | "signal"
+> & { readonly profile?: Profile };
 
 /**
  * The directed tier: each fault, plant and misbehaviour a test judges
  * is forced by name on a directed tape (tape.ts Direction), every other draw benign, rather than
  * reached by a seed found by scanning. A seed is re-rolled by any change that adds a seam call on
- * its path; a direction is not, and one the run never takes fails the run (run.ts DirectionsNotTaken) instead of letting the
+ * its path; a direction is not, and one the run never takes fails the run (run.ts DirectionsNotTaken) instead of
+ * letting the
  * test judge a run that never met its behaviour. The forced behaviour flows through the same code
  * as a seeded one: the same seams, stand-ins and interleaver; only the choice is named.
  * @testseam the directed tier's test files run each directed tape through it
  */
-export function directed(test: TestScope, directions: readonly Direction[], scenario: Scenario = {}): Promise<RunResult> {
+export function directed(
+  test: TestScope,
+  directions: readonly Direction[],
+  scenario: Scenario = {},
+): Promise<RunResult> {
   const { signal, ...shape } = scenario;
   return runSeed({
     seed: 1,
@@ -140,12 +154,32 @@ const LIVENESS_WALL_CLOCK_MS = Number.POSITIVE_INFINITY;
  * cycle: a persona's loop runs to its own bound, and the run ends by cycles alone.
  * @testseam the termination test files run each persona and plant through it
  */
-export function liveness(test: TestScope, directions: readonly Direction[], scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles" | "alterDatabase">> = {}): Promise<RunResult> {
-  return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, scratchRoot, timeoutMs: LIVENESS_WALL_CLOCK_MS, maxCycles: MAX_CYCLES, ...scenario });
+export function liveness(
+  test: TestScope,
+  directions: readonly Direction[],
+  scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles" | "alterDatabase">> = {},
+): Promise<RunResult> {
+  return runSeed({
+    signal: runSignal(test),
+    seed: 1,
+    profile: "liveness",
+    tape: { kind: "directed", directions },
+    databaseUrl,
+    template,
+    scratchRoot,
+    timeoutMs: LIVENESS_WALL_CLOCK_MS,
+    maxCycles: MAX_CYCLES,
+    ...scenario,
+  });
 }
 
 /** @testseam the termination test files force a role's persona by name through it */
-export const persona = (role: string, value: number): Direction => ({ kind: "draw", site: `persona.${role}`, nth: 1, value });
+export const persona = (role: string, value: number): Direction => ({
+  kind: "draw",
+  site: `persona.${role}`,
+  nth: 1,
+  value,
+});
 
 /** @testseam the directed tier's test files name a draw's value through it */
 export const draw = (site: string | RegExp, nth: number | "every", value = 1, scope?: string): Direction => ({
@@ -159,7 +193,10 @@ export const draw = (site: string | RegExp, nth: number | "every", value = 1, sc
  * The plan is two tasks that depend on none of each other, so their implementations run as one batch.
  * @testseam the directed tier's test files force a batch of two with it
  */
-export const BATCH_OF_TWO: readonly Direction[] = [draw("universe.extra-tasks", 1), draw("universe.independent-tasks", 1)];
+export const BATCH_OF_TWO: readonly Direction[] = [
+  draw("universe.extra-tasks", 1),
+  draw("universe.independent-tasks", 1),
+];
 /**
  * The running task hands the turn to the other at every matching seam call where it can (interleave.ts).
  * @testseam the directed tier's test files force an interleaving with it
@@ -171,7 +208,13 @@ export const switchAtEvery = (site: RegExp): Direction => draw(site, "every");
  */
 export const implementation = (site: string, nth: number | "every"): Direction => draw(site, nth, 1, "implementation");
 /** @testseam the directed tier's test files force a fault on the first call that can carry it */
-export const fault = (seam: SeamKind, label: string | RegExp, kind: FaultKind): Direction => ({ kind: "fault", seam, label, nth: 1, fault: kind });
+export const fault = (seam: SeamKind, label: string | RegExp, kind: FaultKind): Direction => ({
+  kind: "fault",
+  seam,
+  label,
+  nth: 1,
+  fault: kind,
+});
 
 /** @testseam the simulator's test files read a run's violation keys through it */
 export function keys(result: RunResult): string[] {
@@ -188,9 +231,14 @@ export function statements(result: RunResult): string {
   return result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n");
 }
 
-/** @testseam the termination test files print a run's violations and its outcome as an assertion's message through it */
+/**
+ * @testseam the termination test files print a run's violations and its outcome as an assertion's message through it
+ */
 export function statementsAndOutcome(result: RunResult): string {
-  return [...result.violations.map((v) => `${v.key}: ${v.statement}`), `outcome ${JSON.stringify(result.outcome)}`].join("\n");
+  return [
+    ...result.violations.map((v) => `${v.key}: ${v.statement}`),
+    `outcome ${JSON.stringify(result.outcome)}`,
+  ].join("\n");
 }
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../..");
@@ -215,7 +263,14 @@ function canonical(stdout: string): string[] {
 
 /** A run that exited non-zero: execFile rejects with its exit code and output. */
 function failedSoak(err: unknown): Soak | null {
-  if (!(err instanceof Error) || !("code" in err) || typeof err.code !== "number" || !("stdout" in err) || typeof err.stdout !== "string") return null;
+  if (
+    !(err instanceof Error) ||
+    !("code" in err) ||
+    typeof err.code !== "number" ||
+    !("stdout" in err) ||
+    typeof err.stdout !== "string"
+  )
+    return null;
   return { exitCode: err.code, lines: canonical(err.stdout) };
 }
 

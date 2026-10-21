@@ -3,7 +3,13 @@ import { pendingUncounted } from "./admissions.js";
 import { correctionHoldMissesReturned, correctionHoldsWholePlan } from "./correction-plants.js";
 import { intakeSecondReadingDropped } from "./intake-plants.js";
 import { receiptSkipped } from "./receipts.js";
-import { pinInfrastructureFaults, skipDispatchRefund, skipMergeRecord, throwingActiveListing, unrecordedStepFault } from "./faults.js";
+import {
+  pinInfrastructureFaults,
+  skipDispatchRefund,
+  skipMergeRecord,
+  throwingActiveListing,
+  unrecordedStepFault,
+} from "./faults.js";
 import type { QueryPlant } from "./faults.js";
 import { ledgerDrawSkipped, reviewCountReset, reviewLoopUnbounded, suiteReviewBoundIgnored } from "./loop-plants.js";
 import {
@@ -179,7 +185,9 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
 
 /** A sent value as text, to tell a rewritten parameter from the one sent; a bigint is not JSON. */
 function sentForm(value: unknown): string {
-  return JSON.stringify(value, (_, inner: unknown) => (typeof inner === "bigint" ? `${inner}n` : inner)) ?? String(value);
+  return (
+    JSON.stringify(value, (_, inner: unknown) => (typeof inner === "bigint" ? `${inner}n` : inner)) ?? String(value)
+  );
 }
 
 /** Whether `plant` would change what `args` sends: the query reaches the seam the plant acts on. */
@@ -201,7 +209,9 @@ const QUERY_PLANTS = MUTATIONS.flatMap((mutation) => {
  * to be caught, so its mutation test would be the only run that reaches it.
  */
 export function plantSeamsOf(args: readonly unknown[], skip: ReadonlySet<string>): Mutation[] {
-  return QUERY_PLANTS.filter((plant) => !skip.has(plant.mutation) && rewrites(plant.queries, args)).map((plant) => plant.mutation);
+  return QUERY_PLANTS.filter((plant) => !skip.has(plant.mutation) && rewrites(plant.queries, args)).map(
+    (plant) => plant.mutation,
+  );
 }
 
 /** The plants that skip a contended wait of `kind`: a run that met the wait reached their seam. */

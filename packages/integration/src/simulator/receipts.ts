@@ -17,7 +17,10 @@ import type { Violation } from "./invariants.js";
 const unansweredRow = z.object({ id: z.string(), projectId: z.string(), kind: z.string(), backingOff: z.boolean() });
 type Unanswered = z.infer<typeof unansweredRow>;
 
-/** The inbound messages of the run's projects with no receipt yet, each with whether its receipt's subject has a fault on record. */
+/**
+ * The inbound messages of the run's projects with no receipt yet, each with whether its receipt's subject has a fault
+ * on record.
+ */
 export async function unansweredMessages(db: Database, projectIds: readonly string[]): Promise<Unanswered[]> {
   if (projectIds.length === 0) return [];
   const ids = sql.join(
@@ -26,7 +29,8 @@ export async function unansweredMessages(db: Database, projectIds: readonly stri
   );
   const result = await db.execute(sql`
     SELECT m.id, m.project_id AS "projectId", m.kind,
-           EXISTS (SELECT 1 FROM step_faults f WHERE f.step = 'client-receipt' AND f.subject_id = 'receipt:' || m.id::text) AS "backingOff"
+           EXISTS (SELECT 1 FROM step_faults f WHERE f.step = 'client-receipt'
+             AND f.subject_id = 'receipt:' || m.id::text) AS "backingOff"
     FROM client_messages m
     WHERE m.project_id IN (${ids}) AND m.direction = 'inbound' AND NOT m.receipt_waived
       AND NOT EXISTS (SELECT 1 FROM client_messages r WHERE r.direction = 'outbound' AND r.receipt_of = m.id)
@@ -51,12 +55,22 @@ export function lateReceipts(
       violation: {
         invariant: "I4",
         step,
-        statement: `an inbound ${message.kind} on record before the cycle began still has no receipt after it, with no fault on its receipt`,
+        statement:
+          `an inbound ${message.kind} on record before the cycle began still has no receipt after it, with no ` +
+          `fault on its receipt`,
         key: `I4:receipt-late:${message.kind}`,
       },
     }));
 }
 
-/** The listing of the messages owed a receipt (Engagement listDueReceipts) lists none, so no message is ever answered (I4's receipt clause). */
+/**
+ * The listing of the messages owed a receipt (Engagement listDueReceipts) lists none, so no message is ever answered
+ * (I4's receipt clause).
+ */
 export const receiptSkipped: QueryPlant = (args) =>
-  rewriteText(args, (text) => text.replace(/NOT EXISTS \(SELECT 1 FROM client_messages rc WHERE rc\.receipt_of/, "FALSE AND NOT EXISTS (SELECT 1 FROM client_messages rc WHERE rc.receipt_of"));
+  rewriteText(args, (text) =>
+    text.replace(
+      /NOT EXISTS \(SELECT 1 FROM client_messages rc WHERE rc\.receipt_of/,
+      "FALSE AND NOT EXISTS (SELECT 1 FROM client_messages rc WHERE rc.receipt_of",
+    ),
+  );

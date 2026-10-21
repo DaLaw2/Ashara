@@ -39,7 +39,10 @@ export interface Coverage {
   readonly models: Set<string>;
   /** Each mutation whose seam the run reached (plants.ts): a query it would rewrite, or a wait it would skip. */
   readonly plants: Set<string>;
-  /** The client correction the run posted, as `<arrival>:<kind>` (correction-draws.ts), recorded by the run as it posts it. */
+  /**
+   * The client correction the run posted, as `<arrival>:<kind>` (correction-draws.ts), recorded by the run as it posts
+   * it.
+   */
   readonly corrections: Set<string>;
 }
 
@@ -71,7 +74,12 @@ export function observeAcceptanceSweeps(onSweep: (outcome: string) => void): () 
  * - turn-handed-on: a task gave the turn to the other at a seam call;
  * - contended:<wait>: a task waited on the other's checkout lock or spend-cap admission.
  */
-const CONCURRENCY = ["batch-of-two", "turn-handed-on", "contended:target-checkout", "contended:spend-admission"] as const;
+const CONCURRENCY = [
+  "batch-of-two",
+  "turn-handed-on",
+  "contended:target-checkout",
+  "contended:spend-admission",
+] as const;
 
 export function emptyCoverage(): Coverage {
   return {
@@ -132,13 +140,19 @@ export function mergeCoverage(into: Coverage, from: Coverage): void {
 
 const ALL_TRANSITIONS = WORK_ITEM_STATUSES.flatMap((from) => OUTBOUND_TRANSITIONS[from].map((to) => `${from}->${to}`));
 
-/** A recorded status change OUTBOUND_TRANSITIONS does not hold: production's writer validates each, so the record is not one it wrote. */
+/**
+ * A recorded status change OUTBOUND_TRANSITIONS does not hold: production's writer validates each, so the record is not
+ * one it wrote.
+ */
 class UnmodelledTransition extends Error {
   constructor(
     readonly transition: string,
     readonly workItemId: string,
   ) {
-    super(`coverage: work_item_transitions records ${transition} of work item ${workItemId}, which OUTBOUND_TRANSITIONS does not hold; the run's transitions cannot be counted`);
+    super(
+      `coverage: work_item_transitions records ${transition} of work item ${workItemId}, which ` +
+        `OUTBOUND_TRANSITIONS does not hold; the run's transitions cannot be counted`,
+    );
     this.name = "UnmodelledTransition";
   }
 }
@@ -155,7 +169,12 @@ function transitionsOf(snapshot: Snapshot): Set<string> {
 }
 
 /** What one snapshot adds; `executions` are the statuses the run's routing evidence shows. */
-export function sample(coverage: Coverage, snapshot: Snapshot, faults: readonly FaultRecord[], executions: Iterable<string>): void {
+export function sample(
+  coverage: Coverage,
+  snapshot: Snapshot,
+  faults: readonly FaultRecord[],
+  executions: Iterable<string>,
+): void {
   for (const transition of transitionsOf(snapshot)) coverage.transitions.add(transition);
   for (const item of snapshot.items) {
     const source = sourceOf(item.blockedReason);
@@ -210,7 +229,11 @@ type CallRow = z.infer<typeof callRowSchema>;
 export function modelPathOf(row: CallRow): ModelPath | null {
   const kind = row.callSite === AGENT_CALL_SITE ? "turn" : "structured";
   if (row.finishReason === "length") {
-    const allReasoning = row.outputTokens !== null && row.outputTokens > 0 && row.reasoningTokens !== null && row.reasoningTokens >= row.outputTokens;
+    const allReasoning =
+      row.outputTokens !== null &&
+      row.outputTokens > 0 &&
+      row.reasoningTokens !== null &&
+      row.reasoningTokens >= row.outputTokens;
     return `${kind}:${allReasoning ? "reasoning-exhausted" : "truncated"}`;
   }
   if (row.finishReason === "stop" && row.outputTokens === 0) return `${kind}:empty`;
@@ -223,15 +246,22 @@ const countRow = z.tuple([z.object({ n: z.number().int() })]);
 /** The heading an attempt's brief opens its conflict with main with (Quality's merge.ts formatConflictForBrief). */
 const CONFLICT_BRIEF_HEADING = "## Merge with main in progress";
 
-/** What the run's records show of attempts and model misbehaviour: read once, at the run's end, from its projects' rows. */
-export async function sampleModelPaths(coverage: Coverage, observer: Database, projectIds: readonly string[]): Promise<void> {
+/**
+ * What the run's records show of attempts and model misbehaviour: read once, at the run's end, from its projects' rows.
+ */
+export async function sampleModelPaths(
+  coverage: Coverage,
+  observer: Database,
+  projectIds: readonly string[],
+): Promise<void> {
   for (const projectId of projectIds) {
     const terminals = await observer.execute(sql`
       SELECT DISTINCT s.attempt_terminal AS terminal FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
       WHERE w.project_id = ${projectId} AND s.attempt_terminal IS NOT NULL`);
     for (const row of terminalRows.parse(terminals.rows)) coverage.attempts.add(row.terminal);
     const calls = await observer.execute(sql`
-      SELECT call_site AS "callSite", finish_reason AS "finishReason", outcome, output_tokens AS "outputTokens", reasoning_tokens AS "reasoningTokens"
+      SELECT call_site AS "callSite", finish_reason AS "finishReason", outcome, output_tokens AS "outputTokens",
+        reasoning_tokens AS "reasoningTokens"
       FROM llm_calls WHERE project_id = ${projectId} AND state = 'recorded'`);
     for (const row of z.array(callRowSchema).parse(calls.rows)) {
       const path = modelPathOf(row);
@@ -267,7 +297,11 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("faults by seam", faultPairs, coverage.faults),
     split("batch of two", CONCURRENCY, coverage.concurrency),
     split("acceptance sweeps (AcceptanceSweep kinds)", Object.values(SWEEP_OUTCOMES).flat(), coverage.sweeps),
-    split("halts by cause (project block kinds)", PROJECT_BLOCK_KINDS.map((kind) => `${haltCauseOf(kind)}:${kind}`), coverage.halts),
+    split(
+      "halts by cause (project block kinds)",
+      PROJECT_BLOCK_KINDS.map((kind) => `${haltCauseOf(kind)}:${kind}`),
+      coverage.halts,
+    ),
     split("attempt terminals (ATTEMPT_TERMINALS)", ATTEMPT_TERMINALS, coverage.attempts),
     split("model misbehaviour met (MODEL_PATHS)", MODEL_PATHS, coverage.models),
     split("plant seams reached (MUTATIONS)", MUTATIONS, coverage.plants),
@@ -280,7 +314,8 @@ type BehaviourSet = "faults" | "models" | "concurrency" | "plants";
 /**
  * The behaviour keys a soak counts (scripts/simulate.ts): every fault kind at every seam it applies
  * to, every response-level misbehaviour met, every contended wait and every plant's seam. Each is
- * forced directly by a test of the directed tier (the simulator-faults*.test.ts and simulator-plants*.test.ts files); the floor keeps the seeded
+ * forced directly by a test of the directed tier (the simulator-faults*.test.ts and simulator-plants*.test.ts files);
+ * the floor keeps the seeded
  * soak exploring it too, so a change that stops the soak reaching one is named, not silent.
  */
 const BEHAVIOURS: ReadonlyArray<readonly [set: BehaviourSet, members: readonly string[]]> = [
@@ -338,7 +373,8 @@ export function countBehaviours(counts: Map<string, number>, coverage: Coverage)
     for (const member of members) {
       if (!coverage[set].has(member)) continue;
       const key = `${set} ${member}`;
-      // eslint-disable-next-line no-restricted-syntax -- policy default: a behaviour not yet counted has count 0, the accumulator's start
+      /* eslint-disable-next-line no-restricted-syntax -- policy default: a behaviour not yet counted has count 0,
+         the accumulator's start */
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
@@ -348,6 +384,11 @@ export function countBehaviours(counts: Map<string, number>, coverage: Coverage)
 export function behavioursBelowFloor(counts: ReadonlyMap<string, number>, floor: Floor): string[] {
   const sets: readonly BehaviourSet[] = FLOORS[floor];
   return [...counts]
-    .filter(([key, seeds]) => seeds === 0 && sets.some((set) => key.startsWith(`${set} `)) && !(floor === "own" && RARE_UNDER_OWN_PROFILES.has(key)))
+    .filter(
+      ([key, seeds]) =>
+        seeds === 0 &&
+        sets.some((set) => key.startsWith(`${set} `)) &&
+        !(floor === "own" && RARE_UNDER_OWN_PROFILES.has(key)),
+    )
     .map(([key]) => key);
 }

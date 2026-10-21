@@ -27,6 +27,12 @@ export const WorkerReplySchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("ready") }),
   z.strictObject({
     kind: z.literal("report"),
-    report: z.strictObject({ seed, lines: z.array(z.string()), coverage: CoverageSchema, asharaHalts: z.array(z.string()), unexpected: z.boolean() }),
+    report: z.strictObject({
+      seed,
+      lines: z.array(z.string()),
+      coverage: CoverageSchema,
+      asharaHalts: z.array(z.string()),
+      unexpected: z.boolean(),
+    }),
   }),
 ]);

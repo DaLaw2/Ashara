@@ -12,7 +12,11 @@ import type { QueryPlant } from "./faults.js";
  * requests (W1).
  */
 export const ledgerDrawSkipped: QueryPlant = (args) =>
-  rewriteText(args, (text) => (text.includes('AS "projectDrawn"') ? text.replace(/FROM llm_calls WHERE project_id = /, "FROM llm_calls WHERE false AND project_id = ") : text));
+  rewriteText(args, (text) =>
+    text.includes('AS "projectDrawn"')
+      ? text.replace(/FROM llm_calls WHERE project_id = /, "FROM llm_calls WHERE false AND project_id = ")
+      : text,
+  );
 
 /**
  * The reviews naming a check task are read as at most one (Quality SuiteReviewFindingRepository
@@ -20,7 +24,11 @@ export const ledgerDrawSkipped: QueryPlant = (args) =>
  * names it (W2's and W3's bound clauses).
  */
 export const suiteReviewBoundIgnored: QueryPlant = (args) =>
-  rewriteText(args, (text) => (/^select "check_task_id", count\(\*\) from "suite_review_findings" .* group by /.test(text) ? text.replace("count(*)", "least(count(*), 1)") : text));
+  rewriteText(args, (text) =>
+    /^select "check_task_id", count\(\*\) from "suite_review_findings" .* group by /.test(text)
+      ? text.replace("count(*)", "least(count(*), 1)")
+      : text,
+  );
 
 /**
  * A review's earlier findings are dropped as it records new ones, in the same statement: each check

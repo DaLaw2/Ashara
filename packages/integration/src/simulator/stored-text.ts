@@ -48,29 +48,45 @@ class StoredProjectMissing extends Error {
  * I4 and I9 on one project's stored records. `briefs` is "as-recorded" to judge the briefs the
  * sessions recorded, or the briefs today's composer states for them.
  */
-export async function judgeStoredText(db: Database, projectId: string, briefs: "as-recorded" | readonly RecomposedBrief[]): Promise<StoredTextViolation[]> {
-  const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> => z.array(schema).parse((await db.execute(query)).rows);
+export async function judgeStoredText(
+  db: Database,
+  projectId: string,
+  briefs: "as-recorded" | readonly RecomposedBrief[],
+): Promise<StoredTextViolation[]> {
+  const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> =>
+    z.array(schema).parse((await db.execute(query)).rows);
   const [project] = await rows(projectRow, sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   if (project === undefined) throw new StoredProjectMissing(projectId);
   const items = await rows(
     itemRow,
-    sql`SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin, merge_commit AS "mergeCommit",
+    sql`SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
+           merge_commit AS "mergeCommit",
                merge_kind AS "mergeKind", blocked_reason AS "blockedReason"
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`,
   );
-  const checked = new Set((await rows(checkedRow, sql`SELECT DISTINCT task_id AS "taskId" FROM task_checks WHERE project_id = ${projectId}`)).map((row) => row.taskId));
+  const checked = new Set(
+    (
+      await rows(checkedRow, sql`SELECT DISTINCT task_id AS "taskId" FROM task_checks WHERE project_id = ${projectId}`)
+    ).map((row) => row.taskId),
+  );
   // A dump holds no checkout: the public interface a delivered report quotes from main is not judged.
   const recorded = await readTextFactRecords(db, projectId, null);
   const facts = briefs === "as-recorded" ? recorded : { ...recorded, briefs };
   const reports = await readReportRecords(db, projectId);
   // I4 judges a delivered report only on an accepted project. A kept run ends stopped or reopened
   // as often as accepted, and its delivered report was composed while it was accepted: judged so.
-  const wasAccepted = project.status !== "accepted" && reports.sweeps.some((sweep) => sweep.passed && sweep.reportId !== null);
+  const wasAccepted =
+    project.status !== "accepted" && reports.sweeps.some((sweep) => sweep.passed && sweep.reportId !== null);
   const delivered = wasAccepted
-    ? checkReports(reports, { status: "accepted" }, items, checked).filter((found) => found.key.startsWith("delivered-") || found.key.startsWith("accepted-"))
+    ? checkReports(reports, { status: "accepted" }, items, checked).filter(
+        (found) => found.key.startsWith("delivered-") || found.key.startsWith("accepted-"),
+      )
     : [];
   return [
-    ...[...checkReports(reports, project, items, checked), ...delivered].map((found) => ({ invariant: "I4" as const, ...found })),
+    ...[...checkReports(reports, project, items, checked), ...delivered].map((found) => ({
+      invariant: "I4" as const,
+      ...found,
+    })),
     ...checkTextFacts(facts).map((found) => ({ invariant: "I9" as const, ...found })),
   ];
 }
