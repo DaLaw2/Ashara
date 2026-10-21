@@ -123,7 +123,7 @@ const ENTRY = "entry";
 /** Per package, its internal modules; `entry` may import every module and none may import it. */
 const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = {
   quality: {
-    verification: { allow: ["verdict", "checks", "environment", "suite-review", "acl"], host: "src/verification.ts", target: "src/gates/finalize.ts" },
+    verification: { allow: ["verdict", "checks", "environment", "suite-review", "acl"], host: "src/verification/suites-verdict.ts", target: "src/gates/finalize.ts" },
     verdict: { allow: ["checks", "environment", "acl"], host: "src/dispatch-result.ts", target: "src/fault-class.ts" },
     checks: { allow: ["acl", "reviewer-record"], host: "src/task-checks.ts", target: "src/public-interface.ts" },
     "suite-review": { allow: ["checks", "acl"], host: "src/suite-review.ts", target: "src/repositories/suite-review.ts" },
@@ -497,7 +497,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts", "scripts/table-ownership.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts", "scripts/table-ownership.ts", "scripts/verification-split.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.symlinkSync(path.join(REPO, "node_modules"), path.join(into, "node_modules"), "dir");

@@ -43,15 +43,28 @@ import {
 } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import {
+  AcceptanceSweeper,
+  BaselineRevalidation,
+  CellTeardown,
   CheckDisputeRepository,
+  CheckHarvest,
+  CheckPorts,
   CheckSetFreezeRepository,
+  DeliveredOnMain,
+  DispatchCells,
+  FoundationGate,
+  OwnershipGate,
+  PostMergeChecks,
+  SubstrateGate,
   SuiteReviewFindingRepository,
   SuiteReviewJudgementRepository,
+  SuiteReviewRun,
   SuiteReviewer,
+  TerminalSweeper,
   gitPublicInterface,
   readEnvironmentDefinition,
 } from "@ashara/quality";
-import type { ExecutionEventSink } from "@ashara/quality";
+import type { EnvironmentStatementStore, ExecutionEventSink, MainSweepDeps } from "@ashara/quality";
 import {
   ENVIRONMENT_BUILD_TIMEOUT_MS,
   PodmanSubstrate,
@@ -407,6 +420,34 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     prune: (projectId, keepVersion) => pruneEnvironmentImages(cellSubstrate, projectId, keepVersion),
   };
 
+  const verificationCells = { substrate: cellSubstrate, instance: cellInstance };
+  const environmentStatements: EnvironmentStatementStore = {
+    record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
+    forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
+  };
+  const taskChecks = createTaskCheckStore(db);
+  // Quality's verification, one job per stage: the dispatcher calls each as a port, and the core
+  // loop runs the sweeps of main, which no dispatch holds.
+  const teardown = new CellTeardown({ eventSink: devEventSink, logger });
+  const dispatchCells = new DispatchCells({
+    config: { workdirBase: config.coreLoop.workdirBase },
+    cells: verificationCells,
+    attemptPolicy: ATTEMPT_POLICY,
+    images: environmentImages,
+    teardown,
+  });
+  const mainSweep: MainSweepDeps = {
+    config: { workdirBase: config.coreLoop.workdirBase },
+    cells: verificationCells,
+    attemptPolicy: ATTEMPT_POLICY,
+    environment: { images: environmentImages, statements: environmentStatements },
+    checks: taskChecks,
+    teardown,
+    eventSink: devEventSink,
+  };
+  const acceptanceSweeper = new AcceptanceSweeper(mainSweep);
+  const terminalSweeper = new TerminalSweeper(mainSweep);
+
   const dispatchService = new DispatchService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
@@ -420,22 +461,38 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     llm: modelCalls,
     staffing,
     attemptPolicy: ATTEMPT_POLICY,
-    environment: {
-      images: environmentImages,
-      statements: {
-        record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
-        forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
-      },
+    environment: { images: environmentImages, statements: environmentStatements },
+    checks: taskChecks,
+    verifiers: {
+      suiteReview: new SuiteReviewRun({
+        suiteReview: new SuiteReviewer({
+          llm: modelCalls,
+          source: createSuiteReviewSource(db),
+          publicInterface: gitPublicInterface,
+          judgements: new SuiteReviewJudgementRepository(db),
+          onAttempt: ladderAttemptSink,
+          logger,
+        }),
+        eventSink: devEventSink,
+        logger,
+      }),
+      teardown,
+      revalidation: new BaselineRevalidation({ dispatchCells, attemptPolicy: ATTEMPT_POLICY, eventSink: devEventSink, logger }),
+      delivered: new DeliveredOnMain({ dispatchCells, checks: taskChecks, eventSink: devEventSink, logger }),
+      foundationGate: new FoundationGate({ dispatchCells, attemptPolicy: ATTEMPT_POLICY, eventSink: devEventSink, logger }),
+      checkPorts: new CheckPorts({ dispatchCells, eventSink: devEventSink, logger }),
+      harvest: new CheckHarvest({ dispatchCells, checks: taskChecks, eventSink: devEventSink, logger }),
+      ownershipGate: new OwnershipGate({ checks: taskChecks, eventSink: devEventSink, logger }),
+      substrateGate: new SubstrateGate({ dispatchCells, attemptPolicy: ATTEMPT_POLICY, statements: environmentStatements, eventSink: devEventSink, logger }),
+      postMerge: new PostMergeChecks({
+        dispatchCells,
+        attemptPolicy: ATTEMPT_POLICY,
+        environment: { images: environmentImages, statements: environmentStatements },
+        checks: taskChecks,
+        eventSink: devEventSink,
+        logger,
+      }),
     },
-    checks: createTaskCheckStore(db),
-    suiteReview: new SuiteReviewer({
-      llm: modelCalls,
-      source: createSuiteReviewSource(db),
-      publicInterface: gitPublicInterface,
-      judgements: new SuiteReviewJudgementRepository(db),
-      onAttempt: ladderAttemptSink,
-      logger,
-    }),
     shutdownSignal: abortController.signal,
     clock: ports.clock,
     logger,
@@ -455,9 +512,9 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     failedApproachRepo,
     projectRepo,
     dispatchService,
-    acceptanceSweeper: dispatchService.verification,
+    acceptanceSweeper,
     acceptance: createAcceptanceStore(db),
-    terminalSweeper: dispatchService.verification,
+    terminalSweeper,
     terminalSweeps: createTerminalSweepStore(db),
     deliveredReports: createDeliveredReports(createDeliveredReportStore(db)),
     failureRouter,

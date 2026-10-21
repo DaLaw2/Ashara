@@ -30,6 +30,7 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { WorkKind } from "@ashara/organization";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // Independent verification end to end on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
@@ -176,7 +177,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   ), recordingLogger());
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const service = new DispatchService({
+  const service = composedDispatchService({
     logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },

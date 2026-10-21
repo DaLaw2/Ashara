@@ -10,7 +10,6 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { DispatchService } from "@ashara/delivery";
 import type { TaskCheckStore } from "@ashara/quality";
 import type { SessionStore } from "@ashara/workplace";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
@@ -20,6 +19,7 @@ import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, recordingLogger, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // Real podman cells from the BaseCell image, the real recorded gateway writing llm_calls, a mock
 // model: no real LLM call, and no skip (CI rejects skipped tests).
@@ -180,7 +180,7 @@ describe("a task runs on cells end to end", () => {
     const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();
-    const service = new DispatchService({
+    const service = composedDispatchService({
       logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: sessions,

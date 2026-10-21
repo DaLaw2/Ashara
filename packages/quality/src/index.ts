@@ -1,6 +1,18 @@
-export { TaskVerification, observeAcceptanceSweeps } from "./verification.js";
+export { AcceptanceSweeper, observeAcceptanceSweeps } from "./verification/acceptance-sweep.js";
+export type { AcceptanceSweep, MainSweepDeps } from "./verification/acceptance-sweep.js";
+export { TerminalSweeper } from "./verification/terminal-sweep.js";
+export { BaselineRevalidation } from "./verification/baseline-revalidation.js";
+export { CellTeardown } from "./verification/cell-teardown.js";
+export { CheckHarvest } from "./verification/check-harvest.js";
+export { CheckPorts } from "./verification/check-ports.js";
+export { DeliveredOnMain } from "./verification/delivered-on-main.js";
+export { DispatchCells } from "./verification/dispatch-cells.js";
+export { FoundationGate } from "./verification/foundation-gate.js";
+export { OwnershipGate } from "./verification/ownership-gate.js";
+export { PostMergeChecks } from "./verification/post-merge-checks.js";
+export { SubstrateGate } from "./verification/substrate-gate.js";
+export { SuiteReviewRun } from "./verification/suite-review-run.js";
 export { QUALITY_MODEL_SCHEMAS } from "./suite-review.js";
-export type { AcceptanceSweep } from "./verification.js";
 export {
   EXECUTION_STATUSES,
   AttemptEventNameSchema,

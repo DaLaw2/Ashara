@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService, ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, FirstPlanner, adaptWorkItemRepo, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, FirstPlanner, adaptWorkItemRepo, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import { BlockReports, ClientStops, ClientMessageRepository, DeliveredReports, PlanReports, VisionRepository } from "@ashara/engagement";
 import type { BlockReportStore, ClientStopStore, DeliveredReportStore, PlanReportStore } from "@ashara/engagement";
@@ -32,6 +32,7 @@ import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/scripted-models.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.
@@ -617,7 +618,7 @@ describe("a turn refused at the project's spend cap", () => {
     stub.model = mock;
     const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 0.2 } });
     const gateway = gatewayOn(spendCap, calls);
-    const dispatchService = new DispatchService({
+    const dispatchService = composedDispatchService({
       logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },

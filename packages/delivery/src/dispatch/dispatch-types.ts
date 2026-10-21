@@ -7,9 +7,7 @@ import type {
   EnvironmentStatementStore,
   ExecutionEventSink,
   MainConflict,
-  SuiteReviewing,
   TaskCheckStore,
-  TaskVerification,
   VerificationCells,
 } from "@ashara/quality";
 import type { Clock, Logger, ProjectId, WorkItemId } from "@ashara/shared";
@@ -18,6 +16,7 @@ import type { StoredBlockedReason } from "../work-item-language/blocked-reason.j
 import type { StoredTaskSpec } from "../work-item-language/task-spec.js";
 import type { WorkKind } from "../acl/organization-acl.js";
 import type { DispatchRecords } from "./dispatch-records.js";
+import type { DispatchVerification } from "./verification-ports.js";
 
 /** A task no work plan can be made for: it fails before the agent, with the reason. */
 export interface Unplannable {
@@ -198,12 +197,8 @@ export interface DispatchServiceDeps {
    * an implementation task is decided by them. Required: no task is verified without them.
    */
   readonly checks: TaskCheckStore;
-  /**
-   * Quality's review of a plan revision's suites: a review task is
-   * dispatched to it, never to an agent, so it runs no cell. Required: no implementation is released
-   * without it.
-   */
-  readonly suiteReview: SuiteReviewing;
+  /** Quality's verification jobs, each built by the composition root: every verdict a dispatch is decided by. */
+  readonly verifiers: DispatchVerification;
   /** Aborted on shutdown: an attempt in flight ends as cancelled. */
   readonly shutdownSignal: AbortSignal;
   /** What an attempt's wall clock reads. */
@@ -214,5 +209,5 @@ export interface DispatchServiceDeps {
 /** What every stage of a dispatch works with: the service's dependencies and Quality's verification of its dispatches. */
 export interface DispatchContext {
   readonly deps: DispatchServiceDeps;
-  readonly verification: TaskVerification;
+  readonly verification: DispatchVerification;
 }

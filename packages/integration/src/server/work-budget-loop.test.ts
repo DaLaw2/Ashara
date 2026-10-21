@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, WorkGrantRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { CoreLoopDeps } from "@ashara/delivery";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
@@ -26,6 +26,7 @@ import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // The work ledger end to end: Finance draws one model request from the
 // project's and the task's budgets before every gateway request, counted from llm_calls rows, and
@@ -156,7 +157,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     checkedSources: ["test"],
     clock: () => new Date(),
   }), new LlmCallLedger(calls, spendCap), recordingLogger());
-  const dispatchService = new DispatchService({
+  const dispatchService = composedDispatchService({
     logger: recordingLogger(),
     config: { workdirBase: at.workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },

@@ -87,15 +87,15 @@ export async function runExecution({ context, dispatch: d, slot }: CellRun): Pro
   // delivered, whoever delivered it. In that order: a set that cannot tell the task's work from its
   // absence would pass on main whatever main holds, and close the task on nothing.
   if (d.work.kind === "stored-checks") {
-    const stale = await verification.revalidateOnBaseline(d, d.work.stored);
+    const stale = await verification.revalidation.revalidateOnBaseline(d, d.work.stored);
     if (stale !== null) return stale;
-    const delivered = await verification.sweepDelivered(d, d.work.stored);
+    const delivered = await verification.delivered.sweepDelivered(d, d.work.stored);
     if (delivered !== null) return delivered;
   }
   // A check author is dispatched only on a foundation the environment builds: on one it
   // does not, every check fails for that reason alone and the red run could decide nothing.
   if (d.work.kind === "check-authoring") {
-    const unbuilt = await verification.foundationBuildGate(d, d.work);
+    const unbuilt = await verification.foundationGate.foundationBuildGate(d, d.work);
     if (unbuilt !== null) return unbuilt;
   }
 
@@ -129,9 +129,9 @@ export async function runExecution({ context, dispatch: d, slot }: CellRun): Pro
       clock: deps.clock,
       records: d.records,
       signal: deps.shutdownSignal,
-      environment: task.workKind === "environment" ? environmentCheckPort(verification.environmentScope(d)) : null,
-      checks: d.work.kind === "check-authoring" ? verification.checkDefinitionPort(d, d.work) : null,
-      taskChecks: d.work.kind === "stored-checks" ? verification.taskCheckRunPort(d, d.work.stored, d.work.merged) : null,
+      environment: task.workKind === "environment" ? environmentCheckPort(verification.checkPorts.environmentScope(d)) : null,
+      checks: d.work.kind === "check-authoring" ? verification.checkPorts.checkDefinitionPort(d, d.work) : null,
+      taskChecks: d.work.kind === "stored-checks" ? verification.checkPorts.taskCheckRunPort(d, d.work.stored, d.work.merged) : null,
     },
   );
   slot.attempt = toSessionAttempt(outcome, staff.model, attemptCellImage(d.environment));
@@ -154,7 +154,7 @@ export async function runExecution({ context, dispatch: d, slot }: CellRun): Pro
   }
 
   // A check may need no file of its own, so a check task is judged by its checks, not its diff.
-  if (d.work.kind === "check-authoring") return verification.keepChecks(d, d.work, outcome);
+  if (d.work.kind === "check-authoring") return verification.harvest.keepChecks(d, d.work, outcome);
 
   return settleDone({ context, dispatch: d, work: d.work, outcome, filesChanged });
 }
@@ -182,7 +182,7 @@ async function settleDone({ context, dispatch: d, work, outcome, filesChanged }:
     if (onBranch.kind === "ended") return onBranch.result;
     workChanged = onBranch.paths;
     // Work already on main is decided by its checks on main, never by the word of an implementer that changed nothing.
-    if (workChanged.length === 0 && work.kind === "stored-checks") return verification.deliveredOnMain(d, work.stored, { outcome, agentWork: "kept" }, outcome.turnsUsed);
+    if (workChanged.length === 0 && work.kind === "stored-checks") return verification.delivered.deliveredOnMain(d, work.stored, { outcome, agentWork: "kept" }, outcome.turnsUsed);
     if (workChanged.length === 0) {
       const reason = NO_CHANGE_REASON;
       eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
@@ -205,7 +205,7 @@ async function settleDone({ context, dispatch: d, work, outcome, filesChanged }:
   }
 
   if (work.kind === "stored-checks" || work.kind === "scaffold") {
-    const refused = await verification.ownershipGate(d, outcome);
+    const refused = await verification.ownershipGate.ownershipGate(d, outcome);
     if (refused !== null) return refused;
   }
 
@@ -220,24 +220,24 @@ async function mergeAndVerify({ context, dispatch: d, outcome }: DoneStep, work:
 
   let finalizeDeps: Omit<FinalizeDeps, "presentedConflict" | "workdirBase" | "logger">;
   if (work.kind === "substrate") {
-    const gate = await verification.substrateGate(d, outcome.statement, outcome);
+    const gate = await verification.substrateGate.substrateGate(d, outcome.statement, outcome);
     if (gate.kind === "ended") return gate.result;
     finalizeDeps = {
       postMergeOperation: "postMergeVerify",
-      postMergeVerify: (path, lease) => verification.postMergeEnvironmentTest(d, path, gate.tested, lease),
+      postMergeVerify: (path, lease) => verification.postMerge.postMergeEnvironmentTest(d, path, gate.tested, lease),
     };
   } else if (work.kind === "scaffold") {
     // No gate ran the scaffold's build and test before its merge: their verdict there is its
     // own attempt's, never a regression of the tree.
     finalizeDeps = {
       postMergeOperation: "postMergeScaffold",
-      postMergeVerify: (path, lease) => verification.postMergeScaffold(d, path, lease),
+      postMergeVerify: (path, lease) => verification.postMerge.postMergeScaffold(d, path, lease),
     };
   } else {
     const { stored } = work;
     finalizeDeps = {
       postMergeOperation: "postMergeTaskChecks",
-      postMergeVerify: (path, lease) => verification.postMergeStoredChecks(d, path, stored, lease),
+      postMergeVerify: (path, lease) => verification.postMerge.postMergeStoredChecks(d, path, stored, lease),
     };
   }
 

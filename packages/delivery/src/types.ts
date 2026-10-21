@@ -6,7 +6,7 @@ import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
 import type { FirstPlanning } from "./first-plan.js";
 import type { Replanning } from "./replan.js";
 import type { FailedApproachRepository } from "./acl/knowledge-acl.js";
-import type { TaskVerification } from "./acl/quality-acl.js";
+import type { AcceptanceSweeper, TerminalSweeper } from "./acl/quality-acl.js";
 import type { DispatchService } from "./dispatch/dispatch-service.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
 import type { SettledTargets } from "./settled-branches.js";
@@ -153,11 +153,11 @@ export interface CoreLoopDeps {
   readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts & SettledTargets;
   readonly dispatchService: Pick<DispatchService, "execute">;
   /** Z0's acceptance sweep of a project on main HEAD (Quality; no model is called). */
-  readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
+  readonly acceptanceSweeper: Pick<AcceptanceSweeper, "sweepForAcceptance">;
   /** The acceptance sweeps recorded on main: which projects are ready, and their verdicts. */
   readonly acceptance: AcceptanceStore;
   /** Z0's terminal sweep of a stopped or halted project on main HEAD (Quality; no model is called). */
-  readonly terminalSweeper: Pick<TaskVerification, "sweepForTerminal">;
+  readonly terminalSweeper: Pick<TerminalSweeper, "sweepForTerminal">;
   /** The terminal sweeps recorded: which stops and halt episodes are owed one, and each one's record. */
   readonly terminalSweeps: TerminalSweepStore;
   /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */

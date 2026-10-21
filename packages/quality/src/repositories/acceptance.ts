@@ -5,7 +5,7 @@ import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
 import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
-import type { FailedCheck, SweptCheck } from "../verification.js";
+import type { FailedCheck, SweptCheck } from "../verification/acceptance-sweep.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
 // A delivered project is accepted on one sweep of main HEAD. A project is ready for it once its first plan exists,

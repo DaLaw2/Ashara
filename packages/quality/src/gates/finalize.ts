@@ -75,7 +75,7 @@ export interface FinalizeDeps {
   /** Required: what a post-merge failure means differs by check, and routing reads it from here. */
   readonly postMergeOperation: PostMergeOperation;
   /**
-   * Checks the tentative merge in a short-lived cell, torn down after (TaskVerification):
+   * Checks the tentative merge in a short-lived cell, torn down after (PostMergeChecks):
    * the checks the check author stored for the task, on a throwaway checkout of the merge
    * with the stored check files written over it, or for a substrate-checked task the
    * gate's own run (the environment's build then test, from the image the gate built) on a

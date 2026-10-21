@@ -3,7 +3,7 @@ import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
-import type { TaskVerification } from "./acl/quality-acl.js";
+import type { AcceptanceSweeper } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
 import type { InterfaceDefect } from "./domain/index.js";
@@ -65,7 +65,7 @@ export interface AcceptanceStore {
 
 interface AcceptanceDeps {
   readonly acceptance: AcceptanceStore;
-  readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
+  readonly acceptanceSweeper: Pick<AcceptanceSweeper, "sweepForAcceptance">;
   readonly projectRepo: { block(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> };
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   /** Each project's own fault is contained to it (containEach). */

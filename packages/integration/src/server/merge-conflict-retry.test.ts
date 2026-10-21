@@ -21,6 +21,7 @@ import { createWorkItemId, parseWorkItemId, recordingLogger, systemClock } from 
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // Two tasks dispatched in one batch leave the same main and change the
 // same file. The first merges; the second's merge conflicts, and its retry must start with that
@@ -138,7 +139,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
   ), recordingLogger());
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const service = new DispatchService({
+  const service = composedDispatchService({
     logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },

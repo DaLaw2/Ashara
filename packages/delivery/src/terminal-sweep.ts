@@ -1,6 +1,6 @@
 import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { TaskVerification } from "./acl/quality-acl.js";
+import type { TerminalSweeper } from "./acl/quality-acl.js";
 
 // A project that reaches a terminal short of acceptance, the client's stop or a halt of any kind (a
 // budget stop among them), gets one terminal sweep: the acceptance sweep's commands-only run of
@@ -11,7 +11,7 @@ import type { TaskVerification } from "./acl/quality-acl.js";
 // read as having no sweep on a commit rather than as having no evidence on one: a sweep that faulted
 // after reading main ran no check there, and the commit it read is named in why.
 
-type Sweep = Awaited<ReturnType<TaskVerification["sweepForTerminal"]>>;
+type Sweep = Awaited<ReturnType<TerminalSweeper["sweepForTerminal"]>>;
 
 /** What a terminal sweep is run for: the client's consumed stop, or a halt episode. */
 type Terminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
@@ -48,7 +48,7 @@ export interface TerminalSweepStore {
 
 interface TerminalSweepDeps {
   readonly terminalSweeps: TerminalSweepStore;
-  readonly terminalSweeper: Pick<TaskVerification, "sweepForTerminal">;
+  readonly terminalSweeper: Pick<TerminalSweeper, "sweepForTerminal">;
   /** Each terminal's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly logger: Logger;

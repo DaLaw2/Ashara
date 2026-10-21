@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { CheckSuite, SuiteRun } from "./task-checks.js";
-import { suitesVerdict } from "./verification.js";
+import type { CheckSuite, SuiteRun } from "../task-checks.js";
+import { suitesVerdict } from "./suites-verdict.js";
 
 // Missing evidence is failure. A stored check that reported no run, or a
 // suite with no run at all, never reads as a pass, though every check that did run passed.

@@ -7,12 +7,13 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
 import { testCellInstance } from "../test-cells.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // A project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other
@@ -115,7 +116,7 @@ describe("a project whose workspace path is refused", () => {
       clock: () => new Date(),
     }), new LlmCallLedger(calls, spendCap), recordingLogger());
     const workdirBase = join(root, "work");
-    const dispatchService = new DispatchService({
+    const dispatchService = composedDispatchService({
       logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: { insert: notExercised("insert"), complete: notExercised("complete"), fail: notExercised("fail") },

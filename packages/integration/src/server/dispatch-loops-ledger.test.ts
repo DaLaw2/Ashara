@@ -12,7 +12,6 @@ import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import {
-  DispatchService,
   CoreLoop,
   DEFAULT_CONFIG,
   concurrentTaskLanes,
@@ -34,6 +33,7 @@ import { DevSessionRepository } from "@ashara/workplace";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // The dispatch loops that have no counter of their own end through the work ledger,
 // each in a typed, recorded state: a task requeued after every shutdown and a
@@ -207,7 +207,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets, shutdown: AbortControl
     checkedSources: ["test"],
     clock: () => new Date(),
   }), new LlmCallLedger(calls, spendCap), recordingLogger());
-  const dispatchService = new DispatchService({
+  const dispatchService = composedDispatchService({
     logger: recordingLogger(),
     config: { workdirBase: at.workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },

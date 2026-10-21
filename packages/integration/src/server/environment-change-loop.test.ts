@@ -12,7 +12,7 @@ import { ClientRepository, createDb, EnvironmentBuildRepository, EventStoreRepos
 import { DevSessionRepository } from "@ashara/workplace";
 import { TaskCheckRepository } from "@ashara/quality";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService, CoreLoop, DEFAULT_CONFIG, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { CoreLoop, DEFAULT_CONFIG, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -22,6 +22,7 @@ import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock }
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
+import { composedDispatchService } from "../dispatch-verification.js";
 
 // The environment change loop, end to end through the real contractor loop, the real
 // DispatchService, real podman and git, and the recorded gateway with scripted models: an
@@ -147,7 +148,7 @@ async function harness(name: string): Promise<Harness> {
   const workItems = new WorkItemRowRepository(db);
   const sessions = new DevSessionRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const dispatchService = new DispatchService({
+  const dispatchService = composedDispatchService({
     logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: {

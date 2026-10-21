@@ -20,7 +20,7 @@ export type FaultClass = "agent_work" | "ashara" | "substrate" | "provider";
 /**
  * A failure of the substrate a stage ran on, never of the work under it: the operator's to fix,
  * so the item is Blocked with `environment_unavailable` and never reaches the failure classifier.
- * CellTeardownFailed is not one: no stage ends on it (TaskVerification's teardownCell logs it and
+ * CellTeardownFailed is not one: no stage ends on it (CellTeardown's teardownCell logs it and
  * leaves the cell to teardownAll and reconcileOrphans).
  */
 export type EnvironmentError = SubstrateUnavailable | CellStartFailed | CellExecFailed | PodmanCommandFailed | MountPathRejected | CellToolFailed;

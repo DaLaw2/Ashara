@@ -187,7 +187,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
   // A review of the plan's suites reads stored checks and the vision in one structured call: no
   // substrate, environment, worktree or cell is involved, so none is probed.
   if (task.taskSpec?.origin === "review") {
-    const reviewed = await verification.reviewSuites(task, sessionId, targetProjectPath);
+    const reviewed = await verification.suiteReview.reviewSuites(task, sessionId, targetProjectPath);
     if (reviewed.status === "failed") await storeFailureKnowledge(deps.knowledgeSink, task, reviewed);
     return reviewed;
   }
@@ -424,7 +424,7 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
     await cleanupWorkdir(workDir, targetProjectPath);
     return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink, deps.logger);
   } finally {
-    await verification.teardownCell({ taskId: task.id, attempt: task.attempt }, cell);
+    await verification.teardown.teardownCell({ taskId: task.id, attempt: task.attempt }, cell);
   }
 }
 

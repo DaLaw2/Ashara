@@ -109,7 +109,7 @@ export async function endWithoutDone({ context, dispatch: d, outcome }: EndedRun
 
   let notDelivered = "";
   if (outcome.kind === "finished" && d.work.kind === "check-authoring") {
-    const evaluated = await verification.checkedTaskOnMain(d, d.work, outcome);
+    const evaluated = await verification.delivered.checkedTaskOnMain(d, d.work, outcome);
     if ("status" in evaluated) return evaluated;
     notDelivered = `; Z0 does not find it delivered: ${evaluated.why}`;
   }

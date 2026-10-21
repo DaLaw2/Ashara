@@ -74,6 +74,7 @@ import { findPriceColumnDefaults } from "./price-defaults.js";
 import { findRunBudgetFindings } from "./simulator-run-budget.js";
 import { findStackLiterals, parseStackLiteralRules, STACK_LITERALS_SECTION } from "./stack-literals.js";
 import { DB_OWNER, SHARED_OWNER, TABLES_SECTION, declaredTables, findTableUses, parseTableOwnershipRules } from "./table-ownership.js";
+import { findVerificationSplitBreaks } from "./verification-split.js";
 
 // ---------------------------------------------------------------------------
 // TOML parser (minimal: [section] headers, `allow = [...]`, `restrict.x = [...]`)
@@ -1276,6 +1277,12 @@ function main(): void {
       specifier: `predicate: ${copy.rule}`,
       reason: `a raw copy of a rule another context owns: ${copy.text}; use ${copy.use}`,
     });
+  }
+
+  // Not an import rule either: each verification job is its own short module, built by the
+  // composition root, never one class every job is reached through (scripts/verification-split.ts).
+  for (const found of findVerificationSplitBreaks(root)) {
+    violations.push({ file: found.file, line: found.line, fromPkg: found.file.split("/")[1] ?? found.file, specifier: "verification-split", reason: found.reason });
   }
 
   // Report
