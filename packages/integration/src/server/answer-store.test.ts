@@ -4,7 +4,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -325,7 +325,7 @@ describe("the client's answers", () => {
     pipelineModel({ verdict: "confirms" });
     expect((await roster().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
     expect((await planner().runPending()).map((o) => o.kind)).toEqual(["planned"]);
-    const projectRepo = new ProjectRepository(db);
+    const projectRepo = new ProjectHaltRepository(db);
     // The plan is dispatched once the client is told it.
     expect(await projectRepo.listActiveIds()).not.toContain(projectId);
     await db.execute(sql`
@@ -483,7 +483,7 @@ describe("the client's answers", () => {
     for (let i = 0; i < 3; i++) for (const outcome of await answers().runPending()) kinds.push(outcome.kind);
 
     expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
-    expect((await new ProjectRepository(db).get(projectId))?.status).toBe("blocked");
+    expect((await new ProjectHaltRepository(db).get(projectId))?.status).toBe("blocked");
     // Blamed by the one classifier: the model never answered in the schema, so the halt is the model's, not Ashara's.
     expect(await haltKindOf(projectId)).toBe("model_failed");
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeNull();
@@ -541,7 +541,7 @@ describe("the client's answers", () => {
     expect(z.array(z.object({ faults: z.number(), lastError: z.string(), waiting: z.boolean() })).parse(faults.rows)).toEqual([
       { faults: 1, lastError: expect.stringContaining("scripted store failure"), waiting: true },
     ]);
-    expect((await new ProjectRepository(db).get(broken.projectId))?.status).not.toBe("blocked");
+    expect((await new ProjectHaltRepository(db).get(broken.projectId))?.status).not.toBe("blocked");
     // Not read again until its backoff has passed.
     expect(await new ClientAnswers({ containment: containment(), llm: gateway, store: failing }).runPending()).toEqual([]);
   });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ClientMessageRepository, CreatedTender } from "@ashara/engagement";
-import type { ClientRepository, ProjectRepository } from "@ashara/db";
+import type { ClientRepository } from "@ashara/db";
+import type { ProjectHaltRepository } from "@ashara/delivery";
 import {
   ClientPostSchema,
   TenderSchema,
@@ -19,7 +20,7 @@ import type { ProjectId } from "@ashara/shared";
 // cycle answers it (Engagement's ClientReceipts).
 
 export interface ClientChannelDeps {
-  readonly projectRepo: ProjectRepository;
+  readonly projectRepo: ProjectHaltRepository;
   readonly clientMessageRepo: ClientMessageRepository;
   readonly clientRepo: ClientRepository;
   /** A tender: the project row, owned by `clientId`, and its inbound 'tender' message in one transaction. */

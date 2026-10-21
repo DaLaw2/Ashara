@@ -1,13 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
+import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl, workItems, type Database } from "@ashara/db";
+import { completedGoalTasks, goalTaskSql, isGoalTask } from "@ashara/delivery/predicates";
 import type { ProjectId } from "@ashara/shared";
-import { createDb, type Database } from "../connection.js";
-import { resolveTestDatabaseUrl } from "../test-database-url.js";
-import { workItems } from "../schema/index.js";
-import { ClientRepository } from "./client.js";
-import { completedGoalTasks, goalTaskSql, isGoalTask } from "./goal-tasks.js";
-import { ProjectRepository } from "./project.js";
 
 // Every row here belongs to a project this suite creates under a unique name; deleting the project
 // deletes its work items.

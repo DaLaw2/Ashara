@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { isGoalTask } from "@ashara/db";
 import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { isGoalTask } from "./predicates.js";
 import type { CapabilityLevel, ContextualLlm } from "./acl/finance-acl.js";
 import { createPendingWorkItem } from "./domain/work-item.js";
 import type { WorkItem } from "./domain/work-item.js";

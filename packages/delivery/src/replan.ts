@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { isGoalTask } from "@ashara/db";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { DomainEvent, Logger, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import { isGoalTask } from "./predicates.js";
 import { higherCapability, withStructuredLadder } from "./acl/finance-acl.js";
 import type { CapabilityLevel, LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";

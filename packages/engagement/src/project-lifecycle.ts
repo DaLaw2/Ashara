@@ -1,8 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { projectAtWork, projectHalted, projects } from "@ashara/db";
+import { projects } from "@ashara/db";
 import type { DbHandle, PROJECT_LIFECYCLES } from "@ashara/db";
+import { projectHalted } from "@ashara/delivery/predicates";
 import type { ProjectId } from "@ashara/shared";
+import { projectAtWork } from "./predicates.js";
 
 /**
  * Every state the client is shown a project in: its Engagement lifecycle (PROJECT_LIFECYCLES,
@@ -16,8 +18,8 @@ type ProjectLifecycle = (typeof PROJECT_LIFECYCLES)[number];
  * Engagement's one guard over projects.lifecycle, the column's
  * only writer. A project is active from its tender; the client's stop ends work on it from active
  * (halted or not) or accepted; a passed acceptance sweep accepts an active project Delivery has not
- * halted. The halt itself is Delivery's (its project-halt repository), read here only through db's
- * projectHalted.
+ * halted. The halt itself is Delivery's (its project-halt repository), read here only through
+ * Delivery's published projectHalted.
  */
 const PROJECT_LIFECYCLE = {
   stop: { from: ["active", "accepted"], to: "stopped" },

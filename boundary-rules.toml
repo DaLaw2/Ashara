@@ -93,22 +93,27 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # the schema. A project's halt is Delivery's; Engagement's steps that ask for one
 # read its cause in Delivery's published language (project-halt), and its block and delivered reports and the early-warning register
 # read the work item's recorded cause and task specification in Delivery's work-item
-# language, only in the files listed.
+# language; its predicates, its lifecycle guard and the reads that admit a project by its halt
+# or a task by the plan it belongs to read them in Delivery's published predicates; each only in the
+# files listed.
 allow = ["shared", "db", "finance", "delivery"]
-restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/client-change.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/stack-choice.ts"]
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/client-change.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-receipt.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/stack-choice.ts"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it (answers, stops, and changes read
 # into corrections of the contract), and the reports back.
 # Every module reads the vision; intake reads only the tender message inbound recorded. The client's
-# stop is answered with a terminal report, so inbound reads the reports' guarantee table.
+# stop is answered with a terminal report, so inbound reads the reports' guarantee table. The
+# published predicates (a project at work, a stop or an answer awaiting the Liaison, the first plan
+# told) import no other module; inbound and reports admit projects by them.
 module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories/vision.ts"]
 module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
 module.inbound = ["src/answers.ts", "src/client-*.ts", "src/correction.ts", "src/project-lifecycle.ts", "src/repositories/client-*.ts"]
 module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts"]
+module.predicates = ["src/predicates.ts"]
 module.entry   = ["src/index.ts", "src/model-schemas.ts"]
 module-allow.intake  = ["vision", "inbound"]
-module-allow.inbound = ["vision", "reports"]
-module-allow.reports = ["vision"]
+module-allow.inbound = ["vision", "reports", "predicates"]
+module-allow.reports = ["vision", "predicates"]
 module-entry.inbound = ["src/repositories/client-message.ts"]
 
 [organization]
@@ -145,11 +150,11 @@ module.acceptance     = ["src/repositories/acceptance.ts"]
 module.reviewer-record = ["src/repositories/reviewer-outcome.ts"]
 module.acl            = ["src/acl/*.ts"]
 module.entry          = ["src/index.ts"]
-module-allow.verification = ["verdict", "checks", "environment", "suite-review"]
+module-allow.verification = ["verdict", "checks", "environment", "suite-review", "acl"]
 module-allow.verdict      = ["checks", "environment", "acl"]
 module-allow.suite-review = ["checks", "acl"]
 module-allow.checks       = ["acl", "reviewer-record"]
-module-allow.acceptance   = ["verification", "reviewer-record"]
+module-allow.acceptance   = ["verification", "reviewer-record", "acl"]
 module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/*.ts"]
 
 [delivery]

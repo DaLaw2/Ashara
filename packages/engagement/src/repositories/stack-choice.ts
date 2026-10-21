@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
-import { clientMessages, noOpenStop, projectAtWork, projects, workItems } from "@ashara/db";
+import { clientMessages, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { noOpenStop, projectAtWork } from "../predicates.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { VisionRepository } from "./vision.js";

@@ -1,8 +1,10 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_LIFECYCLES, clientMessages, projectReadsClientInput, projects } from "@ashara/db";
+import { PROJECT_LIFECYCLES, clientMessages, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import { openHaltKind } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import { projectReadsClientInput } from "../predicates.js";
 import { receiptSubject } from "../client-receipt.js";
 import type { DueReceipt, ProjectStanding } from "../client-receipt.js";
 
@@ -19,7 +21,7 @@ const DueRowSchema = z.object({ messageId: z.string(), projectId: z.string(), ki
 /** The project's lifecycle, its open halt's kind, and whether its answers and changes are read: what a receipt states. */
 const standingColumns = {
   lifecycle: projects.lifecycle,
-  halt: sql<unknown>`(SELECT hb.kind FROM project_blocks hb WHERE hb.project_id = projects.id AND hb.ended_at IS NULL)`,
+  halt: openHaltKind(projects.id),
   readsInput: projectReadsClientInput(),
 };
 

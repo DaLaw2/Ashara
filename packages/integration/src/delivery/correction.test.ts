@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, LlmCallRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ClientChanges, ClientMessageRepository, TenderIntake, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientChangeStore, IntakeStore } from "@ashara/engagement";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -572,7 +572,7 @@ describe("no path outside the correction gate starts or replaces a task the corr
         eventStore: new EventStoreRepository(db),
         devSessionRepo: new DevSessionRepository(db),
         visionRepo: new VisionRepository(db),
-        projectRepo: new ProjectRepository(db),
+        projectRepo: new ProjectHaltRepository(db),
         clientMessageRepo: new ClientMessageRepository(db),
         clientRepo: new ClientRepository(db),
         createTender: async () => {

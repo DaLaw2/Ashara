@@ -1,23 +1,9 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import {
-  acceptanceSweeps,
-  clientMessages,
-  completedGoalTasks,
-  goalTaskSql,
-  guaranteeEvidence,
-  noOpenAnswer,
-  noOpenStop,
-  pendingCorrection,
-  pendingRepair,
-  projectAtWork,
-  projectBlocks,
-  projects,
-  taskChecks,
-  undecidedItems,
-  workItems,
-} from "@ashara/db";
+import { acceptanceSweeps, clientMessages, guaranteeEvidence, projectBlocks, projects, taskChecks, undecidedItems, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { completedGoalTasks, goalTaskSql, pendingCorrection, pendingRepair, productScaffoldTask } from "../acl/delivery-acl.js";
+import { noOpenAnswer, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-acl.js";
 import type { FailedCheck, SweptCheck } from "../verification.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
@@ -69,7 +55,7 @@ async function completedScaffolds(db: DbHandle, projectId: string): Promise<Reco
         eq(workItems.projectId, projectId),
         eq(workItems.level, "Task"),
         eq(workItems.status, "Completed"),
-        sql`${workItems.taskSpec}->>'origin' = 'product-scaffold'`,
+        productScaffoldTask(workItems),
       ),
     )
     .orderBy(asc(workItems.updatedAt), asc(workItems.id));
@@ -340,7 +326,7 @@ export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSw
     .where(
       and(
         isNull(projectBlocks.endedAt),
-        eq(projects.lifecycle, "active"),
+        projectActive(),
         sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.block_id = ${projectBlocks.id})`,
       ),
     )

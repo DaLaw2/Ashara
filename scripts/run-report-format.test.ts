@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { isGoalTask } from "@ashara/db";
+import { isGoalTask } from "@ashara/delivery/predicates";
 import { judgedVerdictSchema, overallOf, type JudgedVerdict } from "./hidden-verdict.js";
 import type { PickRecord } from "./pool-selection.js";
 import { readMappingFile, readPacketKey } from "./pool-mapping.js";

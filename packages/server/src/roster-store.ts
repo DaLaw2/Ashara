@@ -1,12 +1,13 @@
-import { listProjectsAwaitingRoster, recordFirstRoster } from "@ashara/db";
+import { listProjectsAwaitingRoster, projects, recordFirstRoster } from "@ashara/db";
 import type { createDb } from "@ashara/db";
+import { noOpenStop, projectAtWork } from "@ashara/engagement/predicates";
 import type { RosterStore } from "@ashara/organization";
 
 /** Organization's roster store over projects, vision_documents and roster_roles. */
 export function createRosterStore(db: ReturnType<typeof createDb>): RosterStore {
   return {
     async projectsAwaitingRoster() {
-      const rows = await listProjectsAwaitingRoster(db);
+      const rows = await listProjectsAwaitingRoster(db, [projectAtWork(), noOpenStop(projects.id)]);
       return rows.map((row) => ({
         projectId: row.projectId,
         vision: row.vision,

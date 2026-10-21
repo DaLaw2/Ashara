@@ -1,8 +1,11 @@
 import { and, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { clientMessages, insertedRow, noOpenStop, projectAtWork, projects, workBurnWarnings } from "@ashara/db";
+import { clientMessages, insertedRow, projects, workBurnWarnings, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import { inCurrentPlan } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type UnreadSubject } from "@ashara/shared";
+import { noOpenStop, projectAtWork } from "../predicates.js";
 import type { BurnWarning, ProjectBurn } from "../burn-warning.js";
 
 // The work ledger's early warnings: each project at work, read with its current plan
@@ -33,9 +36,11 @@ class ProjectBurnUnreadable extends Error {
   }
 }
 
-/** An implementation task of the project's current plan: one no plan revision superseded. */
+const w = alias(workItems, "w");
+
+/** An implementation task of the project's current plan (inCurrentPlan): given-up tasks count, superseded ones do not. */
 const ofCurrentPlan = sql`w.project_id = projects.id AND w.level = 'Task' AND w.work_kind = 'implementation'
-  AND NOT (w.status = 'Abandoned' AND w.blocked_reason->>'source' = 'superseded')`;
+  AND ${inCurrentPlan(w)}`;
 
 const ListedSchema = z.array(z.looseObject({ projectId: z.string() }));
 

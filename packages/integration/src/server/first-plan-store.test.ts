@@ -402,7 +402,7 @@ describe("first plan", () => {
     const sites = await callSitesOf(projectId);
     expect(sites).toHaveLength(1);
     expect(new Set(sites)).toEqual(new Set(["decomposition"]));
-    expect((await new ProjectRepository(db).get(projectId))?.status).toBe("active");
+    expect((await new ProjectHaltRepository(db).get(projectId))?.status).toBe("active");
 
     expect(await reports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
     expect(await reports().runPending()).toEqual([]);
@@ -573,7 +573,7 @@ describe("first plan", () => {
     expect(await delivery.runPending()).toEqual([]);
 
     expect(await workItemsOf(projectId)).toHaveLength(0);
-    const project = await new ProjectRepository(db).get(projectId);
+    const project = await new ProjectHaltRepository(db).get(projectId);
     expect(project?.status).toBe("blocked");
     const row = await db.execute(
       sql`SELECT plan_attempts AS "attempts", plan_last_error AS "error" FROM projects WHERE id = ${projectId}`,

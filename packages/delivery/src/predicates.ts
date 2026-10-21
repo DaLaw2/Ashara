@@ -1,0 +1,126 @@
+import { and, asc, eq, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { qualifiedColumn, workItems } from "@ashara/db";
+import type { DbHandle } from "@ashara/db";
+
+// Delivery's published predicates: the facts about a project's halt, its awaited plan revisions and
+// its work items that other contexts read the shared tables by. Each is spelled here once; a reader
+// in another context imports it (`@ashara/delivery/predicates`) instead of writing the SQL again.
+// This module imports nothing of Delivery and no other context, so any context Delivery itself
+// reads can import it without a cycle at load time.
+
+/** The columns of a work_items row a predicate reads; `workItems` itself, or an alias of it. */
+export interface WorkItemColumns {
+  readonly status: AnyColumn;
+  readonly blockedReason: AnyColumn;
+  readonly level: AnyColumn;
+  readonly taskSpec: AnyColumn;
+}
+
+/** The project's open block episode, `also` narrowing which one. */
+const openEpisode = (projectId: AnyColumn, also: SQL | null): SQL =>
+  sql`EXISTS (SELECT 1 FROM project_blocks hb WHERE hb.project_id = ${qualifiedColumn(projectId)} AND hb.ended_at IS NULL${also === null ? sql`` : sql` AND ${also}`})`;
+
+/** Delivery's halt as stored: the project has an open block episode, the halt's one record. */
+export const projectHalted = (projectId: AnyColumn): SQL => openEpisode(projectId, null);
+
+/**
+ * The project is halted on its budget: a spend cap's or the work ledger's halt, which refuses every
+ * model call the project would make.
+ */
+export const projectHaltedOnBudget = (projectId: AnyColumn): SQL => openEpisode(projectId, sql`hb.kind IN ('budget_cap', 'work_budget')`);
+
+/** The kind of the project's open block episode; null while it is not halted. */
+export const openHaltKind = (projectId: AnyColumn): SQL<unknown> =>
+  sql<unknown>`(SELECT hb.kind FROM project_blocks hb WHERE hb.project_id = ${qualifiedColumn(projectId)} AND hb.ended_at IS NULL)`;
+
+/**
+ * The project awaits a plan repair: a task the failure router gave up that no plan
+ * revision has re-planned around yet. Its dispatch is held until one has.
+ */
+export const pendingRepair = (projectId: AnyColumn): SQL =>
+  sql`EXISTS (SELECT 1 FROM plan_repairs pr WHERE pr.project_id = ${projectId} AND pr.plan_revision_id IS NULL)`;
+
+/**
+ * The project awaits a plan revision for a client's correction (a change, a confirmed proposal, an
+ * answer that changed an assumption) that no revision has taken in yet. Only the tasks citing a key
+ * it affects are held: the rest of the project still dispatches.
+ */
+export const pendingCorrection = (projectId: AnyColumn): SQL =>
+  sql`EXISTS (SELECT 1 FROM correction_holds ch WHERE ch.project_id = ${projectId} AND ch.plan_revision_id IS NULL)`;
+
+const ABANDONED = "Abandoned";
+const SUPERSEDED = "superseded";
+
+/**
+ * A work item a plan revision replaced while it was open: Abandoned with a `superseded` reason. It
+ * belongs to the revision that replaced it, not to the plan that stands; an Abandoned item with any
+ * other reason, or none, was given up and stays in the plan as given up.
+ */
+const supersededItem = (w: WorkItemColumns): SQL =>
+  sql`(${w.status} = ${ABANDONED} AND (${w.blockedReason}->>'source') IS NOT DISTINCT FROM ${SUPERSEDED})`;
+
+/** supersededItem in memory, on a row's status and its parsed blocked reason. */
+export function isSupersededItem(item: { readonly status: string; readonly blockedReason: { readonly source: string } | null | undefined }): boolean {
+  return item.status === ABANDONED && item.blockedReason?.source === SUPERSEDED;
+}
+
+/**
+ * The work item belongs to the project's current plan: no revision superseded it. A given-up item
+ * belongs to it: the plan was repaired around it, and its share of the plan's work stays counted.
+ */
+export const inCurrentPlan = (w: WorkItemColumns): SQL => sql`NOT ${supersededItem(w)}`;
+
+/** The work item was given up: Abandoned, and not by a revision that superseded it. */
+export const givenUpItem = (w: WorkItemColumns): SQL => sql`(${w.status} = ${ABANDONED} AND NOT ${supersededItem(w)})`;
+
+/**
+ * The work item belongs to the current plan and is not given up: its work is yet to be done, under
+ * way or done. Every Abandoned item is outside it, superseded or given up alike.
+ */
+export const liveInCurrentPlan = (w: WorkItemColumns): SQL => sql`${w.status} <> ${ABANDONED}`;
+
+const GOAL_TASK_LEVEL = "Task";
+const GOAL_TASK_ORIGIN = "decomposition";
+const PRODUCT_SCAFFOLD_ORIGIN = "product-scaffold";
+const REVIEW_ORIGIN = "review";
+const SPRINT0_ORIGIN = "sprint0";
+
+/**
+ * A goal task: a Task the plan's decomposition wrote (work_items.level 'Task', task_spec.origin
+ * 'decomposition'). Its work kind is not part of the definition: the plan store derives it from
+ * the origin, so it restates the origin and is null on a task planned before owners were assigned.
+ */
+export function isGoalTask(item: { readonly level: string; readonly origin: string | null }): boolean {
+  return item.level === GOAL_TASK_LEVEL && item.origin === GOAL_TASK_ORIGIN;
+}
+
+/** isGoalTask as a condition on a work_items row or an alias of it. */
+const goalTask = (w: WorkItemColumns): SQL => sql`(${w.level} = ${GOAL_TASK_LEVEL} AND ${w.taskSpec}->>'origin' = ${GOAL_TASK_ORIGIN})`;
+
+/** isGoalTask as a condition on a work_items row, for a query whose FROM names work_items unaliased. */
+export const goalTaskSql: SQL = goalTask(workItems);
+
+/** The project's Completed goal tasks (isGoalTask), oldest completion first. */
+export async function completedGoalTasks(db: DbHandle, projectId: string): Promise<Array<typeof workItems.$inferSelect>> {
+  return db
+    .select()
+    .from(workItems)
+    .where(and(eq(workItems.projectId, projectId), eq(workItems.status, "Completed"), goalTaskSql))
+    .orderBy(asc(workItems.updatedAt), asc(workItems.id));
+}
+
+/** The product scaffold: the task that lays out the product, which every check is red-run after. */
+export const productScaffoldTask = (w: WorkItemColumns): SQL => sql`${w.taskSpec}->>'origin' = ${PRODUCT_SCAFFOLD_ORIGIN}`;
+
+/** productScaffoldTask in memory, on a row's task_spec.origin as read. */
+export function isProductScaffoldOrigin(origin: string | null): boolean {
+  return origin === PRODUCT_SCAFFOLD_ORIGIN;
+}
+
+/** A Sprint 0 task, on its task_spec.origin as read: it sets up the environment before any product exists. */
+export function isSprint0Origin(origin: string | null | undefined): boolean {
+  return origin === SPRINT0_ORIGIN;
+}
+
+/** A plan revision's review task: the task that reviews the revision's check suites. */
+export const reviewTask = (w: WorkItemColumns): SQL => sql`${w.taskSpec}->>'origin' = ${REVIEW_ORIGIN}`;

@@ -1,7 +1,8 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { ProjectRepository, clientMessages, insertedRow, noOpenStop, projectHalted } from "@ashara/db";
-import type { Database, DbHandle, ProjectRecord } from "@ashara/db";
+import { ProjectRepository, clientMessages, insertedRow, projects } from "@ashara/db";
+import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
+import { noOpenStop, projectAtWork } from "../predicates.js";
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
 
@@ -119,8 +120,7 @@ export class ClientMessageRepository {
           eq(clientMessages.direction, "inbound"),
           eq(clientMessages.kind, "tender"),
           isNull(clientMessages.consumedAt),
-          sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${clientMessages.projectId} AND p.lifecycle = 'active')`,
-          sql`NOT ${projectHalted(clientMessages.projectId)}`,
+          sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.id} = ${clientMessages.projectId} AND ${projectAtWork()})`,
           noOpenStop(clientMessages.projectId),
         ),
       )
@@ -216,7 +216,7 @@ export class ClientMessageRepository {
 }
 
 export interface CreatedTender {
-  readonly project: ProjectRecord;
+  readonly project: ProjectRow;
   readonly message: ClientMessageRow;
 }
 

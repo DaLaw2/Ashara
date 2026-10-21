@@ -1,10 +1,11 @@
 import { and, asc, count, desc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, clientMessages, insertedRow, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
+import { noOpenStop } from "../predicates.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 

@@ -53,8 +53,9 @@
  * (a manifest, language, extension or toolchain name) in a non-test packages/<pkg>/src module,
  * against the tokens and exemptions of the rules file's [stack-literals] section, which is no
  * package's section (scripts/stack-literals.ts states what that scan reads and its blind spots),
- * and on a packages/integration/src/simulator test file over its budget of simulator runs
- * (scripts/simulator-run-budget.ts).
+ * on a packages/integration/src/simulator test file over its budget of simulator runs
+ * (scripts/simulator-run-budget.ts), and on a raw copy of a cross-context predicate outside the
+ * context that owns it (scripts/predicate-copies.ts).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -66,6 +67,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
 import { OPTIONAL_MEMBER_ALLOWLIST, findUnsuppliedOptionalMembers } from "./optional-deps.js";
+import { findPredicateCopies } from "./predicate-copies.js";
 import { findPriceColumnDefaults } from "./price-defaults.js";
 import { findRunBudgetFindings } from "./simulator-run-budget.js";
 import { findStackLiterals, parseStackLiteralRules, STACK_LITERALS_SECTION } from "./stack-literals.js";
@@ -1161,6 +1163,17 @@ function main(): void {
 
   violations.push(...stackLiteralViolations(root, packagesDir, packageDirs, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
   violations.push(...simulatorRunBudgetViolations(root));
+  // Not an import rule either: a cross-context predicate re-spelled outside its owner, which drifts
+  // from the owner's one spelling (scripts/predicate-copies.ts).
+  for (const copy of findPredicateCopies(root)) {
+    violations.push({
+      file: copy.file,
+      line: copy.line,
+      fromPkg: copy.file.split("/")[1] ?? copy.file,
+      specifier: `predicate: ${copy.rule}`,
+      reason: `a raw copy of a rule another context owns: ${copy.text}; use ${copy.use}`,
+    });
+  }
 
   // Report
   if (violations.length > 0) {

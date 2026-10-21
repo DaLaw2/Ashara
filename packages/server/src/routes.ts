@@ -6,9 +6,10 @@ import type { WorkItemId } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery";
 import { InvalidId, parseProjectId, parseWorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, WORK_ITEM_STATUSES } from "@ashara/delivery";
-import { EventStoreRepository, ProjectRepository } from "@ashara/db";
+import { EventStoreRepository } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
 import { WorkItemRowRepository, adaptWorkItemRepo, rowToWorkItem, workItemSaveRow } from "@ashara/delivery";
+import type { ProjectHaltRepository } from "@ashara/delivery";
 import {
   startUnlessHeld,
   TaskHeldForCorrection,
@@ -35,7 +36,7 @@ export interface AppDeps extends ClientChannelDeps {
   readonly eventStore: EventStoreRepository;
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
-  readonly projectRepo: ProjectRepository;
+  readonly projectRepo: ProjectHaltRepository;
 }
 
 type AppEnv = { Variables: { deps: AppDeps } };

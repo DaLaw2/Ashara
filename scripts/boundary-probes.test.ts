@@ -54,7 +54,13 @@ const MAP: Readonly<Record<string, PackageMap>> = {
         "src/intake.ts",
         "src/plan-report.ts",
         "src/plan-report.test.ts",
+        "src/predicates.ts",
+        "src/project-lifecycle.ts",
         "src/repositories/block-report.ts",
+        "src/repositories/burn-warning.ts",
+        "src/repositories/client-answer.ts",
+        "src/repositories/client-change.ts",
+        "src/repositories/client-receipt.ts",
         "src/repositories/delivered-report.ts",
         "src/repositories/early-warning.ts",
         "src/stack-choice.ts",
@@ -105,12 +111,12 @@ const ENTRY = "entry";
 /** Per package, its internal modules; `entry` may import every module and none may import it. */
 const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = {
   quality: {
-    verification: { allow: ["verdict", "checks", "environment", "suite-review"], host: "src/verification.ts", target: "src/gates/finalize.ts" },
+    verification: { allow: ["verdict", "checks", "environment", "suite-review", "acl"], host: "src/verification.ts", target: "src/gates/finalize.ts" },
     verdict: { allow: ["checks", "environment", "acl"], host: "src/dispatch-result.ts", target: "src/fault-class.ts" },
     checks: { allow: ["acl", "reviewer-record"], host: "src/task-checks.ts", target: "src/public-interface.ts" },
     "suite-review": { allow: ["checks", "acl"], host: "src/suite-review.ts", target: "src/repositories/suite-review.ts" },
     environment: { allow: [], host: "src/environment-check.ts", target: "src/environment-definition.ts" },
-    acceptance: { allow: ["verification", "reviewer-record"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
+    acceptance: { allow: ["verification", "reviewer-record", "acl"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
     "reviewer-record": { allow: [], host: "src/repositories/reviewer-outcome.ts", target: "src/repositories/reviewer-outcome.ts" },
     acl: { allow: [], host: "src/acl/engagement-acl.ts", target: "src/acl/delivery-acl.ts" },
     [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
@@ -125,8 +131,9 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
   engagement: {
     vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
     intake: { allow: ["vision", "inbound"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
-    inbound: { allow: ["vision", "reports"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
-    reports: { allow: ["vision"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
+    inbound: { allow: ["vision", "reports", "predicates"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
+    reports: { allow: ["vision", "predicates"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
+    predicates: { allow: [], host: "src/predicates.ts", target: "src/predicates.ts" },
     [ENTRY]: { allow: [], host: "src/model-schemas.ts", target: "src/index.ts" },
   },
 };
@@ -410,7 +417,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.symlinkSync(path.join(REPO, "node_modules"), path.join(into, "node_modules"), "dir");

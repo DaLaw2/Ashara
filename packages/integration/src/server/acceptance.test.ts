@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, isGoalTask, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { isGoalTask } from "@ashara/delivery/predicates";
 import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import {
@@ -762,7 +763,7 @@ describe("acceptance on main", () => {
       { status: "Abandoned", source: "acceptance_failed", reason: details, mainCommit: MAIN, origin: "acceptance", awaited: true, passed: false },
     ]);
     // The repair holds dispatch and readiness; nothing is reported as delivered.
-    expect(await new ProjectRepository(db).listActiveIds()).not.toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
     expect(await deliveredReports().runPending()).toEqual([]);
   });

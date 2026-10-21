@@ -1,7 +1,7 @@
-import { sql } from "drizzle-orm";
+import { sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
-import { INIT_MIGRATION, legacyMigrationFile, projectHalted, projects } from "@ashara/db";
+import { INIT_MIGRATION, legacyMigrationFile, projects } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { AGENT_CALL_SITE } from "./attempt.js";
 import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
@@ -226,9 +226,11 @@ function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: D
  * The evidence of one project's run: every task that had a dev session or an
  * llm_calls row, with each session's attempt record and each of its calls (when, by which site),
  * the project's llm_calls totals per task and provider, and every work item of the project with
- * the columns its spend is attributed by. Every row is validated on the way out of Postgres.
+ * the columns its spend is attributed by. Every row is validated on the way out of Postgres. The
+ * project reads 'blocked' while `projectHalted` holds of it: Delivery's halt, which the caller
+ * supplies from Delivery's published predicates, since Workplace is upstream of Delivery.
  */
-export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promise<RunEvidence> {
+export async function readRunEvidence(db: DbHandle, projectId: ProjectId, projectHalted: (projectId: AnyColumn) => SQL): Promise<RunEvidence> {
   const projectRows = await db.execute(
     sql`SELECT id, name, CASE WHEN ${projectHalted(projects.id)} THEN 'blocked' ELSE lifecycle END AS status FROM projects WHERE id = ${projectId}`,
   );

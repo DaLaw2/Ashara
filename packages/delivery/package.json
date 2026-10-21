@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./project-halt": "./src/project-halt.ts",
+    "./predicates": "./src/predicates.ts",
     "./work-item": "./src/work-item-language/index.ts"
   },
   "dependencies": {

@@ -1,7 +1,8 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { projects, visionDocuments, workItems, noOpenAnswer, noOpenStop, projectAtWork } from "@ashara/db";
+import { projects, visionDocuments, workItems } from "@ashara/db";
+import { noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { WorkItemRowRepository } from "./work-item.js";
 import { haltForPlanningStopped } from "./project-halt.js";
 

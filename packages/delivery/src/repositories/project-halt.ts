@@ -1,8 +1,11 @@
-import { and, asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
-import { ProjectRepository, noOpenStop, projectAtWork, projectBlocks, projects } from "@ashara/db";
-import type { DbHandle } from "@ashara/db";
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
+import { ProjectRepository, projectBlocks, projectRowColumns, projects, toProjectRow } from "@ashara/db";
+import type { DbHandle, ProjectRow } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { firstPlanUnreported, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
+import { pendingRepair, projectHalted } from "../predicates.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 
 // Delivery's one guard over the project halt. A project is halted
@@ -21,7 +24,7 @@ import type { ProjectBlockCause } from "../project-halt.js";
  * other halt holds the report until the project resumes.
  */
 export const projectReportsPlans = (): SQL =>
-  sql`(${projectAtWork()} OR (${projects.lifecycle} = 'active' AND EXISTS (SELECT 1 FROM project_blocks cb
+  sql`(${projectAtWork()} OR (${projectActive()} AND EXISTS (SELECT 1 FROM project_blocks cb
     WHERE cb.project_id = ${projects.id} AND cb.ended_at IS NULL AND cb.error_class = ${SPEND_CAP_ERROR_CLASS.deployment})))`;
 
 /** A project id named for a write that matches no project row. */
@@ -99,11 +102,60 @@ export async function haltForPlanningStopped(tx: DbHandle, id: ProjectId, lastEr
   await tx.insert(projectBlocks).values({ projectId: id, kind: "planning_stopped", errorClass: null, reason: lastError });
 }
 
+/** A project as the client sees it. */
+export interface ProjectRecord extends ProjectRow {
+  /**
+   * 'blocked' while Delivery has the project halted, otherwise Engagement's lifecycle (active,
+   * stopped, accepted). Only an active project is ever halted.
+   */
+  readonly status: string;
+}
+
+/** The columns a ProjectRecord is read from, the halt among them, in one statement. */
+const recordColumns = { ...projectRowColumns, halted: projectHalted(projects.id) };
+
+function toRecord(row: Parameters<typeof toProjectRow>[0] & { readonly halted: unknown }): ProjectRecord {
+  const project = toProjectRow(row);
+  return { ...project, status: z.boolean().parse(row.halted) ? "blocked" : project.lifecycle };
+}
+
 /**
  * The Project Record as Delivery reads and halts it: Engagement's record (db's ProjectRepository)
- * and the halt, whose every write is here.
+ * read with the halt, whose every write is here.
  */
 export class ProjectHaltRepository extends ProjectRepository {
+  override async get(id: ProjectId): Promise<ProjectRecord | null> {
+    const [row] = await this.db.select(recordColumns).from(projects).where(eq(projects.id, id)).limit(1);
+    return row ? toRecord(row) : null;
+  }
+
+  /** This client's projects, newest first. There is no unscoped listing. */
+  override async listByClient(clientId: string): Promise<ProjectRecord[]> {
+    const rows = await this.db
+      .select(recordColumns)
+      .from(projects)
+      .where(eq(projects.clientId, clientId))
+      .orderBy(desc(projects.createdAt), desc(projects.id));
+    return rows.map(toRecord);
+  }
+
+  /**
+   * The projects whose work may be dispatched: at work (active, not halted), no stop
+   * awaiting the Liaison, no plan repair awaited and no first-plan report awaited
+   * (firstPlanUnreported), oldest first. A client's correction awaiting its revision holds only the
+   * tasks citing a key it affects, each parked on its own row, so it does not hold the project.
+   * This read is the dispatch decision: a stop committed after it is ordered
+   * after the dispatch it gated.
+   */
+  async listActiveIds(): Promise<ProjectId[]> {
+    const rows = await this.db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingRepair(projects.id)}`, sql`NOT ${firstPlanUnreported()}`))
+      .orderBy(asc(projects.createdAt), asc(projects.id));
+    return rows.map((row) => parseProjectId(row.id, "projects.id"));
+  }
+
   /**
    * Halts a project at work and records why, with the cause's category,
    * opening the episode the Liaison reports to the client once. A project already halted
@@ -134,7 +186,7 @@ export class ProjectHaltRepository extends ProjectRepository {
       const candidates = await tx
         .select({ id: projects.id })
         .from(projects)
-        .where(and(eq(projects.lifecycle, "active"), noOpenStop(projects.id)))
+        .where(and(projectActive(), noOpenStop(projects.id)))
         .orderBy(asc(projects.id))
         .for("update");
       if (candidates.length === 0) return [];

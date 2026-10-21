@@ -51,8 +51,8 @@ async function accept(projectId: ProjectId): Promise<void> {
 
 /** The client-visible state, read the three ways; they must agree. */
 async function stateOf(projectId: ProjectId): Promise<string> {
-  const listed = (await new ProjectRepository(db).listByClient(clientId)).find((project) => project.id === projectId)?.status;
-  const single = (await new ProjectRepository(db).get(projectId))?.status;
+  const listed = (await new ProjectHaltRepository(db).listByClient(clientId)).find((project) => project.id === projectId)?.status;
+  const single = (await new ProjectHaltRepository(db).get(projectId))?.status;
   const oracle = z
     .array(z.object({ status: z.string() }))
     .parse((await db.execute(sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`)).rows)[0]?.status;

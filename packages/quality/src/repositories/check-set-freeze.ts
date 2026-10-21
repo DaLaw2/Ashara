@@ -1,11 +1,16 @@
 import { eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { checkSetFreezes } from "@ashara/db";
+import { checkSetFreezes, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
+import { reviewTask } from "../acl/delivery-acl.js";
 
 // Quality's freeze of a plan revision's check set: written when
 // the first task depending on the revision's review task is dispatched, with the check set the
 // review read as it then stood. After it, a review of that set reopens nothing.
+
+/** The review tasks a dispatched task depends on. */
+const review = alias(workItems, "review");
 
 const FrozenReviewsSchema = z.array(z.strictObject({ reviewTaskId: z.guid() }));
 
@@ -46,7 +51,7 @@ export class CheckSetFreezeRepository {
         ), '[]'::jsonb)
       FROM dependencies held
       JOIN work_items review ON review.id = held.to_id
-      WHERE held.from_id = ${taskId}::uuid AND review.task_spec->>'origin' = 'review'
+      WHERE held.from_id = ${taskId}::uuid AND ${reviewTask(review)}
       ON CONFLICT (review_task_id) DO NOTHING
       RETURNING review_task_id AS "reviewTaskId"`);
     return FrozenReviewsSchema.parse(result.rows).map((row) => row.reviewTaskId);

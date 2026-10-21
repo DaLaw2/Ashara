@@ -4,6 +4,7 @@ import { planRevisions, taskChecks, workBurnWarnings, workItems } from "@ashara/
 import type { DbHandle } from "@ashara/db";
 import type { BurnZone } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
+import { goalTaskSql, inCurrentPlan } from "@ashara/delivery/predicates";
 import { WORK_ITEM_STATUSES, parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { RiskRecords } from "../early-warning.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
@@ -34,18 +35,15 @@ function specOf(taskId: string, raw: unknown): ReturnType<typeof parseStoredTask
   }
 }
 
-/** The tasks no plan revision superseded. */
-const notSuperseded = sql`NOT (${workItems.status} = 'Abandoned' AND ${workItems.blockedReason}->>'source' = 'superseded')`;
-
 async function delivering(db: DbHandle, projectId: ProjectId): Promise<Array<{ readonly id: string; readonly done: boolean; readonly cites: readonly string[] }>> {
   const rows = await db
     .select({ id: workItems.id, status: workItems.status, taskSpec: workItems.taskSpec })
     .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), notSuperseded))
+    .where(and(eq(workItems.projectId, projectId), goalTaskSql, inCurrentPlan(workItems)))
     .orderBy(asc(workItems.id));
   return rows.flatMap((row) => {
     const spec = specOf(row.id, row.taskSpec);
-    if (spec?.origin !== "decomposition") return [];
+    if (spec === undefined) throw new RiskRecordUnreadable(`work item ${row.id}: a goal task that records no task_spec`);
     const status = StatusSchema.safeParse(row.status);
     if (!status.success) throw new RiskRecordUnreadable(`work item ${row.id}: status ${JSON.stringify(row.status)} is not a work item status`);
     if (spec.sources === undefined) throw new RiskRecordUnreadable(`work item ${row.id}: a decomposed task that records no cited vision items`);

@@ -2,10 +2,12 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, ty
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, correctionHolds, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingCorrection, pendingRepair, projectAtWork } from "@ashara/db";
+import { clientMessages, correctionHolds, devSessions, domainEvents, modelConfigs, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
+import { firstPlanTold, noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { CapabilityLevelSchema, higherCapability } from "../acl/finance-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 import { holdForCorrection, takeEvents } from "../domain/index.js";
+import { pendingCorrection, pendingRepair } from "../predicates.js";
 import type { AttemptGrade } from "../replan.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
@@ -597,7 +599,7 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<Du
         isNull(planRevisions.reportId),
         projectReportsPlans(),
         noOpenStop(projects.id),
-        sql`EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = ${projects.id} AND m.reports_on = 'first-plan')`,
+        firstPlanTold(projects.id),
       ),
     )
     .orderBy(asc(planRevisions.createdAt), asc(planRevisions.id));

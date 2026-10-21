@@ -1,8 +1,7 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { projects, rosterRoles, visionDocuments } from "../schema/index.js";
-import { noOpenStop, projectAtWork } from "./project.js";
 
 // A project's roster: the rows of its latest revision. Derived
 // from vision v1 before the first plan; the table is append-only.
@@ -50,12 +49,13 @@ class RosterProjectMissing extends Error {
 const noRoster = () => sql`NOT EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = ${projects.id})`;
 
 /**
- * Active projects with vision v1, no roster and nothing planned yet, oldest
- * first, each with vision v1. A project with a stop awaiting the Liaison is not
- * listed. A project already planned before rosters existed is not listed either:
- * its items were written without owners, and a roster now would own none of them.
+ * Projects every condition of `admitted` admits, with vision v1, no roster and nothing planned yet,
+ * oldest first, each with vision v1. The caller states which projects a roster is derived for in
+ * the words of the contexts that own the facts (a project at work, no stop awaiting the Liaison),
+ * which this package below every context cannot import. A project already planned before rosters
+ * existed is not listed: its items were written without owners, and a roster now would own none.
  */
-export async function listProjectsAwaitingRoster(db: DbHandle): Promise<ProjectAwaitingRosterRow[]> {
+export async function listProjectsAwaitingRoster(db: DbHandle, admitted: readonly [SQL, ...SQL[]]): Promise<ProjectAwaitingRosterRow[]> {
   const rows = await db
     .select({ id: projects.id, vision: visionDocuments })
     .from(projects)
@@ -65,12 +65,11 @@ export async function listProjectsAwaitingRoster(db: DbHandle): Promise<ProjectA
     )
     .where(
       and(
-        projectAtWork(),
+        ...admitted,
         isNull(projects.firstPlannedAt),
         isNull(projects.planStoppedAt),
         sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = ${projects.id})`,
         noRoster(),
-        noOpenStop(projects.id),
       ),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));

@@ -1,18 +1,19 @@
-import { and, asc, desc, eq, getTableName, isNotNull, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { insertedRow } from "../inserted-row.js";
 import { PROJECT_LIFECYCLES, projects } from "../schema/index.js";
 
-export interface ProjectRecord {
+/**
+ * A project row as stored: Engagement's lifecycle (active, stopped, accepted) and the identity
+ * every context reads. Delivery's halt is not read here: Delivery's ProjectHaltRepository reads the
+ * state the client sees, the halt included.
+ */
+export interface ProjectRow {
   readonly id: ProjectId;
   readonly name: string;
-  /**
-   * The state the client sees: 'blocked' while Delivery has the project halted, otherwise
-   * Engagement's lifecycle (active, stopped, accepted). Only an active project is ever halted.
-   */
-  readonly status: string;
+  readonly lifecycle: (typeof PROJECT_LIFECYCLES)[number];
   /** The client this project belongs to. */
   readonly clientId: string;
   readonly createdAt: Date;
@@ -20,113 +21,38 @@ export interface ProjectRecord {
   readonly workspacePath: string | null;
 }
 
-/**
- * A column named with its table. Drizzle renders a bare column unqualified in a select list, where
- * inside a subquery it would name the subquery's own column of that name.
- */
-const qualified = (column: AnyColumn): SQL => sql`${sql.identifier(getTableName(column.table))}.${sql.identifier(column.name)}`;
-
-/**
- * Delivery's halt as stored: the project has an open block
- * episode. The episode is the halt's one record, and Delivery's halt guard its only writer.
- */
-export const projectHalted = (projectId: AnyColumn): SQL =>
-  sql`EXISTS (SELECT 1 FROM project_blocks hb WHERE hb.project_id = ${qualified(projectId)} AND hb.ended_at IS NULL)`;
-
-/**
- * The project is at work: Engagement's lifecycle is 'active' (its lifecycle guard is the column's
- * only writer) and Delivery has not halted it. What every reader that gates, plans, takes in or
- * reports on work admits.
- */
-export const projectAtWork = (): SQL => sql`(${qualified(projects.lifecycle)} = 'active' AND NOT ${projectHalted(projects.id)})`;
-
-/**
- * The project reads the client's answers and changes: Engagement's lifecycle is 'active', halted or
- * not, since a halt pauses the work and never the reading of what the client said; except under a
- * budget halt (a spend cap's or the work ledger's), which refuses the reading's own model call.
- * Whether the work resumes stays with the halt's own exits.
- */
-export const projectReadsClientInput = (): SQL =>
-  sql`(${qualified(projects.lifecycle)} = 'active' AND NOT EXISTS (SELECT 1 FROM project_blocks rb
-    WHERE rb.project_id = ${qualified(projects.id)} AND rb.ended_at IS NULL AND rb.kind IN ('budget_cap', 'work_budget')))`;
-
 const LifecycleSchema = z.enum(PROJECT_LIFECYCLES);
 
-/** The columns a ProjectRecord is read from, the halt among them, in one statement. */
-const recordColumns = {
+/** The columns a ProjectRow is read from. */
+export const projectRowColumns = {
   id: projects.id,
   name: projects.name,
   lifecycle: projects.lifecycle,
-  halted: projectHalted(projects.id),
   clientId: projects.clientId,
   createdAt: projects.createdAt,
   workspacePath: projects.workspacePath,
 };
 
-interface ProjectRow {
+interface StoredProjectRow {
   readonly id: string;
   readonly name: string;
   readonly lifecycle: string;
-  readonly halted: unknown;
   readonly clientId: string;
   readonly createdAt: Date;
   readonly workspacePath: string | null;
 }
 
-function toRecord(row: ProjectRow): ProjectRecord {
-  const lifecycle = LifecycleSchema.parse(row.lifecycle);
+/** A row read by projectRowColumns, its lifecycle checked against Engagement's vocabulary. */
+export function toProjectRow(row: StoredProjectRow): ProjectRow {
   return {
     id: parseProjectId(row.id, "projects.id"),
     name: row.name,
-    status: z.boolean().parse(row.halted) ? "blocked" : lifecycle,
+    lifecycle: LifecycleSchema.parse(row.lifecycle),
     clientId: row.clientId,
     createdAt: row.createdAt,
     workspacePath: row.workspacePath,
   };
 }
-
-/**
- * True while the project has no inbound stop the Liaison has yet to consume
- * The Liaison consumes stops once per cycle, at its top; a stop
- * the client sends later in the cycle must already hold, so every reader that
- * admits only active projects to take in, plan, report on or dispatch also
- * requires this. A stop committed before such a read is honoured by it.
- */
-export const noOpenStop = (projectId: AnyColumn) =>
-  sql`NOT EXISTS (SELECT 1 FROM client_messages s WHERE s.project_id = ${projectId}
-    AND s.direction = 'inbound' AND s.kind = 'stop' AND s.consumed_at IS NULL)`;
-
-/**
- * The project awaits a plan repair: a task the failure router gave up that no plan
- * revision has re-planned around yet. Its dispatch is held until one has (listActiveIds).
- */
-export const pendingRepair = (projectId: AnyColumn) =>
-  sql`EXISTS (SELECT 1 FROM plan_repairs pr WHERE pr.project_id = ${projectId} AND pr.plan_revision_id IS NULL)`;
-
-/**
- * The project awaits a plan revision for a client's correction (a change, a confirmed proposal, an
- * answer that changed an assumption) that no revision has taken in yet. Only the tasks citing a key
- * it affects are held: the rest of the project still dispatches (listActiveIds does not read it).
- */
-export const pendingCorrection = (projectId: AnyColumn) =>
-  sql`EXISTS (SELECT 1 FROM correction_holds ch WHERE ch.project_id = ${projectId} AND ch.plan_revision_id IS NULL)`;
-
-/**
- * The project's first plan is written and the Liaison's report of it (reports_on 'first-plan') is
- * not yet posted. Its dispatch is held until the report is: the report tells the client that none of
- * the plan's tasks has started, and refuses to be posted once one has (PlanReportUnfounded), so a
- * task dispatched while a faulted post waits for its retry would leave the plan unreportable and the
- * project blocked (listActiveIds).
- */
-const firstPlanUnreported = (): SQL =>
-  sql`(${qualified(projects.firstPlannedAt)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM client_messages fr
-    WHERE fr.project_id = ${qualified(projects.id)} AND fr.direction = 'outbound' AND fr.reports_on = 'first-plan'))`;
-
-// An answer the Liaison has yet to read may change the vision: the project is
-// planned once its answers are in.
-export const noOpenAnswer = () =>
-  sql`NOT EXISTS (SELECT 1 FROM client_messages a WHERE a.project_id = projects.id
-    AND a.direction = 'inbound' AND a.kind = 'answer' AND a.consumed_at IS NULL)`;
 
 /** A workspace path could not be recorded on the project. */
 class WorkspacePathNotRecorded extends Error {
@@ -143,29 +69,29 @@ class WorkspacePathNotRecorded extends Error {
 /**
  * The Project Record: one row per tender, owned by one client. Its lifecycle is
  * Engagement's (its project-lifecycle guard); its halt, the open block episode, is Delivery's:
- * Delivery's repository extends this one with the only writes of it.
+ * Delivery's repository extends this one with the reads of it and the only writes of it.
  */
 export class ProjectRepository {
   constructor(protected readonly db: DbHandle) {}
 
-  async create(name: string, clientId: string): Promise<ProjectRecord> {
-    const rows = await this.db.insert(projects).values({ name, clientId }).returning(recordColumns);
-    return toRecord(insertedRow(rows, "projects", `create project ${JSON.stringify(name)} for client ${clientId}`));
+  async create(name: string, clientId: string): Promise<ProjectRow> {
+    const rows = await this.db.insert(projects).values({ name, clientId }).returning(projectRowColumns);
+    return toProjectRow(insertedRow(rows, "projects", `create project ${JSON.stringify(name)} for client ${clientId}`));
   }
 
-  async get(id: ProjectId): Promise<ProjectRecord | null> {
-    const [row] = await this.db.select(recordColumns).from(projects).where(eq(projects.id, id)).limit(1);
-    return row ? toRecord(row) : null;
+  async get(id: ProjectId): Promise<ProjectRow | null> {
+    const [row] = await this.db.select(projectRowColumns).from(projects).where(eq(projects.id, id)).limit(1);
+    return row ? toProjectRow(row) : null;
   }
 
   /** This client's projects, newest first. There is no unscoped listing. */
-  async listByClient(clientId: string): Promise<ProjectRecord[]> {
+  async listByClient(clientId: string): Promise<ProjectRow[]> {
     const rows = await this.db
-      .select(recordColumns)
+      .select(projectRowColumns)
       .from(projects)
       .where(eq(projects.clientId, clientId))
       .orderBy(desc(projects.createdAt), desc(projects.id));
-    return rows.map(toRecord);
+    return rows.map(toProjectRow);
   }
 
   /**
@@ -186,23 +112,6 @@ export class ProjectRepository {
       throw new WorkspacePathNotRecorded(id, path, "the conditional UPDATE matched no row yet the path is still unset");
     }
     return existing.workspacePath;
-  }
-
-  /**
-   * The projects whose work may be dispatched: at work (active, not halted), no stop
-   * awaiting the Liaison, no plan repair awaited and no first-plan report awaited
-   * (firstPlanUnreported), oldest first. A client's correction awaiting its revision holds only the
-   * tasks citing a key it affects, each parked on its own row, so it does not hold the project.
-   * This read is the dispatch decision: a stop committed after it is ordered
-   * after the dispatch it gated.
-   */
-  async listActiveIds(): Promise<ProjectId[]> {
-    const rows = await this.db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingRepair(projects.id)}`, sql`NOT ${firstPlanUnreported()}`))
-      .orderBy(asc(projects.createdAt), asc(projects.id));
-    return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }
 
   /** Every project with a target workspace, whatever its status: what startup prunes environment images of. */

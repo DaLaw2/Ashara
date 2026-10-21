@@ -4,7 +4,7 @@
  */
 
 import { z } from "zod";
-import { isGoalTask } from "@ashara/db";
+import { isGoalTask } from "@ashara/delivery/predicates";
 import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { readRunEvidence } from "@ashara/workplace";

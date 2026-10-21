@@ -6,6 +6,7 @@ export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
 export { TargetCheckoutClaimedElsewhere, claimTargetCheckouts } from "./target-claim.js";
 export { insertedRow } from "./inserted-row.js";
+export { qualifiedColumn } from "./qualified-column.js";
 export { isDatabaseConnectionFault } from "./connection-fault.js";
 
 export {
@@ -42,10 +43,9 @@ export {
   workItems,
 } from "./schema/index.js";
 
-export { ProjectRepository, noOpenAnswer, noOpenStop, pendingCorrection, pendingRepair, projectAtWork, projectHalted, projectReadsClientInput } from "./repositories/project.js";
-export type { ProjectRecord } from "./repositories/project.js";
+export { ProjectRepository, projectRowColumns, toProjectRow } from "./repositories/project.js";
+export type { ProjectRow } from "./repositories/project.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
-export { completedGoalTasks, goalTaskSql, isGoalTask } from "./repositories/goal-tasks.js";
 export { stepFaultLedger } from "./repositories/step-fault.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";

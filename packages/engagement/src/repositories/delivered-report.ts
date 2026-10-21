@@ -1,9 +1,11 @@
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, goalTaskSql, insertedRow, intakeReadings, isDatabaseConnectionFault, noOpenStop, projects, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, insertedRow, intakeReadings, isDatabaseConnectionFault, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { completedGoalTasks, givenUpItem, goalTaskSql } from "@ashara/delivery/predicates";
+import { noOpenStop } from "../predicates.js";
 import type { DeliveredReportFailureRecord, ReadingTold } from "../delivered-report.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
@@ -158,9 +160,8 @@ async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<strin
     .where(
       and(
         eq(workItems.projectId, projectId),
-        eq(workItems.status, "Abandoned"),
         goalTaskSql,
-        sql`${workItems.blockedReason}->>'source' IS DISTINCT FROM 'superseded'`,
+        givenUpItem(workItems),
       ),
     )
     .orderBy(asc(workItems.updatedAt), asc(workItems.id));

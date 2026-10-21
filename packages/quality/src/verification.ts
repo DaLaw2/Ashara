@@ -29,6 +29,7 @@ import { describeErrorChain, parseWorkItemId, renderElided, wrapError } from "@a
 import { createSessionId } from "@ashara/workplace";
 import { attemptSummary, outcomeRecord } from "@ashara/workplace";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, FoundationProbe, Outcome, TaskCheckRunPort } from "@ashara/workplace";
+import { isSprint0Origin } from "./acl/delivery-acl.js";
 import { checkPassed, checkRunVerdict, checkVerdict, describeProductChange, formatCheckRuns } from "./check-verdict.js";
 import type { CheckRunReport } from "./check-verdict.js";
 import {
@@ -1058,7 +1059,7 @@ export class TaskVerification {
     const probe = await runPostMergeProbe(scope, POST_MERGE_VERIFIER_ROLE, tested, commit, timeoutSeconds);
     let passed = environmentProbePassed(probe);
     let details = formatEnvironmentProbe(probe);
-    const noProduct = d.task.taskSpec?.origin === "sprint0" || d.task.taskSpec?.product === "absent";
+    const noProduct = isSprint0Origin(d.task.taskSpec?.origin) || d.task.taskSpec?.product === "absent";
     if (passed && !noProduct) {
       lease.extend(cellRunBoundMs([timeoutSeconds, timeoutSeconds]), "the post-merge build and test cell");
       const commands = await runPostMergeEnvironmentCommands(scope, POST_MERGE_VERIFIER_ROLE, tested, commit, timeoutSeconds);

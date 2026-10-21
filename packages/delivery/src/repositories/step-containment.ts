@@ -1,6 +1,7 @@
 import { stepFaultLedger } from "@ashara/db";
 import type { DbHandle } from "@ashara/db";
 import type { Clock, Logger, StepContainment } from "@ashara/shared";
+import { projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { projectBlockCause } from "../project-halt.js";
 import { ProjectHaltRepository } from "./project-halt.js";
 
@@ -14,7 +15,7 @@ import { ProjectHaltRepository } from "./project-halt.js";
 export function stepContainment(db: DbHandle, clock: Clock, escapes: (error: unknown) => boolean, logger: Logger): StepContainment {
   const halts = new ProjectHaltRepository(db);
   return {
-    ...stepFaultLedger(db, clock),
+    ...stepFaultLedger(db, clock, projectAtWork()),
     escapes,
     logger,
     halt: async (projectId, fault) => {

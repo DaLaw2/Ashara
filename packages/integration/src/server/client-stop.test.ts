@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, listProjectsAwaitingRoster, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ClientStops, ClientMessageRepository, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
@@ -10,6 +10,7 @@ import type { ProjectId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
+import { createRosterStore } from "@ashara/server/roster-store";
 import { projectState } from "../simulator/project-state.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
@@ -240,7 +241,7 @@ describe("a client's stop", () => {
 
     const gated = async () => (await gate()).map((item) => item.id);
     const tenders = async () => (await createIntakeStore(db).openTenders()).map((tender) => tender.projectId);
-    const toStaff = async () => (await listProjectsAwaitingRoster(db)).map((row) => row.projectId);
+    const toStaff = async () => (await createRosterStore(db).projectsAwaitingRoster()).map((row) => row.projectId);
     const toPlan = async () => (await createFirstPlanStore(db).projectsAwaitingPlan()).map((row) => row.projectId);
     const toReport = async () => (await listDuePlanReports(db)).map((row) => row.projectId);
     expect(await gated()).toContain(dispatchable.taskIds[0]);

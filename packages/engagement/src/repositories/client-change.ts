@@ -1,10 +1,13 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { clientMessages, noOpenStop, projectHalted, projectReadsClientInput, projects, visionDocuments } from "@ashara/db";
+import { clientMessages, projects, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import { liveInCurrentPlan, projectHalted } from "@ashara/delivery/predicates";
 import { projectWorkBudget } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { noOpenStop, projectReadsClientInput } from "../predicates.js";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
 import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
@@ -187,8 +190,14 @@ function citingStatus(taskId: string, status: string): CitingTask["status"] {
   }
 }
 
-/** The implementation tasks of the project's current plan (none abandoned) and the vision keys each cites. */
-const currentTasks = sql`w.level = 'Task' AND w.work_kind = 'implementation' AND w.status <> 'Abandoned'
+const w = alias(workItems, "w");
+
+/**
+ * The implementation tasks live in the project's current plan (liveInCurrentPlan) and the vision keys
+ * each cites. A given-up task is not one: the plan was repaired around it, and no work of it is left
+ * for a correction to touch.
+ */
+const currentTasks = sql`w.level = 'Task' AND w.work_kind = 'implementation' AND ${liveInCurrentPlan(w)}
   AND jsonb_typeof(w.task_spec->'sources') = 'array'`;
 
 /**

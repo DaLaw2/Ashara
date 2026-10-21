@@ -1,9 +1,8 @@
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, lte, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Clock, StepFaultLedger, StepFaultStanding } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { projects, stepFaults } from "../schema/index.js";
-import { projectAtWork } from "./project.js";
 
 const StandingRowSchema = z.object({ subjectId: z.string().min(1), faults: z.number().int().positive(), due: z.boolean() });
 
@@ -33,12 +32,14 @@ class StepFaultNotOnRecord extends Error {
  * The cycle steps' faults per subject, kept in step_faults so a backoff, and the
  * parking of a subject that exhausted its faults, outlive a restart. A backoff is set and read on
  * `clock`, the time the cycle itself runs on, never the database's: a wait measured on another
- * clock than the one that spaces the cycles passes in no number of cycles, or in none at all.
+ * clock than the one that spaces the cycles passes in no number of cycles, or in none at all. A
+ * parked subject is due again once its project is at work: `projectAtWork`, a condition on the
+ * joined projects row in the words of the context that owns it, which this package cannot import.
  */
-export function stepFaultLedger(db: DbHandle, clock: Clock): StepFaultLedger {
+export function stepFaultLedger(db: DbHandle, clock: Clock, projectAtWork: SQL): StepFaultLedger {
   return {
     async faultsOf(step) {
-      const due = sql<unknown>`(${lte(stepFaults.retryAt, new Date(clock.now()))} AND (${stepFaults.parkedAt} IS NULL OR ${projectAtWork()}))`;
+      const due = sql<unknown>`(${lte(stepFaults.retryAt, new Date(clock.now()))} AND (${stepFaults.parkedAt} IS NULL OR ${projectAtWork}))`;
       const rows = await db
         .select({ subjectId: stepFaults.subjectId, faults: stepFaults.faults, due })
         .from(stepFaults)

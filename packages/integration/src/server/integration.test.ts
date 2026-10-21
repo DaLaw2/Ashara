@@ -13,7 +13,7 @@ import type { ProjectId } from "@ashara/shared";
 import { bearerAuth } from "@ashara/server/middleware";
 import { createRoutes } from "@ashara/server/routes";
 import type { AppDeps } from "@ashara/server/routes";
-import { WorkItemRowRepository } from "@ashara/delivery";
+import { ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
@@ -81,7 +81,7 @@ beforeAll(async () => {
     eventStore,
     devSessionRepo,
     visionRepo,
-    projectRepo: new ProjectRepository(db),
+    projectRepo: new ProjectHaltRepository(db),
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: async (clientId, projectName, body) => {

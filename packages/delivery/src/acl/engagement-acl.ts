@@ -8,8 +8,9 @@ import type { VisionItem } from "../decomposition-types.js";
 /**
  * Anti-Corruption Layer: Engagement.
  *
- * With engagement-vision-acl.ts (Engagement's vision language alone), the only file in @ashara/delivery that
- * imports from @ashara/engagement.
+ * With engagement-vision-acl.ts (Engagement's vision language alone) and engagement-predicates-acl.ts
+ * (Engagement's published predicates alone), the only file in @ashara/delivery that imports from
+ * @ashara/engagement.
  * Delivery talks to the client only through Engagement: the loop asks the
  * Liaison to act on the client's stops, to answer the client's changes, to take in pending tenders, to read the
  * client's answers into the vision, to report

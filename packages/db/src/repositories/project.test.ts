@@ -145,28 +145,3 @@ describe("Project ownership", () => {
     expect(message).toMatch(/foreign key/);
   });
 });
-
-describe("Dispatch held until the first plan is reported", () => {
-  // The first-plan report says none of the plan's tasks has started: a project dispatched while a
-  // faulted post of it waits for its retry could never be reported on, so the gate's read omits it.
-  test("a planned project is listed active only once its first-plan report is posted", async () => {
-    const unplanned = await projects.create(`project-test-${NONCE}-unplanned`, clientId);
-    const planned = await projects.create(`project-test-${NONCE}-planned`, clientId);
-    await db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id = ${planned.id}`);
-
-    const active = await projects.listActiveIds();
-    expect(active).toContain(unplanned.id);
-    expect(active).not.toContain(planned.id);
-
-    // A report on another subject is not the first-plan report.
-    await db.execute(sql`
-      INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
-      VALUES (${planned.id}, 'outbound', 'report', 'Your stack.', 'stack-choice')`);
-    expect(await projects.listActiveIds()).not.toContain(planned.id);
-
-    await db.execute(sql`
-      INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
-      VALUES (${planned.id}, 'outbound', 'report', 'Your plan.', 'first-plan')`);
-    expect(await projects.listActiveIds()).toContain(planned.id);
-  });
-});

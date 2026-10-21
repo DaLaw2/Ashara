@@ -2,7 +2,9 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
-import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingCorrection, projectHalted } from "@ashara/db";
+import { clientMessages, planRevisions, projects, workItems } from "@ashara/db";
+import { firstPlanTold, noOpenStop } from "../acl/engagement-predicates-acl.js";
+import { isSupersededItem, pendingCorrection, projectHalted } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
@@ -116,7 +118,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
         projectReportsPlans(),
         isNotNull(projects.firstPlannedAt),
         sql`NOT ${pendingCorrection(projects.id)}`,
-        unreported("first-plan"),
+        sql`NOT ${firstPlanTold(projects.id)}`,
         noOpenStop(projects.id),
       ),
     )
@@ -127,6 +129,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
         id: workItems.id,
         projectId: workItems.projectId,
         level: workItems.level,
+        status: workItems.status,
         title: workItems.title,
         taskSpec: workItems.taskSpec,
         successCriteria: workItems.successCriteria,
@@ -142,7 +145,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
     try {
       standing = items
         .map((i) => ({ item: i, parsed: parseWorkItemJsonb(i) }))
-        .filter(({ parsed }) => parsed.blockedReason?.source !== "superseded")
+        .filter(({ item, parsed }) => !isSupersededItem({ status: item.status, blockedReason: parsed.blockedReason }))
         .map(({ item, parsed }) => ({ level: item.level, title: item.title, origin: parsed.taskSpec?.origin, dispatchCount: item.dispatchCount }));
       dropped = droppedOrderingHints(projectId, row.droppedDependencies);
     } catch (err) {

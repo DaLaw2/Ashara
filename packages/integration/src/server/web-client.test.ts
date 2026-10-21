@@ -14,7 +14,7 @@ import type { Hono } from "hono";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository, createDb, EventStoreRepository, ProjectRepository, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository, createDb, EventStoreRepository, SecretRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
 import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
@@ -26,7 +26,7 @@ import type { AppDeps } from "@ashara/server/routes";
 import type { SecretReader } from "@ashara/server/secrets";
 import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "@ashara/server/web-client";
 import type { WebClientDeps } from "@ashara/server/web-client";
-import { WorkItemRowRepository } from "@ashara/delivery";
+import { ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
@@ -70,7 +70,7 @@ function appDeps(): AppDeps {
     eventStore: new EventStoreRepository(db),
     devSessionRepo: new DevSessionRepository(db),
     visionRepo: new VisionRepository(db),
-    projectRepo: new ProjectRepository(db),
+    projectRepo: new ProjectHaltRepository(db),
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
@@ -763,7 +763,7 @@ describe("recorded web-client session", () => {
       await page.locator("#timeline li.kind-tender .msg-body", { hasText: tenderBody }).waitFor();
       step(`sent tender for project "${projectName}"; it appears in the timeline`);
 
-      const projects = await new ProjectRepository(db).listByClient(alice.id);
+      const projects = await new ProjectHaltRepository(db).listByClient(alice.id);
       const project = projects.find((p) => p.name === projectName);
       if (project === undefined) throw new Error(`project ${projectName} not found after the tender`);
 
@@ -900,7 +900,7 @@ describe("recorded web-client session", () => {
         { direction: "inbound", kind: "stop", projectId: project.id, inReplyTo: null },
         { direction: "outbound", kind: "report", projectId: project.id, inReplyTo: expect.any(String) },
       ]);
-      expect((await new ProjectRepository(db).get(project.id))?.status).toBe("stopped");
+      expect((await new ProjectHaltRepository(db).get(project.id))?.status).toBe("stopped");
       step(`Postgres rows for project ${project.id}: ${JSON.stringify(summary)}`);
 
       expect(pageErrors).toEqual([]);

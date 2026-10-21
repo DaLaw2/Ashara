@@ -1,10 +1,11 @@
 import { and, asc, eq, max, ne, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { dependencies, taskChecks, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { CapabilityLevelSchema } from "@ashara/finance";
 import type { CapabilityLevel } from "@ashara/finance";
-import { parseWorkItemJsonb } from "../acl/delivery-acl.js";
+import { isProductScaffoldOrigin, parseWorkItemJsonb, productScaffoldTask } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
@@ -71,6 +72,9 @@ interface TaskChecksRecord {
 type CheckFoundation =
   | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
   | { readonly kind: "none"; readonly reason: string };
+
+/** A project's product scaffolds, read beside a check task's foundations. */
+const scaffolds = alias(workItems, "s");
 
 const FoundationRowSchema = z.object({
   id: z.string(),
@@ -194,12 +198,12 @@ export class TaskCheckRepository {
              w.updated_at AS "completedAt",
              (SELECT max(s.updated_at) FROM work_items s
                WHERE s.project_id = w.project_id AND s.status = 'Completed'
-                 AND s.task_spec->>'origin' = 'product-scaffold') AS "scaffoldCompletedAt"
+                 AND ${productScaffoldTask(scaffolds)}) AS "scaffoldCompletedAt"
       FROM dependencies d JOIN work_items w ON w.id = d.to_id
       WHERE d.from_id = ${checkTaskId}
       ORDER BY w.updated_at DESC, w.id`);
     const rows = z.array(FoundationRowSchema).parse(result.rows);
-    const scaffold = rows.find((row) => row.origin === "product-scaffold");
+    const scaffold = rows.find((row) => isProductScaffoldOrigin(row.origin));
     const [only] = rows;
     const foundation = scaffold ?? (rows.length === 1 ? only : undefined);
     if (foundation === undefined) {

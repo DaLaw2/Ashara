@@ -1,8 +1,10 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { clientMessages, noOpenStop, projectHalted, projectReadsClientInput, projects } from "@ashara/db";
+import { clientMessages, projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import { projectHalted } from "@ashara/delivery/predicates";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { noOpenStop, projectReadsClientInput } from "../predicates.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { affectedKeysOf } from "./client-change.js";
