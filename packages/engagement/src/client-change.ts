@@ -31,7 +31,7 @@ import type { StoredVision, VisionAppend } from "./vision.js";
 // way one impact note goes out in reply to it, in the same transaction. No outcome refuses a change.
 // A halted project's changes are read too: a halt pauses the work, never the reading of what the client
 // said, so the contract is corrected at once and the work it touches waits for the halt's own end;
-// except under a halt the reading cannot get past (projectReadsClientInput), which the change waits out.
+// except under a halt the reading cannot get past, which the change waits out, as inboundDecision decides.
 
 /** Failed attempts to read one change after which the Liaison stops and blocks the project. */
 export const MAX_CHANGE_ATTEMPTS = 3;
@@ -215,7 +215,7 @@ interface ClientChangesDeps {
  * The Liaison's reading of the client's changes. Each unconsumed change is read by one structured call
  * at the intake site; what it does is recorded whole or not at all. A failed attempt leaves the change
  * unconsumed with the failure counted; at the cap the project is blocked and the change kept, and
- * whatever ends the halt sets its count back to none (restartClientReadings), so it is read afresh then.
+ * whatever ends the halt sets its count back to none (inboundDecision's resetOnHaltEnd), so it is read afresh then.
  */
 export class ClientChanges implements LiaisonClientChanges {
   constructor(private readonly deps: ClientChangesDeps) {}

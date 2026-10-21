@@ -294,6 +294,7 @@ describe("every terminal message carries the table", () => {
           kind: "infrastructure",
           cause: { errorClass: "InfrastructureFaultBudgetSpent", reason: "the substrate did not answer", spend: null, work: null },
           guarantees: guaranteeTableOf(UNSWEPT),
+          visionWritten: true,
         },
       ],
       postProjectReport: async (_episodeId, _on, body, verdicts) => {

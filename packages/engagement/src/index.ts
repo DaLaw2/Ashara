@@ -6,6 +6,10 @@ export type { AnswerOutcome, AnswerStore, LiaisonAnswers } from "./answers.js";
 export { ClientStops } from "./client-stop.js";
 export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
 export { ClientReceipts } from "./client-receipt.js";
+/** @testseam the integration inbound-message-policy.test.ts holds the readers to the decision, cell by cell */
+export { CLOSED_LIFECYCLES, inboundDecision } from "./inbound-policy.js";
+/** @testseam the integration inbound-message-policy.test.ts names the cells it enumerates */
+export type { InboundKind, InboundState } from "./inbound-policy.js";
 export type { ClientReceiptStore, LiaisonClientReceipts } from "./client-receipt.js";
 export { ClientChanges } from "./client-change.js";
 export type { ClientChangeOutcome, ClientChangeStore, LiaisonClientChanges } from "./client-change.js";

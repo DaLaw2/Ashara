@@ -119,7 +119,7 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # record read the sweeps, their evidence and the check disputes in Quality's published reads, only in
 # the repositories listed.
 allow = ["shared", "db", "finance", "delivery", "quality"]
-restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/client-change.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-receipt.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/told-report.ts", "src/stack-choice.ts"]
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/block-report.test.ts", "src/client-change.ts", "src/client-receipt.ts", "src/client-receipt.test.ts", "src/inbound-policy.ts", "src/inbound-policy.test.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-message.ts", "src/repositories/client-receipt.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/told-report.ts", "src/stack-choice.ts"]
 restrict.quality = ["src/repositories/block-report.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it (answers, stops, and changes read
@@ -127,13 +127,14 @@ restrict.quality = ["src/repositories/block-report.ts", "src/repositories/client
 # Every module reads the vision; intake reads only the tender message inbound recorded. The client's
 # stop is answered with a terminal report, so inbound reads the reports' guarantee table. The
 # published predicates (a project at work, a stop or an answer awaiting the Liaison, the first plan
-# told) and the vocabulary of the subjects a report is on import no other module; intake, inbound and
-# reports admit projects by them and name a report's subject in it.
+# told), the decision of when each inbound message is read and what the client is told of it, and the
+# vocabulary of the subjects a report is on import no other module; intake, inbound and reports admit
+# projects and messages by them, word a message's fate by them and name a report's subject in it.
 module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories/vision.ts"]
 module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
 module.inbound = ["src/answers.ts", "src/client-*.ts", "src/correction.ts", "src/project-lifecycle.ts", "src/repositories/client-*.ts"]
 module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts", "src/repositories/plan-report.ts"]
-module.predicates = ["src/predicates.ts", "src/report-subjects.ts"]
+module.predicates = ["src/predicates.ts", "src/report-subjects.ts", "src/inbound-policy.ts"]
 module.ports   = ["src/ports.ts"]
 module.entry   = ["src/index.ts", "src/model-schemas.ts"]
 module-allow.intake  = ["vision", "inbound", "predicates"]

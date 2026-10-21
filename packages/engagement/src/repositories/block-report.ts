@@ -1,5 +1,6 @@
-import { and, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
+import { projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
@@ -7,7 +8,7 @@ import { PROJECT_BLOCK_KINDS, endedHaltEpisodesWhere, haltEpisodeOf, haltEpisode
 import { awaitedRepairsRecordedBy, workItemSummaries } from "@ashara/delivery/reads";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 import { lastDisputeBy, sweepOfTerminal } from "@ashara/quality/published-reads";
-import { haltReported, noOpenStop, reportTold } from "../predicates.js";
+import { haltReported, noOpenStop, reportTold, visionWritten } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
@@ -184,6 +185,7 @@ type DueBlockReportRow =
       readonly kind: ProjectBlockKind;
       readonly cause: RecordedCauseRow;
       readonly guarantees: GuaranteeTable;
+      readonly visionWritten: boolean;
     }
   | {
       readonly subject: "project-blocked";
@@ -192,6 +194,7 @@ type DueBlockReportRow =
       readonly kind: "check_dispute";
       readonly dispute: BlockingDisputeRow;
       readonly guarantees: GuaranteeTable;
+      readonly visionWritten: boolean;
     }
   | {
       readonly subject: "project-blocked";
@@ -200,6 +203,7 @@ type DueBlockReportRow =
       readonly kind: "suite_review";
       readonly review: BlockingReviewRow;
       readonly guarantees: GuaranteeTable;
+      readonly visionWritten: boolean;
     }
   | {
       readonly subject: "project-blocked";
@@ -208,6 +212,7 @@ type DueBlockReportRow =
       readonly kind: "plan_repair";
       readonly abandoned: readonly BlockingAbandonmentRow[];
       readonly guarantees: GuaranteeTable;
+      readonly visionWritten: boolean;
     }
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
 
@@ -283,6 +288,17 @@ const notCoveredByPlanningStoppedReport = (episode: HaltEpisodeRef): SQL => sql`
  */
 const haltTold = (episode: HaltEpisodeRef): SQL => sql`(${haltReported(episode.id)} OR NOT ${notCoveredByPlanningStoppedReport(episode)})`;
 
+const VisionWrittenRowSchema = z.object({ written: z.boolean() });
+
+/**
+ * Whether the project's tender's reading has written its first vision: what a change sent during its
+ * halt waits for (inboundDecision). A tender is not read under a halt, so it holds for the halt's length.
+ */
+async function projectVisionWritten(db: DbHandle, projectId: ProjectId): Promise<boolean> {
+  const [row] = await db.select({ written: visionWritten(projects.id) }).from(projects).where(eq(projects.id, projectId));
+  return VisionWrittenRowSchema.parse(row).written;
+}
+
 /** The report's subject in the block-report step's ledger: one per episode and side (BlockReports). */
 function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id: string; readonly projectId: string }) {
   return { id: `${subject}:${row.id}`, projectId: parseProjectId(row.projectId, "project_blocks.project_id") };
@@ -334,21 +350,22 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
       const sweepId = await sweepOfTerminal(db, { kind: "halt", blockId: row.id });
       const guarantees = await readGuaranteeTable(db, sweepId === null ? { kind: "no-sweep", projectId: row.projectId } : { kind: "sweep", sweepId });
+      const written = await projectVisionWritten(db, projectId);
       if (kind.data === "check_dispute") {
         const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
-        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute, guarantees };
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute, guarantees, visionWritten: written };
       }
       if (kind.data === "suite_review") {
         const review = await blockingReview(db, row.projectId, row.blockedAt);
         if (review === null) throw new BlockingReviewMissing(row.id, row.projectId);
-        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review, guarantees };
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review, guarantees, visionWritten: written };
       }
       if (kind.data === "plan_repair") {
         const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
-        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned, guarantees };
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned, guarantees, visionWritten: written };
       }
       const cause = { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend), work: recordedWork(row.id, row.work) };
-      return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause, guarantees };
+      return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause, guarantees, visionWritten: written };
     },
   );
 

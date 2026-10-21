@@ -1,6 +1,6 @@
 import { and, asc, eq, isNotNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { qualifiedColumn } from "@ashara/db";
-import { projectBlocks, workItems } from "@ashara/db/schema/delivery";
+import { PROJECT_BLOCK_KINDS, projectBlocks, workItems } from "@ashara/db/schema/delivery";
 import type { DbHandle } from "@ashara/db";
 
 // Delivery's published predicates: the facts about a project's halt, its awaited plan revisions and
@@ -27,13 +27,19 @@ const openEpisode = (projectId: AnyColumn, also: SQL | null): SQL =>
 /** Delivery's halt as stored: the project has an open block episode, the halt's one record. */
 export const projectHalted = (projectId: AnyColumn): SQL => openEpisode(projectId, null);
 
-/**
- * The project is halted on its model work: on its budget (a spend cap's or the work ledger's halt,
- * which refuses every model call the project would make), or on a model's or its provider's failure,
- * the plan revision's among them, which a model call the project makes meanwhile would meet again.
- */
-export const projectHaltedOnModelWork = (projectId: AnyColumn): SQL =>
-  openEpisode(projectId, sql`hb.kind IN ('budget_cap', 'work_budget', 'model_failed', 'provider_failed', 'replan_stopped', 'replan_provider_failed')`);
+/** Every kind a halt can record: Delivery's halt vocabulary, which a reader deciding by the halt's kind decides over. */
+export const HALT_KINDS = PROJECT_BLOCK_KINDS;
+export type HaltKind = (typeof HALT_KINDS)[number];
+
+/** The project's open halt is of one of `kinds`. */
+export const projectHaltedOn = (projectId: AnyColumn, kinds: readonly [HaltKind, ...HaltKind[]]): SQL =>
+  openEpisode(
+    projectId,
+    sql`hb.kind IN (${sql.join(
+      kinds.map((kind) => sql`${kind}`),
+      sql`, `,
+    )})`,
+  );
 
 /** The kind of the project's open block episode; null while it is not halted. */
 export const openHaltKind = (projectId: AnyColumn): SQL<unknown> =>

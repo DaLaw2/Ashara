@@ -7,7 +7,7 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { restartClientReadings } from "../acl/engagement-acl.js";
 import { firstPlanUnreported, haltReported, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
-import { pendingRepair, projectHalted } from "../predicates.js";
+import { HALT_KINDS, pendingRepair, projectHalted, type HaltKind } from "../predicates.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 
 // Delivery's one guard over the project halt. A project is halted
@@ -74,12 +74,12 @@ async function lockProject(tx: DbHandle, id: ProjectId): Promise<{ readonly life
  * The open episode of a project whose row `tx` holds locked: read in its own statement after the
  * lock, so a halt committed by a writer the lock waited for is seen.
  */
-async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind: string; readonly reported: boolean } | null> {
+async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind: HaltKind; readonly reported: boolean } | null> {
   const [open] = await tx
     .select({ kind: projectBlocks.kind, reported: haltReported(projectBlocks.id) })
     .from(projectBlocks)
     .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)));
-  return open === undefined ? null : { kind: open.kind, reported: z.boolean().parse(open.reported) };
+  return open === undefined ? null : { kind: z.enum(HALT_KINDS).parse(open.kind), reported: z.boolean().parse(open.reported) };
 }
 
 /**
@@ -242,8 +242,8 @@ export class ProjectHaltRepository extends ProjectRepository {
   /**
    * The automatic way out of an infrastructure halt: in one transaction with the
    * project row locked, its open episode is ended as 'probe_passed' with what the probe observed,
-   * and its cause cleared, and the client's unconsumed changes and answers are read afresh
-   * (restartClientReadings). The Liaison then tells the client, once, that work resumed. A project no
+   * and its cause cleared, and the client's unconsumed messages whose count the halt's end resets
+   * are read afresh (restartClientReadings). The Liaison then tells the client, once, that work resumed. A project no
    * longer halted on infrastructure is left as it is: "moved". A halt whose own report is not yet
    * posted is left as it is too, "unreported": its report is due only while the episode is open,
    * so it is told before it can end.
@@ -264,7 +264,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         .update(projects)
         .set({ blockedCategory: null, blockedErrorClass: null, blockedReason: null })
         .where(eq(projects.id, id));
-      await restartClientReadings(tx, id);
+      await restartClientReadings(tx, id, open.kind);
       return "resumed";
     });
   }
@@ -274,15 +274,16 @@ export class ProjectHaltRepository extends ProjectRepository {
    * transaction with the project row locked, the open block episode is ended with who and why,
    * and the cause cleared. A project whose first planning gave up has its planning record reset,
    * so first planning runs again from no attempts; a plan revision's failed attempts are reset
-   * likewise, and so is every reading of the client's unconsumed changes and answers that ran out
-   * (restartClientReadings). The Liaison then tells the client, once, that work resumed. Only a
+   * likewise, and so is every reading of the client's unconsumed messages whose count the halt's end
+   * resets (restartClientReadings). The Liaison then tells the client, once, that work resumed. Only a
    * halted project is unblocked: any other throws ProjectNotBlocked, and nothing is written.
    */
   async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
     return this.db.transaction(async (tx) => {
       const locked = await lockProject(tx, id);
       if (!locked) throw new ProjectNotFound(id, "unblock the project");
-      if (!(await openEpisode(tx, id))) throw new ProjectNotBlocked(id, locked.lifecycle);
+      const open = await openEpisode(tx, id);
+      if (!open) throw new ProjectNotBlocked(id, locked.lifecycle);
 
       const [episode] = await tx
         .update(projectBlocks)
@@ -305,7 +306,7 @@ export class ProjectHaltRepository extends ProjectRepository {
           ...planningReset,
         })
         .where(eq(projects.id, id));
-      await restartClientReadings(tx, id);
+      await restartClientReadings(tx, id, open.kind);
       return { episodeId: episode.id };
     });
   }

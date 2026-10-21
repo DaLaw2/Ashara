@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, not, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { projects } from "@ashara/db";
 import { clientMessages, visionDocuments } from "@ashara/db/schema/engagement";
@@ -8,7 +8,7 @@ import { completedImplementationTaskIds, currentTasksCiting } from "@ashara/deli
 import { projectWork, projectWorkBudget, tasksWorkDrawn } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { noOpenStop, projectReadsClientInput } from "../predicates.js";
+import { clientMessageReadNow, noOpenStop } from "../predicates.js";
 import type { HoldCorrection } from "../ports.js";
 import { MAX_CHANGE_ATTEMPTS } from "../client-change.js";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
@@ -56,9 +56,9 @@ export async function affectedKeysOf(db: DbHandle, projectId: ProjectId, version
  * Unconsumed inbound changes of active projects, those at work first, each oldest first, with its project's current vision,
  * every key its versions used, its proposals awaiting confirmation and whether it is halted. A halted
  * project's change is read all the same (a halt pauses the work, not the reading), except under a
- * halt the reading cannot get past (projectReadsClientInput). A change at its cap of failed readings
- * waits out any halt: its reading would only halt the project again. A change of a project with no
- * vision yet waits for its tender's reading, and one of a project with a stop awaiting the Liaison is
+ * halt the reading cannot get past, and a change at its cap of failed readings waits out any halt,
+ * each as inboundDecision decides (clientMessageReadNow), which also holds a change of a project
+ * with no vision yet for its tender's reading. One of a project with a stop awaiting the Liaison is
  * not listed, as for answers.
  */
 export async function listUnconsumedChanges(db: DbHandle): Promise<OpenChange[]> {
@@ -94,10 +94,8 @@ async function openChangeRows(db: DbHandle, changeId: string | null): Promise<Op
         eq(clientMessages.direction, "inbound"),
         eq(clientMessages.kind, "change"),
         isNull(clientMessages.consumedAt),
-        projectReadsClientInput(),
-        // A change waits for the project's first vision: the tender's reading writes it, and a change has nothing to correct before.
-        sql`EXISTS (SELECT 1 FROM vision_documents vd WHERE vd.project_id = ${clientMessages.projectId})`,
-        or(lt(clientMessages.intakeAttempts, MAX_CHANGE_ATTEMPTS), not(projectHalted(projects.id))),
+        clientMessageReadNow("change"),
+        or(lt(clientMessages.intakeAttempts, MAX_CHANGE_ATTEMPTS), clientMessageReadNow("change", "atCap")),
         noOpenStop(clientMessages.projectId),
         changeId === null ? undefined : eq(clientMessages.id, changeId),
       ),
@@ -237,14 +235,15 @@ const StandingSchema = z.object({ lifecycle: z.string(), readsInput: z.boolean()
 
 /**
  * Locks the project row for the rest of `tx` and reads, after the lock, whether the project still
- * reads the client's input and whether it is halted: the lifecycle guard and the halt guard each
- * lock the row to write, so what this reads holds until `tx` ends. Null when there is no such project.
+ * reads a message of `kind` now (clientMessageReadNow) and whether it is halted: the lifecycle guard
+ * and the halt guard each lock the row to write, so what this reads holds until `tx` ends. Null when
+ * there is no such project.
  */
-export async function lockClientInputStanding(tx: DbHandle, projectId: ProjectId): Promise<{ readonly readsInput: boolean; readonly halted: boolean; readonly lifecycle: string } | null> {
+export async function lockClientInputStanding(tx: DbHandle, projectId: ProjectId, kind: "answer" | "change"): Promise<{ readonly readsInput: boolean; readonly halted: boolean; readonly lifecycle: string } | null> {
   const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
   if (locked === undefined) return null;
   const [row] = await tx
-    .select({ lifecycle: projects.lifecycle, readsInput: projectReadsClientInput(), halted: projectHalted(projects.id) })
+    .select({ lifecycle: projects.lifecycle, readsInput: clientMessageReadNow(kind), halted: projectHalted(projects.id) })
     .from(projects)
     .where(eq(projects.id, projectId));
   return row === undefined ? null : StandingSchema.parse(row);
@@ -296,7 +295,7 @@ export async function recordCorrection(
 
 function writeCorrection(db: Database, write: CorrectionWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
-    const standing = standingMoved(await lockClientInputStanding(tx, write.projectId), write.paused);
+    const standing = standingMoved(await lockClientInputStanding(tx, write.projectId, "change"), write.paused);
     if (standing !== null) throw new ChangeContextMoved(write.changeId, standing);
     const consumed = await tx
       .update(clientMessages)

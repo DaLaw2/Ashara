@@ -1,9 +1,11 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { ProjectRepository, insertedRow, projects } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { noOpenStop, projectAtWork } from "../predicates.js";
+import type { HaltKind } from "@ashara/delivery/predicates";
+import { INBOUND_KINDS, inboundDecision } from "../inbound-policy.js";
+import { clientMessageReadNow, noOpenStop, visionWritten } from "../predicates.js";
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
 
@@ -44,13 +46,22 @@ class TenderNotOpen extends Error {
 }
 
 /**
- * Sets the failed-reading count of every unconsumed change and answer of the project back to none,
- * keeping the last error's text on record (whose failure it was goes with the count it qualifies): run
- * in the transaction that ends the project's halt, so a message whose readings ran out while the halt
- * was open is read afresh once work resumes, and the resumption is not halted again at once for a
- * count no new reading made. Returns how many messages it set back.
+ * Sets the failed-reading count of every unconsumed message of the project whose kind the end of an
+ * `ended` halt resets (inboundDecision, in the project's vision state) back to none, keeping the last error's text on record (whose
+ * failure it was goes with the count it qualifies): run in the transaction that ends the project's
+ * halt, so a message whose readings ran out while the halt was open is read afresh once work resumes,
+ * and the resumption is not halted again at once for a count no new reading made. Returns how many
+ * messages it set back.
  */
-export async function restartClientReadings(db: DbHandle, projectId: ProjectId): Promise<number> {
+export async function restartClientReadings(db: DbHandle, projectId: ProjectId, ended: HaltKind): Promise<number> {
+  const resetKinds = (written: boolean): SQL | null => {
+    const kinds = INBOUND_KINDS.filter((kind) => inboundDecision({ lifecycle: "active", halt: ended, visionWritten: written }, kind).resetOnHaltEnd);
+    if (kinds.length === 0) return null;
+    const vision = visionWritten(clientMessages.projectId);
+    return sql`(${written ? vision : sql`NOT ${vision}`} AND ${inArray(clientMessages.kind, kinds)})`;
+  };
+  const byVision = [resetKinds(true), resetKinds(false)].filter((each): each is SQL => each !== null);
+  if (byVision.length === 0) return 0;
   const rows = await db
     .update(clientMessages)
     .set({ intakeAttempts: 0, intakeLastFailure: null })
@@ -58,7 +69,7 @@ export async function restartClientReadings(db: DbHandle, projectId: ProjectId):
       and(
         eq(clientMessages.projectId, projectId),
         eq(clientMessages.direction, "inbound"),
-        inArray(clientMessages.kind, ["change", "answer"]),
+        or(...byVision),
         isNull(clientMessages.consumedAt),
         sql`${clientMessages.intakeAttempts} > 0`,
       ),
@@ -132,9 +143,9 @@ export class ClientMessageRepository {
   }
 
   /**
-   * Inbound tenders not yet consumed, of active projects, oldest first: the
-   * Liaison's intake queue. A halted project's tender stays unconsumed and is
-   * not taken in, and so does one whose project has a stop awaiting the Liaison.
+   * Inbound tenders not yet consumed, read now by inboundDecision
+   * (clientMessageReadNow), oldest first: the Liaison's intake queue. One whose
+   * project has a stop awaiting the Liaison stays unconsumed and is not taken in.
    */
   async listUnconsumedTenders(): Promise<ClientMessageRow[]> {
     return this.db
@@ -145,7 +156,7 @@ export class ClientMessageRepository {
           eq(clientMessages.direction, "inbound"),
           eq(clientMessages.kind, "tender"),
           isNull(clientMessages.consumedAt),
-          sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.id} = ${clientMessages.projectId} AND ${projectAtWork()})`,
+          sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.id} = ${clientMessages.projectId} AND ${clientMessageReadNow("tender")})`,
           noOpenStop(clientMessages.projectId),
         ),
       )

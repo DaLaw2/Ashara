@@ -921,9 +921,8 @@ interface ProjectCharges {
 /**
  * The halts under which nothing reads the client's messages, the oracle's own copy: a budget halt
  * refuses the reading's model call, and one on a model's or its provider's failure, the plan
- * revision's too, would charge the reading for meeting it again (Delivery's projectHaltedOnModelWork,
- * which Engagement's projectReadsClientInput excludes).
- * @testseam model-work-halt-kinds.test.ts holds it to Delivery's and the receipt's spelling of the same set
+ * revision's too, would charge the reading for meeting it again (Engagement's inboundDecision).
+ * @testseam inbound-message-policy.test.ts holds it to inboundDecision and the readers' SQL, cell by cell
  */
 export const UNREAD_HALT_KINDS = [
   "budget_cap",

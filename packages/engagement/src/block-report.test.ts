@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { HALT_KINDS } from "@ashara/delivery/predicates";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
@@ -14,11 +15,14 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 /** The table these reports carry; guarantee-report.test.ts judges its text. */
 const TABLE: GuaranteeTable = { kind: "no-contract", sweep: { id: "s1", mainCommit: null } };
 
-function withTable(each: DistributiveOmit<Due, "guarantees">): Due {
-  return each.subject === "project-resumed" ? each : { ...each, guarantees: TABLE };
+/** A listed report as a test spells it: the table added, and the project's vision written unless it says otherwise. */
+type Spelled = DistributiveOmit<Due, "guarantees" | "visionWritten"> & { readonly visionWritten?: boolean };
+
+function withTable(each: Spelled): Due {
+  return each.subject === "project-resumed" ? each : { visionWritten: true, ...each, guarantees: TABLE };
 }
 
-function reportsFor(listed: ReadonlyArray<DistributiveOmit<Due, "guarantees">>) {
+function reportsFor(listed: readonly Spelled[]) {
   const due = listed.map(withTable);
   const posted: Array<{ key: string; body: string }> = [];
   const store: BlockReportStore = {
@@ -292,5 +296,61 @@ describe("halt reports state the observed cause", () => {
     const body = posted[0].body;
     expect(body).toContain(`"Port the importer", after 2 attempts counted against it. Ashara recorded why it was given up as this: it was moved by hand through Ashara's API.`);
     expect(body).not.toContain("superseded by the new importer");
+  });
+});
+
+// Every halt kind's report tells what a change sent during it does, as the inbound-message decision
+// decides for the halt: read during the pause, or read once it ends for the budget or the model work
+// that holds the reading.
+describe("each halt kind's report tells what a change sent meanwhile does", () => {
+  const cause = { errorClass: "SomethingFailed", reason: "the cause as recorded", spend: null, work: null };
+  const halts = [
+    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget"] as const).map(
+      (kind) => ({ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }) as const,
+    ),
+    { subject: "project-blocked", episodeId: "e1", projectId, kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port", attempts: 2, cause: { source: "api", reason: "r" } }] } as const,
+    { subject: "project-blocked", episodeId: "e1", projectId, kind: "check_dispute", dispute: { taskTitle: "Port", checkName: "imports", reason: "r", disputes: 3 } } as const,
+    { subject: "project-blocked", episodeId: "e1", projectId, kind: "suite_review", review: { times: 3, problems: ["p"] } } as const,
+  ];
+  const WAIT_WORDS: Readonly<Record<string, string>> = {
+    budget_cap: "Reading it takes model work, which the budget that paused this project does not allow, so Ashara reads it once the pause ends.",
+    work_budget: "Reading it takes model work, which the budget that paused this project does not allow, so Ashara reads it once the pause ends.",
+    model_failed: "Reading it takes model work, and what paused this project is model work failing",
+    provider_failed: "Reading it takes model work, and what paused this project is model work failing",
+    replan_stopped: "Reading it takes model work, and what paused this project is model work failing",
+    replan_provider_failed: "Reading it takes model work, and what paused this project is model work failing",
+  };
+
+  test("the halts enumerated are every halt kind", () => {
+    expect(halts.map((halt) => halt.kind).sort()).toEqual([...HALT_KINDS].sort());
+  });
+
+  test.each(halts.map((halt) => [halt.kind, halt] as const))("%s", async (kind, halt) => {
+    const { reports, posted } = reportsFor([halt]);
+    await reports.runPending();
+    const body = posted[0].body;
+    expect(body).toContain("A change you send meanwhile does not end this pause");
+    expect(body).toContain("The plan is revised for it once work resumes.");
+    const waits = WAIT_WORDS[kind];
+    if (waits === undefined) {
+      expect(body).toContain("Ashara reads it and records it during the pause");
+      expect(body).not.toContain("Reading it takes model work");
+    } else {
+      expect(body).toContain(waits);
+      expect(body).not.toContain("records it during the pause");
+    }
+  });
+
+  // A halt opened before the tender is read (the tender's reading exhausted as Ashara's fault): a change
+  // waits for the tender, which waits for the halt's end, whatever the halt.
+  test.each(halts.map((halt) => [halt.kind, halt] as const))("%s, before the tender is read", async (_kind, halt) => {
+    const { reports, posted } = reportsFor([{ ...halt, visionWritten: false }]);
+    await reports.runPending();
+    const body = posted[0].body;
+    expect(body).toContain("A change you send meanwhile does not end this pause");
+    expect(body).toContain("Ashara has not yet read the tender this project began with, and reads it once the pause ends");
+    expect(body).not.toContain("records it during the pause");
+    expect(body).not.toContain("Reading it takes model work");
+    expect(body).not.toContain("The plan is revised for it once work resumes.");
   });
 });

@@ -2,11 +2,14 @@ import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import type { HaltKind } from "@ashara/delivery/predicates";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
 import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { WAITS_FOR_HALT_END, inboundDecision } from "./inbound-policy.js";
+import type { Told } from "./inbound-policy.js";
 
 // The Liaison's reports on project halts: the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
@@ -89,6 +92,8 @@ type DueBlockReport =
       readonly kind: ProjectBlockKind;
       readonly cause: RecordedCause;
       readonly guarantees: GuaranteeTable;
+      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
+      readonly visionWritten: boolean;
     }
   | {
       readonly subject: "project-blocked";
@@ -97,6 +102,8 @@ type DueBlockReport =
       readonly kind: "suite_review";
       readonly review: BlockingReview;
       readonly guarantees: GuaranteeTable;
+      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
+      readonly visionWritten: boolean;
     }
   | {
       readonly subject: "project-blocked";
@@ -105,6 +112,8 @@ type DueBlockReport =
       readonly kind: "plan_repair";
       readonly abandoned: readonly BlockingAbandonment[];
       readonly guarantees: GuaranteeTable;
+      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
+      readonly visionWritten: boolean;
     }
   | {
       readonly subject: "project-blocked";
@@ -113,6 +122,8 @@ type DueBlockReport =
       readonly kind: "check_dispute";
       readonly dispute: BlockingDispute;
       readonly guarantees: GuaranteeTable;
+      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
+      readonly visionWritten: boolean;
     }
   /** `how` the halt ended: an owner's unblock, or the substrate probe passing after an infrastructure halt. */
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
@@ -324,23 +335,59 @@ function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: 
   return [opening, recordedCause(episodeId, halt, cause), nextStep(halt)].join("\n\n");
 }
 
+/** A halt for which inboundDecision tells a change something other than its reading under a halt: the decision does not hold together. */
+class HaltReportToldIncoherent extends Error {
+  constructor(
+    readonly halt: HaltKind,
+    readonly told: Told,
+  ) {
+    super(`a change sent during a '${halt}' halt was decided to be told '${told}', which is not a reading under a halt`);
+    this.name = "HaltReportToldIncoherent";
+  }
+}
+
+const CHANGE_DOES_NOT_END_PAUSE = "A change you send meanwhile does not end this pause";
+const PLAN_REVISED_ON_RESUMPTION = "The plan is revised for it once work resumes.";
+
 /**
- * What a change the client sends during a halt the operator alone ends does: it does not end the
- * halt, whose exits are the operator's resumption and the substrate probe, and the probe ends only
- * an infrastructure halt. It is read during the halt (a halt of these kinds pauses the work, never
- * the reading: projectReadsClientInput), except while a spend limit refuses the reading's model call:
- * the deployment's, which stops all work, or the project's own, which the reading meets under this
- * halt and waits out without holding up any other project's reading. The report may be posted
- * before either limit is reached, and either may be reached after it, so it states both. A reading
- * that fails on every attempt, or a change the record cannot take while the halt lasts, waits for the
- * halt's end, whose every exit sets its count of failed readings back to none (restartClientReadings),
- * so it is read afresh once work resumes.
+ * What a change the client sends during the halt does, as inboundDecision decides for the halt's
+ * kind. It never ends the halt, whose exits are the operator's resumption and the substrate probe.
+ * Under a halt its reading can get past it is read during the halt, except while a spend limit
+ * refuses the reading's model call: the deployment's, which stops all work, or the project's own,
+ * which the reading meets under this halt and waits out without holding up any other project's
+ * reading. The report may be posted before either limit is reached, and either may be reached after
+ * it, so it states both. A reading that fails on every attempt, or a change the record cannot take
+ * while the halt lasts, waits for the halt's end, which sets its count of failed readings back to none
+ * (resetOnHaltEnd), so it is read afresh once work resumes. Under a halt that holds its reading, it
+ * is read once the halt ends, for the reason the decision gives. Before the project's tender is read
+ * it waits for that reading, which waits for the halt's end.
  */
-const CHANGE_DURING_PAUSE =
-  "A change you send meanwhile does not end this pause: Ashara reads it and records it during the pause, unless a spending " +
-  "limit stops that reading (this project's own, or the one for all of Ashara's work), in which case it is read once that " +
-  "limit is raised. If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, " +
-  "Ashara reads it afresh once work resumes. The plan is revised for it once work resumes.";
+function changeSentDuringHalt(halt: HaltKind, visionWritten: boolean): string {
+  const told = inboundDecision({ lifecycle: "active", halt, visionWritten }, "change").told;
+  switch (told) {
+    case "read-during-pause":
+      return (
+        `${CHANGE_DOES_NOT_END_PAUSE}: Ashara reads it and records it during the pause, unless a spending ` +
+        "limit stops that reading (this project's own, or the one for all of Ashara's work), in which case it is read once that " +
+        "limit is raised. If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, " +
+        `Ashara reads it afresh once work resumes. ${PLAN_REVISED_ON_RESUMPTION}`
+      );
+    case "waits-for-budget":
+      return `${CHANGE_DOES_NOT_END_PAUSE}. ${WAITS_FOR_HALT_END.budget} ${PLAN_REVISED_ON_RESUMPTION}`;
+    case "waits-for-model-work":
+      return `${CHANGE_DOES_NOT_END_PAUSE}. ${WAITS_FOR_HALT_END["model-work"]} ${PLAN_REVISED_ON_RESUMPTION}`;
+    case "waits-for-pause":
+      return (
+        `${CHANGE_DOES_NOT_END_PAUSE}. Ashara has not yet read the tender this project began with, and reads it once the pause ends; ` +
+        "a change is read after it, since until then there is nothing for the change to correct."
+      );
+    case "read-at-work":
+    case "waits-for-tender":
+    case "closed":
+    case "stop":
+      throw new HaltReportToldIncoherent(halt, told);
+  }
+}
 
 /** Plain words: what stopped, why, and what ends it (a halt kind only older records hold). */
 function disputeBoundReport(dispute: BlockingDispute): string {
@@ -350,7 +397,6 @@ function disputeBoundReport(dispute: BlockingDispute): string {
       `to settle this after ${dispute.disputes} attempts.`,
     `The developer's last explanation: ${dispute.reason}`,
     `Nothing more will be built until the team's operator resolves this and resumes the project; you will be told when work resumes.`,
-    CHANGE_DURING_PAUSE,
   ].join("\n\n");
 }
 
@@ -362,7 +408,6 @@ function suiteReviewBoundReport(review: BlockingReview): string {
       `that test something you did not ask for, and the team has not been able to settle this after ${review.times} reviews.`,
     `What the last review found:\n${review.problems.map((problem) => `- ${problem}`).join("\n")}`,
     `Nothing will be built until the team's operator resolves this and resumes the project; you will be told when work resumes.`,
-    CHANGE_DURING_PAUSE,
   ].join("\n\n");
 }
 
@@ -432,7 +477,6 @@ function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): strin
       )
       .join("\n"),
     `Nothing more is built until the team's operator looks the project over and resumes it; you will be told when work resumes.`,
-    CHANGE_DURING_PAUSE,
   ].join("\n\n");
 }
 
@@ -459,9 +503,9 @@ function haltBody(due: Extract<DueBlockReport, { readonly subject: "project-bloc
   }
 }
 
-/** A halt's report: what paused the project, then the guarantee table of its terminal sweep. */
+/** A halt's report: what paused the project, what a change sent during it does, then the guarantee table of its terminal sweep. */
 function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
-  return `${haltBody(due)}\n\n${guaranteeSection(due.guarantees)}`;
+  return `${haltBody(due)}\n\n${changeSentDuringHalt(due.kind, due.visionWritten)}\n\n${guaranteeSection(due.guarantees)}`;
 }
 
 export class BlockReports implements LiaisonBlockReports {

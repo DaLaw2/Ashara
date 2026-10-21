@@ -3,10 +3,11 @@ import { z } from "zod";
 import { PROJECT_LIFECYCLES, projects } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
-import { openHaltKind } from "@ashara/delivery/predicates";
+import { HALT_KINDS, openHaltKind } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
-import { projectReadsClientInput } from "../predicates.js";
-import { receiptSubject } from "../client-receipt.js";
+import { INBOUND_KINDS, inboundDecision } from "../inbound-policy.js";
+import { visionWritten } from "../predicates.js";
+import { inboundState, receiptSubject } from "../client-receipt.js";
 import type { DueReceipt, ProjectStanding } from "../client-receipt.js";
 
 // The receipts owed to the client's messages: an inbound message is owed one until an outbound
@@ -15,15 +16,15 @@ import type { DueReceipt, ProjectStanding } from "../client-receipt.js";
 // consumption are written in one transaction under the project row's lock, after the project's state
 // and the message's consumption are read again, so a receipt never states a state that moved.
 
-const InboundKindSchema = z.enum(["tender", "answer", "change", "stop"]);
-const StandingRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.string().nullable(), readsInput: z.boolean() });
+const InboundKindSchema = z.enum(INBOUND_KINDS);
+const StandingRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.enum(HALT_KINDS).nullable(), visionWritten: z.boolean() });
 const DueRowSchema = z.object({ messageId: z.string(), projectId: z.string(), kind: z.string(), consumed: z.boolean(), stoppedProject: z.boolean() });
 
-/** The project's lifecycle, its open halt's kind, and whether its answers and changes are read: what a receipt states. */
+/** The project's lifecycle, its open halt's kind and whether its first vision is written: what a receipt states, and what inboundDecision decides the message's fate by. */
 const standingColumns = {
   lifecycle: projects.lifecycle,
   halt: openHaltKind(projects.id),
-  readsInput: projectReadsClientInput(),
+  visionWritten: visionWritten(projects.id),
 };
 
 /** A stored lifecycle and halt that do not hold together: a stopped or delivered project has no open halt. */
@@ -39,15 +40,16 @@ class ProjectStandingIncoherent extends Error {
 }
 
 function standingOf(projectId: string, row: unknown): ProjectStanding {
-  const { lifecycle, halt, readsInput } = StandingRowSchema.parse(row);
-  if (lifecycle === "active") return halt === null ? { kind: "at-work" } : { kind: "paused", halt, readsInput };
+  const { lifecycle, halt, visionWritten: written } = StandingRowSchema.parse(row);
+  if (lifecycle === "active") return halt === null ? { kind: "at-work", visionWritten: written } : { kind: "paused", halt, visionWritten: written };
   if (halt !== null) throw new ProjectStandingIncoherent(projectId, lifecycle, halt);
   return { kind: lifecycle === "stopped" ? "stopped" : "accepted" };
 }
 
 function sameStanding(a: ProjectStanding, b: ProjectStanding): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "paused" && b.kind === "paused") return a.halt === b.halt && a.readsInput === b.readsInput;
+  if (a.kind === "paused" && b.kind === "paused") return a.halt === b.halt && a.visionWritten === b.visionWritten;
+  if (a.kind === "at-work" && b.kind === "at-work") return a.visionWritten === b.visionWritten;
   return true;
 }
 
@@ -100,10 +102,10 @@ class ReceiptMessageNotFound extends Error {
   }
 }
 
-/** A receipt that consumes its message was asked for one a reader may still act on: only a closed project's unconsumed answer, change or tender is consumed by its receipt. */
+/** A receipt that consumes its message was asked for one a reader may still act on: only an unconsumed message inboundDecision says is never read is consumed by its receipt. */
 class ReceiptCannotClose extends Error {
   constructor(readonly messageId: string) {
-    super(`the receipt for client message ${messageId} was to consume it, but it is a stop, already consumed, or of a project that is not closed`);
+    super(`the receipt for client message ${messageId} was to consume it, but it is already consumed, or a message its project's state still reads`);
     this.name = "ReceiptCannotClose";
   }
 }
@@ -135,7 +137,7 @@ export async function postClientReceipt(
     if (inserted.length === 0) return "already-posted";
 
     if (write.closes) {
-      if (message.kind === "stop" || due.standing.kind === "at-work" || due.standing.kind === "paused") throw new ReceiptCannotClose(due.messageId);
+      if (inboundDecision(inboundState(due.standing), InboundKindSchema.parse(message.kind)).reading !== "never") throw new ReceiptCannotClose(due.messageId);
       const closed = await tx
         .update(clientMessages)
         .set({ consumedAt: new Date() })

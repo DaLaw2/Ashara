@@ -25,7 +25,7 @@ import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 // (planning replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
 // A halted project's answers are read too: a halt pauses the work, never the reading of what the client said,
 // and the work an answer touches waits for the halt's own end; except under a halt the reading cannot get
-// past (projectReadsClientInput), which the answer waits out.
+// past, which the answer waits out, as inboundDecision decides.
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
 export const MAX_ANSWER_ATTEMPTS = 3;
@@ -318,7 +318,7 @@ export class ClientAnswers implements LiaisonAnswers {
     if (answer.intakeAttempts >= MAX_ANSWER_ATTEMPTS) {
       if (answer.intakeLastError === null) throw new AnswerFailureUnrecorded(answer.id, answer.intakeAttempts);
       // At the cap with no halt to wait out: whatever ends a halt sets the count back to none
-      // (restartClientReadings), so only a count left by no halt at all leads here, and halts the project, blamed as it was.
+      // (inboundDecision's resetOnHaltEnd), so only a count left by no halt at all leads here, and halts the project, blamed as it was.
       throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError, recordedFailureOf(answer.intakeLastFailure));
     }
     let context = contextOf(answer);

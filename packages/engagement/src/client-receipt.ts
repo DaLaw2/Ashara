@@ -1,5 +1,8 @@
+import type { HaltKind } from "@ashara/delivery/predicates";
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import { WAITS_FOR_HALT_END, inboundDecision } from "./inbound-policy.js";
+import type { InboundKind, InboundState, Told } from "./inbound-policy.js";
 
 // The Liaison's receipt for every message the client sends. A message is never left unanswered,
 // whatever state its project is in: each inbound message gets one receipt, posted in reply to it the
@@ -9,16 +12,14 @@ import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@as
 // on. Only a message to a closed project (stopped or delivered) is consumed with its receipt: nothing
 // acts on it, and the receipt says so.
 
-/** What the client can send. */
-type InboundKind = "tender" | "answer" | "change" | "stop";
-
 /**
- * The project's state as the receipt tells it: at work, paused by a halt (its recorded kind, and
- * whether answers and changes are still read under it), stopped by the client, or delivered.
+ * The project's state as the receipt tells it: at work, paused by a halt of its recorded kind,
+ * stopped by the client, or delivered; while it is open, whether its tender's reading has written
+ * its first vision, which a change waits for.
  */
 export type ProjectStanding =
-  | { readonly kind: "at-work" }
-  | { readonly kind: "paused"; readonly halt: string; readonly readsInput: boolean }
+  | { readonly kind: "at-work"; readonly visionWritten: boolean }
+  | { readonly kind: "paused"; readonly halt: HaltKind; readonly visionWritten: boolean }
   | { readonly kind: "stopped" }
   | { readonly kind: "accepted" };
 
@@ -104,7 +105,7 @@ function standingLine(standing: ProjectStanding, work: DeploymentWork): string {
 }
 
 /** What ends a pause: only the substrate probe for an infrastructure halt, the operator's resumption for every other. */
-function pauseEnd(halt: string): string {
+function pauseEnd(halt: HaltKind): string {
   return halt === "infrastructure"
     ? "Ashara resumes the project by itself as soon as the machines it runs the work on answer again, and you will be told when it does."
     : "The pause ends when the team's operator resumes the project, and you will be told when it does.";
@@ -132,23 +133,29 @@ function stopFate(due: DueReceipt): string {
   return "No new work starts on this project from now on, and Ashara takes the stop in at the start of its next round of work.";
 }
 
-/**
- * Why a paused project's message waits for the pause's end, by the halt that holds it
- * (projectReadsClientInput): a budget halt refuses the reading's model call, and a halt on a model's or
- * its provider's failure would meet the reading's model call too.
- */
-function unreadWhilePaused(halt: string): string {
-  switch (halt) {
-    case "budget_cap":
-    case "work_budget":
-      return "Reading it takes model work, which the budget that paused this project does not allow, so Ashara reads it once the pause ends.";
-    case "model_failed":
-    case "provider_failed":
-    case "replan_stopped":
-    case "replan_provider_failed":
-      return "Reading it takes model work, and what paused this project is model work failing, so Ashara reads it once the pause ends rather than while it lasts.";
-    default:
-      return "Ashara reads it once the pause ends.";
+/** The project's state as inboundDecision reads it. */
+export function inboundState(standing: ProjectStanding): InboundState {
+  switch (standing.kind) {
+    case "at-work":
+      return { lifecycle: "active", halt: null, visionWritten: standing.visionWritten };
+    case "paused":
+      return { lifecycle: "active", halt: standing.halt, visionWritten: standing.visionWritten };
+    case "stopped":
+      return { lifecycle: "stopped" };
+    case "accepted":
+      return { lifecycle: "accepted" };
+  }
+}
+
+/** A message that is not a stop was decided to be told the stop's account: the decision does not hold together. */
+class ReceiptToldIncoherent extends Error {
+  constructor(
+    readonly messageId: string,
+    readonly kind: InboundKind,
+    readonly told: Told,
+  ) {
+    super(`the receipt for client message ${messageId}, a ${kind}, was decided to tell '${told}', which only a stop is told`);
+    this.name = "ReceiptToldIncoherent";
   }
 }
 
@@ -158,24 +165,32 @@ function messageFate(due: DueReceipt & { readonly kind: Exclude<InboundKind, "st
   if (openWhileStopped(standing, work)) {
     return "It is recorded, and nothing reads it while all work is stopped: Ashara reads it once the owner raises that limit and Ashara is started again.";
   }
-  switch (standing.kind) {
-    case "stopped":
-    case "accepted":
+  const told = inboundDecision(inboundState(standing), due.kind).told;
+  switch (told) {
+    case "closed":
       return `It is recorded, but not acted on: Ashara does no further work on a ${standing.kind === "stopped" ? "stopped" : "delivered"} project.`;
-    case "at-work":
+    case "read-at-work":
       return `Ashara reads it in this or the next round of work, ${afterReading(due.kind)}.`;
-    case "paused":
-      if (due.kind === "tender") return "Ashara reads it once the pause ends.";
-      if (!standing.readsInput) return unreadWhilePaused(standing.halt);
+    case "waits-for-tender":
+      return `Ashara reads it once it has read the tender this project began with, ${afterReading(due.kind)}.`;
+    case "waits-for-pause":
+      return "Ashara reads it once the pause ends.";
+    case "waits-for-budget":
+      return WAITS_FOR_HALT_END.budget;
+    case "waits-for-model-work":
+      return WAITS_FOR_HALT_END["model-work"];
+    case "read-during-pause":
       // A paused project at its own spend limit has the reading's model call refused; the reading waits for the limit.
       // A reading that fails on every attempt, or a message the record cannot take while paused, waits for the
-      // pause's end, whose every exit sets its count of failed readings back to none (restartClientReadings).
+      // pause's end, whose every exit sets its count of failed readings back to none (inboundDecision's resetOnHaltEnd).
       return (
         `Ashara reads it all the same, in this or the next round of work, ${afterReading(due.kind)}, unless this project has ` +
         `reached its own spending limit, in which case it is read once that limit is raised. ` +
         `If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh once work resumes. ` +
         `This ${NOUN[due.kind]} does not end the pause: the work it touches is planned for it once work resumes.`
       );
+    case "stop":
+      throw new ReceiptToldIncoherent(due.messageId, due.kind, told);
   }
 }
 
@@ -187,9 +202,9 @@ function receiptReport(due: DueReceipt, work: DeploymentWork): string {
   return [`Ashara has received your ${NOUN[due.kind]}.`, standingLine(due.standing, work), fate, ...end].join("\n\n");
 }
 
-/** A message to a closed project that no reader consumed: nothing will act on it, so its receipt consumes it. A stop is the stop step's alone. */
+/** A message no reader consumed and inboundDecision says is never read: nothing will act on it, so its receipt consumes it. */
 function closesMessage(due: DueReceipt): boolean {
-  return !due.consumed && due.kind !== "stop" && (due.standing.kind === "stopped" || due.standing.kind === "accepted");
+  return !due.consumed && inboundDecision(inboundState(due.standing), due.kind).reading === "never";
 }
 
 export class ClientReceipts implements LiaisonClientReceipts {

@@ -11,6 +11,7 @@ import type { EndHaltOnStop } from "../ports.js";
 import { stopProject } from "../project-lifecycle.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
+import { clientMessageReadNow } from "../predicates.js";
 import { ClientMessageRepository } from "./client-message.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
@@ -56,8 +57,8 @@ type ClientStopCommit =
   | { readonly kind: "stopped"; readonly reportDue: boolean }
   | { readonly kind: "already-stopped" };
 
-/** Inbound stops not yet consumed, of any project status, oldest first. */
-export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> {
+/** Inbound stops not yet consumed, read now by inboundDecision (clientMessageReadNow), oldest first. */
+export async function listUnconsumedStops(db: DbHandle): Promise<OpenStopRow[]> {
   const rows = await db
     .select({ id: clientMessages.id, projectId: clientMessages.projectId })
     .from(clientMessages)
@@ -66,6 +67,7 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
         eq(clientMessages.direction, "inbound"),
         eq(clientMessages.kind, "stop"),
         isNull(clientMessages.consumedAt),
+        sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.id} = ${clientMessages.projectId} AND ${clientMessageReadNow("stop")})`,
       ),
     )
     .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));

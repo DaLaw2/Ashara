@@ -348,7 +348,7 @@ describe("a change is read only while its reading can succeed", () => {
   });
 
   // The block reports of these halts tell the client a change sent meanwhile is read during the pause
-  // (block-report.ts CHANGE_DURING_PAUSE): each is a halt under which the change reader lists it.
+  // (inboundDecision's read-during-pause): each is a halt under which the change reader lists it.
   test.each(["plan_repair", "check_dispute", "suite_review"] as const)("a change sent during a %s halt, whose report says it is read during the pause, is listed for reading", async (category) => {
     const projectId = await contractedProject();
     expect(await halt(projectId, category)).toBe("blocked");

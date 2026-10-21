@@ -1,11 +1,11 @@
-import { and, asc, eq, isNull, lt, not, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { projects } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { noOpenStop, projectReadsClientInput } from "../predicates.js";
+import { clientMessageReadNow, noOpenStop } from "../predicates.js";
 import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
@@ -39,9 +39,8 @@ interface OpenAnswerRow {
  * Unconsumed inbound answers of active projects, those at work first, each oldest first, with its
  * project's current vision and whether it is halted. A halted project's answer is
  * read all the same (a halt pauses the work, not the reading), except under a
- * halt the reading cannot get past (projectReadsClientInput). An answer at its
- * cap of failed readings waits out any halt: its reading would only halt the
- * project again. A project with a stop awaiting the Liaison is not listed, as for tenders.
+ * halt the reading cannot get past, and an answer at its cap of failed readings
+ * waits out any halt, each as inboundDecision decides (clientMessageReadNow). A project with a stop awaiting the Liaison is not listed, as for tenders.
  */
 export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
   return openAnswerRows(db, null);
@@ -79,8 +78,8 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
         eq(clientMessages.direction, "inbound"),
         eq(clientMessages.kind, "answer"),
         isNull(clientMessages.consumedAt),
-        projectReadsClientInput(),
-        or(lt(clientMessages.intakeAttempts, MAX_ANSWER_ATTEMPTS), not(projectHalted(projects.id))),
+        clientMessageReadNow("answer"),
+        or(lt(clientMessages.intakeAttempts, MAX_ANSWER_ATTEMPTS), clientMessageReadNow("answer", "atCap")),
         noOpenStop(clientMessages.projectId),
         answerId === null ? undefined : eq(clientMessages.id, answerId),
       ),
@@ -205,7 +204,7 @@ type AnswerRecording =
 
 function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
-    const standing = standingMoved(await lockClientInputStanding(tx, write.projectId), write.paused);
+    const standing = standingMoved(await lockClientInputStanding(tx, write.projectId, "answer"), write.paused);
     if (standing !== null) throw new AnswerContextMoved(write.answerId, write.projectId, standing);
     const [project] = await tx
       .select({ firstPlannedAt: projects.firstPlannedAt })
