@@ -398,7 +398,7 @@ async function publishBestEffort(
     try {
       await deps.eventStore.publish(event);
     } catch (error) {
-      // eslint-disable-next-line ashara/catch-continue -- best effort: the transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the transition is committed before its events are published; domain_events is an operator audit log (GET /events is the bearer route) that no verdict, counter, charge or client text reads: each reads state written in the transition's own transaction, work_item_transitions for starts and reopens
       deps.logger.warn(
         "delivery.event-publish-failed",
         `failed to publish audit event for ${itemId} (transition already committed)`,

@@ -28,8 +28,8 @@ import { WORK_BOUNDS } from "./work-bounds.js";
  * makes for no task of its own is counted against the lane's task (and W1 names it as unrecorded);
  * W2 and W3 count the review and dispute loops only, not the stale-check rewrite, environment change
  * or replan loops, whose rounds W1's request bound covers; the freeze clause takes the first
- * `work_item.started` of a task depending on the review as the freeze, read by wall clock against
- * the findings' created_at.
+ * recorded move into InProgress of a task depending on the review as the freeze, read by wall clock
+ * against the findings' created_at.
  */
 
 /** The model requests the stand-ins' port received, by the lane's task that made each, or outside every lane. */
@@ -164,10 +164,10 @@ async function readLoopRecords(db: Database, projectId: string): Promise<LoopRec
         SELECT w.id, w.title, w.status,
           (SELECT count(*) FROM suite_review_findings f WHERE f.check_task_id = w.id)::int AS namings,
           (SELECT count(*) FROM check_disputes c WHERE c.check_task_id = w.id)::int AS disputes,
-          (SELECT count(*) FROM domain_events e WHERE e.event_type = 'work_item.reopened' AND e.payload->>'work_item_id' = w.id::text
-             AND e.payload ? 'review_task_id')::int AS "reviewReopens",
-          (SELECT count(*) FROM domain_events e WHERE e.event_type = 'work_item.reopened' AND e.payload->>'work_item_id' = w.id::text
-             AND e.payload ? 'disputed_check')::int AS "disputeReopens"
+          (SELECT count(*) FROM work_item_transitions t WHERE t.work_item_id = w.id AND t.from_status = 'Completed' AND t.to_status = 'Pending'
+             AND t.blocked_reason->'replanContext'->'raw' ? 'reviewTaskId')::int AS "reviewReopens",
+          (SELECT count(*) FROM work_item_transitions t WHERE t.work_item_id = w.id AND t.from_status = 'Completed' AND t.to_status = 'Pending'
+             AND t.blocked_reason->'replanContext'->'raw' ? 'disputedCheck')::int AS "disputeReopens"
         FROM work_items w WHERE w.project_id = ${projectId} AND w.work_kind = 'check' ORDER BY w.created_at, w.id`)
     ).rows,
   );
@@ -185,8 +185,8 @@ async function readLoopRecords(db: Database, projectId: string): Promise<LoopRec
         SELECT r.title, count(f.id)::int AS findings
         FROM work_items r
         JOIN LATERAL (
-          SELECT min(e.created_at) AS frozen_at FROM dependencies d
-          JOIN domain_events e ON e.event_type = 'work_item.started' AND e.payload->>'work_item_id' = d.from_id::text
+          SELECT min(t.created_at) AS frozen_at FROM dependencies d
+          JOIN work_item_transitions t ON t.work_item_id = d.from_id AND t.to_status = 'InProgress'
           WHERE d.to_id = r.id
         ) frozen ON frozen.frozen_at IS NOT NULL
         JOIN suite_review_findings f ON f.review_task_id = r.id AND f.created_at > frozen.frozen_at

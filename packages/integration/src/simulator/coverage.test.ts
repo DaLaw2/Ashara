@@ -4,7 +4,7 @@ import { RARE_UNDER_OWN_PROFILES, behavioursBelowFloor, countBehaviours, coverag
 import type { Snapshot } from "./invariants.js";
 import { Tape } from "./tape.js";
 
-function snapshotWith(events: Snapshot["events"]): Snapshot {
+function snapshotWith(transitions: Snapshot["transitions"]): Snapshot {
   return {
     projectId: "p1",
     project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryPending: false, passedSweepId: null, passedSweepReportId: null },
@@ -16,7 +16,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     corrections: [],
     spendUsd: 0,
     unrecordedCalls: 0,
-    events,
+    transitions,
     main: [],
     reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
     textFacts: {
@@ -35,20 +35,19 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
 }
 
 describe("sample", () => {
-  it("counts the transitions the events record, each item starting at Pending", () => {
+  it("counts the transitions work_item_transitions records", () => {
     const coverage = emptyCoverage();
     sample(coverage, snapshotWith([
-      { seq: 1, eventType: "work_item.created", workItemId: "a" },
-      { seq: 2, eventType: "work_item.started", workItemId: "a" },
-      { seq: 3, eventType: "work_item.completed", workItemId: "a" },
+      { workItemId: "a", from: "Pending", to: "InProgress" },
+      { workItemId: "a", from: "InProgress", to: "Completed" },
     ]), [], []);
     expect([...coverage.transitions].sort()).toEqual(["InProgress->Completed", "Pending->InProgress"]);
   });
 
-  // An unknown event is never collected unreported, which would put its item's later "from" wrong.
-  it("refuses an event kind it does not model instead of skipping it", () => {
-    const events = [{ seq: 1, eventType: "work_item.teleported", workItemId: "a" }];
-    expect(() => sample(emptyCoverage(), snapshotWith(events), [], [])).toThrow(/work_item\.teleported .* not in EVENT_TARGET/);
+  // A recorded change the state machine does not hold is never counted, nor skipped unreported.
+  it("refuses a recorded transition OUTBOUND_TRANSITIONS does not hold", () => {
+    const transitions = [{ workItemId: "a", from: "Completed", to: "InProgress" }];
+    expect(() => sample(emptyCoverage(), snapshotWith(transitions), [], [])).toThrow(/Completed->InProgress .* OUTBOUND_TRANSITIONS does not hold/);
   });
 });
 

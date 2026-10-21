@@ -103,7 +103,8 @@ const checkRow = z.object({
   name: z.string(),
   files: z.array(z.object({ path: z.string() })),
 });
-const eventRow = z.object({ seq: z.number(), eventType: z.string(), workItemId: z.string().nullable() });
+/** One status change of a work item, recorded by work_items' trigger in the statement that made it. */
+const transitionRow = z.object({ workItemId: z.string(), from: z.string(), to: z.string() });
 const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
 /**
  * A client correction recorded as holding work: the vision version it wrote, the keys it affects, and
@@ -130,7 +131,8 @@ export interface Snapshot {
   readonly corrections: ReadonlyArray<z.infer<typeof correctionRow>>;
   readonly spendUsd: number;
   readonly unrecordedCalls: number;
-  readonly events: ReadonlyArray<z.infer<typeof eventRow>>;
+  /** Every status change of the project's work items, oldest first (work_item_transitions). */
+  readonly transitions: ReadonlyArray<z.infer<typeof transitionRow>>;
   readonly main: readonly MainCommit[];
   /** What the client was sent and the records each report is rendered from (I4). */
   readonly reports: ReportRecords;
@@ -216,12 +218,12 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
       await db.execute(sql`
         SELECT ch.vision_version AS "visionVersion", ch.affected,
                COALESCE((SELECT json_agg(DISTINCT w.title) FROM work_items w
-                 JOIN domain_events e ON e.event_type = 'work_item.started' AND e.payload->>'work_item_id' = w.id::text
+                 JOIN work_item_transitions t ON t.work_item_id = w.id AND t.to_status = 'InProgress'
                  WHERE w.project_id = ch.project_id AND w.level = 'Task'
                    AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
                      THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(ch.affected))
-                   AND e.created_at > ch.created_at
-                   AND e.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
+                   AND t.created_at > ch.created_at
+                   AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
                  '[]'::json) AS "startedWhileHeld"
         FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
     ).rows,
@@ -236,14 +238,13 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   );
   // I5 is judged on this row: without it the spend would read as zero and the cap could not be seen crossed.
   if (spend === undefined) throw new SnapshotRowMissing(projectId, "llm_calls", "the spend aggregate row");
-  const events = z.array(eventRow).parse(
+  const transitions = z.array(transitionRow).parse(
     (
       await db.execute(sql`
-        SELECT row_number() OVER (ORDER BY created_at, timestamp, event_id)::int AS seq, event_type AS "eventType",
-               payload->>'work_item_id' AS "workItemId"
-        FROM domain_events
-        WHERE payload->>'work_item_id' IN (SELECT id::text FROM work_items WHERE project_id = ${projectId})
-        ORDER BY created_at, timestamp, event_id`)
+        SELECT t.work_item_id AS "workItemId", t.from_status AS "from", t.to_status AS "to"
+        FROM work_item_transitions t JOIN work_items w ON w.id = t.work_item_id
+        WHERE w.project_id = ${projectId}
+        ORDER BY t.created_at, t.id`)
     ).rows,
   );
   return {
@@ -257,7 +258,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     corrections,
     spendUsd: spend.spend,
     unrecordedCalls: spend.unrecorded,
-    events,
+    transitions,
     main: project.workspacePath === null ? [] : await mainLog(project.workspacePath),
     reports: await readReportRecords(db, projectId),
     textFacts: await readTextFactRecords(db, projectId, project.workspacePath),

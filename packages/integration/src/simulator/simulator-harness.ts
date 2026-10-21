@@ -101,7 +101,7 @@ export function replayed(test: TestScope, seed: number, decisions: RunResult["de
 }
 
 /** A directed run's shape; its `signal` stops the run before its test ends, as the test's own signal does at the end. */
-type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject" | "signal"> & { readonly profile?: Profile };
+type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject" | "alterDatabase" | "signal"> & { readonly profile?: Profile };
 
 /**
  * The directed tier: each fault, plant and misbehaviour a test judges
@@ -140,7 +140,7 @@ const LIVENESS_WALL_CLOCK_MS = Number.POSITIVE_INFINITY;
  * cycle: a persona's loop runs to its own bound, and the run ends by cycles alone.
  * @testseam the termination test files run each persona and plant through it
  */
-export function liveness(test: TestScope, directions: readonly Direction[], scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles">> = {}): Promise<RunResult> {
+export function liveness(test: TestScope, directions: readonly Direction[], scenario: Partial<Pick<RunOptions, "mutation" | "maxCycles" | "alterDatabase">> = {}): Promise<RunResult> {
   return runSeed({ signal: runSignal(test), seed: 1, profile: "liveness", tape: { kind: "directed", directions }, databaseUrl, template, scratchRoot, timeoutMs: LIVENESS_WALL_CLOCK_MS, maxCycles: MAX_CYCLES, ...scenario });
 }
 

@@ -98,7 +98,7 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
     corrections: [],
     spendUsd: 0,
     unrecordedCalls: 0,
-    events: [],
+    transitions: [],
     main: [],
     reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
     textFacts: {

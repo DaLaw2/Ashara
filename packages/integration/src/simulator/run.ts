@@ -77,6 +77,12 @@ export interface RunOptions {
    */
   readonly corruptSecondProject?: boolean;
   /**
+   * Run on the run's database once it is made, before anything of the run is written: a test's
+   * change to what the database keeps (a log that loses its rows), the verdicts judged on what is left.
+   * @testseam the directed tier's evidence tests pass it
+   */
+  readonly alterDatabase?: (db: Database) => Promise<void>;
+  /**
    * Ends the run at its next step once aborted: the run rejects with RunAborted after its cleanup,
    * so nothing of it outlives whatever started it (a test that timed out). Policy default: with none,
    * the run ends only on its own terms or its wall clock.
@@ -626,7 +632,7 @@ function firstQuestion(messages: ReadonlyArray<{ readonly id: string; readonly d
 function executionEvidence(snapshot: Snapshot, statuses: readonly string[]): string[] {
   const seen = new Set<string>();
   for (const status of statuses) if (status === "refused" || status === "interrupted" || status === "failed" || status === "blocked") seen.add(status);
-  for (const event of snapshot.events) if (event.eventType === "work_item.completed") seen.add("completed");
+  for (const transition of snapshot.transitions) if (transition.to === "Completed") seen.add("completed");
   for (const item of snapshot.items) {
     const source = sourceOf(item.blockedReason);
     if (source === "environment_unavailable") seen.add("environment_blocked");
@@ -639,9 +645,12 @@ function executionEvidence(snapshot: Snapshot, statuses: readonly string[]): str
     if (source === "context_window_exceeded") seen.add("context_exceeded");
     if (source === "no_wider_model") seen.add("no_wider_model");
   }
-  for (const event of snapshot.events) {
-    if (event.eventType === "work_item.awaiting_environment") seen.add("environment_change_requested");
-    if (event.eventType === "work_item.awaiting_checks") seen.add("disputed");
+  // A task waits on an environment change only once its environment task is opened, and on
+  // rewritten checks only once a check task is reopened: each leaves that durable record.
+  for (const item of snapshot.items) if (item.workKind === "environment" && item.origin === "environment-change") seen.add("environment_change_requested");
+  const checkTasks = new Set(snapshot.items.filter((item) => item.workKind === "check").map((item) => item.id));
+  for (const transition of snapshot.transitions) {
+    if (checkTasks.has(transition.workItemId) && transition.from === "Completed" && transition.to === "Pending") seen.add("disputed");
   }
   return [...seen];
 }
@@ -908,6 +917,7 @@ async function runAlone(options: RunOptions, log: string[]): Promise<RunResult> 
     const db = database;
     const observing = createDb(db.url, (config) => new pg.Pool({ ...config, application_name: "ashara-sim-observer", max: 2 }));
     observer = observing;
+    if (options.alterDatabase !== undefined) await options.alterDatabase(observing);
     const keyDir = await mkdtemp(join(options.scratchRoot, "ashara-sim-key-"));
     const keyFile = join(keyDir, "master.key");
     createKeyFile(keyFile);

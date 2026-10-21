@@ -6,7 +6,6 @@ import type { AcceptanceSweep } from "@ashara/quality";
 import { ATTEMPT_TERMINALS } from "@ashara/workplace";
 import { BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { PROJECT_STATUSES } from "@ashara/engagement";
-import type { WorkItemStatus } from "@ashara/delivery";
 import { CORRECTION_PAIRS } from "./correction-draws.js";
 import type { Database } from "./database.js";
 import { APPLICABLE_FAULTS, SEAM_KINDS } from "./faults.js";
@@ -131,53 +130,26 @@ export function mergeCoverage(into: Coverage, from: Coverage): void {
   for (const key of COVERAGE_KEYS) for (const value of from[key]) into[key].add(value);
 }
 
-/** The status each domain event moves its item to; null for an event that is no transition. */
-const EVENT_TARGET: Readonly<Record<string, WorkItemStatus | null>> = {
-  "work_item.started": "InProgress",
-  "work_item.completed": "Completed",
-  "work_item.failed": "Failed",
-  "work_item.blocked": "Blocked",
-  "work_item.unblocked": "Pending",
-  "work_item.replanned": "Pending",
-  "work_item.abandoned": "Abandoned",
-  // giveUpWorkItem: an open item given up, its cause on record; also the defect a failed acceptance sweep
-  // opens and gives up.
-  "work_item.given_up": "Abandoned",
-  "work_item.superseded": "Abandoned",
-  "work_item.requeued": "Pending",
-  "work_item.reopened": "Pending",
-  "work_item.awaiting_checks": "Pending",
-  "work_item.awaiting_environment": "Pending",
-  "work_item.created": null,
-};
+const ALL_TRANSITIONS = WORK_ITEM_STATUSES.flatMap((from) => OUTBOUND_TRANSITIONS[from].map((to) => `${from}->${to}`));
 
-/** A work item's domain event EVENT_TARGET does not map: its transition, and every later one of the item, is unknown. */
-class UnmodelledDomainEvent extends Error {
+/** A recorded status change OUTBOUND_TRANSITIONS does not hold: production's writer validates each, so the record is not one it wrote. */
+class UnmodelledTransition extends Error {
   constructor(
-    readonly eventType: string,
+    readonly transition: string,
     readonly workItemId: string,
-    readonly seq: number,
   ) {
-    super(`coverage: domain event ${eventType} (seq ${seq}) of work item ${workItemId} is not in EVENT_TARGET; model it before the run's transitions can be counted`);
-    this.name = "UnmodelledDomainEvent";
+    super(`coverage: work_item_transitions records ${transition} of work item ${workItemId}, which OUTBOUND_TRANSITIONS does not hold; the run's transitions cannot be counted`);
+    this.name = "UnmodelledTransition";
   }
 }
 
-/**
- * The transitions the run's domain events record, each item starting at Pending. An event this
- * table does not know stops the run, so a new event kind cannot pass unmodelled.
- */
+/** The transitions work_item_transitions records; one OUTBOUND_TRANSITIONS does not hold stops the run. */
 function transitionsOf(snapshot: Snapshot): Set<string> {
-  const status = new Map<string, WorkItemStatus>();
   const taken = new Set<string>();
-  for (const event of snapshot.events) {
-    if (event.workItemId === null) continue;
-    const to = Object.hasOwn(EVENT_TARGET, event.eventType) ? EVENT_TARGET[event.eventType] : undefined;
-    if (to === undefined) throw new UnmodelledDomainEvent(event.eventType, event.workItemId, event.seq);
-    if (to === null) continue;
-    const from = status.get(event.workItemId) ?? "Pending";
-    taken.add(`${from}->${to}`);
-    status.set(event.workItemId, to);
+  for (const { workItemId, from, to } of snapshot.transitions) {
+    const transition = `${from}->${to}`;
+    if (!ALL_TRANSITIONS.includes(transition)) throw new UnmodelledTransition(transition, workItemId);
+    taken.add(transition);
   }
   return taken;
 }
@@ -277,8 +249,6 @@ interface MachineCoverage {
   readonly reached: readonly string[];
   readonly unreached: readonly string[];
 }
-
-const ALL_TRANSITIONS = WORK_ITEM_STATUSES.flatMap((from) => OUTBOUND_TRANSITIONS[from].map((to) => `${from}->${to}`));
 
 /** Reached and never-reached members of every list, in the lists' own order. */
 export function coverageReport(coverage: Coverage): MachineCoverage[] {
