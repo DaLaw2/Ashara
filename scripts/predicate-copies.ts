@@ -7,23 +7,26 @@
  *
  * What is read: every line of a non-test .ts file under packages/<pkg>/src, except the paths a rule
  * exempts as an oracle: the integration simulator restates the rules on purpose as an independent
- * oracle, and every rule but the status partition exempts all of packages/integration. A line whose
- * first non-blank characters open a comment (`//`, `/*`, `*`) is not read: prose that names a rule
- * decides nothing. A pattern is matched against the file's text as a whole, so the work-item status
- * patterns, which may cross a line break, catch a list or a chain split across lines; a copy is
- * reported at the line it starts on.
+ * oracle, and every rule but the status partition exempts all of packages/integration. A rule may
+ * instead exempt one declaration of a file, which names another vocabulary in the same words; the
+ * rest of that file is read. A line whose first non-blank characters open a comment (`//`, `/*`,
+ * `*`) is not read: prose that names a rule decides nothing. A pattern is matched against the file's
+ * text as a whole, so the work-item status patterns, which may cross a line break, catch a list, a
+ * chain or an inline subset split across lines, and the latest-revision pattern reads a SQL template
+ * literal whole; a copy is reported at the line it starts on.
  *
  * Blind spots, each a copy this check passes:
  * - A copy spelled in another shape: a different alias or quoting, a literal built from pieces, a
  *   rule restated through a column the patterns do not name, or a cross-context predicate split across
- *   lines (only the work-item status patterns cross a line break).
+ *   lines (only the work-item status and latest-revision patterns cross a line break).
+ * - A latest revision whose max() and `FROM task_checks` an interpolation holding a backtick separates.
  * - A rule no pattern below names; only the shapes listed here are enumerated.
  * - A report subject's literal that reaches the column through a name the patterns do not read, such
  *   as a function argument (`unreported("planning-stopped")`) or a constant not named *subject*.
  * - Comparison inside the owner itself is not checked: an owner may spell its rule twice.
  * - A list of work-item statuses whose literals are not adjacent (`["Pending", x, "Failed"]`), a
  *   chain of comparisons on a name other than `status`, or a chain whose comparisons a `;`, `{` or
- *   `}` separates.
+ *   `}` separates; a subset taken from the vocabulary through another name than its own.
  */
 
 import fs from "node:fs";
@@ -39,6 +42,15 @@ interface PredicateRule {
   readonly use: string;
   /** Repository-relative path prefixes not read for this rule: an oracle that restates it on purpose. */
   readonly exempt: readonly string[];
+  /** Declarations not read for this rule, each in one file: another vocabulary spelled in the same words. */
+  readonly exemptDeclarations: readonly ExemptDeclaration[];
+}
+
+interface ExemptDeclaration {
+  /** Repository-relative path of the file that holds the declaration. */
+  readonly file: string;
+  /** The declaration's whole text; a copy that starts inside a match is not reported. */
+  readonly declaration: RegExp;
 }
 
 const DELIVERY_PREDICATES = "packages/delivery/src/predicates.ts";
@@ -47,6 +59,8 @@ const INTEGRATION = "packages/integration/";
 
 const STATUS_LITERAL = `['"](?:${WORK_ITEM_STATUSES.join("|")})['"]`;
 const STATUS_COMPARISON = `\\bstatus\\b['"]?\\s*(?:===|!==|==|!=|=|<>)\\s*${STATUS_LITERAL}`;
+/** The vocabulary or a half of it, not a subset the language names. */
+const STATUS_PARTITION = "\\b(?:OPEN_|SETTLED_)?WORK_ITEM_STATUSES";
 const ENGAGEMENT_REPORT_SUBJECTS = "packages/engagement/src/report-subjects.ts";
 const QUALITY_STORED_CHECKS = "packages/quality/src/stored-checks.ts";
 /** Model Access's catalog: read by Model Access itself, by Finance in front of it, and by the catalog repository that loads it at boot. */
@@ -59,6 +73,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/blocked_?[rR]eason\b.*['"]superseded['"]/, /\.source\s*[!=]==?\s*['"]superseded['"]/],
     use: "isSupersededItem, inCurrentPlan or givenUpItem from @ashara/delivery/predicates",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "current plan, given-up tasks left out",
@@ -66,6 +81,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/status\s*(?:<>|!=)\s*'Abandoned'/],
     use: "liveInCurrentPlan from @ashara/delivery/predicates",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "task origin (goal task, product scaffold, review, ...)",
@@ -73,6 +89,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/origin'?\s*(?:===|!==|==|!=|=|<>)\s*['"](?:decomposition|product-scaffold|sprint0|review|check|environment-change|acceptance)['"]/],
     use: "goalTaskSql, isGoalTask, productScaffoldTask, isProductScaffoldOrigin, isSprint0Origin or reviewTask from @ashara/delivery/predicates",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "project at work (engagement lifecycle 'active')",
@@ -80,6 +97,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/lifecycle\W*=\s*'active'/, /lifecycle,\s*['"]active['"]/],
     use: "projectActive or projectAtWork from @ashara/engagement/predicates",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "first plan told",
@@ -87,15 +105,24 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/reports_on\s*=\s*'first-plan'/],
     use: "firstPlanTold or firstPlanUnreported from @ashara/engagement/predicates",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     // A hand-written list or chain of statuses drifts from the partition when the vocabulary grows.
-    // Workplace's session phases share two words with it and name another vocabulary.
+    // An inline filter of the vocabulary or a half, or a membership test narrowed by a comparison, is
+    // a subset the language does not name. Workplace's terminal session phases share two words with
+    // it and name another vocabulary: that declaration alone is not read.
     name: "work-item status list (open or settled)",
     owners: ["packages/delivery/src/work-item-language/"],
-    patterns: [new RegExp(`${STATUS_LITERAL}\\s*,\\s*${STATUS_LITERAL}`), new RegExp(`${STATUS_COMPARISON}[^;{}]*?${STATUS_COMPARISON}`)],
-    use: "OPEN_WORK_ITEM_STATUSES or SETTLED_WORK_ITEM_STATUSES from @ashara/delivery/work-item, or a named subset derived from one",
-    exempt: ["packages/integration/src/simulator/", "packages/workplace/src/session-vocabulary.ts"],
+    patterns: [
+      new RegExp(`${STATUS_LITERAL}\\s*,\\s*${STATUS_LITERAL}`),
+      new RegExp(`${STATUS_COMPARISON}[^;{}]*?${STATUS_COMPARISON}`),
+      new RegExp(`${STATUS_PARTITION}\\s*\\.\\s*filter\\s*\\(`),
+      new RegExp(`${STATUS_PARTITION}\\s*\\.\\s*includes\\s*\\([^;{}]*?${STATUS_COMPARISON}`),
+    ],
+    use: "OPEN_WORK_ITEM_STATUSES or SETTLED_WORK_ITEM_STATUSES from @ashara/delivery/work-item, or a subset Delivery's work-item language names (IDLE_OPEN_WORK_ITEM_STATUSES, UNFAILED_OPEN_WORK_ITEM_STATUSES)",
+    exempt: ["packages/integration/src/simulator/"],
+    exemptDeclarations: [{ file: "packages/workplace/src/session-vocabulary.ts", declaration: /\bTERMINAL_SESSION_PHASES\s*:\s*readonly\s+SessionPhase\[\]\s*=\s*\[[^\]]*\]/ }],
   },
   {
     name: "an attempt's model grade (the model catalog read outside Finance)",
@@ -103,13 +130,15 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/\b(?:join|from)\s+model_configs\b/i, /\b(?:leftJoin|innerJoin|rightJoin|fullJoin|join|from)\(\s*modelConfigs\b/],
     use: "attemptGrade from @ashara/finance",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "the latest stored check revision",
     owners: [QUALITY_STORED_CHECKS],
-    patterns: [/max\(\s*(?:\w+\.)?revision\s*\).*\bfrom\s+task_checks\b/i, /max\(\s*taskChecks\.revision\s*\)/],
+    patterns: [/max\(\s*(?:\w+\.)?revision\s*\)[^`]*?\bfrom\s+task_checks\b/i, /max\(\s*taskChecks\.revision\s*\)/],
     use: "latestCheckRevision or inLatestCheckRevision from @ashara/quality/stored-checks",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "the stored check decides schema",
@@ -117,6 +146,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     patterns: [/\b\w*Decides\w*\s*=\s*z\./],
     use: "StoredDecidesSchema from @ashara/quality/stored-checks",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
   {
     name: "a report subject (client_messages.reports_on)",
@@ -124,12 +154,13 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     // A literal a report's subject is compared with, stored as or named by; the same words name the
     // core loop's contained steps (shared ContainedStep), which are another vocabulary and not read.
     patterns: [
-      /reports_?[oO]n\b.*['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/,
+      /reports_?[oO]n\b[^`;]*?['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/,
       /\bsubject\w*\s*(?:===?|!==?|=|:)\s*['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/i,
       /\b(?:type|interface)\s+PlanReportSubject\b/,
     ],
     use: "REPORT_SUBJECT or PlanReportSubject from @ashara/engagement/report-subjects",
     exempt: [INTEGRATION],
+    exemptDeclarations: [],
   },
 ];
 
@@ -154,9 +185,14 @@ function findPredicateCopiesIn(file: string, content: string): PredicateCopy[] {
   const code = content.split("\n").map((text) => (COMMENT_LINE.test(text) ? "" : text)).join("\n");
   for (const rule of PREDICATE_RULES) {
     if (rule.owners.some((owner) => under(file, owner)) || rule.exempt.some((prefix) => under(file, prefix))) continue;
+    const exempted = rule.exemptDeclarations
+      .filter((exemption) => exemption.file === file)
+      .flatMap((exemption) => [...code.matchAll(new RegExp(exemption.declaration.source, `${exemption.declaration.flags}g`))])
+      .map((declaration) => ({ start: declaration.index, end: declaration.index + declaration[0].length }));
     const hits = new Map<number, string>();
     for (const pattern of rule.patterns) {
       for (const match of code.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
+        if (exempted.some((span) => match.index >= span.start && match.index < span.end)) continue;
         const start = code.lastIndexOf("\n", match.index) + 1;
         const end = code.indexOf("\n", match.index);
         hits.set(code.slice(0, match.index).split("\n").length, code.slice(start, end === -1 ? code.length : end).trim());

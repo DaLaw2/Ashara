@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REPORT_SUBJECTS } from "./report-subjects.js";
 
 // The client channel's language. The client
 // says tender, answer, change, stop; the Liaison says question, report. The same
@@ -38,6 +39,8 @@ const ClientMessageSchema = z.discriminatedUnion("direction", [
     direction: z.literal("inbound"),
     kind: z.enum(["tender", "answer", "change", "stop"]),
     consumedAt: z.date().nullable(),
+    // Only the Liaison's reports are on a subject.
+    reportsOn: z.null(),
   }),
   z.object({
     ...recordFields,
@@ -45,6 +48,7 @@ const ClientMessageSchema = z.discriminatedUnion("direction", [
     kind: z.enum(["question", "report"]),
     // Only inbound messages are consumed.
     consumedAt: z.null(),
+    reportsOn: z.enum(REPORT_SUBJECTS).nullable(),
   }),
 ]);
 

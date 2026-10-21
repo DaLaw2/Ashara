@@ -6,7 +6,7 @@ import { higherCapability, withStructuredLadder } from "./acl/finance-acl.js";
 import type { CapabilityLevel, LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
-import { OPEN_WORK_ITEM_STATUSES, SETTLED_WORK_ITEM_STATUSES, type WorkItemStatus } from "./work-item-language/work-item-status.js";
+import { IDLE_OPEN_WORK_ITEM_STATUSES, SETTLED_WORK_ITEM_STATUSES, type WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { projectBlockCause, recordedFailureOf } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
@@ -677,7 +677,7 @@ interface RegatedTask {
  * key plans that key again beside it.
  */
 function isSupersedable(item: WorkItem): boolean {
-  if (!OPEN_WORK_ITEM_STATUSES.includes(item.status) || item.status === "InProgress") return false;
+  if (!IDLE_OPEN_WORK_ITEM_STATUSES.includes(item.status)) return false;
   return item.status !== "Blocked" || item.blockedReason?.source !== "merge_unrecorded";
 }
 

@@ -7,6 +7,9 @@ import { sweepOrphanedWorktrees } from "@ashara/execution-infra";
 import { createWorkItemId, type WorkItemId } from "@ashara/shared";
 import { keptWorktreeTaskIds } from "./kept-worktrees.js";
 
+const COMPOSE_FILE = path.join(import.meta.dirname, "compose.ts");
+const COMMENT = /\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm;
+
 let base: string | null = null;
 
 afterEach(() => {
@@ -31,5 +34,14 @@ describe("keptWorktreeTaskIds", () => {
     const kept = new Set(fs.readdirSync(workdirBase));
     const keptStatuses = [...statusOf].filter(([id]) => kept.has(`task-${id}`)).map(([, status]) => status);
     expect(keptStatuses.sort()).toEqual(["Blocked", "Failed", "InProgress", "Pending"]);
+  });
+});
+
+describe("the startup sweep in composeAshara", () => {
+  test("is the one sweep at boot, and keeps the worktrees keptWorktreeTaskIds reads from Delivery's work-item repository, not a list of its own", () => {
+    const code = fs.readFileSync(COMPOSE_FILE, "utf-8").replace(COMMENT, "").replace(/\s+/g, " ");
+    const sweeps = [...code.matchAll(/\bsweepOrphanedWorktrees\s*\(([^;]*?)\);/g)].map((match) => (match[1] ?? "").trim());
+    expect(sweeps).toEqual(["config.coreLoop.workdirBase, keptWorktreeTaskIds(workItemRepo)"]);
+    expect(code).toMatch(/\bconst workItemRepo: WorkItemRepository = adaptWorkItemRepo\(dbWorkItemRepo\);/);
   });
 });

@@ -33,6 +33,12 @@ export const SETTLED_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = WORK_ITEM_S
  */
 export const OPEN_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = WORK_ITEM_STATUSES.filter((status) => WORK_ITEM_STATUS_STANDING[status] === "open");
 
+/** Open with no attempt in progress: work a plan revision may supersede, since an attempt in progress is waited on instead. */
+export const IDLE_OPEN_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = OPEN_WORK_ITEM_STATUSES.filter((status) => status !== "InProgress");
+
+/** Open and not Failed: the statuses a give-up is decided in, since a Failed item is the FailureRouter's to abandon. */
+export const UNFAILED_OPEN_WORK_ITEM_STATUSES: readonly WorkItemStatus[] = OPEN_WORK_ITEM_STATUSES.filter((status) => status !== "Failed");
+
 const WorkItemLevelSchema = z.enum(["Epic", "Task"]);
 const WorkItemStatusSchema = z.enum(WORK_ITEM_STATUSES);
 

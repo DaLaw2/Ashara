@@ -14,7 +14,7 @@ import { pendingCorrection, pendingRepair } from "../predicates.js";
 import type { AttemptGrade } from "../replan.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
-import { OPEN_WORK_ITEM_STATUSES } from "../work-item-language/work-item-status.js";
+import { IDLE_OPEN_WORK_ITEM_STATUSES } from "../work-item-language/work-item-status.js";
 import { citesAnyOf } from "./citation.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
@@ -514,7 +514,7 @@ async function tasksWithoutRosterOwnerAmongOpen(db: DbHandle, projectId: Project
   const open = await db
     .select({ id: workItems.id })
     .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), inArray(workItems.status, OPEN_WORK_ITEM_STATUSES.filter((status) => status !== "InProgress"))));
+    .where(and(eq(workItems.projectId, projectId), inArray(workItems.status, IDLE_OPEN_WORK_ITEM_STATUSES)));
   return open.map((row) => row.id).filter((id) => unowned.has(id));
 }
 

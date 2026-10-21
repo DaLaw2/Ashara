@@ -153,6 +153,64 @@ describe("findPredicateCopies", () => {
     );
   });
 
+  test("a latest check revision whose max() and FROM task_checks a SQL template literal splits across lines is a copy; a revision of another table, or a max() in another literal, is not", () => {
+    const planted = [
+      "const a = sql`",
+      "  SELECT max(stored.revision)",
+      "  FROM task_checks stored",
+      "  WHERE stored.task_id = ${taskId}`;",
+      "const b = sql`SELECT max(r.revision)",
+      "  FROM plan_revisions r`;",
+      "const c = sql`SELECT max(r.revision) FROM plan_revisions r`; const d = sql`SELECT 1 FROM task_checks t`;",
+    ].join("\n");
+    const root = treeOf({ "packages/quality/src/repositories/check-set-freeze.ts": planted });
+    expect(findPredicateCopies(root).map((copy) => [copy.line, copy.rule])).toEqual([[2, LATEST_REVISION]]);
+  });
+
+  test("a report subject compared with reports_on across lines, in SQL or a drizzle eq(), is a copy; a subject in another statement is not", () => {
+    const planted = [
+      "const a = sql`m.reports_on",
+      "  = 'planning-stopped'`;",
+      ".where(eq(clientMessages.reportsOn,",
+      '  "stack-choice"));',
+      "const b = sql`m.reports_on = ${subject}`;",
+      'const c = await this.step("client-stop", () => run());',
+    ].join("\n");
+    const root = treeOf({ "packages/delivery/src/planted.ts": planted });
+    expect(findPredicateCopies(root).map((copy) => [copy.line, copy.rule])).toEqual([
+      [1, REPORT_SUBJECT],
+      [3, REPORT_SUBJECT],
+    ]);
+  });
+
+  test("an inline subset of the work-item vocabulary outside Delivery's work-item language is a copy, on one line or split across lines; a subset the language names is not", () => {
+    const planted = [
+      'const a = inArray(workItems.status, OPEN_WORK_ITEM_STATUSES.filter((status) => status !== "InProgress"));',
+      'const b = OPEN_WORK_ITEM_STATUSES.includes(item.status) && (item.status !== "InProgress" || item.level === "Epic");',
+      "const c =",
+      "  OPEN_WORK_ITEM_STATUSES.includes(item.status) &&",
+      '  item.status !== "Failed";',
+      "const d = WORK_ITEM_STATUSES",
+      '  .filter((status) => status !== "Abandoned");',
+      'const e = IDLE_OPEN_WORK_ITEM_STATUSES.includes(item.status) || (item.status === "InProgress" && item.level === "Epic");',
+      "const f = inArray(workItems.status, IDLE_OPEN_WORK_ITEM_STATUSES);",
+    ].join("\n");
+    const root = treeOf({ "packages/delivery/src/repositories/replan.ts": planted, "packages/delivery/src/work-item-language/work-item-status.ts": planted });
+    expect(findPredicateCopies(root).map((copy) => `${copy.file}:${copy.line}`)).toEqual([1, 2, 4, 6].map((line) => `packages/delivery/src/repositories/replan.ts:${line}`));
+  });
+
+  test("Workplace's terminal session phases may spell two status words; another status list in the same file is a copy", () => {
+    const vocabulary = [
+      'type SessionPhase = "Preparing" | "Completed" | "Failed";',
+      "",
+      'export const TERMINAL_SESSION_PHASES: readonly SessionPhase[] = ["Completed", "Failed"] as const;',
+      'const settled = ["Completed",',
+      '  "Abandoned"];',
+    ].join("\n");
+    const root = treeOf({ "packages/workplace/src/session-vocabulary.ts": vocabulary });
+    expect(findPredicateCopies(root).map((copy) => [copy.line, copy.rule])).toEqual([[4, "work-item status list (open or settled)"]]);
+  });
+
   test("the repository holds no copy outside an owner", () => {
     expect(findPredicateCopies(REPO)).toEqual([]);
   });

@@ -14,8 +14,8 @@ export const REPORT_SUBJECT = {
 } as const;
 
 /**
- * Every subject a report is on: the values client_messages.reports_on admits.
- * @testseam the integration report-subjects.test.ts holds the column's CHECK, which a migration cannot import, to it
+ * Every subject a report is on: the values client_messages.reports_on admits, and the ones a
+ * client_messages row read back is parsed against (client-message.ts).
  */
 export const REPORT_SUBJECTS = [
   REPORT_SUBJECT.firstPlan,
