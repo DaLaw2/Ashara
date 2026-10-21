@@ -12,7 +12,7 @@
  * appended as its last argument. Split on spaces, no quoting. With the database in a container:
  *
  *   npx tsx scripts/replay-run-state.ts --dump kept-run/ashara_run.sql \
- *     --psql "podman exec -i docker_postgres_1 psql -U ashara -v ON_ERROR_STOP=1 -q -d"
+ *     --psql "podman exec -i ashara-db psql -U ashara -v ON_ERROR_STOP=1 -q -d"
  *
  * The scratch database `ashara_replay_*` is created on the server of REPLAY_DATABASE_URL (default
  * DATABASE_URL, default local) and dropped at the end unless `--keep`; the shared database is never
