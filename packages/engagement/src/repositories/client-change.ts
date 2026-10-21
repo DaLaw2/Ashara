@@ -4,10 +4,11 @@ import { z } from "zod";
 import { clientMessages, projects, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { liveInCurrentPlan, projectHalted } from "@ashara/delivery/predicates";
-import { projectWorkBudget } from "@ashara/finance";
+import { projectWork, projectWorkBudget, tasksWorkDrawn } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { noOpenStop, projectReadsClientInput } from "../predicates.js";
+import type { HoldCorrection } from "../ports.js";
 import { MAX_CHANGE_ATTEMPTS } from "../client-change.js";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
 import { affectedKeys } from "../correction.js";
@@ -21,21 +22,6 @@ import { VisionRepository } from "./vision.js";
 // project's current vision, and consumed together with the revisions it writes, the hold on the work
 // each applied revision touches and the impact note posted in reply to it, so a change is never left
 // unread, never answered twice and never applied with the work it changes still dispatching.
-
-/** One applied correction as Delivery's hold reads it: the version it wrote, the message it answers and the keys it affects. */
-interface AppliedCorrection {
-  readonly projectId: ProjectId;
-  readonly visionVersion: number;
-  readonly requestedBy: string;
-  readonly affected: readonly string[];
-}
-
-/**
- * Delivery's hold on the work an applied correction touches, written in the transaction that records
- * it, so no task citing a key it affects is dispatched after it applies; the composition root
- * supplies Delivery's.
- */
-export type HoldCorrection = (tx: DbHandle, correction: AppliedCorrection) => Promise<unknown>;
 
 /** An applied correction's version, or the one it was applied to, is not on record in its own transaction. */
 class CorrectionVersionMissing extends Error {
@@ -165,9 +151,21 @@ async function proposalsOf(db: DbHandle, projectId: ProjectId): Promise<StoredPr
   }));
 }
 
-const count = z.coerce.number().int().nonnegative();
 const CitingRowsSchema = z.array(z.object({ id: z.string(), title: z.string(), status: z.string(), cites: z.array(z.string()) }));
-const LedgerRowsSchema = z.tuple([z.object({ drawn: count, granted: count })]);
+
+/** Finance's read of the requests each task drew names no figure for a task it was asked of. */
+class TaskDrawnUnread extends Error {
+  constructor(readonly taskId: string) {
+    super(`the work ledger read names no requests drawn for completed task ${taskId}, which it was asked of`);
+    this.name = "TaskDrawnUnread";
+  }
+}
+
+function drawnOf(drawn: ReadonlyMap<string, number>, taskId: string): number {
+  const requests = drawn.get(taskId);
+  if (requests === undefined) throw new TaskDrawnUnread(taskId);
+  return requests;
+}
 
 /** A citing task's status in the words the impact note uses; a status outside the current plan's never reaches here. */
 class CitingTaskStatusUnknown extends Error {
@@ -224,18 +222,17 @@ export async function readChangeImpact(db: DbHandle, projectId: ProjectId, ids: 
   const tasks = CitingRowsSchema.parse(citing.rows)
     .filter((row) => row.cites.length > 0)
     .map((row): CitingTask => ({ id: row.id, title: row.title, status: citingStatus(row.id, row.status), cites: row.cites }));
-  const drawn = await db.execute(sql`
-    SELECT (SELECT count(*) FROM llm_calls c WHERE c.task_id = w.id) AS drawn
-    FROM work_items w
-    WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.work_kind = 'implementation' AND w.status = 'Completed'`);
-  const ledger = await db.execute(sql`
-    SELECT (SELECT count(*) FROM llm_calls c WHERE c.project_id = ${projectId}) AS drawn,
-           (SELECT COALESCE(sum(g.requests), 0) FROM work_grants g WHERE g.project_id = ${projectId}) AS granted`);
-  const [figures] = LedgerRowsSchema.parse(ledger.rows);
+  const completed = await db
+    .select({ id: workItems.id })
+    .from(workItems)
+    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), eq(workItems.workKind, "implementation"), eq(workItems.status, "Completed")))
+    .orderBy(asc(workItems.createdAt), asc(workItems.id));
+  const drawnByTask = await tasksWorkDrawn(db, completed.map((row) => row.id));
+  const work = await projectWork(db, projectId);
   return {
     tasks,
-    completedTaskRequests: z.array(z.object({ drawn: count })).parse(drawn.rows).map((row) => row.drawn),
-    budgetLeftRequests: Math.max(0, projectWorkBudget(budgets, figures.granted).budgetRequests - figures.drawn),
+    completedTaskRequests: completed.map((row) => drawnOf(drawnByTask, row.id)),
+    budgetLeftRequests: Math.max(0, projectWorkBudget(budgets, work.granted).budgetRequests - work.drawn),
   };
 }
 

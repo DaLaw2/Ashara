@@ -4,13 +4,15 @@ import { z } from "zod";
 import { clientMessages, insertedRow, projects, workBurnWarnings, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { inCurrentPlan } from "@ashara/delivery/predicates";
+import { projectWork } from "@ashara/finance";
 import { parseProjectId, readEach, type UnreadSubject } from "@ashara/shared";
 import { noOpenStop, projectAtWork } from "../predicates.js";
 import type { BurnWarning, ProjectBurn } from "../burn-warning.js";
 
-// The work ledger's early warnings: each project at work, read with its current plan
-// revision, the requests it drew, its grants, its revision's implementation tasks and the zones
-// already reported for that revision; and the one transaction that records a zone with its report.
+// The work ledger's early warnings: each project at work, read with its current plan revision, its
+// revision's implementation tasks and the zones already reported for that revision, and with the
+// requests it drew and its grants as Finance's work ledger reads them (projectWork); and the one
+// transaction that records a zone with its report.
 
 const count = z.coerce.number().int().nonnegative();
 const ZoneSchema = z.enum(["yellow", "red"]);
@@ -18,8 +20,6 @@ const ZoneSchema = z.enum(["yellow", "red"]);
 const BurnRowSchema = z.object({
   projectId: z.string(),
   planRevision: z.coerce.number().int().positive(),
-  drawnRequests: count,
-  grantedRequests: count,
   plannedTasks: count,
   completedTasks: count,
   reported: z.array(ZoneSchema),
@@ -57,8 +57,6 @@ export async function listProjectBurns(db: DbHandle): Promise<Array<ProjectBurn 
     FROM (
       SELECT projects.id AS "projectId", projects.created_at,
              (SELECT COALESCE(max(r.revision), 1) FROM plan_revisions r WHERE r.project_id = projects.id) AS "planRevision",
-             (SELECT count(*) FROM llm_calls c WHERE c.project_id = projects.id) AS "drawnRequests",
-             (SELECT COALESCE(sum(g.requests), 0) FROM work_grants g WHERE g.project_id = projects.id) AS "grantedRequests",
              (SELECT count(*) FROM work_items w WHERE ${ofCurrentPlan}) AS "plannedTasks",
              (SELECT count(*) FROM work_items w WHERE ${ofCurrentPlan} AND w.status = 'Completed') AS "completedTasks"
       FROM projects
@@ -68,12 +66,14 @@ export async function listProjectBurns(db: DbHandle): Promise<Array<ProjectBurn 
   return readEach(
     ListedSchema.parse(result.rows),
     (row) => ({ id: row.projectId, projectId: parseProjectId(row.projectId, "projects.id") }),
-    (raw): ProjectBurn => {
+    async (raw): Promise<ProjectBurn> => {
       const row = BurnRowSchema.parse(raw);
       if (row.completedTasks > row.plannedTasks) {
         throw new ProjectBurnUnreadable(row.projectId, `${row.completedTasks} completed of ${row.plannedTasks} planned implementation tasks`);
       }
-      return { ...row, projectId: parseProjectId(row.projectId, "projects.id") };
+      const projectId = parseProjectId(row.projectId, "projects.id");
+      const work = await projectWork(db, projectId);
+      return { ...row, projectId, drawnRequests: work.drawn, grantedRequests: work.granted };
     },
   );
 }

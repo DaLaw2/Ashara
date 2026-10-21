@@ -204,3 +204,47 @@ export const visionRevisions = pgTable(
     projectVersionUnique: unique("vision_revisions_project_version_unique").on(t.projectId, t.version),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// told_reports (Engagement context)
+// ---------------------------------------------------------------------------
+// One row per subject the Liaison has told the client of: a halt episode ('project-blocked'), its
+// resumption ('project-resumed'), a passed acceptance sweep ('delivered') or a plan revision
+// ('plan-revision'), with the report that told it. The primary key admits one report per subject; the
+// row is written in the transaction that posts the report. The subject ids are other contexts' rows,
+// read through their published reads, so no foreign key names them.
+
+export const toldReports = pgTable(
+  "told_reports",
+  {
+    subjectKind: text("subject_kind").notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => clientMessages.id, { onDelete: "cascade" }),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.subjectKind, t.subjectId] })],
+);
+
+// ---------------------------------------------------------------------------
+// delivered_report_attempts (Engagement context)
+// ---------------------------------------------------------------------------
+// One row per passed acceptance sweep whose delivered report failed at least once: the failed
+// attempts, the failed reads of the public interface file and the records that did not read as a
+// report each counted apart, the last error, and when it is tried again.
+
+export const deliveredReportAttempts = pgTable("delivered_report_attempts", {
+  sweepId: uuid("sweep_id").primaryKey(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  failures: integer().notNull().default(0),
+  interfaceReadFailures: integer("interface_read_failures").notNull().default(0),
+  recordFailures: integer("record_failures").notNull().default(0),
+  lastError: text("last_error"),
+  retryAt: timestamptz("retry_at"),
+});

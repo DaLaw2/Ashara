@@ -252,6 +252,19 @@ export class LlmCallRepository {
     };
   }
 
+  /** The requests each of `taskIds` drew, in any state, as work() counts a task's; a task that drew none is 0. */
+  async drawnByTask(taskIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
+    const drawn = new Map(taskIds.map((taskId) => [taskId, 0]));
+    if (taskIds.length === 0) return drawn;
+    const rows = await this.db
+      .select({ taskId: llmCalls.taskId, requests: sql<number>`count(*)::int`.mapWith(Number) })
+      .from(llmCalls)
+      .where(inArray(llmCalls.taskId, [...taskIds]))
+      .groupBy(llmCalls.taskId);
+    for (const row of rows) if (row.taskId !== null) drawn.set(row.taskId, row.requests);
+    return drawn;
+  }
+
   /** The requests drawn in `scope`, by the call site that drew them, most first. */
   async workBySite(scope: WorkScope): Promise<RequestsAtSite[]> {
     const task = scope.taskId === null ? sql`` : sql`AND task_id = ${scope.taskId}::uuid`;

@@ -123,8 +123,7 @@ async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise<Guaran
  * halt's report, the client's stop report, or the planning-stopped report.
  */
 const terminalReport = sql`(
-  EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.report_id = ${clientMessages.id})
-  OR EXISTS (SELECT 1 FROM project_blocks b WHERE b.report_id = ${clientMessages.id})
+  EXISTS (SELECT 1 FROM told_reports t WHERE t.report_id = ${clientMessages.id} AND t.subject_kind IN ('delivered', 'project-blocked'))
   OR ${inArray(clientMessages.reportsOn, [REPORT_SUBJECT.clientStop, REPORT_SUBJECT.planningStopped])})`;
 
 /**

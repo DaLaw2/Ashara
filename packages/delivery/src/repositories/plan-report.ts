@@ -1,11 +1,10 @@
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
-import { clientMessages, planRevisions, projects, workItems } from "@ashara/db";
-import { firstPlanTold, noOpenStop } from "../acl/engagement-predicates-acl.js";
+import { planRevisions, projects, workItems } from "@ashara/db";
+import { firstPlanTold, noOpenStop, planningStoppedTold, planRevisionTold } from "../acl/engagement-predicates-acl.js";
 import { REPORT_SUBJECT } from "../acl/engagement-report-subjects-acl.js";
-import type { PlanReportSubject } from "../acl/engagement-report-subjects-acl.js";
 import { isSupersededItem, pendingCorrection, projectHalted } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
@@ -14,8 +13,9 @@ import type { DroppedPlanDependency } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 
-// The Liaison's reports on planning outcomes. A report is due
-// while the outcome is stamped on the project and no report on it exists.
+// Delivery's published reads of its planning outcomes the Liaison reports on. A report is due
+// while the outcome is stamped on the project and Engagement's told record holds no report on it;
+// the report itself is Engagement's write.
 
 /** A plan's tasks counted by the producer task_spec.origin records. */
 interface TaskCounts {
@@ -85,9 +85,6 @@ type DuePlanReportRow =
    * recorded dropped ordering hints do not (PlanDroppedDependenciesCorrupt).
    */
   | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
-
-const unreported = (subject: PlanReportSubject) =>
-  sql`NOT EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = projects.id AND m.reports_on = ${subject})`;
 
 /**
  * Planning outcomes the client has not been told about, oldest project first.
@@ -163,7 +160,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
           answersTaken: answersTakenBy(planRevisions.id),
         })
         .from(planRevisions)
-        .where(and(eq(planRevisions.projectId, row.id), isNull(planRevisions.reportId)))
+        .where(and(eq(planRevisions.projectId, row.id), sql`NOT ${planRevisionTold(planRevisions.id)}`))
         .orderBy(asc(planRevisions.revision))
     ).map((revision) => ({ ...revision, answersTaken: parseAnswersTaken(revision.revisionId, revision.answersTaken) }));
     return {
@@ -188,63 +185,10 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
     .select({ id: projects.id, attempts: projects.planAttempts })
     .from(projects)
     .where(
-      and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), unreported(REPORT_SUBJECT.planningStopped), noOpenStop(projects.id)),
+      and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), sql`NOT ${planningStoppedTold(projects.id)}`, noOpenStop(projects.id)),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
   const stops = stopped.map((row): DuePlanReportRow => ({ subject: REPORT_SUBJECT.planningStopped, projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts }));
   return [...firstPlans, ...stops];
 }
 
-/** A revision the first-plan report was to describe is gone or already reported: nothing of the report is recorded. */
-class RevisionsNotFoldable extends Error {
-  constructor(
-    readonly projectId: ProjectId,
-    readonly expected: readonly string[],
-    readonly marked: number,
-  ) {
-    super(
-      `project ${projectId}: the first-plan report describes plan revision(s) ${expected.join(", ")}, ` +
-        `but ${marked} of ${expected.length} were unreported revisions of the project; no report is posted`,
-    );
-    this.name = "RevisionsNotFoldable";
-  }
-}
-
-/**
- * Posts an outbound report on a planning outcome, naming the message posted. The partial unique
- * index on (project_id, reports_on) admits one per outcome: a second post inserts nothing
- * and returns "already-posted". `revisionIds` are the revisions a first-plan report
- * describes (listDuePlanReports): each is recorded as reported by it in the same
- * transaction, so none of them is reported again on its own. `alsoRecord` writes what the caller
- * records beside the report in that transaction (a planning-stopped report's verdicts).
- */
-export async function postPlanReport(
-  db: DbHandle,
-  projectId: ProjectId,
-  subject: PlanReportSubject,
-  body: string,
-  revisionIds: readonly string[],
-  alsoRecord: (tx: DbHandle, reportId: string) => Promise<void>,
-): Promise<"posted" | "already-posted"> {
-  return db.transaction(async (tx) => {
-    const [inserted] = await tx
-      .insert(clientMessages)
-      .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo: null, reportsOn: subject })
-      .onConflictDoNothing({
-        target: [clientMessages.projectId, clientMessages.reportsOn],
-        where: isNotNull(clientMessages.reportsOn),
-      })
-      .returning({ id: clientMessages.id });
-    if (inserted === undefined) return "already-posted";
-    if (revisionIds.length > 0) {
-      const marked = await tx
-        .update(planRevisions)
-        .set({ reportId: inserted.id })
-        .where(and(eq(planRevisions.projectId, projectId), isNull(planRevisions.reportId), inArray(planRevisions.id, [...revisionIds])))
-        .returning({ id: planRevisions.id });
-      if (marked.length !== revisionIds.length) throw new RevisionsNotFoldable(projectId, revisionIds, marked.length);
-    }
-    await alsoRecord(tx, inserted.id);
-    return "posted";
-  });
-}

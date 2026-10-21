@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./predicates": "./src/predicates.ts",
     "./report-subjects": "./src/report-subjects.ts",
+    "./ports": "./src/ports.ts",
     "./vision": "./src/vision-language/index.ts"
   },
   "dependencies": {

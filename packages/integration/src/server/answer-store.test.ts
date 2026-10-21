@@ -549,7 +549,8 @@ describe("the client's answers", () => {
       if (category === "infrastructure") {
         // The probe ends only a halt whose report the client has been told.
         const report = await new ClientMessageRepository(db).insertOutbound({ projectId, kind: "report", body: "Work on this project is paused.", inReplyTo: null });
-        await db.execute(sql`UPDATE project_blocks SET report_id = ${report.id} WHERE project_id = ${projectId} AND ended_at IS NULL`);
+        await db.execute(sql`INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id)
+          SELECT 'project-blocked', b.id, b.project_id, ${report.id} FROM project_blocks b WHERE b.project_id = ${projectId} AND b.ended_at IS NULL`);
         expect(await projects.resumeFromInfrastructureHalt(projectId, "the substrate answered")).toBe("resumed");
       } else {
         await projects.unblock(projectId, "operator-a", "repaired the cause");

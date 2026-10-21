@@ -7,7 +7,8 @@
  * forbidden package pair, per restrict rule, for the named-only rule, for the stand-in rule
  * (directly and through a helper) and for the bounds-table rule (a package's name and another
  * file), one manifest-name literal in production source for the
- * [stack-literals] denylist, plus one permitted import
+ * [stack-literals] denylist, a write and a raw SQL read of another context's table for the [tables]
+ * owner map, plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -132,9 +133,10 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
   engagement: {
     vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
     intake: { allow: ["vision", "inbound", "predicates"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
-    inbound: { allow: ["vision", "reports", "predicates"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
+    inbound: { allow: ["vision", "reports", "predicates", "ports"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
     reports: { allow: ["vision", "predicates"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
     predicates: { allow: [], host: "src/predicates.ts", target: "src/predicates.ts" },
+    ports: { allow: [], host: "src/ports.ts", target: "src/ports.ts" },
     [ENTRY]: { allow: [], host: "src/model-schemas.ts", target: "src/index.ts" },
   },
 };
@@ -286,6 +288,41 @@ const STACK_LITERAL_PROBE = {
     'packages/delivery/src/__boundary_probe__/stack-literal.ts:1  delivery -> "Cargo.toml"  (stack literal in production source: "Cargo.toml"; take it from the contract, or exempt it in [stack-literals] with a reason)',
 };
 
+// A context writing another context's table through drizzle and through raw SQL, and reading one in
+// raw SQL that no [tables] exemption admits, each on its own line of one file.
+const TABLE_PROBE_FILE = "packages/delivery/src/__boundary_probe__/table-ownership.ts";
+const TABLE_PROBE_CONTENT = [
+  'import { sql } from "drizzle-orm";',
+  'import { clientMessages } from "@ashara/db";',
+  "export const write = (tx: { insert(table: unknown): unknown }) => tx.insert(clientMessages);",
+  "export const rawWrite = sql`UPDATE acceptance_sweeps SET details = 'x'`;",
+  "export const rawRead = sql`SELECT count(*) FROM llm_calls`;",
+  "",
+].join("\n");
+const TABLE_PROBES = [
+  {
+    name: "a write to another context's table through drizzle is refused",
+    file: TABLE_PROBE_FILE,
+    content: TABLE_PROBE_CONTENT,
+    violation: `${TABLE_PROBE_FILE}:3  delivery -> "client_messages"  (writes a table "engagement" owns: tx.insert(clientMessages); go through engagement's exported write entry)`,
+  },
+  {
+    // Planted by the probe above, on its fourth line: this entry adds nothing to the file.
+    name: "a write to another context's table in raw SQL is refused",
+    file: TABLE_PROBE_FILE,
+    content: null,
+    violation: `${TABLE_PROBE_FILE}:4  delivery -> "acceptance_sweeps"  (writes a table "quality" owns: UPDATE acceptance_sweeps SET details = 'x'; go through quality's exported write entry)`,
+  },
+  {
+    name: "a raw SQL read of another context's table no exemption admits is refused",
+    file: TABLE_PROBE_FILE,
+    content: null,
+    violation:
+      `${TABLE_PROBE_FILE}:5  delivery -> "llm_calls"  (raw SQL reads a table "finance" owns: SELECT count(*) FROM llm_calls; ` +
+      "read it through finance's typed read, or exempt it in [tables] with a reason)",
+  },
+];
+
 // A stand-in model importing a product rule (a name names.delivery lists, so only the stand-in list
 // refuses it), directly, through a simulator helper that re-exports one, and by a relative path into
 // the package that owns it.
@@ -410,6 +447,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   }
   probes.push({ name: "integration simulator imports only listed names", ...NAMED_ONLY_PROBE });
   probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
+  probes.push(...TABLE_PROBES);
   probes.push(...STAND_IN_PROBES);
   probes.push(...BOUNDS_TABLE_PROBES);
   for (const pkg of Object.keys(MODULES)) probes.push(...moduleProbes(pkg));
@@ -418,7 +456,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts", "scripts/table-ownership.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.symlinkSync(path.join(REPO, "node_modules"), path.join(into, "node_modules"), "dir");

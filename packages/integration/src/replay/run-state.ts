@@ -141,12 +141,15 @@ type MessageSubject = "client-stop" | "planning-stopped";
 
 /**
  * A record whose kept report was set aside for today's Engagement to report on again: a sweep or a
- * halt episode, whose report it names; or the kept report of a project's stop or stopped planning,
- * which names its own subject.
+ * halt episode, whose report the told record names; or the kept report of a project's stop or
+ * stopped planning, which names its own subject.
  */
 type SetAside =
   | { readonly table: "acceptance_sweeps" | "project_blocks"; readonly id: string; readonly projectId: string; readonly reportId: string }
   | { readonly table: "client_messages"; readonly subject: MessageSubject; readonly id: string; readonly projectId: string; readonly reportId: string };
+
+/** The told record's subject kind of a sweep's and of a halt episode's report. */
+const TOLD_KIND = { acceptance_sweeps: "delivered", project_blocks: "project-blocked" } as const;
 
 const setAsideRow = z.object({ id: z.string(), projectId: z.string(), reportId: z.string() });
 const setAsideMessageRow = setAsideRow.extend({ subject: z.enum(["client-stop", "planning-stopped"]) });
@@ -169,17 +172,17 @@ export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
     const sweeps = z.array(setAsideRow).parse(
       (
         await tx.execute(sql`
-          UPDATE acceptance_sweeps s SET report_id = NULL FROM acceptance_sweeps o
-          WHERE o.id = s.id AND s.passed AND s.report_id IS NOT NULL
-          RETURNING s.id, s.project_id AS "projectId", o.report_id AS "reportId"`)
+          DELETE FROM told_reports t USING acceptance_sweeps s
+          WHERE t.subject_kind = ${TOLD_KIND.acceptance_sweeps} AND t.subject_id = s.id AND s.passed
+          RETURNING t.subject_id AS id, t.project_id AS "projectId", t.report_id AS "reportId"`)
       ).rows,
     );
     const episodes = z.array(setAsideRow).parse(
       (
         await tx.execute(sql`
-          UPDATE project_blocks b SET report_id = NULL FROM project_blocks o
-          WHERE o.id = b.id AND b.ended_at IS NULL AND b.report_id IS NOT NULL
-          RETURNING b.id, b.project_id AS "projectId", o.report_id AS "reportId"`)
+          DELETE FROM told_reports t USING project_blocks b
+          WHERE t.subject_kind = ${TOLD_KIND.project_blocks} AND t.subject_id = b.id AND b.ended_at IS NULL
+          RETURNING t.subject_id AS id, t.project_id AS "projectId", t.report_id AS "reportId"`)
       ).rows,
     );
     const messages = z.array(setAsideMessageRow).parse(
@@ -227,10 +230,12 @@ export async function settleReports(db: Db, setAside: ReportsSetAside): Promise<
         recomposed.push(record);
         continue;
       }
-      const table = sql.identifier(record.table);
-      const [now] = z.array(z.object({ reportId: z.string().nullable() })).parse((await tx.execute(sql`SELECT report_id AS "reportId" FROM ${table} WHERE id = ${record.id}`)).rows);
-      if (now === undefined || now.reportId === null) {
-        await tx.execute(sql`UPDATE ${table} SET report_id = ${record.reportId} WHERE id = ${record.id}`);
+      const kind = TOLD_KIND[record.table];
+      const [now] = z
+        .array(z.object({ reportId: z.string() }))
+        .parse((await tx.execute(sql`SELECT report_id AS "reportId" FROM told_reports WHERE subject_kind = ${kind} AND subject_id = ${record.id}`)).rows);
+      if (now === undefined) {
+        await tx.execute(sql`INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id) VALUES (${kind}, ${record.id}, ${record.projectId}, ${record.reportId})`);
         continue;
       }
       await tx.execute(sql`DELETE FROM client_messages WHERE id = ${record.reportId}`);

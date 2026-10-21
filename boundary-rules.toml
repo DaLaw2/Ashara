@@ -111,11 +111,12 @@ restrict.quality = ["src/repositories/early-warning.ts"]
 module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories/vision.ts"]
 module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
 module.inbound = ["src/answers.ts", "src/client-*.ts", "src/correction.ts", "src/project-lifecycle.ts", "src/repositories/client-*.ts"]
-module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts"]
+module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts", "src/repositories/plan-report.ts"]
 module.predicates = ["src/predicates.ts", "src/report-subjects.ts"]
+module.ports   = ["src/ports.ts"]
 module.entry   = ["src/index.ts", "src/model-schemas.ts"]
 module-allow.intake  = ["vision", "inbound", "predicates"]
-module-allow.inbound = ["vision", "reports", "predicates"]
+module-allow.inbound = ["vision", "reports", "predicates", "ports"]
 module-allow.reports = ["vision", "predicates"]
 module-entry.inbound = ["src/repositories/client-message.ts"]
 
@@ -236,6 +237,81 @@ stand-in-names.model-access = ["LanguageModelFactory", "ProviderType", "schemaRe
 # value its cited decision states and a production change that moves a bound moves nothing here.
 bounds-tables = ["src/simulator/work-bounds.ts"]
 
+
+# --- Table ownership (no package's section) ---------------------------------------------------
+
+[tables]
+# Every insert, update or delete a context's source issues lands on a table that context owns;
+# anything it does to another context's table goes through that owner's exported write entry or
+# typed read. scripts/check-boundaries.ts fails on a write to a table another package owns, and on a
+# raw SQL read of one no exemption below admits (scripts/table-ownership.ts states what is read and
+# its blind spots). Every table a packages/db/src/schema/<module>.ts declares has one entry: owned by
+# <module> when it is a package, otherwise by "db" (generic persistence, reached through db's
+# repositories) or "shared".
+#
+# <table>     = "<owner>"   the package that owns it, "db", or "shared": projects is the record every
+#                           context keys its rows by, and domain_events the log every context appends to
+# exempt.<id> = { file = "<repo-relative path>", tables = ["..."], reason = "..." }
+#                           a reviewed raw SQL read of another context's table; an exempted table no
+#                           read of its file names is itself a violation, so the list only shrinks
+client_login_failures = "db"
+clients = "db"
+client_sessions = "db"
+step_faults = "db"
+system_settings = "db"
+correction_holds = "delivery"
+dependencies = "delivery"
+plan_repairs = "delivery"
+plan_revisions = "delivery"
+project_blocks = "delivery"
+work_items = "delivery"
+client_messages = "engagement"
+delivered_report_attempts = "engagement"
+guarantee_verdicts = "engagement"
+intake_readings = "engagement"
+told_reports = "engagement"
+vision_documents = "engagement"
+vision_revisions = "engagement"
+work_burn_warnings = "engagement"
+environment_builds = "execution-infra"
+llm_calls = "finance"
+work_grants = "finance"
+failed_approaches = "knowledge"
+knowledge_entries = "knowledge"
+model_configs = "model-access"
+model_dated_prices = "model-access"
+model_price_tiers = "model-access"
+model_price_windows = "model-access"
+provider_configs = "model-access"
+roster_roles = "organization"
+acceptance_sweeps = "quality"
+check_disputes = "quality"
+check_set_freezes = "quality"
+guarantee_evidence = "quality"
+reviewer_outcomes = "quality"
+suite_review_claims = "quality"
+suite_review_findings = "quality"
+suite_review_judgements = "quality"
+task_checks = "quality"
+undecided_item_claims = "quality"
+undecided_items = "quality"
+secrets = "security"
+dev_sessions = "workplace"
+domain_events = "shared"
+projects = "shared"
+# Raw reads of another context's table that predate its owner's typed read; each owner is to publish
+# one and the reader to move to it, so each line below goes as that read lands.
+exempt.delivery-first-plan = { file = "packages/delivery/src/repositories/first-plan.ts", tables = ["roster_roles", "vision_documents"], reason = "first planning admits a project by its roster and its vision version in raw SQL" }
+exempt.delivery-replan = { file = "packages/delivery/src/repositories/replan.ts", tables = ["vision_documents"], reason = "the revision reads the vision version in force in raw SQL" }
+exempt.engagement-burn-warning = { file = "packages/engagement/src/repositories/burn-warning.ts", tables = ["plan_revisions", "work_items"], reason = "the burn warning counts the current plan's revision and tasks in raw SQL" }
+exempt.engagement-client-change = { file = "packages/engagement/src/repositories/client-change.ts", tables = ["work_items"], reason = "a correction's impact lists the current plan's tasks citing its keys in raw SQL" }
+exempt.engagement-early-warning = { file = "packages/engagement/src/repositories/early-warning.ts", tables = ["plan_revisions"], reason = "the early-warning register reads the plan revision in raw SQL" }
+exempt.quality-acceptance = { file = "packages/quality/src/repositories/acceptance.ts", tables = ["work_items", "client_messages"], reason = "readiness reads the open tasks, and the terminal sweep the stop report, in raw SQL" }
+exempt.quality-check-set-freeze = { file = "packages/quality/src/repositories/check-set-freeze.ts", tables = ["dependencies", "work_items"], reason = "the freeze selects the reviewed check set from the plan's tasks in raw SQL" }
+exempt.finance-attempt-grade = { file = "packages/finance/src/attempt-grade.ts", tables = ["model_configs"], reason = "Finance's attempt grade reads the catalog's two grades as one scalar expression every reader embeds in its own query" }
+exempt.quality-reviewer-outcome = { file = "packages/quality/src/repositories/reviewer-outcome.ts", tables = ["llm_calls"], reason = "the reviewer record counts the ledger's calls in raw SQL" }
+exempt.quality-task-check = { file = "packages/quality/src/repositories/task-check.ts", tables = ["work_items", "dependencies", "dev_sessions"], reason = "stored checks read their tasks and the attempt models in raw SQL" }
+exempt.workplace-run-evidence = { file = "packages/workplace/src/run-evidence.ts", tables = ["work_items", "llm_calls"], reason = "the run evidence reads the tasks and the ledger's calls in raw SQL" }
 # --- Stack literals (no package's section) ----------------------------------------------------
 
 [stack-literals]

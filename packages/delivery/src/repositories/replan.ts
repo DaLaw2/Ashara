@@ -3,7 +3,7 @@ import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { clientMessages, correctionHolds, devSessions, domainEvents, planRepairs, planRevisions, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
-import { firstPlanTold, noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
+import { firstPlanTold, noOpenAnswer, noOpenStop, planRevisionTold, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { attemptGrade, CapabilityLevelSchema } from "../acl/finance-acl.js";
 import { inLatestCheckRevision, StoredDecidesSchema } from "../acl/quality-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
@@ -572,10 +572,11 @@ interface DuePlanRevisionRow {
 }
 
 /**
- * Plan revisions the client has not been told about, oldest first. Only an active project's: a
- * report saying what the team will now do is not posted while the project is stopped, nor while a
- * stop awaits the Liaison, nor while it is halted for any cause but the deployment's spend cap
- * (projectReportsPlans); such a halted project's revision is reported once it resumes. A revision written before the project's first plan was reported is not listed here:
+ * Plan revisions the client has not been told about (Engagement's told record), oldest first. Only
+ * an active project's: a report saying what the team will now do is not posted while the project is
+ * stopped, nor while a stop awaits the Liaison, nor while it is halted for any cause but the
+ * deployment's spend cap (projectReportsPlans); such a halted project's revision is reported once it
+ * resumes. A revision written before the project's first plan was reported is not listed here:
  * that report describes it (listDuePlanReports), so the client never reads a revision of a plan it
  * was not told about. A revision whose row does not read is its UnreadSubject (readEach).
  */
@@ -592,7 +593,7 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<Du
     .innerJoin(projects, eq(projects.id, planRevisions.projectId))
     .where(
       and(
-        isNull(planRevisions.reportId),
+        sql`NOT ${planRevisionTold(planRevisions.id)}`,
         projectReportsPlans(),
         noOpenStop(projects.id),
         firstPlanTold(projects.id),
@@ -620,34 +621,19 @@ class PlanRevisionNotFound extends Error {
   }
 }
 
-/** The report's insert returned no row: nothing is recorded on the revision. */
-class PlanRevisionReportNotInserted extends Error {
-  constructor(readonly revisionId: string) {
-    super(`the report on plan revision ${revisionId} was not inserted: the INSERT returned no row`);
-    this.name = "PlanRevisionReportNotInserted";
-  }
-}
-
 /**
- * Posts the Liaison's one report on a plan revision, in reply to the earliest client message whose
- * correction it took in (in reply to nothing for a plan repair, which no client asked for), and records it on the revision in
- * the same transaction; a revision already reported on gets nothing new.
+ * A plan revision as its report is told: its project and the earliest client message whose
+ * correction it took in, which the report replies to (null for a plan repair, which no client asked
+ * for). An id with no revision throws.
  */
-export async function postPlanRevisionReport(db: DbHandle, revisionId: string, body: string): Promise<"posted" | "already-posted"> {
-  return db.transaction(async (tx) => {
-    const [revision] = await tx
-      .select({ projectId: planRevisions.projectId, requestedBy: planRevisions.requestedBy, reportId: planRevisions.reportId })
-      .from(planRevisions)
-      .where(eq(planRevisions.id, revisionId))
-      .for("update");
-    if (!revision) throw new PlanRevisionNotFound(revisionId);
-    if (revision.reportId !== null) return "already-posted";
-    const [message] = await tx
-      .insert(clientMessages)
-      .values({ projectId: revision.projectId, direction: "outbound", kind: "report", body, inReplyTo: revision.requestedBy })
-      .returning({ id: clientMessages.id });
-    if (!message) throw new PlanRevisionReportNotInserted(revisionId);
-    await tx.update(planRevisions).set({ reportId: message.id }).where(eq(planRevisions.id, revisionId));
-    return "posted";
-  });
+export async function planRevisionToTell(
+  db: DbHandle,
+  revisionId: string,
+): Promise<{ readonly revisionId: string; readonly projectId: string; readonly requestedBy: string | null }> {
+  const [revision] = await db
+    .select({ projectId: planRevisions.projectId, requestedBy: planRevisions.requestedBy })
+    .from(planRevisions)
+    .where(eq(planRevisions.id, revisionId));
+  if (!revision) throw new PlanRevisionNotFound(revisionId);
+  return { revisionId, ...revision };
 }

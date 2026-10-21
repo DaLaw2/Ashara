@@ -4,6 +4,7 @@ import { projects } from "@ashara/db";
 import type { DbHandle, PROJECT_LIFECYCLES } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
 import type { ProjectId } from "@ashara/shared";
+import type { AcceptProject, EndHaltOnStop } from "./ports.js";
 import { projectAtWork } from "./predicates.js";
 
 /**
@@ -46,10 +47,10 @@ type StopOutcome = { readonly kind: "stopped"; readonly wasHalted: boolean } | {
 
 /**
  * Moves the project to 'stopped', inside the caller's transaction, with the project
- * row locked. A halt it finds is ended as 'client_stop' by the projects_stop_ends_halt trigger. A
+ * row locked, and ends a halt it finds through Delivery's `endHalt` in the same transaction. A
  * project already stopped is left as it is; any other refusal throws ProjectLifecycleRefused.
  */
-export async function stopProject(tx: DbHandle, projectId: ProjectId): Promise<StopOutcome> {
+export async function stopProject(tx: DbHandle, projectId: ProjectId, endHalt: EndHaltOnStop): Promise<StopOutcome> {
   const [locked] = await tx.select({ lifecycle: projects.lifecycle }).from(projects).where(eq(projects.id, projectId)).for("update");
   if (locked?.lifecycle === PROJECT_LIFECYCLE.stop.to) return { kind: "already-stopped" };
   // Read after the lock, in its own statement: a halt committed while the lock was awaited is seen.
@@ -60,14 +61,16 @@ export async function stopProject(tx: DbHandle, projectId: ProjectId): Promise<S
     .where(and(eq(projects.id, projectId), inArray(projects.lifecycle, [...PROJECT_LIFECYCLE.stop.from])))
     .returning({ id: projects.id });
   if (!moved || !halt) throw new ProjectLifecycleRefused(projectId, "stop", locked?.lifecycle ?? null);
-  return { kind: "stopped", wasHalted: z.boolean().parse(halt.halted) };
+  const wasHalted = z.boolean().parse(halt.halted);
+  if (wasHalted) await endHalt(tx, projectId);
+  return { kind: "stopped", wasHalted };
 }
 
 /**
  * Moves the project to 'accepted', inside the caller's transaction, which holds the
  * project row locked and records the passed sweep the projects_acceptance_guard trigger requires.
  */
-export async function acceptProject(tx: DbHandle, projectId: ProjectId): Promise<void> {
+export const acceptProject: AcceptProject = async (tx, projectId) => {
   const [moved] = await tx
     .update(projects)
     .set({ lifecycle: PROJECT_LIFECYCLE.accept.to })
@@ -76,4 +79,4 @@ export async function acceptProject(tx: DbHandle, projectId: ProjectId): Promise
   if (moved) return;
   const [found] = await tx.select({ lifecycle: projects.lifecycle }).from(projects).where(eq(projects.id, projectId));
   throw new ProjectLifecycleRefused(projectId, "accept", found === undefined ? null : found.lifecycle);
-}
+};

@@ -4,13 +4,13 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
-import { BlockReports, VisionRepository } from "@ashara/engagement";
+import { BlockReports, VisionRepository, postPlanReport } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";
+import { ProjectHaltRepository } from "@ashara/delivery";
 import { projectState } from "../simulator/project-state.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
@@ -66,7 +66,8 @@ const EpisodesSchema = z.array(
 async function episodesOf(projectId: ProjectId) {
   const result = await db.execute(sql`
     SELECT kind, end_kind AS "endKind", unblocked_by AS "unblockedBy", unblock_reason AS "unblockReason",
-           report_id IS NOT NULL AS "reported", resumed_report_id IS NOT NULL AS "resumedReported"
+           EXISTS (SELECT 1 FROM told_reports t WHERE t.subject_kind = 'project-blocked' AND t.subject_id = project_blocks.id) AS "reported",
+           EXISTS (SELECT 1 FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = project_blocks.id) AS "resumedReported"
       FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`);
   return EpisodesSchema.parse(result.rows);
 }
@@ -266,7 +267,8 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
         INSERT INTO client_messages (project_id, direction, kind, body)
         VALUES (${projectId}, 'outbound', 'report', 'Work on this project has resumed (told alone).')
         RETURNING id)
-      UPDATE project_blocks SET resumed_report_id = (SELECT id FROM told) WHERE project_id = ${projectId}`);
+      INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id)
+      SELECT 'project-resumed', b.id, b.project_id, (SELECT id FROM told) FROM project_blocks b WHERE b.project_id = ${projectId}`);
 
     expect((await reports().runPending()).filter((outcome) => outcome.projectId === projectId)).toEqual([]);
     expect(await messagesOf(projectId)).toEqual(["Work on this project has resumed (told alone)."]);
@@ -304,7 +306,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await stop();
     await reports().runPending();
     expect(await messagesOf(projectId)).toEqual([]);
-    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [], async () => {})).toBe("posted");
+    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [], null)).toBe("posted");
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
     const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM projects WHERE id = ${projectId}`);

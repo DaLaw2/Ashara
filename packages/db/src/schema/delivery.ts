@@ -86,8 +86,8 @@ export const dependencies = pgTable("dependencies", {
 
 // ---------------------------------------------------------------------------
 // project_blocks: one row per time Delivery halted a project. An open row is
-// the halt itself: opened and ended by Delivery's halt guard, ended as
-// 'client_stop' by the projects_stop_ends_halt trigger when the client stops the project.
+// the halt itself: opened and ended by Delivery's halt guard, ended as 'client_stop' by
+// Delivery's endHaltOnStop in the transaction in which the client stops the project.
 // ---------------------------------------------------------------------------
 
 /**
@@ -119,14 +119,12 @@ export const projectBlocks = pgTable("project_blocks", {
   errorClass: text("error_class"),
   reason: text(),
   blockedAt: timestamptz("blocked_at").notNull().defaultNow(),
-  reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   endedAt: timestamptz("ended_at"),
   endKind: text("end_kind"),
   unblockedBy: text("unblocked_by"),
   unblockReason: text("unblock_reason"),
   /** What the passing substrate probe observed, on an infrastructure halt it ended. */
   resumeEvidence: text("resume_evidence"),
-  resumedReportId: uuid("resumed_report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   /**
    * On a budget_cap halt, the amounts its cap was judged on (capUsd, spentUsd,
    * inFlightUsd, nextCallUsd); NULL on every other kind and on a budget_cap halt recorded before the column existed.
@@ -141,7 +139,7 @@ export const projectBlocks = pgTable("project_blocks", {
 
 // ---------------------------------------------------------------------------
 // plan_revisions: one row per revision of a project's plan after
-// the first, with what it did and the Liaison's one report on it.
+// the first, with what it did. The Liaison's report on it is Engagement's record (told_reports).
 // ---------------------------------------------------------------------------
 
 export const planRevisions = pgTable(
@@ -162,7 +160,6 @@ export const planRevisions = pgTable(
     kind: text().notNull().default("client_change"),
     summary: jsonb().notNull(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
-    reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   },
   (t) => ({
     oneNumber: unique("plan_revisions_one_per_number").on(t.projectId, t.revision),

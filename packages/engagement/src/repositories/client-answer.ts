@@ -8,8 +8,8 @@ import { noOpenStop, projectReadsClientInput } from "../predicates.js";
 import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
+import type { HoldCorrection } from "../ports.js";
 import { affectedKeysOf, lockClientInputStanding, standingMoved } from "./client-change.js";
-import type { HoldCorrection } from "./client-change.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions: each inbound

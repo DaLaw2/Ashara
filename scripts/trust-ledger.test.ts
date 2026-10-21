@@ -45,9 +45,10 @@ beforeAll(async () => {
     INSERT INTO client_messages (project_id, direction, kind, body) VALUES (${projectId}, 'outbound', 'report', 'scripted report')
     RETURNING id`);
   const sweepId = await insertedId(sql`
-    INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, check_outcomes, report_id)
-    VALUES (${projectId}, ${COMMIT}, 'v1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', '[]'::jsonb, ${reportId})
+    INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, check_outcomes)
+    VALUES (${projectId}, ${COMMIT}, 'v1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', '[]'::jsonb)
     RETURNING id`);
+  await db.execute(sql`INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id) VALUES ('delivered', ${sweepId}, ${projectId}, ${reportId})`);
   for (const [guarantee, verdict, evidence] of [
     ["G1", "pass", "witness"],
     ["G2", "fail", "witness"],

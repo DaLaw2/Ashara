@@ -44,11 +44,11 @@ export type ReadingTold =
 /** An accepted project whose delivered report the client has not been sent. */
 interface DueDeliveredReport {
   readonly kind: "due";
-  /** Failed attempts at this report so far (acceptance_sweeps.report_failures). */
+  /** Failed attempts at this report so far (delivered_report_attempts.failures). */
   readonly failures: number;
-  /** Failed reads of its public interface file so far (acceptance_sweeps.report_interface_read_failures). */
+  /** Failed reads of its public interface file so far (delivered_report_attempts.interface_read_failures). */
   readonly interfaceReadFailures: number;
-  /** Failed attempts whose records did not make a report (acceptance_sweeps.report_record_failures). */
+  /** Failed attempts whose records did not make a report (delivered_report_attempts.record_failures). */
   readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
@@ -88,7 +88,7 @@ interface UnreadDeliveredReport {
   readonly kind: "unread";
   readonly cause: "record" | "connection";
   readonly failures: number;
-  /** Failed attempts whose records did not read as a report (acceptance_sweeps.report_record_failures). */
+  /** Failed attempts whose records did not read as a report (delivered_report_attempts.record_failures). */
   readonly recordFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;

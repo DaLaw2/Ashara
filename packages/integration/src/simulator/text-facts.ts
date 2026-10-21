@@ -133,7 +133,7 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
       replyRow,
       sql`SELECT a.id AS "answerId", r.body FROM client_messages r JOIN client_messages a ON a.id = r.in_reply_to
           WHERE r.project_id = ${projectId} AND r.direction = 'outbound' AND a.direction = 'inbound' AND a.kind = 'answer'
-            AND r.receipt_of IS NULL AND NOT EXISTS (SELECT 1 FROM plan_revisions p WHERE p.report_id = r.id)
+            AND r.receipt_of IS NULL AND NOT EXISTS (SELECT 1 FROM told_reports p WHERE p.subject_kind = 'plan-revision' AND p.report_id = r.id)
           ORDER BY r.created_at, r.id`,
     ),
     tenderReports: await rows(
@@ -147,7 +147,8 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
       deliveredRow,
       sql`SELECT s.id AS "sweepId", m.body, s.main_commit AS "mainCommit",
                  (SELECT max(v.version) FROM vision_documents v WHERE v.project_id = s.project_id AND v.created_at <= s.created_at) AS "visionAtAcceptance"
-          FROM acceptance_sweeps s JOIN client_messages m ON m.id = s.report_id
+          FROM acceptance_sweeps s JOIN told_reports t ON t.subject_kind = 'delivered' AND t.subject_id = s.id
+          JOIN client_messages m ON m.id = t.report_id
           WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
     ),
     firstPlan: {
@@ -795,12 +796,13 @@ const I9_CHECKS: readonly TextCheck[] = [...new Set(TEXT_COVERED.flatMap((entry)
 /** @testseam text-coverage.test.ts holds it to the source: the composers no oracle judges, each with its reason */
 export const TEXT_EXCLUDED: readonly ExcludedText[] = [
   { source: `${ENGAGEMENT}/block-report.ts#blockedBody`, kind: "not-a-composer", reason: "joins the halt's own text and the guarantee table, each placed on its own" },
-  { source: `${ENGAGEMENT}/repositories/block-report.ts#postProjectBlockReport`, kind: "not-a-composer", reason: "posts the body it is given, through insertReport" },
-  { source: `${ENGAGEMENT}/repositories/block-report.ts#insertReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${ENGAGEMENT}/repositories/block-report.ts#postProjectBlockReport`, kind: "not-a-composer", reason: "posts the body it is given, through insertOutboundReport" },
+  { source: `${ENGAGEMENT}/repositories/block-report.ts#notCoveredByPlanningStoppedReport`, kind: "not-a-composer", reason: "a predicate on which halts a planning-stopped report already tells; it composes no text" },
+  { source: `${ENGAGEMENT}/repositories/told-report.ts#insertOutboundReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`, kind: "not-a-composer", reason: "posts the body it is given" },
-  { source: `${DELIVERY}/repositories/plan-report.ts#postPlanReport`, kind: "not-a-composer", reason: "posts the body it is given" },
-  { source: `${DELIVERY}/repositories/replan.ts#postPlanRevisionReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${ENGAGEMENT}/repositories/plan-report.ts#postPlanReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${ENGAGEMENT}/repositories/plan-report.ts#postPlanRevisionReport`, kind: "not-a-composer", reason: "posts the body it is given" },
   { source: `${DELIVERY}/dispatch/dispatch-records.ts#DispatchRecords.writeBrief`, kind: "not-a-composer", reason: "writes the composed brief to the conversation record as it is" },
   { source: `${WORKPLACE}/agent-brief.ts#createAgentBrief`, kind: "not-a-composer", reason: "parses a composed brief against its schema; DispatchService.buildBrief composes it" },
   { source: `${WORKPLACE}/prompt.ts#buildSystemPrompt`, kind: "not-a-composer", reason: "joins the charter's duties to the sections placed on their own" },
@@ -853,16 +855,18 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
 
 /** @testseam text-coverage.test.ts holds it to the source: every client_messages writer, with the composers whose text it posts */
 export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
-  { source: `${DELIVERY}/repositories/plan-report.ts#postPlanReport`, posts: [`${ENGAGEMENT}/plan-report.ts#firstPlanReport`, `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`], clientWords: false },
-  { source: `${DELIVERY}/repositories/replan.ts#postPlanRevisionReport`, posts: [`${ENGAGEMENT}/plan-report.ts#planRevisionReport`], clientWords: false },
+  { source: `${ENGAGEMENT}/repositories/plan-report.ts#postPlanReport`, posts: [`${ENGAGEMENT}/plan-report.ts#firstPlanReport`, `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`], clientWords: false },
   {
-    source: `${ENGAGEMENT}/repositories/block-report.ts#insertReport`,
+    source: `${ENGAGEMENT}/repositories/told-report.ts#insertOutboundReport`,
     posts: [
+      `${ENGAGEMENT}/plan-report.ts#planRevisionReport`,
       `${ENGAGEMENT}/block-report.ts#projectBlockedReport`,
       `${ENGAGEMENT}/block-report.ts#planRepairBoundReport`,
       `${ENGAGEMENT}/block-report.ts#disputeBoundReport`,
       `${ENGAGEMENT}/block-report.ts#suiteReviewBoundReport`,
       `${ENGAGEMENT}/block-report.ts#projectResumedReport`,
+      `${ENGAGEMENT}/delivered-report.ts#deliveredReport`,
+      `${ENGAGEMENT}/delivered-report.ts#unreadNotice`,
     ],
     clientWords: false,
   },
@@ -876,11 +880,6 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   { source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`, posts: [`${ENGAGEMENT}/intake.ts#questionBody`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`, posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/client-receipt.ts#postClientReceipt`, posts: [`${ENGAGEMENT}/client-receipt.ts#receiptReport`], clientWords: false },
-  {
-    source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`,
-    posts: [`${ENGAGEMENT}/delivered-report.ts#deliveredReport`, `${ENGAGEMENT}/delivered-report.ts#unreadNotice`],
-    clientWords: false,
-  },
   { source: `${ENGAGEMENT}/repositories/stack-choice.ts#recordStackChoice`, posts: [`${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`], clientWords: false },
   { source: `${ENGAGEMENT}/repositories/burn-warning.ts#postBurnWarning`, posts: [`${ENGAGEMENT}/burn-warning.ts#burnWarningReport`], clientWords: false },
 ];

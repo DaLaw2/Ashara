@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { JsonParseFailed, parseJson } from "@ashara/shared";
 import type { QueryPlant } from "./faults.js";
@@ -215,11 +216,13 @@ function suppressListing(matches: (text: string) => boolean): QueryPlant {
   };
 }
 
-/** No halt is ever due its report (Engagement listDueBlockReports, the halts it lists). */
-export const haltReportSuppressed = suppressListing((text) => text.includes(`"project_blocks"."error_class"`) && text.includes(`from "project_blocks"`));
+/** No halt is ever due its report (Engagement listDueBlockReports, the halts it lists through Delivery's haltEpisodesWhere). */
+export const haltReportSuppressed = suppressListing((text) =>
+  text.startsWith(`select "id", "project_id", "kind", "blocked_at", "error_class", "reason", "spend", "work" from "project_blocks" where `),
+);
 
-/** No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueBlockReports, the resumptions it lists). */
-export const resumptionReportSuppressed = suppressListing((text) => text.includes(`"project_blocks"."end_kind" from "project_blocks"`));
+/** No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueBlockReports, the resumptions it lists through Delivery's endedHaltEpisodesWhere). */
+export const resumptionReportSuppressed = suppressListing((text) => text.startsWith(`select "id", "project_id", "end_kind" from "project_blocks" where `));
 
 /** No stop is ever due its stop report (Engagement listDueStopReports). */
 export const stopReportSuppressed = suppressListing((text) => text.includes(`from "client_messages"`) && text.includes(`"stop_found_halted" is not null`));
@@ -227,13 +230,15 @@ export const stopReportSuppressed = suppressListing((text) => text.includes(`fro
 /** No first planning that stopped is ever due its planning-stopped report (Delivery's plan report listing). */
 export const planningStoppedReportSuppressed = suppressListing((text) => text.includes(`"plan_attempts" from "projects"`) && text.includes(`"plan_stopped_at" is not null`));
 
-/** The delivered report is posted but its sweep never records it, so it is due, and posted, again. */
+/**
+ * The delivered report is posted but its told record names another subject than its sweep, so the
+ * sweep is never recorded as told: it is due, and posted, again.
+ */
 export const deliveredReportUnrecorded: QueryPlant = (args) => {
   const text = textOf(args);
-  if (text === null || !text.startsWith(`update "acceptance_sweeps" set "report_id" = $1`)) return null;
-  const planted = text.replace(`set "report_id" = $1`, `set "report_id" = nullif($1::uuid, $1::uuid)`);
-  const parsed = sentText.safeParse(args[0]);
-  return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];
+  const params = args[1];
+  if (text === null || !text.startsWith(`insert into "told_reports"`) || !Array.isArray(params) || params[0] !== "delivered") return null;
+  return [args[0], [params[0], randomUUID(), ...params.slice(2)], ...args.slice(2)];
 };
 
 /**

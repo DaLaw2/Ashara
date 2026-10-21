@@ -54,8 +54,10 @@
  * against the tokens and exemptions of the rules file's [stack-literals] section, which is no
  * package's section (scripts/stack-literals.ts states what that scan reads and its blind spots),
  * on a packages/integration/src/simulator test file over its budget of simulator runs
- * (scripts/simulator-run-budget.ts), and on a raw copy of a cross-context predicate outside the
- * context that owns it (scripts/predicate-copies.ts).
+ * (scripts/simulator-run-budget.ts), on a raw copy of a cross-context predicate outside the
+ * context that owns it (scripts/predicate-copies.ts), and on a write to a table another context
+ * owns or an unexempted raw SQL read of one, against the owner map of the rules file's [tables]
+ * section, itself held to the schema modules (scripts/table-ownership.ts).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -71,6 +73,7 @@ import { findPredicateCopies } from "./predicate-copies.js";
 import { findPriceColumnDefaults } from "./price-defaults.js";
 import { findRunBudgetFindings } from "./simulator-run-budget.js";
 import { findStackLiterals, parseStackLiteralRules, STACK_LITERALS_SECTION } from "./stack-literals.js";
+import { DB_OWNER, SHARED_OWNER, TABLES_SECTION, declaredTables, findTableUses, parseTableOwnershipRules } from "./table-ownership.js";
 
 // ---------------------------------------------------------------------------
 // TOML parser (minimal: [section] headers, `allow = [...]`, `restrict.x = [...]`)
@@ -165,8 +168,9 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     }
   >();
   let currentSection: string | null = null;
-  // The [stack-literals] section is not a package's rules; parseStackLiteralRules reads it.
-  let inStackLiterals = false;
+  // The [stack-literals] and [tables] sections are not a package's rules; parseStackLiteralRules and
+  // parseTableOwnershipRules read them.
+  let inOtherSection = false;
   const lines = toml.split("\n");
 
   for (let i = 0; i < lines.length; i++) {
@@ -176,8 +180,8 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (line === "" || line.startsWith("#")) continue;
 
     const sectionMatch = /^\[([a-z][a-z0-9-]*)\]$/.exec(line);
-    inStackLiterals = sectionMatch ? sectionMatch[1] === STACK_LITERALS_SECTION : inStackLiterals;
-    if (inStackLiterals) continue;
+    inOtherSection = sectionMatch ? sectionMatch[1] === STACK_LITERALS_SECTION || sectionMatch[1] === TABLES_SECTION : inOtherSection;
+    if (inOtherSection) continue;
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
@@ -869,6 +873,101 @@ function stackLiteralViolations(
 }
 
 // ---------------------------------------------------------------------------
+// Table ownership (not an import rule; run here so it needs no gate of its own in `just check`)
+// ---------------------------------------------------------------------------
+
+/** Packages whose source the table-ownership scan does not read: generic persistence, and the test harness. */
+const OWNERSHIP_UNSCANNED = new Set(["db", "integration"]);
+
+/**
+ * The [tables] owner map held to the schema modules, every write of a table another package owns,
+ * every raw SQL read of one no exemption admits, and every exempted table no read uses
+ * (scripts/table-ownership.ts).
+ */
+function tableOwnershipViolations(root: string, packagesDir: string, packageDirs: readonly string[], toml: string, rulesRelative: string): Violation[] {
+  const rules = parseTableOwnershipRules(toml, rulesRelative);
+  const violations: Violation[] = [];
+  const atRules = (table: string, reason: string): Violation => ({
+    file: rulesRelative,
+    // eslint-disable-next-line no-restricted-syntax -- policy default: line 0 names the rules file as a whole, as every rules-level finding here does
+    line: rules.lines.get(table) ?? 0,
+    fromPkg: TABLES_SECTION,
+    specifier: table,
+    reason,
+  });
+
+  const schemaDir = path.join(packagesDir, "db", "src", "schema");
+  const identifiers = new Map<string, string>();
+  const declared = new Set<string>();
+  for (const name of fs.readdirSync(schemaDir).filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))) {
+    const module = name.slice(0, -".ts".length);
+    const schemaPath = path.join(schemaDir, name);
+    for (const table of declaredTables(fs.readFileSync(schemaPath, "utf-8"), schemaPath)) {
+      identifiers.set(table.identifier, table.name);
+      declared.add(table.name);
+      const owner = rules.owners.get(table.name);
+      const file = path.relative(root, schemaPath).split(path.sep).join("/");
+      if (owner === undefined) {
+        violations.push({ file, line: table.line, fromPkg: TABLES_SECTION, specifier: table.name, reason: `no [${TABLES_SECTION}] entry names its owner` });
+        continue;
+      }
+      const admitted = packageDirs.includes(module) ? [module, SHARED_OWNER] : [DB_OWNER, SHARED_OWNER];
+      if (!admitted.includes(owner)) {
+        violations.push(atRules(table.name, `owned by "${owner}", but declared in schema/${name}, which admits ${admitted.map((a) => `"${a}"`).join(" or ")}`));
+      }
+    }
+  }
+  if (declared.size === 0) violations.push({ file: path.relative(root, schemaDir), line: 0, fromPkg: TABLES_SECTION, specifier: "schema", reason: "no table declared; an owner map held to nothing would pass" });
+  for (const table of rules.owners.keys()) {
+    if (!declared.has(table)) violations.push(atRules(table, "no schema module declares this table; remove its entry"));
+  }
+
+  const exemptionsUsed = new Set<string>();
+  let scanned = 0;
+  for (const pkgName of packageDirs.filter((pkg) => !OWNERSHIP_UNSCANNED.has(pkg))) {
+    for (const filePath of collectTsFiles(path.join(packagesDir, pkgName, "src")).filter((file) => !file.endsWith(".test.ts"))) {
+      scanned++;
+      const file = path.relative(root, filePath).split(path.sep).join("/");
+      for (const use of findTableUses(fs.readFileSync(filePath, "utf-8"), filePath, identifiers)) {
+        const owner = rules.owners.get(use.table);
+        if (owner === undefined || owner === pkgName || owner === SHARED_OWNER) continue;
+        if (use.kind === "write") {
+          violations.push({
+            file,
+            line: use.line,
+            fromPkg: pkgName,
+            specifier: use.table,
+            reason: `writes a table "${owner}" owns: ${use.text}; go through ${owner}'s exported write entry`,
+          });
+          continue;
+        }
+        const exemption = rules.exemptions.find((e) => e.file === file && e.tables.includes(use.table));
+        if (exemption !== undefined) {
+          exemptionsUsed.add(`${exemption.id}\0${use.table}`);
+          continue;
+        }
+        violations.push({
+          file,
+          line: use.line,
+          fromPkg: pkgName,
+          specifier: use.table,
+          reason: `raw SQL reads a table "${owner}" owns: ${use.text}; read it through ${owner}'s typed read, or exempt it in [${TABLES_SECTION}] with a reason`,
+        });
+      }
+    }
+  }
+  if (scanned === 0) violations.push({ file: "packages", line: 0, fromPkg: "*", specifier: TABLES_SECTION, reason: "no source module to scan for table writes; a scan of nothing would pass" });
+  for (const exemption of rules.exemptions) {
+    for (const table of exemption.tables) {
+      if (!exemptionsUsed.has(`${exemption.id}\0${table}`)) {
+        violations.push({ file: rulesRelative, line: 0, fromPkg: TABLES_SECTION, specifier: `exempt.${exemption.id}`, reason: `"${table}" is exempted in ${exemption.file}, but no raw read there names it; remove it` });
+      }
+    }
+  }
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
 // Simulator run budget (not an import rule; run here so it needs no gate of its own in `just check`)
 // ---------------------------------------------------------------------------
 
@@ -1162,6 +1261,9 @@ function main(): void {
   }
 
   violations.push(...stackLiteralViolations(root, packagesDir, packageDirs, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
+  // Not an import rule either: a context writes only the tables it owns, and reads another's only
+  // through its typed read or a reviewed exemption (scripts/table-ownership.ts).
+  violations.push(...tableOwnershipViolations(root, packagesDir, packageDirs, fs.readFileSync(rulesPath, "utf-8"), rulesRelative));
   violations.push(...simulatorRunBudgetViolations(root));
   // Not an import rule either: a cross-context predicate re-spelled outside its owner, which drifts
   // from the owner's one spelling (scripts/predicate-copies.ts).

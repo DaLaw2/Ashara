@@ -1,9 +1,10 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
 import { acceptanceSweeps, clientMessages, guaranteeEvidence, projectBlocks, projects, taskChecks, undecidedItems, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { SETTLED_WORK_ITEM_STATUSES, completedGoalTasks, goalTaskSql, pendingCorrection, pendingRepair, productScaffoldTask } from "../acl/delivery-acl.js";
-import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, REPORT_SUBJECT } from "../acl/engagement-acl.js";
+import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, REPORT_SUBJECT, type AcceptProject } from "../acl/engagement-acl.js";
 import type { FailedCheck, SweptCheck } from "../verification.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
@@ -12,7 +13,8 @@ import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 // no repair or revision is awaited, and no stop or answer awaits the Liaison. A passed sweep is
 // recorded with the project's move to 'accepted' in one transaction, the project row locked and
 // readiness read again; a failed one with the defect item it opens. Engagement's delivered report
-// is due while a passed sweep has none (engagement repositories/delivered-report.ts). A project
+// is due while a passed sweep has none on Engagement's told record, and reads what the sweep
+// recorded only through readSweepOutcome. A project
 // stopped or halted short of acceptance gets one terminal sweep per stop or halt episode. Every
 // sweep is recorded with the outcome of each stored check it ran and one evidence row per guarantee
 // in force, together.
@@ -253,7 +255,7 @@ async function lockReady(tx: DbHandle, projectId: ProjectId): Promise<boolean> {
 export async function recordAcceptance(
   db: Database,
   sweep: AcceptanceSweepRecord & { readonly mainCommit: string },
-  accept: (tx: DbTransaction, projectId: ProjectId) => Promise<void>,
+  accept: AcceptProject,
   readGuarantees: ReadGuarantees,
 ): Promise<"accepted" | "moved"> {
   return db.transaction(async (tx) => {
@@ -380,4 +382,69 @@ export async function latestAcceptanceSweepOf(
     .orderBy(desc(acceptanceSweeps.createdAt), desc(acceptanceSweeps.id))
     .limit(1);
   return row;
+}
+
+/** How one stored check an acceptance sweep ran ended (acceptance_sweeps.check_outcomes). */
+const CHECK_OUTCOMES = ["passed", "failed", "not-run"] as const;
+
+const SweepTaskIdsSchema = z.array(z.guid());
+
+/** acceptance_sweeps.check_outcomes as insertSweepWithEvidence writes it; null on a row recorded before the column existed. */
+const StoredCheckOutcomesSchema = z
+  .array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1), outcome: z.enum(CHECK_OUTCOMES) }))
+  .nullable();
+
+/** One stored check a sweep ran: its task, its name, the command it ran and how it ended. */
+interface SweepCheckOutcome {
+  readonly taskId: string;
+  readonly name: string;
+  readonly command: string;
+  readonly outcome: (typeof CHECK_OUTCOMES)[number];
+}
+
+/**
+ * What a sweep recorded of the work it swept, as Quality publishes it: the completed tasks whose
+ * stored checks it ran and those with none, and every stored check it ran with its outcome; the
+ * checks are unrecorded on a sweep recorded before their outcomes were.
+ */
+interface SweepOutcome {
+  readonly checkedTasks: readonly string[];
+  readonly uncheckedTasks: readonly string[];
+  readonly checks: { readonly kind: "unrecorded" } | { readonly kind: "recorded"; readonly checks: readonly SweepCheckOutcome[] };
+}
+
+/** A sweep's stored outcome does not read: the column named holds something its writer never writes. */
+class SweepOutcomeUnreadable extends Error {
+  constructor(
+    readonly sweepId: string,
+    readonly column: "checked_tasks" | "unchecked_tasks" | "check_outcomes" | "row",
+    readonly detail: string,
+  ) {
+    super(`acceptance sweep ${sweepId}: ${column} does not read as its sweep outcome: ${detail}`);
+    this.name = "SweepOutcomeUnreadable";
+  }
+}
+
+function parsedColumn<T>(sweepId: string, column: "checked_tasks" | "unchecked_tasks" | "check_outcomes", schema: z.ZodType<T>, raw: unknown): T {
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) throw new SweepOutcomeUnreadable(sweepId, column, z.prettifyError(parsed.error));
+  return parsed.data;
+}
+
+/** The outcome the sweep `sweepId` recorded; one that does not read throws SweepOutcomeUnreadable, never reads as empty. */
+export async function readSweepOutcome(db: DbHandle, sweepId: string): Promise<SweepOutcome> {
+  const [row] = await db
+    .select({ checkedTasks: acceptanceSweeps.checkedTasks, uncheckedTasks: acceptanceSweeps.uncheckedTasks, checkOutcomes: acceptanceSweeps.checkOutcomes })
+    .from(acceptanceSweeps)
+    .where(eq(acceptanceSweeps.id, sweepId));
+  if (row === undefined) throw new SweepOutcomeUnreadable(sweepId, "row", "no acceptance_sweeps row has that id");
+  const checks = parsedColumn(sweepId, "check_outcomes", StoredCheckOutcomesSchema, row.checkOutcomes);
+  return {
+    checkedTasks: parsedColumn(sweepId, "checked_tasks", SweepTaskIdsSchema, row.checkedTasks),
+    uncheckedTasks: parsedColumn(sweepId, "unchecked_tasks", SweepTaskIdsSchema, row.uncheckedTasks),
+    checks:
+      checks === null
+        ? { kind: "unrecorded" }
+        : { kind: "recorded", checks: checks.map((check) => ({ taskId: check.taskId, name: check.name, command: check.command, outcome: check.outcome })) },
+  };
 }

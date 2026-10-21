@@ -267,12 +267,13 @@ async function statusOf(projectId: ProjectId): Promise<string> {
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status ?? "(none)";
 }
 
-/** The failed attempts recorded on the project's passed sweep, and whether it is waiting out a backoff. */
+/** The failed attempts recorded for the project's passed sweep's report, and whether it is waiting out a backoff. */
 async function reportAttempts(projectId: ProjectId): Promise<{ failures: number; interfaceReadFailures: number; lastError: string | null; waiting: boolean }> {
   const result = await db.execute(sql`
-    SELECT report_failures AS failures, report_interface_read_failures AS "interfaceReadFailures", report_last_error AS "lastError",
-      COALESCE(report_retry_at > now(), false) AS waiting
-    FROM acceptance_sweeps WHERE project_id = ${projectId} AND passed`);
+    SELECT COALESCE(a.failures, 0) AS failures, COALESCE(a.interface_read_failures, 0) AS "interfaceReadFailures", a.last_error AS "lastError",
+      COALESCE(a.retry_at > now(), false) AS waiting
+    FROM acceptance_sweeps s LEFT JOIN delivered_report_attempts a ON a.sweep_id = s.id
+    WHERE s.project_id = ${projectId} AND s.passed`);
   const [row] = z
     .array(z.object({ failures: z.number(), interfaceReadFailures: z.number(), lastError: z.string().nullable(), waiting: z.boolean() }))
     .parse(result.rows);
@@ -282,7 +283,7 @@ async function reportAttempts(projectId: ProjectId): Promise<{ failures: number;
 
 /** Stands in for the backoff passing: the sweep's retry time is now. */
 async function endBackoff(projectId: ProjectId): Promise<void> {
-  await db.execute(sql`UPDATE acceptance_sweeps SET report_retry_at = now() WHERE project_id = ${projectId} AND passed`);
+  await db.execute(sql`UPDATE delivered_report_attempts SET retry_at = now() WHERE project_id = ${projectId}`);
 }
 
 const verdictRow = z.object({ guaranteeId: z.string(), verdict: z.string(), reason: z.string().nullable(), basis: z.string(), evidenceClass: z.string() });
@@ -516,7 +517,7 @@ describe("acceptance on main", () => {
     const malformed = await deliveredProject();
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: malformed.goals, unchecked: [malformed.scaffold] }))).toBe(1);
     await db.execute(sql`UPDATE acceptance_sweeps SET check_outcomes = '[{"taskId": "x"}]'::jsonb WHERE project_id = ${malformed.projectId}`);
-    expect(await due(malformed.projectId)).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "SweepCheckOutcomesUnreadable" }) });
+    expect(await due(malformed.projectId)).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "SweepOutcomeUnreadable", column: "check_outcomes" }) });
 
     await deliveredReports().runPending();
     const [body] = await reportsOf(unrecorded.projectId);
@@ -579,7 +580,7 @@ describe("acceptance on main", () => {
       });
       const ours = async (handle: Database) => (await createDeliveredReportStore(handle).dueReports()).find((due) => due.projectId === projectId);
       const recordFailures = async () =>
-        z.array(z.object({ n: z.number() })).parse((await db.execute(sql`SELECT report_record_failures AS n FROM acceptance_sweeps WHERE project_id = ${projectId} AND passed`)).rows)[0]?.n;
+        z.array(z.object({ n: z.number() })).parse((await db.execute(sql`SELECT COALESCE(a.record_failures, 0) AS n FROM acceptance_sweeps s LEFT JOIN delivered_report_attempts a ON a.sweep_id = s.id WHERE s.project_id = ${projectId} AND s.passed`)).rows)[0]?.n;
 
       expect(await ours(listedThenFailing(unreachable))).toMatchObject({ kind: "unread", cause: "connection" });
       expect(await ours(listedThenFailing(unnamed))).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "TypeError" }) });

@@ -189,9 +189,10 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     episodes: await rows(
       episodeRecord,
-      sql`SELECT b.id, b.kind, b.error_class AS "errorClass", b.reason, b.spend, b.work, b.report_id AS "reportId", b.resumed_report_id AS "resumedReportId",
+      sql`SELECT b.id, b.kind, b.error_class AS "errorClass", b.reason, b.spend, b.work, (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked' AND t.subject_id = b.id) AS "reportId",
+                 (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = b.id) AS "resumedReportId",
                  b.ended_at IS NOT NULL AS ended,
-                 (SELECT s.id FROM acceptance_sweeps s JOIN client_messages m ON m.id = b.report_id
+                 (SELECT s.id FROM acceptance_sweeps s JOIN client_messages m ON m.id = (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked' AND t.subject_id = b.id)
                    WHERE s.block_id = b.id AND s.created_at <= m.created_at ORDER BY s.created_at, s.id LIMIT 1) AS "sweepBeforeReport"
           FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`,
     ),
@@ -214,11 +215,12 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     sweeps: await rows(
       sweepRow,
-      sql`SELECT id, passed, unchecked_tasks AS "uncheckedTasks", report_id AS "reportId", report_failures AS "reportFailures"
-          FROM acceptance_sweeps WHERE project_id = ${projectId} ORDER BY created_at, id`,
+      sql`SELECT s.id, s.passed, s.unchecked_tasks AS "uncheckedTasks", (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered' AND t.subject_id = s.id) AS "reportId",
+                 COALESCE((SELECT a.failures FROM delivered_report_attempts a WHERE a.sweep_id = s.id), 0) AS "reportFailures"
+          FROM acceptance_sweeps s WHERE s.project_id = ${projectId} ORDER BY s.created_at, s.id`,
     ),
     revisionReports: (
-      await rows(revisionRow, sql`SELECT report_id AS "reportId" FROM plan_revisions WHERE project_id = ${projectId} AND report_id IS NOT NULL`)
+      await rows(revisionRow, sql`SELECT t.report_id AS "reportId" FROM told_reports t WHERE t.project_id = ${projectId} AND t.subject_kind = 'plan-revision'`)
     ).map((row) => row.reportId),
     tableSweeps: await rows(
       tableSweepRow,
@@ -259,7 +261,7 @@ async function passedSweepsOf(
   const sweeps = await rows(
     passedSweepRow,
     sql`SELECT s.id, v.version, v.inferences, v.scope_boundaries AS "scopeBoundaries", v.contract_form AS "contractForm", v.guarantees,
-               (SELECT m.body FROM client_messages m WHERE m.id = s.report_id) AS "reportBody"
+               (SELECT m.body FROM client_messages m WHERE m.id = (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered' AND t.subject_id = s.id)) AS "reportBody"
         FROM acceptance_sweeps s
         LEFT JOIN LATERAL (SELECT version, inferences, scope_boundaries, contract_form, guarantees FROM vision_documents d
                            WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
@@ -291,7 +293,8 @@ async function passedSweepsOf(
   const verdicts = await rows(
     sweptVerdictRow,
     sql`SELECT s.id AS "sweepId", v.guarantee_id AS "guaranteeId", v.verdict
-        FROM acceptance_sweeps s JOIN guarantee_verdicts v ON v.report_id = s.report_id
+        FROM acceptance_sweeps s JOIN told_reports t ON t.subject_kind = 'delivered' AND t.subject_id = s.id
+        JOIN guarantee_verdicts v ON v.report_id = t.report_id
         WHERE s.project_id = ${projectId} AND s.passed
         ORDER BY s.id, v.guarantee_id`,
   );

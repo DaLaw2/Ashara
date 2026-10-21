@@ -4,7 +4,7 @@ import { ProjectRepository, projectBlocks, projectRowColumns, projects, toProjec
 import type { DbHandle, ProjectRow } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { restartClientReadings } from "../acl/engagement-acl.js";
-import { firstPlanUnreported, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
+import { firstPlanUnreported, haltReported, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import { pendingRepair, projectHalted } from "../predicates.js";
 import type { ProjectBlockCause } from "../project-halt.js";
@@ -13,9 +13,10 @@ import type { ProjectBlockCause } from "../project-halt.js";
 // while it has an open project_blocks episode; this module is the only writer of that episode and
 // of the halt's cause on the project row (blocked_category, blocked_error_class, blocked_reason). A
 // halt opens an episode on a project at work (Engagement's lifecycle 'active', not halted); a
-// resumption (the substrate probe, or the operator's unblock once the cause is cleared) ends it.
-// Engagement's lifecycle column is never written here; the client's stop ends a halt it finds
-// through the projects_stop_ends_halt trigger.
+// resumption (the substrate probe, or the operator's unblock once the cause is cleared) ends it, and
+// so does the client's stop, through endHaltOnStop, which Engagement's stop calls in its own
+// transaction. Engagement's lifecycle column is never written here, and whether a halt was told is
+// Engagement's told record, read through its published haltReported.
 
 /**
  * The project's planning outcomes are reported to the client: it is at work, or its halt is the
@@ -72,12 +73,12 @@ async function lockProject(tx: DbHandle, id: ProjectId): Promise<{ readonly life
  * The open episode of a project whose row `tx` holds locked: read in its own statement after the
  * lock, so a halt committed by a writer the lock waited for is seen.
  */
-async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind: string; readonly reportId: string | null } | null> {
+async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind: string; readonly reported: boolean } | null> {
   const [open] = await tx
-    .select({ kind: projectBlocks.kind, reportId: projectBlocks.reportId })
+    .select({ kind: projectBlocks.kind, reported: haltReported(projectBlocks.id) })
     .from(projectBlocks)
     .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)));
-  return open ?? null;
+  return open === undefined ? null : { kind: open.kind, reported: z.boolean().parse(open.reported) };
 }
 
 /**
@@ -101,6 +102,18 @@ function episodeOf(cause: ProjectBlockCause) {
  */
 export async function haltForPlanningStopped(tx: DbHandle, id: ProjectId, lastError: string | null): Promise<void> {
   await tx.insert(projectBlocks).values({ projectId: id, kind: "planning_stopped", errorClass: null, reason: lastError });
+}
+
+/**
+ * Ends the project's open halt episode, if it has one, as 'client_stop', inside `tx`: the
+ * transaction in which Engagement moves the project to 'stopped' with its row locked. The deferred
+ * project_halt_consistent check refuses, at the commit, a stopped project left halted.
+ */
+export async function endHaltOnStop(tx: DbHandle, id: ProjectId): Promise<void> {
+  await tx
+    .update(projectBlocks)
+    .set({ endedAt: sql`now()`, endKind: "client_stop" })
+    .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)));
 }
 
 /** A project as the client sees it. */
@@ -218,7 +231,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         and(
           noOpenStop(projects.id),
           sql`EXISTS (SELECT 1 FROM project_blocks b WHERE b.project_id = ${projects.id} AND b.ended_at IS NULL
-            AND b.kind = 'infrastructure' AND b.report_id IS NOT NULL)`,
+            AND b.kind = 'infrastructure' AND ${haltReported(sql`b.id`)})`,
         ),
       )
       .orderBy(asc(projects.createdAt), asc(projects.id));
@@ -239,7 +252,7 @@ export class ProjectHaltRepository extends ProjectRepository {
       if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "resume the project");
       const open = await openEpisode(tx, id);
       if (!open || open.kind !== "infrastructure") return "moved";
-      if (open.reportId === null) return "unreported";
+      if (!open.reported) return "unreported";
       const [episode] = await tx
         .update(projectBlocks)
         .set({ endedAt: sql`now()`, endKind: "probe_passed", resumeEvidence: evidence })

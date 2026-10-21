@@ -1,23 +1,26 @@
-import { and, asc, count, desc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, clientMessages, insertedRow, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS, acceptanceSweeps, checkDisputes, planRepairs, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import { endedHaltEpisodesWhere, haltEpisodeOf, haltEpisodesWhere, type HaltEpisodeColumns } from "@ashara/delivery/predicates";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
-import { noOpenStop } from "../predicates.js";
+import { haltReported, noOpenStop, reportTold } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
+import { insertOutboundReport, tellOnce } from "./told-report.js";
 
 // The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
-// infrastructure halt). Each is due while its episode (a project_blocks row) has no report, and
-// posting one records it against that episode in the same transaction, so a retried or concurrent
-// post tells the client once. A halt's report carries the guarantee table of the halt's terminal
-// sweep, which the cycle runs before its reports, and its verdicts are posted with it; a halt whose
-// sweep is not on record (its recording failed) is still told, every guarantee unjudged with no sweep
-// on a commit, since the client is never left unaware of a halt for want of evidence.
+// infrastructure halt). Each is due while its episode (Delivery's halt episode, read in its
+// published reads) has no told record, and posting one records it as told of that episode in the
+// same transaction, so a retried or concurrent post tells the client once. A halt's report carries
+// the guarantee table of the halt's terminal sweep, which the cycle runs before its reports, and its
+// verdicts are posted with it; a halt whose sweep is not on record (its recording failed) is still
+// told, every guarantee unjudged with no sweep on a commit, since the client is never left unaware
+// of a halt for want of evidence.
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
 type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
@@ -257,24 +260,41 @@ async function blockingDispute(db: DbHandle, episodeId: string, projectId: strin
 /** A report was asked to be posted for a block episode that does not exist. */
 class BlockEpisodeNotFound extends Error {
   constructor(readonly episodeId: string) {
-    super(`cannot post a report on block episode ${episodeId}: no such project_blocks row`);
+    super(`cannot post a report on block episode ${episodeId}: Delivery publishes no such halt episode`);
     this.name = "BlockEpisodeNotFound";
   }
 }
+
+const RESUMED_END_KINDS = ["unblocked", "probe_passed"];
+
+/** A resumption report was asked for an episode no unblock or passing probe ended. */
+class BlockEpisodeNotResumed extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly endKind: string | null,
+  ) {
+    super(`cannot post a resumption report on block episode ${episodeId}: it ${endKind === null ? "is still open" : `ended as '${endKind}'`}, not by an unblock or a passing probe`);
+    this.name = "BlockEpisodeNotResumed";
+  }
+}
+
+/** The project is not stopped by the client and has no stop awaiting the Liaison: its halts are told. */
+const haltsToldOf = (projectId: AnyColumn): SQL =>
+  sql`(EXISTS (SELECT 1 FROM projects hp WHERE hp.id = ${projectId} AND hp.lifecycle <> 'stopped') AND ${noOpenStop(projectId)})`;
 
 /**
  * A planning_stopped block is first told by the planning-stopped report (plan-report.ts), one per
  * project; only a later stop, blocked after that report was posted, is due here.
  */
-const notCoveredByPlanningStoppedReport = sql`(${projectBlocks.kind} <> 'planning_stopped' OR EXISTS (
-  SELECT 1 FROM client_messages m WHERE m.project_id = ${projectBlocks.projectId}
-    AND m.reports_on = ${REPORT_SUBJECT.planningStopped} AND m.created_at < ${projectBlocks.blockedAt}))`;
+const notCoveredByPlanningStoppedReport = (episode: HaltEpisodeColumns): SQL => sql`(${episode.kind} <> 'planning_stopped' OR EXISTS (
+  SELECT 1 FROM client_messages m WHERE m.project_id = ${episode.projectId}
+    AND m.reports_on = ${REPORT_SUBJECT.planningStopped} AND m.created_at < ${episode.blockedAt}))`;
 
 /**
  * The halt is told before its resumption: its own report is posted, or it is a planning_stopped
  * block the planning-stopped report tells.
  */
-const haltTold = sql`(${projectBlocks.reportId} IS NOT NULL OR NOT ${notCoveredByPlanningStoppedReport})`;
+const haltTold = (episode: HaltEpisodeColumns): SQL => sql`(${haltReported(episode.id)} OR NOT ${notCoveredByPlanningStoppedReport(episode)})`;
 
 /** The report's subject in the block-report step's ledger: one per episode and side (BlockReports). */
 function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id: string; readonly projectId: string }) {
@@ -282,26 +302,20 @@ function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id
 }
 
 /**
- * Every block report not yet posted, oldest first within each subject. A project the client
- * stopped, or has a stop awaiting the Liaison, is not reported on. Each episode is read on its own
- * (readEach): one whose record does not read as a report is that report's UnreadSubject, and every
- * other report is still listed.
+ * Every block report not yet posted, oldest first within each subject, over the halt episodes
+ * Delivery publishes. A project the client stopped, or has a stop awaiting the Liaison, is not
+ * reported on. Each episode is read on its own (readEach): one whose record does not read as a
+ * report is that report's UnreadSubject, and every other report is still listed.
  */
 export async function listDueBlockReports(db: DbHandle, blockingReview: BlockingReviewReader): Promise<Array<DueBlockReportRow | UnreadSubject>> {
-  const resumed = await db
-    .select({ id: projectBlocks.id, projectId: projectBlocks.projectId, endKind: projectBlocks.endKind })
-    .from(projectBlocks)
-    .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
-    .where(
-      and(
-        inArray(projectBlocks.endKind, ["unblocked", "probe_passed"]),
-        isNull(projectBlocks.resumedReportId),
-        haltTold,
-        ne(projects.lifecycle, "stopped"),
-        noOpenStop(projects.id),
-      ),
-    )
-    .orderBy(asc(projectBlocks.endedAt), asc(projectBlocks.id));
+  const resumed = await endedHaltEpisodesWhere(db, (episode) =>
+    and(
+      inArray(episode.endKind, RESUMED_END_KINDS),
+      sql`NOT ${reportTold("project-resumed", episode.id)}`,
+      haltTold(episode),
+      haltsToldOf(episode.projectId),
+    ),
+  );
   const resumedReports = await readEach(
     resumed,
     (row) => reportSubject("project-resumed", row),
@@ -313,37 +327,17 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
     }),
   );
 
-  const blocked = await db
-    .select({
-      id: projectBlocks.id,
-      projectId: projectBlocks.projectId,
-      kind: projectBlocks.kind,
-      blockedAt: projectBlocks.blockedAt,
-      errorClass: projectBlocks.errorClass,
-      reason: projectBlocks.reason,
-      spend: projectBlocks.spend,
-      work: projectBlocks.work,
-      sweepId: acceptanceSweeps.id,
-    })
-    .from(projectBlocks)
-    .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
-    .leftJoin(acceptanceSweeps, eq(acceptanceSweeps.blockId, projectBlocks.id))
-    .where(
-      and(
-        // A halt ended by an unblock or a passing probe before its report was posted is still told,
-        // and its resumption after it; one the client's stop ended is told by the stop report. An episode
-        // whose resumption the client has already heard is never told the halt after it.
-        or(
-          isNull(projectBlocks.endedAt),
-          and(inArray(projectBlocks.endKind, ["unblocked", "probe_passed"]), isNull(projectBlocks.resumedReportId)),
-        ),
-        isNull(projectBlocks.reportId),
-        ne(projects.lifecycle, "stopped"),
-        noOpenStop(projects.id),
-        notCoveredByPlanningStoppedReport,
-      ),
-    )
-    .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
+  const blocked = await haltEpisodesWhere(db, (episode) =>
+    and(
+      // A halt ended by an unblock or a passing probe before its report was posted is still told,
+      // and its resumption after it; one the client's stop ended is told by the stop report. An episode
+      // whose resumption the client has already heard is never told the halt after it.
+      or(isNull(episode.endedAt), and(inArray(episode.endKind, RESUMED_END_KINDS), sql`NOT ${reportTold("project-resumed", episode.id)}`)),
+      sql`NOT ${haltReported(episode.id)}`,
+      haltsToldOf(episode.projectId),
+      notCoveredByPlanningStoppedReport(episode),
+    ),
+  );
   const blockedReports = await readEach(
     blocked,
     (row) => reportSubject("project-blocked", row),
@@ -351,7 +345,8 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       const kind = ProjectBlockKindSchema.safeParse(row.kind);
       if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
       const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
-      const guarantees = await readGuaranteeTable(db, row.sweepId === null ? { kind: "no-sweep", projectId: row.projectId } : { kind: "sweep", sweepId: row.sweepId });
+      const [sweep] = await db.select({ id: acceptanceSweeps.id }).from(acceptanceSweeps).where(eq(acceptanceSweeps.blockId, row.id));
+      const guarantees = await readGuaranteeTable(db, sweep === undefined ? { kind: "no-sweep", projectId: row.projectId } : { kind: "sweep", sweepId: sweep.id });
       if (kind.data === "check_dispute") {
         const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
         return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute, guarantees };
@@ -373,18 +368,10 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
   return [...resumedReports, ...blockedReports];
 }
 
-async function insertReport(tx: DbHandle, projectId: string, body: string): Promise<string> {
-  const rows = await tx
-    .insert(clientMessages)
-    .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo: null })
-    .returning({ id: clientMessages.id });
-  return insertedRow(rows, "client_messages", `post a block report to project ${projectId}`).id;
-}
-
 /**
  * Posts the report on one project block episode, `on` the block itself or its resumption, with the
- * verdicts of the table it carries, and records it on the episode, in one transaction with the
- * episode row locked. An episode already reported on gets nothing.
+ * verdicts of the table it carries, and records it as told of the episode in the same transaction,
+ * so a retried or concurrent post tells the client once. An episode already reported on gets nothing.
  */
 export async function postProjectBlockReport(
   db: Database,
@@ -393,21 +380,12 @@ export async function postProjectBlockReport(
   body: string,
   verdicts: TableVerdicts | null,
 ): Promise<"posted" | "already-posted"> {
-  return db.transaction(async (tx) => {
-    const [episode] = await tx
-      .select({ projectId: projectBlocks.projectId, reportId: projectBlocks.reportId, resumedReportId: projectBlocks.resumedReportId })
-      .from(projectBlocks)
-      .where(eq(projectBlocks.id, episodeId))
-      .for("update");
-    if (!episode) throw new BlockEpisodeNotFound(episodeId);
-    const existing = on === "blocked" ? episode.reportId : episode.resumedReportId;
-    if (existing !== null) return "already-posted";
-    const reportId = await insertReport(tx, episode.projectId, body);
+  const episode = await haltEpisodeOf(db, episodeId);
+  if (episode === null) throw new BlockEpisodeNotFound(episodeId);
+  if (on === "resumed" && (episode.endKind === null || !RESUMED_END_KINDS.includes(episode.endKind))) throw new BlockEpisodeNotResumed(episodeId, episode.endKind);
+  return tellOnce(db, { kind: on === "blocked" ? "project-blocked" : "project-resumed", id: episodeId }, async (tx) => {
+    const reportId = await insertOutboundReport(tx, episode.projectId, body, null, `post a block report to project ${episode.projectId}`);
     if (verdicts !== null) await insertGuaranteeVerdicts(tx, episode.projectId, reportId, verdicts);
-    await tx
-      .update(projectBlocks)
-      .set(on === "blocked" ? { reportId } : { resumedReportId: reportId })
-      .where(eq(projectBlocks.id, episodeId));
-    return "posted";
+    return { projectId: episode.projectId, reportId };
   });
 }

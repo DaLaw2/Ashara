@@ -263,18 +263,7 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   passed: boolean().notNull(),
   details: text().notNull(),
   defectItemId: uuid("defect_item_id").references(() => workItems.id, { onDelete: "cascade" }),
-  reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
-  /**
-   * Failed attempts at the delivered report, the failed reads of its public interface
-   * file among them, the last error, and when it is tried again.
-   */
-  reportFailures: integer("report_failures").notNull().default(0),
-  reportInterfaceReadFailures: integer("report_interface_read_failures").notNull().default(0),
-  reportLastError: text("report_last_error"),
-  reportRetryAt: timestamptz("report_retry_at"),
-  /** Failed attempts whose records are on file but do not read as a report; only these count toward the substitute notice. */
-  reportRecordFailures: integer("report_record_failures").notNull().default(0),
   /** Every stored check the sweep ran, [{taskCheckId, taskId, name, command, outcome}] with outcome passed, failed or not-run; null on a row recorded before the column existed. */
   checkOutcomes: jsonb("check_outcomes"),
   /** "acceptance" or "terminal" (the acceptance_sweeps_purpose_known CHECK). */

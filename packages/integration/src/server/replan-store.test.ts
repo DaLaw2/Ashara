@@ -386,7 +386,8 @@ describe("the client is told one plan, and never what the team will now do on a 
     expect(plan.body).toContain(`Because you said "No, the hill studio opens first.", work proceeds on: The hill studio opens first.`);
     expect(reports.some((m) => m.body.includes("The team will now do") || m.body.includes("set aside"))).toBe(false);
     // The revision is recorded as told by that one report, so it is never told again on its own.
-    const revisions = await db.execute(sql`SELECT requested_by AS "requestedBy", report_id AS "reportId" FROM plan_revisions WHERE project_id = ${projectId}`);
+    const revisions = await db.execute(sql`SELECT r.requested_by AS "requestedBy", t.report_id AS "reportId" FROM plan_revisions r
+        LEFT JOIN told_reports t ON t.subject_kind = 'plan-revision' AND t.subject_id = r.id WHERE r.project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ requestedBy: answerId, reportId: plan.id }]);
   });
 
@@ -712,8 +713,11 @@ describe("a late client change is planned", () => {
       const report = await db.execute(sql`INSERT INTO client_messages (project_id, direction, kind, body)
         VALUES (${projectId}, 'outbound', 'report', 'earlier revision') RETURNING id`);
       const [row] = z.array(z.object({ id: z.string() })).parse(report.rows);
-      await db.execute(sql`INSERT INTO plan_revisions (project_id, revision, vision_version, requested_by, summary, report_id)
-        VALUES (${projectId}, ${revision}, 1, ${answerId}, '{}'::jsonb, ${row?.id ?? null})`);
+      await db.execute(sql`WITH revision AS (
+          INSERT INTO plan_revisions (project_id, revision, vision_version, requested_by, summary)
+          VALUES (${projectId}, ${revision}, 1, ${answerId}, '{}'::jsonb) RETURNING id)
+        INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id)
+        SELECT 'plan-revision', revision.id, ${projectId}, ${row?.id ?? null} FROM revision`);
     }
     const mock = pipelineModel();
 

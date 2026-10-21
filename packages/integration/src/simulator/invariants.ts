@@ -163,7 +163,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
                plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath",
                EXISTS (SELECT 1 FROM step_faults f WHERE f.project_id = projects.id AND f.parked_at IS NULL) AS "retryPending",
                (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
-               (SELECT s.report_id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
+               (SELECT (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered' AND t.subject_id = s.id) FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
         FROM projects WHERE id = ${projectId}`)
     ).rows,
   );
@@ -183,8 +183,8 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const episodes = z.array(episodeRow).parse(
     (
       await db.execute(sql`
-        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", b.resumed_report_id AS "resumedReportId",
-               COALESCE(b.report_id, CASE WHEN b.kind = 'planning_stopped' THEN (
+        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = b.id) AS "resumedReportId",
+               COALESCE((SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked' AND t.subject_id = b.id), CASE WHEN b.kind = 'planning_stopped' THEN (
                  SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id AND m.reports_on = 'planning-stopped'
                    AND m.created_at >= b.blocked_at ORDER BY m.created_at, m.id LIMIT 1) END) AS "reportId"
         FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`)

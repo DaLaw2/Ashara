@@ -1,4 +1,4 @@
-import { sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { SQL, sql, type AnyColumn } from "drizzle-orm";
 import { projects, qualifiedColumn } from "@ashara/db";
 import { projectHalted, projectHaltedOnModelWork } from "@ashara/delivery/predicates";
 import { REPORT_SUBJECT } from "./report-subjects.js";
@@ -56,3 +56,21 @@ export const firstPlanTold = (projectId: AnyColumn): SQL =>
  */
 export const firstPlanUnreported = (): SQL =>
   sql`(${qualifiedColumn(projects.firstPlannedAt)} IS NOT NULL AND NOT ${firstPlanTold(projects.id)})`;
+
+/** The subjects the Liaison keeps a told record of (told_reports), each told once. */
+const TOLD_SUBJECT_KINDS = ["project-blocked", "project-resumed", "delivered", "plan-revision"] as const;
+export type ToldSubjectKind = (typeof TOLD_SUBJECT_KINDS)[number];
+
+/** The report on the subject `subjectId` of `kind` is posted: its told record is on file. */
+export const reportTold = (kind: ToldSubjectKind, subjectId: AnyColumn | SQL): SQL =>
+  sql`EXISTS (SELECT 1 FROM told_reports tr WHERE tr.subject_kind = ${kind} AND tr.subject_id = ${subjectId instanceof SQL ? subjectId : qualifiedColumn(subjectId)})`;
+
+/** The halt episode's own report is posted. Delivery resumes an infrastructure halt only once it is. */
+export const haltReported = (episodeId: AnyColumn | SQL): SQL => reportTold("project-blocked", episodeId);
+
+/** The plan revision's report is posted: its own, or the first-plan report that described it. */
+export const planRevisionTold = (revisionId: AnyColumn | SQL): SQL => reportTold("plan-revision", revisionId);
+
+/** The Liaison's report on the project's planning-stopped outcome (reports_on 'planning-stopped') is posted. */
+export const planningStoppedTold = (projectId: AnyColumn): SQL =>
+  sql`EXISTS (SELECT 1 FROM client_messages ps WHERE ps.project_id = ${qualifiedColumn(projectId)} AND ps.reports_on = ${REPORT_SUBJECT.planningStopped})`;

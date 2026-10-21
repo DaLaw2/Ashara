@@ -8,6 +8,7 @@ import {
   gitPublicInterface,
   listDueTerminalSweeps,
   listProjectsReadyForAcceptance,
+  readSweepOutcome,
   recordAcceptance,
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
@@ -39,10 +40,10 @@ export function createTerminalSweepStore(db: Db): TerminalSweepStore {
   };
 }
 
-/** Engagement's delivered-report store over acceptance_sweeps, work_items, task_checks and client_messages. */
+/** Engagement's delivered-report store over Quality's published sweep outcomes, work_items, Engagement's told and attempts records and client_messages. */
 export function createDeliveredReportStore(db: Db): DeliveredReportStore {
   return {
-    dueReports: () => listDueDeliveredReports(db),
+    dueReports: () => listDueDeliveredReports(db, readSweepOutcome),
     guaranteeTable: (sweepId) => readGuaranteeTable(db, { kind: "sweep", sweepId }),
     postReport: (sweepId, body, verdicts) => postDeliveredReport(db, sweepId, body, verdicts),
     recordReportFailure: (sweepId, failure) => recordDeliveredReportFailure(db, sweepId, failure),

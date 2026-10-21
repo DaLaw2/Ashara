@@ -466,9 +466,10 @@ describe("runReport with a mapping: Ashara's side is the last terminal report's 
   test("pairs the delivered report's verdicts; once a later terminal report carries none, it says so and never pairs the older ones", async () => {
     const delivered = await report("2026-10-18T00:01:00Z", null);
     const swept = await db.execute(sql`
-      INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, report_id, created_at)
-      VALUES (${mapped}, ${"c".repeat(40)}, 'env-1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', ${delivered}, '2026-10-18T00:00:00Z') RETURNING id`);
+      INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, created_at)
+      VALUES (${mapped}, ${"c".repeat(40)}, 'env-1', '[]'::jsonb, '[]'::jsonb, true, 'scripted sweep', '2026-10-18T00:00:00Z') RETURNING id`);
     const sweepId = IdRowSchema.parse(swept.rows[0]).id;
+    await db.execute(sql`INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id) VALUES ('delivered', ${sweepId}, ${mapped}, ${delivered})`);
     await db.execute(sql`
       INSERT INTO guarantee_verdicts (project_id, report_id, sweep_id, vision_version, guarantee_id, verdict, reason, basis, evidence_class)
       VALUES (${mapped}, ${delivered}, ${sweepId}, 1, 'G4', 'pass', NULL, 'client-stated', 'witness')`);

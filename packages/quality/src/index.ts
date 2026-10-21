@@ -85,4 +85,5 @@ export {
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
   recordTerminalSweep,
+  readSweepOutcome,
 } from "./repositories/acceptance.js";

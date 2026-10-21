@@ -56,7 +56,8 @@ describe("lastReportGuaranteeVerdictsOf", () => {
     // A halt's report, with its verdicts.
     await new ProjectHaltRepository(db).block(parseProjectId(projectId, "test project"), { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
     const halt = await report("2026-10-18T00:01:00Z", null);
-    await db.execute(sql`UPDATE project_blocks SET report_id = ${halt} WHERE project_id = ${projectId}`);
+    await db.execute(sql`INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id)
+      SELECT 'project-blocked', b.id, b.project_id, ${halt} FROM project_blocks b WHERE b.project_id = ${projectId}`);
     await unjudged(halt, "G1");
     const haltRows = { kind: "verdicts", reportId: halt, rows: [{ reportId: halt, guaranteeId: "G1", verdict: "unjudged", reason: "no-sweep-on-commit", evidenceClass: "none" }] };
     expect(await lastReportGuaranteeVerdictsOf(db, projectId)).toEqual(haltRows);

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { acceptanceSweeps, clientMessages, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import type { EndHaltOnStop } from "../ports.js";
 import { stopProject } from "../project-lifecycle.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
@@ -76,15 +77,15 @@ function stopReportPosted(projectId: string | SQL): SQL<boolean> {
 /**
  * One stop, in one transaction: the stop consumed first (its row lock serialises two consumers of
  * it), then an active (halted or not) or accepted project moved to 'stopped', and the stop marked as
- * the one that stopped it with whether Delivery had it halted then. A project already stopped gets
- * only the consumption.
+ * the one that stopped it with whether Delivery had it halted then; a halt it finds is ended by
+ * Delivery's `endHalt` in the same transaction. A project already stopped gets only the consumption.
  */
-export async function recordClientStop(db: Database, stop: OpenStopRow): Promise<ClientStopCommit> {
+export async function recordClientStop(db: Database, stop: OpenStopRow, endHalt: EndHaltOnStop): Promise<ClientStopCommit> {
   return db.transaction(async (tx) => {
     await new ClientMessageRepository(tx).markConsumed(stop.id);
 
     // An accepted project waits for exactly this.
-    const moved = await stopProject(tx, stop.projectId);
+    const moved = await stopProject(tx, stop.projectId, endHalt);
     if (moved.kind === "already-stopped") return moved;
     await tx.update(clientMessages).set({ stopFoundHalted: moved.wasHalted }).where(eq(clientMessages.id, stop.id));
     const [reported] = await tx.select({ posted: stopReportPosted(stop.projectId) }).from(projects).where(eq(projects.id, stop.projectId));

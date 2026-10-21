@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { ProjectHaltRepository } from "@ashara/delivery";
+import { ProjectHaltRepository, endHaltOnStop } from "@ashara/delivery";
 import { ClientMessageRepository, acceptProject, recordClientStop } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
 import { projectState } from "../simulator/project-state.js";
@@ -33,7 +33,7 @@ async function halt(projectId: ProjectId): Promise<string> {
 /** The client's stop through Engagement's guard; returns whether the stop recorded the project as paused. */
 async function stop(projectId: ProjectId): Promise<boolean> {
   const message = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Stop.", inReplyTo: null });
-  await recordClientStop(db, { id: message.id, projectId });
+  await recordClientStop(db, { id: message.id, projectId }, endHaltOnStop);
   const result = await db.execute(sql`SELECT stop_found_halted AS paused FROM client_messages WHERE id = ${message.id}`);
   return z.array(z.object({ paused: z.boolean() })).length(1).parse(result.rows)[0]?.paused === true;
 }

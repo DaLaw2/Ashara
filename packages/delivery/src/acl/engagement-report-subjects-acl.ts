@@ -7,4 +7,3 @@
  */
 
 export { REPORT_SUBJECT } from "@ashara/engagement/report-subjects";
-export type { PlanReportSubject } from "@ashara/engagement/report-subjects";
