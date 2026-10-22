@@ -41,8 +41,9 @@ export interface Coverage {
   /** Each mutation whose seam the run reached (plants.ts): a query it would rewrite, or a wait it would skip. */
   readonly plants: Set<string>;
   /**
-   * The client correction the run posted, as `<arrival>:<kind>` (correction-draws.ts), recorded by the run as it posts
-   * it.
+   * The client correction the system stored, as `<arrival>:<kind>` (correction-draws.ts): the drawn arrival with the
+   * kind of each operation its stored vision revision holds, never the kind drawn, read at the run's end
+   * (correction-coverage.ts sampleCorrection).
    */
   readonly corrections: Set<string>;
 }
@@ -308,31 +309,33 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
   ];
 }
 
-type BehaviourSet = "faults" | "models" | "concurrency" | "plants";
+type BehaviourSet = "faults" | "models" | "concurrency" | "plants" | "corrections";
 
 /**
  * The behaviour keys a soak counts (scripts/simulate.ts): every fault kind at every seam it applies
- * to, every response-level misbehaviour met, every contended wait and every plant's seam. Each is
- * forced directly by a test of the directed tier (the simulator-faults*.test.ts and simulator-plants*.test.ts files);
- * the floor keeps the seeded
- * soak exploring it too, so a change that stops the soak reaching one is named, not silent.
+ * to, every response-level misbehaviour met, every contended wait, every plant's seam, and every
+ * correction arrival with every kind the system stored. Each but the corrections is forced directly
+ * by a test of the directed tier (the simulator-faults*.test.ts and simulator-plants*.test.ts
+ * files); a seed's correction pair is its own draw (correction-draws.ts drawCorrection). The floor
+ * keeps the seeded soak exploring each, so a change that stops the soak reaching one is named, not silent.
  */
 const BEHAVIOURS: ReadonlyArray<readonly [set: BehaviourSet, members: readonly string[]]> = [
   ["faults", SEAM_KINDS.flatMap((seam) => APPLICABLE_FAULTS[seam].map((fault) => `${seam}:${fault}`))],
   ["models", MODEL_PATHS],
   ["concurrency", CONCURRENCY],
   ["plants", MUTATIONS],
+  ["corrections", CORRECTION_PAIRS],
 ];
 
 /**
  * The soaks that have a coverage floor, by the profile their seeds run under, and the sets each
- * floors. Under the seeds' own profiles (profile.ts profileOfSeed) a soak draws seam faults, and the
- * hostile and chaos profiles' misbehaviour at low rates. The adversarial profile draws no seam fault
- * (profile.ts FAULTS) and every misbehaviour at high rates, so it floors the model and concurrency
- * sets and no fault set.
+ * floors. Under the seeds' own profiles (profile.ts profileOfSeed) a soak draws seam faults, the
+ * hostile and chaos profiles' misbehaviour at low rates, and each correction arrival on the profiles
+ * whose runs reach it. The adversarial profile draws no seam fault (profile.ts FAULTS) and every
+ * misbehaviour at high rates, so it floors the model and concurrency sets and no fault set.
  */
 const FLOORS = {
-  own: ["faults", "models", "concurrency", "plants"],
+  own: ["faults", "models", "concurrency", "plants", "corrections"],
   adversarial: ["models", "concurrency"],
 } as const satisfies Record<string, readonly BehaviourSet[]>;
 export type Floor = keyof typeof FLOORS;

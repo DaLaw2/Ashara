@@ -246,12 +246,17 @@ type Measure = readonly [number, number, number, number];
 
 const MEASURE_PARTS = ["plan revisions (negated)", "review namings left", "disputes left", "requests left"] as const;
 
-function measureOf(records: LoopRecords): Measure {
-  const reviewsLeft = records.checkTasks.reduce(
+/**
+ * The measure over the check tasks `known` names: a check task a plan wrote since the last snapshot
+ * enters with its whole bounds, which no round spent, so it is measured from the next snapshot on.
+ */
+function measureOf(records: LoopRecords, known: ReadonlySet<string>): Measure {
+  const measured = records.checkTasks.filter((task) => known.has(task.id));
+  const reviewsLeft = measured.reduce(
     (sum, task) => sum + WORK_BOUNDS.reviewNamingsPerCheckTask.value - task.namings,
     0,
   );
-  const disputesLeft = records.checkTasks.reduce(
+  const disputesLeft = measured.reduce(
     (sum, task) => sum + WORK_BOUNDS.disputesPerCheckTask.value - task.disputes,
     0,
   );
@@ -380,8 +385,9 @@ export function checkLoops(
     );
   }
   if (previous !== null && rounds(records) > rounds(previous)) {
-    const before = measureOf(previous);
-    const after = measureOf(records);
+    const known = new Set(previous.checkTasks.map((task) => task.id));
+    const before = measureOf(previous, known);
+    const after = measureOf(records, known);
     const shrank = openSet(records).length < openSet(previous).length;
     if (compareMeasures(after, before) >= 0 && !shrank) {
       const parts = MEASURE_PARTS.map((part, i) => `${part} ${before[i]} -> ${after[i]}`).join(", ");

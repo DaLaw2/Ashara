@@ -39,7 +39,10 @@ export interface IntakeRecords {
   readonly visionWritten: boolean;
   /** Its intake_readings row, or null when none is. */
   readonly reading: z.infer<typeof readingRow> | null;
-  /** The questions posted to the client. */
+  /**
+   * The questions intake posted to the client, in reply to the tender intake_readings names; a task's
+   * question for a decision only the client can make replies to nothing and is not intake's.
+   */
   readonly questionsPosted: number;
 }
 
@@ -57,7 +60,8 @@ export async function readIntakeRecords(db: Database, projectId: string): Promis
       await db.execute(sql`
         SELECT (SELECT count(*) FROM vision_documents WHERE project_id = ${projectId}) AS visions,
                (SELECT count(*) FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound'
-                 AND kind = 'question') AS questions`)
+                 AND kind = 'question' AND in_reply_to = (SELECT r.tender_id FROM intake_readings r
+                   WHERE r.project_id = ${projectId})) AS questions`)
     ).rows,
   );
   if (counts === undefined) throw new IntakeCountsMissing(projectId);

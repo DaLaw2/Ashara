@@ -7,7 +7,7 @@ import { Tape } from "./tape.js";
 function snapshotWith(transitions: Snapshot["transitions"]): Snapshot {
   return {
     projectId: "p1",
-    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryPending: false, passedSweepId: null, passedSweepReportId: null },
+    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryingSteps: [], passedSweepId: null, passedSweepReportId: null },
     items: [],
     episodes: [],
     stops: [],
@@ -88,9 +88,10 @@ describe("the corrections a soak draws", () => {
     expect(CORRECTION_PAIRS.filter((pair) => !pairs.includes(pair))).toEqual([]);
   });
 
-  it("draws every pair in any run of consecutive seeds as long as the pair list, wherever a soak starts", () => {
+  // Each last digit keeps its arrival and takes every kind in six consecutive tens.
+  it("draws every pair in any sixty consecutive seeds, wherever a soak starts", () => {
     for (const start of [1, 81, 1000]) {
-      const drawn = new Set(Array.from({ length: CORRECTION_PAIRS.length }, (_, index) => pairOf(start + index)));
+      const drawn = new Set(Array.from({ length: 60 }, (_, index) => pairOf(start + index)));
       expect(CORRECTION_PAIRS.filter((pair) => !drawn.has(pair)), `seeds from ${start}`).toEqual([]);
     }
   });
@@ -99,7 +100,32 @@ describe("the corrections a soak draws", () => {
     expect(drawCorrection(new Tape({ kind: "replay", decisions: [] }))).toBeNull();
   });
 
-  it("names a run's posted correction in its coverage and every pair in the report", () => {
+  it("draws each arrival on the profiles whose runs reach it, by the digit profileOfSeed draws the profile by", () => {
+    const arrivalOf = (seed: number): string | undefined => pairOf(seed)?.split(":")[0];
+    expect(Array.from({ length: 10 }, (_, digit) => arrivalOf(digit))).toEqual([
+      "after-merge",
+      "halted",
+      "in-progress",
+      "in-progress",
+      "in-progress",
+      "before-review",
+      "before-review",
+      "before-review",
+      "halted",
+      "before-review",
+    ]);
+  });
+
+  it("floors every pair in a soak under the seeds' own profiles", () => {
+    const counts = emptyBehaviourCounts();
+    const reached = emptyCoverage();
+    for (const pair of CORRECTION_PAIRS.filter((each) => each !== "halted:rewrite-guarantee")) reached.corrections.add(pair);
+    countBehaviours(counts, reached);
+    expect(behavioursBelowFloor(counts, "own").filter((key) => key.startsWith("corrections "))).toEqual(["corrections halted:rewrite-guarantee"]);
+    expect(behavioursBelowFloor(counts, "adversarial").filter((key) => key.startsWith("corrections "))).toEqual([]);
+  });
+
+  it("names a run's stored correction in its coverage and every pair in the report", () => {
     const coverage = emptyCoverage();
     coverage.corrections.add("halted:change-interface");
     const corrections = coverageReport(coverage).find((machine) => machine.machine.startsWith("corrections"));

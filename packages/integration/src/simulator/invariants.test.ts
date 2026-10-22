@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FaultRecord } from "./faults.js";
 import { TRANSPORT_RESPONSES } from "./faults.js";
 import { REPORT_BOUND_CYCLES, SilenceWatch, cellRoleViolations, checkCharges, checkSnapshot, checkTotality, misreadRejections } from "./invariants.js";
-import type { ChargeWindow, Charges, Snapshot } from "./invariants.js";
+import type { ChargeWindow, Charges, SilenceCycle, Snapshot } from "./invariants.js";
 import { MISREAD_REJECTION_MARKER } from "./product.js";
 
 const OWNER = "0ed5677b-4330-4dec-be2e-586c7d953682";
@@ -98,7 +98,7 @@ describe("I10, charged only for agent work", () => {
 function plantedSnapshot(items: Snapshot["items"]): Snapshot {
   return {
     projectId: "p1",
-    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryPending: false, passedSweepId: null, passedSweepReportId: null },
+    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, retryingSteps: [], passedSweepId: null, passedSweepReportId: null },
     items,
     episodes: [],
     stops: [],
@@ -157,10 +157,12 @@ describe("every terminal event is told within the bound (I2's and I4's silence c
   };
   const context = (final: boolean) => ({ spendCapUsd: 25, cells: [], final, reviews: [], intakes: [] });
   /** The keys a watch names over `cycles` cycles of one snapshot, the first being the cycle that recorded the event. */
-  const silentFor = (snapshot: Snapshot, cycles: number, counted = true): string[] => {
+  const COUNTED: SilenceCycle = { kind: "counted" };
+  const FAULTED: SilenceCycle = { kind: "exempt", faulted: ["fault db:crash-before at select"] };
+  const silentFor = (snapshot: Snapshot, cycles: number, cycle: SilenceCycle = COUNTED): string[] => {
     const watch = new SilenceWatch();
     const keys: string[] = [];
-    for (let step = 1; step <= cycles; step++) keys.push(...watch.observe(step, 0, snapshot, counted).map((violation) => violation.key));
+    for (let step = 1; step <= cycles; step++) keys.push(...watch.observe(step, 0, snapshot, cycle).map((violation) => violation.key));
     return keys;
   };
   const past = REPORT_BOUND_CYCLES + 2;
@@ -184,16 +186,31 @@ describe("every terminal event is told within the bound (I2's and I4's silence c
   }
 
   it("counts no cycle that carried a fault, or in which the project waited out a step's backoff", () => {
-    expect(silentFor(openHalt, past, false)).toEqual([]);
-    expect(silentFor(at("blocked", { episodes: openHalt.episodes }, { retryPending: true }), past)).toEqual([]);
+    expect(silentFor(openHalt, past, FAULTED)).toEqual([]);
+    expect(silentFor(at("blocked", { episodes: openHalt.episodes }, { retryingSteps: ["report-halt"] }), past)).toEqual([]);
+  });
+
+  it("rejects a cycle exempted without naming the faulted step it carried", () => {
+    const watch = new SilenceWatch();
+    expect(() => watch.observe(1, 0, openHalt, { kind: "exempt", faulted: [] })).toThrow(/naming no faulted step/);
+    expect(() => watch.observe(1, 0, openHalt, { kind: "exempt", faulted: [" "] })).toThrow(/naming no faulted step/);
+  });
+
+  it("names the faulted steps that exempted cycles of a silence it names past the bound", () => {
+    const watch = new SilenceWatch();
+    const statements: string[] = [];
+    watch.observe(1, 0, openHalt, COUNTED);
+    watch.observe(2, 0, openHalt, FAULTED);
+    for (let step = 3; step <= past + 1; step++) statements.push(...watch.observe(step, 0, openHalt, COUNTED).map((violation) => violation.statement));
+    expect(statements.at(-1)).toContain("exempted by: fault db:crash-before at select");
   });
 
   it("names nothing told in time, nor what the stop report tells instead", () => {
     const watch = new SilenceWatch();
-    expect(watch.observe(1, 0, openHalt, true)).toEqual([]);
-    expect(watch.observe(2, 0, openHalt, true)).toEqual([]);
+    expect(watch.observe(1, 0, openHalt, COUNTED)).toEqual([]);
+    expect(watch.observe(2, 0, openHalt, COUNTED)).toEqual([]);
     const told = at("blocked", { episodes: [episode({ reportId: "r1" })] });
-    for (let step = 3; step <= past + 2; step++) expect(watch.observe(step, 0, told, true)).toEqual([]);
+    for (let step = 3; step <= past + 2; step++) expect(watch.observe(step, 0, told, COUNTED)).toEqual([]);
     const stoppedHalt = at("stopped", { episodes: [episode({ ended: true, endKind: "client_stop" })], stops: [{ id: "s1", stoppedProject: true, reported: true }] });
     expect(silentFor(stoppedHalt, past)).toEqual([]);
     expect(silentFor(at("stopped", { stops: [{ id: "s2", stoppedProject: false, reported: false }] }), past)).toEqual([]);

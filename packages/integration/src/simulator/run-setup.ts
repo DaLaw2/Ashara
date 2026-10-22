@@ -55,6 +55,11 @@ const ADVERSARIAL_CAP_USD = 100;
  */
 const LIVENESS_CAP_USD = 2 * WORK_BOUNDS.requestsPerProject.value;
 const LOW_CAP_USD = 0.02;
+/**
+ * The cap of a run whose correction arrives once its project is halted: out of reach of the work up
+ * to the halt it waits for, which at the default cap two projects' work spends before it in most runs.
+ */
+const HALTED_ARRIVAL_CAP_USD = 100;
 
 const SIM_ENV = [
   "WORKDIR_BASE",
@@ -113,7 +118,15 @@ export interface RunDraws {
 /** The run's draws, its first trace lines the universe and the personas drawn. */
 export function drawRun(options: RunOptions, state: RunState): RunDraws {
   const tape = new Tape(options.tape);
-  const rates = drawRates(options.profile, tape);
+  const correctionDraw = drawCorrection(tape);
+  const drawn = drawRates(options.profile, tape);
+  // A correction is read under a halt only while Ashara may still call a model, which a spend-cap halt
+  // forbids. At a halted arrival every implementation meets a decision only the client can make, so the
+  // project halts waiting on the client, who sends the correction instead of an answer and never stops
+  // the work; no attempt runs out of turns, and the cap is out of the work's reach, so no spend-cap halt
+  // comes first.
+  const halting = correctionDraw?.arrival === "halted";
+  const rates = halting ? { ...drawn, blockedOnClient: 1, timeout: 0, clientStop: 0 } : drawn;
   const clock = new SimClock();
   const universe = drawUniverse(tape);
   const personas = Personas.draw(options.profile, tape, () => state.cycles);
@@ -123,13 +136,18 @@ export function drawRun(options: RunOptions, state: RunState): RunDraws {
       : options.profile === "liveness"
         ? LIVENESS_CAP_USD
         : DEFAULT_CAP_USD;
-  const capUsd = options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : profileCap);
+  const capUsd =
+    options.capUsd ??
+    (halting
+      ? Math.max(profileCap, HALTED_ARRIVAL_CAP_USD)
+      : tape.chance("finance.low-budget", rates.lowBudget)
+        ? LOW_CAP_USD
+        : profileCap);
   const projectCount = options.projects ?? 1;
   if (options.corruptSecondProject === true && projectCount < 2) throw new CorruptionWithoutSecondProject(options.seed);
   const corruption: Corruption | null =
     options.corruptSecondProject === true ? { taskSpec: false, blockKind: false, contained: new Set() } : null;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
-  const correctionDraw = drawCorrection(tape);
   const heldReturns = correctionDraw !== null && tape.chance("correction.held-returns", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
   const tasks = universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ");

@@ -24,6 +24,13 @@ describe("W2 and W3 on loop records", () => {
     expect(keys(checkLoops(4, records({ grownAfterFreeze: [{ title: "review", findings: 1 }] }), null, new Map()))).toEqual(["W3:grew-after-freeze:review"]);
   });
 
+  it("measures a round from the check tasks the last snapshot held, not those a plan wrote since", () => {
+    // The first plan's check tasks are written and reviewed in one cycle after a cycle that wrote none.
+    const before = records({ checkTasks: [], revisions: 0, requests: 2 });
+    const after = records({ checkTasks: [task({ namings: 1, reviewReopens: 1, status: "Pending" }), task({ id: "ct2", title: "more checks" })], revisions: 0, requests: 9 });
+    expect(checkLoops(2, after, before, new Map())).toEqual([]);
+  });
+
   it("names a round that left the measure no smaller and no reopened check task fewer", () => {
     // The disputes left grow back with no plan revision to pay for it, and nothing else moved.
     const before = records({ checkTasks: [task({ disputes: 1, disputeReopens: 1, status: "Pending" })] });

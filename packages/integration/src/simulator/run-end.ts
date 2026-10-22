@@ -1,3 +1,4 @@
+import { sampleCorrection } from "./correction-coverage.js";
 import { sampleModelPaths } from "./coverage.js";
 import { asharaFaultHaltOf, checkSnapshot, checkTotality, mainFiles, outcomeOf, sourceOf } from "./invariants.js";
 import type { Snapshot } from "./invariants.js";
@@ -5,7 +6,7 @@ import { readCorrelationRows } from "./log-correlation.js";
 import type { Mutation } from "./plants.js";
 import { behaviourPath } from "./product.js";
 import { checkResidue } from "./residue.js";
-import { NO_PROGRESS_CYCLES, snapshotsOf } from "./run-cycle-loop.js";
+import { CORRECTION_BODY, NO_PROGRESS_CYCLES, snapshotsOf } from "./run-cycle-loop.js";
 import { ofProject } from "./run-instance.js";
 import type { RunState } from "./run-instance.js";
 import type { ProcessWide, Provisioned, RunDraws, RunResources, RunWorld } from "./run-setup.js";
@@ -52,6 +53,15 @@ export async function judgeRunEnd(parts: EndParts): Promise<void> {
   }
   const finals = await snapshotsOf(observer, projectIds);
   await sampleModelPaths(state.coverage, observer, projectIds);
+  // The correction is the first project's, recorded as the system stored it, never as drawn.
+  const [corrected] = projectIds;
+  if (draws.correctionDraw !== null && corrected !== undefined) {
+    const stored = await sampleCorrection(state.coverage, observer, corrected, draws.correctionDraw, CORRECTION_BODY);
+    state.trace.push(stored);
+  }
+  for (const fallback of standIns.correctionFallbacks()) {
+    state.trace.push(`the Liaison stand-in read the client's ${fallback.asked} as add-exclusion: ${fallback.reason}`);
+  }
   // The second reading's seam: a first reading answered with no question, which the plant would leave unconfirmed.
   if (standIns.observedIntakes().some((reading) => reading.kind === "reading" && reading.questions === 0)) {
     state.coverage.plants.add("intake-second-reading-dropped");

@@ -2,7 +2,6 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain } from "@ashara/shared";
-import { correctionPair } from "./correction-draws.js";
 import type { CorrectionDraw } from "./correction-draws.js";
 import { sample } from "./coverage.js";
 import type { Database } from "./database.js";
@@ -19,7 +18,7 @@ import {
   readSnapshot,
   sourceOf,
 } from "./invariants.js";
-import type { Charges, Snapshot, Violation } from "./invariants.js";
+import type { Charges, SilenceCycle, Snapshot, Violation } from "./invariants.js";
 import { FAULTS } from "./profile.js";
 import { lateReceipts, unansweredMessages } from "./receipts.js";
 import { ofProject, onRecord, stopIfAborted, unfaultedError } from "./run-instance.js";
@@ -55,7 +54,8 @@ export const REPORT_RETRY_MS = 60_000;
 const SETTLE_CYCLES = Math.floor(REPORT_RETRY_MS / IDLE_INTERVAL_MS) + 1;
 const STOP_BODY = "Please stop the work.";
 const CHANGE_BODY = "Use French, please.";
-const CORRECTION_BODY = "Never colour the output.";
+/** The client's correction (ClientCorrection); its stored revision is read back at the run's end (sampleCorrection). */
+export const CORRECTION_BODY = "Never colour the output.";
 /** The client of a declined contract confirming it as written, which leaves it declined. */
 const CONFIRM_AS_WRITTEN_BODY = "I confirm the contract as written.";
 /** The client of a declined contract restating its guarantees, which releases the work. */
@@ -386,7 +386,7 @@ export class ClientCorrection {
         this.unsure = false;
         if (seen.value.found) {
           this.corrected = true;
-          state.coverage.corrections.add(correctionPair(draw));
+          state.trace.push(`client correction asking ${draw.kind} found on record at cycle ${state.cycles}, ${at}`);
           return;
         }
       }
@@ -401,8 +401,7 @@ export class ClientCorrection {
         return;
       }
       this.corrected = true;
-      state.coverage.corrections.add(correctionPair(draw));
-      state.trace.push(`client correction ${correctionPair(draw)} at cycle ${state.cycles}, ${at}`);
+      state.trace.push(`client correction asking ${draw.kind} posted at cycle ${state.cycles}, ${at}`);
     } catch (err) {
       /* eslint-disable-next-line ashara/catch-continue -- best effort: a post the server's process failed under is
          read back and sent again at a later turn, settlement or cycle; the cycle's own fault handling judges
@@ -625,9 +624,17 @@ export class CycleLoop {
     if (draws.corruption !== null && corrupted !== undefined && second !== undefined) {
       await corruptRows(observer, corrupted, second, draws.corruption, state.trace);
     }
-    // A cycle that carried an injected fault, a duplicated wake or a restart does not count against a report's bound.
-    const counted =
-      world.scheduler.faults().length === this.faultsSeen && state.restarts === this.restartsSeen && repeats === 1;
+    // A cycle that carried an injected fault, a duplicated wake or a restart does not count against a report's
+    // bound, and names each of them.
+    const faulted = [
+      ...world.scheduler
+        .faults()
+        .slice(this.faultsSeen)
+        .map((fault) => `fault ${fault.seam}:${fault.fault} at ${fault.label}`),
+      ...(state.restarts > this.restartsSeen ? [`restart ${state.restarts} of the server`] : []),
+      ...(repeats > 1 ? [`a duplicated wake at cycle ${state.cycles}`] : []),
+    ];
+    const cycle: SilenceCycle = faulted.length === 0 ? { kind: "counted" } : { kind: "exempt", faulted };
     for (const [index, each] of snapshots.entries()) {
       const judged = checkSnapshot(state.cycles, each, {
         spendCapUsd: draws.capUsd,
@@ -637,7 +644,7 @@ export class CycleLoop {
         intakes: standIns.observedIntakes(),
       });
       for (const violation of judged) state.report(ofProject(index, violation));
-      for (const violation of world.silence.observe(state.cycles, index, each, counted))
+      for (const violation of world.silence.observe(state.cycles, index, each, cycle))
         state.report(ofProject(index, violation));
       sample(state.coverage, each, world.scheduler.faults(), executionEvidence(each, statuses));
       world.residue.observe(each);
@@ -762,7 +769,7 @@ export class CycleLoop {
       correction.unsure = false;
       if (landed) {
         correction.corrected = true;
-        state.coverage.corrections.add(correctionPair(draw));
+        state.trace.push(`client correction asking ${draw.kind} found on record at cycle ${state.cycles}`);
         return;
       }
     }
@@ -773,8 +780,7 @@ export class CycleLoop {
       (app) => onRecord(client, projectId, app, isCorrection),
     );
     correction.corrected = true;
-    state.coverage.corrections.add(correctionPair(draw));
-    state.trace.push(`client correction ${correctionPair(draw)} at cycle ${state.cycles}`);
+    state.trace.push(`client correction asking ${draw.kind} posted at cycle ${state.cycles}, arrival ${draw.arrival}`);
   }
 
   /**

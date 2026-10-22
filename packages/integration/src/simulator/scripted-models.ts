@@ -8,7 +8,7 @@ import { ClassifierStandIn } from "./stand-ins/classifier.js";
 import type { StandInContext } from "./stand-ins/context.js";
 import { IntakeStandIn } from "./stand-ins/intake.js";
 import { LiaisonStandIn } from "./stand-ins/liaison.js";
-import type { ClientAsk } from "./stand-ins/liaison.js";
+import type { ClientAsk, CorrectionFallback } from "./stand-ins/liaison.js";
 import { PlannerStandIn } from "./stand-ins/planner.js";
 import {
   StandInRefusedSchema,
@@ -62,6 +62,11 @@ export class StandIns {
   /** The correction the client is about to post: the Liaison's reading of it asks this of the contract. */
   askCorrection(kind: ClientAsk, during: string | null): void {
     this.liaison.askCorrection(kind, during);
+  }
+
+  /** Every correction the Liaison stand-in read as the exclusion in place of the kind the client asked. */
+  correctionFallbacks(): readonly CorrectionFallback[] {
+    return this.liaison.fallbacks();
   }
 
   readonly factory: LanguageModelFactory = (provider, model) =>

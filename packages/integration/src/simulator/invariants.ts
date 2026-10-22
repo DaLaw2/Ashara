@@ -76,10 +76,10 @@ const projectRow = z.object({
   planStopped: z.boolean(),
   workspacePath: z.string().nullable(),
   /**
-   * A contained step of the project waits out a fault's backoff (an unparked step_faults row): a report it owes may
-   * wait with it.
+   * The contained steps of the project waiting out a fault's backoff (its unparked step_faults rows), by name: a
+   * report it owes may wait with them.
    */
-  retryPending: z.boolean(),
+  retryingSteps: z.array(z.string().min(1)),
   /** The project's latest passed acceptance sweep, and the delivered report recorded on it; null when none passed. */
   passedSweepId: z.string().nullable(),
   passedSweepReportId: z.string().nullable(),
@@ -179,8 +179,8 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
                  WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedReason",
                EXISTS (SELECT 1 FROM project_plans pp WHERE pp.project_id = projects.id
                  AND pp.plan_stopped_at IS NOT NULL) AS "planStopped", workspace_path AS "workspacePath",
-               EXISTS (SELECT 1 FROM step_faults f WHERE f.project_id = projects.id
-                 AND f.parked_at IS NULL) AS "retryPending",
+               ARRAY(SELECT f.step FROM step_faults f WHERE f.project_id = projects.id
+                 AND f.parked_at IS NULL ORDER BY f.step) AS "retryingSteps",
                (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
                  ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
                (SELECT (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered'
@@ -608,19 +608,45 @@ export function owedReports(snapshot: Snapshot): OwedReport[] {
 export const REPORT_BOUND_CYCLES = 2;
 
 /**
+ * Whether a cycle counts against the silence bound: one that carried an injected fault, a restart or
+ * a duplicated wake is exempt, and names each faulted step it carried.
+ */
+export type SilenceCycle =
+  | { readonly kind: "counted" }
+  | { readonly kind: "exempt"; readonly faulted: readonly string[] };
+
+/** A cycle was exempted from the silence bound without naming the faulted step that exempts it. */
+class UnnamedSilenceExemption extends Error {
+  constructor(
+    readonly step: number,
+    readonly project: number,
+  ) {
+    super(
+      `cycle ${step} of project ${project} was exempted from the silence bound naming no faulted step: ` +
+        `an exemption names what the cycle carried`,
+    );
+    this.name = "UnnamedSilenceExemption";
+  }
+}
+
+/**
  * I2's and I4's silence clause, cycle by cycle: every terminal event (owedReports) is told within
  * REPORT_BOUND_CYCLES counted cycles of the one whose snapshot first held it. Each project of the
- * run is watched by its index in the run's order.
+ * run is watched by its index in the run's order. A cycle is not counted when it carried a fault
+ * (SilenceCycle) or the project had a contained step waiting out a fault's backoff; a silence named
+ * past the bound names the faulted steps that exempted cycles of it.
  */
 export class SilenceWatch {
-  private readonly owed = new Map<string, number>();
+  private readonly owed = new Map<string, { readonly cycles: number; readonly exempted: readonly string[] }>();
 
-  /**
-   * The silences one project's snapshot after cycle `step` shows; `counted` is whether that cycle counts against the
-   * bound.
-   */
-  observe(step: number, project: number, snapshot: Snapshot, counted: boolean): Violation[] {
-    const counts = counted && !snapshot.project.retryPending;
+  /** The silences one project's snapshot after cycle `step` shows. */
+  observe(step: number, project: number, snapshot: Snapshot, cycle: SilenceCycle): Violation[] {
+    if (cycle.kind === "exempt" && (cycle.faulted.length === 0 || cycle.faulted.some((name) => name.trim() === "")))
+      throw new UnnamedSilenceExemption(step, project);
+    const exempting = [
+      ...(cycle.kind === "exempt" ? cycle.faulted : []),
+      ...snapshot.project.retryingSteps.map((name) => `the backoff of ${name}`),
+    ];
     const now = owedReports(snapshot);
     const subjects = new Set(now.map((owed) => `${project}:${owed.subject}`));
     for (const subject of this.owed.keys())
@@ -629,13 +655,21 @@ export class SilenceWatch {
     for (const owed of now) {
       const subject = `${project}:${owed.subject}`;
       const seen = this.owed.get(subject);
-      const cycles = seen === undefined ? 0 : seen + (counts ? 1 : 0);
-      this.owed.set(subject, cycles);
+      const counted = exempting.length === 0;
+      if (seen === undefined) {
+        this.owed.set(subject, { cycles: 0, exempted: [] });
+        continue;
+      }
+      const cycles = seen.cycles + (counted ? 1 : 0);
+      const exempted = counted ? seen.exempted : [...new Set([...seen.exempted, ...exempting])];
+      this.owed.set(subject, { cycles, exempted });
       if (cycles > REPORT_BOUND_CYCLES) {
+        const excused = exempted.length === 0 ? "" : ` (cycles not counted, exempted by: ${exempted.join("; ")})`;
         violations.push({
           invariant: owed.invariant,
           step,
-          statement: `${owed.statement} ${cycles} counted cycles after it was recorded (bound ${REPORT_BOUND_CYCLES})`,
+          statement:
+            `${owed.statement} ${cycles} counted cycles after it was recorded (bound ${REPORT_BOUND_CYCLES})${excused}`,
           key: `${owed.invariant}:${owed.key}`,
         });
       }
