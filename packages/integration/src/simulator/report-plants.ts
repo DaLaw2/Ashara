@@ -207,14 +207,15 @@ export const deliveredReportMisstatesStanding = rewriteReport(
 );
 
 /**
- * A delivered report whose table says its first unjudged guarantee passed. The honest check author
- * decides every guarantee, so every one passes; the plant stores one check set with a guarantee
- * undecided, which then reads unjudged on no executed evidence (I6 names that too).
+ * A halt report whose table says its first unjudged guarantee passed. The honest check author
+ * decides every guarantee, so every one passes and the project is accepted; the plant stores one
+ * check set with a guarantee undecided, which then reads unjudged on no executed evidence, so the
+ * passed sweep does not cover the contract and the project halts with a table that holds it.
  */
-export const deliveredReportPassesUnjudged: QueryPlant = (args) =>
+export const haltReportPassesUnjudged: QueryPlant = (args) =>
   checkSetSkipsItem(args) ??
   rewriteReport(
-    (body) => body.startsWith("Your project is delivered."),
+    (body) => PAUSED.some((opening) => body.startsWith(opening)),
     (body) => body.replace(/\| verdict: unjudged, [^|]*\|/, "| verdict: pass |"),
   )(args);
 

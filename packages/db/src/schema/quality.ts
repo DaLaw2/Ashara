@@ -305,6 +305,40 @@ export const guaranteeEvidence = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// guarantee_verdicts (Quality): the verdicts each terminal message carries
+// ---------------------------------------------------------------------------
+// One row per guarantee of the vision version a terminal message's sweep evidence was recorded
+// against: Quality's verdict, why it is unjudged, its basis and the class of evidence behind it,
+// persisted beside the message in the transaction that posts it. The vocabulary, "a reason exactly
+// when unjudged" and "a pass rests on executed evidence" are CHECKs in the migration; the sweep's
+// foreign key is there too. Append-only.
+
+export const guaranteeVerdicts = pgTable(
+  "guarantee_verdicts",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => clientMessages.id, { onDelete: "cascade" }),
+    // null when no sweep is on record for the message; every verdict is then unjudged (a CHECK).
+    sweepId: uuid("sweep_id"),
+    visionVersion: integer("vision_version").notNull(),
+    guaranteeId: text("guarantee_id").notNull(),
+    verdict: text().notNull(),
+    reason: text(),
+    basis: text().notNull(),
+    evidenceClass: text("evidence_class").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    onePerReport: unique("guarantee_verdicts_one_per_report").on(t.reportId, t.guaranteeId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // reviewer_outcomes (Quality): one row per piece of later evidence about one
 // reviewer's verdict (a suite review claim or judgement, or an intake reading): its pass
 // contradicted, or its finding witnessed or refuted, with the evidence it rests on. Append-only;

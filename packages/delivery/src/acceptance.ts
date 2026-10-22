@@ -1,9 +1,9 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import { projectBlockCause } from "./project-halt.js";
+import { acceptanceUncoveredCause, projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
-import type { AcceptanceSweeper } from "./acl/quality-acl.js";
+import type { AcceptanceSweeper, AcceptanceUncovered } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
 import type { InterfaceDefect } from "./domain/index.js";
@@ -11,8 +11,13 @@ import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 
 // Delivering -> Accepted: each cycle, every project
 // whose plan has no open task and at least one goal task done gets one acceptance sweep on main
-// HEAD, run by Z0 with no model. A sweep that passes makes the project Accepted, and nothing is
-// dispatched for it again; the Liaison's delivered report follows. A sweep that fails is a defect,
+// HEAD, run by Z0 with no model. A sweep that passes makes the project Accepted when Quality finds
+// it covers the contract (every guarantee in force that the contract does not mark not verifiable by
+// Ashara judged pass), and nothing is dispatched for it again; the Liaison's delivered report
+// follows. A passed sweep that leaves such a guarantee unjudged never makes it Accepted: the project
+// stays active and halts on its own kind (acceptance_uncovered, never Ashara's fault), which only the
+// operator ends, with each such guarantee and why named in the recorded cause, so the uncovered sweep
+// is neither repeated every cycle nor read as acceptance. A sweep that fails is a defect,
 // never Accepted: it opens a defect item given up at once, so the plan is repaired around it like
 // any task given up. A sweep that could not run is counted on the project, durably
 // (projects.acceptance_faults), against the dispatch path's INFRASTRUCTURE_FAULT_BUDGET: within it,
@@ -50,10 +55,12 @@ interface SweepRecord {
 export interface AcceptanceStore {
   readyForAcceptance(): Promise<readonly ReadyProject[]>;
   /**
-   * Records a passed sweep, with the outcome of every stored check it ran and each guarantee's
-   * evidence, and moves the project to accepted, together; "moved" when it is no longer ready.
+   * Records a passed sweep that covers the contract in force, with the outcome of every stored check
+   * it ran and each guarantee's evidence, and moves the project to accepted, together; "moved" when
+   * it is no longer ready; Quality's uncovered outcome when a guarantee in force is not judged pass,
+   * with nothing written.
    */
-  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved">;
+  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved" | AcceptanceUncovered>;
   /** Counts one sweep that could not run on the project (projects.acceptance_faults); returns the count with it. */
   recordSweepFault(projectId: ProjectId): Promise<number>;
   /**
@@ -97,6 +104,40 @@ class ScaffoldMergeUnrecorded extends Error {
     );
     this.name = "ScaffoldMergeUnrecorded";
   }
+}
+
+/** The project's cause on record when its sweep passed but does not cover the contract in force. */
+class AcceptanceSweepUncovered extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly mainCommit: string,
+    readonly uncovered: AcceptanceUncovered,
+  ) {
+    super(
+      `the acceptance sweep of project ${projectId} passed on main ${mainCommit}, but ${uncoveredDetail(uncovered)}${notVerifiableDetail(uncovered)}; ` +
+        `a project is accepted only when every guarantee in force that Ashara can verify is judged pass, so it halts until the operator reviews it`,
+    );
+    this.name = "AcceptanceSweepUncovered";
+  }
+}
+
+function uncoveredDetail({ coverage }: AcceptanceUncovered): string {
+  switch (coverage.kind) {
+    case "nothing-to-judge":
+      return coverage.visionVersion === null
+        ? "no contract is on record for it, so no guarantee is judged"
+        : `vision v${coverage.visionVersion} holds no guarantee Ashara can verify, so none is judged`;
+    case "unjudged":
+      return (
+        `vision v${coverage.visionVersion} holds guarantees not judged pass: ` +
+        coverage.guarantees.map((each) => `${each.guaranteeId} (${each.verdict.kind === "unjudged" ? `unjudged, ${each.verdict.reason}` : each.verdict.kind})`).join(", ")
+      );
+  }
+}
+
+/** The guarantees outside coverage, which the contract marks not verifiable by Ashara; none named when there are none. */
+function notVerifiableDetail({ coverage }: AcceptanceUncovered): string {
+  return coverage.notVerifiable.length === 0 ? "" : ` (outside coverage, marked not verifiable by Ashara: ${coverage.notVerifiable.join(", ")})`;
 }
 
 /** The project's cause on record when its acceptance sweep failed to run past the fault budget. */
@@ -244,6 +285,18 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
   };
   if (sweep.passed) {
     const outcome = await deps.acceptance.recordAccepted(record);
+    if (typeof outcome !== "string") {
+      const halt = new AcceptanceSweepUncovered(ready.projectId, sweep.mainCommit, outcome);
+      const cause = acceptanceUncoveredCause(halt);
+      const blocked = await deps.projectRepo.block(ready.projectId, cause);
+      deps.logger.warn("delivery.project-halted", `project ${ready.projectId} ${blocked}: ${cause.reason}`, {
+        projectId: ready.projectId,
+        mainCommit: sweep.mainCommit,
+        errorClass: cause.errorClass,
+        result: blocked,
+      }, halt);
+      return "not-accepted";
+    }
     deps.logger.info("delivery.acceptance-passed", `sweep on main ${sweep.mainCommit} passed; ${outcome}`, {
       projectId: ready.projectId,
       mainCommit: sweep.mainCommit,

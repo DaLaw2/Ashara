@@ -5,7 +5,7 @@ import { blockingReview } from "@ashara/quality";
 
 type Db = ReturnType<typeof createDb>;
 
-/** Engagement's block-report store over Delivery's published halt episodes and Engagement's told record, client_messages and guarantee_verdicts. */
+/** Engagement's block-report store over Delivery's published halt episodes, Engagement's told record and client_messages, and Quality's published guarantee verdicts. */
 export function createBlockReportStore(db: Db): BlockReportStore {
   return {
     dueReports: () => listDueBlockReports(db, blockingReview),

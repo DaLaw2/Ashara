@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { checkReports, unconfirmedAtPassedSweeps, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
+import { uncoveredAcceptance } from "./client-report-core.js";
 
 const noRecords: ReportRecords = {
   reports: [],
@@ -501,5 +502,60 @@ describe("checkReports, a burn warning", () => {
     const records: ReportRecords = { ...noRecords, reports, burnWarnings: [red, { ...red, zone: "yellow", reportId: "w3", operatorReport: null }] };
     expect(keysOf(records, "active")).toEqual(["burn-warning-repeated"]);
     expect(keysOf({ ...noRecords, reports: reports.slice(0, 1), burnWarnings: [{ ...red, operatorReport: null }] }, "active")).toEqual(["burn-warning-operator"]);
+  });
+});
+
+// The coverage rule, restated by the oracle: an accepted project rests on a passed sweep whose
+// evidence judges every guarantee in force pass, read by the oracle's own rules, never production's.
+describe("uncoveredAcceptance", () => {
+  const guarantees = [
+    { id: "G1", statement: "A user is greeted.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["no greeting is printed"] },
+    { id: "G2", statement: "Names are kept as given.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a name is changed"] },
+  ];
+  const vision = { version: 1, contractForm: "guarantees", guarantees, inferences: [], scopeBoundaries: [] };
+  const passedCheck = [{ taskCheckId: "k1", outcome: "passed", class: "implementer-visible" }];
+  const accepted = (g2Checks: readonly unknown[], extra: Partial<ReportRecords> = {}): ReportRecords => ({
+    ...noRecords,
+    sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: null, reportFailures: 0 }],
+    tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: 1 }],
+    visions: [vision],
+    evidence: [
+      { sweepId: "s1", guaranteeId: "G1", visionVersion: 1, checks: passedCheck, reviewLowers: false },
+      { sweepId: "s1", guaranteeId: "G2", visionVersion: 1, checks: g2Checks, reviewLowers: false },
+    ],
+    ...extra,
+  });
+  const keys = (records: ReportRecords): string[] => uncoveredAcceptance(records).map((each) => each.key);
+
+  it("finds nothing when every guarantee in force reads pass on the passed sweep", () => {
+    expect(keys(accepted(passedCheck))).toEqual([]);
+  });
+
+  it("flags a guarantee with no executed evidence, one only a review speaks for, and one a review lowers", () => {
+    expect(uncoveredAcceptance(accepted([]))).toEqual([{ key: "G2", statement: expect.stringContaining("reads unjudged (no-executed-evidence) on passed sweep s1, yet the project is accepted") }]);
+    expect(keys(accepted([{ taskCheckId: "r1", outcome: "passed", class: "review-only" }]))).toEqual(["G2"]);
+    const lowered = accepted(passedCheck);
+    expect(keys({ ...lowered, evidence: lowered.evidence.map((each) => ({ ...each, reviewLowers: each.guaranteeId === "G2" })) })).toEqual(["G2"]);
+  });
+
+  it("flags acceptance with no passed sweep, no evidence, or a guarantee missing from the evidence", () => {
+    expect(keys({ ...accepted(passedCheck), sweeps: [] })).toEqual(["no-passed-sweep"]);
+    expect(keys({ ...accepted(passedCheck), evidence: [] })).toEqual(["evidence-unread"]);
+    const torn = accepted(passedCheck);
+    expect(keys({ ...torn, evidence: torn.evidence.slice(0, 1) })).toEqual(["G2"]);
+  });
+
+  it("leaves a stored-data guarantee its contract marks not verifiable by Ashara outside coverage, never one a check could decide", () => {
+    const marked = (observation: string) => {
+      const records = accepted([]);
+      const g2 = { ...guarantees[1], observable: { interface: ["I1"], observation }, verification: "not-by-ashara" };
+      return { ...records, visions: [{ ...vision, guarantees: [guarantees[0], g2] }] };
+    };
+    expect(keys(marked("stored-data"))).toEqual([]);
+    expect(keys(marked("output"))).toEqual(["G2"]);
+    const onlyMarked = marked("stored-data");
+    expect(keys({ ...onlyMarked, visions: [{ ...vision, guarantees: [{ ...guarantees[0], observable: { interface: ["I1"], observation: "stored-data" }, verification: "not-by-ashara" }] }] })).toEqual([
+      "no-guarantee",
+    ]);
   });
 });

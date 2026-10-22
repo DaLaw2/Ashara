@@ -10,6 +10,8 @@
 # restrict.<pkg> = [glob, ...]  package-relative files that may import <pkg>; every other file in
 #                               the package is a violation (a downstream context reads an upstream
 #                               one through its src/acl/)
+# entries.<pkg>  = [sub, ...]   the only entry points of <pkg> this package may import: subpaths its
+#                               package.json exports, "." for its root; any other is a violation
 # importers      = [...]        the only packages that may import this one, checked even against a
 #                               wildcard `allow`; `[]` means none may
 # named-only, names.<pkg>       see [integration]
@@ -119,10 +121,15 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # files listed. The early-warning register reads which revision of a task's stored checks is in force
 # and what each decides in Quality's published stored-checks language, and the reports and the told
 # record read the sweeps, their evidence and the check disputes in Quality's published reads, only in
-# the repositories listed.
+# the repositories listed. Quality judges every guarantee's verdict; Engagement renders it, reading and
+# persisting it only through Quality's published verdicts, and never imports the verdict computation:
+# it reaches Quality only through the entries listed, never through the root that exports it. The
+# contract's guarantee vocabulary records, when a guarantee is proposed, Quality's decision of whether
+# Ashara can verify it, read from the published verdicts.
 allow = ["shared", "db", "finance", "delivery", "quality"]
 restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/block-report.test.ts", "src/client-change.ts", "src/client-receipt.ts", "src/client-receipt.test.ts", "src/inbound-policy.ts", "src/inbound-policy.test.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-message.ts", "src/repositories/client-receipt.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/told-report.ts", "src/stack-choice.ts"]
-restrict.quality = ["src/repositories/block-report.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts"]
+restrict.quality = ["src/guarantee-report.ts", "src/repositories/block-report.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts", "src/vision-language/guarantee.ts"]
+entries.quality = ["published-reads", "published-verdicts", "stored-checks"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it (answers, stops, and changes read
 # into corrections of the contract), and the reports back.
@@ -168,8 +175,9 @@ restrict.delivery = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
 # Its modules by business purpose: the merge gate and its verification, the verdict Delivery routes a
 # dispatch on, a task's stored checks, the suite review, the environment definition and its gate, and
-# the acceptance sweep's records (the sweep itself runs in the verification module, src/verification/), and the
-# reviewer record, written beside the evidence a re-authored check revision or a failed sweep is.
+# the acceptance sweep's records (the sweep itself runs in the verification module, src/verification/), the
+# reviewer record, written beside the evidence a re-authored check revision or a failed sweep is, the
+# verdict on each guarantee and the coverage acceptance requires, and its published reads and verdicts.
 module.verification   = ["src/verification/*.ts", "src/merge.ts", "src/gates/*.ts", "src/settled-branches.ts", "src/host-git.test.ts", "src/merge-queue.test.ts", "src/workspace-*.test.ts"]
 module.verdict        = ["src/dispatch-result.ts", "src/fault-class.ts", "src/task-verdict.ts"]
 module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/stored-checks.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
@@ -178,13 +186,16 @@ module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts
 module.acceptance     = ["src/repositories/acceptance.ts"]
 module.reviewer-record = ["src/repositories/reviewer-outcome.ts"]
 module.acl            = ["src/acl/*.ts"]
-module.published      = ["src/published-reads.ts"]
+module.guarantee-verdict = ["src/guarantee-verdict.ts"]
+module.published      = ["src/published-reads.ts", "src/published-verdicts.ts"]
 module.entry          = ["src/index.ts"]
 module-allow.verification = ["verdict", "checks", "environment", "suite-review", "acl"]
 module-allow.verdict      = ["checks", "environment", "acl"]
 module-allow.suite-review = ["checks", "acl"]
 module-allow.checks       = ["acl", "reviewer-record"]
-module-allow.acceptance   = ["verification", "reviewer-record", "acl"]
+module-allow.acceptance   = ["verification", "reviewer-record", "guarantee-verdict", "acl"]
+module-allow.guarantee-verdict = ["acl"]
+module-allow.published    = ["guarantee-verdict", "acl"]
 module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/*.ts"]
 
 [delivery]
@@ -296,7 +307,6 @@ project_blocks = "delivery"
 work_items = "delivery"
 client_messages = "engagement"
 delivered_report_attempts = "engagement"
-guarantee_verdicts = "engagement"
 intake_readings = "engagement"
 told_reports = "engagement"
 vision_documents = "engagement"
@@ -317,6 +327,7 @@ acceptance_sweeps = "quality"
 check_disputes = "quality"
 check_set_freezes = "quality"
 guarantee_evidence = "quality"
+guarantee_verdicts = "quality"
 reviewer_outcomes = "quality"
 suite_review_claims = "quality"
 suite_review_findings = "quality"

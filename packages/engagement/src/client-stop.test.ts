@@ -35,12 +35,12 @@ const SWEPT: GuaranteeRecords = {
   kind: "judged",
   sweep: { id: "sweep-1", mainCommit: MAIN },
   vision: VISION,
-  evidence: {
-    kind: "recorded",
-    byGuarantee: new Map([
-      ["G1", { checks: [{ checkId: "c1", outcome: "passed", class: "implementer-visible" }], reviewLowers: false }],
-      ["G2", { checks: [], reviewLowers: false }],
-    ]),
+  judged: {
+    evidence: "recorded",
+    verdicts: [
+      { guaranteeId: "G1", verdict: { kind: "pass", evidence: "implementer-visible" }, evidenceClass: "implementer-visible" },
+      { guaranteeId: "G2", verdict: { kind: "unjudged", reason: "no-executed-evidence" }, evidenceClass: "none" },
+    ],
   },
   revisions: [],
 };

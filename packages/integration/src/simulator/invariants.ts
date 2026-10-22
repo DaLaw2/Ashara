@@ -15,6 +15,7 @@ import {
   uncheckedAtPassedSweeps,
 } from "./client-reports.js";
 import type { ObservedReview, ReportRecords } from "./client-reports.js";
+import { uncoveredAcceptance } from "./client-report-core.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
 import type { FaultKind, FaultRecord } from "./faults.js";
@@ -389,7 +390,8 @@ export type Outcome =
  * undeliverable (orchestrator acceptance.ts); `configuration` (a model call refused by anything but a
  * spend cap) is Ashara's setup, kept with infrastructure as before. `work_budget` is the work
  * ledger's halt on a project's spent model requests, which the owner's grant
- * and the operator's unblock end.
+ * and the operator's unblock end. `acceptance_uncovered` is a passed sweep that leaves a guarantee
+ * Ashara can verify unjudged: the project cannot be accepted, and only the operator ends it.
  */
 const HALT_CAUSES = {
   budget_cap: "spend_cap",
@@ -406,6 +408,7 @@ const HALT_CAUSES = {
   model_failed: "undeliverable",
   provider_failed: "undeliverable",
   work_budget: "work_budget",
+  acceptance_uncovered: "undeliverable",
 } as const satisfies Record<(typeof PROJECT_BLOCK_KINDS)[number], HaltCause>;
 const HALT_CAUSE_OF: ReadonlyMap<string, HaltCause> = new Map(Object.entries(HALT_CAUSES));
 
@@ -773,12 +776,19 @@ export function checkSnapshot(
   // guarantee a suite review left undecided is named unverified in the sweep's delivered report, never
   // covered, and every asked-for item the report calls decided had its suite's
   // review found clean on it by a second model family, as the stand-ins answered it.
-  // Judged on every passed sweep once the run ends, whatever the project's status then.
+  // Judged on every passed sweep once the run ends, whatever the project's status then. An accepted
+  // project rests on a passed sweep whose evidence judges every guarantee in force pass, as the
+  // oracle's own reading of the table's rules judges it (uncoveredAcceptance): accepted with a
+  // guarantee unjudged is a finding, on every snapshot.
   if (context.final) {
     for (const found of uncheckedAtPassedSweeps(snapshot.reports))
       add("I6", `unchecked-item:${found.key}`, found.statement);
     for (const found of unconfirmedAtPassedSweeps(snapshot.reports, context.reviews))
       add("I6", `unconfirmed-clean:${found.key}`, found.statement);
+  }
+  if (snapshot.project.status === "accepted") {
+    for (const found of uncoveredAcceptance(snapshot.reports))
+      add("I6", `accepted-unjudged:${found.key}`, found.statement);
   }
   const checkedTasks = new Set(snapshot.checks.map((check) => check.taskId));
   for (const item of snapshot.items) {

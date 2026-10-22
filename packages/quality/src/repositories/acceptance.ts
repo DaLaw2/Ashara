@@ -6,14 +6,20 @@ import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
 import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
+import { coverageOf, judgeGuarantees } from "../guarantee-verdict.js";
+import type { Coverage, Evidence, JudgedGuarantee } from "../guarantee-verdict.js";
 import type { FailedCheck, SweptCheck } from "../verification/acceptance-sweep.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
 // A delivered project is accepted on one sweep of main HEAD. A project is ready for it once its first plan exists,
 // no task of it is open (any status Delivery does not name settled), at least one goal task is Completed,
-// no repair or revision is awaited, and no stop or answer awaits the Liaison. A passed sweep is
-// recorded with the project's move to 'accepted' in one transaction, the project row locked and
-// readiness read again; a failed one with the defect item it opens. Engagement's delivered report
+// no repair or revision is awaited, and no stop or answer awaits the Liaison. A project is accepted
+// only when its sweep passed and it covers the contract in force: every guarantee the contract does
+// not mark not verifiable by Ashara judged pass on the evidence that sweep recorded (coverageOf). The
+// sweep is recorded with the project's move to 'accepted' in one transaction, the project row locked
+// and readiness read again; a passed sweep that leaves such a guarantee unjudged records nothing and
+// names each such guarantee, and the project is not accepted. A failed sweep is recorded with the
+// defect item it opens. Engagement's delivered report
 // is due while a passed sweep has none on Engagement's told record, and reads what the sweep
 // recorded only through readSweepOutcome. A project
 // stopped or halted short of acceptance gets one terminal sweep per stop or halt episode. Every
@@ -81,12 +87,12 @@ interface AcceptanceSweepRecord {
 }
 
 /**
- * The guarantees of the project's vision version in force, by key, as Engagement's vision reader
- * reads them (the composition root supplies the reader); none when the project has no vision yet.
+ * The guarantees of the project's vision version in force, in its order, as Engagement's vision
+ * reader reads them (the composition root supplies the reader); none when the project has no vision yet.
  */
 type GuaranteesInForce =
   | { readonly kind: "none" }
-  | { readonly kind: "version"; readonly version: number; readonly guaranteeIds: readonly string[] };
+  | { readonly kind: "version"; readonly version: number; readonly guarantees: readonly JudgedGuarantee[] };
 
 /** Reads the guarantees in force inside the transaction a sweep is recorded in. */
 type ReadGuarantees = (tx: DbHandle, projectId: ProjectId) => Promise<GuaranteesInForce>;
@@ -142,19 +148,63 @@ async function storedRowsOf(tx: DbHandle, projectId: ProjectId, swept: readonly 
 /** The columns of an acceptance_sweeps row as inserted. */
 type SweepRow = typeof acceptanceSweeps.$inferInsert;
 
+/** What a sweep is recorded with: each swept check with its stored row, and each guarantee in force with its evidence. */
+interface SweepEvidenceRecord {
+  readonly swept: ReadonlyArray<SweptCheck & { readonly taskCheckId: string }>;
+  readonly guarantees: GuaranteesInForce;
+  readonly byGuarantee: ReadonlyMap<string, Evidence>;
+}
+
+/**
+ * The evidence of every guarantee in force on the sweep: every stored check deciding it with its
+ * outcome and class, an empty list when none does, and whether a review left it undecided.
+ */
+async function sweepEvidenceOf(tx: DbHandle, sweep: AcceptanceSweepRecord, readGuarantees: ReadGuarantees): Promise<SweepEvidenceRecord> {
+  const swept = await storedRowsOf(tx, sweep.projectId, sweep.checkOutcomes);
+  const guarantees = await readGuarantees(tx, sweep.projectId);
+  const ids = guarantees.kind === "none" ? [] : guarantees.guarantees.map((guarantee) => guarantee.id);
+  if (ids.length === 0) return { swept, guarantees, byGuarantee: new Map() };
+  const undecided = await tx
+    .selectDistinct({ itemId: undecidedItems.itemId })
+    .from(undecidedItems)
+    .where(and(eq(undecidedItems.projectId, sweep.projectId), inArray(undecidedItems.itemId, ids)));
+  const lowered = new Set(undecided.map((item) => item.itemId));
+  const byGuarantee = new Map(
+    ids.map((guaranteeId): [string, Evidence] => [
+      guaranteeId,
+      {
+        checks: swept
+          .filter((check) => check.decides?.includes(guaranteeId) === true)
+          .map((check) => ({ checkId: check.taskCheckId, outcome: check.outcome, class: STORED_CHECK_CLASS })),
+        reviewLowers: lowered.has(guaranteeId),
+      },
+    ]),
+  );
+  return { swept, guarantees, byGuarantee };
+}
+
+/**
+ * Whether a passed sweep on `mainCommit` covers the contract in force: Quality's verdict on every
+ * guarantee, judged on the evidence the sweep records, is a pass.
+ */
+function coverageOfSweep(evidence: SweepEvidenceRecord, projectId: ProjectId, mainCommit: string): Coverage {
+  const { guarantees } = evidence;
+  if (guarantees.kind === "none") return coverageOf(null, []);
+  const verdicts = judgeGuarantees(guarantees.guarantees, guarantees.version, { id: `of project ${projectId} on ${mainCommit}`, mainCommit }, { kind: "recorded", byGuarantee: evidence.byGuarantee });
+  return coverageOf(guarantees.version, verdicts);
+}
+
 /**
  * Inserts the sweep's row with the outcome of every stored check it ran, then one evidence row per
- * guarantee in force: every stored check deciding it with its outcome and class, an empty list when
- * none does, and whether a review left it undecided. Returns the sweep's id, or null when `row`
- * conflicted with a sweep already recorded (a terminal one, by its stop or halt episode).
+ * guarantee in force. Returns the sweep's id, or null when `row` conflicted with a sweep already
+ * recorded (a terminal one, by its stop or halt episode).
  */
 async function insertSweepWithEvidence(
   tx: DbHandle,
   sweep: AcceptanceSweepRecord,
   row: Omit<SweepRow, "checkOutcomes" | "projectId" | "mainCommit" | "environmentVersion" | "checkedTasks" | "uncheckedTasks" | "details">,
-  readGuarantees: ReadGuarantees,
+  evidence: SweepEvidenceRecord,
 ): Promise<string | null> {
-  const swept = await storedRowsOf(tx, sweep.projectId, sweep.checkOutcomes);
   const insert = tx.insert(acceptanceSweeps).values({
     ...row,
     projectId: sweep.projectId,
@@ -163,7 +213,7 @@ async function insertSweepWithEvidence(
     checkedTasks: [...sweep.checkedTasks],
     uncheckedTasks: [...sweep.uncheckedTasks],
     details: sweep.details,
-    checkOutcomes: swept.map((check) => ({ taskCheckId: check.taskCheckId, taskId: check.taskId, name: check.name, command: check.command, outcome: check.outcome })),
+    checkOutcomes: evidence.swept.map((check) => ({ taskCheckId: check.taskCheckId, taskId: check.taskId, name: check.name, command: check.command, outcome: check.outcome })),
   });
   // Only a terminal sweep may meet one already recorded (its stop or halt episode's); any other conflict is a fault.
   const [recorded] =
@@ -172,27 +222,35 @@ async function insertSweepWithEvidence(
     if (row.purpose === "terminal") return null;
     throw new AcceptanceSweepUnrecorded(sweep.projectId);
   }
-  const guarantees = await readGuarantees(tx, sweep.projectId);
-  if (guarantees.kind === "none" || guarantees.guaranteeIds.length === 0) return recorded.id;
-  const undecided = await tx
-    .selectDistinct({ itemId: undecidedItems.itemId })
-    .from(undecidedItems)
-    .where(and(eq(undecidedItems.projectId, sweep.projectId), inArray(undecidedItems.itemId, [...guarantees.guaranteeIds])));
-  const lowered = new Set(undecided.map((item) => item.itemId));
+  const { guarantees } = evidence;
+  if (guarantees.kind === "none" || guarantees.guarantees.length === 0) return recorded.id;
   await tx.insert(guaranteeEvidence).values(
-    guarantees.guaranteeIds.map((guaranteeId) => ({
-      projectId: sweep.projectId,
-      sweepId: recorded.id,
-      visionVersion: guarantees.version,
-      guaranteeId,
-      mainCommit: sweep.mainCommit,
-      checks: swept
-        .filter((check) => check.decides?.includes(guaranteeId) === true)
-        .map((check) => ({ taskCheckId: check.taskCheckId, outcome: check.outcome, class: STORED_CHECK_CLASS })),
-      reviewLowers: lowered.has(guaranteeId),
-    })),
+    guarantees.guarantees.map(({ id: guaranteeId }) => {
+      const seen = evidence.byGuarantee.get(guaranteeId);
+      if (seen === undefined) throw new GuaranteeEvidenceUnbuilt(sweep.projectId, guaranteeId);
+      return {
+        projectId: sweep.projectId,
+        sweepId: recorded.id,
+        visionVersion: guarantees.version,
+        guaranteeId,
+        mainCommit: sweep.mainCommit,
+        checks: seen.checks.map((check) => ({ taskCheckId: check.checkId, outcome: check.outcome, class: check.class })),
+        reviewLowers: seen.reviewLowers,
+      };
+    }),
   );
   return recorded.id;
+}
+
+/** A guarantee in force has no evidence built for it: the sweep's evidence and the guarantees it was built for are out of step. */
+class GuaranteeEvidenceUnbuilt extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly guaranteeId: string,
+  ) {
+    super(`cannot record the sweep of project ${projectId}: no evidence was built for guarantee ${guaranteeId}, which is in force`);
+    this.name = "GuaranteeEvidenceUnbuilt";
+  }
 }
 
 /** recordSweepFault named a project with no row. */
@@ -225,21 +283,37 @@ async function lockReady(tx: DbHandle, projectId: ProjectId): Promise<boolean> {
 }
 
 /**
- * A sweep that passed: recorded with the outcome of every stored check it ran and the evidence of
- * every guarantee in force (`readGuarantees`), and the project moved to 'accepted' by `accept`
- * (Engagement's lifecycle guard; the composition root supplies both), in one transaction (the
- * projects_acceptance_guard trigger refuses the move without the row). "moved" when the project is
- * no longer ready; nothing is written.
+ * Why a passed sweep did not accept its project: it does not cover the contract in force, every
+ * guarantee of which that Ashara can verify must be judged pass (Coverage, short of covered).
+ */
+export type AcceptanceUncovered = { readonly kind: "uncovered"; readonly coverage: Exclude<Coverage, { readonly kind: "covered" }> };
+
+/**
+ * A sweep that passed: when it covers the contract in force (every guarantee in force, read by
+ * `readGuarantees`, that the contract does not mark not verifiable by Ashara judged pass on the
+ * evidence it records), recorded with the outcome of every stored check it ran and that evidence, and
+ * the project moved to 'accepted' by `accept` (Engagement's lifecycle guard; the composition root
+ * supplies both), in one transaction. "moved" when the project is no longer ready; the uncovered
+ * outcome, naming each guarantee not judged pass, when the sweep does not cover the contract: the
+ * project is not accepted. Either way nothing is written.
+ *
+ * This is the one writer of a passed acceptance sweep, and it writes one only on coverage, in the
+ * transaction that moves the project. The projects_acceptance_guard trigger refuses 'accepted' without
+ * a passed sweep, so the database holds coverage through this writer: judging coverage again in SQL
+ * would put a second verdict computation outside Quality's verdictOf.
  */
 export async function recordAcceptance(
   db: Database,
   sweep: AcceptanceSweepRecord & { readonly mainCommit: string },
   accept: AcceptProject,
   readGuarantees: ReadGuarantees,
-): Promise<"accepted" | "moved"> {
+): Promise<"accepted" | "moved" | AcceptanceUncovered> {
   return db.transaction(async (tx) => {
     if (!(await lockReady(tx, sweep.projectId))) return "moved";
-    await insertSweepWithEvidence(tx, sweep, { purpose: "acceptance", passed: true }, readGuarantees);
+    const evidence = await sweepEvidenceOf(tx, sweep, readGuarantees);
+    const coverage = coverageOfSweep(evidence, sweep.projectId, sweep.mainCommit);
+    if (coverage.kind !== "covered") return { kind: "uncovered", coverage };
+    await insertSweepWithEvidence(tx, sweep, { purpose: "acceptance", passed: true }, evidence);
     await accept(tx, sweep.projectId);
     return "accepted";
   });
@@ -261,7 +335,7 @@ export async function recordAcceptanceDefect(
   return db.transaction(async (tx) => {
     if (!(await lockReady(tx, sweep.projectId))) return "moved";
     const defectItemId = await writeDefect(tx);
-    const sweepId = await insertSweepWithEvidence(tx, sweep, { purpose: "acceptance", passed: false, defectItemId }, readGuarantees);
+    const sweepId = await insertSweepWithEvidence(tx, sweep, { purpose: "acceptance", passed: false, defectItemId }, await sweepEvidenceOf(tx, sweep, readGuarantees));
     if (sweepId === null) throw new AcceptanceSweepUnrecorded(sweep.projectId);
     await recordFailedSweepOutcomes(tx, { projectId: sweep.projectId, sweepId, failedCheckTasks: sweep.failedChecks.map((check) => check.checkTaskId) });
     return "recorded";
@@ -340,7 +414,7 @@ export async function recordTerminalSweep(
 ): Promise<"recorded" | "already-recorded"> {
   return db.transaction(async (tx) => {
     const of = sweep.terminal.kind === "stop" ? { stopId: sweep.terminal.stopId } : { blockId: sweep.terminal.blockId };
-    const sweepId = await insertSweepWithEvidence(tx, sweep, { purpose: "terminal", passed: false, ...of }, readGuarantees);
+    const sweepId = await insertSweepWithEvidence(tx, sweep, { purpose: "terminal", passed: false, ...of }, await sweepEvidenceOf(tx, sweep, readGuarantees));
     return sweepId === null ? "already-recorded" : "recorded";
   });
 }

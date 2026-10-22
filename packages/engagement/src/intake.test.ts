@@ -5,6 +5,7 @@ import type { CapabilityLevel, ContextualLlm } from "@ashara/finance";
 import { SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
 import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
+import { visionWritable } from "./vision.js";
 import type { IntakeStore } from "./intake.js";
 import { ASSUMPTION_KIND_RULE } from "./vision-language/vision-assumption.js";
 
@@ -408,7 +409,12 @@ describe("TenderIntake contract draft", () => {
   test("the contract draft lists every guarantee with its basis, at risk until the assumption it rests on is confirmed", async () => {
     const draft = (await intakeOf(reply)).contractDraft;
     expect(draft).toContain("- G1: get prints the value put stored. (basis: an assumption you have not confirmed; at risk until you confirm A3)");
-    expect(draft).toContain("- G2: list prints the keys sorted. (basis: an assumption you have not confirmed; at risk until you confirm A2)");
+    // Its undecided observation is recorded as stored-data, which no check Ashara runs can show holding: the client is told before work starts.
+    expect(draft).toContain(
+      "- G2: list prints the keys sorted. (basis: an assumption you have not confirmed; at risk until you confirm A2; not verifiable by Ashara: " +
+        "no check Ashara can run today shows it holding, so Ashara's reports list it as not verified, never as passed, and the project is accepted without it)",
+    );
+    expect(draft).not.toMatch(/- G[13]: [^\n]*not verifiable by Ashara/);
     expect(draft).toContain("- G3: A value may hold spaces. (basis: an assumption you have not confirmed; at risk until you confirm A1)");
     for (const g of reply.guarantees) expect(draft).toContain(`- ${g.id}: ${g.statement} (basis: `);
     expect(draft).toContain("- I1: put KEY VALUE stores the value.\n- I2: list prints every key, one per line.");
@@ -427,6 +433,12 @@ describe("TenderIntake contract draft", () => {
 
   test("vision v1 records the contract as drafted, an undecided observation as stored-data, and every assumption under its own key", async () => {
     const vision = (await intakeOf(reply)).vision(["q0"]);
+    const written = visionWritable("p", { visionText: vision.visionText, scopeBoundaries: [], inferences: vision.inferences, openQuestions: [], contract: { form: "guarantees", ...vision.contract } });
+    expect(written.guarantees.map((g) => [g.id, g.verification])).toEqual([
+      ["G1", "by-ashara"],
+      ["G2", "not-by-ashara"],
+      ["G3", "by-ashara"],
+    ]);
     expect(vision.contract.interface.map((entry) => entry.id)).toEqual(["I1", "I2"]);
     expect(vision.contract.guarantees.map((g) => [g.id, g.observable.observation])).toEqual([
       ["G1", "output"],

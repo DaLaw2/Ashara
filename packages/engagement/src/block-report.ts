@@ -261,6 +261,11 @@ function recordedKind(halt: ToldHalt): string {
       return "a step of the work kept failing because the model doing it gave no usable answer";
     case "provider_failed":
       return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
+    case "acceptance_uncovered":
+      return (
+        "every check Ashara ran on the finished work passed, but a guarantee of your contract that Ashara can verify was not " +
+        "shown to hold by a check that ran, so the project cannot be accepted"
+      );
     case "work_budget":
       return halt.work?.reserveProtected === true
         ? "the budget of model requests set for this project was used up except for the share set aside for checking and accepting the " +
@@ -320,6 +325,8 @@ function nextStep(halt: ToldHalt): string {
       return `Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. ${WAITS_ON_OPERATOR}`;
     case "work_budget":
       return `More model requests have to be granted to this project before more work is done. ${WAITS_ON_OPERATOR}`;
+    case "acceptance_uncovered":
+      return `The team has to look into why each such guarantee went unchecked before the finished work is checked again. ${WAITS_ON_OPERATOR}`;
     case "infrastructure":
       // Not a claim about the cause, which is the record's own text above: only what ends this
       // halt (infrastructure-halts.ts, the substrate probe each cycle) and that it is not charged.
@@ -512,6 +519,7 @@ function haltBody(due: Extract<DueBlockReport, { readonly subject: "project-bloc
     case "model_failed":
     case "provider_failed":
     case "work_budget":
+    case "acceptance_uncovered":
       return projectBlockedReport(due.episodeId, due.kind, due.cause);
   }
   throw new HaltKindUnworded(due);

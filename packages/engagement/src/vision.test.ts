@@ -71,6 +71,7 @@ describe("a version written before guarantees reads as legacy guarantees, never 
         interface: [],
         observation: "unclassified",
         refutedBy: [],
+        verification: "unmarked",
         source: { kind: "legacy", from: "assumption", id: "A1" },
         basis: "assumed-unconfirmed",
       },

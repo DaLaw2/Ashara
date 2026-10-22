@@ -197,6 +197,9 @@ export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
     for (const projectId of new Set(sweeps.map((sweep) => sweep.projectId))) {
       statuses.push(...z.array(statusRow).parse((await tx.execute(sql`SELECT id, lifecycle AS status FROM projects WHERE id = ${projectId} AND lifecycle <> 'accepted'`)).rows));
     }
+    // A scratch copy of a kept run, put back after: each project moved here holds the passed sweep its
+    // run recorded, which the guard requires. The move bypasses Quality's acceptance and its coverage
+    // rule, so it restores only what the kept run recorded and never accepts a project of its own.
     for (const { id } of statuses) await tx.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${id}`);
     return {
       records: [

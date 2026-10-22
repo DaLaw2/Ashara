@@ -20,6 +20,10 @@
  * Database handle is built without a schema, its `query` names no table, and the type checker
  * refuses that read.
  *
+ * A package that states `entries.<pkg>` imports <pkg> only through the entry points listed: an import
+ * of any other, the root included unless "." is listed, is a violation, and so is a relative path into
+ * <pkg>, which names no entry.
+ *
  * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
  * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
  * relative import may not leave the named-only files, and a listed name no named-only file imports
@@ -42,6 +46,17 @@ import {
   scanLines,
 } from "./source-files.js";
 import { checkStandIns } from "./stand-ins.js";
+
+/**
+ * The entry point of `pkg` a specifier names: "." for the package root, its subpath for
+ * "@ashara/<pkg>/<sub>", and the specifier itself for a relative one, which names no entry.
+ */
+function entryOf(specifier: string, pkg: string): string {
+  const root = `@ashara/${pkg}`;
+  if (specifier === root) return ".";
+  if (specifier.startsWith(`${root}/`)) return specifier.slice(root.length + 1);
+  return specifier;
+}
 
 /**
  * Why `importer` may not import `specifier` of `pkg` under its subpath-importers; null when it may or
@@ -176,6 +191,10 @@ function packageViolations(context: LintContext, pkg: PackageScan): Violation[] 
 
       const subpathRefusal = subpathRefusalOf(rules, ref.pkg, ref.specifier, pkgName);
       if (subpathRefusal !== null) violations.push(violation(subpathRefusal));
+      const entries = rule.entries.get(ref.pkg);
+      if (entries !== undefined && !entries.includes(entryOf(ref.specifier, ref.pkg))) {
+        violations.push(violation(`only the entries ${entries.join(", ")} of package "${ref.pkg}" may be imported`));
+      }
     }
   }
 

@@ -33,7 +33,7 @@ function assumption(status: "Inferred" | "Stated"): VisionAssumption {
 function versionWith(a1: VisionAssumption): Pick<VisionVersion, "guarantees" | "assumptions"> {
   const guarantee = (id: string, statement: string) => {
     const source = { kind: "tender", quote: statement } as const;
-    return { id, statement, interface: ["I1"], observation: "output", refutedBy: ["a lookup returns another value"], source, basis: basisOf({ id, source }, [a1]) } as const;
+    return { id, statement, interface: ["I1"], observation: "output", refutedBy: ["a lookup returns another value"], verification: "by-ashara", source, basis: basisOf({ id, source }, [a1]) } as const;
   };
   return { guarantees: [guarantee("G1", "A stored value is read back."), guarantee("G2", "Keys differing in case are distinct.")], assumptions: [a1] };
 }

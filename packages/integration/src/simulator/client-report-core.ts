@@ -65,6 +65,7 @@ export const sweptGuarantee = z.looseObject({
   statement: z.string().min(1),
   observable: z.looseObject({ observation: z.string() }).optional(),
   refutedBy: z.array(z.string()).optional(),
+  verification: z.string().optional(),
 });
 
 /**
@@ -79,6 +80,11 @@ export interface GuaranteeInForce {
   readonly checkable: boolean;
   /** Whether it is about stored data, which no check can show surviving a fault while no fault set is run. */
   readonly storedData: boolean;
+  /**
+   * Whether its contract marks it not verifiable by Ashara, as the client was told when it was proposed:
+   * it is reported not verified, never passed, and acceptance does not wait on it.
+   */
+  readonly notVerifiable: boolean;
 }
 
 export const sweptContractForm = z.enum(["scope-lines", "guarantees"]);
@@ -108,6 +114,7 @@ export function guaranteesInForce(
              refuting it is not checkable, the fail-closed reading */
           (g.refutedBy ?? []).length > 0,
         storedData: observation === "stored-data",
+        notVerifiable: g.verification === "not-by-ashara",
       };
     });
   }
@@ -118,7 +125,14 @@ export function guaranteesInForce(
       if (side === "out") return [];
       const read = `${side === "in" ? "in scope" : side}, read as a guarantee`;
       return [
-        { id, text, named: `scope line ${id} ("${text.slice(0, 120)}"), ${read}`, checkable: false, storedData: false },
+        {
+          id,
+          text,
+          named: `scope line ${id} ("${text.slice(0, 120)}"), ${read}`,
+          checkable: false,
+          storedData: false,
+          notVerifiable: false,
+        },
       ];
     }),
     ...inferences.flatMap((record, i) => {
@@ -127,7 +141,7 @@ export function guaranteesInForce(
       const named =
         `assumption ${id} ("${record.statement.slice(0, 120)}"), ` +
         `${record.kind ?? "of no recorded kind"}, read as a guarantee`;
-      return [{ id, text: record.statement, named, checkable: false, storedData: false }];
+      return [{ id, text: record.statement, named, checkable: false, storedData: false, notVerifiable: false }];
     }),
   ];
 }
@@ -143,11 +157,15 @@ interface TableVerdict {
 
 const unjudged = (reason: string): TableVerdict => ({ verdict: "unjudged", reason });
 
+/** The reason stored for a guarantee its contract marks not verifiable by Ashara; its table line says not verified. */
+const NOT_VERIFIABLE = "not-verifiable-by-ashara";
+
 /**
  * One guarantee's verdict from its evidence on the sweep, restated here by the rules the table
  * promises the client: nothing is judged off a commit; an executed check that failed fails it; one
- * that names nothing refuting it, or is about stored data (no fault set is run), no check decides;
- * it passes only on an executed check that passed, and any review's doubt holds it back.
+ * its contract marks not verifiable by Ashara is never verified; one that names nothing refuting it,
+ * or is about stored data (no fault set is run), no check decides; it passes only on an executed
+ * check that passed, and any review's doubt holds it back.
  */
 function judged(
   guarantee: GuaranteeInForce,
@@ -159,6 +177,7 @@ function judged(
     (check) => check.class === "witness" || check.class === "implementer-visible",
   );
   if (executed.some((check) => check.outcome === "failed")) return { verdict: "fail", reason: null };
+  if (guarantee.notVerifiable) return unjudged(NOT_VERIFIABLE);
   if (!guarantee.checkable) return unjudged("not-checkable-as-written");
   if (guarantee.storedData) return unjudged("stored-data-unjudged");
   const reviews = evidence.checks.filter((check) => check.class === "review-only");
@@ -328,11 +347,12 @@ export function tableProblems(
       `its table lists [${idsListed(table).join(", ")}]; vision v${version} holds [${ids.join(", ")}], each once`,
     );
   }
-  for (const { guarantee, verdict } of expected) {
+  for (const { guarantee, verdict, reason } of expected) {
     const line = lines.find((each) => each.startsWith(`- ${guarantee.id}: `));
-    const said = line === undefined ? null : /\| verdict: (pass|fail|unjudged)\b/.exec(line)?.[1];
-    if (line !== undefined && said !== verdict)
-      problems.push(`its table says ${guarantee.id} is ${said ?? "nothing"}; its evidence reads ${verdict}`);
+    const said = line === undefined ? null : /\| verdict: (pass|fail|unjudged|not verified)\b/.exec(line)?.[1];
+    const told = reason === NOT_VERIFIABLE ? "not verified" : verdict;
+    if (line !== undefined && said !== told)
+      problems.push(`its table says ${guarantee.id} is ${said ?? "nothing"}; its evidence reads ${told}`);
   }
   const atRisk = new Set(
     stored.filter((row) => row.verdict === "pass" && row.basis === "assumed-unconfirmed").map((row) => row.guaranteeId),
@@ -351,4 +371,64 @@ export function tableProblems(
     );
   }
   return problems;
+}
+
+/**
+ * The coverage rule, restated as the oracle reads it: a project is accepted only on a passed sweep
+ * whose recorded evidence judges every guarantee of the version it was recorded against pass, each as
+ * `judged` reads it, except one its contract marks not verifiable by Ashara, which lies outside
+ * coverage. Only a guarantee about stored data may carry that mark while no fault set is run: one that
+ * a check could decide, marked so, would excuse it from coverage. A passed sweep with no evidence,
+ * evidence of more than one version, a version that does not read or holds no guarantee within
+ * coverage, or a guarantee with no evidence row covers nothing, so an accepted project resting on it
+ * is a finding. One finding per guarantee, keyed by its id, or per record that does not read.
+ */
+export function uncoveredAcceptance(
+  records: Pick<ReportRecords, "sweeps" | "tableSweeps" | "evidence" | "visions">,
+): ReportViolation[] {
+  const passed = records.sweeps.filter((sweep) => sweep.passed);
+  if (passed.length === 0)
+    return [{ key: "no-passed-sweep", statement: "the project is accepted with no passed sweep on record" }];
+  const found = new Map<string, string>();
+  for (const sweep of passed) {
+    const at = `passed sweep ${sweep.id}`;
+    const swept = records.tableSweeps.find((each) => each.id === sweep.id);
+    const onCommit = swept !== undefined && swept.mainCommit !== null;
+    const evidence = records.evidence.filter((each) => each.sweepId === sweep.id);
+    const versions = [...new Set(evidence.map((each) => each.visionVersion))];
+    const [version] = versions;
+    if (versions.length !== 1 || version === undefined) {
+      found.set(
+        "evidence-unread",
+        `${at} records evidence of ${versions.length} vision version(s), so no guarantee is judged on it`,
+      );
+      continue;
+    }
+    const vision = records.visions.find((each) => each.version === version);
+    const inForce = vision === undefined ? `vision v${version} is not on record` : inForceAt(vision);
+    if (typeof inForce === "string") {
+      found.set("vision-unread", `${at}: ${inForce}, so no guarantee is judged on it`);
+      continue;
+    }
+    if (inForce.every((guarantee) => guarantee.notVerifiable))
+      found.set("no-guarantee", `${at}: vision v${version} holds no guarantee Ashara can verify, so nothing is judged`);
+    for (const guarantee of inForce) {
+      if (guarantee.notVerifiable) {
+        if (!guarantee.storedData)
+          found.set(guarantee.id, `${guarantee.named} is marked not verifiable by Ashara though a check can decide it`);
+        continue;
+      }
+      const seen = evidence.find((each) => each.guaranteeId === guarantee.id);
+      const checks = checkEvidence.safeParse(seen?.checks);
+      if (seen === undefined || !checks.success) {
+        found.set(guarantee.id, `${guarantee.named} has no readable evidence on ${at}`);
+        continue;
+      }
+      const verdict = judged(guarantee, { checks: checks.data, reviewLowers: seen.reviewLowers }, onCommit);
+      const why = verdict.reason === null ? "" : ` (${verdict.reason})`;
+      if (verdict.verdict !== "pass")
+        found.set(guarantee.id, `${guarantee.named} reads ${verdict.verdict}${why} on ${at}`);
+    }
+  }
+  return [...found].map(([key, statement]) => ({ key, statement: `${statement}, yet the project is accepted` }));
 }

@@ -47,6 +47,7 @@ const KIND_JUDGEMENT = {
   model_failed: "stated",
   provider_failed: "stated",
   work_budget: "stated",
+  acceptance_uncovered: "stated",
   plan_repair: "repair",
   check_dispute: "retired",
   suite_review: "retired",
@@ -66,6 +67,7 @@ const STATED_KINDS: ReadonlyArray<StatedKind> = [
   "model_failed",
   "provider_failed",
   "work_budget",
+  "acceptance_uncovered",
 ];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
@@ -205,6 +207,11 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
       );
     case "work_budget":
       return "the budget of model requests set for this project was used up, so the next step of the work was not sent";
+    case "acceptance_uncovered":
+      return (
+        "every check Ashara ran on the finished work passed, but a guarantee of your contract that Ashara can verify " +
+        "was not shown to hold by a check that ran, so the project cannot be accepted"
+      );
   }
 }
 

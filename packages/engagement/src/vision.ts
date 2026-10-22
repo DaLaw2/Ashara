@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { StoredContractSchema, WritableContractSchema, collapseWhitespace, visionGuaranteeOf } from "./vision-language/guarantee.js";
+import { StoredContractSchema, WritableContractSchema, collapseWhitespace, verificationOf, visionGuaranteeOf } from "./vision-language/guarantee.js";
 import type { ContractDraft, StoredContract, VisionExclusion } from "./vision-language/guarantee.js";
 import type { ContractOp } from "./vision-language/contract-op.js";
 import { basisOf } from "./vision-language/index.js";
@@ -255,7 +255,7 @@ function legacyGuarantee(
   source: Extract<VisionGuarantee["source"], { readonly kind: "legacy" }>,
   assumptions: readonly VisionAssumption[],
 ): VisionGuarantee {
-  return { id, statement, interface: [], observation: "unclassified", refutedBy: [], source, basis: basisOf({ id, source }, assumptions) };
+  return { id, statement, interface: [], observation: "unclassified", refutedBy: [], verification: "unmarked", source, basis: basisOf({ id, source }, assumptions) };
 }
 
 /** A version's contract breaks one of the rules the Vision keeps; the caller names the version. */
@@ -671,7 +671,14 @@ export class Vision {
     switch (op.op) {
       case "add-guarantee": {
         const id = nextKey("G");
-        const guarantee = { id, statement: op.statement, observable: { interface: op.interface, observation: op.observation }, refutedBy: op.refutedBy, source: correction };
+        const guarantee = {
+          id,
+          statement: op.statement,
+          observable: { interface: op.interface, observation: op.observation },
+          refutedBy: op.refutedBy,
+          verification: verificationOf(op.observation),
+          source: correction,
+        };
         return done({ contract: { ...contract, guarantees: [...contract.guarantees, guarantee] } }, id);
       }
       case "amend-guarantee": {
@@ -685,6 +692,7 @@ export class Vision {
           statement: op.statement,
           observable: { interface: op.interface, observation: op.observation },
           refutedBy: op.refutedBy,
+          verification: verificationOf(op.observation),
           source: restores ? ({ kind: "tender", quote: op.statement } as const) : correction,
         };
         return done({ contract: { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? amended : g)) } }, op.id, restores ? "misread" : "client-change");

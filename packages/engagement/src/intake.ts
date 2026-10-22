@@ -13,7 +13,7 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
-import { AssumptionKeySchema, ContractDraftSchema, GuaranteeKeySchema, basisOf } from "./vision-language/guarantee.js";
+import { AssumptionKeySchema, ContractDraftSchema, GuaranteeKeySchema, NOT_VERIFIABLE_BY_ASHARA, basisOf, verificationOf } from "./vision-language/guarantee.js";
 import type { GuaranteeBasis } from "./vision-language/guarantee.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { VisionWriteRefused, visionWritable } from "./vision.js";
@@ -576,7 +576,8 @@ const BASIS_WORDS: Readonly<Record<GuaranteeBasis, string>> = {
 /**
  * The contract draft the client reads with vision v1: the interface as Ashara reads it, the first
  * thing they may correct; every guarantee with its basis, one resting on an assumption they have
- * not confirmed marked at risk until they confirm it; the assumptions they could observe, each
+ * not confirmed marked at risk until they confirm it, and one Ashara cannot verify with the checks it
+ * can run marked not verifiable by Ashara, as the contract records it; the assumptions they could observe, each
  * with the guarantees it underpins; the exclusions, so silence is never read as a promise; and the
  * team's own design choices, which acceptance does not depend on. Nothing waits on a reply.
  */
@@ -585,7 +586,8 @@ function contractDraftReport(first: IntakeResponse, inferences: readonly Inferre
   const guarantees = first.guarantees.map((g) => {
     const resting = inferences.filter((a) => a.underpins.includes(g.id) || (g.source.kind === "assumption" && g.source.id === a.key)).map((a) => a.key);
     const risk = resting.length === 0 ? "" : `; at risk until you confirm ${resting.join(", ")}`;
-    return `- ${g.id}: ${g.statement} (basis: ${BASIS_WORDS[basisOf(g, footing)]}${risk})`;
+    const unverifiable = verificationOf(g.observable.observation) === "not-by-ashara" ? `; ${NOT_VERIFIABLE_BY_ASHARA}` : "";
+    return `- ${g.id}: ${g.statement} (basis: ${BASIS_WORDS[basisOf(g, footing)]}${risk}${unverifiable})`;
   });
   const excludedBy = (key: string): string[] => first.exclusions.filter((x) => x.source.kind === "assumption" && x.source.id === key).map((x) => x.id);
   const visible = inferences.flatMap((a) => {

@@ -1,11 +1,11 @@
 import { and, asc, count, desc, eq, lte, type SQL } from "drizzle-orm";
 import { qualifiedColumn } from "@ashara/db";
-import { acceptanceSweeps, checkDisputes, guaranteeEvidence } from "@ashara/db/schema/quality";
+import { acceptanceSweeps, checkDisputes } from "@ashara/db/schema/quality";
 import type { DbHandle } from "@ashara/db";
 
-// Quality's published reads of its acceptance sweeps, the evidence each recorded per guarantee and
-// its check disputes, for the contexts that tell the client of them: what another context reads of
-// these tables goes through these, never a query of its own. Each returns Quality's rows as stored,
+// Quality's published reads of its acceptance sweeps and its check disputes, for the contexts that
+// tell the client of them: what another context reads of these tables goes through these, never a
+// query of its own. Each returns Quality's rows as stored,
 // its jsonb unread. This module imports nothing of Quality, so a context Quality reads can import it
 // without a cycle at load time.
 
@@ -62,22 +62,6 @@ export async function recordedSweep(db: DbHandle, sweepId: string, passed?: bool
     .from(acceptanceSweeps)
     .where(and(eq(acceptanceSweeps.id, sweepId), passed === undefined ? undefined : eq(acceptanceSweeps.passed, passed)));
   return sweep ?? null;
-}
-
-/** One guarantee's evidence as a sweep recorded it: the vision version it was judged against, the checks deciding it as stored, and whether a review lowers it. */
-export interface RecordedEvidence {
-  readonly guaranteeId: string;
-  readonly visionVersion: number;
-  readonly checks: unknown;
-  readonly reviewLowers: boolean;
-}
-
-/** The evidence the sweep recorded, one row per guarantee; none for a sweep recorded before evidence per guarantee was. */
-export async function sweepEvidence(db: DbHandle, sweepId: string): Promise<RecordedEvidence[]> {
-  return db
-    .select({ guaranteeId: guaranteeEvidence.guaranteeId, visionVersion: guaranteeEvidence.visionVersion, checks: guaranteeEvidence.checks, reviewLowers: guaranteeEvidence.reviewLowers })
-    .from(guaranteeEvidence)
-    .where(eq(guaranteeEvidence.sweepId, sweepId));
 }
 
 /** A dispute of a stored check, with how many times its check task was disputed by then. */

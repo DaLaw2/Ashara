@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { ContractOpSchema, opKey, opShape } from "./vision-language/contract-op.js";
 import type { ContractOp, Direction, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
+import { NOT_VERIFIABLE_BY_ASHARA, verificationOf } from "./vision-language/guarantee.js";
+import type { Observation } from "./vision-language/guarantee.js";
 import type { AppliedOp, UnappliedOp, VisionVersion } from "./vision.js";
 
 // A client's correction: a change message read into typed operations on the contract of the version in
@@ -246,14 +248,19 @@ const PAUSED_CLOSE =
 /** The fixed close of a pushback: the correction is held, never refused. */
 const CONFIRM_CLOSE = "This change will be made as you sent it once you confirm; nothing else waits.";
 
+/** What the client is told of a guarantee its change proposes that Ashara cannot verify with the checks it can run. */
+function unverifiable(observation: Observation): string {
+  return verificationOf(observation) === "not-by-ashara" ? ` (${NOT_VERIFIABLE_BY_ASHARA})` : "";
+}
+
 /** One operation in plain words, naming the record it acts on as the version in force holds it. */
 function opLine(op: ContractOp, vision: VisionVersion): string {
   const named = (id: string, text: string | undefined) => (text === undefined ? id : `${id} ("${text}")`);
   switch (op.op) {
     case "add-guarantee":
-      return `Add a guarantee: ${op.statement}`;
+      return `Add a guarantee: ${op.statement}${unverifiable(op.observation)}`;
     case "amend-guarantee":
-      return `Change ${named(op.id, vision.guarantees.find((g) => g.id === op.id)?.statement)} to: ${op.statement}`;
+      return `Change ${named(op.id, vision.guarantees.find((g) => g.id === op.id)?.statement)} to: ${op.statement}${unverifiable(op.observation)}`;
     case "withdraw-guarantee":
       return `Withdraw ${named(op.id, vision.guarantees.find((g) => g.id === op.id)?.statement)}`;
     case "amend-assumption":

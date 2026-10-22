@@ -67,8 +67,9 @@ export async function stopProject(tx: DbHandle, projectId: ProjectId, endHalt: E
 }
 
 /**
- * Moves the project to 'accepted', inside the caller's transaction, which holds the
- * project row locked and records the passed sweep the projects_acceptance_guard trigger requires.
+ * Moves the project to 'accepted', inside the caller's transaction: Quality's acceptance, which holds
+ * the project row locked, has found the sweep covers the contract and records the passed sweep the
+ * projects_acceptance_guard trigger requires. Nothing else calls it.
  */
 export const acceptProject: AcceptProject = async (tx, projectId) => {
   const [moved] = await tx

@@ -305,7 +305,7 @@ describe("halt reports state the observed cause", () => {
 describe("each halt kind's report tells what a change sent meanwhile does", () => {
   const cause = { errorClass: "SomethingFailed", reason: "the cause as recorded", spend: null, work: null };
   const halts = [
-    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget"] as const).map(
+    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered"] as const).map(
       (kind) => ({ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }) as const,
     ),
     { subject: "project-blocked", episodeId: "e1", projectId, kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port", attempts: 2, cause: { source: "api", reason: "r" } }] } as const,

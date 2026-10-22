@@ -8,14 +8,15 @@ import { guaranteeSection, guaranteeTableOf, tableVerdicts } from "./guarantee-r
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
 import type { GuaranteeRecords, GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
-import type { Evidence } from "./vision-language/index.js";
 import { readVisionVersion } from "./vision.js";
+import type { VisionVersion } from "./vision.js";
 
 // The guarantee table every terminal message carries: every guarantee of the version in force,
-// exactly once, on the delivered and halt reports alike (client-stop.test.ts holds the stop report to it); a halt of Ashara's own machines, whose
-// sweep ran on no commit, holds every guarantee unjudged and says why, as does a message no sweep is
-// on record for; records that do not hold together judge nothing and say so; and no review's reading
-// of the checks ever makes a guarantee pass.
+// exactly once, on the delivered and halt reports alike (client-stop.test.ts holds the stop report to
+// it), each with Quality's verdict as given, which the table renders and never judges; a halt of
+// Ashara's own machines, whose sweep ran on no commit, holds every guarantee unjudged and says why,
+// as does a message no sweep is on record for; records that do not hold together judge nothing and
+// say so.
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000031", "test");
 const MAIN = "d".repeat(40);
@@ -49,23 +50,36 @@ const VISION = readVisionVersion({
 
 const IDS = GUARANTEES.map((g) => g.id);
 
-const passed = (cls: "witness" | "implementer-visible" | "review-only", id = "c1") => ({ checkId: id, outcome: "passed" as const, class: cls });
-const NONE: Evidence = { checks: [], reviewLowers: false };
+type Judged = Extract<GuaranteeRecords, { kind: "judged" }>["judged"];
+type Verdict = Judged["verdicts"][number];
+type Executed = "witness" | "implementer-visible";
 
-function recorded(byGuarantee: Readonly<Record<string, Evidence>>, mainCommit: string | null = MAIN): GuaranteeRecords {
-  return { kind: "judged", sweep: { id: "sweep-1", mainCommit }, vision: VISION, evidence: { kind: "recorded", byGuarantee: new Map(Object.entries(byGuarantee)) }, revisions: [] };
-}
-
-/** The evidence a sweep records: G1 passed on a check its implementer saw, G3 failed, G4 only a review's reading. */
-const SWEPT = recorded({
-  G1: { checks: [passed("implementer-visible")], reviewLowers: false },
-  G2: { checks: [passed("implementer-visible", "c2")], reviewLowers: false },
-  G3: { checks: [{ checkId: "c3", outcome: "failed", class: "implementer-visible" }], reviewLowers: false },
-  G4: { checks: [passed("review-only", "r4")], reviewLowers: false },
+const pass = (guaranteeId: string, cls: Executed = "implementer-visible"): Verdict => ({ guaranteeId, verdict: { kind: "pass", evidence: cls }, evidenceClass: cls });
+const fail = (guaranteeId: string, cls: Executed = "implementer-visible"): Verdict => ({ guaranteeId, verdict: { kind: "fail" }, evidenceClass: cls });
+const unjudged = (guaranteeId: string, reason: Extract<Verdict["verdict"], { kind: "unjudged" }>["reason"], cls: Verdict["evidenceClass"] = "none"): Verdict => ({
+  guaranteeId,
+  verdict: { kind: "unjudged", reason },
+  evidenceClass: cls,
 });
 
-/** An infrastructure halt's terminal sweep: no commit of main could be swept, every guarantee's evidence empty. */
-const UNSWEPT = recorded(Object.fromEntries(IDS.map((id) => [id, NONE])), null);
+function judgedBy(verdicts: readonly Verdict[], mainCommit: string | null = MAIN, vision: VisionVersion = VISION): GuaranteeRecords {
+  return { kind: "judged", sweep: { id: "sweep-1", mainCommit }, vision, judged: { evidence: "recorded", verdicts }, revisions: [] };
+}
+
+/** The verdicts on a sweep: G1 passed on a check its implementer saw, G2 stored data, G3 failed, G4 only a review's reading. */
+const SWEPT = judgedBy([pass("G1"), unjudged("G2", "stored-data-unjudged", "implementer-visible"), fail("G3"), unjudged("G4", "review-only", "review-only")]);
+
+/** A message no sweep is on record for: every guarantee unjudged for want of a sweep on a commit. */
+const NO_SWEEP: GuaranteeRecords = { kind: "judged", sweep: null, vision: VISION, judged: { evidence: "unrecorded", verdicts: IDS.map((id) => unjudged(id, "no-sweep-on-commit")) }, revisions: [] };
+
+/** An infrastructure halt's terminal sweep: no commit of main could be swept, every guarantee unjudged for it. */
+const UNSWEPT = judgedBy(IDS.map((id) => unjudged(id, "no-sweep-on-commit")), null);
+
+/** A persisted verdict, flat: its guarantee, verdict, reason when unjudged, basis and evidence class. */
+function flat(each: TableVerdicts["verdicts"][number]): [string, string, string | null, string, string] {
+  const { judged } = each;
+  return [judged.guaranteeId, judged.verdict.kind, judged.verdict.kind === "unjudged" ? judged.verdict.reason : null, each.basis, judged.evidenceClass];
+}
 
 /** The table paragraph's line for each guarantee, by id, as many times as it is there. */
 function tableIds(body: string): string[] {
@@ -87,18 +101,19 @@ describe("the guarantee table", () => {
   test("every guarantee of the version in force is in the table exactly once, in its order, and among the verdicts exactly once", () => {
     const table = guaranteeTableOf(SWEPT);
     expect(tableIds(guaranteeSection(table))).toEqual(IDS);
-    expect(tableVerdicts(table).verdicts.map((v) => v.guaranteeId)).toEqual(IDS);
+    expect(tableVerdicts(table).verdicts.map((v) => v.judged.guaranteeId)).toEqual(IDS);
   });
 
-  test("evidence that misses a guarantee of the version, or names one it does not hold, is refused, never read as no evidence", () => {
-    const { G4: _dropped, ...missing } = Object.fromEntries(IDS.map((id) => [id, NONE]));
-    expect(() => guaranteeTableOf(recorded(missing))).toThrow(/none for G4/);
-    expect(() => guaranteeTableOf(recorded({ ...Object.fromEntries(IDS.map((id) => [id, NONE])), G9: NONE }))).toThrow(/G9, which vision v2 does not hold/);
+  test("verdicts that miss a guarantee of the version, name one it does not hold, or come out of its order are refused, never rendered", () => {
+    const verdicts = IDS.map((id) => unjudged(id, "no-executed-evidence"));
+    expect(() => guaranteeTableOf(judgedBy(verdicts.slice(0, 3)))).toThrow(/name \[G1, G2, G3\], but it holds \[G1, G2, G3, G4\]/);
+    expect(() => guaranteeTableOf(judgedBy([...verdicts, unjudged("G9", "no-executed-evidence")]))).toThrow(/G9/);
+    expect(() => guaranteeTableOf(judgedBy([...verdicts].reverse()))).toThrow(/name \[G4, G3, G2, G1\]/);
   });
 
-  test("each verdict follows the evidence: pass on an executed check, fail on a failed one, stored data unjudged, a review's reading never a pass", () => {
+  test("each line renders Quality's verdict as given: pass, fail, stored data unjudged, a review's reading unjudged", () => {
     const table = guaranteeTableOf(SWEPT);
-    expect(tableVerdicts(table).verdicts.map((v) => [v.guaranteeId, v.verdict, v.reason, v.basis, v.evidenceClass])).toEqual([
+    expect(tableVerdicts(table).verdicts.map(flat)).toEqual([
       ["G1", "pass", null, "client-stated", "implementer-visible"],
       ["G2", "unjudged", "stored-data-unjudged", "assumed-unconfirmed", "implementer-visible"],
       ["G3", "fail", null, "client-stated", "implementer-visible"],
@@ -112,29 +127,8 @@ describe("the guarantee table", () => {
     expect(tableLine(body, "G2")).toContain("| basis: an assumption you have not confirmed, so it is at risk |");
   });
 
-  test("review-only evidence never renders pass, whatever its outcome, alone or beside a passing executed check a review lowers", () => {
-    for (const evidence of [
-      { checks: [passed("review-only")], reviewLowers: false },
-      { checks: [passed("review-only"), passed("review-only", "r2")], reviewLowers: false },
-      { checks: [passed("implementer-visible"), passed("review-only", "r2")], reviewLowers: true },
-      { checks: [passed("witness"), { checkId: "r2", outcome: "failed" as const, class: "review-only" as const }], reviewLowers: false },
-    ]) {
-      const table = guaranteeTableOf(recorded({ G1: evidence, G2: NONE, G3: NONE, G4: NONE }));
-      const [g1] = tableVerdicts(table).verdicts;
-      expect(g1?.verdict, JSON.stringify(evidence)).toBe("unjudged");
-      expect(tableLine(guaranteeSection(table), "G1")).not.toContain("| verdict: pass |");
-    }
-  });
-
   test("the punch list comes first: failures, then every unjudged guarantee with why", () => {
-    const table = guaranteeTableOf(
-      recorded({
-        G1: { checks: [passed("implementer-visible")], reviewLowers: false },
-        G2: NONE,
-        G3: { checks: [{ checkId: "c3", outcome: "failed", class: "witness" }], reviewLowers: false },
-        G4: { checks: [passed("witness")], reviewLowers: true },
-      }),
-    );
+    const table = guaranteeTableOf(judgedBy([pass("G1"), unjudged("G2", "stored-data-unjudged"), fail("G3", "witness"), unjudged("G4", "lowered-by-review", "witness")]));
     const [punch] = guaranteeSection(table).split("\n\n");
     expect(punch).toBe(
       [
@@ -155,7 +149,7 @@ describe("the guarantee table", () => {
     ]);
   });
 
-  test("a sweep recorded before evidence per guarantee judges every guarantee on none: a legacy one is not checkable as written", () => {
+  test("a sweep recorded before evidence per guarantee says so, and renders the verdicts judged on none", () => {
     const legacy = readVisionVersion({
       projectId,
       version: 1,
@@ -169,8 +163,9 @@ describe("the guarantee table", () => {
       guarantees: [],
       exclusions: [],
     });
-    const table = guaranteeTableOf({ kind: "judged", sweep: { id: "sweep-0", mainCommit: MAIN }, vision: legacy, evidence: { kind: "unrecorded" }, revisions: [] });
-    expect(tableVerdicts(table).verdicts.map((v) => [v.guaranteeId, v.verdict, v.reason])).toEqual([
+    const verdicts = [unjudged("S1", "not-checkable-as-written"), unjudged("A10", "not-checkable-as-written")];
+    const table = guaranteeTableOf({ kind: "judged", sweep: { id: "sweep-0", mainCommit: MAIN }, vision: legacy, judged: { evidence: "unrecorded", verdicts }, revisions: [] });
+    expect(tableVerdicts(table).verdicts.map((v) => flat(v).slice(0, 3))).toEqual([
       ["S1", "unjudged", "not-checkable-as-written"],
       ["A10", "unjudged", "not-checkable-as-written"],
     ]);
@@ -178,10 +173,10 @@ describe("the guarantee table", () => {
   });
 
   test("a message no sweep is on record for holds every guarantee of the version in force unjudged for want of a sweep on a commit, naming no sweep", () => {
-    const table = guaranteeTableOf({ kind: "judged", sweep: null, vision: VISION, evidence: { kind: "unrecorded" }, revisions: [] });
+    const table = guaranteeTableOf(NO_SWEEP);
     const verdicts = tableVerdicts(table);
     expect(verdicts.sweepId).toBeNull();
-    expect(verdicts.verdicts.map((v) => [v.guaranteeId, v.verdict, v.reason, v.evidenceClass])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
+    expect(verdicts.verdicts.map((v) => [flat(v)[0], flat(v)[1], flat(v)[2], flat(v)[4]])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
     const section = guaranteeSection(table);
     expect(section).toContain("No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v2) is unjudged.");
     expect(section).not.toContain("Which checks decided each guarantee is not on record");
@@ -310,7 +305,7 @@ describe("every terminal message carries the table", () => {
     expect(tableIds(body)).toEqual(IDS);
     for (const id of IDS) expect(tableLine(body, id)).toContain("| verdict: unjudged, no check could run on a commit of main for this report |");
     expect(body).toContain("No check could run on a commit of main for this report; why is in Ashara's record of that attempt, sweep sweep-1.");
-    expect(verdicts?.verdicts.map((v) => [v.guaranteeId, v.verdict, v.reason, v.evidenceClass])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
+    expect(verdicts?.verdicts.map((v) => [flat(v)[0], flat(v)[1], flat(v)[2], flat(v)[4]])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
   });
 
   test("the report of a first planning that stopped holds the table, every guarantee unjudged with no sweep, and posts those verdicts", async () => {
@@ -321,7 +316,7 @@ describe("every terminal message carries the table", () => {
         posted.push({ subject, body, verdicts });
         return "posted";
       },
-      guaranteesWithoutSweep: async () => guaranteeTableOf({ kind: "judged", sweep: null, vision: VISION, evidence: { kind: "unrecorded" }, revisions: [] }),
+      guaranteesWithoutSweep: async () => guaranteeTableOf(NO_SWEEP),
       dueRevisionReports: async () => [],
       postRevisionReport: async () => expect.unreachable("no revision is due"),
       blockProject: async () => expect.unreachable("nothing is blocked"),
@@ -333,12 +328,7 @@ describe("every terminal message carries the table", () => {
     expect(body).toContain("Ashara could not turn this project's vision into a plan after 3 attempts");
     expect(tableIds(body)).toEqual(IDS);
     expect(verdicts?.sweepId).toBeNull();
-    expect(verdicts?.verdicts.map((v) => [v.guaranteeId, v.verdict, v.reason])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit"]));
-  });
-
-  test("a halt that ran no sweep on a commit holds every guarantee unjudged even where evidence is unrecorded", () => {
-    const table = guaranteeTableOf({ kind: "judged", sweep: { id: "sweep-3", mainCommit: null }, vision: VISION, evidence: { kind: "unrecorded" }, revisions: [] });
-    expect(tableVerdicts(table).verdicts.map((v) => v.reason)).toEqual(IDS.map(() => "no-sweep-on-commit"));
+    expect(verdicts?.verdicts.map((v) => flat(v).slice(0, 3))).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit"]));
   });
 
   test("the delivered report holds the table after what was delivered, every guarantee once, and posts its verdicts", async () => {

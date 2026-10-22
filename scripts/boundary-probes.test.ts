@@ -4,7 +4,7 @@
  * The map below is the expected side: for every package it states the packages it may import, the
  * packages that admit only some importers, and the files a restricted edge is confined to. The test
  * copies packages/, the rules and the checker into a scratch tree, plants one violating import per
- * forbidden package pair, per restrict rule, for the named-only rule, for the stand-in rule
+ * forbidden package pair, per restrict rule, per entries rule, for the named-only rule, for the stand-in rule
  * (directly and through a helper) and for the bounds-table rule (a package's name and another
  * file), one manifest-name literal in production source for the
  * [stack-literals] denylist, a write and a raw SQL read of another context's table for the [tables]
@@ -42,6 +42,8 @@ interface PackageMap {
   readonly importers?: readonly string[];
   /** importedPkg -> the package-relative globs that alone may import it. */
   readonly restrict?: Readonly<Record<string, readonly string[]>>;
+  /** importedPkg -> the only entry points of it ("." or an exported subpath) this package may import. */
+  readonly entries?: Readonly<Record<string, readonly string[]>>;
 }
 
 const ACL = ["src/acl/*.ts"];
@@ -58,14 +60,17 @@ const MAP: Readonly<Record<string, PackageMap>> = {
   workplace: { allow: ["shared", "db", "finance", "execution-infra"] },
   engagement: {
     allow: ["shared", "db", "finance", "delivery", "quality"],
+    entries: { quality: ["published-reads", "published-verdicts", "stored-checks"] },
     restrict: {
       quality: [
+        "src/guarantee-report.ts",
         "src/repositories/block-report.ts",
         "src/repositories/client-stop.ts",
         "src/repositories/delivered-report.ts",
         "src/repositories/early-warning.ts",
         "src/repositories/guarantee-report.ts",
         "src/repositories/told-report.ts",
+        "src/vision-language/guarantee.ts",
       ],
       delivery: [
         "src/answers.ts",
@@ -145,10 +150,11 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
     checks: { allow: ["acl", "reviewer-record"], host: "src/task-checks.ts", target: "src/public-interface.ts" },
     "suite-review": { allow: ["checks", "acl"], host: "src/suite-review.ts", target: "src/repositories/suite-review.ts" },
     environment: { allow: [], host: "src/environment-check.ts", target: "src/environment-definition.ts" },
-    acceptance: { allow: ["verification", "reviewer-record", "acl"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
+    acceptance: { allow: ["verification", "reviewer-record", "guarantee-verdict", "acl"], host: "src/repositories/acceptance.ts", target: "src/repositories/acceptance.ts" },
+    "guarantee-verdict": { allow: ["acl"], host: "src/guarantee-verdict.ts", target: "src/guarantee-verdict.ts" },
     "reviewer-record": { allow: [], host: "src/repositories/reviewer-outcome.ts", target: "src/repositories/reviewer-outcome.ts" },
     acl: { allow: [], host: "src/acl/engagement-acl.ts", target: "src/acl/delivery-acl.ts" },
-    published: { allow: [], host: "src/published-reads.ts", target: "src/published-reads.ts" },
+    published: { allow: ["guarantee-verdict", "acl"], host: "src/published-reads.ts", target: "src/published-verdicts.ts" },
     [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
   },
   "execution-infra": {
@@ -338,7 +344,38 @@ const TABLE_PROBE_CONTENT = [
   "",
 ].join("\n");
 const SUBPATH_REFUSAL = (pkg: string): string => `only [${pkg}, server, integration] may import "${SCHEMA}/${pkg}" (subpath-importers.schema/${pkg})`;
+// Engagement renders Quality's guarantee verdicts and never reads or writes guarantee_verdicts itself.
+const VERDICT_PROBE_FILE = "packages/engagement/src/__boundary_probe__/guarantee-verdicts.ts";
+const VERDICT_PROBE_CONTENT = [
+  'import { sql } from "drizzle-orm";',
+  `import { guaranteeVerdicts } from "${SCHEMA}/quality";`,
+  "export const write = (tx: { insert(table: unknown): unknown }) => tx.insert(guaranteeVerdicts);",
+  "export const rawRead = sql`SELECT verdict FROM guarantee_verdicts`;",
+  "",
+].join("\n");
 const TABLE_PROBES = [
+  {
+    name: "engagement importing Quality's guarantee_verdicts table object is refused",
+    file: VERDICT_PROBE_FILE,
+    content: VERDICT_PROBE_CONTENT,
+    violation: `${VERDICT_PROBE_FILE}:2  engagement -> "${SCHEMA}/quality"  (${SUBPATH_REFUSAL("quality")})`,
+  },
+  {
+    // Planted by the probe above, on its third line: this entry adds nothing to the file.
+    name: "engagement writes no guarantee verdict: Quality owns guarantee_verdicts",
+    file: VERDICT_PROBE_FILE,
+    content: null,
+    violation: `${VERDICT_PROBE_FILE}:3  engagement -> "guarantee_verdicts"  (writes a table "quality" owns: tx.insert(guaranteeVerdicts); go through quality's exported write entry)`,
+  },
+  {
+    // Planted by the probe above, on its fourth line: this entry adds nothing to the file.
+    name: "engagement reads no guarantee verdict but through Quality's published verdicts",
+    file: VERDICT_PROBE_FILE,
+    content: null,
+    violation:
+      `${VERDICT_PROBE_FILE}:4  engagement -> "guarantee_verdicts"  (raw SQL reads a table "quality" owns: SELECT verdict FROM guarantee_verdicts; ` +
+      "read it through quality's typed read, or admit it in [tables] as an allowed edge with its reason)",
+  },
   {
     // Planted by the probe below, on its second line: this entry adds nothing to the file.
     name: "a context importing another context's table object for a drizzle write is refused",
@@ -536,19 +573,35 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
         });
       } else {
         const globs = rule.restrict?.[to];
+        const entries = rule.entries?.[to];
+        // An import a package's entries admit, so that only the rule probed can refuse it.
+        const entry = entries === undefined || entries.includes(".") ? to : `${to}/${entries[0]}`;
         if (globs !== undefined) {
           probes.push({
             name: `${from} -> ${to} is confined to ${globs.join(", ")}`,
             file,
-            content: `import "@ashara/${to}";\n`,
-            violation: reportLine(file, from, to, `only ${globs.join(", ")} may import package "${to}"`),
+            content: `import "@ashara/${entry}";\n`,
+            violation: reportLine(file, from, entry, `only ${globs.join(", ")} may import package "${to}"`),
           });
           const inside = globs[0].includes("*")
             ? `packages/${from}/${globs[0].replace("*", `__boundary_probe_${to}`)}`
             : `packages/${from}/${globs[0]}`;
-          probes.push({ name: `${from} -> ${to} is permitted in ${globs[0]}`, file: inside, content: `import "@ashara/${to}";\n`, violation: null });
+          probes.push({ name: `${from} -> ${to} is permitted in ${globs[0]}`, file: inside, content: `import "@ashara/${entry}";\n`, violation: null });
         } else {
-          probes.push({ name: `${from} -> ${to} is permitted`, file, content: `import "@ashara/${to}";\n`, violation: null });
+          probes.push({ name: `${from} -> ${to} is permitted`, file, content: `import "@ashara/${entry}";\n`, violation: null });
+        }
+        if (entries !== undefined && !entries.includes(".")) {
+          // Planted where the restrict rule admits the package, so only the entries rule refuses it.
+          const host = globs === undefined ? `${PROBE_DIR}/entry-${to}.ts` : (globs[1] ?? globs[0]).replace("*", `__boundary_probe_entry_${to}`);
+          const at = `packages/${from}/${host}`;
+          probes.push({
+            name: `${from} -> ${to} imports only the entries ${entries.join(", ")}`,
+            file: at,
+            content: `import "@ashara/${to}";
+`,
+            violation: reportLine(at, from, to, `only the entries ${entries.join(", ")} of package "${to}" may be imported`),
+            prepend: true,
+          });
         }
       }
     }

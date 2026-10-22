@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { verificationOf } from "@ashara/quality/published-verdicts";
 
 // The vocabulary of the contract a vision version records: the product's interface, the guarantees a
 // delivery is judged against, and the exclusions that keep silence from reading as a promise. Each
@@ -60,38 +61,66 @@ export const InterfaceKeySchema = z.string().regex(INTERFACE_ID);
 export const ExclusionKeySchema = z.string().regex(EXCLUSION_ID);
 
 /**
+ * Whether Ashara judges a guarantee with the checks it can run, as the contract recorded it when the
+ * guarantee was proposed and the client was told: "not-by-ashara" is reported as not verified, never
+ * as passed, and lies outside what acceptance requires judged. Quality decides it (verificationOf).
+ */
+const VerificationSchema = z.enum(["by-ashara", "not-by-ashara"]);
+
+export { verificationOf };
+
+/** What the client is told of a guarantee Ashara cannot verify with the checks it can run, when it is proposed and before work on it starts. */
+export const NOT_VERIFIABLE_BY_ASHARA =
+  "not verifiable by Ashara: no check Ashara can run today shows it holding, so Ashara's reports list it as not verified, never as passed, and the project is accepted without it";
+
+/** One guarantee: its key, what it promises, where it is observed, what would refute it and where it comes from. */
+const guaranteeShape = <O extends z.ZodType<Observation, unknown>, S extends z.ZodType<StoredSource>>(observation: O, source: S) =>
+  z.strictObject({
+    id: GuaranteeKeySchema,
+    statement: z.string().trim().min(1),
+    observable: z.strictObject({
+      interface: z.array(InterfaceKeySchema).min(1),
+      observation,
+    }),
+    refutedBy: z.array(z.string().trim().min(1)).min(1),
+    source,
+  });
+
+/**
  * The contract records, each record sourced by `source`: one entry of the product's public interface
  * in the terms the product's kind has, the guarantees, and what the tender leaves out, recorded so its
  * absence from the guarantees is never read as a promise.
  */
-const contractShape = <O extends z.ZodType<Observation, unknown>, S extends z.ZodType<StoredSource>>(observation: O, source: S) =>
+const contractShape = <G extends z.ZodType, S extends z.ZodType<StoredSource>>(guarantee: G, source: S) =>
   z.strictObject({
     interface: z.array(z.strictObject({ id: InterfaceKeySchema, text: z.string().trim().min(1), source })).min(1),
-    guarantees: z
-      .array(
-        z.strictObject({
-          id: GuaranteeKeySchema,
-          statement: z.string().trim().min(1),
-          observable: z.strictObject({
-            interface: z.array(InterfaceKeySchema).min(1),
-            observation,
-          }),
-          refutedBy: z.array(z.string().trim().min(1)).min(1),
-          source,
-        }),
-      )
-      .min(1),
+    guarantees: z.array(guarantee).min(1),
     exclusions: z.array(z.strictObject({ id: ExclusionKeySchema, text: z.string().trim().min(1), source })),
   });
 
-/** The contract records of a guarantees-form version, as stored: never an empty interface or guarantee list. */
-export const StoredContractSchema = contractShape(ObservationSchema, StoredSourceSchema);
+/**
+ * The contract records of a guarantees-form version, as stored: never an empty interface or guarantee
+ * list. A guarantee stored before the contract recorded whether Ashara can verify it carries no mark.
+ */
+export const StoredContractSchema = contractShape(
+  guaranteeShape(ObservationSchema, StoredSourceSchema).extend({ verification: VerificationSchema.optional() }),
+  StoredSourceSchema,
+);
 
-/** The contract records a version's writer hands over, before an undecided observation is recorded as stored-data. */
-export const WritableContractSchema = contractShape(ClassifiedObservationSchema, StoredSourceSchema);
+/**
+ * The contract records a version's writer hands over: an undecided observation is recorded as
+ * stored-data, and a guarantee that carries no mark yet is marked as Quality decides for its
+ * observation; one already marked keeps the mark the client was told.
+ */
+export const WritableContractSchema = contractShape(
+  guaranteeShape(ClassifiedObservationSchema, StoredSourceSchema)
+    .extend({ verification: VerificationSchema.optional() })
+    .transform((guarantee) => ({ ...guarantee, verification: guarantee.verification ?? verificationOf(guarantee.observable.observation) })),
+  StoredSourceSchema,
+);
 
-/** The contract records a reading of the tender drafts: sourced only from the tender and its assumptions. */
-export const ContractDraftSchema = contractShape(ClassifiedObservationSchema, ContractSourceSchema);
+/** The contract records a reading of the tender drafts: sourced only from the tender and its assumptions, and never marked by it. */
+export const ContractDraftSchema = contractShape(guaranteeShape(ClassifiedObservationSchema, ContractSourceSchema), ContractSourceSchema);
 
 export type ContractDraft = z.input<typeof ContractDraftSchema>;
 export type StoredContract = z.infer<typeof StoredContractSchema>;
@@ -125,6 +154,11 @@ export interface VisionGuarantee {
   readonly observation: Observation | "unclassified";
   /** What would show it broken; empty on a legacy guarantee, which is not checkable as written. */
   readonly refutedBy: readonly string[];
+  /**
+   * Whether the contract marks it verifiable by Ashara; "unmarked" on a guarantee recorded before the
+   * contract carried the mark, or a legacy one: it was never told as not verifiable, so it stays in coverage.
+   */
+  readonly verification: z.infer<typeof VerificationSchema> | "unmarked";
   readonly source: GuaranteeSource;
   readonly basis: GuaranteeBasis;
 }
@@ -171,6 +205,7 @@ export function visionGuaranteeOf(guarantee: Guarantee, assumptions: readonly As
     interface: guarantee.observable.interface,
     observation: guarantee.observable.observation,
     refutedBy: guarantee.refutedBy,
+    verification: guarantee.verification ?? "unmarked",
     source: guarantee.source,
     basis: basisOf(guarantee, assumptions),
   };

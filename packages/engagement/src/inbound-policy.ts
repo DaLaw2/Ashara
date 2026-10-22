@@ -81,6 +81,7 @@ const HALT_READING = {
   suite_review: READ,
   plan_repair: READ,
   infrastructure: READ,
+  acceptance_uncovered: READ,
 } as const satisfies Record<HaltKind, HaltReading>;
 
 const STOP: InboundDecision = { reading: "now", atCap: "now", resetOnHaltEnd: false, told: "stop" };

@@ -20,7 +20,9 @@ type Db = ReturnType<typeof createDb>;
 /**
  * Delivery's acceptance store over projects, work_items, acceptance_sweeps and guarantee_evidence. The
  * guarantees each sweep's evidence is recorded for are Engagement's, read by its vision reader in the
- * sweep's transaction.
+ * sweep's transaction; Quality judges each of them, and accepts a project only on a passed sweep that
+ * judges pass every one the contract does not mark not verifiable by Ashara, the coverage Delivery
+ * routes as an acceptance_uncovered halt when it is short.
  */
 export function createAcceptanceStore(db: Db): AcceptanceStore {
   return {

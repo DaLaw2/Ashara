@@ -163,6 +163,38 @@ describe("the acceptance sweep", () => {
     expect(logger.records.map((r) => [r.level, r.event, r.fields?.["projectId"]])).toEqual([["info", "delivery.acceptance-passed", projectId]]);
   });
 
+  test("a passed sweep Quality finds short of covering the contract halts the project once on its own kind, never as a fault, naming each guarantee, never acceptance", async () => {
+    const { deps, logger, defects, blocks } = harness({
+      kind: "ran",
+      passed: true,
+      mainCommit: MAIN,
+      environmentVersion: "v1",
+      checkedTasks: ["g1", "g2"],
+      uncheckedTasks: [],
+      publicInterface: { kind: "not-placeholder" },
+      checkOutcomes: OUTCOMES,
+      failedChecks: [],
+      details: "all passed",
+    });
+    deps.acceptance.recordAccepted = async () => ({
+      kind: "uncovered",
+      coverage: {
+        kind: "unjudged",
+        visionVersion: 2,
+        guarantees: [{ guaranteeId: "G2", verdict: { kind: "unjudged", reason: "no-executed-evidence" } }],
+        notVerifiable: ["G3"],
+      },
+    });
+    expect(await runAcceptanceSweeps(deps)).toBe(0);
+    expect(await runAcceptanceSweeps(deps)).toBe(0);
+    expect(defects).toEqual([]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.cause).toMatchObject({ category: "acceptance_uncovered", errorClass: "AcceptanceSweepUncovered" });
+    expect(blocks[0]?.cause.reason).toContain("vision v2 holds guarantees not judged pass: G2 (unjudged, no-executed-evidence)");
+    expect(blocks[0]?.cause.reason).toContain("outside coverage, marked not verifiable by Ashara: G3");
+    expect(logger.records.map((r) => [r.level, r.event])).toEqual([["warn", "delivery.project-halted"]]);
+  });
+
   test("a sweep that fails is a defect given up for a repair, never acceptance", async () => {
     const details = `1 failure(s) on main:\n- task g2's checks: check "delete" exited 1`;
     const { deps, accepted, defects, created, blocks } = harness({

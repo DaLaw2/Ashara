@@ -20,9 +20,9 @@ import {
   deliveredReportMisstatesStanding,
   deliveredReportMisstatesUnchecked,
   deliveredReportOmitsGoal,
-  deliveredReportPassesUnjudged,
   deliveredReportUnrecorded,
   haltReportFixedCause,
+  haltReportPassesUnjudged,
   haltReportSuppressed,
   planningStoppedReportSuppressed,
   questionMisstatesAssumption,
@@ -61,9 +61,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  *   (I9);
  * - delivered-report-misstates-standing: the delivered report's table says an assumption the
  *   client has not answered was stated by them (I9);
- * - delivered-report-passes-unjudged: on a check set stored with a cited item undecided
- *   (check-set-skips-item), the delivered report's table says that guarantee, which its evidence
- *   leaves unjudged, passed (I4; I6 names the undecided item);
+ * - halt-report-passes-unjudged: on a check set stored with a cited item undecided
+ *   (check-set-skips-item), whose passed sweep Quality's coverage refuses, the halt report's table
+ *   says that guarantee, which its evidence leaves unjudged, passed (I4);
  * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
  *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
@@ -74,8 +74,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  *   second reading asked, recorded as another family's agreement (I3); caught
  *   under the lazy intake persona;
  * - check-set-skips-item: a check set is stored with one item its check task cites decided by none
- *   of its checks, past Z0's rule, so that item is accepted with no stored check deciding it, though
- *   an acceptance line still cites it (I6);
+ *   of its checks, past Z0's rule, so that item reads unjudged at the sweep though an acceptance line
+ *   still cites it: Quality's coverage refuses the acceptance and the project halts naming it, and
+ *   I6 names it should a passed sweep or an acceptance rest on it;
  * - dispatch-refund-skipped: a dispatch refund gives nothing back, so an attempt stopped by a
  *   substrate fault before its agent worked stays charged (I10);
  * - step-fault-unrecorded: a contained subject's fault cannot be kept, so containEach throws it
@@ -114,7 +115,7 @@ export const MUTATIONS = [
   "delivered-report-unrecorded",
   "brief-misstates-standing",
   "delivered-report-misstates-standing",
-  "delivered-report-passes-unjudged",
+  "halt-report-passes-unjudged",
   "delivered-report-misquotes-interface",
   "question-misstates-assumption",
   "unconfirmed-claim-dropped",
@@ -160,7 +161,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
   "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
   "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
-  "delivered-report-passes-unjudged": { bypassed: [], queries: deliveredReportPassesUnjudged, code: null },
+  "halt-report-passes-unjudged": { bypassed: [], queries: haltReportPassesUnjudged, code: null },
   "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
   "unconfirmed-claim-dropped": { bypassed: [], queries: unconfirmedClaimDropped, code: null },

@@ -1,40 +1,24 @@
-import { verdictOf } from "./vision-language/index.js";
-import type { Evidence, EvidenceClass, FaultSet, UnjudgedReason, Verdict, VisionGuarantee } from "./vision-language/index.js";
+import type { EvidenceClass, GuaranteeVerdict, JudgedSweep, JudgedVerdicts, ReportVerdicts, UnjudgedReason, Verdict } from "@ashara/quality/published-verdicts";
+import type { VisionGuarantee } from "./vision-language/index.js";
 import type { Direction, RevisionOp } from "./vision-language/contract-op.js";
 import type { GuaranteeBasis } from "./vision-language/guarantee.js";
 import type { VisionVersion } from "./vision.js";
 
 // The guarantee table every terminal message carries: the delivered report, a halt's report and the
-// client's stop report. It is judged from one sweep's evidence on main, one verdict per guarantee of
-// the vision version that evidence was recorded against, each guarantee exactly once. A guarantee
-// passes only on a check deciding it that ran on that commit and passed; a review's reading of the
-// checks can only hold one back. A sweep that ran on no commit judges nothing, and neither does a
-// message no sweep is on record for (one told before its sweep could be recorded): every guarantee of
-// the version in force reads unjudged and names that, so a terminal message is never held back for
-// want of evidence. Records that do not hold together judge nothing either: the message says its
-// table could not be read rather than give any guarantee a verdict. The punch list comes first: every failure, then every unjudged
-// guarantee with why, then every pass that rests on an assumption the client has not confirmed. An
-// appendix follows when the contract was revised: each guarantee an earlier version held with what
-// replaced it, and each narrowing Ashara proposed that the client has not confirmed. A proposal is
-// never in force, so the table judges the guarantee it would narrow as the version in force states it.
-
-/**
- * The fault set that exercises stored data is deferred: no check of a stored-data guarantee can
- * show that stored data survives a fault, so such a guarantee reads unjudged.
- */
-const FAULT_SET: FaultSet = "deferred";
-
-/** The sweep a table is judged from: its record, and the commit of main it ran on, null when it ran on none. */
-interface JudgedSweep {
-  readonly id: string;
-  readonly mainCommit: string | null;
-}
-
-/**
- * Each guarantee's evidence on the sweep, by guarantee id: recorded, or not on record at all (a
- * sweep recorded before evidence per guarantee was), which judges every guarantee on no evidence.
- */
-type SweepEvidence = { readonly kind: "recorded"; readonly byGuarantee: ReadonlyMap<string, Evidence> } | { readonly kind: "unrecorded" };
+// client's stop report. It renders Quality's verdict on each guarantee of the vision version that
+// one sweep's evidence was recorded against, each guarantee exactly once, and judges none itself. A
+// guarantee passes only on a check deciding it that ran on that commit and passed; a review's
+// reading of the checks can only hold one back. A guarantee the contract marks not verifiable by
+// Ashara, as the client was told when it was proposed, is listed as not verified, never as passed. A sweep that ran on no commit judges nothing, and
+// neither does a message no sweep is on record for (one told before its sweep could be recorded):
+// every guarantee of the version in force reads unjudged and names that, so a terminal message is
+// never held back for want of evidence. Records that do not hold together judge nothing either: the
+// message says its table could not be read rather than give any guarantee a verdict. The punch list
+// comes first: every failure, then every unjudged guarantee with why, then every pass that rests on
+// an assumption the client has not confirmed. An appendix follows when the contract was revised:
+// each guarantee an earlier version held with what replaced it, and each narrowing Ashara proposed
+// that the client has not confirmed. A proposal is never in force, so the table renders the
+// guarantee it would narrow as the version in force states it.
 
 /**
  * One revision of the project's contract as its record holds it, with the version it revised: applied,
@@ -49,16 +33,16 @@ export type ContractRevision = {
 
 /**
  * What a table is read from: the sweep, null when none is on record for the message, and the vision
- * version in force at it with each guarantee's evidence and every revision record of the project's
- * contract; or no vision then. The appendix lists only what a revision record states, so the records
- * always carry the list read, never an absent one that would read as no revision.
+ * version in force at it with Quality's verdict on each of its guarantees and every revision record of
+ * the project's contract; or no vision then. The appendix lists only what a revision record states, so
+ * the records always carry the list read, never an absent one that would read as no revision.
  */
 export type GuaranteeRecords =
   | {
       readonly kind: "judged";
       readonly sweep: JudgedSweep | null;
       readonly vision: VisionVersion;
-      readonly evidence: SweepEvidence;
+      readonly judged: JudgedVerdicts;
       readonly revisions: readonly ContractRevision[];
     }
   | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null };
@@ -85,13 +69,8 @@ interface Appendix {
   readonly proposed: readonly ProposedOp[];
 }
 
-/** One guarantee's line of the table. */
-interface GuaranteeLine {
-  readonly guarantee: VisionGuarantee;
-  readonly verdict: Verdict;
-  /** The strongest class of evidence seen for it; a pass names the weakest it rests on instead. */
-  readonly evidenceClass: EvidenceClass;
-}
+/** One guarantee's line of the table: the guarantee, and Quality's verdict on it with the class of evidence it names. */
+type GuaranteeLine = Omit<GuaranteeVerdict, "guaranteeId"> & { readonly guarantee: VisionGuarantee };
 
 /**
  * The table a terminal message carries; or that no contract was on record at its sweep; or that its
@@ -102,46 +81,28 @@ export type GuaranteeTable =
       readonly kind: "table";
       readonly sweep: JudgedSweep | null;
       readonly vision: VisionVersion;
-      readonly evidence: SweepEvidence["kind"];
+      readonly evidence: JudgedVerdicts["evidence"];
       readonly lines: readonly GuaranteeLine[];
       readonly appendix: Appendix;
     }
   | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null }
   | { readonly kind: "unreadable"; readonly sweepId: string | null };
 
-/** One verdict as guarantee_verdicts stores it beside the message that carries it. */
-interface StoredGuaranteeVerdict {
-  readonly guaranteeId: string;
-  readonly visionVersion: number;
-  readonly verdict: Verdict["kind"];
-  readonly reason: UnjudgedReason | null;
-  readonly basis: GuaranteeBasis;
-  readonly evidenceClass: EvidenceClass;
-}
-
 /**
- * The verdicts a message's table persists, with the sweep they were judged on (null when none was on
- * record); none when no contract was on record or the table could not be read.
+ * The verdicts a message's table persists through Quality, with the sweep they were judged on (null
+ * when none was on record); none when no contract was on record or the table could not be read.
  */
-export interface TableVerdicts {
-  readonly sweepId: string | null;
-  readonly verdicts: readonly StoredGuaranteeVerdict[];
-}
+export type TableVerdicts = ReportVerdicts;
 
-/** A sweep's evidence names a guarantee the vision version it was recorded against does not hold, or misses one it holds. */
-export class GuaranteeEvidenceMismatch extends Error {
+/** Quality's verdicts do not name each guarantee of the version they were judged on exactly once, in its order. */
+export class GuaranteeVerdictsMismatch extends Error {
   constructor(
-    readonly sweepId: string,
     readonly visionVersion: number,
-    readonly guaranteeId: string,
-    readonly detail: "missing" | "unmatched",
+    readonly judged: readonly string[],
+    readonly held: readonly string[],
   ) {
-    super(
-      detail === "missing"
-        ? `sweep ${sweepId} records evidence for some guarantees of vision v${visionVersion} but none for ${guaranteeId}: its table cannot be judged`
-        : `sweep ${sweepId} records evidence for ${guaranteeId}, which vision v${visionVersion} does not hold: its table cannot be judged`,
-    );
-    this.name = "GuaranteeEvidenceMismatch";
+    super(`the verdicts judged on vision v${visionVersion} name [${judged.join(", ")}], but it holds [${held.join(", ")}]: its table cannot be rendered`);
+    this.name = "GuaranteeVerdictsMismatch";
   }
 }
 
@@ -156,22 +117,6 @@ export class ContractRevisionMismatch extends Error {
     super(`project ${projectId}: a revision ${detail} ${guaranteeId}, which vision v${visionVersion} does not hold: its appendix cannot be read`);
     this.name = "ContractRevisionMismatch";
   }
-}
-
-const NO_EVIDENCE: Evidence = { checks: [], reviewLowers: false };
-
-const CLASS_RANK: readonly EvidenceClass[] = ["witness", "implementer-visible", "review-only"];
-
-/** The strongest class among the checks seen for a guarantee: an executed one only when it ran. */
-function strongestClass(evidence: Evidence): EvidenceClass {
-  const seen = evidence.checks.filter((check) => check.class === "review-only" || check.outcome !== "not-run").map((check) => check.class);
-  return CLASS_RANK.find((cls) => seen.includes(cls)) ?? "none";
-}
-
-function lineOf(guarantee: VisionGuarantee, evidence: Evidence, onCommit: boolean): GuaranteeLine {
-  if (!onCommit) return { guarantee, verdict: { kind: "unjudged", reason: "no-sweep-on-commit" }, evidenceClass: "none" };
-  const verdict = verdictOf(guarantee, evidence, FAULT_SET);
-  return { guarantee, verdict, evidenceClass: verdict.kind === "pass" ? verdict.evidence : strongestClass(evidence) };
 }
 
 function heldGuarantee(version: VisionVersion, id: string, detail: string): VisionGuarantee {
@@ -234,31 +179,25 @@ function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[
 
 /**
  * The table of every guarantee of the version in force at the sweep, each exactly once, in the
- * version's order, with the appendix of the contract's revisions. Evidence that misses a guarantee or
- * names one the version does not hold is a record that does not hold together: it throws, never reads
- * as no evidence; so does a revision naming a guarantee its versions do not hold.
+ * version's order, with Quality's verdict on it and the appendix of the contract's revisions. Verdicts
+ * that do not name each guarantee once, in order, throw, never render as a guarantee unjudged; so does
+ * a revision naming a guarantee its versions do not hold.
  */
 export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
   if (records.kind === "no-contract") return records;
-  const { sweep, vision, evidence } = records;
+  const { sweep, vision, judged } = records;
   const appendix = appendixOf(vision, records.revisions);
-  const onCommit = sweep !== null && sweep.mainCommit !== null;
-  if (sweep === null || evidence.kind === "unrecorded") {
-    return { kind: "table", sweep, vision, evidence: "unrecorded", lines: vision.guarantees.map((guarantee) => lineOf(guarantee, NO_EVIDENCE, onCommit)), appendix };
-  }
-  const ids = new Set(vision.guarantees.map((guarantee) => guarantee.id));
-  for (const id of evidence.byGuarantee.keys()) {
-    if (!ids.has(id)) throw new GuaranteeEvidenceMismatch(sweep.id, vision.version, id, "unmatched");
-  }
-  const lines = vision.guarantees.map((guarantee) => {
-    const seen = evidence.byGuarantee.get(guarantee.id);
-    if (seen === undefined) throw new GuaranteeEvidenceMismatch(sweep.id, vision.version, guarantee.id, "missing");
-    return lineOf(guarantee, seen, onCommit);
+  const held = vision.guarantees.map((guarantee) => guarantee.id);
+  const named = judged.verdicts.map((each) => each.guaranteeId);
+  if (JSON.stringify(named) !== JSON.stringify(held)) throw new GuaranteeVerdictsMismatch(vision.version, named, held);
+  const lines = judged.verdicts.flatMap((each, i): GuaranteeLine[] => {
+    const guarantee = vision.guarantees[i];
+    return guarantee === undefined ? [] : [{ guarantee, verdict: each.verdict, evidenceClass: each.evidenceClass }];
   });
-  return { kind: "table", sweep, vision, evidence: evidence.kind, lines, appendix };
+  return { kind: "table", sweep, vision, evidence: judged.evidence, lines, appendix };
 }
 
-/** The verdicts the table persists beside its message. */
+/** The verdicts the table persists beside its message, through Quality. */
 export function tableVerdicts(table: GuaranteeTable): TableVerdicts {
   if (table.kind === "unreadable") return { sweepId: table.sweepId, verdicts: [] };
   const sweepId = table.sweep === null ? null : table.sweep.id;
@@ -266,18 +205,19 @@ export function tableVerdicts(table: GuaranteeTable): TableVerdicts {
   return {
     sweepId,
     verdicts: table.lines.map((line) => ({
-      guaranteeId: line.guarantee.id,
       visionVersion: table.vision.version,
-      verdict: line.verdict.kind,
-      reason: line.verdict.kind === "unjudged" ? line.verdict.reason : null,
       basis: line.guarantee.basis,
-      evidenceClass: line.evidenceClass,
+      judged: { guaranteeId: line.guarantee.id, verdict: line.verdict, evidenceClass: line.evidenceClass },
     })),
   };
 }
 
+/** Why a guarantee the contract marks not verifiable by Ashara is not verified, as the client was told when it was proposed. */
+const NOT_VERIFIABLE = "Ashara cannot verify it with the checks it can run, as your contract said when it was proposed";
+
 /** Why a guarantee is unjudged, in the client's words. */
 const UNJUDGED_BECAUSE: Readonly<Record<UnjudgedReason, string>> = {
+  "not-verifiable-by-ashara": NOT_VERIFIABLE,
   "no-executed-evidence": "no check deciding it ran and passed",
   "review-only": "only a review of the checks speaks for it, and a review never makes a guarantee pass",
   "stored-data-unjudged": "it is about stored data, and the faults that would show stored data surviving them are not run",
@@ -309,14 +249,19 @@ function verdictWords(verdict: Verdict): string {
     case "fail":
       return "fail, a check deciding it failed on this commit";
     case "unjudged":
-      return `unjudged, ${UNJUDGED_BECAUSE[verdict.reason]}`;
+      return unjudgedWords(verdict.reason);
   }
+}
+
+/** An unjudged verdict in the client's words: one outside what Ashara can verify reads not verified, never unjudged work. */
+function unjudgedWords(reason: UnjudgedReason): string {
+  return reason === "not-verifiable-by-ashara" ? `not verified, ${NOT_VERIFIABLE}` : `unjudged, ${UNJUDGED_BECAUSE[reason]}`;
 }
 
 /** The punch list: every failure, then every unjudged guarantee, then every pass at risk; or that it is empty. */
 function punchList(lines: readonly GuaranteeLine[]): string {
   const failed = lines.filter((line) => line.verdict.kind === "fail").map((line) => `- ${line.guarantee.id}: fail, a check deciding it failed on this commit`);
-  const unjudged = lines.flatMap((line) => (line.verdict.kind === "unjudged" ? [`- ${line.guarantee.id}: unjudged, ${UNJUDGED_BECAUSE[line.verdict.reason]}`] : []));
+  const unjudged = lines.flatMap((line) => (line.verdict.kind === "unjudged" ? [`- ${line.guarantee.id}: ${unjudgedWords(line.verdict.reason)}`] : []));
   const atRisk = lines
     .filter((line) => line.verdict.kind === "pass" && line.guarantee.basis === "assumed-unconfirmed")
     .map((line) => `- ${line.guarantee.id}: pass, but it rests on an assumption you have not confirmed`);

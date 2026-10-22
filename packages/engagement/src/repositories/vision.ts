@@ -4,7 +4,7 @@ import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { readVisionVersion, visionWritable } from "../vision.js";
 import type { Direction, RevisionOp, RevisionRecord } from "../vision-language/contract-op.js";
-import type { ContractDraft } from "../vision-language/guarantee.js";
+import type { ContractDraft, VisionGuarantee } from "../vision-language/guarantee.js";
 import type { VisionAppend } from "../vision.js";
 
 type VisionRow = typeof visionDocuments.$inferSelect;
@@ -179,16 +179,16 @@ export class VisionRepository {
 }
 
 /**
- * The guarantees of the project's current vision version, by key, as every reader of the vision
+ * The guarantees of the project's current vision version, in its order, as every reader of the vision
  * reads them (a version written before guarantees reads its legacy ones); none when the project has
  * no vision. Throws VisionUnreadable when the version does not read.
  */
 export async function guaranteesInForce(
   db: DbHandle,
   projectId: ProjectId,
-): Promise<{ readonly kind: "none" } | { readonly kind: "version"; readonly version: number; readonly guaranteeIds: readonly string[] }> {
+): Promise<{ readonly kind: "none" } | { readonly kind: "version"; readonly version: number; readonly guarantees: readonly VisionGuarantee[] }> {
   const current = await new VisionRepository(db).getCurrent(projectId);
   if (current === null) return { kind: "none" };
   const vision = readVisionVersion(current);
-  return { kind: "version", version: vision.version, guaranteeIds: vision.guarantees.map((guarantee) => guarantee.id) };
+  return { kind: "version", version: vision.version, guarantees: vision.guarantees };
 }

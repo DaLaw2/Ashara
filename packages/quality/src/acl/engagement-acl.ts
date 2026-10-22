@@ -4,10 +4,11 @@
  * The suite review judges checks against the vision items their tasks cite, as Engagement
  * publishes them, read here from its published-language entry alone. The acceptance sweep admits a
  * project by its engagement lifecycle and the client's messages awaiting the Liaison, and owes a
- * terminal sweep to each stop that stopped a project, read in Engagement's published predicates.
+ * terminal sweep to each stop that stopped a project, read in Engagement's published predicates. Each
+ * guarantee is judged on what Engagement's vision states of it.
  */
 
-export type { VisionSource } from "@ashara/engagement/vision";
+export type { Observation, VisionGuarantee, VisionSource } from "@ashara/engagement/vision";
 export { visionSourceCitation } from "@ashara/engagement/vision";
 export { noOpenAnswer, noOpenStop, projectActive, projectAtWork, stopsThatStopped } from "@ashara/engagement/predicates";
 // The acceptance moves Engagement's lifecycle in the sweep's own transaction, through the port Engagement declares.

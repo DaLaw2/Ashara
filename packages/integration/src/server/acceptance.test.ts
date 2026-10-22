@@ -12,6 +12,7 @@ import {
   DeliveredReports,
   ClientMessageRepository,
   createProjectWithTender,
+  guaranteesInForce,
   VisionRepository,
 } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
@@ -26,8 +27,9 @@ import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { projectState } from "../simulator/project-state.js";
 
 // A project whose goal tasks are
-// all done is swept on main once; a pass makes it Accepted with one delivered report rendered from
-// the records, a failure is a defect repaired like any task given up. The sweep itself (cells, main)
+// all done is swept on main once; a pass that judges every guarantee in force pass makes it Accepted
+// with one delivered report rendered from the records, a pass that leaves one unjudged accepts
+// nothing and halts it, a failure is a defect repaired like any task given up. The sweep itself (cells, main)
 // is Quality's and is stood in here; every record is real Postgres. Every row belongs to a
 // project this suite creates under a unique name; afterAll deletes them.
 
@@ -150,7 +152,9 @@ const CONTRACT_TENDER = "A key store. Clients put and get keys. A deleted key is
  * A planned project in the guarantees form whose one goal task, "Store keys", is Completed and
  * merged, with one stored check ("works") that decides G1 and G2.
  */
-async function contractProject(): Promise<{ readonly projectId: ProjectId; readonly goals: readonly string[]; readonly checksOfStore: string }> {
+async function contractProject(
+  storedData: "with-stored-data" | "without-stored-data" = "without-stored-data",
+): Promise<{ readonly projectId: ProjectId; readonly goals: readonly string[]; readonly checksOfStore: string }> {
   const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, CONTRACT_TENDER);
   ourProjects.add(project.id);
   const quote = (text: string) => ({ kind: "tender" as const, quote: text });
@@ -163,6 +167,9 @@ async function contractProject(): Promise<{ readonly projectId: ProjectId; reado
       guarantees: [
         { id: "G1", statement: "A get returns the value of the last put of its key.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a get after a put prints another value"], source: quote("Clients put and get keys.") },
         { id: "G2", statement: "A deleted key is gone.", observable: { interface: ["I1"], observation: "exit-status" }, refutedBy: ["a get after a delete exits 0"], source: quote("A deleted key is gone.") },
+        ...(storedData === "with-stored-data"
+          ? [{ id: "G3", statement: "A put survives a restart.", observable: { interface: ["I1"], observation: "stored-data" as const }, refutedBy: ["a get after a restart misses a put"], source: quote("A key store.") }]
+          : []),
       ],
       exclusions: [],
     },
@@ -262,6 +269,59 @@ function sweepDeps(
   };
 }
 
+/**
+ * Records the project accepted on a passed sweep as acceptance was recorded before it required every
+ * guarantee judged pass: a version written before guarantees holds none a check can judge, so Quality
+ * accepts none now, while the records of one accepted then are still reported on. The sweep row holds
+ * every checked task's stored check ("works", as storeCheck writes it) as run and passed, each
+ * guarantee in force its evidence as Quality records it (each such check deciding it by `decides`, and
+ * whether a review left it undecided), and the project moves to accepted, which the passed row admits.
+ */
+async function acceptedBeforeCoverage(
+  projectId: ProjectId,
+  ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] },
+  decides: readonly string[] = [],
+): Promise<void> {
+  const stored = ran.checked.length === 0 ? [] : z.array(z.object({ id: z.string(), taskId: z.string() })).parse(
+    (await db.execute(sql`SELECT id, task_id AS "taskId" FROM task_checks WHERE project_id = ${projectId} AND revision = 1 AND name = 'works'`)).rows,
+  ).sort((a, b) => ran.checked.indexOf(a.taskId) - ran.checked.indexOf(b.taskId)).filter((check) => ran.checked.includes(check.taskId));
+  const outcomes = stored.map((check) => ({ taskCheckId: check.id, taskId: check.taskId, name: "works", command: "sh checks/run.sh", outcome: "passed" }));
+  const inserted = await db.execute(sql`
+    INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, check_outcomes, purpose)
+    VALUES (${projectId}, ${MAIN}, 'v1', ${JSON.stringify(ran.checked)}::jsonb, ${JSON.stringify(ran.unchecked)}::jsonb, true, 'all suites passed',
+            ${JSON.stringify(outcomes)}::jsonb, 'acceptance')
+    RETURNING id`);
+  const [sweep] = z.array(z.object({ id: z.string() })).parse(inserted.rows);
+  if (sweep === undefined) throw new Error(`project ${projectId}: the sweep insert returned no row`);
+  const inForce = await guaranteesInForce(db, projectId);
+  if (inForce.kind === "version") {
+    const undecided = new Set(
+      z.array(z.object({ itemId: z.string() })).parse((await db.execute(sql`SELECT DISTINCT item_id AS "itemId" FROM undecided_items WHERE project_id = ${projectId}`)).rows).map((row) => row.itemId),
+    );
+    for (const { id } of inForce.guarantees) {
+      const checks = decides.includes(id) ? stored.map((check) => ({ taskCheckId: check.id, outcome: "passed", class: "implementer-visible" })) : [];
+      await db.execute(sql`
+        INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks, review_lowers)
+        VALUES (${projectId}, ${sweep.id}, ${inForce.version}, ${id}, ${MAIN}, ${JSON.stringify(checks)}::jsonb, ${undecided.has(id)})`);
+    }
+  }
+  await db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`);
+}
+
+/** The project's lifecycle and the kind and error class of its open halt, null when none is open. */
+async function haltOf(
+  projectId: ProjectId,
+): Promise<{ readonly lifecycle: string; readonly kind: string | null; readonly errorClass: string | null; readonly reason: string | null }> {
+  const result = await db.execute(sql`
+    SELECT p.lifecycle, b.kind, p.blocked_error_class AS "errorClass", p.blocked_reason AS "reason"
+    FROM projects p LEFT JOIN project_blocks b ON b.project_id = p.id AND b.ended_at IS NULL WHERE p.id = ${projectId}`);
+  const [row] = z
+    .array(z.object({ lifecycle: z.string(), kind: z.string().nullable(), errorClass: z.string().nullable(), reason: z.string().nullable() }))
+    .parse(result.rows);
+  if (row === undefined) throw new Error(`project ${projectId} has no row`);
+  return row;
+}
+
 async function statusOf(projectId: ProjectId): Promise<string> {
   const result = await db.execute(sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status ?? "(none)";
@@ -340,18 +400,15 @@ afterAll(async () => {
 });
 
 describe("acceptance on main", () => {
-  test("a passing sweep makes the project accepted, stops its dispatch, and posts one delivered report from the records", async () => {
+  test("a project accepted before every guarantee had to be judged posts one delivered report from the records", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
-    const projects = new ProjectHaltRepository(db);
     // The readiness row names the scaffold with its recorded merge, which Quality's sweep compares main's interface file with.
     expect(await acceptanceStore().readyForAcceptance()).toEqual([
       { projectId, workspacePath: `/tmp/${NAME_PREFIX}`, goalTaskIds: goals, scaffoldMerges: [{ taskId: scaffold, mergeCommit: SCAFFOLD_MERGE }] },
     ]);
 
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
-
+    await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
     expect(await statusOf(projectId)).toBe("accepted");
-    expect(await projects.listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
 
     interfaceReads.length = 0;
@@ -396,21 +453,99 @@ describe("acceptance on main", () => {
     );
   });
 
-  // A guarantee stands on the evidence the sweep recorded: one whose stored check ran on main and
-  // passed reads pass; one a suite review left undecided reads unjudged, though its check passed.
-  test("a guarantee whose check passed on main reads pass, one a review left undecided reads unjudged, and the verdicts are stored beside the report", async () => {
-    const { projectId, goals, checksOfStore } = await contractProject();
-    const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "G2", problem: "no check deletes a key", evidence: "sh checks/run.sh" });
-    const judged = await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Strong', 'Strong')
-      RETURNING id`);
-    const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
-    await db.execute(sql`
-      INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, judgement_id)
-      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, 'G2', 'A deleted key is gone.', ${judgement?.id})`);
+  test("a passing sweep that judges every guarantee pass makes the project accepted, stops its dispatch, and its report renders Quality's verdicts", async () => {
+    const { projectId, goals } = await contractProject();
+    const projects = new ProjectHaltRepository(db);
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2"]))).toBe(1);
+    expect(await statusOf(projectId)).toBe("accepted");
+    expect(await projects.listActiveIds()).not.toContain(projectId);
+    expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
 
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    const [body = ""] = await reportsOf(projectId);
+    expect(tableIds(body)).toEqual(["G1", "G2"]);
+    expect(body).toContain("The punch list is empty");
+    expect(await verdictsOf(projectId)).toEqual([
+      { guaranteeId: "G1", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+      { guaranteeId: "G2", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+    ]);
+  });
+
+  // A guarantee Ashara cannot verify with the checks it runs (stored data, while no fault set runs) is
+  // marked so in the contract when it is written, outside coverage: the project is accepted on the
+  // rest, and the report lists it as not verified, never as passed.
+  test("a guarantee the contract marks not verifiable by Ashara is outside coverage and reported not verified", async () => {
+    const { projectId, goals } = await contractProject("with-stored-data");
+    expect(await guaranteesInForce(db, projectId)).toMatchObject({
+      kind: "version",
+      guarantees: [{ id: "G1", verification: "by-ashara" }, { id: "G2", verification: "by-ashara" }, { id: "G3", verification: "not-by-ashara" }],
+    });
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2", "G3"]))).toBe(1);
+    expect(await statusOf(projectId)).toBe("accepted");
+
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    const [body = ""] = await reportsOf(projectId);
+    expect(tableIds(body)).toEqual(["G1", "G2", "G3"]);
+    expect(body).toContain("- G3: A put survives a restart. | verdict: not verified, Ashara cannot verify it");
+    expect(body).not.toMatch(/G3[^\n]*verdict: pass/);
+    expect(await verdictsOf(projectId)).toEqual([
+      { guaranteeId: "G1", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+      { guaranteeId: "G2", verdict: "pass", reason: null, basis: "client-stated", evidenceClass: "implementer-visible" },
+      { guaranteeId: "G3", verdict: "unjudged", reason: "not-verifiable-by-ashara", basis: "client-stated", evidenceClass: "implementer-visible" },
+    ]);
+  });
+
+  // Acceptance is a passed sweep and every guarantee in force judged: a sweep whose every check passed
+  // but on which a guarantee has no executed evidence accepts nothing, records no passed sweep, and
+  // halts the project, still active, on its own kind (never as Ashara's fault), with the guarantee
+  // and why named in its recorded cause.
+  test("a sweep whose every check passed but leaves a guarantee with no executed evidence does not accept the project", async () => {
+    const { projectId, goals } = await contractProject();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1"]))).toBe(0);
+    const halt = await haltOf(projectId);
+    expect(halt).toEqual({
+      lifecycle: "active",
+      kind: "acceptance_uncovered",
+      errorClass: "AcceptanceSweepUncovered",
+      reason: expect.stringContaining("G2 (unjudged, no-executed-evidence)"),
+    });
+    expect(await db.execute(sql`SELECT blocked_category FROM projects WHERE id = ${projectId}`)).toMatchObject({ rows: [{ blocked_category: "acceptance_uncovered" }] });
+    expect(halt.reason).not.toContain("G1 (");
+    const passed = await db.execute(sql`SELECT count(*)::int AS n FROM acceptance_sweeps WHERE project_id = ${projectId} AND passed`);
+    expect(z.array(z.object({ n: z.number() })).parse(passed.rows)[0]?.n).toBe(0);
+    await expect(db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();
+    expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
+  });
+
+  // A guarantee stands on the evidence the sweep recorded: one a suite review left undecided reads
+  // unjudged though its check passed, so the sweep does not cover the contract and accepts nothing.
+  test("a guarantee a review left undecided is unjudged though its check passed on main, and the project is not accepted", async () => {
+    /** A contract project whose check decides G1 and G2, with G2 left undecided by a suite review. */
+    const reviewed = async () => {
+      const project = await contractProject();
+      const finding = JSON.stringify({ checkTasks: [project.checksOfStore], kind: "undecided-item", item: "G2", problem: "no check deletes a key", evidence: "sh checks/run.sh" });
+      const judged = await db.execute(sql`
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_strength, passed_over, judge_tier, judged_tier, tier_relation, first_tier, second_tier)
+        VALUES (${project.projectId}, ${project.checksOfStore}, ${project.checksOfStore}, NULL, 'advisory', 'second-opinion-disagreed', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 'same-model', '[]'::jsonb, 'Strong', 'Strong', 'equal', 'Strong', 'Strong')
+        RETURNING id`);
+      const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
+      await db.execute(sql`
+        INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, judgement_id)
+        VALUES (${project.projectId}, ${project.checksOfStore}, ${project.checksOfStore}, 'G2', 'A deleted key is gone.', ${judgement?.id})`);
+      return project;
+    };
+    const swept = await reviewed();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: swept.goals, unchecked: [] }, [], ["G1", "G2"]))).toBe(0);
+    expect(await haltOf(swept.projectId)).toEqual({
+      lifecycle: "active",
+      kind: "acceptance_uncovered",
+      errorClass: "AcceptanceSweepUncovered",
+      reason: expect.stringContaining("G2 (unjudged, lowered-by-review)"),
+    });
+
+    // The records of a project accepted before every guarantee had to be judged are still reported on, as Quality judges them.
+    const { projectId, goals } = await reviewed();
+    await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [] }, ["G1", "G2"]);
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     const [body = ""] = await reportsOf(projectId);
     expect(tableIds(body)).toEqual(["G1", "G2"]);
@@ -449,7 +584,7 @@ describe("acceptance on main", () => {
   // A goal task a plan revision replaced while it was open is set aside, never given up.
   test("the delivered report's given-up tasks are the goal tasks given up, never one a plan revision set aside", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
     const abandoned = async (title: string, reason: unknown): Promise<void> => {
       await db.execute(sql`
         INSERT INTO work_items (id, level, status, title, task_spec, blocked_reason, project_id)
@@ -493,7 +628,7 @@ describe("acceptance on main", () => {
 
     for (const goal of goals) await setSpec(goal, "origin", "decomposition");
     expect(await ready()).toBe(true);
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
 
     const givenUp = { source: "failure_given_up", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 };
     await insert("Task", "Abandoned", "List keys", { origin: "decomposition" }, givenUp);
@@ -510,12 +645,12 @@ describe("acceptance on main", () => {
   test("a sweep recorded without what it ran states no way of running the product as verified, and one whose record does not parse is refused", async () => {
     const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     const unrecorded = await deliveredProject();
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: unrecorded.goals, unchecked: [unrecorded.scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(unrecorded.projectId, { checked: unrecorded.goals, unchecked: [unrecorded.scaffold] });
     await db.execute(sql`UPDATE acceptance_sweeps SET check_outcomes = NULL WHERE project_id = ${unrecorded.projectId}`);
     expect(await due(unrecorded.projectId)).toMatchObject({ kind: "due", executed: { kind: "unrecorded" } });
 
     const malformed = await deliveredProject();
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: malformed.goals, unchecked: [malformed.scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(malformed.projectId, { checked: malformed.goals, unchecked: [malformed.scaffold] });
     await db.execute(sql`UPDATE acceptance_sweeps SET check_outcomes = '[{"taskId": "x"}]'::jsonb WHERE project_id = ${malformed.projectId}`);
     expect(await due(malformed.projectId)).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "SweepOutcomeUnreadable", column: "check_outcomes" }) });
 
@@ -530,7 +665,7 @@ describe("acceptance on main", () => {
     const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     const accepted = async (): Promise<Delivered> => {
       const delivered = await deliveredProject();
-      await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: delivered.goals, unchecked: [delivered.scaffold] }));
+      await acceptedBeforeCoverage(delivered.projectId, { checked: delivered.goals, unchecked: [delivered.scaffold] });
       return delivered;
     };
     const whole = await accepted();
@@ -557,7 +692,7 @@ describe("acceptance on main", () => {
 
   test("only an unreachable database is retried uncounted: an error nothing names counts toward the notice sent in the report's place", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
     const unreachable = createDb(Object.assign(new URL(DATABASE_URL), { port: "1" }).toString());
     try {
       const listedThenFailing = (failing: Database): Database => {
@@ -611,7 +746,7 @@ describe("acceptance on main", () => {
     expect(await clientAnswers().runPending()).toEqual([
       { kind: "stated", answerId, projectId, assumptionKey: "A3", verdict: "confirms", visionVersion: 2, replanRequested: false },
     ]);
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
 
     expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });
     const [body] = await reportsOf(projectId);
@@ -625,7 +760,7 @@ describe("acceptance on main", () => {
     expect(await clientAnswers().runPending()).toEqual([
       { kind: "stated", answerId: tornAnswer, projectId: torn.projectId, assumptionKey: "A3", verdict: "confirms", visionVersion: 2, replanRequested: false },
     ]);
-    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: torn.goals, unchecked: [torn.scaffold] }))).toBe(1);
+    await acceptedBeforeCoverage(torn.projectId, { checked: torn.goals, unchecked: [torn.scaffold] });
     await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${torn.projectId} AND version = 2`);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -642,7 +777,7 @@ describe("acceptance on main", () => {
   test("one project's report failing (no workspace on record, git unable to read main) never stops another's: each failure is recorded and retried", async () => {
     const accepted = async (): Promise<ProjectId> => {
       const { projectId, goals, scaffold } = await deliveredProject();
-      expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+      await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
       return projectId;
     };
     const healthy = await accepted();
@@ -711,7 +846,7 @@ describe("acceptance on main", () => {
   test("only a passed sweep makes a project accepted, and only the client's stop ends it, with the merges named", async () => {
     const { projectId } = await deliveredProject();
     await expect(db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();
-    await runAcceptanceSweeps(sweepDeps(true, "all suites passed"));
+    await acceptedBeforeCoverage(projectId);
     await expect(db.execute(sql`UPDATE projects SET lifecycle = 'active' WHERE id = ${projectId}`)).rejects.toThrow();
     expect(await statusOf(projectId)).toBe("accepted");
 

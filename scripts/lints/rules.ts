@@ -3,6 +3,9 @@
  * naming no declared package or module is a parse error, never a gate that passes. Rule shapes:
  *   allow            = [...]        which packages this package may import
  *   restrict.<pkg>   = [glob, ...]  which files inside this package may import <pkg>
+ *   entries.<pkg>    = [sub, ...]   the only entry points of <pkg> this package may import, each a
+ *                                   subpath its package.json exports ("." names the package root);
+ *                                   a relative import into <pkg> names none, so it is refused too
  *   importers        = [...]        which packages may import this package; checked even
  *                                   against a wildcard `allow`, so `[]` means none may
  *   named-only       = [glob, ...]  files inside this package that may import from another
@@ -44,6 +47,8 @@ export interface PackageRule {
   readonly allow: readonly string[];
   /** importedPkg -> file globs (relative to the package root) permitted to import it. */
   readonly restrict: ReadonlyMap<string, readonly string[]>;
+  /** importedPkg -> the only entry points of it ("." or an exported subpath) this package may import. */
+  readonly entries: ReadonlyMap<string, readonly string[]>;
   /** Packages that may import this one; null when the section states none. */
   readonly importers: readonly string[] | null;
   /** File globs whose cross-package imports are held to `names`; empty when the section states none. */
@@ -85,6 +90,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     {
       allow: string[];
       restrict: Map<string, string[]>;
+      entries: Map<string, string[]>;
       importers: string[] | null;
       namedOnly: string[];
       names: Map<string, string[]>;
@@ -116,7 +122,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), subpathImporters: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), entries: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), subpathImporters: new Map() });
       }
       continue;
     }
@@ -154,6 +160,16 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
         );
       }
       rule.restrict.set(restrictMatch[1], globs);
+      continue;
+    }
+
+    const entriesMatch = /^entries\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (entriesMatch) {
+      const entries = parseList(entriesMatch[2]);
+      if (entries.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "entries list is empty (use `allow` to forbid the package outright)");
+      }
+      rule.entries.set(entriesMatch[1], entries);
       continue;
     }
 
@@ -263,6 +279,11 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
         );
       }
     }
+    for (const entered of rule.entries.keys()) {
+      if (!isWildcard && !rule.allow.includes(entered)) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] entries.${entered}`, `names entries of "${entered}", which is not in its allow list`);
+      }
+    }
     for (const named of rule.names.keys()) {
       if (rule.namedOnly.length === 0) {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, "names a package's symbols, but the section has no named-only files");
@@ -304,6 +325,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     result.set(pkg, {
       allow: rule.allow,
       restrict: rule.restrict,
+      entries: rule.entries,
       importers: rule.importers,
       namedOnly: rule.namedOnly,
       names: rule.names,

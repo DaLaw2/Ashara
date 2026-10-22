@@ -1,5 +1,6 @@
 /**
- * Each package's subpath-importers held to its package.json exports. A subpath whose entry declares
+ * Each package's subpath-importers held to its package.json exports, and each `entries.<pkg>` item to
+ * an entry point <pkg>'s package.json exports. A subpath whose entry declares
  * tables (`pgTable`) is held to the [tables] owner map: it may list only the package that owns each
  * table it declares, plus a package that composes every context (`allow = ["*"]`) or that none may
  * import (`importers = []`); and the root entry, with every file it re-exports from by a relative
@@ -85,6 +86,31 @@ function subpathEntryViolations(root: string, packagesDir: string, rules: Bounda
   return violations;
 }
 
+/** Every `entries.<pkg>` item that names no entry point `pkg`'s package.json exports: a rule that holds nothing. */
+function unexportedEntries(packagesDir: string, rules: BoundaryRules, rulesRelative: string): Violation[] {
+  const found: Violation[] = [];
+  for (const [pkgName, rule] of rules) {
+    for (const [imported, entries] of rule.entries) {
+      const exported = exportedEntries(path.join(packagesDir, imported, "package.json"));
+      for (const entry of entries) {
+        if (exported.includes(entry)) continue;
+        found.push({ file: rulesRelative, line: 0, fromPkg: pkgName, specifier: `entries.${imported}`, reason: `"${entry}" is no entry point package "${imported}" exports` });
+      }
+    }
+  }
+  return found;
+}
+
+/** The entry points a package.json's exports name: "." and each "./<sub>" as "<sub>"; none when there is no package.json. */
+function exportedEntries(manifest: string): string[] {
+  if (!fs.existsSync(manifest)) return [];
+  const { exports } = parseJson(PackageExportsSchema, fs.readFileSync(manifest, "utf-8"), manifest);
+  return Object.keys(exports).map((key) => (key === "." ? "." : key.replace(/^\.\//, "")));
+}
+
 export function run(context: LintContext): Violation[] {
-  return subpathEntryViolations(context.root, context.packagesDir, context.rules, context.toml, context.rulesRelative);
+  return [
+    ...subpathEntryViolations(context.root, context.packagesDir, context.rules, context.toml, context.rulesRelative),
+    ...unexportedEntries(context.packagesDir, context.rules, context.rulesRelative),
+  ];
 }

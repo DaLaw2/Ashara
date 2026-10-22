@@ -1,28 +1,22 @@
 import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, guaranteeVerdicts, visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
+import { clientMessages, visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
-import { recordedSweep, sweepEvidence } from "@ashara/quality/published-reads";
-import type { Evidence } from "../vision-language/index.js";
-import { CheckEvidenceSchema } from "../vision-language/index.js";
+import { recordedSweep } from "@ashara/quality/published-reads";
+import { GuaranteeEvidenceMismatch, GuaranteeEvidenceUnreadable, guaranteeVerdictsOf, recordReportVerdicts, reportVerdicts, sweepEvidenceVersion } from "@ashara/quality/published-verdicts";
 import { StoredRevisionOpsSchema } from "../vision-language/contract-op.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { VisionVersion } from "../vision.js";
-import { ContractRevisionMismatch, GuaranteeEvidenceMismatch, guaranteeTableOf } from "../guarantee-report.js";
+import { ContractRevisionMismatch, GuaranteeVerdictsMismatch, guaranteeTableOf } from "../guarantee-report.js";
 import type { ContractRevision, GuaranteeRecords, GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 
-// What a terminal message's guarantee table is read from: its sweep, the evidence that sweep
-// recorded per guarantee and the vision version the evidence was recorded against, or, for a message
-// no sweep is on record for, the version in force when it is told; every revision record of the
-// project's contract, for its appendix; and the verdicts it persists beside the message, in the
-// transaction that posts it.
-
-/** guarantee_evidence.checks as stored: each stored check deciding the guarantee, its outcome and class. */
-const StoredChecksSchema = z.array(
-  z.strictObject({ taskCheckId: z.string().min(1), outcome: CheckEvidenceSchema.shape.outcome, class: CheckEvidenceSchema.shape.class }),
-);
+// What a terminal message's guarantee table is read from: its sweep, the vision version that sweep's
+// evidence was recorded against and Quality's verdict on each of its guarantees, or, for a message no
+// sweep is on record for, the version in force when it is told; every revision record of the
+// project's contract, for its appendix. The verdicts the message carries are persisted through
+// Quality, in the transaction that posts it.
 
 /** A sweep's or a project's records do not hold together as the source of a guarantee table; a retry reads the same. */
 class GuaranteeRecordsUnreadable extends Error {
@@ -74,43 +68,32 @@ async function revisionsOf(db: DbHandle, projectId: string): Promise<ContractRev
 /**
  * The records a sweep's table is judged from. The vision version is the one its evidence names; a
  * sweep with no evidence row (recorded before evidence per guarantee was) reads the version current
- * when it ran, its evidence unrecorded. No version by then is no contract on record.
+ * when it ran, its evidence unrecorded. No version by then is no contract on record. Each guarantee's
+ * verdict is Quality's, judged on that version.
  */
 async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise<GuaranteeRecords> {
   const sweep = await recordedSweep(db, sweepId);
   if (sweep === null) throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, "no acceptance_sweeps row has that id");
   const judged = { id: sweep.id, mainCommit: sweep.mainCommit };
-  const rows = await sweepEvidence(db, sweepId);
-  const versions = [...new Set(rows.map((row) => row.visionVersion))];
-  if (versions.length > 1) throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, `its evidence names vision versions ${versions.join(", ")}, not one`);
-  const [version] = versions;
+  const version = await sweepEvidenceVersion(db, sweepId);
   const [stored] = await db
     .select()
     .from(visionDocuments)
     .where(
-      version === undefined
+      version === null
         ? and(eq(visionDocuments.projectId, sweep.projectId), lte(visionDocuments.createdAt, sweep.createdAt))
         : and(eq(visionDocuments.projectId, sweep.projectId), eq(visionDocuments.version, version)),
     )
     .orderBy(desc(visionDocuments.version))
     .limit(1);
   if (stored === undefined) {
-    if (version === undefined) return { kind: "no-contract", sweep: judged };
+    if (version === null) return { kind: "no-contract", sweep: judged };
     throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, `its evidence names vision v${version}, which the project does not hold`);
   }
   const vision = readVisionVersion(stored);
   const revisions = await revisionsOf(db, sweep.projectId);
-  if (version === undefined) return { kind: "judged", sweep: judged, vision, evidence: { kind: "unrecorded" }, revisions };
-  const byGuarantee = new Map<string, Evidence>();
-  for (const row of rows) {
-    const checks = StoredChecksSchema.safeParse(row.checks);
-    if (!checks.success) throw new GuaranteeRecordsUnreadable(`sweep ${sweepId}`, `the evidence of ${row.guaranteeId} does not parse: ${z.prettifyError(checks.error)}`);
-    byGuarantee.set(row.guaranteeId, {
-      checks: checks.data.map((check) => ({ checkId: check.taskCheckId, outcome: check.outcome, class: check.class })),
-      reviewLowers: row.reviewLowers,
-    });
-  }
-  return { kind: "judged", sweep: judged, vision, evidence: { kind: "recorded", byGuarantee }, revisions };
+  const verdicts = await guaranteeVerdictsOf(db, { kind: "sweep", sweep: judged }, vision.version, vision.guarantees);
+  return { kind: "judged", sweep: judged, vision, judged: verdicts, revisions };
 }
 
 /**
@@ -134,17 +117,7 @@ export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: str
     .orderBy(desc(clientMessages.createdAt), desc(clientMessages.id))
     .limit(1);
   if (last === undefined) return { kind: "no-terminal-report" } as const;
-  const rows = await db
-    .select({
-      reportId: guaranteeVerdicts.reportId,
-      guaranteeId: guaranteeVerdicts.guaranteeId,
-      verdict: guaranteeVerdicts.verdict,
-      reason: guaranteeVerdicts.reason,
-      evidenceClass: guaranteeVerdicts.evidenceClass,
-    })
-    .from(guaranteeVerdicts)
-    .where(eq(guaranteeVerdicts.reportId, last.reportId))
-    .orderBy(asc(guaranteeVerdicts.guaranteeId));
+  const rows = await reportVerdicts(db, last.reportId);
   if (rows.length === 0) return { kind: "no-verdicts", reportId: last.reportId } as const;
   return { kind: "verdicts", reportId: last.reportId, rows } as const;
 }
@@ -156,7 +129,9 @@ export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: str
 async function recordsWithoutSweep(db: DbHandle, projectId: string): Promise<GuaranteeRecords> {
   const [stored] = await db.select().from(visionDocuments).where(eq(visionDocuments.projectId, projectId)).orderBy(desc(visionDocuments.version)).limit(1);
   if (stored === undefined) return { kind: "no-contract", sweep: null };
-  return { kind: "judged", sweep: null, vision: readVisionVersion(stored), evidence: { kind: "unrecorded" }, revisions: await revisionsOf(db, projectId) };
+  const vision = readVisionVersion(stored);
+  const judged = await guaranteeVerdictsOf(db, { kind: "no-sweep" }, vision.version, vision.guarantees);
+  return { kind: "judged", sweep: null, vision, judged, revisions: await revisionsOf(db, projectId) };
 }
 
 /** Where a message's table is read from: its sweep, or, with none on record for it, its project's vision in force. */
@@ -172,7 +147,13 @@ export async function readGuaranteeTable(db: DbHandle, source: TableSource): Pro
   try {
     return guaranteeTableOf(source.kind === "sweep" ? await guaranteeRecordsOf(db, source.sweepId) : await recordsWithoutSweep(db, source.projectId));
   } catch (err) {
-    const unreadable = err instanceof GuaranteeRecordsUnreadable || err instanceof GuaranteeEvidenceMismatch || err instanceof ContractRevisionMismatch || err instanceof VisionUnreadable;
+    const unreadable =
+      err instanceof GuaranteeRecordsUnreadable ||
+      err instanceof GuaranteeEvidenceUnreadable ||
+      err instanceof GuaranteeEvidenceMismatch ||
+      err instanceof GuaranteeVerdictsMismatch ||
+      err instanceof ContractRevisionMismatch ||
+      err instanceof VisionUnreadable;
     if (!unreadable) throw err;
     const sweepId = source.kind === "sweep" ? source.sweepId : null;
     console.warn(`[guarantee-report] ${source.kind === "sweep" ? `sweep ${source.sweepId}` : `project ${source.projectId}`}: its guarantee table cannot be read, so its message judges no guarantee: ${describeErrorChain(err)}`);
@@ -180,20 +161,7 @@ export async function readGuaranteeTable(db: DbHandle, source: TableSource): Pro
   }
 }
 
-/** Persists a message's verdicts beside it, inside the transaction that posts it. */
+/** Persists a message's verdicts beside it through Quality, inside the transaction that posts it. */
 export async function insertGuaranteeVerdicts(tx: DbHandle, projectId: string, reportId: string, table: TableVerdicts): Promise<void> {
-  if (table.verdicts.length === 0) return;
-  await tx.insert(guaranteeVerdicts).values(
-    table.verdicts.map((verdict) => ({
-      projectId,
-      reportId,
-      sweepId: table.sweepId,
-      visionVersion: verdict.visionVersion,
-      guaranteeId: verdict.guaranteeId,
-      verdict: verdict.verdict,
-      reason: verdict.reason,
-      basis: verdict.basis,
-      evidenceClass: verdict.evidenceClass,
-    })),
-  );
+  await recordReportVerdicts(tx, projectId, reportId, table);
 }

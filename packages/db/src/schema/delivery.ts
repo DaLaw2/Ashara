@@ -108,6 +108,7 @@ export const PROJECT_BLOCK_KINDS = [
   "model_failed",
   "provider_failed",
   "work_budget",
+  "acceptance_uncovered",
 ] as const;
 
 export const projectBlocks = pgTable("project_blocks", {
