@@ -5,7 +5,7 @@ import { PROJECT_LIFECYCLES, ProjectRepository, insertedRow, projects, qualified
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { HALT_KINDS, openHaltKind, projectHalted, type HaltKind } from "@ashara/delivery/predicates";
+import { HALT_KINDS, firstPlanned, openHaltKind, projectHalted, type HaltKind } from "@ashara/delivery/predicates";
 import { INBOUND_KINDS, inboundDecision, type InboundKind, type InboundState } from "../inbound-policy.js";
 import { clientMessageReadNow, noOpenStop, visionWritten } from "../predicates.js";
 import { REPORT_SUBJECT, type REPORT_SUBJECTS } from "../report-subjects.js";
@@ -390,14 +390,14 @@ const readingOrder = (): SQL[] => [asc(projectHalted(projects.id)), asc(clientMe
 
 const questions = alias(clientMessages, "question");
 
-/** The answers' reading queue, as stored, with the question each answers, its project's first plan and whether Delivery has it halted. */
+/** The answers' reading queue, as stored, with the question each answers, whether its project has a first plan and whether Delivery has it halted. */
 export async function openAnswerMessages(db: DbHandle, maxAttempts: number, answerId: string | null) {
   return db
     .select({
       ...readingColumns,
       questionId: questions.id,
-      firstPlannedAt: projects.firstPlannedAt,
       // An EXISTS is never null: the driver yields a boolean, decoded as one with no per-row parse to fail.
+      planned: firstPlanned(projects.id).mapWith(Boolean),
       halted: projectHalted(projects.id).mapWith(Boolean),
     })
     .from(clientMessages)

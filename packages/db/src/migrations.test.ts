@@ -295,35 +295,69 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
   test("a database built from 000_init.sql alone has the schema and seeded rows of the numbered files", async () => {
     const initOnly = mkdtempSync(join(tmpdir(), "ashara-init-"));
     copyFileSync(join(MIGRATIONS_DIR, "000_init.sql"), join(initOnly, "000_init.sql"));
-    const base = new URL(DATABASE_URL);
-    const name = `${base.pathname.slice(1)}_init_${randomBytes(6).toString("hex")}`;
-    const fresh = new URL(DATABASE_URL);
-    fresh.pathname = `/${name}`;
-    const server = new pg.Client({ connectionString: DATABASE_URL });
-    await server.connect();
     try {
-      await server.query(`CREATE DATABASE ${name}`);
-      try {
-        const result = await runMigrations(fresh.toString(), initOnly);
+      await withFreshDatabase("init", async (fresh) => {
+        const result = await runMigrations(fresh, initOnly);
         expect(result.applied).toEqual(["000_init.sql"]);
-        const client = new pg.Client({ connectionString: fresh.toString() });
-        await client.connect();
-        let fingerprint: string;
-        try {
-          const sql = readFileSync(new URL("./schema-fingerprint.sql", import.meta.url), "utf-8");
-          const rows = await client.query(sql);
-          fingerprint = z.array(z.object({ fingerprint: z.string() })).length(1).parse(rows.rows)[0]?.fingerprint ?? "";
-        } finally {
-          await client.end();
-        }
+        const sql = readFileSync(new URL("./schema-fingerprint.sql", import.meta.url), "utf-8");
+        const rows = await queryOn(fresh, sql);
+        const fingerprint = z.array(z.object({ fingerprint: z.string() })).length(1).parse(rows.rows)[0]?.fingerprint ?? "";
         const expected = readFileSync(new URL("./init-schema.fingerprint.txt", import.meta.url), "utf-8");
         expect(`${fingerprint}\n`).toBe(expected);
-      } finally {
-        await server.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-      }
+      });
     } finally {
-      await server.end();
       rmSync(initOnly, { recursive: true, force: true });
     }
   }, 60_000);
+
+  // Each context keeps its per-project state in a table of its own; the projects row is the tender's
+  // identity, its workspace and Engagement's lifecycle.
+  test("a database built from every file holds a projects table of identity, workspace and lifecycle alone, and no system_settings", async () => {
+    await withFreshDatabase("all", async (fresh) => {
+      await runMigrations(fresh, MIGRATIONS_DIR);
+      const columns = await queryOn(
+        fresh,
+        "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'projects' ORDER BY column_name",
+      );
+      expect(z.array(z.object({ name: z.string() })).parse(columns.rows).map((row) => row.name)).toEqual([
+        "client_id",
+        "created_at",
+        "id",
+        "lifecycle",
+        "name",
+        "workspace_path",
+      ]);
+      const settings = await queryOn(fresh, "SELECT to_regclass('public.system_settings') IS NULL AS gone");
+      expect(settings.rows).toEqual([{ gone: true }]);
+    });
+  }, 120_000);
 });
+
+/** Runs `body` against a database created for it alone, dropped afterwards whatever `body` does. */
+async function withFreshDatabase(label: string, body: (url: string) => Promise<void>): Promise<void> {
+  const name = `${new URL(DATABASE_URL).pathname.slice(1)}_${label}_${randomBytes(6).toString("hex")}`;
+  const fresh = new URL(DATABASE_URL);
+  fresh.pathname = `/${name}`;
+  const server = new pg.Client({ connectionString: DATABASE_URL });
+  await server.connect();
+  try {
+    await server.query(`CREATE DATABASE ${name}`);
+    try {
+      await body(fresh.toString());
+    } finally {
+      await server.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    }
+  } finally {
+    await server.end();
+  }
+}
+
+async function queryOn(databaseUrl: string, sql: string): Promise<pg.QueryResult> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    return await client.query(sql);
+  } finally {
+    await client.end();
+  }
+}

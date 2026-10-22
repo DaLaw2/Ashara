@@ -172,8 +172,13 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const [project] = z.array(projectRow).parse(
     (
       await db.execute(sql`
-        SELECT ${projectState} AS status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
-               plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath",
+        SELECT ${projectState} AS status,
+               (SELECT b.kind FROM project_blocks b
+                 WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedCategory",
+               (SELECT b.reason FROM project_blocks b
+                 WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedReason",
+               EXISTS (SELECT 1 FROM project_plans pp WHERE pp.project_id = projects.id
+                 AND pp.plan_stopped_at IS NOT NULL) AS "planStopped", workspace_path AS "workspacePath",
                EXISTS (SELECT 1 FROM step_faults f WHERE f.project_id = projects.id
                  AND f.parked_at IS NULL) AS "retryPending",
                (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
@@ -979,7 +984,7 @@ export async function readCharges(db: Database, projectIds: readonly string[]): 
     const [project] = z.array(projectChargesRow).parse(
       (
         await db.execute(sql`
-          SELECT plan_attempts AS "planAttempts", replan_attempts AS "replanAttempts",
+          SELECT coalesce(pp.plan_attempts, 0) AS "planAttempts", coalesce(pp.replan_attempts, 0) AS "replanAttempts",
                  (SELECT coalesce(sum(m.intake_attempts), 0) FROM client_messages m
                    WHERE m.project_id = projects.id)::int AS "intakeAttempts",
                  (SELECT b.id::text FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL
@@ -987,7 +992,7 @@ export async function readCharges(db: Database, projectIds: readonly string[]): 
                       UNREAD_HALT_KINDS.map((kind) => sql`${kind}`),
                       sql`, `,
                     )})) AS "unreadHalt"
-          FROM projects WHERE id = ${projectId}`)
+          FROM projects LEFT JOIN project_plans pp ON pp.project_id = projects.id WHERE projects.id = ${projectId}`)
       ).rows,
     );
     if (project === undefined) throw new SnapshotRowMissing(projectId, "projects", "the project's attempt counters");

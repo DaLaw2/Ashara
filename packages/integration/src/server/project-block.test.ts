@@ -69,7 +69,7 @@ async function projectWith(handle: Handle, tasks: readonly TaskRow[], planned: b
   }
   if (planned) {
     await handle.execute(sql`
-      UPDATE projects SET first_planned_at = now(), plan_dropped_dependencies = '[]'::jsonb WHERE id = ${project.id}`);
+      INSERT INTO project_plans (project_id, first_planned_at, plan_dropped_dependencies) VALUES (${project.id}, now(), '[]'::jsonb)`);
   }
   return { projectId: project.id, taskIds };
 }
@@ -80,7 +80,7 @@ const ProjectStateSchema = z.array(
 
 async function stateOf(handle: Handle, projectId: ProjectId) {
   const result = await handle.execute(sql`
-    SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`);
+    SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass", (SELECT b.reason FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "reason" FROM projects WHERE id = ${projectId}`);
   return ProjectStateSchema.parse(result.rows)[0];
 }
 

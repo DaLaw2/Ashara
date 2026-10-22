@@ -8,6 +8,18 @@ import { projects } from "./project.js";
 // Quality: stored checks, disputes, suite reviews and acceptance sweeps.
 
 // ---------------------------------------------------------------------------
+// acceptance_sweep_faults (Quality): the acceptance sweeps that could not run on a project, counted
+// against the fault budget; at most one row per project, never reset.
+// ---------------------------------------------------------------------------
+
+export const acceptanceSweepFaults = pgTable("acceptance_sweep_faults", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  faults: integer().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // task_checks (Quality): the checks the check author wrote for an
 // implementation task, one row per check, append-only by revision. files is
 // jsonb [{path, content}], parsed by the repository.

@@ -1,6 +1,6 @@
 import { SQL, sql, type AnyColumn } from "drizzle-orm";
 import { projects, qualifiedColumn } from "@ashara/db";
-import { HALT_KINDS, projectHalted, projectHaltedOn, type HaltKind } from "@ashara/delivery/predicates";
+import { firstPlanned, HALT_KINDS, projectHalted, projectHaltedOn, type HaltKind } from "@ashara/delivery/predicates";
 import { CLOSED_LIFECYCLES, inboundDecision, type InboundKind, type InboundState } from "./inbound-policy.js";
 import { REPORT_SUBJECT } from "./report-subjects.js";
 
@@ -92,7 +92,7 @@ export const firstPlanTold = (projectId: AnyColumn): SQL =>
  * for its retry would leave the plan unreportable and the project blocked.
  */
 export const firstPlanUnreported = (): SQL =>
-  sql`(${qualifiedColumn(projects.firstPlannedAt)} IS NOT NULL AND NOT ${firstPlanTold(projects.id)})`;
+  sql`(${firstPlanned(projects.id)} AND NOT ${firstPlanTold(projects.id)})`;
 
 /** The subjects the Liaison keeps a told record of (told_reports), each told once. */
 const TOLD_SUBJECT_KINDS = ["project-blocked", "project-resumed", "delivered", "plan-revision"] as const;

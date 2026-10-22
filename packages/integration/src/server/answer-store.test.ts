@@ -739,7 +739,7 @@ describe("the client's answers", () => {
     expect(kinds.length).toBeGreaterThan(1);
     expect(new Set(kinds)).toEqual(new Set(["step-faulted"]));
     expect(await haltKindOf(projectId)).toBe("provider_failed");
-    const halted = await db.execute(sql`SELECT blocked_category AS "category" FROM projects WHERE id = ${projectId}`);
+    const halted = await db.execute(sql`SELECT kind AS "category" FROM project_blocks WHERE project_id = ${projectId} AND ended_at IS NULL`);
     expect(z.array(z.object({ category: z.string() })).parse(halted.rows)).toEqual([{ category: "provider_failed" }]);
     // The parked subject of the halted project is not tried again.
     expect(await roster().runPending()).toEqual([]);

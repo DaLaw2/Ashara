@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { projects } from "@ashara/db";
-import { acceptanceSweeps, guaranteeEvidence, taskChecks, undecidedItems } from "@ashara/db/schema/quality";
+import { projects, qualifiedColumn } from "@ashara/db";
+import { acceptanceSweepFaults, acceptanceSweeps, guaranteeEvidence, taskChecks, undecidedItems } from "@ashara/db/schema/quality";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
+import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, firstPlanned, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
 import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
 import { coverageOf, judgeGuarantees } from "../guarantee-verdict.js";
 import type { Coverage, Evidence, JudgedGuarantee } from "../guarantee-verdict.js";
@@ -28,7 +28,7 @@ import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
 /** Every condition of readiness, on the projects row in scope. */
 const readyForAcceptance = sql`(${projectAtWork()}
-  AND ${projects.firstPlannedAt} IS NOT NULL
+  AND ${firstPlanned(projects.id)}
   AND NOT ${pendingCorrection(projects.id)}
   AND NOT ${pendingRepair(projects.id)}
   AND ${noOpenStop(projects.id)}
@@ -256,23 +256,27 @@ class GuaranteeEvidenceUnbuilt extends Error {
 /** recordSweepFault named a project with no row. */
 class AcceptanceFaultProjectMissing extends Error {
   constructor(readonly projectId: ProjectId) {
-    super(`cannot count an acceptance sweep fault on project ${projectId}: no projects row has that id`);
+    super(`cannot count an acceptance sweep fault on project ${projectId}: no projects row has that id, or the count returned no row`);
     this.name = "AcceptanceFaultProjectMissing";
   }
 }
 
 /**
- * Counts one acceptance sweep that could not run on the project (projects.acceptance_faults),
+ * Counts one acceptance sweep that could not run on the project (acceptance_sweep_faults),
  * durably, and returns the count with it: the bound outlives a restart.
  */
 export async function recordAcceptanceSweepFault(db: DbHandle, projectId: ProjectId): Promise<number> {
-  const [row] = await db
-    .update(projects)
-    .set({ acceptanceFaults: sql`${projects.acceptanceFaults} + 1` })
-    .where(eq(projects.id, projectId))
-    .returning({ faults: projects.acceptanceFaults });
-  if (!row) throw new AcceptanceFaultProjectMissing(projectId);
-  return row.faults;
+  return db.transaction(async (tx) => {
+    const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+    if (!locked) throw new AcceptanceFaultProjectMissing(projectId);
+    const [row] = await tx
+      .insert(acceptanceSweepFaults)
+      .values({ projectId, faults: 1 })
+      .onConflictDoUpdate({ target: acceptanceSweepFaults.projectId, set: { faults: sql`${qualifiedColumn(acceptanceSweepFaults.faults)} + 1` } })
+      .returning({ faults: acceptanceSweepFaults.faults });
+    if (!row) throw new AcceptanceFaultProjectMissing(projectId);
+    return row.faults;
+  });
 }
 
 /** Locks the project row and reads readiness again; false when the project moved since it was listed. */

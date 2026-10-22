@@ -132,7 +132,8 @@ const ProjectRowSchema = z.array(
 
 async function projectRow(projectId: ProjectId) {
   const result = await db.execute(sql`
-    SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`);
+    SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id ORDER BY b.blocked_at DESC LIMIT 1) AS "errorClass",
+      (SELECT b.reason FROM project_blocks b WHERE b.project_id = projects.id ORDER BY b.blocked_at DESC LIMIT 1) AS "reason" FROM projects WHERE id = ${projectId}`);
   return ProjectRowSchema.parse(result.rows)[0];
 }
 
@@ -237,7 +238,7 @@ describe("a client's stop", () => {
       INSERT INTO roster_roles (project_id, revision, role_id, name, responsibility, capabilities, vision_version)
       VALUES (${awaiting}, 1, ${randomUUID()}, 'Implementer', 'Builds it.', ARRAY['write-source'], 1)`);
     const planned = await projectWith([["Ship it", "Pending"]]);
-    await db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id = ${planned.projectId}`);
+    await db.execute(sql`INSERT INTO project_plans (project_id, first_planned_at) VALUES (${planned.projectId}, now())`);
 
     const gated = async () => (await gate()).map((item) => item.id);
     const tenders = async () => (await createIntakeStore(db).openTenders()).map((tender) => tender.projectId);

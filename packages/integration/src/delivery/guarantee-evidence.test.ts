@@ -71,7 +71,7 @@ async function plannedProject(): Promise<Planned> {
   const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, TENDER);
   ourProjects.add(project.id);
   await new VisionRepository(db).create(project.id, VISION);
-  await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
+  await db.execute(sql`WITH planned AS (INSERT INTO project_plans (project_id, first_planned_at) VALUES (${project.id}, now())) UPDATE projects SET workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
   const task = async (title: string, spec: unknown): Promise<string> => {
     const id = randomUUID();
     await db.execute(sql`

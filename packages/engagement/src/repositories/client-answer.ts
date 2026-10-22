@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import { firstPlanned } from "@ashara/delivery/predicates";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
@@ -66,7 +67,7 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
       intakeAttempts: row.intakeAttempts,
       intakeLastError: row.intakeLastError,
       intakeLastFailure: row.intakeLastFailure,
-      planned: row.firstPlannedAt !== null,
+      planned: row.planned,
       vision: await visions.getCurrent(projectId),
       paused: row.halted,
     });
@@ -161,13 +162,13 @@ function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrectio
   return db.transaction(async (tx) => {
     const standing = await LockedStanding.readNow(tx, write.projectId, "answer", write.paused);
     if (!(standing instanceof LockedStanding)) throw new AnswerContextMoved(write.answerId, write.projectId, standing.detail);
+    // Read in its own statement after the lock, so a first plan committed while the lock waited is seen.
     const [project] = await tx
-      .select({ firstPlannedAt: projects.firstPlannedAt })
+      .select({ planned: firstPlanned(projects.id).mapWith(Boolean) })
       .from(projects)
-      .where(eq(projects.id, write.projectId))
-      .for("update");
+      .where(eq(projects.id, write.projectId));
     if (!project) throw new AnswerContextMoved(write.answerId, write.projectId, "the project does not exist");
-    if ((project.firstPlannedAt !== null) !== write.planned) {
+    if (project.planned !== write.planned) {
       throw new AnswerContextMoved(
         write.answerId,
         write.projectId,

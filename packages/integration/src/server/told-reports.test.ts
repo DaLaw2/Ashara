@@ -155,7 +155,7 @@ describe("a report on another context's subject is told once across a restart", 
 
   test("a plan revision's report, and a revision the first-plan report describes", async () => {
     const projectId = await newProject();
-    await session.db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id = ${projectId}`);
+    await session.db.execute(sql`INSERT INTO project_plans (project_id, first_planned_at) VALUES (${projectId}, now())`);
     const revision = async (n: number) =>
       idOf(session.db, sql`INSERT INTO plan_revisions (project_id, revision, vision_version, kind, summary) VALUES (${projectId}, ${n}, 1, 'repair', '{}'::jsonb) RETURNING id`);
     const folded = await revision(2);
@@ -177,7 +177,7 @@ describe("a report on another context's subject is told once across a restart", 
   test("a told record names only a subject of the report's own project", async () => {
     const projectId = await newProject();
     const other = await newProject();
-    await session.db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id IN (${projectId}, ${other})`);
+    await session.db.execute(sql`INSERT INTO project_plans (project_id, first_planned_at) VALUES (${projectId}, now()), (${other}, now())`);
     const othersRevision = await idOf(
       session.db,
       sql`INSERT INTO plan_revisions (project_id, revision, vision_version, kind, summary) VALUES (${other}, 2, 1, 'repair', '{}'::jsonb) RETURNING id`,
@@ -293,8 +293,10 @@ describe("after the migration that moves the told record, no subject already tol
       await before.end();
     }
 
-    copyFileSync(join(MIGRATIONS_DIR, TOLD_MIGRATION), join(dir, TOLD_MIGRATION));
-    expect((await runMigrations(fresh.toString(), dir)).applied).toEqual([TOLD_MIGRATION]);
+    // The readers below are today's, so every migration from the told record's on is applied.
+    const later = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql") && f >= TOLD_MIGRATION).sort();
+    for (const file of later) copyFileSync(join(MIGRATIONS_DIR, file), join(dir, file));
+    expect((await runMigrations(fresh.toString(), dir)).applied).toEqual(later);
 
     const after = connect(fresh.toString());
     try {

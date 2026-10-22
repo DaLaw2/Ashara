@@ -32,7 +32,7 @@ let clientId: string;
 async function plannedProject(other: readonly string[]): Promise<ProjectId> {
   const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, TENDER);
   await new VisionRepository(db).create(project.id, { visionText: TENDER, summary: "A key store.", inferences: [] });
-  await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
+  await db.execute(sql`WITH planned AS (INSERT INTO project_plans (project_id, first_planned_at) VALUES (${project.id}, now())) UPDATE projects SET workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
   for (const [index, status] of ["Completed", ...other].entries()) {
     await db.execute(sql`
       INSERT INTO work_items (id, level, status, title, task_spec, project_id)

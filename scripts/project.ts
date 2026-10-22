@@ -15,7 +15,7 @@
  * only way the budget grows, since its spent requests are its llm_calls rows and nothing returns
  * one. A project halted on its spent work budget (block kind work_budget) still needs `unblock`
  * after the grant. `--by` defaults to the operating-system user running the command.
- * Read the cause first: SELECT blocked_category, blocked_error_class, blocked_reason FROM projects.
+ * Read the cause first: SELECT kind, error_class, reason FROM project_blocks WHERE project_id = <project-id> AND ended_at IS NULL.
  */
 
 import { userInfo } from "node:os";

@@ -20,7 +20,6 @@ import { systemClock } from "@ashara/shared";
 import type { LogRecord, LogSink } from "@ashara/shared";
 import { createRunDatabase, prepareTemplate } from "../simulator/database.js";
 import type { RunDatabase } from "../simulator/database.js";
-import { projectState } from "../simulator/project-state.js";
 
 // A gateway that cannot be built stops intake with a typed error and no
 // constant alignment is produced. The gateway is built once, in composeAshara, before the core
@@ -151,7 +150,6 @@ const MessageRows = z.array(
   }),
 );
 const CountRow = z.tuple([z.object({ n: z.number() })]);
-const ProjectRow = z.tuple([z.object({ status: z.string(), blockedReason: z.string().nullable() })]);
 
 /** What the refused composition left of the project: the tender alone, untouched, and nothing written. */
 async function expectUntouched(projectId: string, tenderId: string): Promise<void> {
@@ -173,10 +171,10 @@ async function expectUntouched(projectId: string, tenderId: string): Promise<voi
     (await db().execute(sql`SELECT count(*)::int AS n FROM llm_calls WHERE project_id = ${projectId}`)).rows,
   );
   expect(calls[0].n).toBe(0);
-  const project = ProjectRow.parse(
-    (await db().execute(sql`SELECT ${projectState} AS status, blocked_reason AS "blockedReason" FROM projects WHERE id = ${projectId}`)).rows,
+  const openHalts = CountRow.parse(
+    (await db().execute(sql`SELECT count(*)::int AS n FROM project_blocks WHERE project_id = ${projectId} AND ended_at IS NULL`)).rows,
   );
-  expect(project[0].blockedReason).toBeNull();
+  expect(openHalts[0].n).toBe(0);
 
   // The next process that can build a gateway takes the same tender in.
   const open = await createIntakeStore(db()).openTenders();

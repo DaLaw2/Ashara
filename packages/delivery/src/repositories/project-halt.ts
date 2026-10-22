@@ -9,12 +9,12 @@ import { firstPlanUnreported, haltReported, noOpenStop, projectActive, projectAt
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import { HALT_KINDS, pendingRepair, projectHalted, type HaltKind } from "../predicates.js";
 import type { ProjectBlockCause } from "../project-halt.js";
+import { resetOnUnblock } from "./project-plan.js";
 
 // Delivery's one guard over the project halt. A project is halted
-// while it has an open project_blocks episode; this module is the only writer of that episode and
-// of the halt's cause on the project row (blocked_category, blocked_error_class, blocked_reason). A
-// halt opens an episode on a project at work (Engagement's lifecycle 'active', not halted); a
-// resumption (the substrate probe, or the operator's unblock once the cause is cleared) ends it, and
+// while it has an open project_blocks episode, which records the halt's cause; this module is the
+// only writer of that episode. A halt opens an episode on a project at work (Engagement's lifecycle
+// 'active', not halted); a resumption (the substrate probe, or the operator's unblock once the cause is cleared) ends it, and
 // so does the client's stop, through endHaltOnStop, which Engagement's stop calls in its own
 // transaction. Engagement's lifecycle column is never written here, and whether a halt was told is
 // Engagement's told record, read through its published haltReported.
@@ -61,9 +61,9 @@ class BlockEpisodeMissing extends Error {
 }
 
 /** Locks the project row for the rest of `tx`; null when there is no such project. */
-async function lockProject(tx: DbHandle, id: ProjectId): Promise<{ readonly lifecycle: string; readonly planStoppedAt: Date | null } | null> {
+async function lockProject(tx: DbHandle, id: ProjectId): Promise<{ readonly lifecycle: string } | null> {
   const [locked] = await tx
-    .select({ lifecycle: projects.lifecycle, planStoppedAt: projects.planStoppedAt })
+    .select({ lifecycle: projects.lifecycle })
     .from(projects)
     .where(eq(projects.id, id))
     .for("update");
@@ -98,8 +98,8 @@ function episodeOf(cause: ProjectBlockCause) {
 
 /**
  * Halts the project for first planning giving up, inside `tx`, which holds the project row locked
- * and has just stamped plan_stopped_at on it: the episode is 'planning_stopped', its reason the
- * last planning error.
+ * and has just stamped planning stopped on its planning record: the episode is 'planning_stopped',
+ * its reason the last planning error.
  */
 export async function haltForPlanningStopped(tx: DbHandle, id: ProjectId, lastError: string | null): Promise<void> {
   await tx.insert(projectBlocks).values({ projectId: id, kind: "planning_stopped", errorClass: null, reason: lastError });
@@ -180,12 +180,8 @@ export class ProjectHaltRepository extends ProjectRepository {
   async block(id: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> {
     return this.db.transaction(async (tx) => {
       if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "block the project");
-      const [halted] = await tx
-        .update(projects)
-        .set({ blockedCategory: cause.category, blockedErrorClass: cause.errorClass, blockedReason: cause.reason })
-        .where(and(eq(projects.id, id), projectAtWork()))
-        .returning({ id: projects.id });
-      if (!halted) return "already-blocked";
+      const [atWork] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, id), projectAtWork()));
+      if (!atWork) return "already-blocked";
       await tx.insert(projectBlocks).values({ projectId: id, ...episodeOf(cause) });
       return "blocked";
     });
@@ -206,10 +202,10 @@ export class ProjectHaltRepository extends ProjectRepository {
         .for("update");
       if (candidates.length === 0) return [];
       const halted = await tx
-        .update(projects)
-        .set({ blockedCategory: cause.category, blockedErrorClass: cause.errorClass, blockedReason: cause.reason })
+        .select({ id: projects.id })
+        .from(projects)
         .where(and(inArray(projects.id, candidates.map((row) => row.id)), projectAtWork(), noOpenStop(projects.id)))
-        .returning({ id: projects.id });
+        .orderBy(asc(projects.id));
       if (halted.length === 0) return [];
       await tx
         .insert(projectBlocks)
@@ -242,7 +238,7 @@ export class ProjectHaltRepository extends ProjectRepository {
   /**
    * The automatic way out of an infrastructure halt: in one transaction with the
    * project row locked, its open episode is ended as 'probe_passed' with what the probe observed,
-   * and its cause cleared, and the client's unconsumed messages whose count the halt's end resets
+   * and the client's unconsumed messages whose count the halt's end resets
    * are read afresh (restartClientReadings). The Liaison then tells the client, once, that work resumed. A project no
    * longer halted on infrastructure is left as it is: "moved". A halt whose own report is not yet
    * posted is left as it is too, "unreported": its report is due only while the episode is open,
@@ -260,10 +256,6 @@ export class ProjectHaltRepository extends ProjectRepository {
         .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)))
         .returning({ id: projectBlocks.id });
       if (!episode) throw new BlockEpisodeMissing(id);
-      await tx
-        .update(projects)
-        .set({ blockedCategory: null, blockedErrorClass: null, blockedReason: null })
-        .where(eq(projects.id, id));
       await restartClientReadings(tx, id, open.kind);
       return "resumed";
     });
@@ -271,11 +263,11 @@ export class ProjectHaltRepository extends ProjectRepository {
 
   /**
    * The operator's way out of a halt, after the cause is cleared: in one
-   * transaction with the project row locked, the open block episode is ended with who and why,
-   * and the cause cleared. A project whose first planning gave up has its planning record reset,
-   * so first planning runs again from no attempts; a plan revision's failed attempts are reset
-   * likewise, and so is every reading of the client's unconsumed messages whose count the halt's end
-   * resets (restartClientReadings). The Liaison then tells the client, once, that work resumed. Only a
+   * transaction with the project row locked, the open block episode is ended with who and why. A
+   * project whose first planning gave up has its planning record reset, so first planning runs
+   * again from no attempts; a plan revision's failed attempts are reset likewise (resetOnUnblock),
+   * and so is every reading of the client's unconsumed messages whose count the halt's end resets
+   * (restartClientReadings). The Liaison then tells the client, once, that work resumed. Only a
    * halted project is unblocked: any other throws ProjectNotBlocked, and nothing is written.
    */
   async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
@@ -292,20 +284,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         .returning({ id: projectBlocks.id });
       if (!episode) throw new BlockEpisodeMissing(id);
 
-      const planningReset = locked.planStoppedAt === null ? {} : { planStoppedAt: null, planAttempts: 0, planLastError: null };
-      // A revision that gave up is tried again from no attempts.
-      await tx
-        .update(projects)
-        .set({
-          blockedCategory: null,
-          blockedErrorClass: null,
-          blockedReason: null,
-          replanAttempts: 0,
-          replanLastError: null,
-          replanLastFailure: null,
-          ...planningReset,
-        })
-        .where(eq(projects.id, id));
+      await resetOnUnblock(tx, id);
       await restartClientReadings(tx, id, open.kind);
       return { episodeId: episode.id };
     });

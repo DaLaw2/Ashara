@@ -348,7 +348,7 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
 
 /**
  * What the client reads when planning gives up. The error chain stays in
- * projects.plan_last_error and the warn log, never in the client channel.
+ * Delivery's planning record and the warn log, never in the client channel.
  */
 function planningStoppedReport(attempts: number): string {
   return [

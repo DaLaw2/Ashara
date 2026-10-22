@@ -320,7 +320,7 @@ const EXPECTED_OWNERS = [
 /** The ordering hints recorded as dropped with the project's first plan. */
 async function droppedOf(projectId: ProjectId) {
   const result = await db.execute(
-    sql`SELECT plan_dropped_dependencies AS "dropped" FROM projects WHERE id = ${projectId}`,
+    sql`SELECT plan_dropped_dependencies AS "dropped" FROM project_plans WHERE project_id = ${projectId}`,
   );
   const [row] = z
     .array(z.object({ dropped: z.array(z.object({ dependentTaskTitle: z.string(), unresolvedRef: z.string() })) }))
@@ -577,7 +577,7 @@ describe("first plan", () => {
     const project = await new ProjectHaltRepository(db).get(projectId);
     expect(project?.status).toBe("blocked");
     const row = await db.execute(
-      sql`SELECT plan_attempts AS "attempts", plan_last_error AS "error" FROM projects WHERE id = ${projectId}`,
+      sql`SELECT plan_attempts AS "attempts", plan_last_error AS "error" FROM project_plans WHERE project_id = ${projectId}`,
     );
     const [recorded] = z.array(z.object({ attempts: z.number(), error: z.string() })).parse(row.rows);
     expect(recorded?.attempts).toBe(3);
@@ -643,7 +643,7 @@ describe("roster", () => {
     // Organization halts nothing itself; the core loop halts the project as a fault, so:
     await new ProjectHaltRepository(db).block(projectId, { category: "fault", ...refused.refusal });
     const row = await db.execute(
-      sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`,
+      sql`SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass", (SELECT b.reason FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "reason" FROM projects WHERE id = ${projectId}`,
     );
     const [blocked] = z.array(z.object({ status: z.string(), errorClass: z.string(), reason: z.string() })).parse(row.rows);
     expect(blocked?.status).toBe("blocked");

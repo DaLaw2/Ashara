@@ -3,9 +3,10 @@ import { qualifiedColumn } from "@ashara/db";
 import { PROJECT_BLOCK_KINDS, projectBlocks, workItems } from "@ashara/db/schema/delivery";
 import type { DbHandle } from "@ashara/db";
 
-// Delivery's published predicates: the facts about a project's halt, its awaited plan revisions and
-// its work items that other contexts read the shared tables by. Each is spelled here once; a reader
-// in another context imports it (`@ashara/delivery/predicates`) instead of writing the SQL again.
+// Delivery's published predicates: the facts about a project's halt, its planning record, its
+// awaited plan revisions and its work items that other contexts read the shared tables by. Each is
+// spelled here once; a reader in another context imports it (`@ashara/delivery/predicates`) instead
+// of writing the SQL again.
 // This module imports nothing of Delivery and no other context, so any context Delivery itself
 // reads can import it without a cycle at load time.
 
@@ -44,6 +45,15 @@ export const projectHaltedOn = (projectId: AnyColumn, kinds: readonly [HaltKind,
 /** The kind of the project's open block episode; null while it is not halted. */
 export const openHaltKind = (projectId: AnyColumn): SQL<unknown> =>
   sql<unknown>`(SELECT hb.kind FROM project_blocks hb WHERE hb.project_id = ${qualifiedColumn(projectId)} AND hb.ended_at IS NULL)`;
+
+/** The project's first plan is written: its planning record (project_plans) has it stamped. */
+export const firstPlanned = (projectId: AnyColumn): SQL =>
+  sql`EXISTS (SELECT 1 FROM project_plans fp WHERE fp.project_id = ${qualifiedColumn(projectId)} AND fp.first_planned_at IS NOT NULL)`;
+
+/** The project's first planning has no outcome: no plan written, and planning not stopped. */
+export const noPlanningOutcome = (projectId: AnyColumn): SQL =>
+  sql`NOT EXISTS (SELECT 1 FROM project_plans po WHERE po.project_id = ${qualifiedColumn(projectId)}
+    AND (po.first_planned_at IS NOT NULL OR po.plan_stopped_at IS NOT NULL))`;
 
 /** The project has no work item: nothing of it was ever planned. */
 export const projectUnplanned = (projectId: AnyColumn): SQL =>

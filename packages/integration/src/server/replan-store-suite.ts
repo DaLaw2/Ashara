@@ -294,7 +294,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
   /** The project's status and category, and the client messages whose correction's revision it awaits (correction_holds), oldest first. */
   async function projectRow(projectId: ProjectId) {
     const result = await db.execute(sql`
-      SELECT ${projectState} AS status, blocked_category AS "category",
+      SELECT ${projectState} AS status, (SELECT b.kind FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "category",
         COALESCE((SELECT json_agg(ch.requested_by ORDER BY ch.created_at) FROM correction_holds ch
           WHERE ch.project_id = projects.id AND ch.plan_revision_id IS NULL), '[]'::json) AS "awaiting"
       FROM projects WHERE id = ${projectId}`);

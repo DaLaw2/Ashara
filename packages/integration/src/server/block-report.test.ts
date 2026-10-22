@@ -280,18 +280,27 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     expect(await episodesOf(projectId)).toEqual([]);
   });
 
-  test("no way back to work but the recorded unblock: a bare write of the cause or of the episode is refused", async () => {
+  test("a halt keeps its cause on its episode, and planning stopped is ended only with its planning record", async () => {
     const projectId = await newProject();
     await new ProjectHaltRepository(db).block(projectId, budgetCap);
-
     await expect(
-      db.execute(sql`UPDATE projects SET blocked_category = NULL, blocked_error_class = NULL, blocked_reason = NULL WHERE id = ${projectId}`),
-    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/halted with no cause recorded/) } });
+      db.execute(sql`UPDATE project_blocks SET error_class = NULL, reason = NULL WHERE project_id = ${projectId} AND ended_at IS NULL`),
+    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/halted on budget_cap with no cause recorded on its episode/) } });
+    expect(await statusOf(projectId)).toBe("blocked");
+
+    const stopped = await newProject();
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO project_plans (project_id, plan_stopped_at, plan_attempts, plan_last_error) VALUES (${stopped}, now(), 3, 'x')`);
+      await tx.execute(sql`INSERT INTO project_blocks (project_id, kind, reason) VALUES (${stopped}, 'planning_stopped', 'x')`);
+    });
     await expect(
       db.execute(sql`UPDATE project_blocks SET ended_at = now(), end_kind = 'unblocked', unblocked_by = 'x', unblock_reason = 'y'
-        WHERE project_id = ${projectId} AND ended_at IS NULL`),
-    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/records a halt's cause but has no open block episode/) } });
-    expect(await statusOf(projectId)).toBe("blocked");
+        WHERE project_id = ${stopped} AND ended_at IS NULL`),
+    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/records its first planning stopped but has no open block episode/) } });
+    await expect(db.execute(sql`UPDATE project_plans SET plan_stopped_at = NULL WHERE project_id = ${stopped}`)).rejects.toMatchObject({
+      cause: { message: expect.stringMatching(/halted on planning_stopped while its planning record has no plan_stopped_at/) },
+    });
+    expect(await statusOf(stopped)).toBe("blocked");
   });
 
   test("a stopped first planning is told by its planning-stopped report alone; a later stop after an unblock is told again", async () => {
@@ -299,7 +308,8 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     // First planning giving up, as stopFirstPlanning writes it: planning stopped and the halt's episode together.
     const stop = () =>
       db.transaction(async (tx) => {
-        await tx.execute(sql`UPDATE projects SET plan_stopped_at = now(), plan_attempts = 3, plan_last_error = 'x' WHERE id = ${projectId}`);
+        await tx.execute(sql`INSERT INTO project_plans (project_id, plan_stopped_at, plan_attempts, plan_last_error) VALUES (${projectId}, now(), 3, 'x')
+          ON CONFLICT (project_id) DO UPDATE SET plan_stopped_at = now(), plan_attempts = 3, plan_last_error = 'x'`);
         await tx.execute(sql`INSERT INTO project_blocks (project_id, kind, reason) VALUES (${projectId}, 'planning_stopped', 'x')`);
       });
 
@@ -309,7 +319,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [], null)).toBe("posted");
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
-    const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM projects WHERE id = ${projectId}`);
+    const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM project_plans WHERE project_id = ${projectId}`);
     expect(reset.rows).toEqual([{ plan_stopped_at: null, plan_attempts: 0, plan_last_error: null }]);
     await reports().runPending();
 

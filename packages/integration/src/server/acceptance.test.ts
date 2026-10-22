@@ -115,7 +115,7 @@ async function deliveredProject(
   const { project, message } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Build a key store.");
   ourProjects.add(project.id);
   const question = await writeVision(project.id, message.id, options.prefixAsked === true);
-  await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
+  await db.execute(sql`WITH planned AS (INSERT INTO project_plans (project_id, first_planned_at) VALUES (${project.id}, now())) UPDATE projects SET workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
   const task = async (title: string, spec: unknown): Promise<string> => {
     const id = randomUUID();
     await db.execute(sql`
@@ -174,7 +174,7 @@ async function contractProject(
       exclusions: [],
     },
   });
-  await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
+  await db.execute(sql`WITH planned AS (INSERT INTO project_plans (project_id, first_planned_at) VALUES (${project.id}, now())) UPDATE projects SET workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
   const store = randomUUID();
   const checksOfStore = randomUUID();
   await db.execute(sql`
@@ -313,7 +313,7 @@ async function haltOf(
   projectId: ProjectId,
 ): Promise<{ readonly lifecycle: string; readonly kind: string | null; readonly errorClass: string | null; readonly reason: string | null }> {
   const result = await db.execute(sql`
-    SELECT p.lifecycle, b.kind, p.blocked_error_class AS "errorClass", p.blocked_reason AS "reason"
+    SELECT p.lifecycle, b.kind, b.error_class AS "errorClass", b.reason AS "reason"
     FROM projects p LEFT JOIN project_blocks b ON b.project_id = p.id AND b.ended_at IS NULL WHERE p.id = ${projectId}`);
   const [row] = z
     .array(z.object({ lifecycle: z.string(), kind: z.string().nullable(), errorClass: z.string().nullable(), reason: z.string().nullable() }))
@@ -509,8 +509,7 @@ describe("acceptance on main", () => {
       errorClass: "AcceptanceSweepUncovered",
       reason: expect.stringContaining("G2 (unjudged, no-executed-evidence)"),
     });
-    expect(await db.execute(sql`SELECT blocked_category FROM projects WHERE id = ${projectId}`)).toMatchObject({ rows: [{ blocked_category: "acceptance_uncovered" }] });
-    expect(halt.reason).not.toContain("G1 (");
+        expect(halt.reason).not.toContain("G1 (");
     const passed = await db.execute(sql`SELECT count(*)::int AS n FROM acceptance_sweeps WHERE project_id = ${projectId} AND passed`);
     expect(z.array(z.object({ n: z.number() })).parse(passed.rows)[0]?.n).toBe(0);
     await expect(db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();
@@ -939,7 +938,7 @@ describe("acceptance on main", () => {
     await runAcceptanceSweeps(deps);
     // A fault that is not the substrate's is a defect given up with the recorded fault, main unread.
     const first = await db.execute(sql`
-      SELECT p.acceptance_faults AS faults, s.main_commit AS "mainCommit", w.blocked_reason->>'reason' AS reason
+      SELECT coalesce((SELECT f.faults FROM acceptance_sweep_faults f WHERE f.project_id = p.id), 0) AS faults, s.main_commit AS "mainCommit", w.blocked_reason->>'reason' AS reason
       FROM projects p JOIN acceptance_sweeps s ON s.project_id = p.id JOIN work_items w ON w.id = s.defect_item_id
       WHERE p.id = ${projectId}`);
     expect(first.rows).toEqual([{ faults: 1, mainCommit: null, reason: expect.stringContaining("fatal: bad object HEAD") }]);
@@ -950,7 +949,7 @@ describe("acceptance on main", () => {
     }
     expect(await statusOf(projectId)).toBe("blocked");
     const block = await db.execute(sql`
-      SELECT p.acceptance_faults AS faults, p.blocked_category AS category, b.error_class AS "errorClass"
+      SELECT coalesce((SELECT f.faults FROM acceptance_sweep_faults f WHERE f.project_id = p.id), 0) AS faults, b.kind AS category, b.error_class AS "errorClass"
       FROM projects p JOIN project_blocks b ON b.project_id = p.id WHERE p.id = ${projectId} ORDER BY b.blocked_at DESC LIMIT 1`);
     expect(block.rows).toEqual([{ faults: 4, category: "fault", errorClass: "AcceptanceFaultBudgetSpent" }]);
     expect(await projects.listActiveIds()).not.toContain(projectId);
@@ -974,7 +973,7 @@ describe("acceptance on main", () => {
     expect(swept).toBe(0);
     expect(await statusOf(projectId)).toBe("blocked");
     const blocks = await db.execute(sql`
-      SELECT p.acceptance_faults AS faults, p.blocked_category AS category, b.error_class AS "errorClass", b.reason
+      SELECT coalesce((SELECT f.faults FROM acceptance_sweep_faults f WHERE f.project_id = p.id), 0) AS faults, b.kind AS category, b.error_class AS "errorClass", b.reason
       FROM projects p JOIN project_blocks b ON b.project_id = p.id WHERE p.id = ${projectId}`);
     expect(blocks.rows).toEqual([{ faults: 0, category: "fault", errorClass: "ScaffoldMergeUnrecorded", reason: expect.stringContaining(scaffold) }]);
   });

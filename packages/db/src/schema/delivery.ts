@@ -85,6 +85,32 @@ export const dependencies = pgTable("dependencies", {
 });
 
 // ---------------------------------------------------------------------------
+// project_plans: Delivery's planning record of one project, at most one row per project, written
+// only by Delivery's project-plan functions, each of which creates the row it changes: a project
+// with no row has had no planning event.
+// ---------------------------------------------------------------------------
+
+export const projectPlans = pgTable("project_plans", {
+  projectId: uuid("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  // The first plan: failed attempts with the last one's error; the plan transaction stamps
+  // first_planned_at, giving up stamps plan_stopped_at together with opening the halt's episode.
+  planAttempts: integer("plan_attempts").notNull().default(0),
+  planLastError: text("plan_last_error"),
+  firstPlannedAt: timestamptz("first_planned_at"),
+  planStoppedAt: timestamptz("plan_stopped_at"),
+  // The ordering hints the first plan's decomposition dropped, stamped with first_planned_at; NULL
+  // on a project planned before they were recorded.
+  planDroppedDependencies: jsonb("plan_dropped_dependencies"),
+  // Failed attempts to revise the plan for the current request, with the last error and whose
+  // failure it was ('model' or 'provider'); reset by a written revision and by the operator's unblock.
+  replanAttempts: integer("replan_attempts").notNull().default(0),
+  replanLastError: text("replan_last_error"),
+  replanLastFailure: text("replan_last_failure"),
+});
+
+// ---------------------------------------------------------------------------
 // project_blocks: one row per time Delivery halted a project. An open row is
 // the halt itself: opened and ended by Delivery's halt guard, ended as 'client_stop' by
 // Delivery's endHaltOnStop in the transaction in which the client stops the project.

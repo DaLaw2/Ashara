@@ -270,7 +270,9 @@ export const stopReportSuppressed = suppressListing(
 
 /** No first planning that stopped is ever due its planning-stopped report (Delivery's plan report listing). */
 export const planningStoppedReportSuppressed = suppressListing(
-  (text) => text.includes(`"plan_attempts" from "projects"`) && text.includes(`"plan_stopped_at" is not null`),
+  (text) =>
+    text.includes(`"project_plans"."plan_attempts" from "projects"`) &&
+    text.includes(`"project_plans"."plan_stopped_at" is not null`),
 );
 
 /**

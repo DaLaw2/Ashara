@@ -3,20 +3,20 @@ import { z } from "zod";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
 import { projects } from "@ashara/db";
-import { planRevisions, workItems } from "@ashara/db/schema/delivery";
+import { planRevisions, projectPlans, workItems } from "@ashara/db/schema/delivery";
 import { firstPlanTold, noOpenStop, planningStoppedTold, planRevisionTold } from "../acl/engagement-predicates-acl.js";
 import { REPORT_SUBJECT } from "../acl/engagement-report-subjects-acl.js";
 import { isSupersededItem, pendingCorrection, projectHalted } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
-import type { DroppedPlanDependency } from "./first-plan.js";
+import type { DroppedPlanDependency } from "./project-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 
 // Delivery's published reads of its planning outcomes the Liaison reports on. A report is due
-// while the outcome is stamped on the project and Engagement's told record holds no report on it;
-// the report itself is Engagement's write.
+// while the outcome is stamped on the project's planning record and Engagement's told record holds
+// no report on it; the report itself is Engagement's write.
 
 /** A plan's tasks counted by the producer task_spec.origin records. */
 interface TaskCounts {
@@ -52,7 +52,7 @@ const DroppedPlanDependenciesSchema: z.ZodType<DroppedPlanDependency[]> = z.arra
   z.object({ dependentTaskTitle: z.string(), unresolvedRef: z.string() }),
 );
 
-/** projects.plan_dropped_dependencies holds something other than a list of dropped dependencies. */
+/** project_plans.plan_dropped_dependencies holds something other than a list of dropped dependencies. */
 class PlanDroppedDependenciesCorrupt extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -109,12 +109,13 @@ type DuePlanReportRow =
  */
 export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanReportRow | UnreadSubject>> {
   const planned = await db
-    .select({ id: projects.id, droppedDependencies: projects.planDroppedDependencies })
+    .select({ id: projects.id, droppedDependencies: projectPlans.planDroppedDependencies })
     .from(projects)
+    .innerJoin(projectPlans, eq(projectPlans.projectId, projects.id))
     .where(
       and(
         projectReportsPlans(),
-        isNotNull(projects.firstPlannedAt),
+        isNotNull(projectPlans.firstPlannedAt),
         sql`NOT ${pendingCorrection(projects.id)}`,
         sql`NOT ${firstPlanTold(projects.id)}`,
         noOpenStop(projects.id),
@@ -183,10 +184,11 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
   });
 
   const stopped = await db
-    .select({ id: projects.id, attempts: projects.planAttempts })
+    .select({ id: projects.id, attempts: projectPlans.planAttempts })
     .from(projects)
+    .innerJoin(projectPlans, eq(projectPlans.projectId, projects.id))
     .where(
-      and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), sql`NOT ${planningStoppedTold(projects.id)}`, noOpenStop(projects.id)),
+      and(projectHalted(projects.id), isNotNull(projectPlans.planStoppedAt), sql`NOT ${planningStoppedTold(projects.id)}`, noOpenStop(projects.id)),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
   const stops = stopped.map((row): DuePlanReportRow => ({ subject: REPORT_SUBJECT.planningStopped, projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts }));

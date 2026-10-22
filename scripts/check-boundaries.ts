@@ -5,7 +5,8 @@
  * matrix, named-only, stand-in and bounds-table files, internal modules, the symbols only one module
  * may import, subpath entries, test-only subpaths and the classes of another context a package may
  * import. The others are no import rule, run here so each needs no gate of its own: price-column defaults, unsupplied
- * optional dependencies, stack literals, table ownership, the simulator's run budgets, raw copies of a
+ * optional dependencies, stack literals, table ownership, the project record's columns, the
+ * simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
  * recognise, and the line limits of the modules split by role.
  *
@@ -27,6 +28,7 @@ import { run as optionalDeps } from "./lints/optional-deps.js";
 import { run as packageImports } from "./lints/package-imports.js";
 import { run as predicateCopies } from "./lints/predicate-copies.js";
 import { run as priceDefaults } from "./lints/price-defaults.js";
+import { run as projectRecord } from "./lints/project-record.js";
 import { run as recognisedWording } from "./lints/recognised-wording.js";
 import { run as scriptSubpaths } from "./lints/script-subpaths.js";
 import { run as simulatorRunBudget } from "./lints/simulator-run-budget.js";
@@ -44,6 +46,7 @@ const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   optionalDeps,
   stackLiterals,
   tableOwnership,
+  projectRecord,
   subpathEntries,
   scriptSubpaths,
   testOnlySubpaths,

@@ -20,8 +20,8 @@ import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 // is neither repeated every cycle nor read as acceptance. A sweep that fails is a defect,
 // never Accepted: it opens a defect item given up at once, so the plan is repaired around it like
 // any task given up. A sweep that could not run is counted on the project, durably
-// (projects.acceptance_faults), against the dispatch path's INFRASTRUCTURE_FAULT_BUDGET: within it,
-// a substrate failure halts the project on infrastructure (resumed by itself once the substrate
+// (Quality's acceptance_sweep_faults), against the dispatch path's INFRASTRUCTURE_FAULT_BUDGET:
+// within it, a substrate failure halts the project on infrastructure (resumed by itself once the substrate
 // probe passes, then swept again), and any other fault opens a defect given up at once with the
 // recorded cause, so the plan is repaired around it. The fault past the budget halts the project as
 // undeliverable (category fault, which only the operator ends), with the recorded cause: a sweep
@@ -61,7 +61,7 @@ export interface AcceptanceStore {
    * with nothing written.
    */
   recordAccepted(sweep: SweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved" | AcceptanceUncovered>;
-  /** Counts one sweep that could not run on the project (projects.acceptance_faults); returns the count with it. */
+  /** Counts one sweep that could not run on the project (acceptance_sweep_faults); returns the count with it. */
   recordSweepFault(projectId: ProjectId): Promise<number>;
   /**
    * Records a failed sweep, with the outcome of every stored check it ran and each guarantee's

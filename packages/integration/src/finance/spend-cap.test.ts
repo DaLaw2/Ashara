@@ -108,7 +108,7 @@ const ProjectRowSchema = z.object({
 
 async function projectRow(projectId: ProjectId): Promise<z.infer<typeof ProjectRowSchema>> {
   const result = await db.execute(sql`
-    SELECT ${projectState} AS status, blocked_error_class AS "blockedErrorClass", blocked_reason AS "blockedReason"
+    SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedErrorClass", (SELECT b.reason FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedReason"
     FROM projects WHERE id = ${projectId}`);
   return ProjectRowSchema.parse(result.rows[0]);
 }

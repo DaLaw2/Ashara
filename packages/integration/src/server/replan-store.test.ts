@@ -428,7 +428,8 @@ describe("a late client change is planned", () => {
     const store = createReplanStore(suite.db, recordingLogger());
     for (let attempt = 0; attempt < 3; attempt += 1) await store.recordFailedAttempt(counted.projectId, "stub provider unavailable", "provider");
     // A row counted before failures named their party names no party.
-    await suite.db.execute(sql`UPDATE projects SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed' WHERE id = ${legacy.projectId}`);
+    await suite.db.execute(sql`INSERT INTO project_plans (project_id, replan_attempts, replan_last_error) VALUES (${legacy.projectId}, 3, 'an earlier attempt failed')
+      ON CONFLICT (project_id) DO UPDATE SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed'`);
     const mock = pipelineModel({ revision: { notTasks: "never asked" } });
 
     const outcomes = await replanner().runPending();
@@ -470,7 +471,7 @@ describe("a late client change is planned", () => {
     // Waiting out its backoff, the project is not replanned again, and nothing was counted against it.
     expect(await replanner(containment).runPending()).toEqual([]);
     expect(await projectRow(broken)).toMatchObject({ category: null });
-    const attempts = await suite.db.execute(sql`SELECT replan_attempts AS "attempts" FROM projects WHERE id = ${broken}`);
+    const attempts = await suite.db.execute(sql`SELECT replan_attempts AS "attempts" FROM project_plans WHERE project_id = ${broken}`);
     expect(z.array(z.object({ attempts: z.number() })).parse(attempts.rows)).toEqual([{ attempts: 0 }]);
 
     expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { projects, qualifiedColumn, type Database, type DbHandle } from "@ashara/db";
 import { rosterRoles } from "@ashara/db/schema/organization";
@@ -60,10 +60,10 @@ export const roleOfLatestRoster = (projectId: string, roleId: AnyColumn): SQL =>
     AND r.revision = (SELECT MAX(l.revision) FROM roster_roles l WHERE l.project_id = ${projectId}))`;
 
 /**
- * Projects every condition of `admitted` admits, with vision v1, no roster and no planning outcome
- * stamped, oldest first, each with vision v1 as stored. The caller states which projects a roster is
- * derived for in the words of the contexts that own the facts (a project at work, no stop awaiting the
- * Liaison, nothing planned yet), which Organization reads only through their published reads. A
+ * Projects every condition of `admitted` admits, with vision v1 and no roster, oldest first, each
+ * with vision v1 as stored. The caller states which projects a roster is derived for in the words of
+ * the contexts that own the facts (a project at work, no stop awaiting the Liaison, nothing planned
+ * yet and no planning outcome stamped), which Organization reads only through their published reads. A
  * project already planned before rosters existed is not listed: its items were written without
  * owners, and a roster now would own none.
  */
@@ -72,7 +72,7 @@ export async function listProjectsAwaitingRoster(db: DbHandle, admitted: readonl
   const rows = await db
     .select({ id: projects.id, vision: firstVision })
     .from(projects)
-    .where(and(...admitted, isNull(projects.firstPlannedAt), isNull(projects.planStoppedAt), sql`${firstVision} IS NOT NULL`, noRoster()))
+    .where(and(...admitted, sql`${firstVision} IS NOT NULL`, noRoster()))
     .orderBy(asc(projects.createdAt), asc(projects.id));
   return rows.map((row) => ({ projectId: parseProjectId(row.id, "projects.id"), vision: row.vision }));
 }

@@ -233,7 +233,7 @@ const ProjectRow = z.object({ status: z.string(), category: z.string().nullable(
 
 async function projectOf(projectId: ProjectId): Promise<z.infer<typeof ProjectRow>> {
   const result = await db.execute(sql`
-    SELECT ${projectState} AS status, blocked_category AS category, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
+    SELECT ${projectState} AS status, (SELECT b.kind FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS category, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass" FROM projects WHERE id = ${projectId}`);
   return ProjectRow.parse(result.rows[0]);
 }
 

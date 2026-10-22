@@ -33,7 +33,7 @@ describe("Dispatch held until the first plan is reported", () => {
   test("a planned project is listed active only once its first-plan report is posted", async () => {
     const unplanned = await projects.create(`active-projects-test-${NONCE}-unplanned`, clientId);
     const planned = await projects.create(`active-projects-test-${NONCE}-planned`, clientId);
-    await db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id = ${planned.id}`);
+    await db.execute(sql`INSERT INTO project_plans (project_id, first_planned_at) VALUES (${planned.id}, now())`);
 
     const active = await projects.listActiveIds();
     expect(active).toContain(unplanned.id);

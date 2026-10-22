@@ -205,7 +205,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
 
     const ended = await new ContinuousRunner(new CoreLoop(deps), recordingLogger(), { databaseUrl: null, idleIntervalMs: 60_000 }).run(abort.signal, async () => {
       // The halt is recorded as the deployment's cap before the client sends its stop.
-      const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
+      const halted = await db.execute(sql`SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass" FROM projects WHERE id = ${projectId}`);
       expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
       stopId = (await messages.insertInbound({ projectId, kind: "stop", body: "Please stop.", inReplyTo: null })).id;
     });
@@ -296,7 +296,7 @@ describe("the deployment cap halts two projects", () => {
     expect(await blockedReports(first)).toHaveLength(1);
     expect(await blockedReports(second)).toHaveLength(1);
     for (const id of ours) {
-      const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${id}`);
+      const halted = await db.execute(sql`SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass" FROM projects WHERE id = ${id}`);
       expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
     }
   });
@@ -613,7 +613,7 @@ describe("a turn refused at the project's spend cap", () => {
     const lessons = await db.execute(sql`SELECT count(*)::int AS n FROM failed_approaches WHERE task_id = ${itemId}`);
     expect(lessons.rows).toEqual([{ n: 0 }]);
     const project = await db.execute(
-      sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS reason FROM projects WHERE id = ${projectId}`,
+      sql`SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass", (SELECT b.reason FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS reason FROM projects WHERE id = ${projectId}`,
     );
     // The class the Liaison names the project's own cap by (SPEND_CAP_ERROR_CLASS), as finance records it.
     expect(project.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.project, reason: expect.stringMatching(/^budget_cap: the spend cap of project/) }]);

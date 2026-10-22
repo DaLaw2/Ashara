@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import type { LintContext } from "./lint.js";
+import { loadLintContext, type LintContext } from "./lint.js";
+import { run as projectRecord } from "./project-record.js";
 import { run as recognisedWording } from "./recognised-wording.js";
+import { parseRules } from "./rules.js";
 
 const REPO = path.join(import.meta.dirname, "..", "..");
 const LINTS_DIR = import.meta.dirname;
@@ -83,5 +85,64 @@ describe("recognised-wording", () => {
   test("the repository's simulator spells every recognised wording once", () => {
     const context: LintContext = { root: REPO, packagesDir: path.join(REPO, "packages"), rulesRelative: "boundary-rules.toml", toml: "", rules: new Map(), packageDirs: [], packages: [] };
     expect(recognisedWording(context)).toEqual([]);
+  });
+});
+
+const PROJECT_RECORD = `export const projects = pgTable("projects", {
+  id: uuid().primaryKey(),
+  name: text().notNull(),
+  lifecycle: varchar({ length: 20 }).notNull(),
+  clientId: uuid("client_id").notNull(),
+  createdAt: timestamptz("created_at").notNull(),
+  workspacePath: text("workspace_path"),
+EXTRA});
+`;
+
+/** A tree holding the project schema (with `extra` columns) and one delivery file of `source`. */
+function projectRecordTree(extra: string, source: string): LintContext {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "project-record-"));
+  scratch = root;
+  const schema = path.join(root, "packages", "db", "src", "schema", "project.ts");
+  fs.mkdirSync(path.dirname(schema), { recursive: true });
+  fs.writeFileSync(schema, PROJECT_RECORD.replace("EXTRA", extra));
+  const pkgRoot = path.join(root, "packages", "delivery");
+  const file = path.join(pkgRoot, "src", "repo.ts");
+  const rule = parseRules("[delivery]\nallow = []\n", "boundary-rules.toml").get("delivery");
+  if (rule === undefined) throw new Error("the delivery rule did not parse");
+  return {
+    root,
+    packagesDir: path.join(root, "packages"),
+    rulesRelative: "boundary-rules.toml",
+    toml: "",
+    rules: new Map(),
+    packageDirs: ["db", "delivery"],
+    packages: [{ name: "delivery", rule, root: pkgRoot, contents: new Map([[file, source]]), relativeTo: (f: string) => path.relative(pkgRoot, f) }],
+  };
+}
+
+describe("project-record", () => {
+  test("the project record with its identity, workspace and lifecycle alone, read by no foreign field, is clean", () => {
+    expect(projectRecord(projectRecordTree("", "select({ id: projects.id, lifecycle: projects.lifecycle })\n"))).toEqual([]);
+  });
+
+  test("a per-context column declared on projects is a violation", () => {
+    const violations = projectRecord(projectRecordTree('  planAttempts: integer("plan_attempts").notNull(),\n', ""));
+    expect(violations.map((v) => v.file)).toEqual([path.join("packages", "db", "src", "schema", "project.ts")]);
+  });
+
+  test("a planning, halt-cause or fault field read on projects outside the schema is a violation", () => {
+    const source = "const a = projects.planAttempts;\nsql`SELECT 1 FROM projects WHERE projects.blocked_reason IS NULL`;\nconst c = projects.acceptanceFaults;\n";
+    const violations = projectRecord(projectRecordTree("", source));
+    expect(violations.map((v) => `${v.line} ${v.specifier}`)).toEqual(["1 projects.planAttempts", "2 projects.blocked_reason", "3 projects.acceptanceFaults"]);
+  });
+
+  test("a missing project schema fails closed", () => {
+    const context = projectRecordTree("", "");
+    fs.rmSync(path.join(context.root, "packages", "db", "src", "schema", "project.ts"));
+    expect(projectRecord(context)).toHaveLength(1);
+  });
+
+  test("the repository's project record holds no per-context state", () => {
+    expect(projectRecord(loadLintContext(REPO))).toEqual([]);
   });
 });

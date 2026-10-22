@@ -1,9 +1,9 @@
-import { and, asc, eq, inArray, isNotNull, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { domainEvents, projects } from "@ashara/db";
-import { correctionHolds, planRepairs, planRevisions, workItems } from "@ashara/db/schema/delivery";
+import { correctionHolds, planRepairs, planRevisions, projectPlans, workItems } from "@ashara/db/schema/delivery";
 import { clientMessageBodies, firstPlanTold, noOpenAnswer, noOpenStop, planRevisionTold, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { currentStoredVision, currentVisionVersion, parseStoredVision, type PublishedStoredVision } from "../acl/engagement-vision-acl.js";
 import { CapabilityLevelSchema } from "../acl/finance-acl.js";
@@ -11,7 +11,7 @@ import { latestStoredChecks, StoredDecidesSchema } from "../acl/quality-acl.js";
 import { lastCompletedAttempts } from "../acl/workplace-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 import { holdForCorrection, takeEvents } from "../domain/index.js";
-import { pendingCorrection, pendingRepair } from "../predicates.js";
+import { firstPlanned, pendingCorrection, pendingRepair } from "../predicates.js";
 import type { AttemptGrade } from "../replan-port.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
@@ -19,6 +19,7 @@ import { IDLE_OPEN_WORK_ITEM_STATUSES } from "../work-item-language/work-item-st
 import { citesAnyOf } from "./citation.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
+import { recordReplanFailure as countReplanFailure, revisionWritten } from "./project-plan.js";
 import { rowToWorkItem, workItemSaveRow } from "./work-item-adapter.js";
 import { WorkItemRowRepository } from "./work-item.js";
 
@@ -74,20 +75,21 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<Pr
     .select({
       id: projects.id,
       name: projects.name,
-      replanAttempts: projects.replanAttempts,
-      replanLastError: projects.replanLastError,
-      replanLastFailure: projects.replanLastFailure,
+      replanAttempts: projectPlans.replanAttempts,
+      replanLastError: projectPlans.replanLastError,
+      replanLastFailure: projectPlans.replanLastFailure,
       revisionsSinceReview: revisionsSince("client_change", "replan_bound"),
       repairsSinceReview: revisionsSince("repair", "plan_repair"),
       nextRevision: sql<unknown>`(SELECT COALESCE(max(r.revision), 1) + 1 FROM plan_revisions r WHERE r.project_id = projects.id)`,
       vision: currentStoredVision(projects.id),
     })
     .from(projects)
+    .innerJoin(projectPlans, eq(projectPlans.projectId, projects.id))
     .where(
       and(
         projectAtWork(),
         sql`${currentStoredVision(projects.id)} IS NOT NULL`,
-        isNotNull(projects.firstPlannedAt),
+        firstPlanned(projects.id),
         sql`((${pendingCorrection(projects.id)} AND NOT ${heldTaskInProgress(projects.id)})
           OR (${pendingRepair(projects.id)} AND NOT ${taskInProgress(projects.id)}))`,
         noOpenStop(projects.id),
@@ -207,8 +209,10 @@ type HoldOutcome = { readonly kind: "held"; readonly parked: number } | { readon
 export async function holdCorrection(db: DbHandle, hold: CorrectionHold): Promise<HoldOutcome> {
   const affected = [...new Set(hold.affected)];
   if (affected.length === 0) return { kind: "no-key" };
-  const [project] = await db.select({ firstPlannedAt: projects.firstPlannedAt }).from(projects).where(eq(projects.id, hold.projectId)).for("update");
-  if (!project || project.firstPlannedAt === null) return { kind: "unplanned" };
+  const [locked] = await db.select({ id: projects.id }).from(projects).where(eq(projects.id, hold.projectId)).for("update");
+  if (!locked) return { kind: "unplanned" };
+  const [planned] = await db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, hold.projectId), firstPlanned(projects.id)));
+  if (!planned) return { kind: "unplanned" };
   await db.insert(correctionHolds).values({ projectId: hold.projectId, visionVersion: hold.visionVersion, requestedBy: hold.requestedBy, affected });
 
   const rows = new WorkItemRowRepository(db);
@@ -492,10 +496,7 @@ export async function withPlanRevisionTransaction(
           .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), inArray(planRepairs.workItemId, [...record.repaired])));
       }
       for (const event of record.events) await insertEvent(tx, event);
-      await tx
-        .update(projects)
-        .set({ replanAttempts: 0, replanLastError: null, replanLastFailure: null })
-        .where(eq(projects.id, projectId));
+      await revisionWritten(tx, projectId);
     });
   } catch (err) {
     if (!(err instanceof RevisionReadMoved) && !(err instanceof InvalidStatusTransition)) throw err;
@@ -529,19 +530,15 @@ class ProjectNotAwaitingReplan extends Error {
 
 /** Counts one failed attempt to revise the plan, with its error and whose failure it was; returns the count after it. */
 export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, error: string, failure: "model" | "provider"): Promise<number> {
-  const [row] = await db
-    .update(projects)
-    .set({ replanAttempts: sql`${projects.replanAttempts} + 1`, replanLastError: error, replanLastFailure: failure })
-    .where(
-      and(
-        eq(projects.id, projectId),
-        projectAtWork(),
-        sql`(${pendingCorrection(projects.id)} OR ${pendingRepair(projects.id)})`,
-      ),
-    )
-    .returning({ replanAttempts: projects.replanAttempts });
-  if (!row) throw new ProjectNotAwaitingReplan(projectId);
-  return row.replanAttempts;
+  return db.transaction(async (tx) => {
+    await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+    const [awaiting] = await tx
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.id, projectId), projectAtWork(), sql`(${pendingCorrection(projects.id)} OR ${pendingRepair(projects.id)})`));
+    if (!awaiting) throw new ProjectNotAwaitingReplan(projectId);
+    return countReplanFailure(tx, projectId, error, failure);
+  });
 }
 
 interface DuePlanRevisionRow {

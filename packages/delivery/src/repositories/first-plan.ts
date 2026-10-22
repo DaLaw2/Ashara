@@ -1,17 +1,19 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { projects } from "@ashara/db";
-import { workItems } from "@ashara/db/schema/delivery";
+import { projectPlans, workItems } from "@ashara/db/schema/delivery";
 import { noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { currentStoredVision, hasVision } from "../acl/engagement-vision-acl.js";
 import { hasRoster, roleOfLatestRoster } from "../acl/organization-roster-acl.js";
+import { noPlanningOutcome } from "../predicates.js";
 import { WorkItemRowRepository } from "./work-item.js";
 import { haltForPlanningStopped } from "./project-halt.js";
+import { planWritten, recordPlanFailure, stopPlanning, type DroppedPlanDependency } from "./project-plan.js";
 
 // Delivery's first plan of a project. A project awaits its first
 // plan while it is active, has a vision, has no work items and has no planning
-// outcome stamped.
+// outcome stamped on its planning record (project-plan.ts).
 
 /** The project was expected to await its first plan and does not. */
 class ProjectNotAwaitingPlan extends Error {
@@ -65,8 +67,7 @@ interface ProjectAwaitingPlanRow {
 const awaitingPlan = () =>
   and(
     projectAtWork(),
-    isNull(projects.firstPlannedAt),
-    isNull(projects.planStoppedAt),
+    noPlanningOutcome(projects.id),
     hasVision(projects.id),
     sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id)`,
     // First planning requires a roster: every task gets an owner.
@@ -74,7 +75,8 @@ const awaitingPlan = () =>
   );
 
 /**
- * Projects awaiting their first plan, oldest first, each with its current vision.
+ * Projects awaiting their first plan, oldest first, each with its current vision and its failed
+ * attempts; a project with no planning record has had none.
  * A project with a stop awaiting the Liaison is not listed; a plan already in
  * progress when the stop lands is still written, and is never dispatched.
  * One statement, so a project and the vision it is listed with are read from the
@@ -85,11 +87,13 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
     .select({
       id: projects.id,
       name: projects.name,
-      planAttempts: projects.planAttempts,
-      planLastError: projects.planLastError,
+      // The planning record's initial state: a project with no row has had no failed attempt.
+      planAttempts: sql<number>`COALESCE(${projectPlans.planAttempts}, 0)`.mapWith(Number),
+      planLastError: projectPlans.planLastError,
       vision: currentStoredVision(projects.id),
     })
     .from(projects)
+    .leftJoin(projectPlans, eq(projectPlans.projectId, projects.id))
     .where(and(awaitingPlan(), noOpenStop(projects.id), noOpenAnswer()))
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
@@ -100,12 +104,6 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
     planLastError: row.planLastError,
     vision: row.vision,
   }));
-}
-
-/** A `dependsOn` entry a first plan's decomposition dropped. */
-export interface DroppedPlanDependency {
-  readonly dependentTaskTitle: string;
-  readonly unresolvedRef: string;
 }
 
 type FirstPlanTransaction<T> =
@@ -144,23 +142,24 @@ export async function withFirstPlanTransaction<T>(
     if (!anyItem) throw new ProjectNotAwaitingPlan(projectId, "stamp a first plan that wrote no work items");
     const unowned = await tasksWithoutRosterOwner(tx, projectId);
     if (unowned.length > 0) throw new FirstPlanTaskUnowned(projectId, unowned);
-    await tx
-      .update(projects)
-      .set({ firstPlannedAt: sql`now()`, planDroppedDependencies: droppedDependencies })
-      .where(eq(projects.id, projectId));
+    await planWritten(tx, projectId, droppedDependencies);
     return { kind: "written", value };
   });
 }
 
+/** Locks the project row for the rest of `tx`, then throws unless it still awaits its first plan. */
+async function lockAwaitingPlan(tx: DbHandle, projectId: ProjectId, operation: string): Promise<void> {
+  await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+  const [awaiting] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), awaitingPlan()));
+  if (!awaiting) throw new ProjectNotAwaitingPlan(projectId, operation);
+}
+
 /** Counts one failed planning attempt with its error; returns the count after it. */
 export async function recordFirstPlanFailure(db: DbHandle, projectId: ProjectId, error: string): Promise<number> {
-  const [row] = await db
-    .update(projects)
-    .set({ planAttempts: sql`${projects.planAttempts} + 1`, planLastError: error })
-    .where(and(eq(projects.id, projectId), awaitingPlan()))
-    .returning({ planAttempts: projects.planAttempts });
-  if (!row) throw new ProjectNotAwaitingPlan(projectId, "record a failed planning attempt");
-  return row.planAttempts;
+  return db.transaction(async (tx) => {
+    await lockAwaitingPlan(tx, projectId, "record a failed planning attempt");
+    return recordPlanFailure(tx, projectId, error);
+  });
 }
 
 /**
@@ -169,13 +168,7 @@ export async function recordFirstPlanFailure(db: DbHandle, projectId: ProjectId,
  */
 export async function stopFirstPlanning(db: DbHandle, projectId: ProjectId): Promise<void> {
   await db.transaction(async (tx) => {
-    await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
-    const [row] = await tx
-      .update(projects)
-      .set({ planStoppedAt: sql`now()` })
-      .where(and(eq(projects.id, projectId), awaitingPlan()))
-      .returning({ lastError: projects.planLastError });
-    if (!row) throw new ProjectNotAwaitingPlan(projectId, "stop planning");
-    await haltForPlanningStopped(tx, projectId, row.lastError);
+    await lockAwaitingPlan(tx, projectId, "stop planning");
+    await haltForPlanningStopped(tx, projectId, await stopPlanning(tx, projectId));
   });
 }
