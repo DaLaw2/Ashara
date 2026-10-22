@@ -22,6 +22,7 @@ interface Totals {
   measuredCalls: number;
   measuredUsd: number;
   unmeasuredEstimateUsd: number;
+  unestimatedCalls: number;
   pendingCalls: number;
   lostCalls: number;
   zeroCostCalls: number;
@@ -31,7 +32,7 @@ interface Totals {
 }
 
 function emptyTotals(): Totals {
-  return { calls: 0, measuredCalls: 0, measuredUsd: 0, unmeasuredEstimateUsd: 0, pendingCalls: 0, lostCalls: 0, zeroCostCalls: 0, cacheCountedCalls: 0, inputTokens: 0, cacheReadTokens: 0 };
+  return { calls: 0, measuredCalls: 0, measuredUsd: 0, unmeasuredEstimateUsd: 0, unestimatedCalls: 0, pendingCalls: 0, lostCalls: 0, zeroCostCalls: 0, cacheCountedCalls: 0, inputTokens: 0, cacheReadTokens: 0 };
 }
 
 function addTo(sum: Totals, row: Totals): void {
@@ -39,6 +40,7 @@ function addTo(sum: Totals, row: Totals): void {
   sum.measuredCalls += row.measuredCalls;
   sum.measuredUsd += row.measuredUsd;
   sum.unmeasuredEstimateUsd += row.unmeasuredEstimateUsd;
+  sum.unestimatedCalls += row.unestimatedCalls;
   sum.pendingCalls += row.pendingCalls;
   sum.lostCalls += row.lostCalls;
   sum.zeroCostCalls += row.zeroCostCalls;
@@ -74,11 +76,16 @@ function unmeasuredDetail(t: Totals, unmeasured: number): string {
   return `: ${[...parts, ...(returned > 0 ? [`${returned} recorded with no cost measured`] : [])].join(", ")}`;
 }
 
+/** The calls with neither a measured cost nor an estimate: an estimate that leaves them out is no worst case. */
+function unestimatedText(count: number): string {
+  return count > 0 ? `, ${count} unestimated (no cost and no estimate: their spend is unknown and in no figure)` : "";
+}
+
 function costLine(t: Totals): string {
   const unmeasured = t.calls - t.measuredCalls;
   return (
     `${t.calls} call(s), cost measured on ${t.measuredCalls}/${t.calls}: ${usd(t.measuredUsd)}` +
-    `${unmeasured > 0 ? `; ${unmeasured} unmeasured (worst-case estimate ${usd(t.unmeasuredEstimateUsd)}${unmeasuredDetail(t, unmeasured)})` : ""}` +
+    `${unmeasured > 0 ? `; ${unmeasured} unmeasured (worst-case estimate ${usd(t.unmeasuredEstimateUsd)}${unestimatedText(t.unestimatedCalls)}${unmeasuredDetail(t, unmeasured)})` : ""}` +
     `${t.zeroCostCalls > 0 ? `; ${t.zeroCostCalls} PRICED AT $0` : ""}`
   );
 }
@@ -418,7 +425,7 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
   };
   lines.push(`  project-level (llm_calls with no task, in no Epic): spend ${spendText(project)} over ${project.calls} call(s)`);
   lines.push(
-    `  run: spend ${spendText({ usd: overall.measuredUsd, calls: overall.calls, unmeasured: overall.calls - overall.measuredCalls })} over ${goalCount} goal task(s), ${perGoal({ usd: overall.measuredUsd, calls: 0, unmeasured: 0 }, goalCount)}; ` +
+    `  run: spend ${spendText({ usd: overall.measuredUsd, calls: overall.calls, unmeasured: overall.calls - overall.measuredCalls })}${unestimatedText(overall.unestimatedCalls)} over ${goalCount} goal task(s), ${perGoal({ usd: overall.measuredUsd, calls: 0, unmeasured: 0 }, goalCount)}; ` +
       `in Epics ${usd(inEpics.usd)} (charged to goal tasks ${usd(attributed.usd)}, unattributed ${usd(unattributed.usd)}), project-level ${usd(project.usd)}`,
   );
   const accounted = inEpics.calls + project.calls;

@@ -18,9 +18,10 @@
  *   npx tsx scripts/trust-ledger.ts append <project-id> --run <label> --facts <facts.json> --mapping-a <reader-a.toml>
  *     --mapping-b <reader-b.toml> --key <key.json> [--hidden <verdict.json>] [--pool <dir>] [--ledger <ledger.jsonl>]
  *
- * The ledger is --ledger, else ASHARA_TRUST_LEDGER. It is refused under the operator's hidden directory in the home
- * directory with LedgerPathRefused,
- * judged by the path alone before anything there is touched, and inside any git work tree. The pick is the run's
+ * The ledger is --ledger, else ASHARA_TRUST_LEDGER. It is refused with LedgerPathRefused when its path, as named or with
+ * every link resolved, is the operator's hidden directory in the home directory or lies under it, the hidden directory
+ * compared both as named and with every link resolved; the check compares paths and opens nothing there. With every
+ * link resolved it is then refused inside any git work tree. The pick is the run's
  * record in the pool's pick ledger (--pool, else ASHARA_TENDER_POOL). Reader A is the in-house mapping reader and
  * reader B the one outside the development loop; both mapped the same packet, whose key is --key. The facts file is
  * the operator's record of what no other input holds: the stage, the tender's stack and kind, who authored the
@@ -41,7 +42,7 @@
  * determined.
  */
 
-import { appendFile, readFile, realpath } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -49,7 +50,7 @@ import { createDb, DEFAULT_DATABASE_URL, type DbHandle } from "@ashara/db";
 import { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import { describeErrorChain, JsonParseFailed, parseJson, parseProjectId, type ProjectId } from "@ashara/shared";
 import type { JudgedVerdict } from "./hidden-verdict.js";
-import { armSchema, type MappingFile, PoolMappingRefused, refuseInsideGitTree } from "./pool-mapping.js";
+import { armSchema, type MappingFile, PoolMappingRefused, realPathOf, refuseInsideGitTree } from "./pool-mapping.js";
 import { poolDirOf, recordedPick, type PickRecord } from "./pool-selection.js";
 import { readRunEvidence } from "./run-evidence.js";
 import { readHidden, readMapping, type ReadMapping } from "./run-report-inputs.js";
@@ -304,7 +305,7 @@ export class MappingDigestMismatch extends Error {
 }
 
 /**
- * A ledger path under the operator's hidden directory, where this command never reads or creates anything.
+ * A ledger whose path `checked` is the hidden directory path `hiddenRoot` or lies under it, by path comparison alone.
  * @testseam trust-ledger.test.ts checks a ledger path there is refused before anything is read
  */
 export class LedgerPathRefused extends Error {
@@ -312,9 +313,13 @@ export class LedgerPathRefused extends Error {
 
   constructor(
     readonly ledger: string,
+    readonly checked: string,
     readonly hiddenRoot: string,
   ) {
-    super(`${COMMAND}: the ledger ${JSON.stringify(ledger)} is under ${JSON.stringify(hiddenRoot)}, which this command never reads or writes; keep the ledger outside it`);
+    super(
+      `${COMMAND}: the ledger ${JSON.stringify(ledger)} is refused: its path ${JSON.stringify(checked)} is ${JSON.stringify(hiddenRoot)}, ` +
+        `the hidden directory of the home directory, or lies under it; keep the ledger outside it`,
+    );
     this.name = "LedgerPathRefused";
   }
 }
@@ -324,24 +329,23 @@ const HIDDEN_DIR_NAME = ["ashara", "hidden"].join("-");
 
 function refuseUnderHidden(ledger: string, target: string, hiddenRoot: string): void {
   const relative = path.relative(hiddenRoot, target);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) throw new LedgerPathRefused(ledger, hiddenRoot);
+  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) throw new LedgerPathRefused(ledger, target, hiddenRoot);
 }
 
 /**
- * Refuses a ledger under the hidden directory by its path alone, then inside a git work tree, then under the hidden
- * directory once its links are resolved: nothing is read or created at a refused path.
+ * Refuses a ledger under the hidden directory by its path as named, then with every link of the ledger and of the
+ * hidden directory resolved, and only then inside a git work tree, so git never runs under the hidden directory;
+ * nothing is read or created at a refused path.
  */
-async function refuseLedgerPath(ledger: string): Promise<void> {
-  const hiddenRoot = path.join(homedir(), `.${HIDDEN_DIR_NAME}`);
-  refuseUnderHidden(ledger, path.resolve(ledger), hiddenRoot);
-  refuseInsideGitTree(ledger);
-  let resolved: string;
-  try {
-    resolved = await realpath(ledger);
-  } catch (err) {
-    throw new TrustLedgerInvalid(ledger, "(file)", `cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
-  }
-  refuseUnderHidden(ledger, resolved, hiddenRoot);
+function refuseLedgerPath(ledger: string): void {
+  const namedRoot = path.join(homedir(), `.${HIDDEN_DIR_NAME}`);
+  const realRoot = realPathOf(namedRoot);
+  const named = path.resolve(ledger);
+  refuseUnderHidden(ledger, named, namedRoot);
+  refuseUnderHidden(ledger, named, realRoot);
+  const resolved = realPathOf(ledger);
+  refuseUnderHidden(ledger, resolved, realRoot);
+  refuseInsideGitTree(resolved, "trust ledger");
 }
 
 /** What only the operator knows of a run, per run and per intended guarantee. */
@@ -468,18 +472,18 @@ function evidenceOf(rows: readonly StoredGuaranteeVerdict[]): string {
 
 /**
  * The run's spend per ledger field from its llm_calls totals, an unmeasured call at its worst-case estimate; spend still
- * in flight, of an unknown provider, or unmeasured with no estimate refuses.
+ * in flight, of an unknown provider, or any one call unmeasured with no estimate refuses.
+ * @testseam trust-ledger.test.ts checks one unestimated call among estimated ones refuses
  */
-function spendOf(run: string, calls: Awaited<ReturnType<typeof readRunEvidence>>["calls"]): PairRow["spend"] {
+export function spendOf(run: string, calls: Awaited<ReturnType<typeof readRunEvidence>>["calls"]): PairRow["spend"] {
   const spend = { claudeUsd: 0, deepseekUsd: 0 };
   for (const call of calls) {
     const field = SPEND_FIELDS.get(call.provider);
     if (field === undefined) throw new TrustLedgerAppendRefused(run, `llm_calls of provider ${call.provider} have no spend field on the ledger`);
     if (call.pendingCalls > 0) throw new TrustLedgerAppendRefused(run, `${call.pendingCalls} ${call.provider} call(s) are admitted and not yet recorded; the run's spend is not known yet`);
     if (call.zeroCostCalls > 0) throw new TrustLedgerAppendRefused(run, `${call.zeroCostCalls} ${call.provider} call(s) are priced at exactly $0, which llm_calls never records`);
-    const unmeasured = call.calls - call.measuredCalls;
-    if (unmeasured > 0 && call.unmeasuredEstimateUsd === 0) {
-      throw new TrustLedgerAppendRefused(run, `${unmeasured} ${call.provider} call(s) are unmeasured with no worst-case estimate; their spend is unknown, never $0`);
+    if (call.unestimatedCalls > 0) {
+      throw new TrustLedgerAppendRefused(run, `${call.unestimatedCalls} ${call.provider} call(s) are unmeasured with no worst-case estimate; their spend is unknown, never $0`);
     }
     spend[field] += call.measuredUsd + call.unmeasuredEstimateUsd;
   }
@@ -567,7 +571,7 @@ function pairRows(inputs: PairInputs): Omit<PairRow, "seq">[] {
  * @testseam trust-ledger.test.ts appends fixture runs without the CLI
  */
 export async function appendRun(db: DbHandle, options: AppendOptions): Promise<number> {
-  await refuseLedgerPath(options.ledger);
+  refuseLedgerPath(options.ledger);
   const text = await readLedgerText(options.ledger);
   const before = parseLedger(options.ledger, text);
   const readers = {

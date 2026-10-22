@@ -146,16 +146,16 @@ describe("output path", () => {
   test("inside the git work tree is refused", () => {
     let caught: unknown;
     try {
-      refuseInsideGitTree(path.join(HERE, "packet.json"));
+      refuseInsideGitTree(path.join(HERE, "packet.json"), "packet");
     } catch (err) {
       caught = err;
     }
     expect(caught).toBeInstanceOf(PoolMappingRefused);
     expect(caught instanceof PoolMappingRefused ? caught.status : 0).toBe(2);
-    expect(caught instanceof PoolMappingRefused ? caught.detail : "").toMatch(/is inside the git work tree/);
+    expect(caught instanceof PoolMappingRefused ? caught.detail : "").toMatch(/the packet .*, resolved to .*, is inside the git work tree/);
   });
 
   test("outside every work tree is allowed", () => {
-    expect(() => refuseInsideGitTree(path.join(dir, "packet.json"))).not.toThrow();
+    expect(() => refuseInsideGitTree(path.join(dir, "packet.json"), "packet")).not.toThrow();
   });
 });

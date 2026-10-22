@@ -18,13 +18,15 @@ const usd = z.coerce.number().nonnegative();
 
 const ProjectRowSchema = z.object({ id: z.guid(), name: z.string(), status: z.string() });
 
-const CallTotalsRowSchema = z.object({
+/** @testseam run-evidence.test.ts checks unestimatedCalls is required */
+export const CallTotalsRowSchema = z.object({
   taskId: z.guid().nullable(),
   provider: z.string(),
   calls: count,
   measuredCalls: count,
   measuredUsd: usd,
   unmeasuredEstimateUsd: usd,
+  unestimatedCalls: count,
   pendingCalls: count,
   lostCalls: count,
   zeroCostCalls: count,
@@ -83,7 +85,9 @@ type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
  * One task's (or, with taskId null, the project's own) llm_calls of one provider. An unmeasured
  * row is one of three: `pendingCalls` admitted and not yet recorded, `lostCalls`
  * admitted by a process that ended before recording them (unmeasured_after_crash), and the rest
- * recorded with no cost measured. `zeroCostCalls` counts rows priced at exactly $0, which the
+ * recorded with no cost measured. `unmeasuredEstimateUsd` sums the worst-case estimates of the
+ * unmeasured rows that carry one; `unestimatedCalls` counts those that carry none, whose spend is
+ * unknown and in no figure. `zeroCostCalls` counts rows priced at exactly $0, which the
  * ledger must never write; `cacheCountedCalls` are the
  * rows reporting both input and cache-read tokens, the only ones a cache-hit share is taken over.
  */

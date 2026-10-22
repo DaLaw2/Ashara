@@ -1,6 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
@@ -186,9 +188,35 @@ beforeEach(async () => {
   await writeFile(file("hidden.json"), JSON.stringify(hidden));
 });
 
+const HOME = process.env["HOME"];
+
 afterEach(async () => {
+  if (HOME === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = HOME;
   await rm(work, { recursive: true, force: true });
 });
+
+/** A home directory in the test's temp dir, so no test resolves or touches the operator's own hidden directory. */
+async function tempHome(name: string): Promise<string> {
+  const home = file(name);
+  await mkdir(home);
+  return realpathSync(home);
+}
+
+const HIDDEN = `.${["ashara", "hidden"].join("-")}`;
+
+async function sha256Of(name: string): Promise<string> {
+  return createHash("sha256").update(await readFile(name)).digest("hex");
+}
+
+async function refusalOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (err) {
+    return err;
+  }
+  throw new Error("the append was not refused");
+}
 
 describe("trust-ledger append", () => {
   test("the mapping rows, then the pair rows, are appended and read back through the ledger reader", async () => {
@@ -230,15 +258,69 @@ describe("trust-ledger append", () => {
     await expect(appendRun(db, options({ hidden: file("hidden.json") }))).rejects.toThrow(MappingDigestMismatch);
   });
 
-  test("a ledger path inside a git work tree is refused before anything is read", async () => {
+  test("a ledger path inside a git work tree is refused before anything is read, the refusal naming the trust ledger", async () => {
     const inside = path.join(REPO_ROOT, "scripts", `trust-ledger-test-${randomUUID().slice(0, 8)}.jsonl`);
 
-    await expect(appendRun(db, options({ ledger: inside }))).rejects.toThrow(PoolMappingRefused);
+    const refusal = await refusalOf(appendRun(db, options({ ledger: inside })));
+
+    expect(refusal).toBeInstanceOf(PoolMappingRefused);
+    expect(refusal instanceof Error ? refusal.message : "").toMatch(/the trust ledger ".*", resolved to .*, is inside the git work tree .*; keep the trust ledger outside every work tree/);
   });
 
-  test("a ledger path under the home hidden directory is refused by its path alone", async () => {
-    const hidden = path.join(homedir(), `.${["ashara", "hidden"].join("-")}`,`trust-ledger-test-${randomUUID().slice(0, 8)}`, "ledger.jsonl");
+  test("a ledger symlinked into a git work tree is refused on its resolved path, and the ledger is untouched", async () => {
+    const tree = file("tree");
+    await mkdir(tree);
+    expect(spawnSync("git", ["init", "-q", tree], { encoding: "utf8" }).status).toBe(0);
+    const real = path.join(tree, "ledger.jsonl");
+    await writeFile(real, await readFile(file("ledger.jsonl")));
+    await symlink(real, file("linked.jsonl"));
+    const before = await sha256Of(real);
 
-    await expect(appendRun(db, options({ ledger: hidden }))).rejects.toThrow(LedgerPathRefused);
+    await expect(appendRun(db, options({ ledger: file("linked.jsonl") }))).rejects.toThrow(PoolMappingRefused);
+
+    expect(await sha256Of(real)).toBe(before);
+  });
+
+  test("a ledger under the hidden directory of a symlinked home is refused", async () => {
+    const home = await tempHome("home");
+    await mkdir(path.join(home, HIDDEN));
+    await symlink(home, file("home-link"));
+    process.env["HOME"] = file("home-link");
+
+    await expect(appendRun(db, options({ ledger: path.join(home, HIDDEN, "ledger.jsonl") }))).rejects.toThrow(LedgerPathRefused);
+  });
+
+  test("a ledger in the directory the hidden directory links to is refused", async () => {
+    const home = await tempHome("home");
+    const target = await tempHome("hidden-target");
+    await symlink(target, path.join(home, HIDDEN));
+    process.env["HOME"] = home;
+
+    await expect(appendRun(db, options({ ledger: path.join(target, "ledger.jsonl") }))).rejects.toThrow(LedgerPathRefused);
+  });
+
+  test("the refusal under the hidden directory states the path it compared and the directory it compared against", async () => {
+    const home = await tempHome("home");
+    process.env["HOME"] = home;
+    const ledger = path.join(home, HIDDEN, "nested", "ledger.jsonl");
+
+    const refusal = await refusalOf(appendRun(db, options({ ledger })));
+
+    expect(refusal).toBeInstanceOf(LedgerPathRefused);
+    expect(refusal instanceof Error ? refusal.message : "").toBe(
+      `trust-ledger append: the ledger ${JSON.stringify(ledger)} is refused: its path ${JSON.stringify(ledger)} is ${JSON.stringify(path.join(home, HIDDEN))}, ` +
+        "the hidden directory of the home directory, or lies under it; keep the ledger outside it",
+    );
+  });
+
+  test("a pair row that fails the row schema is refused and leaves the ledger byte-identical", async () => {
+    // A pick's commit may be any 7 to 64 hex digits; a pair row records a full 40-digit commit only.
+    const pick = { kind: "pick", run: RUN, commit: "a".repeat(12), tender: "T1", seed: SEED, reason: "drawn by seed", at: "2030-01-01T00:00:00Z" };
+    await writeFile(path.join(file("pool"), "ledger.jsonl"), `${JSON.stringify(pick)}\n`);
+    const before = await sha256Of(file("ledger.jsonl"));
+
+    await expect(appendRun(db, options({ hidden: file("hidden.json") }))).rejects.toThrow(/commit: a commit is a full 40-digit lowercase hex sha/);
+
+    expect(await sha256Of(file("ledger.jsonl"))).toBe(before);
   });
 });

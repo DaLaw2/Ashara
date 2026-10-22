@@ -43,6 +43,7 @@ function evidence(tasks: readonly Omit<Task, "title" | "status">[]): Evidence {
       measuredCalls: t.calls.length,
       measuredUsd: 0.01 * t.calls.length,
       unmeasuredEstimateUsd: 0,
+      unestimatedCalls: 0,
       pendingCalls: 0,
       lostCalls: 0,
       zeroCostCalls: 0,
@@ -175,6 +176,7 @@ describe("formatRunReport cost per Epic and goal task", () => {
       measuredCalls: calls.filter((c) => c.costUsd !== null).length,
       measuredUsd: calls.reduce((sum, c) => sum + (c.costUsd === null ? 0 : c.costUsd), 0),
       unmeasuredEstimateUsd: 0,
+      unestimatedCalls: 0,
       pendingCalls: 0,
       lostCalls: 0,
       zeroCostCalls: 0,
@@ -802,5 +804,18 @@ describe("run-report --mapping with a mapping file that fails the schema", () =>
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`mapping file ${JSON.stringify(mapping)}: `);
     expect(result.stderr).toMatch(/packet: a digest is sha256:/);
+  });
+});
+
+describe("formatRunReport: a call with neither a cost nor an estimate", () => {
+  test("is named as unestimated beside the worst-case estimate of the others, in the totals and the run line", () => {
+    const base = evidence([{ taskId: TASK, sessions: [], calls: [] }]);
+    const [row] = base.calls;
+    if (row === undefined) throw new Error("fixture has no llm_calls row");
+    const mixed = { ...row, taskId: null, provider: "deepseek", calls: 2, measuredCalls: 0, measuredUsd: 0, unmeasuredEstimateUsd: 0.5, unestimatedCalls: 1 };
+    const lines = formatRunReport({ ...base, calls: [mixed] }).text.split("\n");
+
+    expect(lines.find((line) => line.startsWith("  all providers: "))).toContain("2 unmeasured (worst-case estimate $0.500000, 1 unestimated");
+    expect(lines.find((line) => line.startsWith("  run: "))).toContain("1 unestimated");
   });
 });

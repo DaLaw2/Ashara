@@ -27,6 +27,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -50,7 +51,7 @@ export class PoolMappingRefused extends Error {
   }
 }
 
-/** @testseam pool-mapping.test.ts checks a missing or repeated intended id throws this type naming the id */
+/** A reader's mapping file refused, naming the intended id at fault when one is. */
 export class MappingFileInvalid extends Error {
   constructor(
     readonly source: string,
@@ -246,14 +247,42 @@ function gitEnv(): NodeJS.ProcessEnv {
   return { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))), LC_ALL: "C", LANGUAGE: "C" };
 }
 
-/** Refuses an output path inside any git work tree, ignored or not: a packet, key or ledger holds hidden material. */
-export function refuseInsideGitTree(out: string): void {
-  const target = path.resolve(out);
+function isMissing(err: unknown): boolean {
+  return err instanceof Error && "code" in err && err.code === "ENOENT";
+}
+
+/**
+ * `file` with every symbolic link resolved. A path that does not exist yet resolves through its nearest existing
+ * ancestor, and a dangling link through its target, so a path is judged where a write to it would land.
+ */
+export function realPathOf(file: string): string {
+  const target = path.resolve(file);
+  try {
+    return realpathSync(target);
+  } catch (err) {
+    if (!isMissing(err)) throw new PoolMappingRefused(2, `cannot resolve the links of ${target}: ${describeErrorChain(err)}`, { cause: err });
+  }
   const parent = path.dirname(target);
-  const top = spawnSync("git", ["-C", parent, "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnv() });
-  if (top.error !== undefined) throw new PoolMappingRefused(2, `cannot run git to check ${target}: ${top.error.message}`, { cause: top.error });
-  if (top.status === 0) throw new PoolMappingRefused(2, `${target} is inside the git work tree ${top.stdout.trim()}; write packets and keys outside every work tree`);
-  if (!/not a git repository/.test(top.stderr)) throw new PoolMappingRefused(2, `cannot tell whether ${target} is in a git work tree: ${top.stderr.trim()}`);
+  if (parent === target) throw new PoolMappingRefused(2, `cannot resolve the links of ${target}: the root does not exist`);
+  try {
+    if (lstatSync(target).isSymbolicLink()) return realPathOf(path.resolve(parent, readlinkSync(target)));
+  } catch (err) {
+    if (!isMissing(err)) throw new PoolMappingRefused(2, `cannot resolve the links of ${target}: ${describeErrorChain(err)}`, { cause: err });
+  }
+  return path.join(realPathOf(parent), path.basename(target));
+}
+
+/**
+ * Refuses a path inside any git work tree, ignored or not, judged at `file` with every link resolved: a packet, key or
+ * trust ledger holds hidden material. `what` names the file in the refusal.
+ */
+export function refuseInsideGitTree(file: string, what: string): void {
+  const target = realPathOf(file);
+  const checked = `the ${what} ${JSON.stringify(file)}, resolved to ${target},`;
+  const top = spawnSync("git", ["-C", path.dirname(target), "rev-parse", "--show-toplevel"], { encoding: "utf8", env: gitEnv() });
+  if (top.error !== undefined) throw new PoolMappingRefused(2, `cannot run git to check whether ${checked} is in a git work tree: ${top.error.message}`, { cause: top.error });
+  if (top.status === 0) throw new PoolMappingRefused(2, `${checked} is inside the git work tree ${top.stdout.trim()}; keep the ${what} outside every work tree`);
+  if (!/not a git repository/.test(top.stderr)) throw new PoolMappingRefused(2, `cannot tell whether ${checked} is in a git work tree: ${top.stderr.trim()}`);
 }
 
 async function writeNew(out: string, text: string): Promise<void> {
@@ -312,8 +341,8 @@ async function exportCommand(argv: readonly string[]): Promise<void> {
   const packetPath = required(values, "--packet");
   const keyPath = required(values, "--key");
   if (path.resolve(packetPath) === path.resolve(keyPath)) throw new PoolMappingRefused(1, "--packet and --key name the same file");
-  refuseInsideGitTree(packetPath);
-  refuseInsideGitTree(keyPath);
+  refuseInsideGitTree(packetPath, "packet");
+  refuseInsideGitTree(keyPath, "packet key");
   const sourcePath = required(values, "--source");
   const source = parseJson(z.unknown(), await readText(sourcePath, "source"), path.resolve(sourcePath));
   const { packet, key } = exportPacket(source, required(values, "--seed"));

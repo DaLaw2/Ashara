@@ -5,7 +5,11 @@ import type { DbHandle } from "@ashara/db";
 // record: what another context reads of the ledger goes through these, never a query of its own.
 // Each returns the rows as Postgres returns them; the reader parses them with its own schema.
 
-/** The project's calls per task (null for the project's own) and provider: counts, measured and estimated cost, and tokens. */
+/**
+ * The project's calls per task (null for the project's own) and provider: counts, measured and estimated cost, and
+ * tokens. `unestimatedCalls` counts the calls with neither a measured cost nor an estimate, which `unmeasuredEstimateUsd`
+ * leaves out.
+ */
 export async function callTotalsByTaskAndProvider(db: DbHandle, projectId: string): Promise<readonly unknown[]> {
   const result = await db.execute(sql`
     SELECT task_id AS "taskId", provider,
@@ -13,6 +17,7 @@ export async function callTotalsByTaskAndProvider(db: DbHandle, projectId: strin
            COUNT(cost_usd)::int AS "measuredCalls",
            COALESCE(SUM(cost_usd), 0)::float8 AS "measuredUsd",
            COALESCE(SUM(estimated_cost_usd) FILTER (WHERE cost_usd IS NULL), 0)::float8 AS "unmeasuredEstimateUsd",
+           COUNT(*) FILTER (WHERE cost_usd IS NULL AND estimated_cost_usd IS NULL)::int AS "unestimatedCalls",
            COUNT(*) FILTER (WHERE state = 'pending')::int AS "pendingCalls",
            COUNT(*) FILTER (WHERE state = 'unmeasured_after_crash')::int AS "lostCalls",
            COUNT(*) FILTER (WHERE cost_usd = 0)::int AS "zeroCostCalls",
