@@ -87,7 +87,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     name: "task origin (goal task, product scaffold, review, ...)",
     owners: ["packages/delivery/src/"],
     patterns: [/origin'?\s*(?:===|!==|==|!=|=|<>)\s*['"](?:decomposition|product-scaffold|sprint0|review|check|environment-change|acceptance)['"]/],
-    use: "goalTaskSql, isGoalTask, productScaffoldTask, isProductScaffoldOrigin, isSprint0Origin or reviewTask from @ashara/delivery/predicates",
+    use: "goalTaskSql, isGoalTask, productScaffoldTask, isProductScaffoldOrigin, isSprint0Origin, isCheckOrigin, isEnvironmentChangeOrigin or reviewTask from @ashara/delivery/predicates",
     exempt: [INTEGRATION],
     exemptDeclarations: [],
   },

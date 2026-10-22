@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { exportPacket, MappingFileInvalid, packetText, parseMappingFile, PoolMappingRefused, readingOrder, refuseInsideGitTree } from "./pool-mapping.js";
 
-const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEED = "5".repeat(64);
 const VERDICTS = ["pass", "fail", "unjudged"];
 const EVIDENCE = ["interface-probe-evidence", "stored-row-evidence"];
@@ -146,7 +146,7 @@ describe("output path", () => {
   test("inside the git work tree is refused", () => {
     let caught: unknown;
     try {
-      refuseInsideGitTree(path.join(SCRIPTS, "packet.json"));
+      refuseInsideGitTree(path.join(HERE, "packet.json"));
     } catch (err) {
       caught = err;
     }

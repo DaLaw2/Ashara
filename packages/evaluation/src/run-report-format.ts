@@ -4,13 +4,13 @@
  */
 
 import { z } from "zod";
-import { isGoalTask } from "@ashara/delivery/predicates";
+import { isCheckOrigin, isEnvironmentChangeOrigin, isGoalTask } from "@ashara/delivery/predicates";
 import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
-import type { readRunEvidence } from "@ashara/workplace";
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
 import type { MappingFile, PacketKey } from "./pool-mapping.js";
 import type { PickRecord } from "./pool-selection.js";
+import type { readRunEvidence } from "./run-evidence.js";
 
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
 type CallTotals = RunEvidence["calls"][number];
@@ -247,13 +247,13 @@ type Served = { readonly kind: "goal"; readonly goal: WorkItem; readonly as: "ow
 
 function servedBy(item: WorkItem, items: ReadonlyMap<string, WorkItem>): Served {
   if (isGoalTask(item)) return { kind: "goal", goal: item, as: "own" };
-  if (item.workKind === "check" && item.origin === "check") {
+  if (item.workKind === "check" && isCheckOrigin(item.origin)) {
     if (item.checksFor === null) return { kind: "none", why: "check task with no task_spec.checksFor" };
     const checked = items.get(item.checksFor);
     if (checked === undefined || !isGoalTask(checked)) return { kind: "none", why: `check task whose checksFor ${item.checksFor} is no goal task of the project` };
     return { kind: "goal", goal: checked, as: "check" };
   }
-  if (item.origin === "environment-change") {
+  if (isEnvironmentChangeOrigin(item.origin)) {
     if (item.repairsTaskId === null) return { kind: "none", why: "environment change with no work_items.repairs_task_id on record (created before the link was recorded)" };
     const repaired = items.get(item.repairsTaskId);
     if (repaired === undefined || !isGoalTask(repaired)) return { kind: "none", why: `environment change whose repairs_task_id ${item.repairsTaskId} is no goal task of the project` };

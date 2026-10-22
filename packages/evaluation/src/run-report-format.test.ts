@@ -9,7 +9,8 @@ import type { PickRecord } from "./pool-selection.js";
 import { readMappingFile, readPacketKey } from "./pool-mapping.js";
 import { asharaGuaranteesOf, asharaVerdictOf, formatGuaranteePairs, formatPoolVerdicts, formatReviewerRecord, formatRunReport, formatSuiteReviewClaims, formatSuiteReviewJudgements } from "./run-report-format.js";
 
-const TSX = path.join(import.meta.dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
+const REPO = path.resolve(import.meta.dirname, "..", "..", "..");
+const TSX = path.join(REPO, "node_modules", "tsx", "dist", "cli.mjs");
 
 type Evidence = Parameters<typeof formatRunReport>[0];
 type Task = Evidence["tasks"][number];
@@ -667,7 +668,7 @@ describe("run-report --hidden with a verdict file that fails the schema", () => 
   test("exits 1 naming the file, before any database is read", async () => {
     const file = path.join(dir, "verdict.json");
     await writeFile(file, JSON.stringify({ tender: "T1", overall: "pass", guarantees: [{ id: "G1", verdict: "maybe" }] }));
-    const result = spawnSync(process.execPath, [TSX, path.join(import.meta.dirname, "run-report.ts"), "00000000-0000-4000-8000-0000000000a1", "--hidden", file], {
+    const result = spawnSync(process.execPath, [TSX, path.join(REPO, "scripts", "run-report.ts"), "00000000-0000-4000-8000-0000000000a1", "--hidden", file], {
       encoding: "utf8",
       // An unreachable database: the report must stop on the verdict file before it connects.
       env: { ...process.env, DATABASE_URL: "postgresql://nobody@127.0.0.1:1/none" },
@@ -792,7 +793,7 @@ describe("run-report --mapping with a mapping file that fails the schema", () =>
     const key = path.join(dir, "key.json");
     await writeFile(mapping, ["version = 1", 'run = "pool-1"', 'packet = "not-a-digest"', "[[map]]", 'intended = "I1"', 'to = ["item-1"]', 'narrowed = "no"'].join("\n"));
     await writeFile(key, JSON.stringify({ version: 1, run: "pool-1", arm: "ashara", items: [{ label: "item-1", id: "G4" }] }));
-    const result = spawnSync(process.execPath, [TSX, path.join(import.meta.dirname, "run-report.ts"), "00000000-0000-4000-8000-0000000000a1", "--mapping", mapping, "--key", key], {
+    const result = spawnSync(process.execPath, [TSX, path.join(REPO, "scripts", "run-report.ts"), "00000000-0000-4000-8000-0000000000a1", "--mapping", mapping, "--key", key], {
       encoding: "utf8",
       // An unreachable database: the report must stop on the mapping file before it connects.
       env: { ...process.env, DATABASE_URL: "postgresql://nobody@127.0.0.1:1/none" },

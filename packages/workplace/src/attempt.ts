@@ -21,7 +21,7 @@ import { executeTool, toolSchemasFor } from "./tools.js";
 /**
  * The routing site agent work is tagged with today (model-access KNOWN_LLM_SITES, config/models.toml):
  * the llm_calls rows of an attempt carry it, and the caller resolves the pinned model with it. The
- * run report ties exactly the rows of this site to attempts (run-evidence.ts).
+ * run report ties exactly the rows of this site to attempts.
  */
 export const AGENT_CALL_SITE = "agent-runner";
 

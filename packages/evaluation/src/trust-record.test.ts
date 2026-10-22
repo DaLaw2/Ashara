@@ -4,12 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { analysisDigest, main } from "./trust-record.js";
+import { analysisDigest, trustRecordMain } from "./trust-record.js";
 import { clopperPearsonUpper, mcnemarExactOneSided, summarizeArm } from "./trust-stats.js";
 import { type PairRow, readTrustLedger } from "./trust-ledger.js";
 
-const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.dirname(SCRIPTS);
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const COMMIT = "a".repeat(40);
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const SEED = "c".repeat(64);
@@ -124,7 +123,7 @@ afterEach(async () => {
 async function record(rows: readonly Row[], out = path.join(work, "record.md")): Promise<{ status: number; page: string }> {
   const ledger = path.join(work, "ledger.jsonl");
   await writeFile(ledger, jsonl(rows));
-  const status = await main(["--ledger", ledger, "--out", out, "--repo", repo], {});
+  const status = await trustRecordMain(["--ledger", ledger, "--out", out, "--repo", repo], {});
   const page = status === 0 ? await readFile(out, "utf8") : "";
   return { status, page };
 }
@@ -288,9 +287,10 @@ describe("refusals", () => {
   });
 });
 
-describe("no package names the ledger", () => {
-  test("neither the packages nor the trust scripts name the hidden directory or the ledger tools", () => {
+describe("no builder package names the ledger", () => {
+  test("neither the builder packages nor the trust modules name the hidden directory or the ledger tools", () => {
     const hidden = ["ashara", "hidden"].join("-");
+    const ledgerDir = ["trust", "ledger"].join("/");
     const grep = (args: readonly string[]): string => {
       try {
         return execFileSync("git", ["-C", REPO_ROOT, "grep", "--untracked", "-n", ...args], { encoding: "utf8", env: gitEnv() });
@@ -299,7 +299,8 @@ describe("no package names the ledger", () => {
         throw err;
       }
     };
-    expect(grep(["-e", hidden, "--", "scripts/trust-*"])).toBe("");
-    expect(grep(["-e", `${hidden}/`, "-e", "trust/ledger", "-e", "trust-record", "-e", "trust-ledger", "-e", "trust-stats", "--", "packages"])).toBe("");
+    expect(grep(["-e", hidden, "--", "packages/evaluation/src/trust-*"])).toBe("");
+    expect(grep(["-e", `${hidden}/`, "-e", ledgerDir, "--", "packages"])).toBe("");
+    expect(grep(["-e", "trust-record", "-e", "trust-ledger", "-e", "trust-stats", "--", "packages", ":!packages/evaluation"])).toBe("");
   });
 });

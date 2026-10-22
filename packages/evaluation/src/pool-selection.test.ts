@@ -6,8 +6,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { pickTender, readLedger, readPool, recordedPick, type PickRecord } from "./pool-selection.js";
 
-const TSX = path.join(import.meta.dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
-const SCRIPT = path.join(import.meta.dirname, "pool-select.ts");
+const REPO = path.resolve(import.meta.dirname, "..", "..", "..");
+const TSX = path.join(REPO, "node_modules", "tsx", "dist", "cli.mjs");
+const SCRIPT = path.join(REPO, "scripts", "pool-select.ts");
 const COMMIT = "0e2adaf991d6c272b39d4896560d4d873a1f2950";
 
 // A throwaway pool: the ids and shape of a real pool.toml, no suite and no canary.

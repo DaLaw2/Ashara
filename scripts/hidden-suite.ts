@@ -31,7 +31,7 @@ import { z } from "zod";
 import { PodmanSubstrate, WORKSPACE_ROOT, type Cell, type ExecResult } from "@ashara/execution-infra";
 import { parseEnvironmentDefinition } from "@ashara/quality";
 import { JsonParseFailed, createLogger, describeErrorChain, parseJson, stdoutSink, systemClock } from "@ashara/shared";
-import { evidenceSchema, guaranteeIdSchema, guaranteeVerdictSchema, overallOf, overallSchema, type JudgedGuarantee, type JudgedVerdict, type Overall, type RunRecord } from "./hidden-verdict.js";
+import { evidenceSchema, guaranteeIdSchema, guaranteeVerdictSchema, overallOf, overallSchema, type JudgedGuarantee, type JudgedVerdict, type Overall, type RunRecord } from "@ashara/evaluation";
 import { treeDigest } from "./tree-digest.js";
 
 const USAGE =

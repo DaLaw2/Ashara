@@ -23,6 +23,7 @@ export { ClientLoginFailureRepository } from "./repositories/client-login-failur
 export type { LoginAttemptCaps } from "./repositories/client-login-failure.js";
 export { EventStoreRepository } from "./repositories/event-store.js";
 export { legacyMigrationFile } from "./legacy-migrations.js";
+export { firstAppliedAt } from "./migration-reads.js";
 export {
   INIT_MIGRATION,
   MIGRATIONS_DIR,

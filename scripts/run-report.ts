@@ -41,10 +41,8 @@
  */
 
 import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { poolDirOf, readHidden, readMapping, recordedPick, runReport, type PickRecord } from "@ashara/evaluation";
 import { describeErrorChain, parseProjectId } from "@ashara/shared";
-import { poolDirOf, recordedPick, type PickRecord } from "./pool-selection.js";
-import { runReport } from "./run-report-body.js";
-import { readHidden, readMapping } from "./run-report-inputs.js";
 
 const USAGE =
   "Usage: npx tsx scripts/run-report.ts <project-id> [--hidden <verdict.json>] [--run <label> [--pool <dir>]] [--mapping <mapping.toml> --key <key.json>]";

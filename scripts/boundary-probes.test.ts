@@ -12,7 +12,9 @@
  * subpath, by a relative path, from scripts/, and re-exported by db's root entry), an import of a
  * test-only subpath from a file that is no test, an import of a Quality class Delivery does not list
  * (by name and through a namespace), an import of the client_messages table object by an Engagement
- * file outside the one module that holds it (by name and through a namespace), plus one permitted import
+ * file outside the one module that holds it (by name and through a namespace), Evaluation's reads of
+ * a repository class, of a context's table object and of a context's table in raw SQL (no builder may
+ * import Evaluation: its empty importers are probed with every other package's), plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -133,6 +135,11 @@ const MAP: Readonly<Record<string, PackageMap>> = {
   integration: {
     allow: ["shared", "db", "model-access", "finance", "security", "execution-infra", "knowledge", "workplace", "engagement", "organization", "quality", "delivery", "server"],
     importers: [],
+  },
+  evaluation: {
+    allow: ["shared", "db", "finance", "workplace", "engagement", "quality", "delivery"],
+    importers: [],
+    entries: { delivery: ["predicates", "reads"], engagement: ["."], quality: ["."] },
   },
 };
 
@@ -531,6 +538,50 @@ const TEST_SUPPORT_PROBES: PlannedProbe[] = [
   },
 ];
 
+// Evaluation reads every context through that context's published reads: a repository class (db's
+// or a context's), a context's table object and a raw SQL read of a context's table are each refused.
+const EVALUATION_PROBE_FILE = "packages/evaluation/src/__boundary_probe__/unpublished-read.ts";
+const UNLISTED_EVALUATION_CLASS = (pkg: string, name: string): string =>
+  `classes.${pkg}: "${name}" is a class of "${pkg}" it does not list; receive it as a port the composition root builds`;
+const EVALUATION_PROBES: PlannedProbe[] = [
+  {
+    name: "Evaluation imports no repository class of db",
+    file: EVALUATION_PROBE_FILE,
+    content: [
+      'import { sql } from "drizzle-orm";',
+      'import { ProjectRepository } from "@ashara/db";',
+      'import { DevSessionRepository } from "@ashara/workplace";',
+      `import { devSessions } from "${SCHEMA}/workplace";`,
+      "export const rawRead = sql`SELECT id FROM dev_sessions`;",
+      "",
+    ].join("\n"),
+    violation: `${EVALUATION_PROBE_FILE}:2  evaluation -> "@ashara/db"  (${UNLISTED_EVALUATION_CLASS("db", "ProjectRepository")})`,
+  },
+  {
+    // Planted by the probe above, on its third line: this entry adds nothing to the file.
+    name: "Evaluation imports no repository class of a context",
+    file: EVALUATION_PROBE_FILE,
+    content: null,
+    violation: `${EVALUATION_PROBE_FILE}:3  evaluation -> "@ashara/workplace"  (${UNLISTED_EVALUATION_CLASS("workplace", "DevSessionRepository")})`,
+  },
+  {
+    // Planted by the probe above, on its fourth line: this entry adds nothing to the file.
+    name: "Evaluation imports no context's table object",
+    file: EVALUATION_PROBE_FILE,
+    content: null,
+    violation: `${EVALUATION_PROBE_FILE}:4  evaluation -> "${SCHEMA}/workplace"  (${SUBPATH_REFUSAL("workplace")})`,
+  },
+  {
+    // Planted by the probe above, on its fifth line: this entry adds nothing to the file.
+    name: "Evaluation reads no context's table in raw SQL",
+    file: EVALUATION_PROBE_FILE,
+    content: null,
+    violation:
+      `${EVALUATION_PROBE_FILE}:5  evaluation -> "dev_sessions"  (raw SQL reads a table "workplace" owns: SELECT id FROM dev_sessions; ` +
+      "read it through workplace's typed read, or admit it in [tables] as an allowed edge with its reason)",
+  },
+];
+
 const SUBPATH_PROBES: PlannedProbe[] = [
   {
     name: "a context importing another context's table object by its subpath is refused",
@@ -719,6 +770,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   probes.push(...STAND_IN_PROBES);
   probes.push(...BOUNDS_TABLE_PROBES);
   probes.push(...TEST_SUPPORT_PROBES);
+  probes.push(...EVALUATION_PROBES);
   for (const pkg of Object.keys(MODULES)) probes.push(...moduleProbes(pkg));
   return probes;
 }

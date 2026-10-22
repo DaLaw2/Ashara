@@ -10,9 +10,7 @@ import type { DbHandle } from "@ashara/db";
 import { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import { latestAcceptanceSweepOf, reviewerRecordOf, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { projectHalted } from "@ashara/delivery/predicates";
-import { projectWorkItems } from "@ashara/delivery/reads";
-import { readRunEvidence } from "@ashara/workplace";
+import { readRunEvidence } from "./run-evidence.js";
 import {
   asharaGuaranteesOf,
   asharaVerdictOf,
@@ -30,7 +28,7 @@ import {
  * hidden verdict judges another tender than the pick, or the mapping does not join to the last terminal report.
  */
 export async function runReport(db: DbHandle, projectId: ProjectId, pool: PoolEvidence): Promise<{ readonly text: string; readonly failed: boolean }> {
-  const evidence = await readRunEvidence(db, projectId, projectHalted, projectWorkItems);
+  const evidence = await readRunEvidence(db, projectId);
   const report = formatRunReport(evidence);
   const verdicts = formatPoolVerdicts(asharaVerdictOf(projectId, await latestAcceptanceSweepOf(db, projectId)), pool);
   const pairs = formatGuaranteePairs(asharaGuaranteesOf(projectId, await lastReportGuaranteeVerdictsOf(db, projectId)), pool);

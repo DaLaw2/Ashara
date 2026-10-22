@@ -1058,6 +1058,7 @@ interface ClientMessageWriter {
 
 const DELIVERY = "packages/delivery/src";
 const ENGAGEMENT = "packages/engagement/src";
+const EVALUATION = "packages/evaluation/src";
 const QUALITY = "packages/quality/src";
 const WORKPLACE = "packages/workplace/src";
 
@@ -1117,6 +1118,16 @@ const I9_CHECKS: readonly TextCheck[] = [
 
 /** @testseam text-coverage.test.ts holds it to the source: the composers no oracle judges, each with its reason */
 export const TEXT_EXCLUDED: readonly ExcludedText[] = [
+  {
+    source: `${EVALUATION}/run-report-body.ts#runReport`,
+    kind: "not-a-composer",
+    reason: "the operator's run report; no agent or client reads it",
+  },
+  {
+    source: `${EVALUATION}/run-report-format.ts#formatRunReport`,
+    kind: "not-a-composer",
+    reason: "the operator's run report; no agent or client reads it",
+  },
   {
     source: `${ENGAGEMENT}/block-report.ts#blockedBody`,
     kind: "not-a-composer",

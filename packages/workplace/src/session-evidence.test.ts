@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { INIT_MIGRATION, legacyMigrationFile } from "@ashara/db";
-import { attemptMigrations } from "./run-evidence.js";
+import { attemptMigrations } from "./session-evidence.js";
 
 describe("the migrations that create the attempt columns", () => {
   test("are the listed numbered file of the attempt-evidence change and the init", () => {

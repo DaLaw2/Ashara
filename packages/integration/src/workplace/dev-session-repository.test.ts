@@ -5,11 +5,9 @@ import { z } from "zod";
 import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { workItems } from "@ashara/db/schema/delivery";
 import { devSessions } from "@ashara/db/schema/workplace";
-import { projectHalted } from "@ashara/delivery/predicates";
-import { projectWorkItems } from "@ashara/delivery/reads";
 import type { Database, DbTransaction } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { DevSessionRepository, ORPHANED_SESSION_RESOLVER, readRunEvidence, terminalizeOrphanedSessions } from "@ashara/workplace";
+import { DevSessionRepository, ORPHANED_SESSION_RESOLVER, sessionEvidenceOf, terminalizeOrphanedSessions } from "@ashara/workplace";
 
 // Workplace's session log against real Postgres: its writes, its terminal writes' guard, and the
 // end record parsed on every write and read.
@@ -162,7 +160,7 @@ describe("DevSessionRepository terminal writes", () => {
     await expect(
       rolledBack(async (tx) => {
         await plantMalformed(tx);
-        return readRunEvidence(tx, testProjectId, projectHalted, projectWorkItems);
+        return sessionEvidenceOf(tx, [taskId]);
       }),
     ).rejects.toBeInstanceOf(z.ZodError);
   });

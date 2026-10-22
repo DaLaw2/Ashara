@@ -110,6 +110,8 @@ const GOAL_TASK_ORIGIN = "decomposition";
 const PRODUCT_SCAFFOLD_ORIGIN = "product-scaffold";
 const REVIEW_ORIGIN = "review";
 const SPRINT0_ORIGIN = "sprint0";
+const CHECK_ORIGIN = "check";
+const ENVIRONMENT_CHANGE_ORIGIN = "environment-change";
 
 /**
  * A goal task: a Task the plan's decomposition wrote (work_items.level 'Task', task_spec.origin
@@ -146,6 +148,16 @@ export function isProductScaffoldOrigin(origin: string | null): boolean {
 /** A Sprint 0 task, on its task_spec.origin as read: it sets up the environment before any product exists. */
 export function isSprint0Origin(origin: string | null | undefined): boolean {
   return origin === SPRINT0_ORIGIN;
+}
+
+/** A check task, on its task_spec.origin as read: it writes the checks of the task its task_spec.checksFor names. */
+export function isCheckOrigin(origin: string | null): boolean {
+  return origin === CHECK_ORIGIN;
+}
+
+/** An environment change, on its task_spec.origin as read: opened for the task its work_items.repairs_task_id records. */
+export function isEnvironmentChangeOrigin(origin: string | null): boolean {
+  return origin === ENVIRONMENT_CHANGE_ORIGIN;
 }
 
 /** A plan revision's review task: the task that reviews the revision's check suites. */

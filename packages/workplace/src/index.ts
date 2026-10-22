@@ -1,4 +1,4 @@
-export { runAttempt } from "./attempt.js";
+export { AGENT_CALL_SITE, runAttempt } from "./attempt.js";
 export type { AssignmentStaff, ToolProfile } from "./assignment.js";
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief } from "./agent-brief.js";
@@ -6,7 +6,8 @@ export { ATTEMPT_TERMINALS, CONVERSATION_RECORDS_DIR, TERMINAL_SESSION_PHASES, c
 export type { ErrorEnvelope } from "./error-envelope.js";
 export { DevSessionRepository } from "./dev-session-repository.js";
 export { attemptsWithModel, lastCompletedAttempts } from "./attempt-reads.js";
-export { readRunEvidence } from "./run-evidence.js";
+export { sessionEvidenceOf } from "./session-evidence.js";
+export type { SessionEvidence } from "./session-evidence.js";
 export { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 export { environmentDefinitionRules } from "./environment-rules.js";
 export type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, DefinedCheck, FoundationProbe } from "./check-definition.js";

@@ -244,6 +244,28 @@ classes.quality = ["ConflictRetryUnprepared", "VerificationInfrastructureFault"]
 # Its inert test builders: only a test or the test harness imports them, so no production loop is built on one.
 test-only-subpaths = ["testing"]
 
+# --- Evaluation, outside the builder ----------------------------------------------------------
+
+[evaluation]
+# Evaluation: the trust measurement (the trust ledger and record, the blind mapping and the tender
+# pick they read) and the run report with its read model, computed outside the builder. It reads each
+# context only through what that context publishes for readers: Delivery's published reads and
+# predicates, the other contexts' root entries, never a schema subpath (db's subpath-importers) and
+# never a class (a repository included), so every row it reads comes through its owner's typed read.
+# No package may import it, the composition root and the test harness included, so nothing the
+# builder runs can read a trust number; the operator commands in scripts/ are its only callers.
+allow = ["shared", "db", "finance", "workplace", "engagement", "quality", "delivery"]
+importers = []
+entries.delivery = ["predicates", "reads"]
+entries.engagement = ["."]
+entries.quality = ["."]
+classes.db = []
+classes.finance = []
+classes.workplace = []
+classes.engagement = []
+classes.quality = []
+classes.delivery = []
+
 # --- Infrastructure and the test harness ------------------------------------------------------
 
 [server]
@@ -255,8 +277,8 @@ restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", 
 
 [integration]
 # The lifecycle simulator and the cross-package integration
-# tests compose the real system as the composition root does, so the list is every package; a new
-# package is added here by decision, never reached through a wildcard. Nothing may import them back:
+# tests compose the real system as the composition root does, so the list is every package but evaluation, which
+# none may import; a new package is added here by decision, never reached through a wildcard. Nothing may import them back:
 # test harness code never becomes a production dependency.
 allow = ["shared", "db", "model-access", "finance", "security", "execution-infra", "knowledge", "workplace", "engagement", "organization", "quality", "delivery", "server"]
 importers = []
@@ -396,7 +418,10 @@ exempt.model-access-key-hint = { file = "packages/model-access/src/build-gateway
 exempt.security-key-length-hint = { file = "packages/security/src/errors.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret-key-init.ts" }
 exempt.security-key-init-hint = { file = "packages/security/src/master-key.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/secret-key-init.ts" }
 exempt.server-secret-hints = { file = "packages/server/src/secrets.ts", tokens = ["npx", "tsx"], reason = "the operator's commands for Ashara's own scripts/secret-key-init.ts and scripts/secret.ts" }
-exempt.server-access-code-hint = { file = "packages/server/src/web-client.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/client.ts" }
+exempt.evaluation-trust-ledger-usage = { file = "packages/evaluation/src/trust-ledger.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/trust-ledger.ts" }
+exempt.evaluation-trust-record-usage = { file = "packages/evaluation/src/trust-record.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/trust-record.ts" }
+exempt.evaluation-pool-mapping-usage = { file = "packages/evaluation/src/pool-mapping.ts", tokens = ["npx", "tsx"], reason = "the operator's commands for Ashara's own scripts/pool-mapping.ts" }
+exempt.server-access-code-hint ={ file = "packages/server/src/web-client.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/client.ts" }
 exempt.server-web-client-script = { file = "packages/server/src/web-client.ts", tokens = ["javascript"], reason = "the media type of Ashara's own web client script" }
 exempt.integration-leak-guard = { file = "packages/integration/src/cell-leak-guard.ts", tokens = ["vitest"], reason = "Ashara's own test runner, whose runs the leak guard tracks" }
 exempt.integration-text-facts = { file = "packages/integration/src/simulator/text-facts.ts", tokens = ["composer"], reason = "the English word for a text composer that I9's coverage lists name, not PHP's Composer" }

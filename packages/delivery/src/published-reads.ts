@@ -1,10 +1,10 @@
 import { SQL, and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, sql, type AnyColumn } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { qualifiedColumn } from "@ashara/db";
+import { projects, qualifiedColumn } from "@ashara/db";
 import { dependencies, planRepairs, planRevisions, workItems } from "@ashara/db/schema/delivery";
 import type { DbHandle } from "@ashara/db";
-import { givenUpItem, goalTaskSql, inCurrentPlan, liveInCurrentPlan, productScaffoldTask, reviewTask } from "./predicates.js";
+import { givenUpItem, goalTaskSql, inCurrentPlan, liveInCurrentPlan, productScaffoldTask, projectHalted, reviewTask } from "./predicates.js";
 import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/index.js";
 
 // Delivery's published reads: what another context reads of the board (work_items, its dependency
@@ -351,4 +351,20 @@ export async function projectWorkItems(db: DbHandle, projectId: string): Promise
     .from(workItems)
     .where(eq(workItems.projectId, projectId))
     .orderBy(asc(workItems.createdAt), asc(workItems.id));
+}
+
+/** A project as other contexts name it: its lifecycle reads 'blocked' while Delivery's halt holds of it. */
+export interface ProjectStatus {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+}
+
+/** The project `projectId` names, or null when no project has that id. */
+export async function projectStatusOf(db: DbHandle, projectId: string): Promise<ProjectStatus | null> {
+  const [row] = await db
+    .select({ id: projects.id, name: projects.name, status: sql<string>`CASE WHEN ${projectHalted(projects.id)} THEN 'blocked' ELSE ${projects.lifecycle} END` })
+    .from(projects)
+    .where(eq(projects.id, projectId));
+  return row ?? null;
 }

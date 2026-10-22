@@ -11,7 +11,7 @@
 
 import { join } from "node:path";
 import { describeErrorChain } from "@ashara/shared";
-import { appendPick, pickTender, poolDirOf, readLedger, readPool } from "./pool-selection.js";
+import { appendPick, pickTender, poolDirOf, readLedger, readPool } from "@ashara/evaluation";
 
 const USAGE = "Usage: npx tsx scripts/pool-select.ts --run <label> --commit <sha> [--pool <dir>] [--pin <tender id> --reason <text>]";
 
