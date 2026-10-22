@@ -41,7 +41,14 @@
 # above the judged tier, else at it, and never to a model graded below it. At
 # the sites such requests use (model-access JUDGEMENT_SITES) a bare model id
 # must be graded at the top tier the deployment's catalog offers, or the
-# gateway refuses to start (JudgePinnedBelowTop).
+# gateway refuses to start (JudgePinnedBelowTop). A same-family second opinion
+# on judged work is not routed by these tables: it takes the cheapest other
+# model of the first reviewer's provider graded at or above the judged tier.
+#
+# Every tier of a per-capability table, whether it names the tier or reaches it
+# through "default", must map to a model graded at or above that tier as its
+# site calls it (in the site's thinking mode, [thinking] below), at every site,
+# or the gateway refuses to start (RoutingEntryBelowTier).
 #
 # A combo with no table below, or an explicitly EMPTY table, is not an error:
 # every site falls through to capability-level logic. A NON-EMPTY table is a
@@ -82,9 +89,9 @@
 "escalation" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
 
 [routing.profiles."anthropic+deepseek"]
-# DeepSeek serves planning and intake; Claude serves every agent-runner task
-# (below), every ladder escalation, and every judgement asked one tier above
-# Strong work.
+# DeepSeek serves planning and intake below Frontier; Claude serves every
+# agent-runner task (below), every ladder escalation, every Frontier request,
+# and every suite review above Light.
 # Each agent-runner level goes to the Claude model graded at that level as called:
 # Frontier claude-opus-5-5, Strong claude-sonnet-5-5, Medium claude-haiku-5-5.
 # No Claude model is graded Light; a Light task takes claude-haiku-5-5, the
@@ -104,11 +111,12 @@
 # The review of a plan revision's check suites: one structured
 # call per review, reading every stored suite with the vision. A review judges
 # the check work, so it asks for a judge one tier above the judged tier, else
-# at it: Frontier goes to claude-opus-5-5, every lower tier to deepseek-flash,
-# which thinking off at this site grades Light, so it judges only Light work.
-# A flat entry here would apply whatever tier is judged, and the gateway refuses
-# to start on one graded below the catalog's top tier.
-"suite-review" = { Frontier = "claude-opus-5-5", default = "deepseek-flash" }
+# at it. Each tier goes to a model graded at it as this site calls it, with
+# thinking off: Frontier claude-opus-5-5, Strong and Medium claude-sonnet-5-5,
+# Light deepseek-flash, which thinking off grades Light here. A tier mapped to a
+# model graded below it would leave the work it judges with no judge, and the
+# gateway refuses to start on one.
+"suite-review" = { Frontier = "claude-opus-5-5", Strong = "claude-sonnet-5-5", Medium = "claude-sonnet-5-5", Light = "deepseek-flash" }
 # An escalation goes up a level: the base sites run deepseek-flash (Strong as called), so the
 # escalation is the Frontier Claude model, never a lateral Strong one.
 "escalation" = "claude-opus-5-5"

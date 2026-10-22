@@ -670,6 +670,44 @@ export class JudgePinnedBelowTop extends GatewayError {
   }
 }
 
+/** One tier of a routing-profile table whose model is graded below it as its site calls it. */
+export interface RoutingEntryBelowTierItem {
+  readonly site: string;
+  readonly tier: CapabilityLevel;
+  readonly model: string;
+  readonly grade: CapabilityLevel;
+}
+
+interface RoutingEntryBelowTierContext {
+  readonly combo: string;
+  readonly entries: readonly RoutingEntryBelowTierItem[];
+  readonly configPath: string;
+}
+
+/**
+ * Thrown by `buildGatewayConfig` when the deployment's routing profile maps a tier of a
+ * per-capability table (by its own key or by `default`) to a model graded below that tier as the
+ * site calls it: a request asked at the tier would be served by a weaker model, and a judge asked at
+ * it would be refused only at run time.
+ */
+export class RoutingEntryBelowTier extends GatewayError {
+  readonly combo: string;
+  readonly entries: readonly RoutingEntryBelowTierItem[];
+  readonly configPath: string;
+
+  constructor(context: RoutingEntryBelowTierContext) {
+    super(
+      `Routing profile "${context.combo}" maps tier(s) to a model graded below them as called at the site: ` +
+        context.entries.map((e) => `"${e.site}" at ${e.tier} -> "${e.model}" (${e.grade} as called there)`).join(", ") +
+        `. Config: ${context.configPath}. Map each such tier to a model graded at or above it at that site.`,
+    );
+    this.name = "RoutingEntryBelowTier";
+    this.combo = context.combo;
+    this.entries = context.entries;
+    this.configPath = context.configPath;
+  }
+}
+
 /** Which models each strength may go to, as SecondOpinionUnavailable states it. */
 const SECOND_OPINION_RULE: Readonly<Record<SecondOpinion["strength"], string>> = {
   "other-family": "it goes only to an enabled provider other than the avoided one",

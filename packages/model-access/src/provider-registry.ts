@@ -298,10 +298,10 @@ export class ProviderRegistry {
   /**
    * The model a second opinion of `opinion.strength` goes to for `ask` at `site`, chosen from the
    * catalog by provider and graded tier alone; null when the catalog offers none. A judging request's
-   * second opinion is held to the judged tier as its first is: one tier above, else equal, never
-   * below. A same-model one has a single candidate, so it is held to the judged tier alone: the
-   * model is re-asked only when no other enabled model is graded at or above the judged tier, never
-   * because none is graded one tier above it. At a tier:
+   * other-family second opinion is a judge like its first: one tier above, else equal, never below.
+   * A same-family one (another model, or the same model) is held to the judged tier as a floor and
+   * takes the cheapest model graded at or above it: a dearer model one tier above is never chosen
+   * over one at the tier, since the verdict reads the weaker of the two reviewers' grades. At a tier:
    * - other-family: another provider's model, by the same routing as any request at `site`;
    * - same-family-other-model: the cheapest other model of the avoided provider graded at or above
    *   the tier;
@@ -311,12 +311,7 @@ export class ProviderRegistry {
   resolveSecondOpinion(ask: TierAsk, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
     if (ask.judges === undefined) return this.secondOpinionAt(ask.capability, opinion, site);
     if (opinion.strength === "other-family") return this.resolveJudgeFallback(ask.judges, [opinion.avoid.provider], site);
-    if (opinion.strength === "same-model") return this.secondOpinionAt(ask.judges, opinion, site);
-    for (const tier of judgeTiers(ask.judges)) {
-      const resolved = this.secondOpinionAt(tier, opinion, site);
-      if (resolved !== null) return resolved;
-    }
-    return null;
+    return this.secondOpinionAt(ask.judges, opinion, site);
   }
 
   private secondOpinionAt(capability: CapabilityLevel, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {

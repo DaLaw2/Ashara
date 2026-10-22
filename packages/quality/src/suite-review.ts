@@ -67,9 +67,11 @@ import type { TaskChecks } from "./task-checks.js";
 // claim of a review that routes nothing, is recorded whole (suite_review_judgements,
 // suite_review_claims) before anything is routed, released or kept on it.
 // Both reviews judge the check work at its own tier: the higher of each check task's grade and the
-// grade of every model an attempt on it ran on, the highest over the suites read. A judge is graded
-// one tier above that, else at it, never below; each record names the weaker judge it rests on and
-// whether it stood above the work or only equal to it.
+// grade of every model an attempt on it ran on, the highest over the suites read. The first judge,
+// and a second opinion from another family, is graded one tier above that, else at it; a second
+// opinion within the first's family is the cheapest model graded at or above it; none is below it.
+// Each record names the weaker judge it rests on and whether it stood above the work or only equal
+// to it.
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */
 interface CheckTaskUnderReview {

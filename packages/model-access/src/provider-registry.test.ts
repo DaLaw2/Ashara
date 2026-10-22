@@ -1,9 +1,13 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { buildGatewayConfig } from "./config.js";
 import { JudgeUnavailable, NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
 import { LLMGateway } from "./gateway.js";
+import { resolveModelsConfigPath } from "./paths.js";
 import { ProviderRegistry, sdkLanguageModels } from "./provider-registry.js";
+import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
+import { loadThinkingPolicyFromToml } from "./thinking.js";
 import type { GatewayConfig, ModelConfig } from "./types.js";
 
 function registryOf(config: GatewayConfig): ProviderRegistry {
@@ -372,7 +376,7 @@ describe("ProviderRegistry.resolveJudge", () => {
     expect(judged(deployment([["alpha", LADDER]], table), "Strong", "suite-review")).toEqual(["alpha-strong", "equal"]);
   });
 
-  test("a second opinion on judged work follows the same ladder within its strength, and none below the judged tier", () => {
+  test("a second opinion on judged work: another family is a judge, the same family the cheapest at or above the judged tier, none below it", () => {
     const registry = deployment([
       ["alpha", [model("alpha", "alpha-medium", "Medium", 0.5), model("alpha", "alpha-strong", "Strong", 2), model("alpha", "alpha-strong-2", "Strong", 3)]],
       ["beta", [model("beta", "beta-medium", "Medium", 0.1), model("beta", "beta-strong", "Strong", 4)]],
@@ -384,7 +388,8 @@ describe("ProviderRegistry.resolveJudge", () => {
     };
     expect(second("other-family", "Medium")).toBe("beta-strong");
     expect(second("other-family", "Strong")).toBe("beta-strong");
-    expect(second("same-family-other-model", "Medium")).toBe("alpha-strong-2");
+    expect(second("same-family-other-model", "Medium")).toBe("alpha-medium");
+    expect(second("same-family-other-model", "Strong")).toBe("alpha-strong-2");
     expect(second("other-family", "Frontier")).toBeNull();
     expect(second("same-family-other-model", "Frontier")).toBeNull();
     expect(second("same-model", "Medium")).toBeNull();
@@ -422,5 +427,55 @@ describe("ProviderRegistry.resolveJudge", () => {
     const response = await gated.generateStructured({ judges: "Medium", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, site: "suite-review" });
     expect(response.model).toBe("alpha-strong");
     await expect(gated.generateStructured({ judges: "Frontier", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10 })).rejects.toBeInstanceOf(JudgeUnavailable);
+  });
+});
+
+// The catalog's own grades and base prices, and the deployment's config/models.toml: suite-review calls with thinking off.
+describe("a suite review's judge and second opinion over the shipped routing profiles", () => {
+  const graded = (id: string, provider: string, on: ModelConfig["capabilityLevel"], off: ModelConfig["capabilityLevel"], inputCostPer1M: number, outputCostPer1M: number): ModelConfig =>
+    ({ ...MODEL, id, apiModelId: id, provider, capabilityLevel: on, thinkingOffCapabilityLevel: off, inputCostPer1M, outputCostPer1M, maxContextTokens: 1_000_000 });
+  const CATALOG: Record<string, ModelConfig> = {
+    "claude-fable-5-1": graded("claude-fable-5-1", "anthropic", "Frontier", "Frontier", 10, 50),
+    "claude-opus-5-5": graded("claude-opus-5-5", "anthropic", "Frontier", "Frontier", 4, 20),
+    "claude-sonnet-5-5": graded("claude-sonnet-5-5", "anthropic", "Strong", "Strong", 2, 10),
+    "claude-haiku-5-5": graded("claude-haiku-5-5", "anthropic", "Medium", "Medium", 0.1, 0.5),
+    "deepseek-flash": graded("deepseek-flash", "deepseek", "Strong", "Light", 0.3, 1.2),
+  };
+  const CREDENTIALS = {
+    anthropic: { name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: null },
+    deepseek: { name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://example.invalid/v1" },
+  };
+  const COMBOS = { anthropic: [CREDENTIALS.anthropic], "anthropic+deepseek": [CREDENTIALS.anthropic, CREDENTIALS.deepseek] };
+  const deployed = (combo: keyof typeof COMBOS): ProviderRegistry => {
+    const path = resolveModelsConfigPath();
+    return registryOf(buildGatewayConfig(
+      CATALOG,
+      loadRoutingProfilesFromToml(path),
+      COMBOS[combo],
+      { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
+      loadThinkingPolicyFromToml(path),
+    ));
+  };
+  const firstReviewer = { provider: "anthropic", model: "claude-opus-5-5" };
+  const secondOpinionOfStrongWork = (registry: ProviderRegistry) =>
+    registry.resolveSecondOpinion({ judges: "Strong" }, { avoid: firstReviewer, strength: "same-family-other-model" }, "suite-review")?.modelConfig.id ?? null;
+
+  test.each(["anthropic", "anthropic+deepseek"] as const)(
+    "%s: Strong work is judged by the Frontier model, and its same-family second opinion is the cheapest Strong one, not the dearer Frontier one",
+    (combo) => {
+      const registry = deployed(combo);
+      expect(registry.resolveJudge("Strong", [], "suite-review").modelConfig.id).toBe("claude-opus-5-5");
+      expect(secondOpinionOfStrongWork(registry)).toBe("claude-sonnet-5-5");
+    },
+  );
+
+  test("anthropic+deepseek: no other family is graded at Strong where thinking is off, so the second opinion falls to the same family", () => {
+    const registry = deployed("anthropic+deepseek");
+    expect(registry.resolveSecondOpinion({ judges: "Strong" }, { avoid: firstReviewer, strength: "other-family" }, "suite-review")).toBeNull();
+  });
+
+  test.each(["anthropic", "anthropic+deepseek"] as const)("%s: work at Medium has a judge, graded above it", (combo) => {
+    const judge = deployed(combo).resolveJudge("Medium", [], "suite-review");
+    expect([judge.modelConfig.id, judge.relation]).toEqual(["claude-sonnet-5-5", "above"]);
   });
 });

@@ -1,12 +1,13 @@
 import { z } from "zod";
-import { parseCapabilityLevel } from "./capability-level.js";
+import { CapabilityLevelSchema, parseCapabilityLevel } from "./capability-level.js";
 import { CAPABILITY_RANK, gradeAsCalled } from "./capability-rank.js";
-import { InvalidGatewayCatalog, JudgePinnedBelowTop } from "./errors.js";
+import { InvalidGatewayCatalog, JudgePinnedBelowTop, RoutingEntryBelowTier } from "./errors.js";
 import { resolveModelsConfigPath } from "./paths.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import { thinkingModeFor, widestTurnOutputReserve } from "./thinking.js";
-import { JUDGEMENT_SITES, PROVIDER_TYPES } from "./types.js";
+import { JUDGEMENT_SITES, KNOWN_LLM_SITES, PROVIDER_TYPES } from "./types.js";
 import type { CapabilityLevel } from "./capability-level.js";
+import type { RoutingEntryBelowTierItem } from "./errors.js";
 import type {
   ContextOverflowSignatures,
   GatewayConfig,
@@ -58,7 +59,9 @@ function parseProviderType(source: string, providerName: string, raw: string): P
  * `defaultProvider` null, which `buildGateway` refuses.
  *
  * Throws {@link InvalidGatewayCatalog} when a provider row's model has a window no larger than the
- * output a turn reserves in it at some site under `thinking` (reserveIssues).
+ * output a turn reserves in it at some site under `thinking` (reserveIssues). Throws
+ * {@link JudgePinnedBelowTop} or {@link RoutingEntryBelowTier} when the deployment's routing profile
+ * maps a site to a model graded below what it is asked at there.
  */
 export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
@@ -108,6 +111,7 @@ export function buildGatewayConfig(
   }
   if (reserve.length > 0) throw new InvalidGatewayCatalog("model_configs", reserve);
   assertNoJudgePinnedBelowTop(providers, routingProfiles, thinking);
+  assertNoTierMappedBelowIt(providers, routingProfiles, thinking);
 
   return {
     providers,
@@ -147,6 +151,35 @@ function assertNoJudgePinnedBelowTop(providers: readonly ProviderConfig[], routi
     }
   }
   if (topTier !== null) throw new JudgePinnedBelowTop({ combo, pins, topTier, configPath: resolveModelsConfigPath() });
+}
+
+/**
+ * Refuses the deployment's routing profile when a per-capability table maps a tier, by its own key
+ * or by `default`, to a model graded below that tier as its site calls it (in the site's thinking
+ * mode). Such an entry would serve a request at the tier with a weaker model, and a judge asked at
+ * the tier would be refused only at run time. A tier the table leaves unmapped is not graded here:
+ * a request at it fails as RoutingProfileUnresolved.
+ */
+function assertNoTierMappedBelowIt(providers: readonly ProviderConfig[], routingProfiles: RoutingProfiles, thinking: ThinkingPolicy): void {
+  const combo = computeProviderCombo(providers.map((p) => p.name));
+  const profile = routingProfiles[combo];
+  if (profile === undefined) return;
+  const offered = providers.flatMap((p) => p.models);
+  const below: RoutingEntryBelowTierItem[] = [];
+  for (const site of KNOWN_LLM_SITES) {
+    const entry = profile[site];
+    if (entry === undefined || typeof entry === "string") continue;
+    const mode = thinkingModeFor(thinking, site);
+    for (const tier of CapabilityLevelSchema.options) {
+      const modelId = entry[tier] ?? entry.default;
+      // A model no enabled provider offers is buildGateway's refusal (RoutingProfileModelMissing).
+      const model = modelId === undefined ? undefined : offered.find((m) => m.id === modelId);
+      if (model === undefined) continue;
+      const grade = gradeAsCalled(model, mode);
+      if (CAPABILITY_RANK[grade] < CAPABILITY_RANK[tier]) below.push({ site, tier, model: model.id, grade });
+    }
+  }
+  if (below.length > 0) throw new RoutingEntryBelowTier({ combo, entries: below, configPath: resolveModelsConfigPath() });
 }
 
 /**

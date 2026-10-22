@@ -296,7 +296,7 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
     );
   });
 
-  test('"anthropic+deepseek": agent-runner goes to the Claude model of each level; planning sites to deepseek-flash, a judge above Strong to claude-opus-5-5', async () => {
+  test('"anthropic+deepseek": agent-runner goes to the Claude model of each level; planning sites to deepseek-flash, a request above Strong to claude-opus-5-5; suite-review to the Claude model of each level above Light', async () => {
     const flash = ["deepseek-flash", "deepseek-flash", "deepseek-flash", "deepseek-flash"];
     const judged = ["deepseek-flash", "deepseek-flash", "deepseek-flash", "claude-opus-5-5"];
     expect(table(await gatewayFor(["anthropic", "deepseek"], true))).toEqual({
@@ -304,12 +304,12 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
       decomposition: judged,
       "liaison-intake": judged,
       roster: flash,
-      "suite-review": ["deepseek-flash", "deepseek-flash", "deepseek-flash", "claude-opus-5-5"],
+      "suite-review": ["deepseek-flash", "claude-sonnet-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
       escalation: ["claude-opus-5-5", "claude-opus-5-5", "claude-opus-5-5", "claude-opus-5-5"],
     });
   });
 
-  test("config/models.toml boots on the migrated catalog for every keyed combo: no judgement site is pinned flatly below its top tier", async () => {
+  test("config/models.toml boots on the migrated catalog for every keyed combo: no judgement site is pinned flatly below its top tier, and no table tier is mapped to a model graded below it where called", async () => {
     const catalog = Object.fromEntries(
       (await repo.listModelConfigs()).filter((m) => m.modelId !== MODEL_ID).map((m) => [m.modelId, toModelConfig("model_configs", m)]),
     );

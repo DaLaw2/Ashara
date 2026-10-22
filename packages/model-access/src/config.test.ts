@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { buildGatewayConfig, toModelConfig } from "./config.js";
 import { TURN_MAX_OUTPUT_TOKENS } from "./context-window.js";
-import { InvalidGatewayCatalog, JudgePinnedBelowTop } from "./errors.js";
+import { InvalidGatewayCatalog, JudgePinnedBelowTop, RoutingEntryBelowTier } from "./errors.js";
 import type { ThinkingPolicy } from "./types.js";
 
 function validCatalog() {
@@ -172,6 +172,50 @@ describe("buildGatewayConfig: a judgement site is never pinned flatly below the 
             buildGatewayConfig(reasoner, { anthropic: { "suite-review": "model-reasoner" } }, [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: null }], OVERFLOW, thinking);
         expect(() => withThinking(THINKING_OFF)).toThrow(/"suite-review" -> "model-reasoner" \(Strong as called there\)/);
         expect(withThinking({ default: "off", sites: { "suite-review": "on" } }).providers).toHaveLength(1);
+    });
+});
+
+// A table's entry, by its own key or by default, serves a request at its tier, so it is graded at that tier as its site calls it.
+describe("buildGatewayConfig: a per-capability table never maps a tier to a model graded below it", () => {
+    const graded = (modelId: string, capability: string, capabilityThinkingOff = capability) =>
+        toModelConfig("model_configs", { ...validCatalog().models[0]!, modelId, capability, capabilityThinkingOff });
+    const catalog = {
+        "model-frontier": graded("model-frontier", "Frontier"),
+        "model-strong": graded("model-strong", "Strong"),
+        "model-reasoner": graded("model-reasoner", "Strong", "Light"),
+    };
+    const build = (profile: Parameters<typeof buildGatewayConfig>[1][string], thinking: ThinkingPolicy = THINKING_OFF) =>
+        buildGatewayConfig(catalog, { anthropic: profile }, [{ name: "anthropic", providerType: "anthropic", apiKey: "k", baseUrl: null }], OVERFLOW, thinking);
+    const refusal = (run: () => unknown): unknown => {
+        try {
+            run();
+        } catch (err) {
+            return err;
+        }
+        return expect.unreachable("the profile was not refused");
+    };
+
+    test("refuses a default graded below a tier it covers as the site calls it, naming the profile, site, tier, model and grade", () => {
+        const err = refusal(() => build({ "suite-review": { Frontier: "model-frontier", default: "model-reasoner" } }));
+        if (!(err instanceof RoutingEntryBelowTier)) return expect.unreachable(`not RoutingEntryBelowTier: ${String(err)}`);
+        expect(err.combo).toBe("anthropic");
+        expect(err.entries).toEqual([
+            { site: "suite-review", tier: "Strong", model: "model-reasoner", grade: "Light" },
+            { site: "suite-review", tier: "Medium", model: "model-reasoner", grade: "Light" },
+        ]);
+        expect(err.message).toContain('"anthropic"');
+        expect(err.message).toContain('"suite-review" at Strong -> "model-reasoner" (Light as called there)');
+    });
+
+    test("refuses a tier's own key graded below it, at any site, not only a judgement site", () => {
+        expect(() => build({ "agent-runner": { Frontier: "model-strong", default: "model-strong" } }))
+            .toThrow(/"agent-runner" at Frontier -> "model-strong" \(Strong as called there\)/);
+    });
+
+    test("boots a table whose every tier is graded at it where called, the same model passing where its site thinks", () => {
+        expect(build({ "suite-review": { Frontier: "model-frontier", Strong: "model-strong", Medium: "model-strong", Light: "model-reasoner" } }).providers).toHaveLength(1);
+        expect(build({ "suite-review": { Frontier: "model-frontier", default: "model-reasoner" } }, { default: "off", sites: { "suite-review": "on" } }).providers).toHaveLength(1);
+        expect(build({ "suite-review": { Frontier: "model-frontier" } }).providers).toHaveLength(1);
     });
 });
 
