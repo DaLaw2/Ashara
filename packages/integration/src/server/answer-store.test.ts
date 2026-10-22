@@ -334,7 +334,7 @@ describe("the client's answers", () => {
     expect(await awaitedChangesOf(projectId)).toEqual([]);
   });
 
-  test("an answer after the first plan that changes an assumption it was built on is reported once and holds only the work citing it", async () => {
+  test("an answer after the first plan that changes an assumption it was built on is reported once and holds the work citing it or a guarantee resting on it", async () => {
     const { projectId, tenderId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
@@ -364,14 +364,14 @@ describe("the client's answers", () => {
       clientAnswer: { messageId: answerId, verdict: "changes" },
     });
     expect(await awaitedChangesOf(projectId)).toEqual([answerId]);
-    // Only the work citing A1 is held: the review, which cites every item, is parked; the task citing
-    // G1 alone stays Pending, and the project still dispatches.
+    // The work citing A1 or G1, which A1 underpinned, is held: the review, which cites every item, and
+    // the task citing G1 alone are parked, and the project still dispatches.
     expect(await projectRepo.listActiveIds()).toContain(projectId);
     const tasks = await db.execute(sql`
       SELECT task_spec->>'origin' AS origin, status, blocked_reason->>'source' AS source FROM work_items
       WHERE project_id = ${projectId} AND task_spec->>'origin' IN ('review', 'decomposition') ORDER BY task_spec->>'origin'`);
     expect(tasks.rows).toEqual([
-      { origin: "decomposition", status: "Pending", source: null },
+      { origin: "decomposition", status: "Blocked", source: "correction_pending" },
       { origin: "review", status: "Blocked", source: "correction_pending" },
     ]);
     // Beside intake's report of the unasked assumptions, in reply to the tender,

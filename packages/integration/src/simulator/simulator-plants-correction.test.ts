@@ -34,6 +34,18 @@ describe("lifecycle simulator, directed: a client's correction", () => {
     expect(planted.some((key) => key.startsWith("I2:held-unaffected:")), planted.join(", ")).toBe(true);
   }, 90_000);
 
+  // The client's answer amends only assumptions, the one its question asked about underpinning the
+  // messages guarantee, which only the merged first task cites: the correction reaches that guarantee
+  // (I2's unreached clause), so its revision plans it again, and the project is still accepted.
+  it("holds the work citing a guarantee resting on an assumption an answer amends", async (ctx) => {
+    const clean = await directed(ctx, [draw("client.late-change", 1)]);
+    expect(keys(clean), statements(clean)).toEqual([]);
+    expect(clean.trace.some((line) => line.startsWith("client answer changes an assumption")), clean.trace.join("\n")).toBe(true);
+    const restated = clean.records.some((r) => r.event === "quality.task-started" && String(r.fields?.["title"]).startsWith("Deliver what the corrected contract states"));
+    expect(restated, clean.trace.join("\n")).toBe(true);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+  }, 90_000);
+
   // The revision for the correction fails twice (its environment judgment is unreadable at each of an
   // attempt's four calls), so the correction awaits it across a cycle, and the task it holds comes
   // back to Pending meanwhile: the gate holds it again, and the project is still accepted. A hold that

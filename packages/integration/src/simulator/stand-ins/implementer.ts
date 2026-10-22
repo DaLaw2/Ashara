@@ -8,6 +8,7 @@ import {
   behaviourPath,
   deliveredInterfaceText,
   publicInterfaceText,
+  restatedBehaviour,
   taskOfTitle,
 } from "../product.js";
 import type { InterfaceForm, SimTask } from "../product.js";
@@ -44,6 +45,15 @@ export class ImplementerStandIn {
     return [
       ["write_file", { path: PUBLIC_INTERFACE_PATH, content: deliveredInterfaceText(form) }],
       finished(`Updated ${PUBLIC_INTERFACE_PATH}.`),
+    ];
+  }
+
+  /** A restatement task's turns: the behaviour of its own the corrected contract asks for. */
+  restateTaskWork(taskId: string): ToolStep[] {
+    const behaviour = restatedBehaviour(taskId);
+    return [
+      ["write_file", { path: behaviourPath(behaviour), content: `${behaviour}\n` }],
+      finished(`Delivered ${behaviour}.`),
     ];
   }
 

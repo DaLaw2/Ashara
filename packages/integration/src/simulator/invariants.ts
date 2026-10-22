@@ -116,13 +116,16 @@ const checkRow = z.object({
 const transitionRow = z.object({ workItemId: z.string(), from: z.string(), to: z.string() });
 const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
 /**
- * A client correction recorded as holding work: the vision version it wrote, the keys it affects, and
- * the tasks citing one of them that were started after it was recorded and before its revision.
+ * A client correction recorded as holding work: the vision version it wrote, the keys it affects, the
+ * tasks citing one of them that were started after it was recorded and before its revision, and the
+ * guarantees an affected assumption underpins, in the version it was applied to or the one it wrote,
+ * that it does not affect.
  */
 const correctionRow = z.object({
   visionVersion: z.number(),
   affected: z.array(z.string()),
   startedWhileHeld: z.array(z.string()),
+  unreached: z.array(z.string()),
 });
 
 interface MainCommit {
@@ -255,7 +258,15 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
                    AND t.created_at > ch.created_at
                    AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r
                      WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
-                 '[]'::json) AS "startedWhileHeld"
+                 '[]'::json) AS "startedWhileHeld",
+               COALESCE((SELECT json_agg(DISTINCT u.key ORDER BY u.key) FROM vision_documents d,
+                 jsonb_array_elements(CASE WHEN jsonb_typeof(d.inferences) = 'array'
+                   THEN d.inferences ELSE '[]'::jsonb END) i,
+                 jsonb_array_elements_text(CASE WHEN jsonb_typeof(i->'underpins') = 'array'
+                   THEN i->'underpins' ELSE '[]'::jsonb END) u(key)
+                 WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
+                   AND i->>'key' = ANY(ch.affected) AND NOT u.key = ANY(ch.affected)),
+                 '[]'::json) AS "unreached"
         FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
     ).rows,
   );
@@ -728,6 +739,18 @@ export function checkSnapshot(
         `task "${item.title}" (citing ${item.cites.join(", ") || "nothing"}) is held for the correction of ` +
           `vision v${reason.visionVersion}, ` +
           (correction === undefined ? "which records no hold" : `which affects only ${correction.affected.join(", ")}`),
+      );
+    }
+  }
+  // What it affects reaches, from each assumption it amends, every guarantee resting on it: work citing
+  // only such a guarantee is built on the assumption and is held with the work citing it.
+  for (const correction of snapshot.corrections) {
+    for (const guarantee of correction.unreached) {
+      add(
+        "I2",
+        `unreached:${guarantee}`,
+        `the correction of vision v${correction.visionVersion} affects ${correction.affected.join(", ")}, ` +
+          `leaving out ${guarantee}, which an assumption among them underpins`,
       );
     }
   }

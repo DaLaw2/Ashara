@@ -1,4 +1,11 @@
-import { INTERFACE_TASK_REF, INTERFACE_TASK_TITLE, PUBLIC_INTERFACE_PATH, taskTitle } from "../product.js";
+import {
+  INTERFACE_TASK_REF,
+  INTERFACE_TASK_TITLE,
+  PUBLIC_INTERFACE_PATH,
+  RESTATE_TASK_REF,
+  RESTATE_TASK_TITLE,
+  taskTitle,
+} from "../product.js";
 import type { StandInContext } from "./context.js";
 import { namesBehaviour } from "./context.js";
 import {
@@ -52,6 +59,23 @@ function interfaceTaskCiting(prompt: string): ScriptedTask {
     acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: [first.id] }],
     capability: "Medium",
     capabilityReason: "One file.",
+  };
+}
+
+/** The task a correction's revision plans for `items`, which no universe task's behaviours name: each its own line. */
+function restateTaskCiting(items: readonly string[]): ScriptedTask {
+  return {
+    ref: RESTATE_TASK_REF,
+    title: RESTATE_TASK_TITLE,
+    description: `Delivers ${items.join(", ")} as the corrected contract states them.`,
+    dependsOn: [],
+    goal: `Deliver ${items.join(", ")} as corrected`,
+    endState: `${items.join(", ")} hold as the corrected contract states them.`,
+    scope: `What ${items.join(", ")} state.`,
+    deliverables: items.map((id) => ({ text: `What ${id} states holds.`, sources: [id] })),
+    acceptance: items.map((id) => ({ text: `A user sees what ${id} states hold.`, sources: [id] })),
+    capability: "Medium",
+    capabilityReason: "One small change.",
   };
 }
 
@@ -112,6 +136,10 @@ export class PlannerStandIn {
     const corrected = prompt.includes(CORRECTION_REVISION)
       ? universe.tasks.filter((task) => task.behaviours.every((b) => listed.some((g) => namesBehaviour(g.line, b))))
       : universe.tasks;
+    // One listing only items no behaviour's guarantee names (the guarantee naming no behaviour, resting on an
+    // amended assumption) plans a task of its own delivering them.
+    const itemsOnly = prompt.includes(CORRECTION_REVISION) && corrected.length === 0 && toCheck.length > 0;
+    const restateTask = itemsOnly ? [restateTaskCiting(toCheck)] : [];
     const todo =
       interfaceTask.length === 0 ? corrected : corrected.filter((task) => !listsDoneTask(prompt, taskTitle(task)));
     const planned = this.reverses() ? [...todo].reverse() : todo;
@@ -134,6 +162,7 @@ export class PlannerStandIn {
             capabilityReason: "One small behaviour.",
           })),
           ...interfaceTask,
+          ...restateTask,
         ],
         toCheck,
       ),

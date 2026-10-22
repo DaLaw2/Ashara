@@ -42,7 +42,7 @@ class ReplanSuiteFixtureError extends Error {
  * Registers the suite's database, gateway and cleanup hooks and returns its helpers. `stub` is the
  * test file's hoisted model holder, which its `@ai-sdk/deepseek` mock answers with.
  *
- * @testseam the plan revision store suites (replan-store.test.ts, replan-repair-store.test.ts) share it
+ * @testseam the plan revision store suites (replan-store.test.ts, replan-repair-store.test.ts, assumption-reaches-guarantees.test.ts) share it
  */
 export function replanStoreSuite(stub: { model: unknown }) {
   const DATABASE_URL = resolveTestDatabaseUrl(process.env);

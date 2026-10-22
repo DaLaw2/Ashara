@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { behaviourPath, isInterfaceTaskTitle, taskOfTitle } from "../product.js";
+import { behaviourPath, isInterfaceTaskTitle, isRestateTaskTitle, restatedBehaviour, taskOfTitle } from "../product.js";
 import type { CheckSpec, SimTask } from "../product.js";
 import type { StandInContext } from "./context.js";
 import { namesBehaviour } from "./context.js";
@@ -51,6 +51,15 @@ export class CheckAuthorStandIn {
       return [
         ["write_file", { path, content: `${JSON.stringify(spec)}\n` }],
         ["define_check", { name: "interface", command: `sim check ${path}`, decides: cited }],
+        finished("Defined 1 check(s)."),
+      ];
+    }
+    if (isRestateTaskTitle(checkedTitle)) {
+      const path = `checks/${checksFor}/restated.json`;
+      const spec: CheckSpec = { kind: "correct", requires: [restatedBehaviour(checksFor)], forbids: [], harness: [] };
+      return [
+        ["write_file", { path, content: `${JSON.stringify(spec)}\n` }],
+        ["define_check", { name: "restated", command: `sim check ${path}`, decides: cited }],
         finished("Defined 1 check(s)."),
       ];
     }

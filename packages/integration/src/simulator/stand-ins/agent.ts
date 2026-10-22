@@ -4,7 +4,7 @@ import type {
   LanguageModelV4GenerateResult,
 } from "@ai-sdk/provider";
 import { z } from "zod";
-import { isInterfaceTaskTitle } from "../product.js";
+import { isInterfaceTaskTitle, isRestateTaskTitle } from "../product.js";
 import { CheckAuthorStandIn } from "./check-author.js";
 import type { StandInContext, TaskRow } from "./context.js";
 import { taskInProgress } from "./context.js";
@@ -159,6 +159,9 @@ export class AgentStandIn {
     } else if (isInterfaceTaskTitle(task.title)) {
       work = "implementation";
       steps = this.implementer.interfaceTaskWork(task.projectId);
+    } else if (isRestateTaskTitle(task.title)) {
+      work = "implementation";
+      steps = this.implementer.restateTaskWork(task.id);
     } else {
       work = "implementation";
       steps = await this.implementer.implementationWork(task, tools, conflictFilesOf(prompt));

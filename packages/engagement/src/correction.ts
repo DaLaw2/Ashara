@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ContractOpSchema, opKey, opShape } from "./vision-language/contract-op.js";
 import type { ContractOp, Direction, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
 import { NOTHING_VERIFIABLE, OBSERVATION_RULE, declinesUnverifiable, markOf, markWords, verifiableByAshara, verifiableCountLine } from "./vision-language/guarantee.js";
-import type { ClassifiedObservation, ContractStanding } from "./vision-language/guarantee.js";
+import type { ClassifiedObservation, ContractStanding, VisionGuarantee } from "./vision-language/guarantee.js";
 import { WORK_WORDS } from "./vision-language/work-promise.js";
 import type { AppliedOp, UnappliedOp, VisionVersion } from "./vision.js";
 
@@ -109,30 +109,82 @@ export interface CheckedOp {
 /** An operation as the affected-key reading needs it: what it acts on and the record's key, null on an add not applied. */
 type AffectingOp = Pick<RevisionOp, "target" | "key">;
 
-/** A guarantee as the affected-key reading needs it: its key and the interface entries it is observed at. */
-interface ObservedGuarantee {
+/** A guarantee as the affected-key reading needs it: its key, the interface entries it is observed at and its source. */
+type ObservedGuarantee = Pick<VisionGuarantee, "id" | "interface" | "source">;
+
+/** An assumption as the affected-key reading needs it: its key and the guarantees it underpins. */
+interface UnderpinningAssumption {
   readonly id: string;
-  readonly interface: readonly string[];
+  readonly underpins: readonly string[];
+}
+
+/** A version as the affected-key reading needs it. */
+interface AffectingVersion {
+  readonly version: number;
+  readonly guarantees: readonly ObservedGuarantee[];
+  readonly assumptions: readonly UnderpinningAssumption[];
+}
+
+/**
+ * A version names, in an assumption's underpins, a guarantee it does not hold: the guarantees resting
+ * on that assumption cannot be read, so the work an amendment of it reaches cannot be held.
+ * @testseam correction.test.ts asserts the refusal by its class
+ */
+export class UnderpinnedGuaranteeUnknown extends Error {
+  constructor(
+    readonly version: number,
+    readonly assumption: string,
+    readonly unknown: readonly string[],
+  ) {
+    super(`vision v${version}: assumption ${assumption} underpins ${unknown.join(", ")}, which the version does not hold`);
+    this.name = "UnderpinnedGuaranteeUnknown";
+  }
+}
+
+/**
+ * The guarantees of `version` resting on assumption `key`: each it underpins, and each citing it as
+ * its source. Throws UnderpinnedGuaranteeUnknown when it underpins a guarantee the version lacks.
+ */
+function restingOn(key: string, version: AffectingVersion): string[] {
+  const held = new Set(version.guarantees.map((guarantee) => guarantee.id));
+  const resting = new Set<string>();
+  for (const assumption of version.assumptions) {
+    if (assumption.id !== key) continue;
+    const unknown = assumption.underpins.filter((id) => !held.has(id));
+    if (unknown.length > 0) throw new UnderpinnedGuaranteeUnknown(version.version, key, unknown);
+    for (const id of assumption.underpins) resting.add(id);
+  }
+  for (const guarantee of version.guarantees) {
+    if (guarantee.source.kind === "assumption" && guarantee.source.id === key) resting.add(guarantee.id);
+  }
+  return [...resting];
 }
 
 /**
  * The guarantee and assumption keys a correction's applied operations affect: the keys a task can
  * cite, which the impact note names and Delivery's hold parks the citing work on, both from this one
- * reading. An operation on a guarantee or an assumption affects its own key; one on an interface entry
- * affects every guarantee observed at that entry; one on an exclusion affects every guarantee, since no
- * record says which guarantee an exclusion bounds, so none is passed over as untouched. Each is read
- * against the guarantees of both `appliedTo`, the version in force, and `written`, the version the
- * operations write, so a guarantee observed at an entry the correction withdrew, or moved off one, is
- * still affected.
+ * reading. An operation on a guarantee affects its own key; one on an assumption affects its own key
+ * and every guarantee resting on it, since the work citing only such a guarantee is built on the
+ * assumption; one on an interface entry affects every guarantee observed at that entry; one on an
+ * exclusion affects every guarantee, since no record says which guarantee an exclusion bounds, so none
+ * is passed over as untouched. Each is read against both `appliedTo`, the version in force, and
+ * `written`, the version the operations write, so a guarantee observed at an entry the correction
+ * withdrew, or one an amendment moved off an assumption, is still affected. Throws
+ * UnderpinnedGuaranteeUnknown when either version names a guarantee it does not hold under an affected
+ * assumption.
  */
-export function affectedKeys(ops: readonly AffectingOp[], appliedTo: VisionVersion, written: VisionVersion): string[] {
+export function affectedKeys(ops: readonly AffectingOp[], appliedTo: AffectingVersion, written: AffectingVersion): string[] {
   const guarantees: readonly ObservedGuarantee[] = [...appliedTo.guarantees, ...written.guarantees];
   const keys = new Set<string>();
   for (const { target, key } of ops) {
     switch (target) {
       case "guarantee":
-      case "assumption":
         if (key !== null) keys.add(key);
+        break;
+      case "assumption":
+        if (key === null) break;
+        keys.add(key);
+        for (const id of [...restingOn(key, appliedTo), ...restingOn(key, written)]) keys.add(id);
         break;
       case "interface":
         for (const guarantee of guarantees) if (key !== null && guarantee.interface.includes(key)) keys.add(guarantee.id);

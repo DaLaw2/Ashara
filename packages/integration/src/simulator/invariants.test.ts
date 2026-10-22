@@ -136,9 +136,15 @@ describe("a state with no exit", () => {
       title: `Deliver ${cites.join("+")}`,
       cites,
     });
-    const snapshot = { ...plantedSnapshot([held(["G2"]), held(["G1"]), held(["G1", "G2"])]), corrections: [{ visionVersion: 2, affected: ["G2"], startedWhileHeld: [] }] };
+    const snapshot = { ...plantedSnapshot([held(["G2"]), held(["G1"]), held(["G1", "G2"])]), corrections: [{ visionVersion: 2, affected: ["G2"], startedWhileHeld: [], unreached: [] }] };
     const keys = checkSnapshot(4, snapshot, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
     expect(keys).toEqual(["I2:held-unaffected:Deliver G1"]);
+  });
+
+  it("names a guarantee resting on an amended assumption that the correction leaves out (I2)", () => {
+    const snapshot = { ...plantedSnapshot([]), corrections: [{ visionVersion: 2, affected: ["A1"], startedWhileHeld: [], unreached: ["G3"] }] };
+    const keys = checkSnapshot(4, snapshot, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
+    expect(keys).toEqual(["I2:unreached:G3"]);
   });
 
   it("names every non-terminal state of a run that made no progress (I8)", () => {

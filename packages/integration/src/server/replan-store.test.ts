@@ -144,14 +144,14 @@ describe("a late client change is planned", () => {
 
     pipelineModel();
     // The revision waits for the check task in flight, which cites A1; the work not started that
-    // cites A1 is held (parked) meanwhile, and the scaffold, which cites no item, is not.
+    // cites A1 or G1, which rests on it, is held (parked) meanwhile, and the scaffold, which cites no item, is not.
     expect(await replanner().runPending()).toEqual([]);
     const inFlight = (i: (typeof first)[number]) => i.id === check.id || i.id === epic.id;
     const held = (i: (typeof first)[number]) => i.origin === "decomposition" || i.origin === "review";
     expect(await itemsOf(projectId)).toEqual(
       first.map((i) =>
         held(i)
-          ? { ...i, status: "Blocked", reason: expect.objectContaining({ source: "correction_pending", affected: ["A1"], visionVersion: 2 }) }
+          ? { ...i, status: "Blocked", reason: expect.objectContaining({ source: "correction_pending", affected: ["A1", "G1"], visionVersion: 2 }) }
           : { ...i, status: i.id === sprint0.id ? "Completed" : inFlight(i) ? "InProgress" : i.status },
       ),
     );
@@ -266,13 +266,45 @@ describe("a late client change is planned", () => {
     if (before.kind === "none") expect(before.reason).toContain("not after the project's product scaffold");
   });
 
-  // What a revision need not plan again is what a completed task's stored checks decide, never what it cites.
+  /** Two tender guarantees: G2 rests on the question's assumption A1, G1 on none. */
+  const A1_UNDERPINS_G2_INTAKE = {
+    summary: "A booking page for the client's two pottery studios.",
+    interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender", quote: "Booking page" } }],
+    guarantees: [
+      {
+        id: "G1",
+        statement: "A client books a class at either studio.",
+        observable: { interface: ["I1"], observation: "output" },
+        refutedBy: ["A booking at either studio is refused."],
+        source: { kind: "tender", quote: "Booking page for my two pottery studios." },
+      },
+      {
+        id: "G2",
+        statement: "The page lists the first studio's classes first.",
+        observable: { interface: ["I1"], observation: "output" },
+        refutedBy: ["The page lists another studio's classes first."],
+        source: { kind: "tender", quote: "Booking page" },
+      },
+    ],
+    assumptions: [],
+    questions: [
+      {
+        text: "Which studio opens first?",
+        whyItMatters: "It orders the work.",
+        assumption: { id: "A1", statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible", underpins: ["G2"] },
+      },
+    ],
+    exclusions: [],
+  };
+
+  // What a revision need not plan again is what a completed task's stored checks decide, never what it
+  // cites, and never a guarantee resting on the assumption the answer amends.
   test.each([
     { stored: "no checks", decides: undefined },
     { stored: "a check that records no items it decides", decides: null },
     { stored: "a check deciding every item it cites", decides: "cited" },
   ] as const)("a completed task with $stored is exempt only for the items its stored checks decide", async ({ decides }) => {
-    const { projectId, questionId } = await plannedProject();
+    const { projectId, questionId } = await plannedProject({ reported: true, intake: A1_UNDERPINS_G2_INTAKE });
     const first = await itemsOf(projectId);
     const check = first.find((i) => i.origin === "check");
     const harbour = first.find((i) => i.origin === "decomposition");
@@ -293,16 +325,14 @@ describe("a late client change is planned", () => {
     expect(await replanner().runPending()).toMatchObject([{ kind: "revised", revision: 2 }]);
 
     const revision = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("changed what is built after work began"));
-    // Every guarantee the replaced work cited decided by a stored check: nothing is left to plan, so no planner is asked.
-    if (decides === "cited") {
-      expect(revision).toBeUndefined();
-      return;
-    }
     if (revision === undefined) throw new Error("no revision prompt was sent");
     const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(revision)?.[1]?.split(", ") ?? [];
-    // G1, the guarantee the answer leaves as it was: a revision plans it again unless a stored check decides it.
-    expect(cited.map((item) => item.id)).toContain("G1");
-    expect(listed).toContain("G1");
+    expect(cited.map((item) => item.id)).toEqual(expect.arrayContaining(["G1", "G2"]));
+    // G2 rests on the amended A1: a check deciding it decided the old contract, so it is planned again.
+    expect(listed).toContain("G2");
+    // G1, the guarantee the answer leaves as it was and rests on nothing amended: planned again unless a stored check decides it.
+    if (decides === "cited") expect(listed).not.toContain("G1");
+    else expect(listed).toContain("G1");
   });
 
   test("an environment change plans a new environment task, and the old one stays Completed", async () => {
@@ -577,7 +607,7 @@ describe("a client answer is reconciled with every assumption and guarantee it c
       },
     ]);
     const holds = await suite.db.execute(sql`SELECT requested_by AS "requestedBy", affected FROM correction_holds WHERE project_id = ${projectId}`);
-    expect(holds.rows).toEqual([{ requestedBy: answerId, affected: ["A1", "A2", "G2"] }]);
+    expect(holds.rows).toEqual([{ requestedBy: answerId, affected: ["A1", "G1", "A2", "G2"] }]);
     expect((await projectRow(projectId)).awaiting).toEqual([answerId]);
 
     pipelineModel({ environmentChange: false });

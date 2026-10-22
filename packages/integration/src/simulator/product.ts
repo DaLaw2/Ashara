@@ -68,6 +68,11 @@ export function isScaffoldInterface(text: string): boolean {
 
 /** The marker ref of the task a repair plans to update the public interface file (never a universe task's). */
 export const INTERFACE_TASK_REF = "iface";
+/**
+ * The marker ref of the task a correction's revision plans for items no universe task's behaviours name
+ * (a guarantee naming no behaviour, resting on an amended assumption): never a universe task's.
+ */
+export const RESTATE_TASK_REF = "restate";
 /** git's conflict marker lines, as `sim resolve` removes them: both sides' lines are kept. */
 export const CONFLICT_MARKER_LINE = /^(<{7}|={7}|>{7})( |$)/;
 
@@ -126,7 +131,7 @@ export function drawUniverse(tape: Tape): Universe {
   };
 }
 
-const TASK_MARKER = /\[sim (t\d+|iface)\]/;
+const TASK_MARKER = /\[sim (t\d+|iface|restate)\]/;
 
 /** The title the scripted planner gives a task; its marker survives into the check task's title. */
 export function taskTitle(task: SimTask): string {
@@ -145,6 +150,22 @@ export const INTERFACE_TASK_TITLE =
 /** Whether `title` is that task's, or a check task's for it. */
 export function isInterfaceTaskTitle(title: string): boolean {
   return TASK_MARKER.exec(title)?.[1] === INTERFACE_TASK_REF;
+}
+
+/** The title a correction's planner gives the task delivering items no universe task names. */
+export const RESTATE_TASK_TITLE = `Deliver what the corrected contract states [sim ${RESTATE_TASK_REF}]`;
+
+/** Whether `title` is that task's, or a check task's for it. */
+export function isRestateTaskTitle(title: string): boolean {
+  return TASK_MARKER.exec(title)?.[1] === RESTATE_TASK_REF;
+}
+
+/**
+ * The behaviour the restatement task `taskId` delivers: its own, so the product on its foundation
+ * lacks it and its check fails there, as a change the corrected contract asks for does.
+ */
+export function restatedBehaviour(taskId: string): string {
+  return `restated-${taskId}`;
 }
 
 /**
