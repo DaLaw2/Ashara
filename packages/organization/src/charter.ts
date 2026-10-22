@@ -3,10 +3,10 @@ import type { WorkKind } from "./work-kind.js";
 
 /**
  * A role's charter as an attempt states it: who the agent is, and the duties its role carries
- * beyond the task itself (null when it carries none). Delivery hands the charter of the role that
- * owns a task's kind of work to Workplace with the assignment.
+ * beyond the task itself (null when it carries none). An attempt's grant carries the charter of the
+ * role that owns its task's kind of work, and Delivery hands it to Workplace with the assignment.
  */
-interface RoleCharter {
+export interface RoleCharter {
   readonly identity: string;
   readonly duties: string | null;
 }
@@ -91,7 +91,7 @@ const CHECK_DUTIES = [
 ].join("\n");
 
 /** The conventions of the workplace a charter names, which their owners supply: Organization fixes none of them. */
-interface CharterConventions {
+export interface CharterConventions {
   /** The file at the repository root that states the product's public interface. */
   readonly publicInterfaceFile: string;
 }

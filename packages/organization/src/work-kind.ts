@@ -3,7 +3,8 @@ import type { CapabilityClass, Role, RoleRef, Roster, RosterViolation } from "./
 import { ref } from "./roster.js";
 
 // The kinds of work a task can be (work_items.work_kind): Organization's language.
-// Delivery reads the kind of a task and maps it, in its ACL, to what Workplace gives the attempt.
+// Organization grants an attempt at each kind its tool profile and charter (attempt-grant.ts);
+// Delivery hands that grant to Workplace without deciding it.
 
 /** @testseam the integration attempt-profile.test.ts runs an attempt for every kind of work; assignmentViolations is its production reader */
 export const WORK_KINDS = ["environment", "implementation", "check"] as const;

@@ -1,5 +1,5 @@
 export { runAttempt } from "./attempt.js";
-export type { AssignmentCharter, AssignmentStaff, ToolProfile } from "./assignment.js";
+export type { AssignmentStaff, ToolProfile } from "./assignment.js";
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief } from "./agent-brief.js";
 export { ATTEMPT_TERMINALS, CONVERSATION_RECORDS_DIR, TERMINAL_SESSION_PHASES, createSessionId } from "./session-vocabulary.js";

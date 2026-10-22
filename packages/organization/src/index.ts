@@ -6,4 +6,5 @@ export type { WorkKind } from "./work-kind.js";
 export { WorkKindOwnerUnresolved, ownerOf, parseWorkKind } from "./work-kind.js";
 /** @testseam the integration attempt-profile.test.ts runs an attempt for every kind of work; assignmentViolations is its production reader */
 export { WORK_KINDS } from "./work-kind.js";
-export { UNKINDED_WORK_CHARTER, charterOf } from "./charter.js";
+export type { AttemptGrant } from "./attempt-grant.js";
+export { attemptGrantOf } from "./attempt-grant.js";
