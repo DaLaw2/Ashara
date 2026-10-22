@@ -62,6 +62,13 @@ afterAll(async () => {
 });
 
 describe("cell on real podman", () => {
+  it("reads the CPUs and memory cells run on from the real podman info's host", async () => {
+    const capacity = await substrate.hostCapacity();
+    expect(Number.isInteger(capacity.cpus) && capacity.cpus > 0).toBe(true);
+    expect(Number.isInteger(capacity.memoryBytes) && capacity.memoryBytes > 0).toBe(true);
+    expect(capacity.source).toContain("info --format json");
+  });
+
   it("runs every tool inside a labelled, network-less, env-free cell and tears it down", async () => {
     const info = await substrate.probeSubstrate();
     expect(info.version).not.toBe("");

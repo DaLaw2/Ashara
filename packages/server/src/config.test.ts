@@ -1,8 +1,17 @@
-import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
-import { loadServerConfig, loadDatabaseUrl } from "./config.js";
+import { PodmanSubstrate, type CellResourceLimits, type ProcessRunner } from "@ashara/execution-infra";
+import { recordingLogger } from "@ashara/shared/testing";
+import { assertLanesFitCellHost, loadServerConfig, loadDatabaseUrl } from "./config.js";
+
+// This process sees four CPUs and 4 GiB, as under a systemd scope with CPUQuota=400%: a check that
+// read the process's own view instead of the cell runtime's would refuse lanes the runtime's host fits.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const processView = { availableParallelism: () => 4, totalmem: () => 4 * 1024 ** 3, cpus: () => actual.cpus().slice(0, 4) };
+  return { ...actual, ...processView, default: { ...actual, ...processView } };
+});
 
 const TEST_DB_URL = "postgres://localhost:5432/test";
 const TEST_TOKEN = "test-token";
@@ -39,7 +48,7 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     delete process.env["ASHARA_PORT"];
     delete process.env["MAX_BATCH_SIZE"];
     delete process.env["ASHARA_TASK_LANES"];
-    // Small enough that the default lanes' cells fit a four-CPU host; the host check is tested on its own.
+    // The lanes' fit to the cell host is checked once the runtime is composed, and tested on its own.
     process.env["ASHARA_CELL_MEMORY"] = "1g";
     process.env["ASHARA_CELL_CPUS"] = "1";
     process.env["WORKDIR_BASE"] = "/srv/ashara-work";
@@ -118,29 +127,6 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     expect([set.port, set.coreLoop.laneCount]).toEqual([8080, 3]);
   });
 
-  test("lanes whose cells cannot all fit the host refuse the boot with TaskLanesExceedHost, by memory and by CPUs", () => {
-    process.env["ASHARA_BUDGET_TOTAL"] = "1";
-    const refusal = (): unknown => {
-      try {
-        loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-      } catch (err) {
-        return err;
-      }
-      return null;
-    };
-    const lanesBeyond = (perCell: number, host: number) => String(Math.floor(host / perCell) + 1);
-
-    process.env["ASHARA_CELL_MEMORY"] = "1g";
-    process.env["ASHARA_CELL_CPUS"] = "0.01";
-    process.env["ASHARA_TASK_LANES"] = lanesBeyond(1024 ** 3, totalmem());
-    expect(refusal()).toMatchObject({ name: "TaskLanesExceedHost", resource: "memory" });
-
-    process.env["ASHARA_CELL_MEMORY"] = "6m";
-    process.env["ASHARA_CELL_CPUS"] = "1";
-    process.env["ASHARA_TASK_LANES"] = lanesBeyond(1, availableParallelism());
-    expect(refusal()).toMatchObject({ name: "TaskLanesExceedHost", resource: "cpus" });
-  });
-
   test("a MAX_BATCH_SIZE still set refuses the boot instead of being ignored", () => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     process.env["MAX_BATCH_SIZE"] = "4";
@@ -189,3 +175,61 @@ describe("loadDatabaseUrl — policy default", () => {
   });
 });
 
+describe("assertLanesFitCellHost — the lanes' cells against the host the cell runtime reports", () => {
+  const GiB = 1024 ** 3;
+  const CAPS: CellResourceLimits = { memoryBytes: 4 * GiB, cpus: 3, pids: 1024 };
+  type ProcessResult = Awaited<ReturnType<ProcessRunner>>;
+  const exited = (exitCode: number, stdout: string, stderr = ""): ProcessResult => ({
+    exitCode, signal: null, stdout, stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null, statusReport: null,
+  });
+  /** A podman whose `info` answers `result`: the composed runtime, its host what the fake reports. */
+  const runtimeAnswering = (result: ProcessResult): PodmanSubstrate =>
+    new PodmanSubstrate({
+      logger: recordingLogger(),
+      podmanPath: "podman",
+      mountRoot: "/srv/ashara-work",
+      limits: CAPS,
+      runner: async (request) => {
+        if (request.args.join(" ") !== "info --format json") throw new Error(`unexpected podman call: ${request.args.join(" ")}`);
+        return result;
+      },
+    });
+  const info = (host: Record<string, unknown>) => exited(0, JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true }, ...host } }));
+  const refusal = async (lanes: number, runtime: PodmanSubstrate): Promise<unknown> => {
+    try {
+      await assertLanesFitCellHost(lanes, CAPS, runtime);
+    } catch (err) {
+      return err;
+    }
+    return null;
+  };
+
+  test("two lanes of 3-CPU cells fit a 36-CPU runtime host although this process sees four CPUs", async () => {
+    await expect(assertLanesFitCellHost(2, CAPS, runtimeAnswering(info({ cpus: 36, memTotal: 64 * GiB })))).resolves.toBeUndefined();
+  });
+
+  test("cells beyond the runtime host's memory refuse the boot with TaskLanesExceedHost, naming where it was read", async () => {
+    const err = await refusal(2, runtimeAnswering(info({ cpus: 36, memTotal: 8 * GiB })));
+    expect(err).toMatchObject({ name: "TaskLanesExceedHost", resource: "memory", cellsAtOnce: 3, needed: 12 * GiB, host: 8 * GiB });
+    expect(err).toHaveProperty("message", expect.stringContaining("`podman info --format json`"));
+  });
+
+  test("cells beyond the runtime host's CPUs refuse the boot with TaskLanesExceedHost", async () => {
+    expect(await refusal(3, runtimeAnswering(info({ cpus: 8, memTotal: 64 * GiB })))).toMatchObject({
+      name: "TaskLanesExceedHost",
+      resource: "cpus",
+      needed: 12,
+      host: 8,
+    });
+  });
+
+  test.each([
+    ["an info without host.cpus", info({ memTotal: 64 * GiB })],
+    ["an info without host.memTotal", info({ cpus: 36 })],
+    ["an info that is not JSON", exited(0, "not json")],
+    ["a failed info", exited(125, "", "cannot connect")],
+  ])("%s refuses the boot with HostCapacityUnreadable naming the command", async (_case, result) => {
+    const err = await refusal(1, runtimeAnswering(result));
+    expect(err).toMatchObject({ name: "HostCapacityUnreadable", command: "podman info --format json" });
+  });
+});

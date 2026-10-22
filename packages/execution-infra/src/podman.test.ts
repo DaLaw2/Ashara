@@ -12,6 +12,7 @@ import {
   CellLimitsInvalid,
   CellStartFailed,
   CellTeardownFailed,
+  HostCapacityUnreadable,
   InvalidCellRequest,
   MountPathRejected,
   PathOutsideWorkspace,
@@ -489,6 +490,29 @@ describe("PodmanSubstrate argv", () => {
     expect(await substrate.probeSubstrate()).toEqual({ version: "5.8.2", rootless: true });
     expect(requests[0]?.args).toEqual(["info", "--format", "json"]);
     await expect(substrate.probeSubstrate()).rejects.toBeInstanceOf(SubstrateUnavailable);
+  });
+
+  it("reads the capacity cells run on from podman info's host, and refuses an info without it", async () => {
+    const host = { security: { rootless: true }, cpus: 36, memTotal: 33301725184 };
+    const { requests, substrate } = recorder([
+      ok(JSON.stringify({ version: { Version: "5.8.2" }, host })),
+      ok(JSON.stringify({ version: { Version: "5.8.2" }, host: { ...host, cpus: undefined } })),
+      ok(JSON.stringify({ version: { Version: "5.8.2" }, host: { ...host, memTotal: undefined } })),
+      ok(JSON.stringify({ version: { Version: "5.8.2" }, host: { ...host, cpus: 0 } })),
+      ok("", 125),
+      new ProcessSpawnFailed("/opt/podman", "ENOENT", "spawn ENOENT"),
+    ]);
+    expect(await substrate.hostCapacity()).toEqual({
+      cpus: 36,
+      memoryBytes: 33301725184,
+      source: "`/opt/podman info --format json` (host.cpus, host.memTotal)",
+    });
+    expect(requests[0]?.args).toEqual(["info", "--format", "json"]);
+    for (let i = 0; i < 5; i++) {
+      const refusal = substrate.hostCapacity();
+      await expect(refusal).rejects.toBeInstanceOf(HostCapacityUnreadable);
+      await expect(refusal).rejects.toMatchObject({ command: "/opt/podman info --format json" });
+    }
   });
 });
 

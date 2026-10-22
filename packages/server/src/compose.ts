@@ -79,7 +79,7 @@ import type { MasterKey } from "@ashara/security";
 import type { Clock, LogSink, Logger, ProjectId } from "@ashara/shared";
 import { contendedWait, createLogger, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
-import { loadServerConfig } from "./config.js";
+import { assertLanesFitCellHost, loadServerConfig } from "./config.js";
 import { sweepWorktreesAtStartup } from "./kept-worktrees.js";
 import type { AppDeps } from "./routes.js";
 import {
@@ -324,6 +324,8 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     limits: config.cellLimits,
     logger,
   });
+  // Before anything dispatches: the lanes' cells must all fit the host podman starts them on.
+  await assertLanesFitCellHost(config.coreLoop.laneCount, config.cellLimits, cellSubstrate);
   const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
   const environmentBuildRepo = new EnvironmentBuildRepository(db);
   const baseCell = await loadBaseCell();

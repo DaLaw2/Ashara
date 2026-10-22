@@ -30,6 +30,22 @@ export class ProcessSpawnFailed extends ExecutionInfraError {
 }
 
 /**
+ * The CPUs and memory of the host cells run on could not be read from the container runtime: the
+ * command failed, or its output is not the shape expected. Nothing is assumed in its place.
+ */
+export class HostCapacityUnreadable extends ExecutionInfraError {
+  readonly command: string;
+  readonly detail: string;
+
+  constructor(command: string, detail: string, options?: ErrorOptions) {
+    super(`Cannot read the CPUs and memory cells run on from \`${command}\`: ${detail}`, options);
+    this.name = "HostCapacityUnreadable";
+    this.command = command;
+    this.detail = detail;
+  }
+}
+
+/**
  * The container substrate cannot be used. Never answered by a host fallback: the caller blocks the
  * work.
  */

@@ -1,10 +1,9 @@
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { CoreLoopConfig } from "@ashara/delivery";
 import { DEFAULT_CONFIG } from "@ashara/delivery";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
-import { readCellLimits, type CellResourceLimits } from "@ashara/execution-infra";
+import { readCellLimits, type CellResourceLimits, type HostCapacity, type PodmanSubstrate } from "@ashara/execution-infra";
 import { DEFAULT_WORK_BUDGETS, type WorkBudgets } from "@ashara/finance";
 
 interface ServerConfig {
@@ -43,7 +42,7 @@ class InvalidBudgetLimit extends Error {
   }
 }
 
-/** The configured task lanes' cells cannot all fit the host at once: the server refuses to boot. */
+/** The configured task lanes' cells cannot all fit the host they run on at once: the server refuses to boot. */
 class TaskLanesExceedHost extends Error {
   constructor(
     readonly lanes: number,
@@ -51,32 +50,40 @@ class TaskLanesExceedHost extends Error {
     readonly resource: "memory" | "cpus",
     readonly needed: number,
     readonly host: number,
+    readonly source: string,
   ) {
     const amount = (value: number) => (resource === "memory" ? `${(value / 1024 ** 3).toFixed(1)} GiB` : `${value} CPUs`);
     super(
       `ASHARA_TASK_LANES=${lanes} runs up to ${cellsAtOnce} cells at once, whose ${resource} caps need ${amount(needed)}, ` +
-        `but this host has ${amount(host)}; lower ASHARA_TASK_LANES or the cell caps (ASHARA_CELL_MEMORY, ASHARA_CELL_CPUS)`,
+        `but the host cells run on has ${amount(host)} (read from ${source}); lower ASHARA_TASK_LANES or the cell caps ` +
+        "(ASHARA_CELL_MEMORY, ASHARA_CELL_CPUS)",
     );
     this.name = "TaskLanesExceedHost";
   }
 }
 
-/** What the host offers every cell together: its total memory and the CPUs this process may use. */
-interface HostCapacity {
-  readonly memoryBytes: number;
-  readonly cpus: number;
+/**
+ * Refuses lanes whose cells cannot all run at once on the host the cell runtime starts them on: each
+ * lane holds one cell at a time, and one more (a check cell or an image build) may run beside them,
+ * each capped at `cells`. The capacity is the runtime's, not this process's: cells run in scopes of
+ * their own, outside any CPU quota or memory limit the server itself runs under.
+ */
+export async function assertLanesFitCellHost(
+  lanes: number,
+  cells: CellResourceLimits,
+  runtime: Pick<PodmanSubstrate, "hostCapacity">,
+): Promise<void> {
+  assertLanesFitHost(lanes, cells, await runtime.hostCapacity());
 }
 
-/**
- * Refuses lanes whose cells cannot all run at once on `host`: each lane holds one cell at a time, and
- * one more (a check cell or an image build) may run beside them, each capped at `cells`.
- */
 function assertLanesFitHost(lanes: number, cells: CellResourceLimits, host: HostCapacity): void {
   const cellsAtOnce = lanes + 1;
   if (cellsAtOnce * cells.memoryBytes > host.memoryBytes) {
-    throw new TaskLanesExceedHost(lanes, cellsAtOnce, "memory", cellsAtOnce * cells.memoryBytes, host.memoryBytes);
+    throw new TaskLanesExceedHost(lanes, cellsAtOnce, "memory", cellsAtOnce * cells.memoryBytes, host.memoryBytes, host.source);
   }
-  if (cellsAtOnce * cells.cpus > host.cpus) throw new TaskLanesExceedHost(lanes, cellsAtOnce, "cpus", cellsAtOnce * cells.cpus, host.cpus);
+  if (cellsAtOnce * cells.cpus > host.cpus) {
+    throw new TaskLanesExceedHost(lanes, cellsAtOnce, "cpus", cellsAtOnce * cells.cpus, host.cpus, host.source);
+  }
 }
 
 /** A server setting that is unset with no default, or set to a value it cannot take. */
@@ -132,7 +139,8 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const retiredBatchSize = nonEmptyEnv("MAX_BATCH_SIZE");
   if (retiredBatchSize !== undefined) throw new RetiredServerSetting("MAX_BATCH_SIZE", retiredBatchSize, "ASHARA_TASK_LANES");
   // Policy default: unset, the loop's own lane count (DEFAULT_CONFIG). It sets throughput only, and
-  // is checked against the host below with the cell caps; a set but unusable one is refused, never replaced.
+  // is checked with the cell caps against the host cells run on once the cell runtime is composed
+  // (assertLanesFitCellHost); a set but unusable one is refused, never replaced.
   const rawLanes = nonEmptyEnv("ASHARA_TASK_LANES");
   const laneCount = rawLanes === undefined ? DEFAULT_CONFIG.laneCount : parseIntegerSetting("ASHARA_TASK_LANES", rawLanes, 1, Number.MAX_SAFE_INTEGER);
   // Both names set the one deployment cap, so a cap the owner set under either
@@ -180,7 +188,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const podmanBinary = nonEmptyEnv("ASHARA_PODMAN_BINARY") ?? "podman";
   // No default: the host also runs Postgres and Z0, so the caps are the owner's choice.
   const cellLimits = readCellLimits(process.env);
-  assertLanesFitHost(laneCount, cellLimits, { memoryBytes: os.totalmem(), cpus: os.availableParallelism() });
 
   return {
     databaseUrl,

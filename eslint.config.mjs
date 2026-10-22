@@ -440,6 +440,25 @@ export default tseslint.config(
     },
   },
   {
+    // The server composes cells; their host's CPUs and memory are what the cell runtime reports
+    // (PodmanSubstrate.hostCapacity), never this process's own view, which a CPU quota or memory
+    // limit on the server alone shrinks. Blind spot: the same numbers read from /proc or a cgroup file.
+    files: ["packages/server/src/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["node:os", "os"].map((name) => ({
+            name,
+            message:
+              "The server reads the host's capacity from the cell runtime (PodmanSubstrate.hostCapacity), not from this process's os view.",
+          })),
+        },
+      ],
+    },
+  },
+  {
     // Delivery and quality log through their injected Logger, so every line carries an event name,
     // a level and the correlation scope. A test may print what it inspects, so tests are exempt.
     files: ["packages/delivery/src/**/*.ts", "packages/quality/src/**/*.ts"],

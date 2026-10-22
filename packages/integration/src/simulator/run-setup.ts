@@ -283,7 +283,7 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   delete process.env["ASHARA_TASK_LANES"];
   delete process.env["MAX_BATCH_SIZE"];
   // Required configuration; the fake runtime accepts and ignores the caps they become. Small, so the
-  // boot's check that the lanes' cells fit the host passes on any host the simulator runs on.
+  // boot's check that the lanes' cells fit the host the fake runtime reports passes.
   process.env["ASHARA_CELL_MEMORY"] = "256m";
   process.env["ASHARA_CELL_CPUS"] = "0.25";
   process.env["ASHARA_CELL_PIDS_LIMIT"] = "1024";

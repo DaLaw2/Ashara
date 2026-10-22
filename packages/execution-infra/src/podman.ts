@@ -9,6 +9,7 @@ import {
   CellExecFailed,
   CellStartFailed,
   CellTeardownFailed,
+  HostCapacityUnreadable,
   InvalidCellRequest,
   MountPathRejected,
   PodmanCommandFailed,
@@ -311,6 +312,13 @@ export interface SubstrateInfo {
   readonly rootless: boolean;
 }
 
+/** The CPUs and memory of the host the runtime starts cells on, and the command that reported them. */
+export interface HostCapacity {
+  readonly cpus: number;
+  readonly memoryBytes: number;
+  readonly source: string;
+}
+
 interface PodmanSubstrateOptions {
   /** Path or name of the podman binary; configuration, so a missing binary can be observed. */
   readonly podmanPath: string;
@@ -341,6 +349,11 @@ interface PodmanSubstrateOptions {
 const podmanInfoSchema = z.object({
   version: z.object({ Version: z.string().min(1) }),
   host: z.object({ security: z.object({ rootless: z.boolean() }) }),
+});
+
+/** `podman info`'s host: cells run in scopes of their own there, outside the calling process's cgroup. */
+const podmanHostCapacitySchema = z.object({
+  host: z.object({ cpus: z.number().int().positive(), memTotal: z.number().int().positive() }),
 });
 
 const containerIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -783,6 +796,31 @@ export class PodmanSubstrate {
     }
     const info = podmanOutput(podmanInfoSchema, result.stdout, "podman info stdout", (detail) => new SubstrateUnavailable(this.podmanPath, detail));
     return { version: info.version.Version, rootless: info.host.security.rootless };
+  }
+
+  /**
+   * The CPUs and memory of the host the runtime starts cells on, as `podman info` reports them.
+   * A failed command or an output without them is HostCapacityUnreadable, never a guess.
+   */
+  async hostCapacity(): Promise<HostCapacity> {
+    const args = ["info", "--format", "json"] as const;
+    const command = `${this.podmanPath} ${args.join(" ")}`;
+    let result: ProcessResult;
+    try {
+      result = await this.run(args);
+    } catch (err) {
+      if (err instanceof SubstrateUnavailable) throw new HostCapacityUnreadable(command, err.detail, { cause: err });
+      throw err;
+    }
+    if (result.exitCode !== 0) {
+      throw new HostCapacityUnreadable(
+        command,
+        // eslint-disable-next-line no-restricted-syntax -- policy default: message text only
+        `exited ${result.exitCode ?? `by signal ${result.signal ?? "unknown"}`}: ${result.stderr.trim() || "(no stderr)"}`,
+      );
+    }
+    const info = podmanOutput(podmanHostCapacitySchema, result.stdout, "podman info stdout", (detail) => new HostCapacityUnreadable(command, detail));
+    return { cpus: info.host.cpus, memoryBytes: info.host.memTotal, source: `\`${command}\` (host.cpus, host.memTotal)` };
   }
 
   async createCell(spec: CellSpec): Promise<Cell> {

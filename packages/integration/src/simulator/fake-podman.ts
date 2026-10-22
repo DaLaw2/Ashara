@@ -70,6 +70,9 @@ export type PodmanEvent =
       readonly hung: boolean;
     };
 
+/** The host the fake runtime reports cells run on, in `podman info`'s host.cpus and host.memTotal. */
+const FAKE_HOST = { cpus: 8, memoryBytes: 16 * 1024 ** 3 } as const;
+
 interface FakePodmanOptions {
   /** The BaseCell image reference (config/base-cell.toml): known to the runtime, with no recipe tokens. */
   readonly baseImage: string;
@@ -185,7 +188,10 @@ export class FakePodman {
     const fail = (code: number, stderr: string): ProcessResult => result(request, exited(code, "", stderr));
     switch (args[0]) {
       case "info":
-        return ok(JSON.stringify({ version: { Version: "5.0.0-sim" }, host: { security: { rootless: true } } }));
+        return ok(JSON.stringify({
+          version: { Version: "5.0.0-sim" },
+          host: { security: { rootless: true }, cpus: FAKE_HOST.cpus, memTotal: FAKE_HOST.memoryBytes },
+        }));
       case "run":
         return this.run(request);
       case "exec":
