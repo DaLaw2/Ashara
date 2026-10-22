@@ -185,27 +185,27 @@ interface IntakeWrite {
 
 type IntakeCommit =
   | { readonly kind: "recorded"; readonly questionIds: readonly string[] }
-  | { readonly kind: "vision-exists"; readonly visionVersion: number };
+  | { readonly kind: "vision-exists"; readonly visionVersion: number }
+  /** The project no longer reads the tender now under its row lock: nothing was written and the tender stays unconsumed. */
+  | { readonly kind: "moved"; readonly detail: string };
 
 /** Engagement's persistence port for intake. Each write method is one transaction. */
 export interface IntakeStore {
   openTenders(): Promise<readonly OpenTender[]>;
   currentVisionVersion(projectId: ProjectId): Promise<number | null>;
-  /** Consumes the tender, posts the questions, the contract draft and the reading report, records the reading and writes vision v1, together. */
+  /**
+   * Consumes the tender, posts the questions, the contract draft and the reading report, records the
+   * reading and writes vision v1, together, only while its project still reads the tender now.
+   */
   recordIntake(write: IntakeWrite): Promise<IntakeCommit>;
   /** Consumes the tender and writes nothing else. */
   consumeTender(tenderId: string): Promise<void>;
   /** Counts a failed attempt with its error; returns the count after it. */
   recordFailedAttempt(tenderId: string, error: string): Promise<number>;
   /**
-   * Blocks the project for a tender intake could not read and sets the tender's count of failed
-   * reads back to none, together: the tender stays unconsumed with its last error, so the
-   * operator's unblock lets the next cycle read it again.
-   */
-  blockUnreadTender(tender: OpenTender, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
-  /**
-   * Blocks the project and records why; a project already
-   * blocked keeps its first cause. A blocked project's tenders are not open.
+   * Blocks the project and records why; a project already blocked keeps its first cause. A blocked
+   * project's tenders are not open, and the halt's end sets each one's count of failed reads back to
+   * none (inboundDecision's resetOnHaltEnd), so the operator's unblock has it read again.
    */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
@@ -219,6 +219,8 @@ export type IntakeOutcome =
       readonly confirmation: ReadingConfirmation["kind"];
     }
   | { readonly kind: "vision-exists"; readonly tenderId: string; readonly projectId: ProjectId; readonly visionVersion: number }
+  /** Its project was halted, stopped or delivered while it was read: nothing was written, no attempt counted, and it is read once its project reads it again. */
+  | { readonly kind: "moved"; readonly tenderId: string; readonly projectId: ProjectId; readonly detail: string }
   | { readonly kind: "failed"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
   /** The tender's intake failed on Ashara's side: recorded on it and taken in again after the backoff; the other tenders go on. */
   | StepFaulted
@@ -680,18 +682,16 @@ export class TenderIntake implements LiaisonIntake {
         return await this.intake(tender);
       } catch (err) {
         if (err instanceof IntakeReadExhausted) {
-          return this.block(tender, { ...projectBlockCause(err), category: modelCallBlockCategory(err.failure) }, "unread");
+          return this.block(tender, { ...projectBlockCause(err), category: modelCallBlockCategory(err.failure) });
         }
         if (!(err instanceof IntakeFailureUnrecorded || err instanceof QuestionIdsMismatch)) throw err;
-        return this.block(tender, projectBlockCause(err), "record");
+        return this.block(tender, projectBlockCause(err));
       }
     });
   }
 
-  /** An unread tender's block also sets its count of failed reads back to none, so the unblock reads it again. */
-  private async block(tender: OpenTender, cause: ProjectBlockCause, why: "unread" | "record"): Promise<IntakeOutcome> {
-    const { store } = this.deps;
-    const result = why === "unread" ? await store.blockUnreadTender(tender, cause) : await store.blockProject(tender.projectId, cause);
+  private async block(tender: OpenTender, cause: ProjectBlockCause): Promise<IntakeOutcome> {
+    const result = await this.deps.store.blockProject(tender.projectId, cause);
     console.warn(
       `[liaison-intake] tender ${tender.id} (project ${tender.projectId}): ${cause.errorClass}; ` +
         `project ${result}: ${cause.reason}`,
@@ -733,6 +733,10 @@ export class TenderIntake implements LiaisonIntake {
     const commit = await store.recordIntake(this.toWrite(tender, first, confirmation));
     if (commit.kind === "vision-exists") {
       return { kind: "vision-exists", ...base, visionVersion: commit.visionVersion };
+    }
+    if (commit.kind === "moved") {
+      console.warn(`[liaison-intake] tender ${tender.id} (project ${tender.projectId}): nothing written, read again once its project reads it: ${commit.detail}`);
+      return { kind: "moved", ...base, detail: commit.detail };
     }
     return { kind: "recorded", ...base, questions: commit.questionIds.length, confirmation: confirmation.kind };
   }

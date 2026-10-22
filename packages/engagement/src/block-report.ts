@@ -25,19 +25,20 @@ import type { Told } from "./inbound-policy.js";
 // that sweep ran on no commit, and a halt whose sweep is not on record is told all the same: either
 // way every guarantee reads unjudged, saying so.
 
-/** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
-type ProjectBlockKind =
-  | "budget_cap"
-  | "configuration"
-  | "fault"
-  | "planning_stopped"
-  | "replan_bound"
-  | "infrastructure"
-  | "replan_stopped"
-  | "replan_provider_failed"
-  | "model_failed"
-  | "provider_failed"
-  | "work_budget";
+/**
+ * What paused a project, as recorded on its block episode: every kind of Delivery's halt vocabulary
+ * but the three that carry their own detail (below). Each switch over it has no default and ends in
+ * HaltKindUnworded, so a halt kind Delivery adds does not compile until its report is worded here.
+ */
+type ProjectBlockKind = Exclude<HaltKind, "check_dispute" | "suite_review" | "plan_repair">;
+
+/** A halt of a kind no report wording is written for: unreachable while every switch over the kinds is exhaustive. */
+class HaltKindUnworded extends Error {
+  constructor(readonly halt: never) {
+    super(`no report wording is written for the halt ${JSON.stringify(halt)}`);
+    this.name = "HaltKindUnworded";
+  }
+}
 
 /**
  * The cause recorded on a block episode: the error's class and its described chain, each null when
@@ -266,6 +267,7 @@ function recordedKind(halt: ToldHalt): string {
             "finished work, which is kept for that, so the next step of the work, which was not that checking, was not sent"
         : "the budget of model requests set for this project was used up, so the next step of the work was not sent";
   }
+  throw new HaltKindUnworded(halt);
 }
 
 /**
@@ -326,6 +328,7 @@ function nextStep(halt: ToldHalt): string {
         `on every round of work and resumes this project by itself as soon as they answer; you will be told when it does.`
       );
   }
+  throw new HaltKindUnworded(halt);
 }
 
 /** What the client reads when a project is paused: that it is, the recorded cause, and what happens next. */
@@ -498,9 +501,20 @@ function haltBody(due: Extract<DueBlockReport, { readonly subject: "project-bloc
       return suiteReviewBoundReport(due.review);
     case "plan_repair":
       return planRepairBoundReport(due.abandoned);
-    default:
+    case "budget_cap":
+    case "configuration":
+    case "fault":
+    case "planning_stopped":
+    case "replan_bound":
+    case "infrastructure":
+    case "replan_stopped":
+    case "replan_provider_failed":
+    case "model_failed":
+    case "provider_failed":
+    case "work_budget":
       return projectBlockedReport(due.episodeId, due.kind, due.cause);
   }
+  throw new HaltKindUnworded(due);
 }
 
 /** A halt's report: what paused the project, what a change sent during it does, then the guarantee table of its terminal sweep. */

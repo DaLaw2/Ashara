@@ -414,7 +414,7 @@ describe("Liaison tender intake", () => {
     expect(messages.filter((m) => m.direction === "outbound")).toHaveLength(0);
     const tenderRow = messages.find((m) => m.id === tenderId);
     expect(tenderRow?.consumedAt).toBeNull();
-    expect(tenderRow?.intakeAttempts).toBe(0);
+    expect(tenderRow?.intakeAttempts).toBe(3);
     expect(tenderRow?.intakeLastError).toMatch(/stub provider unavailable/);
     const blocks = await db.execute(sql`SELECT kind, error_class AS "errorClass", ended_at AS "endedAt" FROM project_blocks WHERE project_id = ${projectId}`);
     expect(blocks.rows).toEqual([{ kind: "provider_failed", errorClass: "IntakeReadExhausted", endedAt: null }]);

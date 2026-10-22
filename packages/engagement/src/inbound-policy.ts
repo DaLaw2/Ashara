@@ -5,9 +5,11 @@ import type { HaltKind } from "@ashara/delivery/predicates";
 // (Engagement's lifecycle, and while active Delivery's open halt by its kind and whether the tender's
 // reading has written the project's first vision) and for each kind of
 // message the client can send, whether the message is read now, once the halt ends, or never;
-// whether the halt's end sets its count of failed readings back to none; and what the client is told
-// of it. The readers admit a message by the SQL derived from it (predicates.ts), the receipt and the
-// halt report word it from it, and the halt's end resets the counts it names. The halt table is keyed
+// whether the halt's end sets its count of failed readings back to none (nothing else ever does); whether
+// its writer may still commit under the project's standing read under the row lock; and what the client
+// is told of it. The readers admit a message by the SQL derived from it (predicates.ts), the writers
+// re-read it under the lock (clientInputStandingMoved), the receipt and the halt report
+// word it from it, and the halt's end resets the counts it names. The halt table is keyed
 // on Delivery's whole halt vocabulary with no default, so a halt kind added there does not compile
 // until it is decided here.
 
@@ -113,10 +115,12 @@ const CLOSED: Readonly<Record<InboundKind, InboundDecision>> = {
 /**
  * Under a halt: a tender waits for its end, since its reading starts the work the halt pauses. An
  * answer or a change is read during it unless HALT_READING says the halt holds the reading; one at its
- * cap waits for the halt's end either way, since its reading would only halt the project again, and
- * every exit of the halt sets its count back to none so that it is read afresh. A change sent before
- * the first vision waits for the tender's reading, which waits for the halt's end, whatever the halt.
- * A stop is read.
+ * cap waits for the halt's end either way, since its reading would only halt the project again. A
+ * change sent before the first vision waits for the tender's reading, which waits for the halt's end,
+ * whatever the halt. Every exit of the halt sets the count of failed readings of each message it held
+ * back to none, so that it is read afresh: the opening of a halt sets back nothing, so a tender whose
+ * failed readings opened the halt keeps its count, and its last error, for the operator until the
+ * halt ends. A stop is read.
  */
 function underHalt(halt: HaltKind, visionWritten: boolean): Readonly<Record<InboundKind, InboundDecision>> {
   const held = HALT_READING[halt];
@@ -124,7 +128,7 @@ function underHalt(halt: HaltKind, visionWritten: boolean): Readonly<Record<Inbo
     ? { reading: "now", atCap: "after-halt", resetOnHaltEnd: true, told: "read-during-pause" }
     : { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: `waits-for-${held.because}` };
   return {
-    tender: { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: false, told: "waits-for-pause" },
+    tender: { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: "waits-for-pause" },
     answer: input,
     change: visionWritten ? input : { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: "waits-for-pause" },
     stop: STOP,

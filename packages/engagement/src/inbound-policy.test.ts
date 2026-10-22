@@ -9,8 +9,8 @@ import type { InboundDecision, InboundKind, InboundState } from "./inbound-polic
 // the decided behaviour spelled here on its own: budget halts hold the reading and say so, model-work
 // halts hold it and say so, every other halt reads answers and changes during it, a closed project
 // records and never reads, a tender waits out any halt, a change before the first vision waits for
-// the tender's reading, a stop is always read, and every halt's end resets the counts of answers and
-// changes.
+// the tender's reading, a stop is always read, and every halt's end resets the counts of tenders,
+// answers and changes.
 
 const BUDGET_HALTS: readonly string[] = ["budget_cap", "work_budget"];
 const MODEL_WORK_HALTS: readonly string[] = ["model_failed", "provider_failed", "replan_stopped", "replan_provider_failed"];
@@ -19,7 +19,7 @@ const VISION_STATES = [true, false] as const;
 
 function expectedUnderHalt(halt: string, kind: InboundKind, visionWritten: boolean): InboundDecision {
   if (kind === "stop") return { reading: "now", atCap: "now", resetOnHaltEnd: false, told: "stop" };
-  if (kind === "tender") return { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: false, told: "waits-for-pause" };
+  if (kind === "tender") return { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: "waits-for-pause" };
   if (kind === "change" && !visionWritten) return { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: "waits-for-pause" };
   if (BUDGET_HALTS.includes(halt)) return { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: "waits-for-budget" };
   if (MODEL_WORK_HALTS.includes(halt)) return { reading: "after-halt", atCap: "after-halt", resetOnHaltEnd: true, told: "waits-for-model-work" };

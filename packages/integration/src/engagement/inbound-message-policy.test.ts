@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl, type Database, type DbHandle } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { HALT_KINDS, type HaltKind } from "@ashara/delivery/predicates";
 import {
+  BlockReports,
   CLOSED_LIFECYCLES,
   ClientMessageRepository,
+  ClientReceipts,
+  TenderIntake,
   VisionRepository,
   createProjectWithTender,
   inboundDecision,
@@ -17,18 +20,21 @@ import {
   listUnconsumedChanges,
   listUnconsumedStops,
 } from "@ashara/engagement";
-import type { InboundKind, InboundState } from "@ashara/engagement";
-import type { ProjectId } from "@ashara/shared";
+import type { BlockReportStore, InboundKind, InboundState } from "@ashara/engagement";
+import { createIntakeStore } from "@ashara/server/intake-store";
+import { memoryStepContainment, parseProjectId, type ProjectId } from "@ashara/shared";
 import { UNREAD_HALT_KINDS } from "../simulator/invariants.js";
 
 // Every cell of Engagement's inbound-message decision (project state by message kind) against what the
 // database does in that state: each reader lists a message exactly when the decision reads it now (one
 // at its cap of failed readings exactly when the decision reads it at its cap), the receipt's listing
-// and the halt report's listing state the state the decision was taken in, a halt's end resets exactly
-// the counts the decision resets, and the simulator's own oracle of the halts that hold the reading
-// agrees cell by cell. Each state is set up and rolled back inside one transaction, on a project whose
-// tender's reading wrote its first vision and on one whose tender is not yet read. Every row belongs to
-// a project this suite creates under a unique name.
+// and the halt report's listing state the state the decision was taken in, the receipt and the halt
+// report word each message's fate as the decision tells it, a halt's opening resets no count and its end
+// resets exactly the counts the decision resets, a tender's intake writes nothing once its project no
+// longer reads it, and the simulator's own oracle of the halts that hold the reading agrees cell by
+// cell. Each state is set up and rolled back inside one transaction, on a project whose tender's
+// reading wrote its first vision and on one whose tender is not yet read. Every row belongs to a
+// project this suite creates under a unique name.
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `inbound-message-policy-test-${randomUUID().slice(0, 8)}`;
@@ -66,6 +72,8 @@ function withVision(state: SetState, visionWritten: boolean): InboundState {
 }
 
 let fixture: Fixture;
+/** The tender of the project whose first vision is not written: kept apart from the readers' cells, which list no tender of it. */
+let bareTender: string;
 
 class RolledBack<T> extends Error {
   constructor(readonly result: T) {
@@ -226,7 +234,8 @@ beforeAll(async () => {
   await charge(change, 1, "model");
   await charge(changeAtCap, AT_CAP, "model");
 
-  const { project: bareProject } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-bare`, "Build a command that prints a greeting.");
+  const { project: bareProject, message: bareProjectTender } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-bare`, "Build a command that prints a greeting.");
+  bareTender = bareProjectTender.id;
   const bareChange = await inbound(bareProject.id, "change", null);
   const bareChangeAtCap = await inbound(bareProject.id, "change", null);
   await charge(bareChange, 1, "model");
@@ -241,6 +250,7 @@ beforeAll(async () => {
 afterAll(async () => {
   const pattern = `${NAME_PREFIX}-%`;
   const ours = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
+  await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_revisions WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours}) AND in_reply_to IS NOT NULL`);
@@ -301,25 +311,302 @@ describe("a closed project: only the stop is listed", () => {
   });
 });
 
-describe("the end of every halt resets the counts the decision resets: an answer's and a change's, never a tender's", () => {
+/** Each fixture message's count of failed readings as it was charged. */
+function chargedAttempts(): Map<string, number> {
+  return new Map([
+    [fixture.tender, 1],
+    [fixture.answer, 1],
+    [fixture.answerAtCap, AT_CAP],
+    [fixture.change, 1],
+    [fixture.changeAtCap, AT_CAP],
+    [fixture.bareChange, 1],
+    [fixture.bareChangeAtCap, AT_CAP],
+  ]);
+}
+
+/** The count the decision leaves each fixture message with once a `halt` halt ends. */
+function decidedAfterHaltEnd(halt: HaltKind): Map<string, number> {
+  const reset = (kind: InboundKind, visionWritten: boolean): boolean => inboundDecision({ lifecycle: "active", halt, visionWritten }, kind).resetOnHaltEnd;
+  const cells: ReadonlyArray<readonly [string, InboundKind, boolean]> = [
+    [fixture.tender, "tender", true],
+    [fixture.answer, "answer", true],
+    [fixture.answerAtCap, "answer", true],
+    [fixture.change, "change", true],
+    [fixture.changeAtCap, "change", true],
+    [fixture.bareChange, "change", false],
+    [fixture.bareChangeAtCap, "change", false],
+  ];
+  const charged = chargedAttempts();
+  return new Map(cells.map(([id, kind, visionWritten]) => [id, reset(kind, visionWritten) ? 0 : (charged.get(id) ?? -1)]));
+}
+
+const ofFixture = (attempts: Map<string, number>): Map<string, number | undefined> => new Map([...chargedAttempts().keys()].map((id) => [id, attempts.get(id)]));
+
+describe("the end of every halt resets the counts the decision resets: a tender's, an answer's and a change's", () => {
   test.each(HALT_KINDS)("%s", async (halt) => {
-    const after = await attemptsAfterUnblock(halt);
     const reset = (kind: InboundKind, visionWritten: boolean): boolean => inboundDecision({ lifecycle: "active", halt, visionWritten }, kind).resetOnHaltEnd;
     expect({ answer: reset("answer", true), change: reset("change", true), tender: reset("tender", true), bareChange: reset("change", false) }).toEqual({
       answer: true,
       change: true,
-      tender: false,
+      tender: true,
       bareChange: true,
     });
-    expect({
-      tender: after.get(fixture.tender),
-      answer: after.get(fixture.answer),
-      answerAtCap: after.get(fixture.answerAtCap),
-      change: after.get(fixture.change),
-      changeAtCap: after.get(fixture.changeAtCap),
-      bareChange: after.get(fixture.bareChange),
-      bareChangeAtCap: after.get(fixture.bareChangeAtCap),
-    }).toEqual({ tender: 1, answer: 0, answerAtCap: 0, change: 0, changeAtCap: 0, bareChange: 0, bareChangeAtCap: 0 });
+    expect(ofFixture(await attemptsAfterUnblock(halt))).toEqual(decidedAfterHaltEnd(halt));
+  });
+});
+
+type BlockCause = Parameters<ProjectHaltRepository["block"]>[1];
+
+/** The cause Delivery's block records a `halt` halt with; a planning_stopped halt is opened by first planning alone, never by a block. */
+function blockCauseOf(halt: HaltKind): BlockCause | null {
+  const errorClass = "ScriptedHalt";
+  const reason = "opened by the test";
+  if (halt === "planning_stopped") return null;
+  if (halt === "budget_cap") return { category: halt, errorClass, reason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } };
+  if (halt === "work_budget") {
+    return {
+      category: halt,
+      errorClass,
+      reason,
+      work: { scope: "project", budgetRequests: 1, grantedRequests: 0, reserveRequests: 0, reserveProtected: false, spentRequests: 1, inFlightRequests: 0, bySite: [] },
+    };
+  }
+  return { category: halt, errorClass, reason };
+}
+
+/** Each fixture message's count of failed readings once Delivery's block opens a `halt` halt on both projects. */
+async function attemptsAfterBlock(cause: BlockCause): Promise<Map<string, number>> {
+  const rows = await under({ lifecycle: "active", halt: null }, async (tx) => {
+    expect(await new ProjectHaltRepository(tx).block(fixture.projectId, cause)).toBe("blocked");
+    expect(await new ProjectHaltRepository(tx).block(fixture.bareProjectId, cause)).toBe("blocked");
+    const result = await tx.execute(
+      sql`SELECT id, intake_attempts AS attempts FROM client_messages WHERE project_id IN (${fixture.projectId}, ${fixture.bareProjectId}) AND direction = 'inbound'`,
+    );
+    return AttemptsSchema.parse(result.rows);
+  });
+  return new Map(rows.map((row) => [row.id, row.attempts]));
+}
+
+// The decision resets a count only at a halt's end (resetOnHaltEnd): opening a halt resets none.
+describe("the opening of every halt resets no count: the decision resets one only at the halt's end", () => {
+  test.each(HALT_KINDS.filter((halt) => blockCauseOf(halt) !== null))("%s", async (halt) => {
+    const cause = blockCauseOf(halt);
+    if (cause === null) throw new Error(`no block opens a ${halt} halt`);
+    expect(ofFixture(await attemptsAfterBlock(cause))).toEqual(ofFixture(chargedAttempts()));
+  });
+
+  test("a tender whose readings ran out halts its project at its count, which only the halt's end sets back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-exhausted-client`)).id;
+    const { project, message: tender } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-exhausted`, "Build a command that prints a greeting.");
+    await charge(tender.id, AT_CAP, null);
+    const llm = {
+      forCall: () => ({
+        generateStructured: async (): Promise<never> => {
+          throw new UnexpectedRead();
+        },
+      }),
+    };
+    const store = createIntakeStore(db);
+    const ours = { ...store, openTenders: async () => (await store.openTenders()).filter((open) => open.id === tender.id) };
+
+    const outcomes = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: ours }).runPending();
+
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
+    const open = await openHaltOf(project.id);
+    expect(open).not.toBeNull();
+    const decided = (halt: HaltKind): number => (inboundDecision({ lifecycle: "active", halt, visionWritten: false }, "tender").resetOnHaltEnd ? 0 : AT_CAP);
+    expect(await attemptsOf(tender.id)).toBe(AT_CAP);
+    await new ProjectHaltRepository(db).unblock(project.id, "operator-test", "ended by the test");
+    expect(await attemptsOf(tender.id)).toBe(decided(open ?? "fault"));
+  });
+});
+
+class UnexpectedRead extends Error {
+  constructor() {
+    super("a tender at its cap was read; it must halt its project unread");
+    this.name = "UnexpectedRead";
+  }
+}
+
+async function attemptsOf(messageId: string): Promise<number | undefined> {
+  const result = await db.execute(sql`SELECT id, intake_attempts AS attempts FROM client_messages WHERE id = ${messageId}`);
+  return AttemptsSchema.parse(result.rows)[0]?.attempts;
+}
+
+const OpenHaltSchema = z.array(z.object({ kind: z.enum(HALT_KINDS) }));
+
+async function openHaltOf(projectId: ProjectId): Promise<HaltKind | null> {
+  const result = await db.execute(sql`SELECT kind FROM project_blocks WHERE project_id = ${projectId} AND ended_at IS NULL`);
+  return OpenHaltSchema.parse(result.rows)[0]?.kind ?? null;
+}
+
+type Told = ReturnType<typeof inboundDecision>["told"];
+
+/**
+ * The receipt's words for each fate the decision tells, spelled here on their own: a receipt whose
+ * fate paragraph carries the words of any fate but the one decided for its cell, or none, fails.
+ */
+const RECEIPT_WORDS: Readonly<Record<Exclude<Told, "stop">, (fate: string) => boolean>> = {
+  "read-at-work": (fate) => fate.startsWith("Ashara reads it in this or the next round of work"),
+  "waits-for-tender": (fate) => fate.startsWith("Ashara reads it once it has read the tender this project began with"),
+  "read-during-pause": (fate) => fate.startsWith("Ashara reads it all the same"),
+  "waits-for-pause": (fate) => fate === "Ashara reads it once the pause ends.",
+  "waits-for-budget": (fate) => fate.includes("which the budget that paused this project does not allow"),
+  "waits-for-model-work": (fate) => fate.includes("what paused this project is model work failing"),
+  closed: (fate) => fate.startsWith("It is recorded, but not acted on"),
+};
+
+function toldIn(words: Readonly<Partial<Record<Told, (fate: string) => boolean>>>, fate: string): Told[] {
+  return Object.entries(words).flatMap(([told, says]) => (says?.(fate) === true ? [told as Told] : []));
+}
+
+/** Each message's receipt body as the Liaison words it from the receipt listing in `state`. */
+async function receiptsUnder(state: SetState): Promise<Map<string, string>> {
+  const due = await under(state, (tx) => listDueReceipts(tx));
+  const bodies = new Map<string, string>();
+  const receipts = new ClientReceipts(
+    {
+      dueReceipts: async () => due,
+      postReceipt: async (write) => {
+        bodies.set(write.due.messageId, write.body);
+        return "posted";
+      },
+    },
+    memoryStepContainment(() => false),
+  );
+  await receipts.runPending({ kind: "running" });
+  return bodies;
+}
+
+const RECEIPT_STATES: readonly SetState[] = [
+  { lifecycle: "active", halt: null },
+  ...HALT_KINDS.map((halt): SetState => ({ lifecycle: "active", halt })),
+  ...CLOSED_LIFECYCLES.map((lifecycle): SetState => ({ lifecycle })),
+];
+
+describe("every receipt tells its message's fate as the decision tells it, in every state, for a tender, an answer and a change", () => {
+  test.each(RECEIPT_STATES.map((state) => [JSON.stringify(state), state] as const))("%s", async (_name, state) => {
+    const bodies = await receiptsUnder(state);
+    const cells: ReadonlyArray<readonly [string, string, Exclude<InboundKind, "stop">, boolean]> = [
+      ["tender", fixture.tender, "tender", true],
+      ["bareTender", bareTender, "tender", false],
+      ["answer", fixture.answer, "answer", true],
+      ["change", fixture.change, "change", true],
+      ["bareChange", fixture.bareChange, "change", false],
+    ];
+    const told = (id: string): Told[] => {
+      const fate = (bodies.get(id) ?? "").split("\n\n")[2] ?? "";
+      return toldIn(RECEIPT_WORDS, fate);
+    };
+    expect(Object.fromEntries(cells.map(([name, id]) => [name, told(id)]))).toEqual(
+      Object.fromEntries(cells.map(([name, , kind, visionWritten]) => [name, [inboundDecision(withVision(state, visionWritten), kind).told]])),
+    );
+  });
+});
+
+/** The halt report's words for each fate the decision can tell a change under a halt, spelled here on their own. */
+const HALT_REPORT_WORDS: Readonly<Partial<Record<Told, (paragraph: string) => boolean>>> = {
+  "read-during-pause": (paragraph) => paragraph.includes("Ashara reads it and records it during the pause"),
+  "waits-for-pause": (paragraph) => paragraph.includes("Ashara has not yet read the tender this project began with, and reads it once the pause ends"),
+  "waits-for-budget": (paragraph) => paragraph.includes("which the budget that paused this project does not allow"),
+  "waits-for-model-work": (paragraph) => paragraph.includes("what paused this project is model work failing"),
+};
+
+type DueHalt = Extract<Awaited<ReturnType<BlockReportStore["dueReports"]>>[number], { readonly subject: "project-blocked" }>;
+
+/** A due report on a `halt` halt of a project whose first vision is written or not, with the detail its kind's report reads. */
+function dueHalt(halt: HaltKind, visionWritten: boolean): DueHalt {
+  const base = { subject: "project-blocked", episodeId: `e-${halt}`, projectId: parseProjectId(fixture.projectId, "fixture"), guarantees: { kind: "no-contract", sweep: null }, visionWritten } as const;
+  switch (halt) {
+    case "check_dispute":
+      return { ...base, kind: halt, dispute: { taskTitle: "Port", checkName: "imports", reason: "the check cannot pass", disputes: 3 } };
+    case "suite_review":
+      return { ...base, kind: halt, review: { times: 3, problems: ["two checks contradict"] } };
+    case "plan_repair":
+      return { ...base, kind: halt, abandoned: [{ workItemId: "w1", title: "Port", attempts: 2, cause: { source: "api", reason: "moved by hand" } }] };
+    default:
+      return { ...base, kind: halt, cause: { errorClass: "ScriptedHalt", reason: "opened by the test", spend: null, work: null } };
+  }
+}
+
+async function haltReportBody(due: DueHalt): Promise<string> {
+  const bodies: string[] = [];
+  const store: BlockReportStore = {
+    dueReports: async () => [due],
+    postProjectReport: async (_episodeId, _on, body) => {
+      bodies.push(body);
+      return "posted";
+    },
+    riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
+  };
+  await new BlockReports(store, memoryStepContainment(() => false)).runPending();
+  return bodies[0] ?? "";
+}
+
+describe("every halt's report tells a change sent during it the fate the decision tells it", () => {
+  test.each(HALT_KINDS.flatMap((halt) => [true, false].map((visionWritten) => [halt, visionWritten] as const)))("%s, the first vision written %s", async (halt, visionWritten) => {
+    const body = await haltReportBody(dueHalt(halt, visionWritten));
+    const paragraph = body.split("\n\n").find((each) => each.startsWith("A change you send meanwhile")) ?? "";
+    expect(toldIn(HALT_REPORT_WORDS, paragraph)).toEqual([inboundDecision({ lifecycle: "active", halt, visionWritten }, "change").told]);
+  });
+});
+
+// A tender is read while its project is at work; its intake commits only while the project still reads
+// it under the project's row lock, as an answer's and a change's writes do.
+describe("a tender's intake composed while its project was at work writes nothing once the project is halted or closed", () => {
+  test.each(["halted", "stopped"] as const)("%s between the reading and the write", async (moved) => {
+    const clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-race-${moved}-client`)).id;
+    const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-race-${moved}`, "Build a command that prints a greeting.");
+    const store = createIntakeStore(db);
+    const tender = (await store.openTenders()).find((open) => open.projectId === project.id);
+    if (tender === undefined) throw new Error(`no open tender for project ${project.id}`);
+
+    if (moved === "halted") expect(await new ProjectHaltRepository(db).block(project.id, { category: "fault", errorClass: "ScriptedHalt", reason: "opened by the test" })).toBe("blocked");
+    else await db.execute(sql`UPDATE projects SET lifecycle = 'stopped' WHERE id = ${project.id}`);
+
+    const commit = await store.recordIntake({
+      tender,
+      questions: [],
+      contractDraft: "This is the contract we are working to, drafted from your tender.",
+      readingReport: null,
+      reading: {
+        first: { provider: "stub", model: "stub-model", grade: "Strong" },
+        firstQuestions: 0,
+        confirmation: {
+          kind: "unconfirmed",
+          passedOver: [
+            { strength: "other-family", outcome: "unavailable", reason: "no second reading in the test" },
+            { strength: "same-family-other-model", outcome: "unavailable", reason: "no second reading in the test" },
+            { strength: "same-model", outcome: "unavailable", reason: "no second reading in the test" },
+          ],
+        },
+      },
+      vision: () => ({
+        visionText: "Build a command that prints a greeting.",
+        summary: "A greeting command.",
+        contract: {
+          interface: [{ id: "I1", text: "The command.", source: { kind: "tender", quote: "Build a command" } }],
+          guarantees: [
+            {
+              id: "G1",
+              statement: "The command prints a greeting.",
+              observable: { interface: ["I1"], observation: "output" },
+              refutedBy: ["The command prints no greeting."],
+              source: { kind: "tender", quote: "prints a greeting" },
+            },
+          ],
+          exclusions: [],
+        },
+        inferences: [],
+        openQuestions: [],
+      }),
+    });
+
+    expect(commit.kind).toBe("moved");
+    expect((await new ClientMessageRepository(db).findById(tender.id))?.consumedAt).toBeNull();
+    expect(await new VisionRepository(db).getCurrent(project.id)).toBeNull();
+    expect((await new ClientMessageRepository(db).listByProject(project.id)).filter((message) => message.direction === "outbound")).toEqual([]);
   });
 });
 

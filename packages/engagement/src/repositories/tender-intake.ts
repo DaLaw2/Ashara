@@ -4,7 +4,7 @@ import type { ProjectId } from "@ashara/shared";
 import type { IntakeReading } from "../intake.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { FirstVision } from "../vision.js";
-import { ClientMessageRepository } from "./client-message.js";
+import { ClientMessageRepository, clientInputStandingMoved } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 /** The first vision version a tender's intake writes did not come out as version 1. */
@@ -61,16 +61,22 @@ async function insertIntakeReading(db: DbHandle, write: TenderIntakeWrite): Prom
 
 type TenderIntakeCommit =
   | { readonly kind: "recorded"; readonly visionId: string; readonly questionIds: readonly string[] }
-  | { readonly kind: "vision-exists"; readonly visionVersion: number };
+  | { readonly kind: "vision-exists"; readonly visionVersion: number }
+  | { readonly kind: "moved"; readonly detail: string };
 
 /**
  * One tender's intake, in one transaction: the tender consumed, its questions, its contract draft
- * and its reading report posted, its reading recorded, vision v1 written. The tender is consumed first so its row lock
- * serialises two intakes of it; a project that already has a vision gets only
- * the consumption and nothing new.
+ * and its reading report posted, its reading recorded, vision v1 written. The project row is locked
+ * first and the tender's intake writes only while inboundDecision still reads it now: a project
+ * halted, stopped or delivered while the tender was read gets nothing ("moved"), the tender left for
+ * the reading the decision gives it then. A tender is read only while its project is at work. The
+ * tender is consumed next so its row lock serialises two intakes of it; a project that already has a
+ * vision gets only the consumption and nothing new.
  */
 export async function recordTenderIntake(db: Database, write: TenderIntakeWrite): Promise<TenderIntakeCommit> {
   return db.transaction(async (tx) => {
+    const moved = await clientInputStandingMoved(tx, write.projectId, "tender", false);
+    if (moved !== null) return { kind: "moved", detail: `tender ${write.tenderId}: ${moved}; nothing was written` };
     const messages = new ClientMessageRepository(tx);
     const visions = new VisionRepository(tx);
     await messages.markConsumed(write.tenderId);

@@ -42,12 +42,6 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
       await messages.markConsumed(tenderId);
     },
     recordFailedAttempt: (tenderId, error) => messages.recordIntakeFailure(tenderId, error),
-    blockUnreadTender: (tender, cause) =>
-      db.transaction(async (tx) => {
-        const blocked = await new ProjectHaltRepository(tx).block(tender.projectId, cause);
-        await new ClientMessageRepository(tx).resetIntakeAttempts(tender.id);
-        return blocked;
-      }),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }

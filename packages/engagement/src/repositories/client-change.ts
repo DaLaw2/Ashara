@@ -16,7 +16,7 @@ import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
 import { readVisionVersion } from "../vision.js";
 import type { RevisionOp } from "../vision-language/contract-op.js";
-import { ClientMessageRepository } from "./client-message.js";
+import { ClientMessageRepository, clientInputStandingMoved } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's changes of direction (client_messages kind 'change'): each read once against its
@@ -231,35 +231,6 @@ export async function recordChangeFailure(db: DbHandle, changeId: string, error:
   return row.intakeAttempts;
 }
 
-const StandingSchema = z.object({ lifecycle: z.string(), readsInput: z.boolean(), halted: z.boolean() });
-
-/**
- * Locks the project row for the rest of `tx` and reads, after the lock, whether the project still
- * reads a message of `kind` now (clientMessageReadNow) and whether it is halted: the lifecycle guard
- * and the halt guard each lock the row to write, so what this reads holds until `tx` ends. Null when
- * there is no such project.
- */
-export async function lockClientInputStanding(tx: DbHandle, projectId: ProjectId, kind: "answer" | "change"): Promise<{ readonly readsInput: boolean; readonly halted: boolean; readonly lifecycle: string } | null> {
-  const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
-  if (locked === undefined) return null;
-  const [row] = await tx
-    .select({ lifecycle: projects.lifecycle, readsInput: clientMessageReadNow(kind), halted: projectHalted(projects.id) })
-    .from(projects)
-    .where(eq(projects.id, projectId));
-  return row === undefined ? null : StandingSchema.parse(row);
-}
-
-/**
- * Why a write composed while its project read the client's input with halt `paused` must write
- * nothing now, or null when it may write.
- */
-export function standingMoved(standing: { readonly readsInput: boolean; readonly halted: boolean; readonly lifecycle: string } | null, paused: boolean): string | null {
-  if (standing === null) return "the project does not exist";
-  if (!standing.readsInput) return `the project no longer reads the client's input (lifecycle '${standing.lifecycle}'${standing.halted ? ", halted" : ""})`;
-  if (standing.halted !== paused) return `composed while the project was ${paused ? "halted" : "at work"}, but it is now ${standing.halted ? "halted" : "at work"}`;
-  return null;
-}
-
 /** What the change was composed against no longer holds when the write's transaction reads it: nothing was written. */
 class ChangeContextMoved extends Error {
   constructor(
@@ -295,7 +266,7 @@ export async function recordCorrection(
 
 function writeCorrection(db: Database, write: CorrectionWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
-    const standing = standingMoved(await lockClientInputStanding(tx, write.projectId, "change"), write.paused);
+    const standing = await clientInputStandingMoved(tx, write.projectId, "change", write.paused);
     if (standing !== null) throw new ChangeContextMoved(write.changeId, standing);
     const consumed = await tx
       .update(clientMessages)

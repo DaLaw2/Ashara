@@ -11,7 +11,7 @@ import { ASSUMPTION_KIND_RULE } from "./vision-language/vision-assumption.js";
 type Tender = Awaited<ReturnType<IntakeStore["openTenders"]>>[number];
 type Write = Parameters<IntakeStore["recordIntake"]>[0];
 type Sent = Parameters<ReturnType<ContextualLlm["forCall"]>["generateStructured"]>[0];
-type ProjectBlockCause = Parameters<IntakeStore["blockUnreadTender"]>[1];
+type ProjectBlockCause = Parameters<IntakeStore["blockProject"]>[1];
 
 function tenderOf(id: string, body: string, project: number, attempts = 0, lastError: string | null = null): Tender {
   return {
@@ -34,7 +34,6 @@ function storeOf(tenders: readonly Tender[], given: Partial<IntakeStore> = {}): 
     recordIntake: unreached("recordIntake"),
     consumeTender: unreached("consumeTender"),
     recordFailedAttempt: unreached("recordFailedAttempt"),
-    blockUnreadTender: unreached("blockUnreadTender"),
     blockProject: unreached("blockProject"),
     ...given,
   };
@@ -140,7 +139,7 @@ describe("TenderIntake failure accounting", () => {
 // A tender is never refused: one no read of which succeeds blocks its project on Ashara's side and
 // stays unconsumed, so the operator's unblock has it read again.
 describe("TenderIntake that cannot read a tender", () => {
-  test("three failed reads block the project and leave the tender unconsumed, its count set back for the unblock", async () => {
+  test("three failed reads block the project and leave the tender unconsumed at its count, which the halt's end sets back", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const llm: ContextualLlm = {
       forCall: () => ({
@@ -151,7 +150,7 @@ describe("TenderIntake that cannot read a tender", () => {
     };
     let tender = tenderOf("tender-unread", "A booking page.", 7);
     const consumed: string[] = [];
-    const blocked: Array<{ readonly tenderId: string; readonly cause: ProjectBlockCause }> = [];
+    const blocked: Array<{ readonly projectId: string; readonly cause: ProjectBlockCause }> = [];
     let projectBlocked = false;
     const store = storeOf([], {
       openTenders: async () => (projectBlocked ? [] : [tender]),
@@ -160,10 +159,9 @@ describe("TenderIntake that cannot read a tender", () => {
         tender = { ...tender, intakeAttempts: tender.intakeAttempts + 1, intakeLastError: error };
         return tender.intakeAttempts;
       },
-      blockUnreadTender: async (unread, cause) => {
-        blocked.push({ tenderId: unread.id, cause });
+      blockProject: async (projectId, cause) => {
+        blocked.push({ projectId, cause });
         projectBlocked = true;
-        tender = { ...tender, intakeAttempts: 0 };
         return "blocked";
       },
     });
@@ -174,15 +172,16 @@ describe("TenderIntake that cannot read a tender", () => {
     expect(outcomes.map((o) => o.kind)).toEqual(["failed", "failed", "project-blocked"]);
     expect(blocked).toEqual([
       {
-        tenderId: "tender-unread",
+        projectId: tender.projectId,
         cause: { category: "model_failed", errorClass: "IntakeReadExhausted", reason: expect.stringMatching(/^IntakeReadExhausted: tender tender-unread could not be read after 3 attempts/) },
       },
     ]);
     expect(consumed).toEqual([]);
-    expect(tender).toMatchObject({ intakeAttempts: 0, intakeLastError: expect.stringContaining("scripted failure") });
-    // The blocked project's tender is not taken in; once unblocked, it is read again from no attempts.
+    expect(tender).toMatchObject({ intakeAttempts: 3, intakeLastError: expect.stringContaining("scripted failure") });
+    // The blocked project's tender is not taken in; the halt's end sets its count back, and it is read again from no attempts.
     expect(await intake.runPending()).toEqual([]);
     projectBlocked = false;
+    tender = { ...tender, intakeAttempts: 0 };
     expect((await intake.runPending()).map((o) => o.kind)).toEqual(["failed"]);
   });
 
@@ -190,7 +189,7 @@ describe("TenderIntake that cannot read a tender", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const causes: ProjectBlockCause[] = [];
     const store = storeOf([tenderOf("tender-capped", "A booking page.", 8, 3, "an earlier read failed")], {
-      blockUnreadTender: async (_tender, cause) => {
+      blockProject: async (_projectId, cause) => {
         causes.push(cause);
         return "blocked";
       },

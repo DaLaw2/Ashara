@@ -1,10 +1,11 @@
 import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
 import { ProjectRepository, insertedRow, projects } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import type { HaltKind } from "@ashara/delivery/predicates";
-import { INBOUND_KINDS, inboundDecision } from "../inbound-policy.js";
+import { projectHalted, type HaltKind } from "@ashara/delivery/predicates";
+import { INBOUND_KINDS, inboundDecision, type InboundKind } from "../inbound-policy.js";
 import { clientMessageReadNow, noOpenStop, visionWritten } from "../predicates.js";
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
@@ -43,6 +44,30 @@ class TenderNotOpen extends Error {
     super(`cannot ${operation}: client message ${messageId} is not an unconsumed inbound tender`);
     this.name = "TenderNotOpen";
   }
+}
+
+const StandingSchema = z.object({ lifecycle: z.string(), readsNow: z.boolean(), halted: z.boolean() });
+
+/**
+ * The one check every writer of a client message's reading (the tender's intake, an answer's, a
+ * change's) runs before it writes: it locks the project row for the rest of `tx` and reads, after the
+ * lock, whether inboundDecision still reads a message of `kind` now (clientMessageReadNow) and whether
+ * the project is halted. The lifecycle guard and the halt guard each lock the row to write, so what it
+ * reads holds until `tx` ends. Returns why a write composed while the project was halted (`paused`)
+ * or at work must write nothing now, or null when it may write.
+ */
+export async function clientInputStandingMoved(tx: DbHandle, projectId: ProjectId, kind: Exclude<InboundKind, "stop">, paused: boolean): Promise<string | null> {
+  const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+  if (locked === undefined) return "the project does not exist";
+  const [row] = await tx
+    .select({ lifecycle: projects.lifecycle, readsNow: clientMessageReadNow(kind), halted: projectHalted(projects.id) })
+    .from(projects)
+    .where(eq(projects.id, projectId));
+  if (row === undefined) return "the project does not exist";
+  const standing = StandingSchema.parse(row);
+  if (!standing.readsNow) return `the project no longer reads the client's input (lifecycle '${standing.lifecycle}'${standing.halted ? ", halted" : ""})`;
+  if (standing.halted !== paused) return `composed while the project was ${paused ? "halted" : "at work"}, but it is now ${standing.halted ? "halted" : "at work"}`;
+  return null;
 }
 
 /**
@@ -185,26 +210,6 @@ export class ClientMessageRepository {
       .returning({ intakeAttempts: clientMessages.intakeAttempts });
     if (!row) throw new TenderNotOpen(id, "record a failed intake attempt");
     return row.intakeAttempts;
-  }
-
-  /**
-   * Sets an unconsumed tender's count of failed intake attempts back to none, keeping the last
-   * error on record: the tender is read again from no attempts once its project is unblocked.
-   */
-  async resetIntakeAttempts(id: string): Promise<void> {
-    const [row] = await this.db
-      .update(clientMessages)
-      .set({ intakeAttempts: 0 })
-      .where(
-        and(
-          eq(clientMessages.id, id),
-          eq(clientMessages.direction, "inbound"),
-          eq(clientMessages.kind, "tender"),
-          isNull(clientMessages.consumedAt),
-        ),
-      )
-      .returning({ id: clientMessages.id });
-    if (!row) throw new TenderNotOpen(id, "reset its failed intake attempts");
   }
 
   /** The answer already given to this question, or null when it has none. */
