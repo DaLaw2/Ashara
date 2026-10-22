@@ -3,7 +3,6 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { describeErrorChain } from "@ashara/shared";
-import * as schema from "./schema/index.js";
 
 /**
  * The default DATABASE_URL when the environment does not provide one.
@@ -15,6 +14,10 @@ import * as schema from "./schema/index.js";
  */
 export const DEFAULT_DATABASE_URL = "postgresql://ashara@localhost:5432/ashara";
 
+/**
+ * Built without a schema, so `db.query` names no table: every context holds this one handle, and a
+ * read of a table it does not own needs that table's object, which only its owner may import.
+ */
 export type Database = ReturnType<typeof createDb>;
 
 /**
@@ -47,7 +50,7 @@ export function createDb(databaseUrl: string, createPool: PoolFactory = createPg
       `[db] WARN: an idle pooled connection failed and was removed from the pool (code ${code}): ${describeErrorChain(err)}`,
     );
   });
-  const db = drizzle(conflictRetryingPool(pool), { schema });
+  const db = drizzle(conflictRetryingPool(pool));
   // Every top-level transaction of this Database runs through the one wrapper below. It exists
   // because drizzle-orm 0.45.2 (the pinned version; node-postgres/session.js NodePgSession.transaction)
   // sends BEGIN on a client checked out of the pool before the try/finally that releases it, so a
@@ -58,7 +61,7 @@ export function createDb(databaseUrl: string, createPool: PoolFactory = createPg
   return db;
 }
 
-type SchemaDatabase = NodePgDatabase<typeof schema>;
+type UnschemedDatabase = NodePgDatabase;
 
 /** BEGIN failed, so no transaction was opened; the connection it was sent on was destroyed, not pooled. */
 class TransactionBeginFailed extends Error {
@@ -93,13 +96,13 @@ interface TransactionProgress {
  * releases nothing). A connection whose BEGIN, COMMIT or ROLLBACK failed is in an unknown state and
  * is destroyed instead of returned to the pool; one whose body failed and rolled back is reused.
  */
-function transactionOnOwnCheckout(pool: pg.Pool): SchemaDatabase["transaction"] {
+function transactionOnOwnCheckout(pool: pg.Pool): UnschemedDatabase["transaction"] {
   return async (body, config) => {
     const client = await pool.connect();
     const progress: TransactionProgress = { entered: false, bodyFailure: null };
     let destroy = true;
     try {
-      const result = await drizzle(client, { schema }).transaction(async (tx) => {
+      const result = await drizzle(client).transaction(async (tx) => {
         progress.entered = true;
         try {
           return await body(tx);
@@ -212,6 +215,6 @@ function conflictRetryingPool(pool: pg.Pool): pg.Pool {
  * A transaction a conflict aborted was rolled back whole, so it runs again from its BEGIN on a fresh
  * checkout, its body included: a body reruns only after its earlier run's writes were undone.
  */
-function retriedTransaction(once: SchemaDatabase["transaction"]): SchemaDatabase["transaction"] {
+function retriedTransaction(once: UnschemedDatabase["transaction"]): UnschemedDatabase["transaction"] {
   return (body, config) => retriedOnConflict("a transaction", () => once(body, config));
 }

@@ -21,8 +21,10 @@
  *   name.
  * A drizzle builder read (`.from(T)`, a join, `alias(T, ...)`) is not read here: it needs the table
  * object, which only the owner's `@ashara/db/schema/<context>` entry exports, and boundary-rules.toml's
- * [db] subpath-importers refuse that import to every other context. Raw SQL names a table by a
- * string no import carries, so the raw read stays here.
+ * [db] subpath-importers refuse that import to every other context. A relational read
+ * (`db.query.<table>`) is not read here either and needs no table object: it is refused by the type
+ * checker, because the shared Database handle is built without a schema and its `query` names no
+ * table. Raw SQL names a table by a string no import carries, so the raw read stays here.
  * A read of a table owned by another package or by "db" fails unless an allowed edge names the file
  * and the table; an edge no read uses is itself a finding. There is no exemption: a key other than an
  * owner or an edge is a parse error.

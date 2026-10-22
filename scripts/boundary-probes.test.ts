@@ -18,6 +18,10 @@
  * import per ordered pair of its modules, a file that belongs to no module, a module glob that
  * matches nothing, and, in a scratch copy of the rules, a module-allow cycle the parser must refuse.
  * A last scratch copy admits a context to another's tables, which the [tables] owner map refuses.
+ *
+ * The relational query API is probed by the type checker instead: a context holding the shared
+ * Database handle that writes `db.query.<table>` or `tx.query.<table>` must fail to compile, since
+ * such a read imports no table object for the checker to refuse.
  */
 
 import { spawnSync } from "node:child_process";
@@ -26,6 +30,7 @@ import os from "node:os";
 import path from "node:path";
 import { getTableName, is } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
+import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import * as dbRoot from "@ashara/db";
 import { DB_OWNER, SHARED_OWNER, declaredTables, parseTableOwnershipRules } from "./table-ownership.js";
@@ -696,4 +701,52 @@ describe("boundary-rules.toml against the context map", () => {
     expect([...reported].filter((line) => !expected.has(line))).toEqual([]);
     expect(probed.output).toContain(`${expected.size} violations found`);
   });
+});
+
+// Compiled in memory as a file of knowledge's sources, so @ashara/db resolves exactly as it does for
+// that context. Only the lines of the two relational reads may draw a diagnostic: one anywhere else
+// (an import that no longer resolves) is a probe that no longer probes.
+const RELATIONAL_PROBE_PACKAGE = path.join(REPO, "packages", "knowledge");
+const RELATIONAL_PROBE_FILE = path.join(RELATIONAL_PROBE_PACKAGE, "src", "__relational_query_probe__.ts");
+const RELATIONAL_PROBE_TEXT = [
+  'import type { Database } from "@ashara/db";',
+  "declare const db: Database;",
+  "export async function probe(): Promise<void> {",
+  "  await db.query.workItems.findMany();",
+  "  await db.transaction(async (tx) => {",
+  "    await tx.query.workItems.findMany();",
+  "  });",
+  "}",
+  "",
+].join("\n");
+const RELATIONAL_READ_LINES = [4, 6];
+
+function relationalProbeDiagnostics(): { line: number; message: string }[] {
+  const read = ts.readConfigFile(path.join(RELATIONAL_PROBE_PACKAGE, "tsconfig.json"), (file) => ts.sys.readFile(file));
+  if (read.error !== undefined) throw new ProbeTreeError("read knowledge tsconfig", ts.flattenDiagnosticMessageText(read.error.messageText, "\n"));
+  const options = { ...ts.parseJsonConfigFileContent(read.config, ts.sys, RELATIONAL_PROBE_PACKAGE).options, noEmit: true };
+  const host = ts.createCompilerHost(options);
+  const isProbe = (file: string): boolean => path.resolve(file) === RELATIONAL_PROBE_FILE;
+  const getSourceFile = host.getSourceFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  const readFile = host.readFile.bind(host);
+  host.getSourceFile = (file, language, onError, create) =>
+    isProbe(file) ? ts.createSourceFile(file, RELATIONAL_PROBE_TEXT, language) : getSourceFile(file, language, onError, create);
+  host.fileExists = (file) => isProbe(file) || fileExists(file);
+  host.readFile = (file) => (isProbe(file) ? RELATIONAL_PROBE_TEXT : readFile(file));
+  const program = ts.createProgram([RELATIONAL_PROBE_FILE], options, host);
+  const source = program.getSourceFile(RELATIONAL_PROBE_FILE);
+  if (source === undefined) throw new ProbeTreeError("relational probe", `${RELATIONAL_PROBE_FILE} is not in the program`);
+  return [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)].map((diagnostic) => ({
+    line: diagnostic.start === undefined ? 0 : source.getLineAndCharacterOfPosition(diagnostic.start).line + 1,
+    message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+  }));
+}
+
+describe("the shared Database handle against drizzle's relational query API", () => {
+  test("a context reading another context's table through db.query or tx.query fails to compile", () => {
+    const diagnostics = relationalProbeDiagnostics();
+    expect(diagnostics.map((diagnostic) => diagnostic.line)).toEqual(RELATIONAL_READ_LINES);
+    for (const diagnostic of diagnostics) expect(diagnostic.message).toContain("workItems");
+  }, 120_000);
 });

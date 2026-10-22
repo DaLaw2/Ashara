@@ -39,7 +39,9 @@ allow = ["shared"]
 # A context's tables are its own: each schema/<context> entry admits that context, the composition
 # root and the test harness, and the root entry re-exports no table a context owns. The checker holds
 # each list to the [tables] owner of every table its entry declares, so a foreign table object fails
-# the import here and a drizzle read of it cannot be written.
+# the import here and a drizzle builder read of it cannot be written. A relational read
+# (db.query.<table>) names no table object; the shared Database handle is built without a schema, so
+# its query names no table and the type checker refuses that read.
 subpath-importers.schema/delivery = ["delivery", "server", "integration"]
 subpath-importers.schema/engagement = ["engagement", "server", "integration"]
 subpath-importers.schema/execution-infra = ["execution-infra", "server", "integration"]
@@ -268,8 +270,9 @@ bounds-tables = ["src/simulator/work-bounds.ts"]
 # Every insert, update or delete a context's source issues lands on a table that context owns;
 # anything it does to another context's table goes through that owner's exported write entry or
 # typed read. scripts/check-boundaries.ts fails on a write to a table another package owns, and on a
-# raw SQL read of one that no allowed edge below admits; a drizzle read needs the table object, which
-# [db] subpath-importers keep inside its owner
+# raw SQL read of one that no allowed edge below admits; a drizzle builder read needs the table
+# object, which [db] subpath-importers keep inside its owner, and a relational read (db.query) has no
+# table on the shared Database handle, which is built without a schema
 # (scripts/table-ownership.ts states what is read and its blind spots). Every table a
 # packages/db/src/schema/<module>.ts declares has one entry: owned by <module> when it is a package,
 # otherwise by "db" (generic persistence, reached through db's repositories) or "shared".
@@ -285,7 +288,6 @@ client_login_failures = "db"
 clients = "db"
 client_sessions = "db"
 step_faults = "db"
-system_settings = "db"
 correction_holds = "delivery"
 dependencies = "delivery"
 plan_repairs = "delivery"

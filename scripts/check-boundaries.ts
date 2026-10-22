@@ -38,7 +38,10 @@
  * table it declares, plus a package that composes every context (`allow = ["*"]`) or that none may
  * import (`importers = []`); and the root entry, with every file it re-exports from by a relative
  * `export ... from`, may declare no table a package owns. So a context's table object is importable
- * only by its owner, and a drizzle read of another context's table cannot be written.
+ * only by its owner, and a drizzle builder read of another context's table cannot be written. The
+ * relational read `db.query.<table>` names no table object, so no import is seen here: the shared
+ * Database handle is built without a schema, its `query` names no table, and the type checker
+ * refuses that read.
  *
  * A package that declares `module.*` is checked inside, against its modules. Every .ts file under
  * its src/ belongs to exactly one module: a test file to its subject's (`x.test.ts` and
