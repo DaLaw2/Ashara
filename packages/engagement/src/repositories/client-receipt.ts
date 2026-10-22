@@ -1,14 +1,15 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { PROJECT_LIFECYCLES, projects } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { HALT_KINDS, openHaltKind } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
-import { INBOUND_KINDS, inboundDecision } from "../inbound-policy.js";
+import { INBOUND_KINDS } from "../inbound-policy.js";
 import { visionWritten } from "../predicates.js";
-import { inboundState, receiptSubject } from "../client-receipt.js";
+import { receiptSubject } from "../client-receipt.js";
 import type { DueReceipt, ProjectStanding } from "../client-receipt.js";
+import { LockedStanding, consumeInbound } from "./client-message.js";
 
 // The receipts owed to the client's messages: an inbound message is owed one until an outbound
 // report names it in receipt_of, whose unique index admits one per message, unless it was consumed
@@ -137,13 +138,9 @@ export async function postClientReceipt(
     if (inserted.length === 0) return "already-posted";
 
     if (write.closes) {
-      if (inboundDecision(inboundState(due.standing), InboundKindSchema.parse(message.kind)).reading !== "never") throw new ReceiptCannotClose(due.messageId);
-      const closed = await tx
-        .update(clientMessages)
-        .set({ consumedAt: new Date() })
-        .where(and(eq(clientMessages.id, due.messageId), eq(clientMessages.direction, "inbound"), isNull(clientMessages.consumedAt)))
-        .returning({ id: clientMessages.id });
-      if (closed.length === 0) throw new ReceiptCannotClose(due.messageId);
+      const standing = await LockedStanding.neverRead(tx, due.projectId, InboundKindSchema.parse(message.kind));
+      if (!(standing instanceof LockedStanding)) throw new ReceiptCannotClose(due.messageId);
+      if ((await consumeInbound(standing, due.messageId)) === "not-open") throw new ReceiptCannotClose(due.messageId);
     }
     return "posted";
   });

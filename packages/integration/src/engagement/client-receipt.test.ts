@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
-import { ClientChanges, ClientMessageRepository, ClientReceipts, ClientStops, VisionRepository, acceptProject, createProjectWithTender } from "@ashara/engagement";
+import { ClientChanges, ClientMessageRepository, ClientReceipts, ClientStops, VisionRepository, acceptProject, consumeTenderWithoutIntake, createProjectWithTender } from "@ashara/engagement";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
@@ -111,7 +111,7 @@ async function contractedProject(): Promise<ProjectId> {
   });
   // The tender is consumed as intake would consume it, so the cycles below read only what each test sends.
   const [tender] = await new ClientMessageRepository(db).listByProject(project.id);
-  if (tender !== undefined) await new ClientMessageRepository(db).markConsumed(tender.id);
+  if (tender !== undefined) await consumeTenderWithoutIntake(db, { id: tender.id, projectId: project.id });
   return project.id;
 }
 

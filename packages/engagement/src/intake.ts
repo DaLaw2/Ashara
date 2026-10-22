@@ -198,8 +198,11 @@ export interface IntakeStore {
    * reading and writes vision v1, together, only while its project still reads the tender now.
    */
   recordIntake(write: IntakeWrite): Promise<IntakeCommit>;
-  /** Consumes the tender and writes nothing else. */
-  consumeTender(tenderId: string): Promise<void>;
+  /**
+   * Consumes the tender and writes nothing else, only while its project still reads the tender now
+   * under its row lock; "moved" consumes nothing.
+   */
+  consumeTender(tender: Pick<OpenTender, "id" | "projectId">): Promise<{ readonly kind: "consumed" } | { readonly kind: "moved"; readonly detail: string }>;
   /** Counts a failed attempt with its error; returns the count after it. */
   recordFailedAttempt(tenderId: string, error: string): Promise<number>;
   /**
@@ -714,7 +717,8 @@ export class TenderIntake implements LiaisonIntake {
 
     const visionVersion = await store.currentVisionVersion(tender.projectId);
     if (visionVersion !== null) {
-      await store.consumeTender(tender.id);
+      const consumed = await store.consumeTender(tender);
+      if (consumed.kind === "moved") return this.moved(tender, consumed.detail);
       console.warn(
         `[liaison-intake] tender ${tender.id}: project ${tender.projectId} already has vision v${visionVersion}; ` +
           `tender consumed without intake`,
@@ -736,11 +740,13 @@ export class TenderIntake implements LiaisonIntake {
     if (commit.kind === "vision-exists") {
       return { kind: "vision-exists", ...base, visionVersion: commit.visionVersion };
     }
-    if (commit.kind === "moved") {
-      console.warn(`[liaison-intake] tender ${tender.id} (project ${tender.projectId}): nothing written, read again once its project reads it: ${commit.detail}`);
-      return { kind: "moved", ...base, detail: commit.detail };
-    }
+    if (commit.kind === "moved") return this.moved(tender, commit.detail);
     return { kind: "recorded", ...base, questions: commit.questionIds.length, confirmation: confirmation.kind };
+  }
+
+  private moved(tender: OpenTender, detail: string): IntakeOutcome {
+    console.warn(`[liaison-intake] tender ${tender.id} (project ${tender.projectId}): nothing written, read again once its project reads it: ${detail}`);
+    return { kind: "moved", tenderId: tender.id, projectId: tender.projectId, detail };
   }
 
   private ladder(tender: OpenTender) {

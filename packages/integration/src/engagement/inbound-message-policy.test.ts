@@ -12,6 +12,7 @@ import {
   ClientReceipts,
   TenderIntake,
   VisionRepository,
+  consumeTenderWithoutIntake,
   createProjectWithTender,
   inboundDecision,
   listDueBlockReports,
@@ -242,7 +243,7 @@ beforeAll(async () => {
   await charge(bareChangeAtCap, AT_CAP, "model");
 
   const { project: stopProject, message: stopTender } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-stop`, "Build a command that prints a greeting.");
-  await new ClientMessageRepository(db).markConsumed(stopTender.id);
+  await consumeTenderWithoutIntake(db, { id: stopTender.id, projectId: stopProject.id });
   const stop = await inbound(stopProject.id, "stop", null);
   fixture = { projectId: project.id, bareProjectId: bareProject.id, stopProjectId: stopProject.id, tender: tender.id, answer, answerAtCap, change, changeAtCap, bareChange, bareChangeAtCap, stop };
 });
@@ -607,6 +608,56 @@ describe("a tender's intake composed while its project was at work writes nothin
     expect((await new ClientMessageRepository(db).findById(tender.id))?.consumedAt).toBeNull();
     expect(await new VisionRepository(db).getCurrent(project.id)).toBeNull();
     expect((await new ClientMessageRepository(db).listByProject(project.id)).filter((message) => message.direction === "outbound")).toEqual([]);
+  });
+});
+
+// A tender of a project that already has a vision is consumed with nothing else written, under the
+// same row lock and decision as its intake.
+describe("a tender listed while its project was at work is not consumed on the vision-exists path once the project is halted or closed", () => {
+  test.each(["halted", "stopped"] as const)("%s between the listing and the consumption", async (moved) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-seeded-${moved}-client`)).id;
+    const { project, message } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-seeded-${moved}`, "Build a command that prints a greeting.");
+    await new VisionRepository(db).create(project.id, {
+      visionText: "Build a command that prints a greeting.",
+      summary: "A greeting command.",
+      contract: {
+        interface: [{ id: "I1", text: "The command.", source: { kind: "tender", quote: "Build a command" } }],
+        guarantees: [
+          {
+            id: "G1",
+            statement: "The command prints a greeting.",
+            observable: { interface: ["I1"], observation: "output" },
+            refutedBy: ["The command prints no greeting."],
+            source: { kind: "tender", quote: "prints a greeting" },
+          },
+        ],
+        exclusions: [],
+      },
+    });
+    const llm = {
+      forCall: () => ({
+        generateStructured: async (): Promise<never> => {
+          throw new UnexpectedRead();
+        },
+      }),
+    };
+    const store = createIntakeStore(db);
+    const ours = {
+      ...store,
+      openTenders: async () => (await store.openTenders()).filter((open) => open.id === message.id),
+      currentVisionVersion: async (projectId: ProjectId) => {
+        const version = await store.currentVisionVersion(projectId);
+        if (moved === "halted") await new ProjectHaltRepository(db).block(project.id, { category: "fault", errorClass: "ScriptedHalt", reason: "opened by the test" });
+        else await db.execute(sql`UPDATE projects SET lifecycle = 'stopped' WHERE id = ${project.id}`);
+        return version;
+      },
+    };
+
+    const outcomes = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: ours }).runPending();
+
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(["moved"]);
+    expect((await new ClientMessageRepository(db).findById(message.id))?.consumedAt).toBeNull();
   });
 });
 

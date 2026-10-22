@@ -1,4 +1,4 @@
-import { ClientMessageRepository, VisionRepository, recordTenderIntake } from "@ashara/engagement";
+import { ClientMessageRepository, VisionRepository, consumeTenderWithoutIntake, recordTenderIntake } from "@ashara/engagement";
 import type { createDb } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import type { IntakeStore } from "@ashara/engagement";
@@ -38,9 +38,7 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
         ? { kind: "recorded", questionIds: commit.questionIds }
         : commit;
     },
-    async consumeTender(tenderId) {
-      await messages.markConsumed(tenderId);
-    },
+    consumeTender: (tender) => consumeTenderWithoutIntake(db, tender),
     recordFailedAttempt: (tenderId, error) => messages.recordIntakeFailure(tenderId, error),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
   };

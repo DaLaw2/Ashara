@@ -4,7 +4,7 @@ import type { ProjectId } from "@ashara/shared";
 import type { IntakeReading } from "../intake.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { FirstVision } from "../vision.js";
-import { ClientMessageRepository, clientInputStandingMoved } from "./client-message.js";
+import { ClientMessageNotConsumable, ClientMessageRepository, LockedStanding, consumeInbound, type StandingMoved } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 /** The first vision version a tender's intake writes did not come out as version 1. */
@@ -35,6 +35,27 @@ interface TenderIntakeWrite {
   readonly reading: IntakeReading;
   /** The vision v1 document, given the ids of the posted questions in the same order. */
   readonly vision: (questionIds: readonly string[]) => FirstVision;
+}
+
+async function consumeTender(standing: LockedStanding, tenderId: string): Promise<void> {
+  if ((await consumeInbound(standing, tenderId)) === "not-open") throw new ClientMessageNotConsumable(tenderId);
+}
+
+/**
+ * A tender of a project that already has a vision, consumed with nothing else written: under the
+ * project row's lock and only while inboundDecision still reads it now, as its intake is. A project
+ * halted, stopped or delivered since the tender was listed gets nothing ("moved").
+ */
+export async function consumeTenderWithoutIntake(
+  db: Database,
+  tender: { readonly id: string; readonly projectId: ProjectId },
+): Promise<{ readonly kind: "consumed" } | StandingMoved> {
+  return db.transaction(async (tx) => {
+    const standing = await LockedStanding.readNow(tx, tender.projectId, "tender", false);
+    if (!(standing instanceof LockedStanding)) return { kind: "moved", detail: `tender ${tender.id}: ${standing.detail}; nothing was written` };
+    await consumeTender(standing, tender.id);
+    return { kind: "consumed" };
+  });
 }
 
 /** One intake_readings row, written with vision v1; its CHECKs hold it consistent. */
@@ -75,11 +96,11 @@ type TenderIntakeCommit =
  */
 export async function recordTenderIntake(db: Database, write: TenderIntakeWrite): Promise<TenderIntakeCommit> {
   return db.transaction(async (tx) => {
-    const moved = await clientInputStandingMoved(tx, write.projectId, "tender", false);
-    if (moved !== null) return { kind: "moved", detail: `tender ${write.tenderId}: ${moved}; nothing was written` };
+    const standing = await LockedStanding.readNow(tx, write.projectId, "tender", false);
+    if (!(standing instanceof LockedStanding)) return { kind: "moved", detail: `tender ${write.tenderId}: ${standing.detail}; nothing was written` };
     const messages = new ClientMessageRepository(tx);
     const visions = new VisionRepository(tx);
-    await messages.markConsumed(write.tenderId);
+    await consumeTender(standing, write.tenderId);
 
     const existing = await visions.getCurrent(write.projectId);
     if (existing) return { kind: "vision-exists", visionVersion: existing.version };

@@ -16,7 +16,7 @@ import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
 import { readVisionVersion } from "../vision.js";
 import type { RevisionOp } from "../vision-language/contract-op.js";
-import { ClientMessageRepository, clientInputStandingMoved } from "./client-message.js";
+import { ClientMessageRepository, LockedStanding, consumeInbound } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's changes of direction (client_messages kind 'change'): each read once against its
@@ -266,22 +266,9 @@ export async function recordCorrection(
 
 function writeCorrection(db: Database, write: CorrectionWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
-    const standing = await clientInputStandingMoved(tx, write.projectId, "change", write.paused);
-    if (standing !== null) throw new ChangeContextMoved(write.changeId, standing);
-    const consumed = await tx
-      .update(clientMessages)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(clientMessages.id, write.changeId),
-          eq(clientMessages.projectId, write.projectId),
-          eq(clientMessages.direction, "inbound"),
-          eq(clientMessages.kind, "change"),
-          isNull(clientMessages.consumedAt),
-        ),
-      )
-      .returning({ id: clientMessages.id });
-    if (consumed.length === 0) return "already-consumed";
+    const standing = await LockedStanding.readNow(tx, write.projectId, "change", write.paused);
+    if (!(standing instanceof LockedStanding)) throw new ChangeContextMoved(write.changeId, standing.detail);
+    if ((await consumeInbound(standing, write.changeId)) === "not-open") return "already-consumed";
 
     const visions = new VisionRepository(tx);
     const moved = (current: number | null, basedOn: number) =>

@@ -11,7 +11,7 @@ import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import type { HoldCorrection } from "../ports.js";
 import { affectedKeysOf } from "./client-change.js";
-import { clientInputStandingMoved } from "./client-message.js";
+import { LockedStanding, consumeInbound } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions: each inbound
@@ -205,8 +205,8 @@ type AnswerRecording =
 
 function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
-    const standing = await clientInputStandingMoved(tx, write.projectId, "answer", write.paused);
-    if (standing !== null) throw new AnswerContextMoved(write.answerId, write.projectId, standing);
+    const standing = await LockedStanding.readNow(tx, write.projectId, "answer", write.paused);
+    if (!(standing instanceof LockedStanding)) throw new AnswerContextMoved(write.answerId, write.projectId, standing.detail);
     const [project] = await tx
       .select({ firstPlannedAt: projects.firstPlannedAt })
       .from(projects)
@@ -221,20 +221,7 @@ function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrectio
       );
     }
 
-    const consumed = await tx
-      .update(clientMessages)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(clientMessages.id, write.answerId),
-          eq(clientMessages.projectId, write.projectId),
-          eq(clientMessages.direction, "inbound"),
-          eq(clientMessages.kind, "answer"),
-          isNull(clientMessages.consumedAt),
-        ),
-      )
-      .returning({ id: clientMessages.id });
-    if (consumed.length === 0) return "already-consumed";
+    if ((await consumeInbound(standing, write.answerId)) === "not-open") return "already-consumed";
 
     let applied: { readonly version: number; readonly revision: RevisionRecord } | null = null;
     if (write.vision !== null) {

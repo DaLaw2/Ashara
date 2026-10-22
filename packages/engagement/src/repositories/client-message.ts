@@ -1,11 +1,11 @@
 import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { ProjectRepository, insertedRow, projects } from "@ashara/db";
+import { PROJECT_LIFECYCLES, ProjectRepository, insertedRow, projects } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { projectHalted, type HaltKind } from "@ashara/delivery/predicates";
-import { INBOUND_KINDS, inboundDecision, type InboundKind } from "../inbound-policy.js";
+import { HALT_KINDS, openHaltKind, type HaltKind } from "@ashara/delivery/predicates";
+import { INBOUND_KINDS, inboundDecision, type InboundKind, type InboundState } from "../inbound-policy.js";
 import { clientMessageReadNow, noOpenStop, visionWritten } from "../predicates.js";
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
@@ -22,15 +22,113 @@ interface NewClientMessage {
   readonly inReplyTo: string | null;
 }
 
+// The only way a client message is consumed: consumeInbound takes a LockedStanding, and a
+// LockedStanding exists only once its transaction holds the project row's lock and inboundDecision,
+// read from the project's state after that lock, decided the message's reading. The lifecycle guard
+// and the halt guard each lock the row to write, so the state it read holds until the transaction
+// ends. Its constructor is private, so a writer that skips the check has no proof to consume with
+// and does not compile.
+
+const StateRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.enum(HALT_KINDS).nullable(), visionWritten: z.boolean() });
+
+/** Why the message's writer may not write under the project's present state: nothing is consumed. */
+export interface StandingMoved {
+  readonly kind: "moved";
+  readonly detail: string;
+}
+
+interface Held {
+  readonly tx: DbHandle;
+  readonly projectId: ProjectId;
+  readonly messageKind: InboundKind;
+}
+
 /**
- * markConsumed found no unconsumed inbound row with this id.
- * @testseam client-message.test.ts asserts the typed rejection
+ * The project row locked in `tx` (held to its end), then its state read in a statement of its own,
+ * so the read sees what the writer the lock waited on committed. Null when the project does not exist.
  */
+async function lockedState(tx: DbHandle, projectId: ProjectId): Promise<InboundState | null> {
+  const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+  if (locked === undefined) return null;
+  const [row] = await tx
+    .select({ lifecycle: projects.lifecycle, halt: openHaltKind(projects.id), visionWritten: visionWritten(projects.id) })
+    .from(projects)
+    .where(eq(projects.id, projectId));
+  if (row === undefined) return null;
+  const state = StateRowSchema.parse(row);
+  return state.lifecycle === "active" ? { lifecycle: "active", halt: state.halt, visionWritten: state.visionWritten } : { lifecycle: state.lifecycle };
+}
+
+function stateWords(state: InboundState): string {
+  return `lifecycle '${state.lifecycle}'${state.lifecycle === "active" && state.halt !== null ? ", halted" : ""}`;
+}
+
+/** Proof that the project row is locked in `tx` and inboundDecision decided a message of `kind`'s reading under it. */
+export class LockedStanding {
+  private constructor(private readonly held: Held) {}
+
+  get tx(): DbHandle {
+    return this.held.tx;
+  }
+
+  get projectId(): ProjectId {
+    return this.held.projectId;
+  }
+
+  get messageKind(): InboundKind {
+    return this.held.messageKind;
+  }
+
+  /**
+   * Locks the project row in `tx` and mints the proof when inboundDecision reads a message of `kind`
+   * now. `paused` is whether the write was composed while the project was halted: a write composed
+   * under the other state is moved too. Null for a stop, which is read in every state.
+   */
+  static async readNow(tx: DbHandle, projectId: ProjectId, kind: InboundKind, paused: boolean | null): Promise<LockedStanding | StandingMoved> {
+    const state = await lockedState(tx, projectId);
+    if (state === null) return { kind: "moved", detail: "the project does not exist" };
+    if (inboundDecision(state, kind).reading !== "now") return { kind: "moved", detail: `the project no longer reads the client's input (${stateWords(state)})` };
+    const halted = state.lifecycle === "active" && state.halt !== null;
+    if (paused !== null && halted !== paused) {
+      return { kind: "moved", detail: `composed while the project was ${paused ? "halted" : "at work"}, but it is now ${halted ? "halted" : "at work"}` };
+    }
+    return new LockedStanding({ tx, projectId, messageKind: kind });
+  }
+
+  /** Locks the project row in `tx` and mints the proof when inboundDecision never reads a message of `kind`: its receipt closes it. */
+  static async neverRead(tx: DbHandle, projectId: ProjectId, kind: InboundKind): Promise<LockedStanding | StandingMoved> {
+    const state = await lockedState(tx, projectId);
+    if (state === null) return { kind: "moved", detail: "the project does not exist" };
+    if (inboundDecision(state, kind).reading !== "never") return { kind: "moved", detail: `the project still reads the client's ${kind} (${stateWords(state)})` };
+    return new LockedStanding({ tx, projectId, messageKind: kind });
+  }
+}
+
+/**
+ * Consumes the unconsumed inbound message `messageId` of the proof's project and kind, in the proof's
+ * transaction. "not-open" when no such message is unconsumed.
+ */
+export async function consumeInbound(standing: LockedStanding, messageId: string): Promise<"consumed" | "not-open"> {
+  const rows = await standing.tx
+    .update(clientMessages)
+    .set({ consumedAt: new Date() })
+    .where(
+      and(
+        eq(clientMessages.id, messageId),
+        eq(clientMessages.projectId, standing.projectId),
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.kind, standing.messageKind),
+        isNull(clientMessages.consumedAt),
+      ),
+    )
+    .returning({ id: clientMessages.id });
+  return rows.length === 0 ? "not-open" : "consumed";
+}
+
+/** consumeInbound found no unconsumed inbound message of the proof's project and kind with this id. */
 export class ClientMessageNotConsumable extends Error {
   constructor(readonly messageId: string) {
-    super(
-      `client message ${messageId} cannot be consumed: no inbound row with this id is unconsumed`,
-    );
+    super(`client message ${messageId} cannot be consumed: no unconsumed inbound message of its project and kind has this id`);
     this.name = "ClientMessageNotConsumable";
   }
 }
@@ -44,30 +142,6 @@ class TenderNotOpen extends Error {
     super(`cannot ${operation}: client message ${messageId} is not an unconsumed inbound tender`);
     this.name = "TenderNotOpen";
   }
-}
-
-const StandingSchema = z.object({ lifecycle: z.string(), readsNow: z.boolean(), halted: z.boolean() });
-
-/**
- * The one check every writer of a client message's reading (the tender's intake, an answer's, a
- * change's) runs before it writes: it locks the project row for the rest of `tx` and reads, after the
- * lock, whether inboundDecision still reads a message of `kind` now (clientMessageReadNow) and whether
- * the project is halted. The lifecycle guard and the halt guard each lock the row to write, so what it
- * reads holds until `tx` ends. Returns why a write composed while the project was halted (`paused`)
- * or at work must write nothing now, or null when it may write.
- */
-export async function clientInputStandingMoved(tx: DbHandle, projectId: ProjectId, kind: Exclude<InboundKind, "stop">, paused: boolean): Promise<string | null> {
-  const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
-  if (locked === undefined) return "the project does not exist";
-  const [row] = await tx
-    .select({ lifecycle: projects.lifecycle, readsNow: clientMessageReadNow(kind), halted: projectHalted(projects.id) })
-    .from(projects)
-    .where(eq(projects.id, projectId));
-  if (row === undefined) return "the project does not exist";
-  const standing = StandingSchema.parse(row);
-  if (!standing.readsNow) return `the project no longer reads the client's input (lifecycle '${standing.lifecycle}'${standing.halted ? ", halted" : ""})`;
-  if (standing.halted !== paused) return `composed while the project was ${paused ? "halted" : "at work"}, but it is now ${standing.halted ? "halted" : "at work"}`;
-  return null;
 }
 
 /**
@@ -220,22 +294,6 @@ export class ClientMessageRepository {
       .where(and(eq(clientMessages.inReplyTo, questionId), eq(clientMessages.kind, "answer")))
       .limit(1);
     return row ?? null;
-  }
-
-  async markConsumed(id: string): Promise<ClientMessageRow> {
-    const [row] = await this.db
-      .update(clientMessages)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(
-          eq(clientMessages.id, id),
-          eq(clientMessages.direction, "inbound"),
-          isNull(clientMessages.consumedAt),
-        ),
-      )
-      .returning();
-    if (!row) throw new ClientMessageNotConsumable(id);
-    return row;
   }
 
   private async insert(

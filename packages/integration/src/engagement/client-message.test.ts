@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
 import { ClientRepository, ProjectRepository, createDb, type Database, resolveTestDatabaseUrl } from "@ashara/db";
-import { ClientMessageNotConsumable, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
+import { ClientMessageNotConsumable, ClientMessageRepository, consumeTenderWithoutIntake, createProjectWithTender } from "@ashara/engagement";
 
 // Against the shared dev database: every row here belongs to a project this suite
 // creates under a unique name, and is deleted in afterAll.
@@ -139,14 +139,14 @@ describe("client_messages constraints", () => {
 });
 
 describe("ClientMessageRepository", () => {
-  test("markConsumed consumes an inbound message once and never an outbound one", async () => {
-    const inbound = await messages.insertInbound({ projectId, kind: "stop", body: "Stop.", inReplyTo: null });
-    const consumed = await messages.markConsumed(inbound.id);
-    expect(consumed.consumedAt).toBeInstanceOf(Date);
-    await expect(messages.markConsumed(inbound.id)).rejects.toBeInstanceOf(ClientMessageNotConsumable);
+  test("a tender is consumed once, and never an outbound message in its place", async () => {
+    const inbound = await messages.insertInbound({ projectId, kind: "tender", body: "Build it.", inReplyTo: null });
+    expect(await consumeTenderWithoutIntake(db, { id: inbound.id, projectId })).toEqual({ kind: "consumed" });
+    expect((await messages.findById(inbound.id))?.consumedAt).toBeInstanceOf(Date);
+    await expect(consumeTenderWithoutIntake(db, { id: inbound.id, projectId })).rejects.toBeInstanceOf(ClientMessageNotConsumable);
 
     const outbound = await messages.insertOutbound({ projectId, kind: "question", body: "Why?", inReplyTo: null });
-    await expect(messages.markConsumed(outbound.id)).rejects.toBeInstanceOf(ClientMessageNotConsumable);
+    await expect(consumeTenderWithoutIntake(db, { id: outbound.id, projectId })).rejects.toBeInstanceOf(ClientMessageNotConsumable);
   });
 
   test("a question takes one answer: a second is refused by the unique index", async () => {

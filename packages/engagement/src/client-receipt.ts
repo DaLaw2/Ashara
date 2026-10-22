@@ -134,7 +134,7 @@ function stopFate(due: DueReceipt): string {
 }
 
 /** The project's state as inboundDecision reads it. */
-export function inboundState(standing: ProjectStanding): InboundState {
+function inboundState(standing: ProjectStanding): InboundState {
   switch (standing.kind) {
     case "at-work":
       return { lifecycle: "active", halt: null, visionWritten: standing.visionWritten };

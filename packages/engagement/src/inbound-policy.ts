@@ -8,7 +8,7 @@ import type { HaltKind } from "@ashara/delivery/predicates";
 // whether the halt's end sets its count of failed readings back to none (nothing else ever does); whether
 // its writer may still commit under the project's standing read under the row lock; and what the client
 // is told of it. The readers admit a message by the SQL derived from it (predicates.ts), the writers
-// re-read it under the lock (clientInputStandingMoved), the receipt and the halt report
+// re-read it under the lock (LockedStanding), the receipt and the halt report
 // word it from it, and the halt's end resets the counts it names. The halt table is keyed
 // on Delivery's whole halt vocabulary with no default, so a halt kind added there does not compile
 // until it is decided here.

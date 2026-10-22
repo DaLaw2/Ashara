@@ -33,10 +33,10 @@ export { VisionUnreadable, readVisionVersion } from "./vision.js";
 export type { StoredVision, VisionVersion } from "./vision.js";
 export { VisionRepository, guaranteesInForce } from "./repositories/vision.js";
 export { ClientMessageRepository, createProjectWithTender, restartClientReadings } from "./repositories/client-message.js";
-/** @testseam the integration client-message.test.ts asserts markConsumed's typed rejection */
+/** @testseam the integration client-message.test.ts asserts the typed rejection of a consumption that finds no open message */
 export { ClientMessageNotConsumable } from "./repositories/client-message.js";
 export type { CreatedTender } from "./repositories/client-message.js";
-export { recordTenderIntake } from "./repositories/tender-intake.js";
+export { consumeTenderWithoutIntake, recordTenderIntake } from "./repositories/tender-intake.js";
 export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
 export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.js";
 export { readRiskRecords } from "./repositories/early-warning.js";

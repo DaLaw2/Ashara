@@ -5,6 +5,7 @@ import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 import type { GuaranteeTable } from "./guarantee-report.js";
+import { inboundDecision } from "./inbound-policy.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000020", "test");
 
@@ -352,5 +353,27 @@ describe("each halt kind's report tells what a change sent meanwhile does", () =
     expect(body).not.toContain("records it during the pause");
     expect(body).not.toContain("Reading it takes model work");
     expect(body).not.toContain("The plan is revised for it once work resumes.");
+  });
+});
+
+// What waits on the operator is said together with what of the client's input is still read during
+// the halt, derived from the inbound-message decision: no halt report says nothing more is done while
+// the decision still reads the client's answers or changes.
+describe("each operator-awaited halt's report says what is still read during it, as the decision decides", () => {
+  const cause = { errorClass: "SomethingFailed", reason: "the cause as recorded", spend: null, work: null };
+  const kinds = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered"] as const;
+  const WORDS = { tender: "the tender this project began with", answer: "your answers", change: "your changes" } as const;
+
+  test.each(kinds.flatMap((kind) => [true, false].map((visionWritten) => [kind, visionWritten] as const)))("%s, the first vision written %s", async (kind, visionWritten) => {
+    const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind, cause, visionWritten }]);
+    await reports.runPending();
+    const body = posted[0].body;
+    const read = (["tender", "answer", "change"] as const).filter((message) => inboundDecision({ lifecycle: "active", halt: kind, visionWritten }, message).reading === "now");
+    const meanwhile =
+      read.length === 0
+        ? "Until then no more work is done on this project, and what you send, other than a stop, is read once work resumes."
+        : `Until then no more work is done on this project, though Ashara still reads ${read.map((message) => WORDS[message]).join(" and ")} during the pause.`;
+    expect(body).toContain(`${meanwhile} The team is waiting on its operator for this, and you will be told when work resumes.`);
+    expect(body).not.toContain("nothing more is done");
   });
 });

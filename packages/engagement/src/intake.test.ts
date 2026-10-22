@@ -155,7 +155,10 @@ describe("TenderIntake that cannot read a tender", () => {
     let projectBlocked = false;
     const store = storeOf([], {
       openTenders: async () => (projectBlocked ? [] : [tender]),
-      consumeTender: async (id) => void consumed.push(id),
+      consumeTender: async ({ id }) => {
+        consumed.push(id);
+        return { kind: "consumed" };
+      },
       recordFailedAttempt: async (_id, error) => {
         tender = { ...tender, intakeAttempts: tender.intakeAttempts + 1, intakeLastError: error };
         return tender.intakeAttempts;
@@ -218,7 +221,7 @@ describe("TenderIntake per-project failure", () => {
     const blocked: Array<{ projectId: string; category: string; errorClass: string; reason: string }> = [];
     const store = storeOf([lying, next], {
       currentVisionVersion: async (projectId) => (projectId === next.projectId ? 1 : null),
-      consumeTender: async () => {},
+      consumeTender: async () => ({ kind: "consumed" }),
       blockProject: async (projectId, cause) => {
         blocked.push({ projectId, ...cause });
         return "blocked";

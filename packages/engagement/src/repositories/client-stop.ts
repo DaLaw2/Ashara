@@ -12,7 +12,7 @@ import { stopProject } from "../project-lifecycle.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import { clientMessageReadNow } from "../predicates.js";
-import { ClientMessageRepository } from "./client-message.js";
+import { ClientMessageNotConsumable, LockedStanding, consumeInbound } from "./client-message.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
 // The client's stop. The Liaison consumes each inbound 'stop' and moves the project to 'stopped',
@@ -79,15 +79,28 @@ function stopReportPosted(projectId: string | SQL): SQL<boolean> {
   return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = ${REPORT_SUBJECT.clientStop})`;
 }
 
+/** inboundDecision reads a stop in every state of an existing project: one it does not read now is a stop of no project, or a decision that no longer holds together. */
+class StopNotReadNow extends Error {
+  constructor(
+    readonly stopId: string,
+    readonly detail: string,
+  ) {
+    super(`client stop ${stopId} cannot be consumed: ${detail}`);
+    this.name = "StopNotReadNow";
+  }
+}
+
 /**
- * One stop, in one transaction: the stop consumed first (its row lock serialises two consumers of
- * it), then an active (halted or not) or accepted project moved to 'stopped', and the stop marked as
- * the one that stopped it with whether Delivery had it halted then; a halt it finds is ended by
+ * One stop, in one transaction: the project row locked and the stop consumed first (its row lock
+ * serialises two consumers of it), then an active (halted or not) or accepted project moved to
+ * 'stopped', and the stop marked as the one that stopped it with whether Delivery had it halted then; a halt it finds is ended by
  * Delivery's `endHalt` in the same transaction. A project already stopped gets only the consumption.
  */
 export async function recordClientStop(db: Database, stop: OpenStopRow, endHalt: EndHaltOnStop): Promise<ClientStopCommit> {
   return db.transaction(async (tx) => {
-    await new ClientMessageRepository(tx).markConsumed(stop.id);
+    const standing = await LockedStanding.readNow(tx, stop.projectId, "stop", null);
+    if (!(standing instanceof LockedStanding)) throw new StopNotReadNow(stop.id, standing.detail);
+    if ((await consumeInbound(standing, stop.id)) === "not-open") throw new ClientMessageNotConsumable(stop.id);
 
     // An accepted project waits for exactly this.
     const moved = await stopProject(tx, stop.projectId, endHalt);

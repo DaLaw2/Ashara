@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
-import { ClientChanges, ClientMessageRepository, StackChoiceReports, VisionRepository, createProjectWithTender, listUnconsumedChanges } from "@ashara/engagement";
+import { ClientChanges, ClientMessageRepository, StackChoiceReports, VisionRepository, consumeTenderWithoutIntake, createProjectWithTender, listUnconsumedChanges } from "@ashara/engagement";
 import type { ClientChangeStore, StackChoiceStore } from "@ashara/engagement";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -103,7 +103,7 @@ async function contractedProject(): Promise<ProjectId> {
     },
   });
   const [tender] = await new ClientMessageRepository(db).listByProject(project.id);
-  if (tender !== undefined) await new ClientMessageRepository(db).markConsumed(tender.id);
+  if (tender !== undefined) await consumeTenderWithoutIntake(db, { id: tender.id, projectId: project.id });
   return project.id;
 }
 
