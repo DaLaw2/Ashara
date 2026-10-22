@@ -165,12 +165,13 @@ export function replanStoreSuite(stub: { model: unknown }) {
       readonly intake?: unknown;
       readonly revision?: unknown;
       readonly repaired?: Parameters<typeof citingItemsToCheck>[0];
+      readonly firstTasks?: Parameters<typeof citingItemsToCheck>[0];
     } = {},
   ): MockLanguageModelV4 {
     const mock = new MockLanguageModelV4({
       doGenerate: async (call) => {
         const prompt = JSON.stringify(call.prompt);
-        if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading: options.reading ?? { verdict: "confirms" } });
+        if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading: options.reading ?? { verdict: "confirms", amends: [] } });
         if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(options.intake ?? INTAKE);
         if (prompt.includes("client-comms")) return jsonResult(ROSTER);
         if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {
@@ -179,7 +180,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
         }
         if (prompt.includes("changed what is built after work began")) return jsonResult(options.revision ?? citingItemsToCheck(REVISED_TASKS, prompt));
         if (prompt.includes("Plan the work still to do again")) return jsonResult(citingItemsToCheck(options.repaired ?? REPAIRED_TASKS, prompt));
-        return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
+        return jsonResult(citingItemsToCheck(options.firstTasks ?? FIRST_TASKS, prompt));
       },
     });
     stub.model = mock;
@@ -221,12 +222,12 @@ export function replanStoreSuite(stub: { model: unknown }) {
 
   /** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */
   async function plannedProject(
-    options: { readonly reported: boolean; readonly intake?: unknown } = { reported: true },
+    options: { readonly reported: boolean; readonly intake?: unknown; readonly firstTasks?: Parameters<typeof citingItemsToCheck>[0] } = { reported: true },
   ): Promise<{ projectId: ProjectId; questionId: string; questionIds: string[] }> {
     const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
     const projectId = created.project.id;
     ourProjects.add(projectId);
-    pipelineModel({ intake: options.intake });
+    pipelineModel({ intake: options.intake, firstTasks: options.firstTasks });
     const intakeStore = createIntakeStore(db);
     const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
     expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
@@ -243,17 +244,17 @@ export function replanStoreSuite(stub: { model: unknown }) {
     return { projectId, questionId: question.id, questionIds: questions.map((q) => q.id) };
   }
 
-  const HILL_FIRST = { body: "No, the hill studio opens first.", statement: "The hill studio opens first." };
+  const HILL_FIRST = { body: "No, the hill studio opens first.", statement: "The hill studio opens first.", amends: [] };
 
   /** The client's answer changing the plan's assumption, read by the Liaison: the project awaits a revision for it. */
-  async function contradict(projectId: ProjectId, questionId: string, change: { readonly body: string; readonly statement: string } = HILL_FIRST): Promise<string> {
+  async function contradict(projectId: ProjectId, questionId: string, change: { readonly body: string; readonly statement: string; readonly amends: readonly unknown[] } = HILL_FIRST): Promise<string> {
     const row = await new ClientMessageRepository(db).insertInbound({
       projectId,
       kind: "answer",
       body: change.body,
       inReplyTo: questionId,
     });
-    pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible" } });
+    pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible", amends: change.amends } });
     const answerStore = createAnswerStore(db);
     const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
     const outcomes = await new ClientAnswers({ containment: memoryStepContainment(() => true), llm: gateway, store: narrowed }).runPending();

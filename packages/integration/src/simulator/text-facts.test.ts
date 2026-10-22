@@ -99,6 +99,17 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
     expect(keysOf({ visions: [v1, v2], answerReplies: [reply] })).toEqual(["answer-reply:A1"]);
   });
 
+  it("holds a reply to an answer that changed two assumptions to each of them", () => {
+    const other = { key: "A2", statement: "Keys are ASCII.", status: "Inferred", kind: "client-visible", disclosed: "reported" };
+    const changed = { ...asked, statement: "Commands fail at once.", status: "Stated", clientAnswer: { messageId: "ans1", verdict: "changes" } };
+    const restated = { ...other, statement: "Keys are UTF-8.", status: "Stated", clientAnswer: { messageId: "ans1", verdict: "changes" } };
+    const visions = [{ ...v1, inferences: [asked, other] }, { ...v2, inferences: [changed, restated] }];
+    const first = "The plan assumed: Commands wait for the lock.\nWork now proceeds on: Commands fail at once.";
+    const second = "The plan assumed: Keys are ASCII.\nWork now proceeds on: Keys are UTF-8.";
+    expect(keysOf({ visions, answerReplies: [{ answerId: "ans1", body: `Your answer changes 2 records.\n\n${first}\n\n${second}` }] })).toEqual([]);
+    expect(keysOf({ visions, answerReplies: [{ answerId: "ans1", body: `Your answer changes an assumption.\n\n${first}` }] })).toEqual(["answer-reply:A2"]);
+  });
+
   it("holds the one contract draft to every guarantee of the first vision with its basis, and every assumption", () => {
     const design = { key: "A2", statement: "Keys are short.", status: "Inferred", kind: "internal-design", disclosed: "reported", underpins: [] };
     const vision = {

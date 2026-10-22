@@ -219,7 +219,7 @@ function acceptanceStore(): AcceptanceStore {
 /** The Liaison's reading of this suite's answers; the model's reading is stood in: it confirms. */
 function clientAnswers(): ClientAnswers {
   const store = createAnswerStore(db);
-  const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ reading: { verdict: "confirms" } }), model: "stub-model", provider: "stub", grade: "Strong" }) }) };
+  const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ reading: { verdict: "confirms", amends: [] } }), model: "stub-model", provider: "stub", grade: "Strong" }) }) };
   return new ClientAnswers({ containment: memoryStepContainment(() => true), llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
 }
 

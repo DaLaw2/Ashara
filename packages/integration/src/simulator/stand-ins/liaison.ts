@@ -3,7 +3,13 @@ import { z } from "zod";
 import type { CorrectionKind } from "../correction-draws.js";
 import type { StandInContext } from "./context.js";
 import { citedItemSchema, namesBehaviour } from "./context.js";
-import { ASSUMPTIONS_HEADING, INTERFACE_HEADING, listsGuarantee, promptEntries } from "./recognised-wording.js";
+import {
+  ASSUMPTIONS_HEADING,
+  INTERFACE_HEADING,
+  OTHER_ASSUMPTIONS_HEADING,
+  listsGuarantee,
+  promptEntries,
+} from "./recognised-wording.js";
 
 /**
  * What a change message the client posts asks, as the scripted Liaison reads it: a drawn correction,
@@ -37,8 +43,25 @@ export class LiaisonStandIn {
     this.asked = { kind, during };
   }
 
-  answer(): unknown {
-    return { reading: { verdict: "changes", statement: "Messages are in French.", kind: "undecided" } };
+  /**
+   * The client's answer read as changing its question's assumption and contradicting the first other
+   * assumption the prompt lists, which it restates, so every answer that has another assumption beside
+   * its own is a multi-record reconciliation.
+   */
+  answer(prompt: string): unknown {
+    const [other] = promptEntries(prompt, OTHER_ASSUMPTIONS_HEADING);
+    const amends =
+      other === undefined
+        ? []
+        : [
+            {
+              op: "amend-assumption",
+              id: other.id,
+              statement: `${other.text} The client's answer restates it.`,
+              direction: "neutral",
+            },
+          ];
+    return { reading: { verdict: "changes", statement: "Messages are in French.", kind: "undecided", amends } };
   }
 
   /**

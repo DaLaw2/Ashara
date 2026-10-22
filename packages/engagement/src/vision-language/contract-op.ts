@@ -29,15 +29,29 @@ const guaranteeTerms = {
 /** The direction the reading gives an operation; Engagement checks it (checkedDirection) before it is recorded. */
 const direction = { direction: DirectionSchema };
 
+/** A guarantee restated whole, by its key. */
+const AmendGuaranteeOpSchema = z.strictObject({ op: z.literal("amend-guarantee"), id: GuaranteeKeySchema, ...guaranteeTerms, ...direction });
+
+/** An assumption restated, by its key. */
+const AmendAssumptionOpSchema = z.strictObject({ op: z.literal("amend-assumption"), id: AssumptionKeySchema, statement: text, ...direction });
+
+/**
+ * An amendment of a record the contract already holds, as a client's answer makes one: an assumption
+ * or a guarantee restated, never one added or withdrawn.
+ */
+export const AmendOpSchema = z.discriminatedUnion("op", [AmendAssumptionOpSchema, AmendGuaranteeOpSchema]);
+
+export type AmendOp = z.infer<typeof AmendOpSchema>;
+
 /**
  * One operation of a correction as a model reads it from the client's message: a record of the
  * contract added, amended (its terms restated whole) or withdrawn, by its key.
  */
 export const ContractOpSchema = z.discriminatedUnion("op", [
   z.strictObject({ op: z.literal("add-guarantee"), ...guaranteeTerms, ...direction }),
-  z.strictObject({ op: z.literal("amend-guarantee"), id: GuaranteeKeySchema, ...guaranteeTerms, ...direction }),
+  AmendGuaranteeOpSchema,
   z.strictObject({ op: z.literal("withdraw-guarantee"), id: GuaranteeKeySchema, ...direction }),
-  z.strictObject({ op: z.literal("amend-assumption"), id: AssumptionKeySchema, statement: text, ...direction }),
+  AmendAssumptionOpSchema,
   z.strictObject({ op: z.literal("add-exclusion"), text, ...direction }),
   z.strictObject({ op: z.literal("withdraw-exclusion"), id: ExclusionKeySchema, ...direction }),
   z.strictObject({ op: z.literal("add-interface"), text, ...direction }),

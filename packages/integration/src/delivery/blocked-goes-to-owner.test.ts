@@ -144,7 +144,7 @@ function pipelineModel(): void {
       const prompt = JSON.stringify(call.prompt);
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
-      if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading: { verdict: "confirms" } });
+      if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading: { verdict: "confirms", amends: [] } });
       return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
     },
   });

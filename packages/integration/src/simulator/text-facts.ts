@@ -636,8 +636,9 @@ function checkQuestions(records: TextFactRecords, add: Add, versions: Versions):
 }
 
 /**
- * Every reply to a client answer: what the plan assumed and what work now proceeds on, from the two
- * vision versions around the answer, and only for an answer recorded as a change.
+ * Every reply to a client answer: for every assumption the answer changed, what the plan assumed and
+ * what work now proceeds on, from the two vision versions around the answer, and only for an answer
+ * that changed at least one.
  */
 function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const reply of records.answerReplies) {
@@ -647,8 +648,9 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
             .filter((a) => a.answer?.messageId === reply.answerId)
             .map((a) => ({ version, assumption: a }))
         : [],
-    )[0];
-    if (recordedBy === undefined) {
+    );
+    const [firstRecorded] = recordedBy;
+    if (firstRecorded === undefined) {
       add(
         "answer-reply-unrecorded",
         `a reply to a client answer was posted ("${reply.body.slice(0, 80)}...") but no vision version ` +
@@ -656,32 +658,45 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
       );
       continue;
     }
-    const { version, assumption } = recordedBy;
+    // The version the answer wrote: every later one carries its records over.
+    const { version } = firstRecorded;
     const before = versions.get(version - 1);
-    const prior = before?.kind === "read" ? before.assumptions.find((a) => a.key === assumption.key) : undefined;
-    // An answer recorded without a verdict changed the assumption when the two versions' statements differ.
-    const verdict =
-      assumption.answer?.verdict ??
-      (prior === undefined ? null : prior.statement === assumption.statement ? "confirms" : "changes");
-    const problems = [
-      ...(verdict === "changes"
-        ? []
-        : [
-            `tells the client their answer changed ${assumption.key}, which the vision records as ` +
-              `${verdict ?? "no verdict and no prior statement"}`,
-          ]),
-      ...(prior !== undefined && reply.body.includes(`The plan assumed: ${prior.statement}`)
-        ? []
-        : [
-            `does not state what the plan assumed as v${version - 1} records it ` +
-              `("${prior?.statement.slice(0, 120) ?? "no record"}")`,
-          ]),
-      ...(reply.body.includes(`Work now proceeds on: ${assumption.statement}`)
-        ? []
-        : [`does not state work now proceeds on "${assumption.statement.slice(0, 120)}" (v${version})`]),
-    ];
-    if (problems.length > 0)
-      add(`answer-reply:${assumption.key}`, `the reply to the answer on ${assumption.key} ${problems.join("; ")}`);
+    const stated = recordedBy
+      .filter((recorded) => recorded.version === version)
+      .map(({ assumption }) => {
+        const prior = before?.kind === "read" ? before.assumptions.find((a) => a.key === assumption.key) : undefined;
+        // An answer recorded without a verdict changed the assumption when the two versions' statements differ.
+        const verdict =
+          assumption.answer?.verdict ??
+          (prior === undefined ? null : prior.statement === assumption.statement ? "confirms" : "changes");
+        return { assumption, prior, verdict };
+      });
+    const changed = stated.filter((each) => each.verdict === "changes");
+    const [shown] = stated;
+    if (changed.length === 0 && shown !== undefined) {
+      const { assumption, verdict } = shown;
+      add(
+        `answer-reply:${assumption.key}`,
+        `the reply to the answer on ${assumption.key} tells the client their answer changed it, which the vision ` +
+          `records as ${verdict ?? "no verdict and no prior statement"}`,
+      );
+      continue;
+    }
+    for (const { assumption, prior } of changed) {
+      const problems = [
+        ...(prior !== undefined && reply.body.includes(`The plan assumed: ${prior.statement}`)
+          ? []
+          : [
+              `does not state what the plan assumed as v${version - 1} records it ` +
+                `("${prior?.statement.slice(0, 120) ?? "no record"}")`,
+            ]),
+        ...(reply.body.includes(`Work now proceeds on: ${assumption.statement}`)
+          ? []
+          : [`does not state work now proceeds on "${assumption.statement.slice(0, 120)}" (v${version})`]),
+      ];
+      if (problems.length > 0)
+        add(`answer-reply:${assumption.key}`, `the reply to the answer on ${assumption.key} ${problems.join("; ")}`);
+    }
   }
 }
 

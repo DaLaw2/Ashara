@@ -57,7 +57,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     const [studioQuestion, teacherQuestion] = questionIds;
     if (studioQuestion === undefined || teacherQuestion === undefined) throw new Error("intake posted fewer than two questions");
     const first = await contradict(projectId, studioQuestion);
-    const second = await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher." });
+    const second = await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher.", amends: [] });
     expect((await projectRow(projectId)).awaiting).toEqual([first, second]);
 
     const mock = pipelineModel({ environmentChange: false });
@@ -82,7 +82,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     const [studioQuestion, teacherQuestion] = questionIds;
     if (studioQuestion === undefined || teacherQuestion === undefined) throw new Error("intake posted fewer than two questions");
     await contradict(projectId, studioQuestion);
-    await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher." });
+    await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher.", amends: [] });
     pipelineModel({ environmentChange: false });
     expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
     // A record in the form a COALESCE update leaves: the summary names one change of the two taken in.
@@ -480,5 +480,115 @@ describe("a late client change is planned", () => {
       "Ashara recorded the cause as this: every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read.",
     );
     expect(body).not.toContain("gave no usable answer");
+  });
+});
+
+describe("a client answer is reconciled with every assumption and guarantee it contradicts", () => {
+  /** The suite's intake with a second guarantee, resting on the assumption no question asked about (A2). */
+  const WALK_IN_INTAKE = {
+    summary: "A booking page for the client's two pottery studios.",
+    interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender", quote: "Booking page" } }],
+    guarantees: [
+      {
+        id: "G1",
+        statement: "A client books a class at either studio.",
+        observable: { interface: ["I1"], observation: "output" },
+        refutedBy: ["A booking at either studio is refused."],
+        source: { kind: "tender", quote: "Booking page for my two pottery studios." },
+      },
+      {
+        id: "G2",
+        statement: "A walk-in client books with no account.",
+        observable: { interface: ["I1"], observation: "output" },
+        refutedBy: ["A walk-in client is asked to sign in."],
+        source: { kind: "assumption", id: "A2" },
+      },
+    ],
+    assumptions: [{ id: "A2", statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible", underpins: ["G2"] }],
+    questions: [
+      {
+        text: "Which studio opens first?",
+        whyItMatters: "It orders the work.",
+        assumption: { id: "A1", statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible", underpins: ["G1"] },
+      },
+    ],
+    exclusions: [],
+  };
+
+  /**
+   * A first plan with a task resting on each record the answer contradicts: the question's assumption
+   * (A1), the one no question asked about (A2), and the guarantee resting on A2 (G2), cited alone.
+   */
+  const TASK_PER_RECORD = {
+    tasks: [
+      {
+        ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [], goal: "",
+        endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1", "A1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
+        capability: "Medium", capabilityReason: "graded for the test",
+      },
+      {
+        ref: "t2", title: "Book without an account", description: "Walk-in bookings.", dependsOn: [], goal: "",
+        endState: "A class can be booked with no account", scope: "walk-in bookings", deliverables: [{ text: "walk-in booking", sources: ["G1", "A2"] }], acceptance: [{ text: "a walk-in client books", sources: ["G1"] }],
+        capability: "Medium", capabilityReason: "graded for the test",
+      },
+      {
+        ref: "t3", title: "Show the walk-in form", description: "The walk-in form.", dependsOn: [], goal: "",
+        endState: "The walk-in form is shown", scope: "walk-in form", deliverables: [{ text: "walk-in form", sources: ["G2"] }], acceptance: [{ text: "a walk-in client sees the form", sources: ["G2"] }],
+        capability: "Medium", capabilityReason: "graded for the test",
+      },
+    ],
+  };
+
+  test("an answer contradicting its question's assumption, another one and a guarantee is one client-change revision, and one plan revision replaces the work citing any", async () => {
+    const { projectId, questionId } = await plannedProject({ reported: true, intake: WALK_IN_INTAKE, firstTasks: TASK_PER_RECORD });
+    const first = await itemsOf(projectId);
+    const cites = ["Open harbour studio bookings", "Book without an account", "Show the walk-in form"].map((title) => first.find((i) => i.title === title));
+    const [harbour, walkIn, form] = cites;
+    if (harbour === undefined || walkIn === undefined || form === undefined) throw new Error("the first plan holds no task per record");
+
+    const answerId = await contradict(projectId, questionId, {
+      body: "No, the hill studio opens first, and only members with an account book there.",
+      statement: "The hill studio opens first.",
+      amends: [
+        { op: "amend-assumption", id: "A2", statement: "Bookings need a member account.", direction: "neutral" },
+        {
+          op: "amend-guarantee",
+          id: "G2",
+          statement: "A member books with their account.",
+          interface: ["I1"],
+          observation: "output",
+          refutedBy: ["A walk-in client is asked to sign in.", "A client with no account books a class."],
+          direction: "widens",
+        },
+      ],
+    });
+
+    const revisions = await suite.db.execute(sql`
+      SELECT cause, ops FROM vision_revisions WHERE project_id = ${projectId} AND source_message_id = ${answerId}`);
+    const RevisionRowSchema = z.array(z.object({ cause: z.string(), ops: z.array(z.object({ target: z.string(), action: z.string(), key: z.string(), statement: z.string() })) }));
+    expect(RevisionRowSchema.parse(revisions.rows).map((r) => ({ cause: r.cause, ops: r.ops.map((op) => [op.target, op.action, op.key, op.statement]) }))).toEqual([
+      {
+        cause: "client-change",
+        ops: [
+          ["assumption", "amend", "A1", "The hill studio opens first."],
+          ["assumption", "amend", "A2", "Bookings need a member account."],
+          ["guarantee", "amend", "G2", "A member books with their account."],
+        ],
+      },
+    ]);
+    const holds = await suite.db.execute(sql`SELECT requested_by AS "requestedBy", affected FROM correction_holds WHERE project_id = ${projectId}`);
+    expect(holds.rows).toEqual([{ requestedBy: answerId, affected: ["A1", "A2", "G2"] }]);
+    expect((await projectRow(projectId)).awaiting).toEqual([answerId]);
+
+    pipelineModel({ environmentChange: false });
+    expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
+    const after = await itemsOf(projectId);
+    for (const task of [harbour, walkIn, form]) {
+      expect(after.find((i) => i.id === task.id)).toMatchObject({ status: "Abandoned", reason: { source: "superseded", planRevision: 2, requestedBy: answerId } });
+    }
+    const planRevisions = await suite.db.execute(sql`SELECT revision, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
+    expect(planRevisions.rows).toEqual([{ revision: 2, requestedBy: answerId }]);
+    expect((await projectRow(projectId)).awaiting).toEqual([]);
+    expect(await replanner().runPending()).toEqual([]);
   });
 });

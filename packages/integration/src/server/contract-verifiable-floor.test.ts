@@ -341,7 +341,7 @@ describe("a contract in which Ashara can verify no guarantee", () => {
     const answerReceipt = await receiptOn(answer.id);
     expect(answerReceipt).toContain(DECLINE);
     for (const proceeds of UNDER_WAY) expect(answerReceipt).not.toContain(proceeds);
-    answering({ reading: { verdict: "confirms" } });
+    answering({ reading: { verdict: "confirms", amends: [] } });
     expect(await answers().runPending()).toMatchObject([{ kind: "stated", projectId, answerId: answer.id, replanRequested: false }]);
     expect(await workMayStart(projectId)).toEqual({ roster: false, firstPlan: false });
     expect(await workItemsOf(projectId)).toBe(0);
@@ -392,7 +392,7 @@ describe("a contract in which Ashara can verify no guarantee", () => {
     const [question] = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
     if (question === undefined) throw new Error(`project ${projectId} has no intake question`);
     await new ClientMessageRepository(db).insertInbound({ projectId, kind: "answer", body: "Yes, up to a million.", inReplyTo: question.id });
-    answering({ reading: { verdict: "confirms" } });
+    answering({ reading: { verdict: "confirms", amends: [] } });
     expect(await answers().runPending()).toMatchObject([{ kind: "stated", projectId, visionVersion: 3 }]);
     expect(await visionVersionsOf(projectId)).toEqual([1, 2, 3]);
     expect(await workMayStart(projectId)).toEqual({ roster: false, firstPlan: false });
@@ -419,7 +419,7 @@ describe("a contract in which Ashara can verify no guarantee", () => {
     const [question] = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
     if (question === undefined) throw new Error(`project ${projectId} has no intake question`);
     await new ClientMessageRepository(db).insertInbound({ projectId, kind: "answer", body: "Yes, up to a million.", inReplyTo: question.id });
-    answering({ reading: { verdict: "confirms" } });
+    answering({ reading: { verdict: "confirms", amends: [] } });
     expect(await answers().runPending()).toMatchObject([{ kind: "stated", projectId, visionVersion: 3 }]);
     expect((await guaranteesOf(projectId, 3)).map((g) => g.verification)).toEqual([undefined, undefined]);
     expect(await workMayStart(projectId)).toEqual({ roster: true, firstPlan: false });

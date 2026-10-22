@@ -33,6 +33,12 @@ export const INTERFACE_HEADING = "Interface:";
 /** The heading of the correction prompt's assumption entries (Engagement correction.ts correctionPrompt). */
 export const ASSUMPTIONS_HEADING = "Assumptions:";
 
+/**
+ * The heading of the answer prompt's entries for every assumption but the question's (Engagement answers.ts
+ * buildAnswerPrompt).
+ */
+export const OTHER_ASSUMPTIONS_HEADING = "Other assumptions:";
+
 /** The files a conflict section lists, `- <path>` one per line; none when the prompt has no such section. */
 export function conflictFilesOf(prompt: string): string[] {
   const at = prompt.indexOf(CONFLICT_HEADING);

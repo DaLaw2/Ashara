@@ -170,7 +170,7 @@ function planner(): FirstPlanner {
 async function intakenProject(): Promise<{ projectId: ProjectId; tenderId: string; questionIds: string[] }> {
   const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
   ourProjects.add(created.project.id);
-  pipelineModel({ verdict: "confirms" });
+  pipelineModel({ verdict: "confirms", amends: [] });
   expect((await intake().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const questions = (await new ClientMessageRepository(db).listByProject(created.project.id)).filter((m) => m.kind === "question");
   return { projectId: created.project.id, tenderId: created.message.id, questionIds: questions.map((q) => q.id) };
@@ -285,7 +285,7 @@ describe("the client's answers", () => {
     const [first, second] = questionIds;
     if (first === undefined || second === undefined) throw new Error("intake posted fewer than two questions");
     const answerId = await answer(projectId, second, "Yes, twelve seats.");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
 
     const outcomes = await answers().runPending();
 
@@ -306,7 +306,7 @@ describe("the client's answers", () => {
     expect(v2?.changeReason).toContain(answerId);
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeInstanceOf(Date);
 
-    const again = pipelineModel({ verdict: "confirms" });
+    const again = pipelineModel({ verdict: "confirms", amends: [] });
     expect(await answers().runPending()).toEqual([]);
     expect(again.doGenerateCalls).toHaveLength(0);
     expect(await visionsOf(projectId)).toHaveLength(2);
@@ -316,15 +316,15 @@ describe("the client's answers", () => {
     const { projectId, questionIds } = await intakenProject();
     const [, second] = questionIds;
     if (second === undefined) throw new Error("intake posted no second question");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     expect((await roster().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
     await answer(projectId, second, "Eight seats, not twelve.");
 
     expect(await planner().runPending()).toEqual([]);
 
-    pipelineModel({ verdict: "changes", statement: "A class has eight seats.", kind: "client-visible" });
+    pipelineModel({ verdict: "changes", statement: "A class has eight seats.", kind: "client-visible", amends: [] });
     expect((await answers().runPending()).map((o) => o.kind)).toEqual(["stated"]);
-    const mock = pipelineModel({ verdict: "confirms" });
+    const mock = pipelineModel({ verdict: "confirms", amends: [] });
     expect((await planner().runPending()).map((o) => o.kind)).toEqual(["planned"]);
 
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
@@ -338,7 +338,7 @@ describe("the client's answers", () => {
     const { projectId, tenderId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     expect((await roster().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
     expect((await planner().runPending()).map((o) => o.kind)).toEqual(["planned"]);
     const projectRepo = new ProjectHaltRepository(db);
@@ -350,7 +350,7 @@ describe("the client's answers", () => {
     expect(await projectRepo.listActiveIds()).toContain(projectId);
 
     const answerId = await answer(projectId, first, "No, the hill studio opens first.");
-    pipelineModel({ verdict: "changes", statement: "The hill studio opens first.", kind: "internal-design" });
+    pipelineModel({ verdict: "changes", statement: "The hill studio opens first.", kind: "internal-design", amends: [] });
     const outcomes = await answers().runPending();
 
     expect(outcomes).toEqual([
@@ -393,7 +393,7 @@ describe("the client's answers", () => {
     const [, second] = questionIds;
     if (second === undefined) throw new Error("intake posted no second question");
     await answer(projectId, second, "Eight seats, not twelve.");
-    pipelineModel({ verdict: "changes", statement: "A class has eight seats.", kind: "undecided" });
+    pipelineModel({ verdict: "changes", statement: "A class has eight seats.", kind: "undecided", amends: [] });
     expect((await answers().runPending()).map((o) => o.kind)).toEqual(["stated"]);
     expect((await visionsOf(projectId))[1]?.inferences.find((a) => a.key === "A2")).toMatchObject({
       statement: "A class has eight seats.",
@@ -406,7 +406,7 @@ describe("the client's answers", () => {
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
     await answer(projectId, first, "Yes, harbour first.");
-    const mock = pipelineModel({ verdict: "confirms" });
+    const mock = pipelineModel({ verdict: "confirms", amends: [] });
     await answers().runPending();
     const prompt = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("Read their answer")) ?? "";
     expect(prompt).toContain("in its exit status, or in the data the client stores with it");
@@ -417,12 +417,12 @@ describe("the client's answers", () => {
     const { projectId, tenderId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     await roster().runPending();
     expect((await planner().runPending()).map((o) => o.kind)).toEqual(["planned"]);
 
     await answer(projectId, first, "Yes, harbour first.");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     expect((await answers().runPending()).map((o) => o.kind === "stated" && o.replanRequested)).toEqual([false]);
     expect(await awaitedChangesOf(projectId)).toEqual([]);
     expect(
@@ -436,7 +436,7 @@ describe("the client's answers", () => {
     if (first === undefined || second === undefined) throw new Error("intake posted fewer than two questions");
     const firstAnswer = await answer(projectId, first, "Yes, harbour first.");
     const secondAnswer = await answer(projectId, second, "Yes, twelve seats.");
-    const mock = pipelineModel({ verdict: "confirms" });
+    const mock = pipelineModel({ verdict: "confirms", amends: [] });
 
     const outcomes = await answers().runPending();
 
@@ -456,7 +456,7 @@ describe("the client's answers", () => {
     const [, second] = questionIds;
     if (second === undefined) throw new Error("intake posted no second question");
     const answerId = await answer(projectId, second, "Yes, twelve seats.");
-    const mock = pipelineModel({ verdict: "confirms" });
+    const mock = pipelineModel({ verdict: "confirms", amends: [] });
     const store = createAnswerStore(db);
     let raced = false;
     const racing: AnswerStore = {
@@ -524,7 +524,7 @@ describe("the client's answers", () => {
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "looked at the answer");
     // The unblock set the count back to none, the last error kept on record.
     expect(await attemptsOf(answerId)).toEqual({ attempts: 0, kept: true });
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["stated"]);
     expect(await haltKindOf(projectId)).toBeNull();
   });
@@ -573,7 +573,7 @@ describe("the client's answers", () => {
     await db.execute(sql`UPDATE vision_documents SET open_questions = '[]'::jsonb WHERE project_id = ${projectId}`);
     expect(await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
     const answerId = await answer(projectId, first, "Harbour.");
-    const mock = pipelineModel({ verdict: "confirms" });
+    const mock = pipelineModel({ verdict: "confirms", amends: [] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     warn.mockClear();
 
@@ -615,7 +615,7 @@ describe("the client's answers", () => {
       expect(z.array(z.object({ body: z.string() })).parse(receipt.rows)).toEqual([{ body: expect.stringContaining("so Ashara reads it once the pause ends") }]);
 
       await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "cleared the halt");
-      pipelineModel({ verdict: "confirms" });
+      pipelineModel({ verdict: "confirms", amends: [] });
       expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["stated"]);
       expect(await haltKindOf(projectId)).toBeNull();
     },
@@ -627,7 +627,7 @@ describe("the client's answers", () => {
     if (second === undefined) throw new Error("intake posted no second question");
     expect(await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
     const answerId = await answer(projectId, second, "Yes, twelve seats.");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
 
     expect(await answers().runPending()).toEqual([
       { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 2, replanRequested: false },
@@ -647,7 +647,7 @@ describe("the client's answers", () => {
       VALUES (${atCap.projectId}, 'liaison-intake', 'deepseek', 'answer-strong', 5, 'pending')`);
     const waiting = await answer(atCap.projectId, atCap.questionIds[1] ?? "", "Yes, twelve seats.");
     const read = await answer(other.projectId, other.questionIds[1] ?? "", "Yes, twelve seats.");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     const store = createAnswerStore(db);
     const capped = new ClientAnswers({
       containment: containment(),
@@ -670,7 +670,7 @@ describe("the client's answers", () => {
     const [, second] = questionIds;
     if (second === undefined) throw new Error("intake posted no second question");
     const answerId = await answer(projectId, second, "Yes, twelve seats.");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     const store = createAnswerStore(db);
     const racing: AnswerStore = {
       ...store,
@@ -691,7 +691,7 @@ describe("the client's answers", () => {
     const healthy = await intakenProject();
     const brokenAnswer = await answer(broken.projectId, broken.questionIds[0] ?? "", "Harbour.");
     const healthyAnswer = await answer(healthy.projectId, healthy.questionIds[0] ?? "", "Yes.");
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
     const store = createAnswerStore(db);
     const failing: AnswerStore = {
       ...store,

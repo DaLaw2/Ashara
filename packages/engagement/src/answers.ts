@@ -7,24 +7,27 @@ import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { ownSpendRefusal } from "./client-spend-refusal.js";
-import type { RevisionRecord } from "./vision-language/contract-op.js";
-import { contractStandingOf } from "./vision-language/guarantee.js";
+import { checkedDirection } from "./correction.js";
+import { AmendOpSchema, opShape, revisionDirection } from "./vision-language/contract-op.js";
+import type { AmendOp, RevisionOp, RevisionRecord } from "./vision-language/contract-op.js";
+import { OBSERVATION_RULE, contractStandingOf } from "./vision-language/guarantee.js";
 import type { ContractStanding } from "./vision-language/guarantee.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { WORK_WORDS } from "./vision-language/work-promise.js";
-import { Vision, VisionUnreadable } from "./vision.js";
-import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
+import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
+import type { StoredVision, VisionAppend, VisionAssumption, VisionVersion } from "./vision.js";
 
 // The client's answers to the Liaison's questions. Each question names the assumption work proceeds on
-// until it is answered (intake.ts). The Liaison reads each answer once: one that
-// confirms or changes that assumption appends a vision version (versions are
-// append-only) in which the assumption is Stated and carries the answer, the client
-// message id as its provenance, with its revision record: the client's, approved by them, one
-// amended assumption. Delivery plans from the current version, so an answer
-// read before the first plan is planned on. One read after it that changes an
-// assumption the plan was built on is a correction, taking the path a change message's does: it
-// holds only the tasks citing that assumption (Delivery's hold), the rest of the plan goes on, and it
-// is reported to the client once. Delivery replaces the held work once none of it is in progress
+// until it is answered (intake.ts). The Liaison reads each answer once, against the question's
+// assumption and against every other assumption and guarantee of the vision in force, since what the
+// client says is not bounded by what they were asked: one that confirms or changes the question's
+// assumption appends one vision version (versions are append-only) in which that assumption is Stated
+// and carries the answer, the client message id as its provenance, and every other record the answer
+// contradicts or refines is restated with it, with one revision record: the client's, approved by them,
+// an amendment per record. Delivery plans from the current version, so an answer
+// read before the first plan is planned on. One read after it that changes what the plan was built on
+// is a correction, taking the path a change message's does: it holds only the tasks citing a record it
+// changed (Delivery's hold), the rest of the plan goes on, and it is reported to the client once. Delivery replaces the held work once none of it is in progress
 // (delivery replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
 // A halted project's answers are read too: a halt pauses the work, never the reading of what the client said,
 // and the work an answer touches waits for the halt's own end; except under a halt the reading cannot get
@@ -171,11 +174,17 @@ class AnswerFailureUnrecorded extends Error {
   }
 }
 
+/**
+ * Every other assumption and guarantee the answer contradicts or refines, each restated: an answer
+ * taken into the vision leaves no record standing that says otherwise.
+ */
+const amends = { amends: z.array(AmendOpSchema) };
+
 const AnswerReadingSchema = z.discriminatedUnion("verdict", [
-  z.strictObject({ verdict: z.literal("confirms") }),
+  z.strictObject({ verdict: z.literal("confirms"), ...amends }),
   // A changed decision is classified again: the kind of the decision it replaced says
   // nothing about the new one, and only a client-visible decision may be cited by an acceptance line.
-  z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1), kind: ClassifiedAssumptionKindSchema }),
+  z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1), kind: ClassifiedAssumptionKindSchema, ...amends }),
   z.strictObject({ verdict: z.literal("does-not-answer") }),
 ]);
 
@@ -202,29 +211,56 @@ interface AnswerContext {
 }
 
 function buildAnswerPrompt(context: AnswerContext): string {
+  const { current } = context.vision;
+  const others = current.assumptions.filter((a) => a.id !== context.question.assumptionKey);
+  // A version written before guarantees were holds no keyed guarantee an answer could restate.
+  const guarantees = current.contractForm === "guarantees" ? current.guarantees : [];
   return [
     `You are the Liaison of a software contractor. You asked the client a question, and work`,
     `proceeded on an assumption until they answered. Read their answer and say what it does to`,
-    `that assumption.`,
+    `that assumption, and to every other assumption and guarantee of the contract below.`,
     ``,
     `Question:`,
     JSON.stringify(context.question.text),
     ``,
-    `Assumption work proceeded on:`,
+    `Assumption work proceeded on (${context.question.assumptionKey}):`,
     JSON.stringify(context.assumption.statement),
     ``,
     `The client's answer:`,
     JSON.stringify(context.answer.body),
     ``,
+    `Interface:`,
+    ...(current.interface.length === 0 ? ["- none"] : current.interface.map((e) => `- ${e.id}: ${e.text}`)),
+    ``,
+    `Guarantees:`,
+    ...(guarantees.length === 0
+      ? ["- none"]
+      : guarantees.map(
+          (g) =>
+            `- ${g.id}: ${g.statement} (observed in its ${g.verification === "undecided" ? "undecided" : g.observation} at ${g.interface.join(", ") || "no entry"}; ` +
+            `refuted by: ${g.refutedBy.join("; ") || "nothing recorded"})`,
+        )),
+    ``,
+    `Other assumptions:`,
+    ...(others.length === 0 ? ["- none"] : others.map((a) => `- ${a.id}: ${a.statement}`)),
+    ``,
     `Return {"reading": <reading>}, where <reading> is exactly one of:`,
-    `- {"verdict": "confirms"} when the answer agrees with the assumption as stated.`,
-    `- {"verdict": "changes", "statement": "...", "kind": "client-visible"} when the answer says something different from`,
-    `  the assumption, in any part. "statement" is the decision work now proceeds on, stated`,
+    `- {"verdict": "confirms", "amends": [...]} when the answer agrees with the assumption as stated.`,
+    `- {"verdict": "changes", "statement": "...", "kind": "client-visible", "amends": [...]} when the answer says something`,
+    `  different from the assumption, in any part. "statement" is the decision work now proceeds on, stated`,
     `  plainly as what will be built, in the client's terms. Do not add anything the answer and`,
     `  the question do not say. "kind" classifies that new decision:`,
     ...ASSUMPTION_KIND_RULE,
     `- {"verdict": "does-not-answer"} when the answer neither agrees with nor changes the`,
     `  assumption (it asks something back, defers, or is about something else).`,
+    `"amends" lists every other assumption and guarantee above that the answer contradicts or refines, each`,
+    `restated so it agrees with the answer, and nothing else; an empty list when the answer contradicts and`,
+    `refines none of them. Never list ${context.question.assumptionKey}: the verdict settles it. Each entry is one of:`,
+    `- {"op": "amend-assumption", "id", "statement", "direction"}`,
+    `- {"op": "amend-guarantee", "id", "statement", "interface": [interface ids], "observation", "refutedBy": [...], "direction"}:`,
+    `  the guarantee restated whole`,
+    ...OBSERVATION_RULE,
+    `"direction" is "widens" when the restatement promises more, "narrows" when it promises less, "neutral" otherwise.`,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
   ].join("\n");
@@ -238,16 +274,27 @@ function answerReask(ctx: { readonly errors: readonly string[] }): string {
   );
 }
 
+/** One record an answer changed: what the plan was built on, and what it now rests on. */
+interface AnswerChange {
+  readonly target: "assumption" | "guarantee";
+  readonly before: string;
+  readonly after: string;
+}
+
 /**
- * Plain words: what the answer changed, that the plan already under way relied on it, and what happens
- * now, as the `standing` of the contract the answer is recorded in allows.
+ * Plain words: every record the answer changed, that the plan already under way relied on them, and
+ * what happens now, as the `standing` of the contract the answer is recorded in allows.
  */
-function replanReport(context: AnswerContext, statement: string, standing: ContractStanding): string {
+function replanReport(context: AnswerContext, changes: readonly [AnswerChange, ...AnswerChange[]], standing: ContractStanding): string {
   const words = WORK_WORDS[standing];
+  const what = changes.length > 1 ? `${changes.length} assumptions and guarantees` : changes[0].target === "assumption" ? "an assumption" : "a guarantee";
   return [
-    `Your answer to "${context.question.text}" changes an assumption the current plan was built on.`,
-    `The plan assumed: ${context.assumption.statement}`,
-    `${words.answerRestsOn} ${statement}`,
+    `Your answer to "${context.question.text}" changes ${what} the current plan was built on.`,
+    ...changes.map((change) =>
+      change.target === "assumption"
+        ? `The plan assumed: ${change.before}\n${words.answerRestsOn} ${change.after}`
+        : `The plan promised: ${change.before}\nIt now promises: ${change.after}`,
+    ),
     words.answerReplans(context.answer.paused),
   ].join("\n\n");
 }
@@ -404,7 +451,18 @@ export class ClientAnswers implements LiaisonAnswers {
       capability: "Strong",
       prompt: buildAnswerPrompt(context),
       schema: AnswerResponseSchema,
-      maxTokens: 1024,
+      // A guarantee the answer restates is restated whole, as a change message's is.
+      maxTokens: 2048,
+      // A reading the vision cannot take whole is the model's to correct: never applied to part of it.
+      validate: (value) => {
+        try {
+          composeWrite(context, value.reading);
+          return { ok: true };
+        } catch (err) {
+          if (!(err instanceof VisionChangeRefused)) throw err;
+          return { ok: false, errors: [err.detail] };
+        }
+      },
     });
     return response.data.reading;
   }
@@ -441,13 +499,23 @@ function recordedOutcome(context: AnswerContext, reading: AnswerReading, write: 
   };
 }
 
-/** Whether a reading of the answer against `before` reads the same against `after`: same question, same assumption. */
+/**
+ * Whether a reading of the answer against `before` reads the same against `after`: same question, and
+ * every record it was reconciled with (the interface, each guarantee and each assumption) as it was.
+ */
 function readingStillApplies(before: AnswerContext, after: AnswerContext): boolean {
-  return (
-    before.question.text === after.question.text &&
-    before.question.assumptionKey === after.question.assumptionKey &&
-    before.assumption.statement === after.assumption.statement
-  );
+  return before.question.text === after.question.text && before.question.assumptionKey === after.question.assumptionKey && JSON.stringify(reconciledWith(before)) === JSON.stringify(reconciledWith(after));
+}
+
+/** The records an answer is read against, as its prompt states them. */
+function reconciledWith(context: AnswerContext): unknown {
+  const { current } = context.vision;
+  return {
+    form: current.contractForm,
+    interface: current.interface.map((e) => [e.id, e.text]),
+    guarantees: current.guarantees.map((g) => [g.id, g.statement, g.interface, g.observation, g.verification, g.refutedBy]),
+    assumptions: current.assumptions.map((a) => [a.id, a.statement]),
+  };
 }
 
 /** The question the answer replies to, open in the current vision, and the assumption it adopted. */
@@ -479,14 +547,20 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
 
   const statement = reading.verdict === "confirms" ? context.assumption.statement : reading.statement;
   const key = context.question.assumptionKey;
+  const { current } = context.vision;
+  const amended: RevisionOp[] = reading.amends.map((op) => ({ ...opShape(op), key: op.id, direction: checkedDirection(op, current), labelled: op.direction, read: op, statement: op.statement }));
+  const ops: readonly [RevisionOp, ...RevisionOp[]] = [
+    // An answer settles its own assumption's wording; which way that moves the promise no record decides.
+    { target: "assumption", action: "amend", key, direction: "neutral", labelled: null, read: null, statement },
+    ...amended,
+  ];
   const revision: RevisionRecord = {
     author: "client",
     sourceMessageId: answer.id,
     approver: "client",
-    // An answer settles an assumption's wording; which way that moves the promise no record decides.
-    direction: "neutral",
+    direction: revisionDirection(ops),
     cause: "client-change",
-    ops: [{ target: "assumption", action: "amend", key, direction: "neutral", labelled: null, read: null, statement }],
+    ops,
     pushback: null,
   };
   const append = context.vision.stateAssumption(key, {
@@ -501,12 +575,28 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
         reading.verdict === "confirms"
           ? `The client confirmed this in answer to "${context.question.text}".`
           : `The client's answer to "${context.question.text}" replaced the assumption "${context.assumption.statement}".`,
-      changeReason: `client answer ${answer.id} ${reading.verdict === "confirms" ? "confirmed" : "changed"} assumption ${key}; now Stated`,
-    });
+      changeReason:
+        `client answer ${answer.id} ${reading.verdict === "confirms" ? "confirmed" : "changed"} assumption ${key}; now Stated` +
+        (reading.amends.length === 0 ? "" : `; it also restated ${reading.amends.map((op) => op.id).join(", ")}`),
+    },
+    reading.amends,
+  );
+  // A confirmed assumption with nothing else restated leaves the plan as it is; any record it was built on that changed does not.
+  const changes: AnswerChange[] = [
+    ...(reading.verdict === "changes" ? [{ target: "assumption", before: context.assumption.statement, after: statement } as const] : []),
+    ...reading.amends.map((op): AnswerChange => ({ target: op.op === "amend-assumption" ? "assumption" : "guarantee", before: statementOf(current, op), after: op.statement })),
+  ];
+  const [first, ...rest] = changes;
   return {
     ...base,
     vision: { append, revision },
-    // A confirmed assumption leaves the plan as it is; a changed one it was built on does not.
-    replanReport: answer.planned && reading.verdict === "changes" ? replanReport(context, statement, contractStandingOf(context.vision.current.guarantees)) : null,
+    replanReport: answer.planned && first !== undefined ? replanReport(context, [first, ...rest], contractStandingOf(current.guarantees)) : null,
   };
+}
+
+/** The statement the vision in force holds for the record `op` restates; composing the version first proved it holds one. */
+function statementOf(vision: VisionVersion, op: AmendOp): string {
+  const held = op.op === "amend-assumption" ? vision.assumptions.find((a) => a.id === op.id) : vision.guarantees.find((g) => g.id === op.id);
+  if (held === undefined) throw new VisionChangeRefused(vision.projectId, vision.version, `it holds no ${op.op === "amend-assumption" ? "assumption" : "guarantee"} keyed ${op.id}`);
+  return held.statement;
 }

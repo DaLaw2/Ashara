@@ -186,7 +186,7 @@ async function plannedProject(): Promise<{ projectId: ProjectId; questionId: str
   const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
   const projectId = created.project.id;
   ourProjects.add(projectId);
-  pipelineModel({ verdict: "confirms" });
+  pipelineModel({ verdict: "confirms", amends: [] });
   const containment = memoryStepContainment(() => true);
   const intakeStore = createIntakeStore(db);
   const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
@@ -341,7 +341,7 @@ describe("a plan revision whose write finds the project moved every cycle", () =
   test("halts the project as work_budget with its report once the revisions drew the project's budget", async () => {
     const { projectId, questionId } = await plannedProject();
     await answer(projectId, questionId);
-    pipelineModel({ verdict: "changes", statement: "The hill studio opens first.", kind: "client-visible" });
+    pipelineModel({ verdict: "changes", statement: "The hill studio opens first.", kind: "client-visible", amends: [] });
     const answerStore = createAnswerStore(db);
     const narrowedAnswers: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
     const read = await new ClientAnswers({ containment: memoryStepContainment(() => true), llm: setupGateway, store: narrowedAnswers }).runPending();
@@ -376,7 +376,7 @@ describe("an answer whose record finds the project moved every cycle", () => {
   test("halts the project as work_budget with its report once the re-reads drew the project's budget", async () => {
     const { projectId, questionId } = await plannedProject();
     const answerId = await answer(projectId, questionId);
-    pipelineModel({ verdict: "confirms" });
+    pipelineModel({ verdict: "confirms", amends: [] });
 
     const { spendCap, budget } = await tightLedger(projectId);
     const containment = memoryStepContainment((error) => spendCap.refusalOf(error) !== null);

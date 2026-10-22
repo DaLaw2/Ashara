@@ -3,7 +3,7 @@ import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { FirstContractSchema, StoredContractSchema, collapseWhitespace, markOf, visionGuaranteeOf } from "./vision-language/guarantee.js";
 import type { ContractDraft, StoredContract, StoredGuarantee, VisionExclusion } from "./vision-language/guarantee.js";
-import type { ContractOp } from "./vision-language/contract-op.js";
+import type { AmendOp, ContractOp } from "./vision-language/contract-op.js";
 import { basisOf } from "./vision-language/index.js";
 import type { InterfaceEntry, VisionGuarantee } from "./vision-language/index.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
@@ -600,7 +600,11 @@ export class Vision {
 
   /**
    * The next version with the assumption `key` Stated by the client's answer to the open question
-   * `answer.questionMessageId`, which closes; every other record is carried over as stored.
+   * `answer.questionMessageId`, which closes, and every other assumption and guarantee the answer
+   * contradicts or refines restated as `amends` says, each assumption Stated by the same answer; every
+   * other record is carried over as stored. All of it is one version or none: an amendment naming a
+   * record this version does not hold, naming `key` (its verdict settles that one), naming a record
+   * twice, or leaving a contract that breaks a rule throws VisionChangeRefused.
    */
   stateAssumption(
     key: string,
@@ -616,34 +620,71 @@ export class Vision {
       readonly rationale: string;
       readonly changeReason: string;
     },
+    amends: readonly AmendOp[],
   ): VisionAppend {
+    const refused = (detail: string) => new VisionChangeRefused(this.current.projectId, this.current.version, detail);
     const records = this.keyedRecords();
     const index = records.findIndex((record) => record.key === key);
     const record = records[index];
-    if (record === undefined) {
-      throw new VisionChangeRefused(this.current.projectId, this.current.version, `it holds no assumption keyed ${key}`);
-    }
+    if (record === undefined) throw refused(`it holds no assumption keyed ${key}`);
+    const clientAnswer = {
+      messageId: answer.messageId,
+      questionMessageId: answer.questionMessageId,
+      question: answer.question,
+      answer: answer.answer,
+    };
     const stated: AssumptionRecord = {
       ...record,
       statement: answer.statement,
       ...(answer.kind === null ? {} : { kind: answer.kind }),
       rationale: answer.rationale,
       status: "Stated",
-      clientAnswer: {
-        messageId: answer.messageId,
-        questionMessageId: answer.questionMessageId,
-        question: answer.question,
-        answer: answer.answer,
-        // The delivered report says from it whether the client confirmed or changed the assumption.
-        verdict: answer.verdict,
-      },
+      // The delivered report says from it whether the client confirmed or changed the assumption.
+      clientAnswer: { ...clientAnswer, verdict: answer.verdict },
     };
+    let working = records.map((other, i) => (i === index ? stated : other));
+    let contract = this.contract;
+    const named = new Set([key]);
+    for (const op of amends) {
+      if (named.has(op.id)) throw refused(op.id === key ? `the answer's own assumption ${key} is settled by its verdict, not restated beside it` : `the answer restates ${op.id} twice`);
+      named.add(op.id);
+      if (op.op === "amend-assumption") {
+        const at = working.map(assumptionOf).findIndex((a) => a.id === op.id);
+        const old = working[at];
+        if (old === undefined) throw refused(`it holds no assumption keyed ${op.id}`);
+        const restated: AssumptionRecord = {
+          ...old,
+          statement: op.statement,
+          status: "Stated",
+          rationale: `The client's answer to "${answer.question}" contradicted the assumption "${old.statement}".`,
+          clientAnswer: { ...clientAnswer, verdict: "changes" },
+        };
+        working = working.map((other, i) => (i === at ? restated : other));
+        continue;
+      }
+      if (contract === null || !contract.guarantees.some((g) => g.id === op.id)) throw refused(`it holds no guarantee keyed ${op.id}`);
+      const amended = observed(op, { id: op.id, statement: op.statement, refutedBy: op.refutedBy, source: { kind: "correction", messageId: answer.messageId } });
+      contract = { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? amended : g)) };
+    }
+    try {
+      if (contract !== this.contract && contract !== null) {
+        const parsed = StoredContractSchema.safeParse(contract);
+        if (!parsed.success) throw new ContractBroken("contract", z.prettifyError(parsed.error));
+        contract = parsed.data;
+      }
+      const assumptions = working.map(assumptionOf);
+      assertUniqueIds("inferences", "assumptions", assumptions.map((a) => a.id));
+      assertContractHolds(this.current.visionText, this.current.scope.length, contract, assumptions);
+    } catch (err) {
+      if (!(err instanceof ContractBroken)) throw err;
+      throw refused(err.message);
+    }
     return {
       basedOnVersion: this.current.version,
       // A guarantee resting on it reads client-stated from the next version on: its basis is computed there, never rewritten.
-      inferences: this.composed(records.map((other, i) => (i === index ? stated : other))),
+      inferences: working,
       openQuestions: this.questions.filter((question) => typeof question === "string" || question.messageId !== answer.questionMessageId),
-      contract: { kind: "unchanged" },
+      contract: contract === this.contract || contract === null ? { kind: "unchanged" } : { kind: "revised", records: contract },
       changeReason: answer.changeReason,
     };
   }

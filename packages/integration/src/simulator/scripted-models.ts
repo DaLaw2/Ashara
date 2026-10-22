@@ -124,7 +124,7 @@ export class StandIns {
     if (keys.includes("roles")) return structured("roster", () => roster(this.context));
     if (keys.includes("tasks")) return structured("decomposition.tasks", () => this.planner.plan(promptText(options)));
     if (keys.includes("problems")) return this.suiteReview.respond(options, modelId);
-    if (keys.includes("reading")) return structured("liaison-answer", () => this.liaison.answer());
+    if (keys.includes("reading")) return structured("liaison-answer", () => this.liaison.answer(promptText(options)));
     if (keys.includes("correction"))
       return structured("liaison-change", () => this.liaison.correction(promptText(options)));
     if (keys.includes("environmentChange")) return this.classifier.judge(options);

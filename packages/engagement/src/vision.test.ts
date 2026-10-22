@@ -200,7 +200,7 @@ describe("the contract records: interface, guarantees with keys, exclusions", ()
       kind: null,
       rationale: "client answer",
       changeReason: "answered",
-    });
+    }, []);
     const next = readVisionVersion({ ...contractVersion(change.inferences), version: 2 });
     expect(next.guarantees.find((g) => g.id === "G2")?.basis).toBe("client-stated");
     expect(next.assumptions[0]?.underpins).toEqual(["G2"]);
@@ -250,13 +250,13 @@ describe("Vision: the only way a next version is composed", () => {
       rationale: "client answer",
       changeReason: "answered",
     };
-    const change = vision.stateAssumption("A1", answer);
+    const change = vision.stateAssumption("A1", answer, []);
     expect(change.openQuestions).toEqual([]);
     expect(change.inferences[1]).toEqual(internal);
     const next = readVisionVersion({ ...stored(change.inferences), version: 4 });
     expect(next.assumptions[0]).toMatchObject({ id: "A1", status: "Stated", standing: "stated", statement: "Commands fail at once." });
     expect(next.assumptions[0]?.clientAnswer).toMatchObject({ messageId: "m1", verdict: "changes" });
-    expect(() => vision.stateAssumption("A9", answer)).toThrow(VisionChangeRefused);
+    expect(() => vision.stateAssumption("A9", answer, [])).toThrow(VisionChangeRefused);
   });
 
   test("the legacy map takes no keyed change, and a version the reader would refuse is never written", () => {
