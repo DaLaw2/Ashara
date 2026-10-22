@@ -17,7 +17,6 @@
     "./compose": "./src/compose.ts",
     "./compose-core-loop": "./src/compose-core-loop.ts",
     "./intake-store": "./src/intake-store.ts",
-    "./middleware": "./src/middleware.ts",
     "./plan-report-store": "./src/plan-report-store.ts",
     "./roster-store": "./src/roster-store.ts",
     "./routes": "./src/routes.ts",

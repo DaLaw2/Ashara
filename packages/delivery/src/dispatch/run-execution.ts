@@ -17,13 +17,13 @@ import {
   taskBranchName,
   thrownBlocked,
 } from "@ashara/quality";
-import type { DispatchEnvironment, DispatchWork, ExecutionResult, FinalizeDeps, MainConflict } from "@ashara/quality";
+import type { DispatchEnvironment, ExecutionResult, FinalizeDeps, MainConflict } from "@ashara/quality";
 import { describeErrorChain, wrapError } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/workplace";
 import { attemptSummary, outcomeRecord, runAttempt, toSessionAttempt } from "@ashara/workplace";
 import type { AttemptSlot, Outcome } from "@ashara/workplace";
 import { attemptProfileOf } from "../acl/workplace-acl.js";
-import type { Dispatch, DispatchContext } from "./dispatch-types.js";
+import type { Dispatch, DispatchContext, DispatchWork } from "./dispatch-types.js";
 import { endWithoutDone } from "./end-without-done.js";
 
 /** A dispatch whose cell is up, in its session's attempt slot. */

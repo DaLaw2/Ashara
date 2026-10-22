@@ -19,7 +19,6 @@ export {
   NO_AGENT,
   NO_CHANGE_REASON,
   ProjectEventNameSchema,
-  agentWorkOf,
   asharaBlocked,
   cellImageOf,
   describeAgentWork,
@@ -31,13 +30,12 @@ export {
 } from "./dispatch-result.js";
 export type {
   AgentWork,
+  CheckAuthoring,
   DispatchEnvironment,
   DispatchRef,
-  DispatchWork,
   ExecutionEventSink,
   ExecutionResult,
   VerificationCells,
-  WorkPlan,
 } from "./dispatch-result.js";
 export { environmentCheckPort } from "./environment-check.js";
 export type { EnvironmentStatementStore } from "./environment-check.js";
@@ -80,7 +78,7 @@ export {
   formatProjectChecksForCheckAuthor,
   headCommit,
 } from "./task-checks.js";
-export type { CitedItemIds, TaskCheckStore, TaskChecks } from "./task-checks.js";
+export type { CitedItemIds, CompletedTaskChecks, TaskCheckStore, TaskChecks } from "./task-checks.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
 export { CheckSetFreezeRepository } from "./repositories/check-set-freeze.js";

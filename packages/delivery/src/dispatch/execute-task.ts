@@ -34,7 +34,7 @@ import {
   taskBranchName,
   thrownBlocked,
 } from "@ashara/quality";
-import type { DispatchEnvironment, DispatchRef, DispatchWork, ExecutionResult, MainConflict, WorkPlan } from "@ashara/quality";
+import type { DispatchEnvironment, DispatchRef, ExecutionResult, MainConflict } from "@ashara/quality";
 import { describeErrorChain, parseWorkItemId, wrapError } from "@ashara/shared";
 import type { AgentBrief } from "@ashara/workplace";
 import {
@@ -51,7 +51,7 @@ import {
 } from "@ashara/workplace";
 import type { KnowledgeSection, TaskSpec } from "@ashara/workplace";
 import { DispatchRecords } from "./dispatch-records.js";
-import type { AgentStaff, Dispatch, DispatchContext, NoWiderModel, OwnerUnresolved, TaskDescriptor, Unplannable } from "./dispatch-types.js";
+import type { AgentStaff, Dispatch, DispatchContext, DispatchWork, NoWiderModel, OwnerUnresolved, TaskDescriptor, Unplannable, WorkPlan } from "./dispatch-types.js";
 import { attemptCellImage, runExecution } from "./run-execution.js";
 
 /** One task's dispatch onto the project's validated target checkout. */

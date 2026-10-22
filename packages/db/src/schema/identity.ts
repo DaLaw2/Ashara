@@ -39,7 +39,7 @@ export const clientLoginFailures = pgTable(
   "client_login_failures",
   {
     clientName: text("client_name").notNull(),
-    // The attempt's source: an IPv4 address or an IPv6 /64 (server/src/source-network.ts sourceNetwork).
+    // The attempt's source: an IPv4 address or an IPv6 /64 (Security's sourceNetwork).
     sourceAddress: text("source_address").notNull(),
     failedAt: timestamptz("failed_at").notNull().defaultNow(),
   },

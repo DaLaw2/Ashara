@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { loadLintContext, type LintContext } from "./lint.js";
+import { run as languageHomes } from "./language-homes.js";
+import { loadLintContext, type LintContext, type PackageScan } from "./lint.js";
 import { run as projectRecord } from "./project-record.js";
 import { run as recognisedWording } from "./recognised-wording.js";
 import { parseRules } from "./rules.js";
@@ -144,5 +145,59 @@ describe("project-record", () => {
 
   test("the repository's project record holds no per-context state", () => {
     expect(projectRecord(loadLintContext(REPO))).toEqual([]);
+  });
+});
+
+function emptyRule(name: string): PackageScan["rule"] {
+  const rule = parseRules(`[${name}]\nallow = []\n`, "boundary-rules.toml").get(name);
+  if (rule === undefined) throw new Error(`the ${name} rule did not parse`);
+  return rule;
+}
+
+/** A tree of in-memory packages, each a map of its src-relative files, under a [homes] section. */
+function homesTree(homes: string, packages: Readonly<Record<string, Readonly<Record<string, string>>>>): LintContext {
+  const scans = Object.entries(packages).map(([name, files]): PackageScan => {
+    const pkgRoot = `/repo/packages/${name}`;
+    return {
+      name,
+      rule: emptyRule(name),
+      root: pkgRoot,
+      contents: new Map(Object.entries(files).map(([file, text]) => [`${pkgRoot}/src/${file}`, text])),
+      relativeTo: (filePath) => filePath.slice(pkgRoot.length + 1),
+    };
+  });
+  return { root: "/repo", packagesDir: "/repo/packages", rulesRelative: "boundary-rules.toml", toml: `[homes]\n${homes}\n`, rules: new Map(), packageDirs: Object.keys(packages), packages: scans };
+}
+
+describe("language-homes", () => {
+  const HOME = { "plan.ts": "export type WorkPlan = { readonly kind: \"substrate\" };\n" };
+
+  test("a name declared only at its home is clean, and a test elsewhere may name it", () => {
+    const context = homesTree(`WorkPlan = "delivery"`, { delivery: HOME, quality: { "x.test.ts": "type WorkPlan = string;\n" } });
+    expect(languageHomes(context)).toEqual([]);
+  });
+
+  test("a copy in another package, and a re-export shim, are violations", () => {
+    const context = homesTree(`WorkPlan = "delivery"`, {
+      delivery: HOME,
+      quality: {
+        "result.ts": "import x from \"y\";\nexport type WorkPlan =\n  | { readonly kind: \"substrate\" };\n",
+        "index.ts": "export type {\n  AgentWork,\n  WorkPlan,\n} from \"./result.js\";\n",
+      },
+    });
+    expect(languageHomes(context).map((v) => `${v.file}:${v.line}`).sort()).toEqual(["packages/quality/src/index.ts:3", "packages/quality/src/result.ts:2"]);
+  });
+
+  test("a name its home does not declare is a stale entry", () => {
+    const context = homesTree(`WorkPlan = "delivery"`, { delivery: {}, quality: {} });
+    expect(languageHomes(context).map((v) => `${v.file}:${v.line}`)).toEqual(["boundary-rules.toml:2"]);
+  });
+
+  test("an entry naming no package refuses the gate", () => {
+    expect(() => languageHomes(homesTree(`WorkPlan = "nowhere"`, { delivery: HOME }))).toThrow(/names no package/);
+  });
+
+  test("the repository declares every name of [homes] at its home only", () => {
+    expect(languageHomes(loadLintContext(REPO))).toEqual([]);
   });
 });

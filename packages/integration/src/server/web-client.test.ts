@@ -18,7 +18,7 @@ import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository
 import { SecretRepository } from "@ashara/security";
 import { DevSessionRepository } from "@ashara/workplace";
 import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
-import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
+import { CLIENT_SESSION_COOKIE, clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { buildApp } from "@ashara/server/app";
@@ -26,7 +26,7 @@ import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import type { AppDeps } from "@ashara/server/routes";
 import type { SecretReader } from "@ashara/server/secrets";
-import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "@ashara/server/web-client";
+import { loadWebClientAssets } from "@ashara/server/web-client";
 import type { WebClientDeps } from "@ashara/server/web-client";
 import { ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";

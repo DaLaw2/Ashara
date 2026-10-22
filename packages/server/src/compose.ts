@@ -108,7 +108,7 @@ const ATTEMPT_POLICY = {
 };
 
 // Login throttle, per fifteen-minute window and per source (an IPv4 address or an
-// IPv6 /64, source-network.ts):
+// IPv6 /64, as Security's sourceNetwork counts it):
 // - 5 per (name, source): a client is closed out only by its own source's failures.
 // - 20 per source across names: one source cannot walk many names.
 // No cap counts across sources, so no number of sources locks out a client, or

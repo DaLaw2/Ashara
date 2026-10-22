@@ -2,12 +2,14 @@ import type { BaseCellReference, Cell, EnvironmentImages, WorkdirInfo } from "@a
 import type { ContextualTurnLlm } from "@ashara/finance";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
 import type {
+  CheckAuthoring,
+  CompletedTaskChecks,
   DispatchEnvironment,
-  DispatchWork,
   EnvironmentStatementStore,
   ExecutionEventSink,
   MainConflict,
   TaskCheckStore,
+  TaskChecks,
   VerificationCells,
 } from "@ashara/quality";
 import type { Clock, Logger, ProjectId, WorkItemId } from "@ashara/shared";
@@ -17,6 +19,29 @@ import type { StoredTaskSpec } from "../work-item-language/task-spec.js";
 import type { WorkKind } from "../acl/organization-acl.js";
 import type { DispatchRecords } from "./dispatch-records.js";
 import type { DispatchVerification } from "./verification-ports.js";
+
+/**
+ * What decides a task's work: the environment substrate (Sprint 0 and every environment task), the
+ * product's own build and test from the definition (the product scaffold), the checks the check
+ * author stored for it (every other implementation task), or, for a check task, Z0's red run of
+ * the checks it defines. Resolved before the brief and the worktree.
+ */
+export type WorkPlan =
+  | { readonly kind: "substrate" }
+  | { readonly kind: "scaffold" }
+  | {
+      readonly kind: "stored-checks";
+      readonly stored: TaskChecks;
+      /**
+       * The latest checks of every task of the project already merged: the regression suite the
+       * merge must pass, any check of which the implementer may dispute.
+       */
+      readonly merged: readonly CompletedTaskChecks[];
+    }
+  | Omit<CheckAuthoring, "branch" | "startCommit" | "recorder">;
+
+/** A task's work plan once its worktree exists: a check task's carries its throwaway worktree. */
+export type DispatchWork = Exclude<WorkPlan, { readonly kind: "check-authoring" }> | CheckAuthoring;
 
 /** A task no work plan can be made for: it fails before the agent, with the reason. */
 export interface Unplannable {

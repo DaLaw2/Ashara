@@ -8,7 +8,7 @@
  * optional dependencies, stack literals, table ownership, the project record's columns, the
  * simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
- * recognise, and the line limits of the modules split by role.
+ * recognise, the line limits of the modules split by role, and a name declared outside its one home.
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -21,6 +21,7 @@ import { describeErrorChain } from "@ashara/shared";
 import { run as classImports } from "./lints/class-imports.js";
 import { run as fileSizes } from "./lints/file-sizes.js";
 import { run as internalModules } from "./lints/internal-modules.js";
+import { run as languageHomes } from "./lints/language-homes.js";
 import { loadLintContext } from "./lints/lint.js";
 import type { LintContext, Violation } from "./lints/lint.js";
 import { run as moduleNames } from "./lints/module-names.js";
@@ -56,6 +57,7 @@ const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   verificationSplit,
   recognisedWording,
   fileSizes,
+  languageHomes,
 ];
 
 function main(): void {

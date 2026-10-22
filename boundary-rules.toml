@@ -85,8 +85,9 @@ importers = ["finance", "server", "integration"]
 allow = ["shared", "db", "model-access"]
 
 [security]
-# Security: db holds the ciphertext rows; the master key stays outside it.
-allow = ["db"]
+# Security: db holds the ciphertext rows and the client login and session rows; the master key
+# stays outside it. shared gives the error chain a login body that is not JSON is logged with.
+allow = ["shared", "db"]
 # Only the composition root and the integration harness may hold a key or a store. The operator
 # tools in scripts/ also import it; this checker reads scripts/ only for subpath-importers.
 importers = ["server", "integration"]
@@ -271,9 +272,9 @@ classes.delivery = []
 [server]
 # The composition root and the client's only interface: it wires every context.
 allow = ["*"]
-# The master key and the secret store are reached only where the server is composed and its
-# startup secrets loaded, plus the web-client login's secret-name vocabulary.
-restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
+# Security is reached only where the server is composed and its startup secrets loaded, and where
+# the HTTP surface mounts Security's bearer check and the web client's login and session.
+restrict.security = ["src/app.ts", "src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
 
 [integration]
 # The lifecycle simulator and the cross-package integration
@@ -396,6 +397,24 @@ projects = "shared"
 edge.finance-model-catalog = { file = "packages/finance/src/attempt-grade.ts", tables = ["model_configs"], reason = "Finance, the gateway in front of Model Access, reads the catalog's two grades as the one scalar expression every reader of an attempt's grade embeds" }
 # --- Stack literals (no package's section) ----------------------------------------------------
 
+[homes]
+# Name = "package": the one package that declares the name, because it is that context's language.
+# Any other package's source (tests aside) that declares it, or names it in an export list, is a
+# copy or a re-export shim left behind by a move. A name its home no longer declares is a stale entry.
+# The dispatch plan is Delivery's; the check task's plan inside it stays Quality's CheckAuthoring.
+WorkPlan = "delivery"
+DispatchWork = "delivery"
+agentWorkOf = "delivery"
+# The bearer check, a login's source network, the client's login and session are Security's; the
+# server only mounts them.
+bearerAuth = "security"
+sourceNetwork = "security"
+createClientSessionRoutes = "security"
+CLIENT_SESSION_COOKIE = "security"
+# The cycle's step names are the kernel's: Engagement's and Organization's steps name theirs beside
+# Delivery's, and Organization may not import Delivery.
+CycleStep = "shared"
+
 [stack-literals]
 # CLAUDE.md "Target Generality": Ashara provides context and never
 # prescribes a stack. scripts/check-boundaries.ts fails on any token below inside a string, template
@@ -421,7 +440,7 @@ exempt.server-secret-hints = { file = "packages/server/src/secrets.ts", tokens =
 exempt.evaluation-trust-ledger-usage = { file = "packages/evaluation/src/trust-ledger.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/trust-ledger.ts" }
 exempt.evaluation-trust-record-usage = { file = "packages/evaluation/src/trust-record.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/trust-record.ts" }
 exempt.evaluation-pool-mapping-usage = { file = "packages/evaluation/src/pool-mapping.ts", tokens = ["npx", "tsx"], reason = "the operator's commands for Ashara's own scripts/pool-mapping.ts" }
-exempt.server-access-code-hint ={ file = "packages/server/src/web-client.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/client.ts" }
+exempt.security-access-code-hint = { file = "packages/security/src/client-session.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/client.ts" }
 exempt.server-web-client-script = { file = "packages/server/src/web-client.ts", tokens = ["javascript"], reason = "the media type of Ashara's own web client script" }
 exempt.integration-leak-guard = { file = "packages/integration/src/cell-leak-guard.ts", tokens = ["vitest"], reason = "Ashara's own test runner, whose runs the leak guard tracks" }
 exempt.integration-text-facts = { file = "packages/integration/src/simulator/text-facts.ts", tokens = ["composer"], reason = "the English word for a text composer that I9's coverage lists name, not PHP's Composer" }

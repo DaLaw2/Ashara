@@ -14,7 +14,11 @@ import type { Logger } from "./log.js";
 // owner's unblock, and is parked: never tried again while its project is not at work, so a subject
 // of a project already halted, stopped or accepted ends on its record instead of retrying unseen.
 
-/** The steps of a cycle that work through their subjects one at a time, each subject one project's. */
+/**
+ * The steps of a cycle that work through their subjects one at a time, each subject one project's.
+ * Engagement's and Organization's steps are named here beside Delivery's, and Organization may not
+ * import Delivery, so the list is the kernel's.
+ */
 export type CycleStep =
   | "liaison-intake"
   | "liaison-answers"

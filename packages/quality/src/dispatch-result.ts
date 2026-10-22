@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Cell, CellSpec, CurrentEnvironment, PartialCommitOutcome, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
+import type { Cell, CellSpec, CurrentEnvironment, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
 import { WorktreeCommitFailed } from "@ashara/execution-infra";
 import type { PreCallRefusal } from "@ashara/finance";
 import type { ErrorLayer, Logger, ProjectId, WorkItemId } from "@ashara/shared";
@@ -11,7 +11,7 @@ import type { StoredTaskSpec } from "./acl/delivery-acl.js";
 import type { EnvironmentDefinition } from "./environment-definition.js";
 import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf, VerificationInfrastructureFault } from "./fault-class.js";
 import type { EnvironmentError, FaultClass } from "./fault-class.js";
-import type { CheckRecorder, CitedItemIds, CompletedTaskChecks, TaskChecks } from "./task-checks.js";
+import type { CheckRecorder, CitedItemIds, TaskChecks } from "./task-checks.js";
 import { WORK_FAILED } from "./task-verdict.js";
 import type { FailureVerdict } from "./task-verdict.js";
 
@@ -88,19 +88,6 @@ export interface AgentPart {
 }
 
 export const NO_AGENT: AgentPart = { outcome: null, agentWork: "none" };
-
-/** The agent's work as the partial commit left it: stated by what git did, never by the kind of work. */
-export function agentWorkOf(partial: PartialCommitOutcome): Exclude<AgentWork, "none" | "discarded"> {
-  if (partial.committed) return "kept";
-  switch (partial.reason) {
-    case "no-changes":
-      return "kept";
-    case "merge-in-progress":
-      return "merge-discarded";
-    case "git-error":
-      return { lost: partial.message };
-  }
-}
 
 export function describeAgentWork(work: AgentWork): string {
   if (typeof work === "object") {
@@ -327,36 +314,6 @@ export function cellImageOf(environment: DispatchEnvironment): string {
   return environment.kind === "base-cell" ? environment.image : environment.imageId;
 }
 
-/**
- * What decides a task's work: the environment substrate (Sprint 0 and every environment task), the
- * product's own build and test from the definition (the product scaffold), the checks the check author stored for it (every other implementation task), or, for a check
- * task, Z0's red run of the checks it defines. Resolved before the
- * brief and the worktree.
- */
-export type WorkPlan =
-  | { readonly kind: "substrate" }
-  | { readonly kind: "scaffold" }
-  | {
-      readonly kind: "stored-checks";
-      readonly stored: TaskChecks;
-      /**
-       * The latest checks of every task of the project already merged: the regression suite the
-       * merge must pass, any check of which the implementer may dispute.
-       */
-      readonly merged: readonly CompletedTaskChecks[];
-    }
-  | {
-      readonly kind: "check-authoring";
-      readonly checkedTaskId: string;
-      readonly environment: CurrentEnvironment<EnvironmentDefinition>;
-      /** The checked task's latest stored revision, when its checks are being written again. */
-      readonly prior: TaskChecks | null;
-      /** The commit every authoring of these checks is red-run on. */
-      readonly foundation: CheckFoundation;
-      /** The ids of the vision items the check task cites: each must be decided by one of its checks. */
-      readonly citedItems: CitedItemIds;
-    };
-
 /** The plan revision's foundation a check task red-runs on: the merged task and its recorded merge commit. */
 interface CheckFoundation {
   readonly taskId: string;
@@ -368,16 +325,17 @@ export interface CheckAuthoring {
   readonly kind: "check-authoring";
   readonly checkedTaskId: string;
   readonly environment: CurrentEnvironment<EnvironmentDefinition>;
+  /** The checked task's latest stored revision, when its checks are being written again. */
   readonly prior: TaskChecks | null;
+  /** The commit every authoring of these checks is red-run on. */
   readonly foundation: CheckFoundation;
+  /** The ids of the vision items the check task cites: each must be decided by one of its checks. */
   readonly citedItems: CitedItemIds;
   readonly branch: string;
   /** The main commit the worktree started from: the attempt's files are its diff against it. */
   readonly startCommit: string;
   readonly recorder: CheckRecorder;
 }
-
-export type DispatchWork = Exclude<WorkPlan, { readonly kind: "check-authoring" }> | CheckAuthoring;
 
 /** The version recorded on the dispatch's dev_sessions row; null when its cells ran on the BaseCell. */
 export function sessionEnvironmentVersion(environment: DispatchEnvironment): string | null {

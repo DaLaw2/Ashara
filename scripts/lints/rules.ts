@@ -36,11 +36,12 @@
  *                                   a namespace, default or dynamic import of <pkg>, or a relative path
  *                                   into it, is refused, since the classes it reaches cannot be read
  *
- * The [stack-literals] and [tables] sections are no package's: the lints that read them parse them.
+ * The [stack-literals], [tables] and [homes] sections are no package's: the lints that read them parse them.
  */
 
 import { STACK_LITERALS_SECTION } from "../stack-literals.js";
 import { TABLES_SECTION } from "../table-ownership.js";
+import { HOMES_SECTION } from "./language-homes.js";
 import { MODULE_RULE_RE, checkModuleRules, parseModuleRule } from "./module-rules.js";
 import { BoundaryRulesParseError } from "./rules-parse-error.js";
 
@@ -124,8 +125,8 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     }
   >();
   let currentSection: string | null = null;
-  // The [stack-literals] and [tables] sections are not a package's rules; parseStackLiteralRules and
-  // parseTableOwnershipRules read them.
+  // The [stack-literals], [tables] and [homes] sections are not a package's rules; parseStackLiteralRules,
+  // parseTableOwnershipRules and the language-homes lint read them.
   let inOtherSection = false;
   const lines = toml.split("\n");
 
@@ -136,7 +137,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (line === "" || line.startsWith("#")) continue;
 
     const sectionMatch = /^\[([a-z][a-z0-9-]*)\]$/.exec(line);
-    inOtherSection = sectionMatch ? sectionMatch[1] === STACK_LITERALS_SECTION || sectionMatch[1] === TABLES_SECTION : inOtherSection;
+    inOtherSection = sectionMatch ? sectionMatch[1] === STACK_LITERALS_SECTION || sectionMatch[1] === TABLES_SECTION || sectionMatch[1] === HOMES_SECTION : inOtherSection;
     if (inOtherSection) continue;
     if (sectionMatch) {
       currentSection = sectionMatch[1];

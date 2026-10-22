@@ -1,19 +1,32 @@
 import { cleanupWorkdir, commitPartialWork } from "@ashara/execution-infra";
+import type { PartialCommitOutcome } from "@ashara/execution-infra";
 import {
   VerificationInfrastructureFault,
   WORK_FAILED,
-  agentWorkOf,
   describeAgentWork,
   discardCheckWorkdir,
   environmentBlocked,
   environmentErrorOf,
   unavailableOf,
 } from "@ashara/quality";
-import type { AgentWork, DispatchWork, ExecutionResult, TaskChecks } from "@ashara/quality";
+import type { AgentWork, ExecutionResult, TaskChecks } from "@ashara/quality";
 import { wrapError } from "@ashara/shared";
 import type { ErrorEnvelope, Outcome } from "@ashara/workplace";
 import { attemptSummary, outcomeRecord, turnFailureOf } from "@ashara/workplace";
-import type { Dispatch, DispatchContext } from "./dispatch-types.js";
+import type { Dispatch, DispatchContext, DispatchWork } from "./dispatch-types.js";
+
+/** The agent's work as the partial commit left it: stated by what git did, never by the kind of work. */
+function agentWorkOf(partial: PartialCommitOutcome): Exclude<AgentWork, "none" | "discarded"> {
+  if (partial.committed) return "kept";
+  switch (partial.reason) {
+    case "no-changes":
+      return "kept";
+    case "merge-in-progress":
+      return "merge-discarded";
+    case "git-error":
+      return { lost: partial.message };
+  }
+}
 
 /** An attempt that ended other than finished(done). */
 interface EndedRun {

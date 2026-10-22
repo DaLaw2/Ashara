@@ -14,7 +14,7 @@ export interface ClientRoutes {
   request(input: string, init: RequestInit, env: SocketBindings): Response | Promise<Response>;
 }
 
-/** The Node adapter's bindings the login reads its throttle's source from (server web-client.ts). */
+/** The Node adapter's bindings the login reads its throttle's source from (Security's client login). */
 interface SocketBindings {
   readonly incoming: { readonly socket: { readonly remoteAddress: string } };
 }

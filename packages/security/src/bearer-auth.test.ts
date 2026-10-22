@@ -14,7 +14,7 @@ vi.mock("node:crypto", async (importActual) => {
   };
 });
 
-const { bearerAuth } = await import("./middleware.js");
+const { bearerAuth } = await import("./bearer-auth.js");
 
 const TOKEN = "test-token-0123456789";
 

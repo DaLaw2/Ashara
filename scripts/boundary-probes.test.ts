@@ -61,7 +61,7 @@ const MAP: Readonly<Record<string, PackageMap>> = {
   db: { allow: ["shared"] },
   "model-access": { allow: ["shared", "db"], importers: ["finance", "server", "integration"] },
   finance: { allow: ["shared", "db", "model-access"] },
-  security: { allow: ["db"], importers: ["server", "integration"] },
+  security: { allow: ["shared", "db"], importers: ["server", "integration"] },
   "execution-infra": { allow: ["shared", "db"] },
   knowledge: { allow: ["shared", "db"] },
   workplace: { allow: ["shared", "db", "finance", "execution-infra"] },
@@ -130,7 +130,7 @@ const MAP: Readonly<Record<string, PackageMap>> = {
   },
   server: {
     allow: "*",
-    restrict: { security: ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"] },
+    restrict: { security: ["src/app.ts", "src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"] },
   },
   integration: {
     allow: ["shared", "db", "model-access", "finance", "security", "execution-infra", "knowledge", "workplace", "engagement", "organization", "quality", "delivery", "server"],

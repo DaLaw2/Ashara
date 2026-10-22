@@ -10,7 +10,7 @@ import { DevSessionRepository } from "@ashara/workplace";
 import { VisionRepository, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { bearerAuth } from "@ashara/server/middleware";
+import { bearerAuth } from "@ashara/security";
 import { createRoutes } from "@ashara/server/routes";
 import type { AppDeps } from "@ashara/server/routes";
 import { ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
