@@ -226,7 +226,9 @@ describe("the trace contract on a scripted run", () => {
     await repo.insert(openSession, idleTaskId, brief, null, "test-trace");
     const orphanSession = createSessionId();
     await repo.insert(orphanSession, attemptTaskId, brief, null, "test-trace");
-    await repo.fail(orphanSession, { outcome: "abandoned", detail: "test orphan", resolvedBy: "startup-reconciler" }, null);
+    // Closed as the startup reconcile closes it; failStale itself would close every open session here.
+    const orphanEnd = { outcome: "abandoned", detail: "test orphan", resolvedBy: "startup-reconciler", resolvedAt: new Date().toISOString() };
+    await db.execute(sql`UPDATE dev_sessions SET phase = 'Failed', verification_result = ${JSON.stringify(orphanEnd)}::jsonb WHERE id = ${orphanSession}`);
     const oldSession = createSessionId();
     await repo.insert(oldSession, idleTaskId, brief, null, "test-trace");
     await repo.fail(oldSession, { outcome: "failed", detail: "a row from before the attempt columns" }, null);

@@ -1,15 +1,38 @@
-import { and, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
 import { devSessions } from "@ashara/db/schema/workplace";
 import type { DbHandle } from "@ashara/db";
+import {
+  SessionEndSchema,
+  parseCompletedSessionEnd,
+  parseFailedSessionEnd,
+  parseReconciledSessionEnd,
+  resolvedByOf,
+  type CompletedSessionEnd,
+  type FailedSessionEnd,
+  type ReconciledSessionEnd,
+} from "./session-end.js";
 import { TERMINAL_SESSION_PHASES, type AttemptTerminal } from "./session-vocabulary.js";
 
-/** A COUNT over dev_sessions returned no row: the evidence cannot be read, so nothing is decided on it. */
-class DispatchEvidenceUnread extends Error {
-  constructor(readonly taskId: string) {
-    super(`dev_sessions of task ${taskId}: the count of crash-orphaned sessions returned no row`);
-    this.name = "DispatchEvidenceUnread";
+/**
+ * A terminal write matched no session still open: the id names no session (`phaseFound` null), or
+ * its session already ended, and a terminal phase is never rewritten.
+ */
+class SessionTerminalWriteRefused extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly phaseWritten: "Completed" | "Failed",
+    readonly phaseFound: string | null,
+  ) {
+    super(
+      phaseFound === null
+        ? `dev_sessions ${sessionId}: cannot write phase ${phaseWritten}, no session has this id`
+        : `dev_sessions ${sessionId}: cannot write phase ${phaseWritten}, the session already ended as ${phaseFound}`,
+    );
+    this.name = "SessionTerminalWriteRefused";
   }
 }
+
+const stillOpen = notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]);
 
 /**
  * What the session's Workplace attempt was, written with its terminal phase. The
@@ -67,28 +90,34 @@ export class DevSessionRepository {
    * `attemptEnd`: how the session ended, in its own words, as `fail` writes a failure's, so a session
    * that completed without an attempt (work already delivered on main) says why.
    */
-  async complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: { readonly outcome: "completed"; readonly detail: string }) {
-    await this.db
-      .update(devSessions)
-      .set({
-        ...attemptColumns(attempt),
-        verificationResult: attemptEnd,
-        phase: "Completed",
-        updatedAt: new Date(),
-      })
-      .where(eq(devSessions.id, sessionId));
+  async complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: CompletedSessionEnd) {
+    await this.end(sessionId, attempt, parseCompletedSessionEnd(attemptEnd), "Completed");
   }
 
-  async fail(sessionId: string, attemptEnd: unknown, attempt: SessionAttempt | null) {
-    await this.db
+  async fail(sessionId: string, attemptEnd: FailedSessionEnd, attempt: SessionAttempt | null) {
+    await this.end(sessionId, attempt, parseFailedSessionEnd(attemptEnd), "Failed");
+  }
+
+  /** Ends a session still open; a terminal phase is final, so a second end of it is refused, never applied. */
+  private async end(
+    sessionId: string,
+    attempt: SessionAttempt | null,
+    attemptEnd: CompletedSessionEnd | FailedSessionEnd,
+    phase: "Completed" | "Failed",
+  ): Promise<void> {
+    const ended = await this.db
       .update(devSessions)
       .set({
         ...attemptColumns(attempt),
         verificationResult: attemptEnd,
-        phase: "Failed",
+        phase,
         updatedAt: new Date(),
       })
-      .where(eq(devSessions.id, sessionId));
+      .where(and(eq(devSessions.id, sessionId), stillOpen))
+      .returning({ id: devSessions.id });
+    if (ended.length > 0) return;
+    const [found] = await this.db.select({ phase: devSessions.phase }).from(devSessions).where(eq(devSessions.id, sessionId));
+    throw new SessionTerminalWriteRefused(sessionId, phase, found === undefined ? null : found.phase);
   }
 
   /**
@@ -103,11 +132,12 @@ export class DevSessionRepository {
    * than closing them silently.
    */
   async failStale(
-    orphaned: unknown,
-    ended: unknown,
+    orphanedEnd: ReconciledSessionEnd,
+    endedEnd: ReconciledSessionEnd,
     inProgressTaskIds: readonly string[],
   ): Promise<{ readonly orphaned: number; readonly ended: number }> {
-    const open = notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]);
+    const orphaned = parseReconciledSessionEnd(orphanedEnd);
+    const ended = parseReconciledSessionEnd(endedEnd);
     return this.db.transaction(async (tx) => {
       const orphanedRows =
         inProgressTaskIds.length === 0
@@ -115,12 +145,12 @@ export class DevSessionRepository {
           : await tx
               .update(devSessions)
               .set({ verificationResult: orphaned, phase: "Failed", updatedAt: new Date() })
-              .where(and(open, inArray(devSessions.taskId, [...inProgressTaskIds])))
+              .where(and(stillOpen, inArray(devSessions.taskId, [...inProgressTaskIds])))
               .returning({ id: devSessions.id });
       const endedRows = await tx
         .update(devSessions)
         .set({ verificationResult: ended, phase: "Failed", updatedAt: new Date() })
-        .where(open)
+        .where(stillOpen)
         .returning({ id: devSessions.id });
       return { orphaned: orphanedRows.length, ended: endedRows.length };
     });
@@ -130,35 +160,30 @@ export class DevSessionRepository {
    * What the task's sessions say about its last dispatch, for the startup reconciler: the phase
    * of its latest session (null when it has none), and how many of its sessions an earlier startup
    * reconcile already closed as crash orphans (failStale's verification result names
-   * `resolvedBy`). Read before failStale closes this start's orphans.
+   * `resolvedBy`). Read before failStale closes this start's orphans. Every end record of the task
+   * is parsed, so an unreadable one refuses the evidence rather than counting as no orphan.
    */
   async dispatchEvidence(
     taskId: string,
     resolvedBy: string,
   ): Promise<{ readonly latestPhase: string | null; readonly orphanedBefore: number }> {
-    const [latest] = await this.db
-      .select({ phase: devSessions.phase })
+    const sessions = await this.db
+      .select({ phase: devSessions.phase, end: devSessions.verificationResult })
       .from(devSessions)
       .where(eq(devSessions.taskId, taskId))
-      .orderBy(desc(devSessions.createdAt))
-      .limit(1);
-    const [orphaned] = await this.db
-      .select({ count: count() })
-      .from(devSessions)
-      .where(
-        and(
-          eq(devSessions.taskId, taskId),
-          sql`${devSessions.verificationResult} ->> 'resolvedBy' = ${resolvedBy}`,
-        ),
-      );
-    if (orphaned === undefined) throw new DispatchEvidenceUnread(taskId);
-    return { latestPhase: latest?.phase ?? null, orphanedBefore: orphaned.count };
+      .orderBy(desc(devSessions.createdAt));
+    const ends = sessions.map((session) => SessionEndSchema.nullable().parse(session.end));
+    const [latest] = sessions;
+    return {
+      latestPhase: latest === undefined ? null : latest.phase,
+      orphanedBefore: ends.filter((end) => resolvedByOf(end) === resolvedBy).length,
+    };
   }
 
   async listActive() {
     return this.db
       .select()
       .from(devSessions)
-      .where(notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]));
+      .where(stillOpen);
   }
 }

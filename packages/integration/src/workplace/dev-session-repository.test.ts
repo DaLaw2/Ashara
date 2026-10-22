@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { z } from "zod";
 import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { workItems } from "@ashara/db/schema/delivery";
 import { devSessions } from "@ashara/db/schema/workplace";
+import { projectHalted } from "@ashara/delivery/predicates";
+import { projectWorkItems } from "@ashara/delivery/reads";
 import type { Database, DbTransaction } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { DevSessionRepository, ORPHANED_SESSION_RESOLVER, terminalizeOrphanedSessions } from "@ashara/workplace";
+import { DevSessionRepository, ORPHANED_SESSION_RESOLVER, readRunEvidence, terminalizeOrphanedSessions } from "@ashara/workplace";
 
-// Workplace's session log against real Postgres: one insert -> read round trip.
+// Workplace's session log against real Postgres: its writes, its terminal writes' guard, and the
+// end record parsed on every write and read.
 
 let db: Database;
 let testProjectId: ProjectId;
@@ -82,6 +86,85 @@ describe("DevSessionRepository", () => {
       ended: { latestPhase: "Failed", orphanedBefore: 0 },
     });
     vi.restoreAllMocks();
+  });
+});
+
+describe("DevSessionRepository terminal writes", () => {
+  const repo = () => new DevSessionRepository(db);
+
+  test("an ended session is never rewritten: failing a Completed session is refused and the row stays Completed", async () => {
+    const id = randomUUID();
+    await repo().insert(id, taskId, {}, null, "test-trace");
+    await repo().complete(id, null, { outcome: "completed", detail: "delivered" });
+
+    await expect(repo().fail(id, { outcome: "failed", detail: "a late failure" }, null)).rejects.toMatchObject({
+      name: "SessionTerminalWriteRefused",
+      sessionId: id,
+      phaseFound: "Completed",
+    });
+    await expect(repo().complete(id, null, { outcome: "completed", detail: "again" })).rejects.toMatchObject({
+      name: "SessionTerminalWriteRefused",
+      phaseFound: "Completed",
+    });
+
+    const [row] = await db.select().from(devSessions).where(sql`${devSessions.id} = ${id}`);
+    expect(row?.phase).toBe("Completed");
+    expect(row?.verificationResult).toEqual({ outcome: "completed", detail: "delivered" });
+  });
+
+  test("a terminal write to an id no session has is refused, never a silent no-op", async () => {
+    const missing = randomUUID();
+    await expect(repo().complete(missing, null, { outcome: "completed", detail: "x" })).rejects.toMatchObject({
+      name: "SessionTerminalWriteRefused",
+      sessionId: missing,
+      phaseFound: null,
+    });
+    await expect(repo().fail(missing, { outcome: "failed", detail: "x" }, null)).rejects.toMatchObject({
+      name: "SessionTerminalWriteRefused",
+      sessionId: missing,
+      phaseFound: null,
+    });
+  });
+
+  test("an end record outside the schema is refused before the write, and the session stays open", async () => {
+    const phase = await rolledBack(async (tx) => {
+      const txRepo = new DevSessionRepository(tx);
+      const id = randomUUID();
+      await txRepo.insert(id, taskId, {}, null, "test-trace");
+      await expect(txRepo.fail(id, { outcome: "completed", detail: "a failure dressed as a completion" }, null)).rejects.toBeInstanceOf(z.ZodError);
+      // @ts-expect-error a failed end names its detail: fail's end record is typed, never unknown
+      await expect(txRepo.fail(id, { outcome: "failed" }, null)).rejects.toBeInstanceOf(z.ZodError);
+      await expect(
+        txRepo.failStale(
+          { outcome: "abandoned", detail: "x", resolvedBy: "", resolvedAt: new Date().toISOString() },
+          { outcome: "abandoned", detail: "x", resolvedBy: "r", resolvedAt: "yesterday" },
+          [],
+        ),
+      ).rejects.toBeInstanceOf(z.ZodError);
+      const [row] = await tx.select({ phase: devSessions.phase }).from(devSessions).where(sql`${devSessions.id} = ${id}`);
+      return row?.phase;
+    });
+    expect(phase).toBe("Preparing");
+  });
+
+  test("an end record the schema does not admit is never read as evidence", async () => {
+    const plantMalformed = async (tx: DbTransaction) => {
+      const id = randomUUID();
+      await new DevSessionRepository(tx).insert(id, taskId, {}, null, "test-trace");
+      await tx.execute(sql`UPDATE dev_sessions SET phase = 'Failed', verification_result = '{"resolvedBy": 7}'::jsonb WHERE id = ${id}`);
+    };
+    await expect(
+      rolledBack(async (tx) => {
+        await plantMalformed(tx);
+        return new DevSessionRepository(tx).dispatchEvidence(taskId, ORPHANED_SESSION_RESOLVER);
+      }),
+    ).rejects.toBeInstanceOf(z.ZodError);
+    await expect(
+      rolledBack(async (tx) => {
+        await plantMalformed(tx);
+        return readRunEvidence(tx, testProjectId, projectHalted, projectWorkItems);
+      }),
+    ).rejects.toBeInstanceOf(z.ZodError);
   });
 });
 

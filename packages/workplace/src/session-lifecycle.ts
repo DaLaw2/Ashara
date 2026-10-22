@@ -2,6 +2,7 @@ import { describeErrorChain } from "@ashara/shared";
 import type { AgentBrief } from "./agent-brief.js";
 import type { ErrorEnvelope } from "./error-envelope.js";
 import type { SessionAttempt } from "./session-attempt.js";
+import type { CompletedSessionEnd, FailedSessionEnd } from "./session-end.js";
 
 /**
  * The dev_sessions attempt log: when an attempt opened and how it ended. Not a verdict on the
@@ -18,8 +19,8 @@ export interface SessionStore {
    * `attempt`: the session's Workplace attempt, or null when no attempt outcome reached it (ended before the model, or the attempt threw).
    * `attemptEnd`: the completion's own detail, so a session that completed with no attempt says why.
    */
-  complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: { readonly outcome: "completed"; readonly detail: string }): Promise<void>;
-  fail(sessionId: string, attemptEnd: unknown, attempt: SessionAttempt | null): Promise<void>;
+  complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: CompletedSessionEnd): Promise<void>;
+  fail(sessionId: string, attemptEnd: FailedSessionEnd, attempt: SessionAttempt | null): Promise<void>;
 }
 
 /** Where the session's body leaves its attempt for the terminal write; null until the attempt returns. */
@@ -101,7 +102,7 @@ async function closeSession(taskId: string, sessionId: string, write: () => Prom
     // eslint-disable-next-line ashara/catch-continue -- best effort: the dispatch's outcome is returned and routed as it is; the next start closes the open row as a crash orphan only when its task is still InProgress there, so the lost write takes no refund away and changes no verdict
     console.warn(
       `[${taskId}] failed to write the terminal dev_session phase for ${sessionId}; ` +
-        `the row stays non-terminal until startup reconciliation resolves it:`,
+        `a row the write left non-terminal stays so until startup reconciliation resolves it:`,
       e,
     );
   }

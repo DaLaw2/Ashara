@@ -1,3 +1,5 @@
+import type { ReconciledSessionEnd } from "./session-end.js";
+
 /**
  * The `resolvedBy` the startup reconcile records on every crash-orphaned session it closes.
  * Delivery counts a task's earlier crash-orphaned dispatches by it, so it is published, never restated.
@@ -11,14 +13,6 @@ export const ORPHANED_SESSION_RESOLVER = "startup-reconciler";
  */
 const ENDED_SESSION_RESOLVER = "startup-reconciler:dispatch-ended";
 
-/** What closing a session at startup records as its verification result. */
-interface StaleSessionResolution {
-  readonly outcome: "abandoned";
-  readonly detail: string;
-  readonly resolvedBy: string;
-  readonly resolvedAt: string;
-}
-
 /** The session store's view of the startup reconcile; DevSessionRepository satisfies it. */
 interface OrphanedSessionStore {
   /**
@@ -26,8 +20,8 @@ interface OrphanedSessionStore {
    * `orphaned`, any other with `ended`; returns how many each.
    */
   failStale(
-    orphaned: StaleSessionResolution,
-    ended: StaleSessionResolution,
+    orphaned: ReconciledSessionEnd,
+    ended: ReconciledSessionEnd,
     inProgressTaskIds: readonly string[],
   ): Promise<{ readonly orphaned: number; readonly ended: number }>;
 }

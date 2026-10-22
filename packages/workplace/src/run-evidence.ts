@@ -5,6 +5,7 @@ import { INIT_MIGRATION, legacyMigrationFile, projects } from "@ashara/db";
 import { callTotalsByTaskAndProvider, taskCallsOf } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { AGENT_CALL_SITE } from "./attempt.js";
+import { SessionEndSchema, resolvedByOf } from "./session-end.js";
 import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
 
 /** The project named for a run report does not exist. */
@@ -59,9 +60,7 @@ const SessionRowSchema = z.object({
   environmentVersion: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
-  resolvedBy: z.string().nullable(),
-  endOutcome: z.string().nullable(),
-  endDetail: z.string().nullable(),
+  end: SessionEndSchema.nullable(),
   attemptPromptDigest: z.string().nullable(),
   attemptTerminal: z.string().nullable(),
   attemptTurns: z.number().int().nullable(),
@@ -204,10 +203,11 @@ function attemptRecord(row: z.infer<typeof SessionRowSchema>, attemptColumnsSinc
     };
   }
   if (!TERMINAL_SESSION_PHASES.some((phase) => phase === row.phase)) return { kind: "open" };
-  if (row.resolvedBy !== null) return { kind: "reconciled", by: row.resolvedBy };
+  const resolvedBy = resolvedByOf(row.end);
+  if (resolvedBy !== null) return { kind: "reconciled", by: resolvedBy };
   if (row.createdAt < attemptColumnsSince) return { kind: "predates-attempt-columns" };
-  if (row.phase === "Completed") return { kind: "completed-without-attempt", endDetail: row.endDetail };
-  return { kind: "unrecorded", endOutcome: row.endOutcome };
+  if (row.phase === "Completed") return { kind: "completed-without-attempt", endDetail: row.end === null ? null : row.end.detail };
+  return { kind: "unrecorded", endOutcome: row.end === null ? null : row.end.outcome };
 }
 
 function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: Date): SessionEvidence {
@@ -258,9 +258,8 @@ export async function readRunEvidence(
       ? { rows: [] }
       : await db.execute(sql`
     SELECT s.id AS "sessionId", s.task_id AS "taskId", s.phase, s.environment_version AS "environmentVersion",
-           s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.verification_result ->> 'resolvedBy' AS "resolvedBy",
-           s.verification_result ->> 'outcome' AS "endOutcome",
-           s.verification_result ->> 'detail' AS "endDetail",s.attempt_prompt_digest AS "attemptPromptDigest",
+           s.created_at AS "createdAt", s.updated_at AS "updatedAt", s.verification_result AS "end",
+           s.attempt_prompt_digest AS "attemptPromptDigest",
            s.attempt_terminal AS "attemptTerminal", s.attempt_turns AS "attemptTurns",
            s.attempt_provider AS "attemptProvider", s.attempt_model AS "attemptModel", s.attempt_cell AS "attemptCell"
     FROM dev_sessions s

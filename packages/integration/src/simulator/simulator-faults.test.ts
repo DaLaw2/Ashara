@@ -55,8 +55,8 @@ describe("lifecycle simulator, directed", () => {
   // so the read fails. The reconciler retries the requeue within its bound, so the orphan is never
   // left InProgress.
   it("retries a failed requeue of an orphan, never leaving it InProgress while the process lives", async (ctx) => {
-    const devSessionsCount = /^select count\(\*\) from "dev_sessions"/;
-    const conflicts = Array.from({ length: CONFLICT_ATTEMPTS }, (_, index) => ({ kind: "fault", seam: "db", label: devSessionsCount, nth: index + 2, fault: "db-query-failed" }) as const);
+    const devSessionsRead = /^select "phase", "verification_result" from "dev_sessions"/;
+    const conflicts = Array.from({ length: CONFLICT_ATTEMPTS }, (_, index) => ({ kind: "fault", seam: "db", label: devSessionsRead, nth: index + 2, fault: "db-query-failed" }) as const);
     const result = await directed(ctx, [CRASH_IN_DISPATCH, ...conflicts]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", ...conflicts.map(() => "db:db-query-failed")]);
     expect(
