@@ -28,6 +28,7 @@ function snapshotWith(transitions: Snapshot["transitions"]): Snapshot {
       delivered: [],
       firstPlan: { report: null, items: [], revisions: [] }, workItems: 0,
       interfaceOnMain: { kind: "not-held" },
+      placeholderOnMain: { kind: "not-held" },
       intakeReading: null,
     },
     intake: { visionWritten: false, reading: null, questionsPosted: 0 },

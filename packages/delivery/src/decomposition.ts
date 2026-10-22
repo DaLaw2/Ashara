@@ -2,7 +2,7 @@ import { z, type ZodType } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import type { StructuredValidation } from "./acl/finance-acl.js";
 import { visionSourceCitation, visionSourceLine } from "./acl/engagement-vision-acl.js";
-import { PUBLIC_INTERFACE_FILE } from "./acl/quality-acl.js";
+import { PUBLIC_INTERFACE_FILE, SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
 import type {
     AddedAssumption,
     DecomposedTaskSpec,
@@ -594,7 +594,11 @@ const SCAFFOLD_PLACEHOLDER =
     "response, a non-zero exit status, a raised error, as the entry's kind has) saying the product does not do that " +
     "yet, so that a check of any behaviour fails on it because the behaviour is missing, never because the product " +
     "could not start. A product that runs as a long-lived process starts, stays up and answers each request with that " +
-    "refusal until it is stopped. Say in your finish summary where the entry point is and how the product is run.";
+    `refusal until it is stopped. Every refusal carries the exact text ${SCAFFOLD_PLACEHOLDER_MARKER} in what it ` +
+    "answers, and the product's source holds that text only in the placeholder's refusal, nowhere else " +
+    `(${PUBLIC_INTERFACE_FILE} included): the tasks that follow remove it as they implement each entry, and the ` +
+    "product is never accepted while any tracked file still holds it. Say in your finish summary where the entry " +
+    "point is and how the product is run.";
 
 type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
 
@@ -652,7 +656,7 @@ function addProductScaffold(
                 agreed
                     ? `${PUBLIC_INTERFACE_FILE}: the product's public interface, every entry ${entryIds} as the vision states it`
                     : `${PUBLIC_INTERFACE_FILE}: the product's public interface, one form for each entry`,
-                "a placeholder that starts as the interface says and refuses every entry of it",
+                `a placeholder that starts as the interface says and refuses every entry of it, each refusal carrying ${SCAFFOLD_PLACEHOLDER_MARKER}`,
                 "a finish summary naming the entry point and how the product is run",
             ],
             capability: PLANNER_SET_LEVEL,
@@ -696,7 +700,9 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
         `Deliverables of "${task.title}", for context:\n${bulleted(task.taskSpec.deliverables)}`,
         `Read the product's public interface in ${PUBLIC_INTERFACE_FILE} at the repository root before writing any ` +
             "check, and test the product only through that interface, in the one form it names: never try other ways " +
-            "to start, configure or call the product. On the foundation the product starts and refuses every entry, " +
+            "to start, configure or call the product. On the foundation the product starts and refuses every entry " +
+            `with a refusal carrying ${SCAFFOLD_PLACEHOLDER_MARKER}, which "${task.title}" removes from every entry ` +
+            "it owns, " +
             `so each check must fail there because "${task.title}" is not done, never because the product did not ` +
             `start. If ${PUBLIC_INTERFACE_FILE} is missing, or does not name what a check needs, say so in your ` +
             "finish summary.",

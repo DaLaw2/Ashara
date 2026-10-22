@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describeErrorChain } from "@ashara/shared";
 import type { LogRecord } from "@ashara/shared";
+import type { Admission } from "./admissions.js";
 import { capturingConsole } from "./console-capture.js";
 import type { ConsoleSink } from "./console-capture.js";
 import type { Coverage } from "./coverage.js";
@@ -43,6 +44,11 @@ export interface RunOptions {
   readonly projects?: 1 | 2;
   /** The deployment's spend cap instead of the tape's draw; each project's cap equals it. */
   readonly capUsd?: number;
+  /**
+   * Bytes of filler each client's tender carries past its request (policy default 0), so every prompt that quotes
+   * the request, and every estimate the spend cap admits on, grows.
+   */
+  readonly requestPaddingBytes?: number;
   /** Every cell start fails for the whole run: the host's container runtime is broken (faults.ts). */
   readonly cellOutage?: boolean;
   /**
@@ -92,6 +98,8 @@ export interface RunResult {
   readonly log: readonly string[];
   /** The last records every composed instance logged through its log port, each tagged by its instance's `boot`. */
   readonly records: readonly LogRecord[];
+  /** Every model call the spend cap admitted, in order, with the spend it was admitted on (admissions.ts). */
+  readonly admissions: readonly Admission[];
 }
 
 const LOG_LINES = 400;
@@ -355,6 +363,7 @@ async function runIsolated(options: RunOptions, log: string[]): Promise<RunResul
     longestQuiet: state.longestQuiet,
     log,
     records: state.records,
+    admissions: world.admissions.judged,
   };
 }
 
@@ -394,10 +403,12 @@ async function runBody(
   state.live = await server.compose();
   // Each client tenders its project through the routes; the late change and the stop are the
   // first project's, and its outcome is the run's.
-  const projectId = await tender(server, client, 0, options.seed, draws.universe.behaviours);
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a run's tender carries no filler unless asked
+  const padding = options.requestPaddingBytes ?? 0;
+  const projectId = await tender(server, client, 0, options.seed, draws.universe.behaviours, padding);
   projectIds.push(projectId);
   for (const [index, other] of others.entries()) {
-    projectIds.push(await tender(server, other, index + 1, options.seed, draws.universe.behaviours));
+    projectIds.push(await tender(server, other, index + 1, options.seed, draws.universe.behaviours, padding));
   }
   correction.arm({ projectId, client, standIns, observer });
   const loop = new CycleLoop({ options, started, draws, world, state, server, provisioned, correction });

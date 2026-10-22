@@ -950,6 +950,14 @@ the product through it, and the client is given it as how to run the delivered p
   wish for it.
 - A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
 
+# Retiring the scaffold's placeholder
+The product's scaffold answers every entry of the interface with a refusal carrying the text ashara-scaffold-refusal-7c41e09d.
+- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a
+  handler in front of it for some inputs and leave it answering the rest, and leave ashara-scaffold-refusal-7c41e09d nowhere on the
+  path of an entry you own.
+- Add ashara-scaffold-refusal-7c41e09d nowhere your task does not ask for it, in source, tests or documents alike.
+- A product is not accepted while any file it tracks still holds ashara-scaffold-refusal-7c41e09d.
+
 # Project
 ## Owner's intent (verbatim)
 A greeting file
@@ -1039,6 +1047,14 @@ the product through it, and the client is given it as how to run the delivered p
 - Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
   wish for it.
 - A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
+
+# Retiring the scaffold's placeholder
+The product's scaffold answers every entry of the interface with a refusal carrying the text ashara-scaffold-refusal-7c41e09d.
+- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a
+  handler in front of it for some inputs and leave it answering the rest, and leave ashara-scaffold-refusal-7c41e09d nowhere on the
+  path of an entry you own.
+- Add ashara-scaffold-refusal-7c41e09d nowhere your task does not ask for it, in source, tests or documents alike.
+- A product is not accepted while any file it tracks still holds ashara-scaffold-refusal-7c41e09d.
 
 # Project
 ## Owner's intent (verbatim)
@@ -1147,6 +1163,14 @@ the product through it, and the client is given it as how to run the delivered p
 - Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
   wish for it.
 - A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
+
+# Retiring the scaffold's placeholder
+The product's scaffold answers every entry of the interface with a refusal carrying the text ashara-scaffold-refusal-7c41e09d.
+- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a
+  handler in front of it for some inputs and leave it answering the rest, and leave ashara-scaffold-refusal-7c41e09d nowhere on the
+  path of an entry you own.
+- Add ashara-scaffold-refusal-7c41e09d nowhere your task does not ask for it, in source, tests or documents alike.
+- A product is not accepted while any file it tracks still holds ashara-scaffold-refusal-7c41e09d.
 
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:
@@ -1261,6 +1285,14 @@ the product through it, and the client is given it as how to run the delivered p
 - Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
   wish for it.
 - A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
+
+# Retiring the scaffold's placeholder
+The product's scaffold answers every entry of the interface with a refusal carrying the text ashara-scaffold-refusal-7c41e09d.
+- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a
+  handler in front of it for some inputs and leave it answering the rest, and leave ashara-scaffold-refusal-7c41e09d nowhere on the
+  path of an entry you own.
+- Add ashara-scaffold-refusal-7c41e09d nowhere your task does not ask for it, in source, tests or documents alike.
+- A product is not accepted while any file it tracks still holds ashara-scaffold-refusal-7c41e09d.
 
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:
@@ -1394,6 +1426,14 @@ the product through it, and the client is given it as how to run the delivered p
   wish for it.
 - A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
 
+# Retiring the scaffold's placeholder
+The product's scaffold answers every entry of the interface with a refusal carrying the text ashara-scaffold-refusal-7c41e09d.
+- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a
+  handler in front of it for some inputs and leave it answering the rest, and leave ashara-scaffold-refusal-7c41e09d nowhere on the
+  path of an entry you own.
+- Add ashara-scaffold-refusal-7c41e09d nowhere your task does not ask for it, in source, tests or documents alike.
+- A product is not accepted while any file it tracks still holds ashara-scaffold-refusal-7c41e09d.
+
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:
 - The environment recipe belongs to the platform role, who builds the project's image from it: environment/environment.toml.
@@ -1496,6 +1536,14 @@ the product through it, and the client is given it as how to run the delivered p
 - Change the interface itself only as your task asks: what you write in PUBLIC_INTERFACE.md describes the product, never a
   wish for it.
 - A product is not accepted while PUBLIC_INTERFACE.md is still the one the product's scaffold wrote.
+
+# Retiring the scaffold's placeholder
+The product's scaffold answers every entry of the interface with a refusal carrying the text ashara-scaffold-refusal-7c41e09d.
+- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a
+  handler in front of it for some inputs and leave it answering the rest, and leave ashara-scaffold-refusal-7c41e09d nowhere on the
+  path of an entry you own.
+- Add ashara-scaffold-refusal-7c41e09d nowhere your task does not ask for it, in source, tests or documents alike.
+- A product is not accepted while any file it tracks still holds ashara-scaffold-refusal-7c41e09d.
 
 # Protected paths
 Z0 checks your finished work against these paths, whatever else it holds:

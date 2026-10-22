@@ -19,6 +19,8 @@ interface FailedAcceptance {
   readonly details: string;
   /** What is wrong with main's public interface file (Quality's sweep found it); null when that is not why. */
   readonly interfaceDefect: InterfaceDefect | null;
+  /** Where main still holds the product scaffold's placeholder refusal (Quality's sweep found it); null when nowhere. */
+  readonly placeholderDefect: PlaceholderDefect | null;
 }
 
 /**
@@ -29,35 +31,78 @@ export type InterfaceDefect =
   | { readonly kind: "scaffold-placeholder"; readonly file: string; readonly scaffoldTaskId: string; readonly scaffoldCommit: string }
   | { readonly kind: "absent"; readonly file: string };
 
+/**
+ * Main still holds the product scaffold's placeholder refusal: the marker every refusal of it carries,
+ * and each tracked file and line it is on. An entry that answers with it is not delivered, in any language.
+ */
+export interface PlaceholderDefect {
+  readonly marker: string;
+  readonly at: readonly [PlaceholderLine, ...PlaceholderLine[]];
+}
+
+interface PlaceholderLine {
+  readonly file: string;
+  readonly line: number;
+}
+
 const SWEEP_PASSES = "every goal task's checks and the environment's test pass together on main";
 
-/**
- * What the defect asks for: the sweep passing, and, when main's public interface file is the
- * scaffold's placeholder or missing, that file stating the delivered product, which no check of a
- * goal task asks for and so no rerun of one delivers.
- */
-function defectSpec(sweep: FailedAcceptance): { goal: string; endState: string; deliverables: string[] } {
-  const defect = sweep.interfaceDefect;
-  if (defect === null) {
-    return { goal: "Every goal task's checks and the environment's test pass together on main", endState: "The acceptance run on main passes", deliverables: [] };
-  }
-  const deliverables = [`${defect.file}, stating the delivered product's public interface`];
+/** What fixing main's public interface file asks for: the defect's own part of the goal and the end state. */
+function interfaceAsk(defect: InterfaceDefect): { goal: string; endState: string; deliverable: string } {
+  const deliverable = `${defect.file}, stating the delivered product's public interface`;
   if (defect.kind === "absent") {
     return {
       goal:
         `Restore ${defect.file} so it states how the delivered product is started, configured and called: main holds ` +
-        `no ${defect.file}, so it states no public interface at all; and ${SWEEP_PASSES}`,
-      endState: `${defect.file} is on main and describes the delivered product, and the acceptance run on main passes`,
-      deliverables,
+        `no ${defect.file}, so it states no public interface at all`,
+      endState: `${defect.file} is on main and describes the delivered product`,
+      deliverable,
     };
   }
   return {
     goal:
       `Update ${defect.file} so it states how the delivered product is started, configured and called: main still ` +
       `holds it byte for byte as the product scaffold wrote it (task ${defect.scaffoldTaskId}, merged as ` +
-      `${defect.scaffoldCommit}), describing a placeholder; and ${SWEEP_PASSES}`,
-    endState: `${defect.file} on main differs from the product scaffold's and describes the delivered product, and the acceptance run on main passes`,
-    deliverables,
+      `${defect.scaffoldCommit}), describing a placeholder`,
+    endState: `${defect.file} on main differs from the product scaffold's and describes the delivered product`,
+    deliverable,
+  };
+}
+
+function placesOf(defect: PlaceholderDefect): string {
+  return defect.at.map((each) => `${each.file}:${each.line}`).join(", ");
+}
+
+/** What retiring the scaffold's placeholder asks for: every entry still refused implemented, the marker gone. */
+function placeholderAsk(defect: PlaceholderDefect): { goal: string; endState: string; deliverable: string } {
+  const places = placesOf(defect);
+  return {
+    goal:
+      `Implement every entry that still answers with the product scaffold's placeholder refusal and remove its ` +
+      `marker ${defect.marker}: main still holds it at ${places}, so those entries are not delivered`,
+    endState: `no tracked file on main holds ${defect.marker}`,
+    deliverable: `every entry refused at ${places}, implemented, with ${defect.marker} removed`,
+  };
+}
+
+/**
+ * What the defect asks for: the sweep passing; when main still holds the scaffold's placeholder
+ * refusal, every entry it refuses implemented; and when main's public interface file is the
+ * scaffold's placeholder or missing, that file stating the delivered product. No check of a goal
+ * task asks for either, so no rerun of one delivers it.
+ */
+function defectSpec(sweep: FailedAcceptance): { goal: string; endState: string; deliverables: string[] } {
+  const asks = [
+    ...(sweep.placeholderDefect === null ? [] : [placeholderAsk(sweep.placeholderDefect)]),
+    ...(sweep.interfaceDefect === null ? [] : [interfaceAsk(sweep.interfaceDefect)]),
+  ];
+  if (asks.length === 0) {
+    return { goal: "Every goal task's checks and the environment's test pass together on main", endState: "The acceptance run on main passes", deliverables: [] };
+  }
+  return {
+    goal: [...asks.map((ask) => ask.goal), SWEEP_PASSES].join("; and "),
+    endState: [...asks.map((ask) => ask.endState), "the acceptance run on main passes"].join(", and "),
+    deliverables: asks.map((ask) => ask.deliverable),
   };
 }
 
@@ -68,8 +113,13 @@ function defectSpec(sweep: FailedAcceptance): { goal: string; endState: string; 
  */
 export function openAcceptanceDefect(sweep: FailedAcceptance): WorkItem {
   const spec = defectSpec(sweep);
-  const interfaceDefect = sweep.interfaceDefect;
-  const asked = interfaceDefect === null ? "" : `: ${interfaceDefect.kind === "absent" ? "restore" : "update"} ${interfaceDefect.file}`;
+  const { interfaceDefect, placeholderDefect } = sweep;
+  const asked = [
+    ...(placeholderDefect === null ? [] : [`retire the scaffold placeholder at ${placesOf(placeholderDefect)}`]),
+    ...(interfaceDefect === null ? [] : [`${interfaceDefect.kind === "absent" ? "restore" : "update"} ${interfaceDefect.file}`]),
+  ]
+    .map((each) => `: ${each}`)
+    .join("");
   const defect = createPendingWorkItem(
     "Task",
     `Acceptance on main ${sweep.mainCommit === null ? "(not read)" : sweep.mainCommit.slice(0, 12)}${asked}`,
@@ -85,6 +135,7 @@ export function openAcceptanceDefect(sweep: FailedAcceptance): WorkItem {
       origin: "acceptance",
       main_commit: sweep.mainCommit,
       interface_defect: interfaceDefect === null ? null : interfaceDefect.kind,
+      placeholder_defect: placeholderDefect === null ? null : placesOf(placeholderDefect),
     }),
   );
   return defect;

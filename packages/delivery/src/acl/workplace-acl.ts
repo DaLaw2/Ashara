@@ -8,7 +8,7 @@
 
 import { attemptGrantOf } from "./organization-acl.js";
 import type { AttemptGrant, WorkKind } from "./organization-acl.js";
-import { PUBLIC_INTERFACE_FILE } from "./quality-acl.js";
+import { PUBLIC_INTERFACE_FILE, SCAFFOLD_PLACEHOLDER_MARKER } from "./quality-acl.js";
 
 export type { DevSessionRepository, ErrorEnvelope, Outcome } from "@ashara/workplace";
 export { ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, lastCompletedAttempts, toRecordedOutcome } from "@ashara/workplace";
@@ -19,5 +19,5 @@ export { ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, lastCompletedAttemp
  * charter names, which Quality owns.
  */
 export function attemptProfileOf(workKind: WorkKind | null): AttemptGrant {
-  return attemptGrantOf(workKind, { publicInterfaceFile: PUBLIC_INTERFACE_FILE });
+  return attemptGrantOf(workKind, { publicInterfaceFile: PUBLIC_INTERFACE_FILE, placeholderMarker: SCAFFOLD_PLACEHOLDER_MARKER });
 }

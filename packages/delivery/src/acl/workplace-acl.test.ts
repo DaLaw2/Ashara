@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WORK_KINDS } from "@ashara/organization";
 import { attemptGrantOf } from "./organization-acl.js";
-import { PUBLIC_INTERFACE_FILE } from "./quality-acl.js";
+import { PUBLIC_INTERFACE_FILE, SCAFFOLD_PLACEHOLDER_MARKER } from "./quality-acl.js";
 import { attemptProfileOf } from "./workplace-acl.js";
 
 // Which tools an attempt at a kind of work is given is Organization's grant: Delivery forwards it to
@@ -24,7 +24,7 @@ function productionSources(dir: string): readonly string[] {
 describe("attemptProfileOf", () => {
   it("forwards Organization's grant for every kind of work and for unkinded work", () => {
     for (const kind of [...WORK_KINDS, null]) {
-      expect(attemptProfileOf(kind), String(kind)).toEqual(attemptGrantOf(kind, { publicInterfaceFile: PUBLIC_INTERFACE_FILE }));
+      expect(attemptProfileOf(kind), String(kind)).toEqual(attemptGrantOf(kind, { publicInterfaceFile: PUBLIC_INTERFACE_FILE, placeholderMarker: SCAFFOLD_PLACEHOLDER_MARKER }));
     }
   });
 

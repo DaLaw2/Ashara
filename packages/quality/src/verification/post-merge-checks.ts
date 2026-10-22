@@ -20,6 +20,7 @@ import type { EnvironmentDefinition } from "../environment-definition.js";
 import { environmentCommandsPassed, environmentProbePassed, formatEnvironmentCommands, formatEnvironmentProbe } from "../environment-verdict.js";
 import { environmentErrorOf, VerificationInfrastructureFault } from "../fault-class.js";
 import type { PostMergeVerdict } from "../gates/finalize.js";
+import { placeholderMarkersAt, scaffoldUnmarkedLine } from "../scaffold-placeholder.js";
 import { productChangeOf, runSuitesOnCheckout, tentativeMergeCommit } from "../task-checks.js";
 import type { CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "../task-checks.js";
 import { POST_MERGE_VERIFIER_ROLE } from "./dispatch-cells.js";
@@ -95,7 +96,9 @@ export class PostMergeChecks {
   }
 
   /**
-   * The product scaffold's post-merge check: the environment of the
+   * The product scaffold's post-merge check: first that some tracked product file of the tentative
+   * merge holds the placeholder marker (scaffoldUnmarkedLine), refused without running anything
+   * when none does; then the environment of the
    * tentative merge (mergedEnvironment: rebuilt when the scaffold wrote an input the recipe reads),
    * then the definition's `build` then `test` on a throwaway checkout of the merge in a verifier
    * cell from that image, which must pass and leave the checkout clean. A rebuilt version passing
@@ -104,37 +107,43 @@ export class PostMergeChecks {
   async postMergeScaffold(d: VerifiedDispatch, targetProjectPath: string, lease: CheckoutLease): Promise<PostMergeVerdict> {
     const { task } = d;
     let verdict: PostMergeVerdict;
-    let merged: MergedEnvironment;
+    let merged: MergedEnvironment | null = null;
     try {
       if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
       const commit = await tentativeMergeCommit(targetProjectPath, task.id);
-      merged = await this.mergedEnvironment(d, d.environment, commit, lease);
-      if (merged.kind === "refused") {
-        verdict = { passed: false, details: merged.details };
-      } else if (merged.kind === "rebuilt") {
-        verdict = { passed: true, details: merged.details };
+      const unmarked = scaffoldUnmarkedLine(await placeholderMarkersAt(targetProjectPath, commit));
+      if (unmarked !== null) {
+        verdict = { passed: false, details: unmarked };
       } else {
-        const timeoutSeconds = this.deps.attemptPolicy.perCommandTimeoutSeconds;
-        lease.extend(cellRunBoundMs([timeoutSeconds, timeoutSeconds]), "the post-merge build and test cell");
-        const commands = await runPostMergeEnvironmentCommands(
-          this.deps.dispatchCells.environmentScope(d),
-          POST_MERGE_VERIFIER_ROLE,
-          { version: merged.version, imageRef: merged.imageRef, definition: merged.definition },
-          commit,
-          this.deps.attemptPolicy.perCommandTimeoutSeconds,
-        );
-        verdict = {
-          passed: environmentCommandsPassed(commands),
-          details: `the product's build and test (environment version ${merged.version}) on the merge:\n${formatEnvironmentCommands(commands)}`,
-        };
+        merged = await this.mergedEnvironment(d, d.environment, commit, lease);
+        verdict = await this.scaffoldBuildAndTest(d, merged, commit, lease);
       }
     } catch (e) {
       if (environmentErrorOf(e) !== null) throw e;
       throw new VerificationInfrastructureFault(task.id, "product scaffold build and test", { cause: e });
     }
     this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: task.attempt, verdict: verdict.passed ? "passed" : "failed", details: verdict.details });
-    if (verdict.passed && merged.kind === "rebuilt") await this.recordRebuiltStatement(task.id, merged);
+    if (verdict.passed && merged?.kind === "rebuilt") await this.recordRebuiltStatement(task.id, merged);
     return verdict;
+  }
+
+  /** The scaffold merge's build and test verdict in the environment `merged` resolved for it. */
+  private async scaffoldBuildAndTest(d: VerifiedDispatch, merged: MergedEnvironment, commit: string, lease: CheckoutLease): Promise<PostMergeVerdict> {
+    if (merged.kind === "refused") return { passed: false, details: merged.details };
+    if (merged.kind === "rebuilt") return { passed: true, details: merged.details };
+    const timeoutSeconds = this.deps.attemptPolicy.perCommandTimeoutSeconds;
+    lease.extend(cellRunBoundMs([timeoutSeconds, timeoutSeconds]), "the post-merge build and test cell");
+    const commands = await runPostMergeEnvironmentCommands(
+      this.deps.dispatchCells.environmentScope(d),
+      POST_MERGE_VERIFIER_ROLE,
+      { version: merged.version, imageRef: merged.imageRef, definition: merged.definition },
+      commit,
+      timeoutSeconds,
+    );
+    return {
+      passed: environmentCommandsPassed(commands),
+      details: `the product's build and test (environment version ${merged.version}) on the merge:\n${formatEnvironmentCommands(commands)}`,
+    };
   }
 
   /** The version a verified merge produced carries the statement of the stack it was built from. */

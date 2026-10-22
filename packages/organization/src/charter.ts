@@ -94,14 +94,20 @@ const CHECK_DUTIES = [
 export interface CharterConventions {
   /** The file at the repository root that states the product's public interface. */
   readonly publicInterfaceFile: string;
+  /** The text every refusal of the product scaffold's placeholder carries, so it is found wherever it survives. */
+  readonly placeholderMarker: string;
 }
 
 /**
  * Implementation work changes the product, so it keeps the written public interface true: every
  * check author tests through that file, and the client is told it as how to run what was delivered.
+ * It replaces the scaffold's placeholder refusal of each entry it implements, marker and all: a
+ * refusal left behind an entry's new handler still answers some of its input, and only the marker
+ * makes it findable in a product of any language.
  */
 function implementationDuties(conventions: CharterConventions): string {
   const file = conventions.publicInterfaceFile;
+  const marker = conventions.placeholderMarker;
   return [
     `# Keeping the public interface true`,
     `${file} at the repository root states the product's public interface: how it is started and configured, and each`,
@@ -114,6 +120,14 @@ function implementationDuties(conventions: CharterConventions): string {
     `- Change the interface itself only as your task asks: what you write in ${file} describes the product, never a`,
     `  wish for it.`,
     `- A product is not accepted while ${file} is still the one the product's scaffold wrote.`,
+    ``,
+    `# Retiring the scaffold's placeholder`,
+    `The product's scaffold answers every entry of the interface with a refusal carrying the text ${marker}.`,
+    `- For every entry your task implements, no input of it may still reach that refusal: replace it, do not put a`,
+    `  handler in front of it for some inputs and leave it answering the rest, and leave ${marker} nowhere on the`,
+    `  path of an entry you own.`,
+    `- Add ${marker} nowhere your task does not ask for it, in source, tests or documents alike.`,
+    `- A product is not accepted while any file it tracks still holds ${marker}.`,
   ].join("\n");
 }
 

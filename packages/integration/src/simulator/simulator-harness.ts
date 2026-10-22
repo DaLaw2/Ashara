@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import type { TestContext } from "vitest";
 import { resolveTestDatabaseUrl } from "@ashara/db";
+import type { Admission } from "./admissions.js";
 import { dropStaleRunDatabases, prepareTemplate } from "./database.js";
 import type { FaultKind, SeamKind } from "./faults.js";
 import { profileOfSeed } from "./profile.js";
@@ -109,7 +110,14 @@ export function replayed(test: TestScope, seed: number, decisions: RunResult["de
  */
 type Scenario = Pick<
   RunOptions,
-  "mutation" | "projects" | "capUsd" | "cellOutage" | "corruptSecondProject" | "alterDatabase" | "signal"
+  | "mutation"
+  | "projects"
+  | "capUsd"
+  | "requestPaddingBytes"
+  | "cellOutage"
+  | "corruptSecondProject"
+  | "alterDatabase"
+  | "signal"
 > & { readonly profile?: Profile };
 
 /**
@@ -215,6 +223,52 @@ export const fault = (seam: SeamKind, label: string | RegExp, kind: FaultKind): 
   nth: 1,
   fault: kind,
 });
+
+/** A probe run never admitted one task's call right after another task's: it holds no race between two tasks. */
+class NoAdmissionRace extends Error {
+  constructor(
+    readonly seed: number,
+    readonly admissions: number,
+  ) {
+    super(
+      `seed ${seed}: none of the probe's ${admissions} admission(s) followed another task's admission ` +
+        `above every earlier one, so no cap decides a race between two tasks on it`,
+    );
+    this.name = "NoAdmissionRace";
+  }
+}
+
+/**
+ * A cap no directed tape's spend reaches: a probe run under it admits every call its tape makes.
+ * @testseam the admission-race plants probe a tape's spend under it
+ */
+export const UNREACHED_CAP_USD = 1000;
+
+/**
+ * The deployment cap at which a probe's first race between two tasks on the cap is decided: the first admission
+ * for one task right after an admission for another, whose worst case is above every earlier one. Every earlier
+ * admission is within the cap; that one is within it when the other task's call is left out (still in flight, or
+ * admitted on the same spend read) and past it when that call is counted. The probe is a run of the same tape under
+ * UNREACHED_CAP_USD, so the cap follows the run's own spend however large its prompts grow; the cap refuses
+ * nothing before the race, so a run under it reaches the race as the probe did.
+ * @testseam the admission-race plants cap their runs with it
+ */
+export function capAtRace(probe: RunResult): number {
+  let highest = 0;
+  let previous: Admission | null = null;
+  for (const each of probe.admissions) {
+    const committed = each.recordedUsd + each.inFlightUsd + each.estimateUsd;
+    const otherTask =
+      previous !== null && previous.taskId !== null && each.taskId !== null && previous.taskId !== each.taskId;
+    if (previous !== null && otherTask && highest < committed) {
+      const floor = Math.max(highest, committed - previous.estimateUsd);
+      return (floor + committed) / 2;
+    }
+    highest = Math.max(highest, committed);
+    previous = each;
+  }
+  throw new NoAdmissionRace(probe.seed, probe.admissions.length);
+}
 
 /** @testseam the simulator's test files read a run's violation keys through it */
 export function keys(result: RunResult): string[] {

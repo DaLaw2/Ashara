@@ -6,7 +6,7 @@ import { describeErrorChain } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
 import { checkReports } from "./client-reports.js";
 import type { Database } from "./database.js";
-import { PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
+import { PLACEHOLDER_MARKER, PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
 
 /**
  * I9, text against fact: every fact a composer
@@ -75,6 +75,13 @@ export interface TextFactRecords {
    */
   readonly interfaceOnMain:
     { readonly kind: "read"; readonly bySweep: ReadonlyMap<string, MainFile> } | { readonly kind: "not-held" };
+  /**
+   * Every file:line of main holding the scaffold placeholder's marker at each delivered report's sweep
+   * commit, by sweep id, read from the project's checkout; not held where no checkout is.
+   */
+  readonly placeholderOnMain:
+    | { readonly kind: "read"; readonly bySweep: ReadonlyMap<string, readonly string[]> }
+    | { readonly kind: "not-held" };
   readonly firstPlan: {
     readonly report: z.infer<typeof firstPlanRow> | null;
     readonly items: ReadonlyArray<z.infer<typeof planItemRow>>;
@@ -119,6 +126,35 @@ async function mainFileAt(checkout: string, commit: string, path: string): Promi
   }
 }
 
+/** execFile's rejection carries the exit status as a number `code`. */
+function exitCodeOf(err: unknown): number | null {
+  return typeof err === "object" && err !== null && "code" in err && typeof err.code === "number" ? err.code : null;
+}
+
+/**
+ * Every tracked file and line of `commit` holding the placeholder marker, as `file:line`, read by the host's git
+ * outside every seam; git's exit 1 is no match, any other failure throws.
+ */
+async function markersAt(checkout: string, commit: string): Promise<readonly string[]> {
+  let printed: string;
+  try {
+    const search = ["grep", "--text", "--line-number", "--null", "--fixed-strings", "-e", PLACEHOLDER_MARKER, commit];
+    const args = ["-C", checkout, ...search];
+    printed = (await runGit("git", args, { maxBuffer: GIT_MAX_BUFFER })).stdout;
+  } catch (err) {
+    if (exitCodeOf(err) === 1) return [];
+    throw new MainFileUnreadable(checkout, commit, `every file holding ${PLACEHOLDER_MARKER}`, { cause: err });
+  }
+  const prefix = `${commit}:`;
+  return printed
+    .split("\n")
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => {
+      const [file, at] = line.slice(prefix.length).split("\0");
+      return `${file}:${at}`;
+    });
+}
+
 /** `checkout` is the project's target checkout, or null where none is held: then no file of main is read. */
 export async function readTextFactRecords(
   db: Database,
@@ -128,16 +164,28 @@ export async function readTextFactRecords(
   const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> =>
     z.array(schema).parse((await db.execute(query)).rows);
   const records = await readStoreRecords(rows, projectId);
-  if (checkout === null) return { ...records, interfaceOnMain: { kind: "not-held" } };
+  if (checkout === null) {
+    return { ...records, interfaceOnMain: { kind: "not-held" }, placeholderOnMain: { kind: "not-held" } };
+  }
   const bySweep = new Map<string, MainFile>();
-  for (const report of records.delivered)
+  const markersBySweep = new Map<string, readonly string[]>();
+  for (const report of records.delivered) {
     bySweep.set(report.sweepId, await mainFileAt(checkout, report.mainCommit, PUBLIC_INTERFACE_PATH));
-  return { ...records, interfaceOnMain: { kind: "read", bySweep } };
+    markersBySweep.set(report.sweepId, await markersAt(checkout, report.mainCommit));
+  }
+  return {
+    ...records,
+    interfaceOnMain: { kind: "read", bySweep },
+    placeholderOnMain: { kind: "read", bySweep: markersBySweep },
+  };
 }
 
 type Rows = <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>) => Promise<T[]>;
 
-async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<TextFactRecords, "interfaceOnMain">> {
+async function readStoreRecords(
+  rows: Rows,
+  projectId: string,
+): Promise<Omit<TextFactRecords, "interfaceOnMain" | "placeholderOnMain">> {
   const [firstPlan] = await rows(
     firstPlanRow,
     sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound'
@@ -1056,9 +1104,25 @@ function quoteOf(quoted: string, file: string): "whole" | "cut" | null {
  * such file on main, the report says the product has none, naming the file. A delivered main whose
  * file is still a scripted scaffold's was accepted on a placeholder's description: the report then
  * quotes something false to the client however faithfully it quotes. A delivered main with no such
- * file was accepted with no description at all. Not judged where no checkout is held.
+ * file was accepted with no description at all. A delivered main any tracked file of which still
+ * holds the scaffold placeholder's marker was accepted with an entry that still answers with the
+ * scaffold's refusal. Not judged where no checkout is held.
  */
 function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
+  const placeholders = records.placeholderOnMain;
+  if (placeholders.kind === "read") {
+    for (const report of records.delivered) {
+      const at = placeholders.bySweep.get(report.sweepId);
+      if (at === undefined || at.length > 0) {
+        const where = at === undefined ? "not searched for" : `still at ${at.join(", ")}`;
+        add(
+          "delivered-placeholder-refusal",
+          `the project was delivered with the scaffold's placeholder refusal (${PLACEHOLDER_MARKER}) ` +
+            `${where} on main at commit ${report.mainCommit.slice(0, 12)}`,
+        );
+      }
+    }
+  }
   const onMain = records.interfaceOnMain;
   if (onMain.kind === "not-held") return;
   for (const report of records.delivered) {

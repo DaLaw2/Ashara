@@ -200,7 +200,7 @@ restrict.engagement = ["src/acl/*.ts"]
 # verdict on each guarantee and the coverage acceptance requires, and its published reads and verdicts.
 module.verification   = ["src/verification/*.ts", "src/merge.ts", "src/gates/*.ts", "src/settled-branches.ts", "src/host-git.test.ts", "src/merge-queue.test.ts", "src/workspace-*.test.ts"]
 module.verdict        = ["src/dispatch-result.ts", "src/fault-class.ts", "src/task-verdict.ts"]
-module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/stored-checks.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
+module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/scaffold-placeholder.ts", "src/stored-checks.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
 module.suite-review   = ["src/suite-review.ts", "src/repositories/suite-review.ts", "src/testing.ts"]
 module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts", "src/environment-definition.ts"]
 module.acceptance     = ["src/repositories/acceptance.ts"]
@@ -216,7 +216,7 @@ module-allow.checks       = ["acl", "reviewer-record"]
 module-allow.acceptance   = ["verification", "reviewer-record", "guarantee-verdict", "acl"]
 module-allow.guarantee-verdict = ["acl"]
 module-allow.published    = ["guarantee-verdict", "acl"]
-module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/*.ts"]
+module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/scaffold-placeholder.ts", "src/repositories/*.ts"]
 # Its SuiteReviewer test builder: only a test or the test harness imports it; production constructs its reviewer.
 test-only-subpaths = ["testing"]
 

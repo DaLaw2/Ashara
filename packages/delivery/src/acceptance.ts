@@ -3,10 +3,11 @@ import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import { acceptanceUncoveredCause, projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
+import { SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
 import type { AcceptanceSweeper, AcceptanceUncovered } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
-import type { InterfaceDefect } from "./domain/index.js";
+import type { InterfaceDefect, PlaceholderDefect } from "./domain/index.js";
 import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 
 // Delivering -> Accepted: each cycle, every project
@@ -162,9 +163,18 @@ type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcc
 /** A failed sweep's record: the stored checks it ran and saw fail, none when it ran none. */
 type FailedSweepRecord = SweepRecord & { readonly failedChecks: Extract<Sweep, { readonly kind: "ran" }>["failedChecks"] };
 
+type Found = { readonly interfaceDefect: InterfaceDefect | null; readonly placeholderDefect: PlaceholderDefect | null };
+
+/** Where a ran sweep found main still holding the scaffold's placeholder refusal, or null when nowhere or not searched. */
+function placeholderDefectOf(sweep: Extract<Sweep, { readonly kind: "ran" }>): PlaceholderDefect | null {
+  if (sweep.placeholder.kind === "not-searched") return null;
+  const [first, ...rest] = sweep.placeholder.hits;
+  return first === undefined ? null : { marker: SCAFFOLD_PLACEHOLDER_MARKER, at: [first, ...rest] };
+}
+
 /** Records a failed sweep with its defect, given up at once, and publishes the defect's events. */
-async function recordDefect(deps: AcceptanceDeps, record: FailedSweepRecord, interfaceDefect: InterfaceDefect | null): Promise<void> {
-  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details, interfaceDefect });
+async function recordDefect(deps: AcceptanceDeps, record: FailedSweepRecord, found: Found): Promise<void> {
+  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details, ...found });
   const outcome = await deps.acceptance.recordDefect(record, async (workItems) => {
     await PlanningService.createWorkItem(workItems, defect);
     giveUpAcceptanceDefect(defect, record);
@@ -227,7 +237,7 @@ async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep
     checkOutcomes: [],
     failedChecks: [],
     details: `The acceptance run could not be carried out (${why}): ${describeErrorChain(sweep.error)}`,
-  }, null);
+  }, { interfaceDefect: null, placeholderDefect: null });
 }
 
 /**
@@ -305,6 +315,7 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
     return outcome === "accepted" ? "accepted" : "not-accepted";
   }
   const standing = sweep.publicInterface;
-  await recordDefect(deps, { ...record, failedChecks: sweep.failedChecks }, standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null);
+  const interfaceDefect = standing.kind === "scaffold-placeholder" || standing.kind === "absent" ? standing : null;
+  await recordDefect(deps, { ...record, failedChecks: sweep.failedChecks }, { interfaceDefect, placeholderDefect: placeholderDefectOf(sweep) });
   return "not-accepted";
 }

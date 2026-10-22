@@ -435,8 +435,9 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
  */
 async function planWork(context: DispatchContext, task: TaskDescriptor, environment: DispatchEnvironment): Promise<WorkPlan | Unplannable> {
   const { checks } = context.deps;
-  // The product scaffold is decided by the product's build and test from the definition on its
-  // merge: no check can be written for a layout that does not exist yet.
+  // The product scaffold is decided on its merge by its marked placeholder refusal and by the
+  // product's build and test from the definition: no check can be written for a layout that does
+  // not exist yet.
   if (task.taskSpec?.origin === "product-scaffold") {
     if (task.taskSpec.checkedBy !== "substrate" || environment.kind !== "environment") {
       return {

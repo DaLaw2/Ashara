@@ -13,6 +13,8 @@ import { environmentErrorOf } from "../fault-class.js";
 import type { EnvironmentError } from "../fault-class.js";
 import { interfaceDefectLine, interfaceStandingOnMain, PUBLIC_INTERFACE_FILE } from "../public-interface.js";
 import type { InterfaceStanding, ScaffoldMerge } from "../public-interface.js";
+import { placeholderDefectLine, placeholderMarkersAt, SCAFFOLD_PLACEHOLDER_MARKER } from "../scaffold-placeholder.js";
+import type { PlaceholderStanding } from "../scaffold-placeholder.js";
 import { mainCommit, runSuitesOnCheckout } from "../task-checks.js";
 import type { CheckCells, CheckSuite, SuiteRun, TaskCheckStore } from "../task-checks.js";
 import type { CellTeardown } from "./cell-teardown.js";
@@ -39,6 +41,8 @@ export type AcceptanceSweep =
       readonly uncheckedTasks: readonly string[];
       /** The public interface file on main against the product scaffold's: a scaffold's byte for byte, or none, is not accepted. */
       readonly publicInterface: InterfaceStanding;
+      /** Main's tracked files searched for the scaffold placeholder's marker: any line holding it is not accepted. */
+      readonly placeholder: PlaceholderStanding;
       /**
        * Every stored check of the checked tasks with how it ended on main, passed, failed or not
        * run, task by task in the order run: the evidence each guarantee the checks decide is
@@ -202,6 +206,7 @@ async function runSweep(
       checkedTasks: [],
       uncheckedTasks: [],
       publicInterface: { kind: "not-compared" },
+      placeholder: { kind: "not-searched" },
       checkOutcomes: [],
       failedChecks: [],
       details: `no environment its cells can be built from: ${resolution.reason}`,
@@ -209,10 +214,14 @@ async function runSweep(
   }
   const environment: CurrentEnvironment<EnvironmentDefinition> = resolution.environment;
   let publicInterface: InterfaceStanding = { kind: "not-compared" };
+  let placeholder: PlaceholderStanding = { kind: "not-searched" };
   if (acceptance !== null) {
     at(`compare ${PUBLIC_INTERFACE_FILE} on main with the product scaffold's`);
     publicInterface = await interfaceStandingOnMain(targetProjectPath, main, acceptance.scaffolds);
+    at(`search main's tracked files for ${SCAFFOLD_PLACEHOLDER_MARKER}`);
+    placeholder = { kind: "searched", hits: await placeholderMarkersAt(targetProjectPath, main) };
   }
+  const placeholderDefect = placeholder.kind === "not-searched" ? null : placeholderDefectLine(placeholder.hits);
   at("read the stored checks of the completed tasks");
   const completed = await deps.checks.completedOf(projectId, null);
   const checkedIds = new Set(completed.checked.map((prior) => prior.taskId));
@@ -248,9 +257,10 @@ async function runSweep(
     ...(completed.unchecked.length === 0 ? [] : [`Not re-run, no check is stored for them: ${completed.unchecked.join(", ")}`]),
   ];
   const interfaceDefect = publicInterface.kind === "not-compared" ? null : interfaceDefectLine(publicInterface);
-  const passed = ran.passed && neverChecked.length === 0 && interfaceDefect === null;
-  // The interface line comes first: a repair reads the start of these details when they are long.
-  const details = [...(interfaceDefect === null ? [] : [interfaceDefect]), ran.details, ...gaps].join("\n");
+  const passed = ran.passed && neverChecked.length === 0 && interfaceDefect === null && placeholderDefect === null;
+  // The placeholder and interface lines come first: a repair reads the start of these details when they are long.
+  const opening = [placeholderDefect, interfaceDefect].filter((line): line is string => line !== null);
+  const details = [...opening, ran.details, ...gaps].join("\n");
   const checkedTasks = completed.checked.map((prior) => prior.taskId);
   if (acceptance !== null) {
     eventSink?.emit({
@@ -271,6 +281,7 @@ async function runSweep(
     checkedTasks,
     uncheckedTasks: completed.unchecked,
     publicInterface,
+    placeholder,
     checkOutcomes: checkOutcomesOf(stored, runs),
     failedChecks: failedChecksOf(stored, runs),
     details,
@@ -295,7 +306,9 @@ export class AcceptanceSweeper {
    * Completed tasks with no stored check are named apart (`uncheckedTasks`), never counted as
    * passed. A main whose public interface file is byte for byte the one a product scaffold in
    * `scaffolds` wrote, or that holds no such file, fails the sweep, its details opening with what to
-   * update or restore. Passing that comparison verifies nothing the file says: the delivered report
+   * update or restore. A main any of whose tracked files still holds the scaffold placeholder's
+   * marker, in any file of any language, fails the sweep, its details opening with each file:line.
+   * Passing that comparison verifies nothing the file says: the delivered report
    * quotes the file as unverified, and presents as verified only the stored checks this sweep ran
    * and saw pass (`checkOutcomes`). A main with no environment its cells can be built from fails the sweep, with the
    * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or

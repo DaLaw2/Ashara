@@ -5,6 +5,7 @@ import type { StoredVision } from "./acl/engagement-acl.js";
 import { checkDecides } from "./acl/engagement-vision-acl.js";
 import { SchemaValidationError, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { StructuredProvider, StructuredValidation } from "./acl/finance-acl.js";
+import { SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
 import { DEFAULT_DECOMPOSITION_CONFIG, PlannedBehaviourInvalid, TaskCapExceededError, UncitedVisionItemsError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput, VisionItem } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
@@ -124,6 +125,22 @@ describe("DecompositionEngine", () => {
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[0]).toContain("choose no implementation stack the vision items below do not state");
         expect(result.droppedDependencies).toEqual([]);
+    });
+
+    test("the scaffold's refusal carries Quality's placeholder marker, and every check author is told the task retires it", async () => {
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        const scaffold = result.tasks.find((t) => t.taskSpec.origin === "product-scaffold");
+        expect(scaffold?.description).toContain(`Every refusal carries the exact text ${SCAFFOLD_PLACEHOLDER_MARKER}`);
+        expect(scaffold?.taskSpec.deliverables).toContainEqual(expect.stringContaining(`each refusal carrying ${SCAFFOLD_PLACEHOLDER_MARKER}`));
+        const checks = result.tasks.filter((t) => t.taskSpec.origin === "check");
+        expect(checks).toHaveLength(2);
+        for (const check of checks) {
+            expect(check.description, check.title).toMatch(
+                new RegExp(`refusal carrying ${SCAFFOLD_PLACEHOLDER_MARKER}, which "Task t\\d" removes from every entry it owns`),
+            );
+        }
     });
 
     test("a plan has exactly one Sprint 0 task, checked by the substrate, that every other task depends on; no task carries checks", async () => {

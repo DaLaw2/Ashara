@@ -588,18 +588,30 @@ export async function onRecord(
   return { ok: true, value: found ? { found: true, value: null } : { found: false } };
 }
 
-/** A client tenders its project through the routes, read back by name when a request may have landed. */
+const PADDING_SENTENCE = " The product is described above.";
+
+/** At least `bytes` bytes of a sentence that adds nothing to the request, so every prompt quoting it grows. */
+function paddingOf(bytes: number): string {
+  return PADDING_SENTENCE.repeat(Math.ceil(bytes / PADDING_SENTENCE.length));
+}
+
+/**
+ * A client tenders its project through the routes, read back by name when a request may have landed; `paddingBytes`
+ * (RunOptions.requestPaddingBytes) grows the request's text.
+ */
 export async function tender(
   server: SimulatedProcess,
   simulated: SimulatedClient,
   index: number,
   seed: number,
   behaviours: readonly string[],
+  paddingBytes: number,
 ): Promise<string> {
   const projectName = `sim-${seed}${index === 0 ? "" : `-p${index + 1}`}`;
+  const body = `Build a product with ${behaviours.join(", ")}.${paddingOf(paddingBytes)}`;
   return server.clientAct<string>(
     `tender ${index + 1}`,
-    (app) => simulated.tender(app, projectName, `Build a product with ${behaviours.join(", ")}.`),
+    (app) => simulated.tender(app, projectName, body),
     async (app) => {
       const listed = await simulated.projects(app);
       if (!listed.ok) return listed;

@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { EnvironmentBuildRepository } from "@ashara/execution-infra";
 import { LlmCallRepository } from "@ashara/finance";
-import { CheckDisputeRepository, TaskCheckRepository } from "@ashara/quality";
+import { CheckDisputeRepository, SCAFFOLD_PLACEHOLDER_MARKER, TaskCheckRepository } from "@ashara/quality";
 import { DispatchService, FailureRouter } from "@ashara/delivery";
 import type { TaskDescriptor } from "@ashara/delivery";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
@@ -869,10 +869,12 @@ describe("post-merge regression suite", () => {
     const { result } = await runTask(
       { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, epicId: null, overflowedWindowTokens: null, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
       [
+        toolCallTurn("write_file", { path: "placeholder.sh", content: `echo "${SCAFFOLD_PLACEHOLDER_MARKER}: not done yet"; exit 1\n` }),
         toolCallTurn("write_file", { path: "BROKEN", content: "a layout whose test fails\n" }),
         toolCallTurn("finish", { status: "done", summary: "Layout set up." }),
       ],
     );
+    expect(result.detail).toContain("the product's build and test");
 
     expect(result.status).toBe("failed");
     if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
@@ -883,6 +885,42 @@ describe("post-merge regression suite", () => {
       action: "replan",
       attempt: 2,
     });
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+  });
+
+  // A scaffold whose refusals carry no marker would leave every later sweep blind to its
+  // placeholder: its merge is refused before any build runs, however well the product builds.
+  it("a product scaffold whose merge holds no marked placeholder refusal fails and is retried, main untouched", async () => {
+    const scaffoldId = createWorkItemId();
+    const taskSpec = {
+      goal: "Set up the product's layout",
+      endState: "the environment's build and test pass",
+      scope: "the product's module root",
+      deliverables: [] as string[],
+      origin: "product-scaffold",
+      checkedBy: "substrate",
+    } as const;
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec)
+      VALUES (${scaffoldId}, 'Task', 'InProgress', 'Set up the product layout', ${projectId}, 'implementation',
+              ${randomUUID()}, ${JSON.stringify(taskSpec)}::jsonb)`);
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result } = await runTask(
+      { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, epicId: null, overflowedWindowTokens: null, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
+      [
+        toolCallTurn("write_file", { path: "placeholder.sh", content: 'echo "not done yet"; exit 1\n' }),
+        toolCallTurn("write_file", { path: "PUBLIC_INTERFACE.md", content: `Every entry answers ${SCAFFOLD_PLACEHOLDER_MARKER} until it is built.\n` }),
+        toolCallTurn("finish", { status: "done", summary: "Layout set up." }),
+      ],
+    );
+
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") throw new Error("expected a failed result");
+    expect(result.errorEnvelope?.chain.operation).toBe("postMergeScaffold");
+    expect(result.detail).toContain(`holds no placeholder refusal marked ${SCAFFOLD_PLACEHOLDER_MARKER}`);
+    expect(result.detail).not.toContain("the product's build and test");
+    expect(result.verdict).toEqual({ kind: "retryable", ground: "work" });
     expect(await git("rev-parse", "main")).toBe(mainBefore);
   });
 });

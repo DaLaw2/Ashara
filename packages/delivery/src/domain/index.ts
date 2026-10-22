@@ -21,7 +21,7 @@ export { requestEnvironmentChange } from "./environment-change.js";
 export { salvagedReason } from "./salvaged-result.js";
 
 export { giveUpAcceptanceDefect, openAcceptanceDefect } from "./acceptance.js";
-export type { InterfaceDefect } from "./acceptance.js";
+export type { InterfaceDefect, PlaceholderDefect } from "./acceptance.js";
 
 export type { ActiveProjects, WorkItemRepository } from "./repository.js";
 

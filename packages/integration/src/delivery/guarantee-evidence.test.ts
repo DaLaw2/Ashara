@@ -103,6 +103,7 @@ function ranSweep(planned: Planned, outcome: "passed" | "failed"): AcceptanceSwe
     checkedTasks: [planned.goal],
     uncheckedTasks: [],
     publicInterface: { kind: "not-placeholder" },
+    placeholder: { kind: "not-searched" as const },
     checkOutcomes: [
       { taskId: planned.goal, revision: 1, checkTaskId: planned.checkTask, name: "works", command: "sh checks/run.sh", decides: ["G1"], outcome },
     ],

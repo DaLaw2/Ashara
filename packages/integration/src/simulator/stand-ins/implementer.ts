@@ -1,6 +1,8 @@
 import {
   LAYOUT_FILE,
   MANIFEST_FILE,
+  PLACEHOLDER_FILE,
+  PLACEHOLDER_MARKER,
   PUBLIC_INTERFACE_PATH,
   SHARED_INDEX_FILE,
   behaviourPath,
@@ -26,10 +28,11 @@ export class ImplementerStandIn {
 
   constructor(private readonly context: StandInContext) {}
 
-  /** The product scaffold's turns: the layout and the public interface file. */
+  /** The product scaffold's turns: the layout, its placeholder carrying the marker, and the public interface file. */
   scaffoldWork(projectId: string): ToolStep[] {
     return [
       ["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }],
+      ["write_file", { path: PLACEHOLDER_FILE, content: `refuses every behaviour: ${PLACEHOLDER_MARKER}\n` }],
       ...this.publicInterfaceWork(projectId),
       finished("Set up the product layout."),
     ];
@@ -82,6 +85,8 @@ export class ImplementerStandIn {
       behaviours.push(...(later[0]?.behaviours ?? []));
     }
     for (const b of behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b}\n` }]);
+    // The entries it delivers no longer answer with the scaffold's refusal, as its brief asks.
+    steps.push(["run_command", { command: `sim rm ${PLACEHOLDER_FILE}` }]);
     const earlier = universe.tasks.slice(0, index).flatMap((t) => t.behaviours);
     const victim = earlier[0];
     if (victim !== undefined && tape.chance("agent.regression", rates.regression, "implementation")) {

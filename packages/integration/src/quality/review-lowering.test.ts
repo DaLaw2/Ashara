@@ -117,6 +117,7 @@ function passingSweep(project: ContractProject) {
         checkedTasks: project.goals,
         uncheckedTasks: [],
         publicInterface: { kind: "not-placeholder" as const },
+        placeholder: { kind: "not-searched" as const },
         checkOutcomes,
         failedChecks: [],
         details: "all suites passed",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { charterOf } from "./charter.js";
 
-const CONVENTIONS = { publicInterfaceFile: "INTERFACE.txt" };
+const CONVENTIONS = { publicInterfaceFile: "INTERFACE.txt", placeholderMarker: "marker-0001" };
 
 function duties(kind: Parameters<typeof charterOf>[0]): string {
   return charterOf(kind, CONVENTIONS).duties ?? "";
@@ -21,6 +21,13 @@ describe("role charters", () => {
     expect(text).toContain("update INTERFACE.txt in the same change, so it states the product as it then is");
     expect(text).toContain("A product is not accepted while INTERFACE.txt is still the one the product's scaffold wrote");
     expect(text).not.toContain("PUBLIC_INTERFACE.md");
+  });
+
+  it("holds the implementer to retiring the placeholder marker it is given for every entry it owns", () => {
+    const text = duties("implementation");
+    expect(text).toContain("refusal carrying the text marker-0001");
+    expect(text).toContain("leave marker-0001 nowhere on the\n  path of an entry you own");
+    expect(text).toContain("A product is not accepted while any file it tracks still holds marker-0001");
   });
 
   it("the environment role's charter states the recipe, the probe gate and that the product is not the environment's", () => {

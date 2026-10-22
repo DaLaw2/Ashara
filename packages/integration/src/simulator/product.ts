@@ -12,6 +12,13 @@ const BEHAVIOUR_DIR = "product/behaviours";
 export const LAYOUT_FILE = "product/LAYOUT";
 export const MANIFEST_FILE = "product/MANIFEST";
 export const SHARED_INDEX_FILE = "product/INDEX";
+/** The scaffold's placeholder, whose refusal carries the marker its brief names; implementations remove it. */
+export const PLACEHOLDER_FILE = "product/PLACEHOLDER";
+/**
+ * The marker the scaffold's brief asks every placeholder refusal to carry, as the simulator knows it
+ * (never read from Quality, as for the public interface path).
+ */
+export const PLACEHOLDER_MARKER = "ashara-scaffold-refusal-7c41e09d";
 /**
  * Where the scaffold's brief asks the product's public interface to be written, as the simulator
  * knows it (never read from Quality: the oracle states what it expects on its own).

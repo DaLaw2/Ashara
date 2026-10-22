@@ -13,6 +13,7 @@ const none: TextFactRecords = {
   delivered: [],
   firstPlan: { report: null, items: [], revisions: [] }, workItems: 0,
   interfaceOnMain: { kind: "not-held" },
+  placeholderOnMain: { kind: "not-held" },
   intakeReading: { confirmation: "not-needed", secondStrength: null, secondQuestions: null },
 };
 
@@ -274,6 +275,13 @@ describe("checkTextFacts, the delivered report's quote of the public interface",
     expect(judged(file, `${said}\n${quote(50)}`)).toEqual([]);
     expect(judged(file, `${said}\n${quote(49)}`)).toEqual(["delivered-interface"]);
     expect(judged(file, `${lead}\n${quote(50)}`)).toEqual(["delivered-interface-cut"]);
+  });
+
+  it("names a delivery whose main still holds the scaffold placeholder's marker, in any file", () => {
+    const markers = (at: readonly string[]): TextFactRecords["placeholderOnMain"] => ({ kind: "read", bySweep: new Map([["s1", at]]) });
+    const section = "Nothing about the interface.";
+    expect(keysOf({ delivered: [report(section)], placeholderOnMain: markers(["src/refuse.c:2"]) })).toEqual(["delivered-placeholder-refusal"]);
+    expect(keysOf({ delivered: [report(section)], placeholderOnMain: markers([]) })).toEqual([]);
   });
 
   it("judges nothing where no checkout is held", () => {

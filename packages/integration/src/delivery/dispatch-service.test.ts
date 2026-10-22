@@ -15,6 +15,7 @@ import { createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashar
 import { recordingLogger } from "@ashara/shared/testing";
 import { createAgentBrief } from "@ashara/workplace";
 import {
+  SCAFFOLD_PLACEHOLDER_MARKER,
   checkBranchName,
   taskBranchName,
 } from "@ashara/quality";
@@ -1488,6 +1489,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // An implementer's commit must not change the environment's files and so move its version.
   describe("the ownership gate: an implementer's branch touches only what its role may write", () => {
+    /** A placeholder entry point whose refusal carries the scaffold marker, as the scaffold brief asks. */
+    const MARKED_REFUSAL = `echo '${SCAFFOLD_PLACEHOLDER_MARKER}: not done yet'; exit 1\n`;
     const CHECK_FILE: Awaited<ReturnType<TaskCheckStore["checkFilesOf"]>>[number] = { taskId: "44444444-4444-4444-8444-444444444444", path: "checks/greet.sh" };
 
     // A refused environment change has an exit other than an operator editing main.
@@ -1599,7 +1602,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
     // The scaffold is decided by the product's build and test, never by stored checks.
     test("the product scaffold: no stored check is read; the definition's build and test pass on its merge and it merges", async () => {
-      const { result, events, started, mainBefore, mainAfter } = await dispatch({ scaffold: true, agentAlsoWrites: { "manifest.txt": "module greeter\n" } });
+      const { result, events, started, mainBefore, mainAfter } = await dispatch({ scaffold: true, agentAlsoWrites: { "manifest.txt": "module greeter\n", "src/main.sh": MARKED_REFUSAL } });
 
       expect(result.status, result.detail).toBe("completed");
       expect(mainAfter).not.toBe(mainBefore);
@@ -1612,10 +1615,21 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     });
 
     test("the product scaffold whose build fails on its merge: failed with the run; nothing merged", async () => {
-      const { result, mainBefore, mainAfter } = await dispatch({ scaffold: true, verifierFailsCommand: "true" });
+      const { result, mainBefore, mainAfter } = await dispatch({ scaffold: true, verifierFailsCommand: "true", agentAlsoWrites: { "src/main.sh": MARKED_REFUSAL } });
 
       expect(result.status, result.detail).toBe("failed");
       expect(result.detail).toContain("Verdict: FAILED");
+      expect(mainAfter).toBe(mainBefore);
+    });
+
+    // Absence of the marker is never read as a clean placeholder: no later sweep could see it survive.
+    test("the product scaffold whose merge holds no marked refusal: failed naming the marker before any build runs; nothing merged", async () => {
+      const { result, events, started, mainBefore, mainAfter } = await dispatch({ scaffold: true, agentAlsoWrites: { "src/main.sh": "echo 'not done yet'; exit 1\n" } });
+
+      expect(result.status, result.detail).toBe("failed");
+      expect(result.detail).toContain(`holds no placeholder refusal marked ${SCAFFOLD_PLACEHOLDER_MARKER}`);
+      expect(started.map((s) => s.role)).toEqual(["developer"]);
+      expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed" });
       expect(mainAfter).toBe(mainBefore);
     });
 

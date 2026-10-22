@@ -65,8 +65,8 @@ export interface PostMergeVerdict {
  *   substrate gate), so a failure belongs to the merged tree, not the task (a tree regression).
  * - "postMergeTaskChecks": the stored checks are the task's first and only verdict; nothing ran
  *   them on the task's own work before, so a failure is the task's work failing its checks.
- * - "postMergeScaffold": the product scaffold's build and test on its merge are its first and only
- *   verdict (no gate ran them before the merge): a failure is the
+ * - "postMergeScaffold": the product scaffold's marked placeholder refusal and its build and test
+ *   on its merge are its first and only verdict (no gate ran them before the merge): a failure is the
  *   scaffold's own attempt failing, retried like any other, never a regression of the tree.
  */
 type PostMergeOperation = "postMergeVerify" | "postMergeTaskChecks" | "postMergeScaffold";

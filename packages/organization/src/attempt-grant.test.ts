@@ -4,7 +4,7 @@ import { UNKINDED_WORK_CHARTER, charterOf } from "./charter.js";
 import { WORK_KINDS } from "./work-kind.js";
 import type { WorkKind } from "./work-kind.js";
 
-const CONVENTIONS = { publicInterfaceFile: "INTERFACE.txt" };
+const CONVENTIONS = { publicInterfaceFile: "INTERFACE.txt", placeholderMarker: "marker-0001" };
 
 const EXPECTED_PROFILE: Readonly<Record<WorkKind, string>> = {
   environment: "build-environment",

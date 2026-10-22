@@ -4,6 +4,7 @@ import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
+import { SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
 import type { AcceptanceStore } from "./acceptance.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { inertWorkItemRepo } from "./testing.js";
@@ -126,6 +127,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
+      placeholder: { kind: "not-searched" as const },
       checkOutcomes: OUTCOMES,
       failedChecks: [],
       details: "all passed",
@@ -150,6 +152,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
+      placeholder: { kind: "not-searched" as const },
       checkOutcomes: OUTCOMES,
       failedChecks: [],
       details: "all passed",
@@ -183,6 +186,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "not-placeholder" },
+      placeholder: { kind: "not-searched" as const },
       checkOutcomes: FAILED_OUTCOMES,
       failedChecks: [{ taskId: "g2", checkTaskId: "c2", name: "delete" }],
       details,
@@ -217,6 +221,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "scaffold-placeholder", file: "PUBLIC_INTERFACE.md", scaffoldTaskId: "s1", scaffoldCommit: SCAFFOLD_MERGE },
+      placeholder: { kind: "not-searched" as const },
       checkOutcomes: [],
       failedChecks: [],
       details,
@@ -240,6 +245,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "absent", file: "PUBLIC_INTERFACE.md" },
+      placeholder: { kind: "not-searched" as const },
       checkOutcomes: [],
       failedChecks: [],
       details,
@@ -251,6 +257,31 @@ describe("the acceptance sweep", () => {
     expect(defect?.title).toBe(`Acceptance on main ${MAIN.slice(0, 12)}: restore PUBLIC_INTERFACE.md`);
     expect(defect?.taskSpec?.goal).toContain("Restore PUBLIC_INTERFACE.md so it states how the delivered product is started, configured and called");
     expect(defect?.taskSpec?.deliverables).toEqual(["PUBLIC_INTERFACE.md, stating the delivered product's public interface"]);
+  });
+
+  test("a main still holding the scaffold placeholder's marker is a defect naming each file:line, given up for a repair", async () => {
+    const { deps, accepted, defects, created } = harness({
+      kind: "ran",
+      passed: false,
+      mainCommit: MAIN,
+      environmentVersion: "v1",
+      checkedTasks: ["g1", "g2"],
+      uncheckedTasks: [],
+      publicInterface: { kind: "not-placeholder" },
+      placeholder: { kind: "searched", hits: [{ file: "src/refuse.c", line: 2 }, { file: "public/index.php", line: 3 }] },
+      checkOutcomes: [],
+      failedChecks: [],
+      details: "The product scaffold's placeholder refusal is still on main.",
+    });
+    expect(await runAcceptanceSweeps(deps)).toBe(0);
+    expect(accepted).toEqual([]);
+    expect(defects[0]?.writes.at(-1)).toEqual({ op: "save", status: "Abandoned", source: "acceptance_failed" });
+    const [defect] = created;
+    expect(defect?.title).toBe(
+      `Acceptance on main ${MAIN.slice(0, 12)}: retire the scaffold placeholder at src/refuse.c:2, public/index.php:3`,
+    );
+    expect(defect?.taskSpec?.goal).toContain(`remove its marker ${SCAFFOLD_PLACEHOLDER_MARKER}: main still holds it at src/refuse.c:2, public/index.php:3`);
+    expect(defect?.taskSpec?.endState).toBe(`no tracked file on main holds ${SCAFFOLD_PLACEHOLDER_MARKER}, and the acceptance run on main passes`);
   });
 
   test("a Completed scaffold with no recorded merge halts the project once, as a fault the operator ends, and is never swept", async () => {

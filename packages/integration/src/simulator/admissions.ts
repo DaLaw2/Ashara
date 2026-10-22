@@ -32,12 +32,26 @@ const callRows = z.array(
   z.object({
     id: z.string(),
     callSite: z.string(),
+    taskId: z.string().nullable(),
     estimate: z.coerce.number().nullable(),
     cost: z.coerce.number().nullable(),
   }),
 );
 
 type Seen = { readonly kind: "admitted" | "recorded"; readonly uuids: readonly string[] };
+
+/**
+ * One admitted call as the ledger saw it: the task it was made for (null for a project's own call), the
+ * deployment's recorded spend and the worst case of the calls in flight when it was admitted, and its own estimate.
+ */
+export interface Admission {
+  readonly callSite: string;
+  readonly taskId: string | null;
+  readonly recordedUsd: number;
+  readonly inFlightUsd: number;
+  readonly inFlightCalls: number;
+  readonly estimateUsd: number;
+}
 
 /**
  * I5, the admission clause, for two admissions racing the spend cap: what the spend cap's admission promises, judged
@@ -51,6 +65,7 @@ type Seen = { readonly kind: "admitted" | "recorded"; readonly uuids: readonly s
  */
 export class AdmissionLedger {
   private readonly seen: Seen[] = [];
+  private lastJudged: readonly Admission[] = [];
 
   /** Every db seam call that returned: an llm_calls insert admits a call, an llm_calls update records one. */
   written(label: string, args: readonly unknown[]): void {
@@ -60,17 +75,34 @@ export class AdmissionLedger {
     this.seen.push({ kind, uuids });
   }
 
+  /** Every admission the last judgment replayed, in the order its row's insert returned. */
+  get judged(): readonly Admission[] {
+    return this.lastJudged;
+  }
+
   /** The first admission past the cap, or null; throws when a row's admission or record was not seen whole. */
   async judge(observer: Database, capUsd: number, step: number): Promise<Violation | null> {
+    const { admissions, unseen } = await this.replay(observer);
+    this.lastJudged = admissions;
+    const past = overCommitted(admissions, capUsd, step);
+    if (past === null && unseen !== null) throw unseen;
+    return past;
+  }
+
+  private async replay(
+    observer: Database,
+  ): Promise<{ readonly admissions: readonly Admission[]; readonly unseen: AdmissionsUnobservable | null }> {
     const rows = callRows.parse(
       (
         await observer.execute(sql`
-          SELECT id, call_site AS "callSite", estimated_cost_usd AS estimate, cost_usd AS cost FROM llm_calls`)
+          SELECT id, call_site AS "callSite", task_id AS "taskId", estimated_cost_usd AS estimate, cost_usd AS cost
+          FROM llm_calls`)
       ).rows,
     );
     const byId = new Map(rows.map((row) => [row.id, row]));
     const admitted = new Set<string>();
     const recorded = new Set<string>();
+    const admissions: Admission[] = [];
     let spent = 0;
     let inFlight = 0;
     for (const event of this.seen) {
@@ -98,28 +130,42 @@ export class AdmissionLedger {
       }
       if (admitted.has(id))
         throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) was admitted twice`);
+      admissions.push({
+        callSite: row.callSite,
+        taskId: row.taskId,
+        recordedUsd: spent,
+        inFlightUsd: inFlight,
+        inFlightCalls: admitted.size - recorded.size,
+        estimateUsd: row.estimate,
+      });
       admitted.add(id);
       inFlight += row.estimate;
-      if (spent + inFlight > capUsd + 1e-9) {
-        return {
-          invariant: "I5",
-          step,
-          statement:
-            `the spend cap admitted past itself: when ${row.callSite} was admitted, recorded spend ` +
-            `$${spent.toFixed(6)} plus ` +
-            (`${admitted.size - recorded.size} call(s) in flight at their worst case $${inFlight.toFixed(6)} ` +
-              `exceeds the cap $${capUsd}`),
-          key: "I5:over-committed",
-        };
-      }
     }
-    const unseen = rows.find((row) => !admitted.has(row.id));
-    if (unseen !== undefined)
-      throw new AdmissionsUnobservable(
-        `the llm_calls row ${unseen.id} (${unseen.callSite}) was written where the db seam did not see it`,
-      );
-    return null;
+    const missed = rows.find((row) => !admitted.has(row.id));
+    const unseen =
+      missed === undefined
+        ? null
+        : new AdmissionsUnobservable(
+            `the llm_calls row ${missed.id} (${missed.callSite}) was written where the db seam did not see it`,
+          );
+    return { admissions, unseen };
   }
+}
+
+/** The first of `admissions` that took the deployment past `capUsd`, as I5's admission clause names it, or null. */
+function overCommitted(admissions: readonly Admission[], capUsd: number, step: number): Violation | null {
+  const past = admissions.find((each) => each.recordedUsd + each.inFlightUsd + each.estimateUsd > capUsd + 1e-9);
+  if (past === undefined) return null;
+  return {
+    invariant: "I5",
+    step,
+    statement:
+      `the spend cap admitted past itself: when ${past.callSite} was admitted, recorded spend ` +
+      `$${past.recordedUsd.toFixed(6)} plus ` +
+      (`${past.inFlightCalls + 1} call(s) in flight at their worst case ` +
+        `$${(past.inFlightUsd + past.estimateUsd).toFixed(6)} exceeds the cap $${capUsd}`),
+    key: "I5:over-committed",
+  };
 }
 
 /** The spend read's in-flight sum, as Finance's LlmCallRepository.spend sends it. */

@@ -1,4 +1,9 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -6,6 +11,8 @@ import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUr
 import { isGoalTask } from "@ashara/delivery/predicates";
 import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
+import { environmentVersion } from "@ashara/execution-infra";
+import type { Cell } from "@ashara/execution-infra";
 import {
   BlockReports,
   ClientAnswers,
@@ -19,8 +26,10 @@ import {
 import type { BlockReportStore, DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
+import { AcceptanceSweeper, SCAFFOLD_PLACEHOLDER_MARKER } from "@ashara/quality";
+import type { MainSweepDeps } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
@@ -260,6 +269,7 @@ function sweepDeps(
         checkedTasks: ran.checked,
         uncheckedTasks: ran.unchecked,
         publicInterface: { kind: "not-placeholder" as const },
+        placeholder: { kind: "not-searched" as const },
         checkOutcomes,
         failedChecks,
         details,
@@ -314,6 +324,90 @@ async function acceptedBeforeCoverage(
     }
   }
   await db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`);
+}
+
+const run = promisify(execFile);
+const workspaces: string[] = [];
+
+/**
+ * Quality's real acceptance sweep of `projectId`, whose workspace becomes a repository whose main
+ * holds an environment, a public interface file and `product`. Its cells run each command on the
+ * host checkout, and the one stored check of `store` ("works", as storeCheck writes it) passes there.
+ */
+async function realSweepDeps(
+  projectId: ProjectId,
+  store: string,
+  checksOfStore: string,
+  product: Readonly<Record<string, string>>,
+): Promise<Parameters<typeof runAcceptanceSweeps>[0]> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), `${NAME_PREFIX}-workspace-`)));
+  workspaces.push(root);
+  const target = join(root, "target");
+  const files: Record<string, string> = {
+    "environment/environment.toml":
+      'containerfile = "environment/Containerfile"\nrecipe = []\ninputs = []\nprobe = "true"\nbuild = "true"\ntest = "echo tested"\n',
+    "environment/Containerfile": "FROM scratch\n",
+    "PUBLIC_INTERFACE.md": "kv put KEY VALUE; kv get KEY; kv delete KEY\n",
+    ...product,
+  };
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(join(target, path, ".."), { recursive: true });
+    await writeFile(join(target, path), content);
+  }
+  const git = (...args: string[]) => run("git", ["-C", target, "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "commit.gpgsign=false", ...args]);
+  await git("init", "-q", "-b", "main");
+  await git("add", "-A");
+  await git("commit", "-q", "-m", "delivered");
+  await db.execute(sql`UPDATE projects SET workspace_path = ${target} WHERE id = ${projectId}`);
+  const hostCell = (hostPath: string): Cell => ({
+    id: "host-stand-in",
+    spec: { image: "none", project: projectId, task: "acceptance", role: "ci", instance: "test", mount: { hostPath } },
+    exec: async (argv) => {
+      const [command, ...args] = argv;
+      if (command === undefined) throw new TypeError("a cell was asked to run no command");
+      const { stdout, stderr } = await run(command, args, { cwd: hostPath });
+      return { exitCode: 0, stdout, stderr, timedOut: false, statusLost: false, stdoutCut: null, stderrCut: null };
+    },
+    teardown: async () => {},
+  });
+  const sweep: MainSweepDeps = {
+    config: { workdirBase: join(root, "work") },
+    cells: {
+      substrate: { probeSubstrate: async () => ({ version: "5", rootless: true }), createCell: async (spec) => hostCell(spec.mount.hostPath) },
+      instance: "test",
+    },
+    attemptPolicy: { perCommandTimeoutSeconds: 30 },
+    environment: {
+      images: {
+        build: async (request) => ({
+          ...(await environmentVersion(request.repoGitDir, request.commit, request.definition)),
+          projectId: request.projectId,
+          imageRef: "ashara/test",
+          network: "none",
+          imageId: "image-1",
+          reused: true,
+        }),
+        prune: notExercised("an image prune"),
+      },
+      statements: { record: notExercised("a statement"), forVersion: async () => "a shell environment" },
+    },
+    checks: {
+      completedOf: async () => ({
+        checked: [{
+          taskId: store,
+          checkTaskId: checksOfStore,
+          revision: 1,
+          environmentVersion: "e".repeat(64),
+          baselineCommit: null,
+          checks: [{ name: "works", command: "echo works", decides: ["G1", "G2"] }],
+          files: [],
+        }],
+        unchecked: [],
+      }),
+    },
+    teardown: { teardownCell: async () => {} },
+  };
+  return { ...sweepDeps(true, "unused"), acceptanceSweeper: new AcceptanceSweeper(sweep) };
 }
 
 /** The project's lifecycle and the kind and error class of its open halt, null when none is open. */
@@ -405,6 +499,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
+  for (const dir of workspaces) await rm(dir, { recursive: true, force: true });
 });
 
 describe("acceptance on main", () => {
@@ -954,6 +1049,35 @@ describe("acceptance on main", () => {
     expect(await new ProjectHaltRepository(db).listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
     expect(await deliveredReports().runPending()).toEqual([]);
+  });
+
+  test("Quality's sweep of a main that still holds the scaffold placeholder's marker fails, and the defect names its file:line for repair", async () => {
+    const { projectId, goals, checksOfStore } = await contractProject();
+    const [store = ""] = goals;
+    const deps = await realSweepDeps(projectId, store, checksOfStore, {
+      "public/index.php": `<?php\nif (ctype_digit($key)) { get($key); }\nhttp_response_code(501); echo '{"error":"${SCAFFOLD_PLACEHOLDER_MARKER}"}';\n`,
+    });
+
+    expect(await runAcceptanceSweeps(deps)).toBe(0);
+
+    expect(await statusOf(projectId)).toBe("active");
+    const defects = z.array(z.object({ status: z.string(), source: z.string(), reason: z.string(), origin: z.string(), passed: z.boolean() })).parse((await db.execute(sql`
+      SELECT w.status, w.blocked_reason->>'source' AS source, w.blocked_reason->>'reason' AS reason, w.task_spec->>'origin' AS origin, s.passed
+      FROM acceptance_sweeps s JOIN work_items w ON w.id = s.defect_item_id JOIN plan_repairs r ON r.work_item_id = w.id
+      WHERE s.project_id = ${projectId}`)).rows);
+    expect(defects).toEqual([{ status: "Abandoned", source: "acceptance_failed", reason: expect.any(String), origin: "acceptance", passed: false }]);
+    expect(defects[0]?.reason.split("\n")[0]).toContain("still on main at public/index.php:3");
+    expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
+  });
+
+  test("Quality's sweep of the same main with the marker gone accepts the project", async () => {
+    const { projectId, goals, checksOfStore } = await contractProject();
+    const [store = ""] = goals;
+    const deps = await realSweepDeps(projectId, store, checksOfStore, { "public/index.php": "<?php\nget($key);\n" });
+
+    expect(await runAcceptanceSweeps(deps)).toBe(1);
+
+    expect(await statusOf(projectId)).toBe("accepted");
   });
 
   test("a failing sweep contradicts the pass of the claim covering the failed check's check task, beside the sweep, in its transaction", async () => {
