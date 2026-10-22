@@ -1,13 +1,14 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { insertedRow, projects } from "@ashara/db";
-import { clientMessages, workBurnWarnings } from "@ashara/db/schema/engagement";
+import { projects } from "@ashara/db";
+import { workBurnWarnings } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { currentPlanImplementationTasks, currentPlanRevision } from "@ashara/delivery/reads";
 import { projectWork } from "@ashara/finance";
 import { parseProjectId, readEach, type UnreadSubject } from "@ashara/shared";
 import { noOpenStop, projectAtWork } from "../predicates.js";
 import type { BurnWarning, ProjectBurn } from "../burn-warning.js";
+import { insertOutboundReport } from "./client-message.js";
 
 // The work ledger's early warnings: each project at work, read with its current plan revision, its
 // revision's implementation tasks and the zones already reported for that revision, and with the
@@ -86,11 +87,7 @@ export async function postBurnWarning(db: Database, warning: BurnWarning): Promi
       .where(and(eq(workBurnWarnings.projectId, warning.projectId), eq(workBurnWarnings.planRevision, warning.planRevision)));
     const zones = z.array(ZoneSchema).parse(recorded.map((row) => row.zone));
     if (zones.includes(warning.zone) || (warning.zone === "yellow" && zones.includes("red"))) return "already-posted";
-    const rows = await tx
-      .insert(clientMessages)
-      .values({ projectId: warning.projectId, direction: "outbound", kind: "report", body: warning.body, inReplyTo: null })
-      .returning({ id: clientMessages.id });
-    const { id: reportId } = insertedRow(rows, "client_messages", `post the ${warning.zone} burn warning to project ${warning.projectId}`);
+    const reportId = await insertOutboundReport(tx, warning.projectId, warning.body, null, `post the ${warning.zone} burn warning to project ${warning.projectId}`);
     await tx.insert(workBurnWarnings).values({
       projectId: warning.projectId,
       planRevision: warning.planRevision,

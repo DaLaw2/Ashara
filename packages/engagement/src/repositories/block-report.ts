@@ -12,7 +12,8 @@ import { haltReported, noOpenStop, reportTold, visionWritten } from "../predicat
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
-import { insertOutboundReport, tellOnce } from "./told-report.js";
+import { insertOutboundReport } from "./client-message.js";
+import { tellOnce } from "./told-report.js";
 
 // The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an

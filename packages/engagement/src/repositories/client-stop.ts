@@ -1,8 +1,4 @@
-import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import type { SQL } from "drizzle-orm";
 import { z } from "zod";
-import { projects } from "@ashara/db";
-import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { tasksWithMerge } from "@ashara/delivery/reads";
@@ -10,9 +6,16 @@ import { sweepOfTerminal } from "@ashara/quality/published-reads";
 import type { EndHaltOnStop } from "../ports.js";
 import { stopProject } from "../project-lifecycle.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
-import { REPORT_SUBJECT } from "../report-subjects.js";
-import { clientMessageReadNow } from "../predicates.js";
-import { ClientMessageNotConsumable, LockedStanding, consumeInbound } from "./client-message.js";
+import {
+  ClientMessageNotConsumable,
+  LockedStanding,
+  consumeInbound,
+  dueStopReportMessages,
+  postOnStop,
+  recordStopFoundHalted,
+  stopReportPosted,
+  unconsumedStopMessages,
+} from "./client-message.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
 
 // The client's stop. The Liaison consumes each inbound 'stop' and moves the project to 'stopped',
@@ -59,24 +62,8 @@ type ClientStopCommit =
 
 /** Inbound stops not yet consumed, read now by inboundDecision (clientMessageReadNow), oldest first. */
 export async function listUnconsumedStops(db: DbHandle): Promise<OpenStopRow[]> {
-  const rows = await db
-    .select({ id: clientMessages.id, projectId: clientMessages.projectId })
-    .from(clientMessages)
-    .where(
-      and(
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.kind, "stop"),
-        isNull(clientMessages.consumedAt),
-        sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.id} = ${clientMessages.projectId} AND ${clientMessageReadNow("stop")})`,
-      ),
-    )
-    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+  const rows = await unconsumedStopMessages(db);
   return rows.map((row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "client_messages.project_id") }));
-}
-
-/** Whether the project's stop report is posted. */
-function stopReportPosted(projectId: string | SQL): SQL<boolean> {
-  return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = ${REPORT_SUBJECT.clientStop})`;
 }
 
 /** inboundDecision reads a stop in every state of an existing project: one it does not read now is a stop of no project, or a decision that no longer holds together. */
@@ -105,9 +92,8 @@ export async function recordClientStop(db: Database, stop: OpenStopRow, endHalt:
     // An accepted project waits for exactly this.
     const moved = await stopProject(tx, stop.projectId, endHalt);
     if (moved.kind === "already-stopped") return moved;
-    await tx.update(clientMessages).set({ stopFoundHalted: moved.wasHalted }).where(eq(clientMessages.id, stop.id));
-    const [reported] = await tx.select({ posted: stopReportPosted(stop.projectId) }).from(projects).where(eq(projects.id, stop.projectId));
-    return { kind: "stopped", reportDue: reported?.posted === false };
+    await recordStopFoundHalted(standing, stop.id, moved.wasHalted);
+    return { kind: "stopped", reportDue: (await stopReportPosted(tx, stop.projectId)) === false };
   });
 }
 
@@ -145,20 +131,7 @@ interface DueStopReportRow {
  * do not read as a report is its UnreadSubject, and every other report is still listed.
  */
 export async function listDueStopReports(db: DbHandle): Promise<Array<DueStopReportRow | UnreadSubject>> {
-  const rows = await db
-    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted })
-    .from(clientMessages)
-    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    .where(
-      and(
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.kind, "stop"),
-        isNotNull(clientMessages.stopFoundHalted),
-        eq(projects.lifecycle, "stopped"),
-        sql`NOT ${stopReportPosted(sql`${clientMessages.projectId}`)}`,
-      ),
-    )
-    .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
+  const rows = await dueStopReportMessages(db);
   return readEach(
     rows,
     (row) => ({ id: `report:${row.stopId}`, projectId: parseProjectId(row.projectId, "client_messages.project_id") }),
@@ -190,22 +163,10 @@ class StopNotFound extends Error {
  */
 export async function postClientStopReport(db: Database, stopId: string, body: string, verdicts: TableVerdicts): Promise<"posted" | "already-posted"> {
   return db.transaction(async (tx) => {
-    const [stop] = await tx
-      .select({ projectId: clientMessages.projectId })
-      .from(clientMessages)
-      .where(and(eq(clientMessages.id, stopId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "stop")));
-    if (stop === undefined) throw new StopNotFound(stopId);
-    const inserted = await tx
-      .insert(clientMessages)
-      .values({ projectId: stop.projectId, direction: "outbound", kind: "report", body, inReplyTo: stopId, reportsOn: REPORT_SUBJECT.clientStop })
-      .onConflictDoNothing({
-        target: [clientMessages.projectId, clientMessages.reportsOn],
-        where: isNotNull(clientMessages.reportsOn),
-      })
-      .returning({ id: clientMessages.id });
-    const [report] = inserted;
-    if (report === undefined) return "already-posted";
-    await insertGuaranteeVerdicts(tx, stop.projectId, report.id, verdicts);
+    const posting = await postOnStop(tx, stopId, body);
+    if (posting.kind === "not-a-stop") throw new StopNotFound(stopId);
+    if (posting.kind === "already-posted") return "already-posted";
+    await insertGuaranteeVerdicts(tx, posting.projectId, posting.reportId, verdicts);
     return "posted";
   });
 }

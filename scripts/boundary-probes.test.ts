@@ -11,7 +11,8 @@
  * owner map, an import of another context's table object for db's subpath-importers (by its
  * subpath, by a relative path, from scripts/, and re-exported by db's root entry), an import of a
  * test-only subpath from a file that is no test, an import of a Quality class Delivery does not list
- * (by name and through a namespace), plus one permitted import
+ * (by name and through a namespace), an import of the client_messages table object by an Engagement
+ * file outside the one module that holds it (by name and through a namespace), plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -19,7 +20,9 @@
  * MODULES does the same inside each package that declares internal modules: one type-only relative
  * import per ordered pair of its modules, a file that belongs to no module, a module glob that
  * matches nothing, and, in a scratch copy of the rules, a module-allow cycle the parser must refuse.
- * A last scratch copy admits a context to another's tables, which the [tables] owner map refuses.
+ * A scratch copy admits a context to another's tables, which the [tables] owner map refuses, and a
+ * last one drops the module-names rule, under which the planted import of the held table object is
+ * no longer refused: that rule, and nothing else, is what refuses it.
  *
  * The relational query API is probed by the type checker instead: a context holding the shared
  * Database handle that writes `db.query.<table>` or `tx.query.<table>` must fail to compile, since
@@ -144,6 +147,10 @@ interface ModuleSpec {
 
 const ENTRY = "entry";
 
+// The subpaths of db's schema, spelled apart from any import statement so that the checker's scan of
+// scripts/ reads this file's probe text as no import.
+const SCHEMA = "@ashara/db/schema";
+
 /** Per package, its internal modules; `entry` may import every module and none may import it. */
 const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = {
   quality: {
@@ -168,9 +175,10 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
   },
   engagement: {
     vision: { allow: [], host: "src/vision.ts", target: "src/vision-language/index.ts" },
-    intake: { allow: ["vision", "inbound", "predicates"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
-    inbound: { allow: ["vision", "reports", "predicates", "ports"], host: "src/client-stop.ts", target: "src/repositories/client-message.ts" },
-    reports: { allow: ["vision", "predicates"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
+    intake: { allow: ["vision", "client-messages", "predicates"], host: "src/intake.ts", target: "src/repositories/tender-intake.ts" },
+    "client-messages": { allow: ["predicates"], host: "src/repositories/client-message.ts", target: "src/repositories/client-message.ts" },
+    inbound: { allow: ["vision", "client-messages", "reports", "predicates", "ports"], host: "src/client-stop.ts", target: "src/answers.ts" },
+    reports: { allow: ["vision", "client-messages", "predicates"], host: "src/burn-warning.ts", target: "src/block-report.ts" },
     predicates: { allow: [], host: "src/predicates.ts", target: "src/predicates.ts" },
     ports: { allow: [], host: "src/ports.ts", target: "src/ports.ts" },
     [ENTRY]: { allow: [], host: "src/model-schemas.ts", target: "src/index.ts" },
@@ -214,11 +222,12 @@ const MODULE_EXTRAS: Readonly<Record<string, Readonly<Record<string, readonly Mo
     ],
   },
   engagement: {
-    intake: [
+    // The module that holds the client_messages table object hands it to no other file.
+    "client-messages": [
       {
-        name: "engagement: intake reads inbound only through its module-entry",
-        line: 'import type { AnswerStore } from "./answers.js";',
-        reason: "module inbound admits imports only of module-entry.inbound: [src/repositories/client-message.ts]",
+        name: "engagement: the client channel re-exports no table object it holds",
+        line: `export { clientMessages } from "${SCHEMA}/engagement";`,
+        reason: `module-names.client-messages: re-exports "clientMessages", which hands it to every importer of the file`,
       },
     ],
   },
@@ -229,6 +238,7 @@ const PROBE_MODULE = 'module.probe = ["src/__boundary_probe__/**"]';
 const UNASSIGNED_FILE = "src/__module_probe__.ts";
 const EMPTY_MODULE = { name: "probe-empty", glob: "src/__no_such_module_file__.ts" };
 const CYCLE_RULE = { pkg: "engagement", line: 'module-allow.vision = ["reports"]', reason: "a cycle between modules: vision -> reports -> vision" };
+const MODULE_NAMES_RULE = 'module-names.client-messages = ["db/schema/engagement:clientMessages"]';
 const OWNER_SUBPATH_RULE = 'subpath-importers.schema/delivery = ["delivery", "server", "integration"]';
 const WIDENED_SUBPATH_RULE = 'subpath-importers.schema/delivery = ["delivery", "quality", "server", "integration"]';
 const WIDENED_SUBPATH_REASON = 'admits "quality" to work_items, which "delivery" owns';
@@ -327,10 +337,6 @@ const STACK_LITERAL_PROBE = {
     'packages/delivery/src/__boundary_probe__/stack-literal.ts:1  delivery -> "Cargo.toml"  (stack literal in production source: "Cargo.toml"; take it from the contract, or exempt it in [stack-literals] with a reason)',
 };
 
-// The subpaths of db's schema, spelled apart from any import statement so that the checker's scan of
-// scripts/ reads this file's probe text as no import.
-const SCHEMA = "@ashara/db/schema";
-
 // A context writing another context's table through drizzle and through raw SQL, and reading one in
 // raw SQL that no [tables] exemption admits, each on its own line of one file. The table object the
 // drizzle write names is itself an import db's subpath-importers refuse; a drizzle read of it is
@@ -355,6 +361,38 @@ const VERDICT_PROBE_CONTENT = [
   "export const rawRead = sql`SELECT verdict FROM guarantee_verdicts`;",
   "",
 ].join("\n");
+// Engagement files outside the client channel's module, each taking the client_messages table object
+// it holds: by name in an inbound repository, and through a namespace in a report's; and one taking
+// another of Engagement's tables from the same entry, which the rule leaves alone.
+const HELD_TABLE_FILE = "packages/engagement/src/repositories/client-stop.ts";
+const HELD_NAMESPACE_FILE = "packages/engagement/src/repositories/told-report.ts";
+const HELD_TABLE_REFUSAL = 'only module client-messages may import "clientMessages" of "@ashara/db/schema/engagement"; go through its entries';
+const HELD_TABLE_PROBES: PlannedProbe[] = [
+  {
+    name: "an Engagement file outside the client channel importing the client_messages table object is refused",
+    file: HELD_TABLE_FILE,
+    content: `import { clientMessages } from "${SCHEMA}/engagement";\n`,
+    violation: `${HELD_TABLE_FILE}:1  engagement -> "${SCHEMA}/engagement"  (module-names.client-messages: ${HELD_TABLE_REFUSAL})`,
+    prepend: true,
+  },
+  {
+    name: "an Engagement file outside the client channel reaching the client_messages table object through a namespace is refused",
+    file: HELD_NAMESPACE_FILE,
+    content: `import * as engagementTables from "${SCHEMA}/engagement";\n`,
+    violation:
+      `${HELD_NAMESPACE_FILE}:1  engagement -> "${SCHEMA}/engagement"  ` +
+      '(module-names.client-messages: a namespace or default import names no symbol, so "clientMessages" could be reached through it; import the names in braces)',
+    prepend: true,
+  },
+  {
+    name: "an Engagement file imports its other table objects from the same entry",
+    file: "packages/engagement/src/repositories/burn-warning.ts",
+    content: `import { toldReports } from "${SCHEMA}/engagement";\n`,
+    violation: null,
+    prepend: true,
+  },
+];
+
 const TABLE_PROBES = [
   {
     name: "engagement importing Quality's guarantee_verdicts table object is refused",
@@ -676,6 +714,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   probes.push({ name: "integration simulator imports only listed names", ...NAMED_ONLY_PROBE });
   probes.push({ name: "a manifest name literal in production source is refused", ...STACK_LITERAL_PROBE });
   probes.push(...TABLE_PROBES);
+  probes.push(...HELD_TABLE_PROBES);
   probes.push(...SUBPATH_PROBES);
   probes.push(...STAND_IN_PROBES);
   probes.push(...BOUNDS_TABLE_PROBES);
@@ -743,6 +782,7 @@ describe("boundary-rules.toml against the context map", () => {
   let probed: { status: number | null; output: string } = { status: null, output: "" };
   let cyclic: { status: number | null; output: string } = { status: null, output: "" };
   let widened: { status: number | null; output: string } = { status: null, output: "" };
+  let unheld: { status: number | null; output: string } = { status: null, output: "" };
   let reported = new Set<string>();
 
   beforeAll(() => {
@@ -760,6 +800,9 @@ describe("boundary-rules.toml against the context map", () => {
     if (!rules.includes(OWNER_SUBPATH_RULE)) throw new ProbeTreeError("rules copy", `no line ${OWNER_SUBPATH_RULE}`);
     fs.writeFileSync(rulesFile, rules.replace(OWNER_SUBPATH_RULE, WIDENED_SUBPATH_RULE));
     widened = runChecker(scratch);
+    if (!rules.includes(MODULE_NAMES_RULE)) throw new ProbeTreeError("rules copy", `no line ${MODULE_NAMES_RULE}`);
+    fs.writeFileSync(rulesFile, rules.replace(MODULE_NAMES_RULE, ""));
+    unheld = runChecker(scratch);
     reported = new Set(probed.output.split("\n").flatMap((line) => {
       const match = VIOLATION_LINE.exec(line);
       return match === null ? [] : [match[1]];
@@ -789,6 +832,13 @@ describe("boundary-rules.toml against the context map", () => {
   test("a subpath rule admitting a context to another's tables fails against the [tables] owner map", () => {
     expect(widened.status).toBe(1);
     expect(widened.output).toContain(WIDENED_SUBPATH_REASON);
+  });
+
+  test("without the module-names rule, the planted imports of the held table object are not refused", () => {
+    const heldReports = unheld.output.split("\n").filter((line) => line.includes("module-names.client-messages"));
+    expect(heldReports).toEqual([]);
+    for (const file of [HELD_TABLE_FILE, HELD_NAMESPACE_FILE]) expect(unheld.output).not.toContain(`${file}:1  `);
+    expect(unheld.output).toContain("violations found");
   });
 
   test("db's root entry exports no table object a package owns", () => {

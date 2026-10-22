@@ -1,15 +1,13 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { PROJECT_LIFECYCLES, projects } from "@ashara/db";
-import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
-import { HALT_KINDS, openHaltKind } from "@ashara/delivery/predicates";
+import { HALT_KINDS } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { INBOUND_KINDS } from "../inbound-policy.js";
-import { visionWritten } from "../predicates.js";
 import { receiptSubject } from "../client-receipt.js";
 import type { DueReceipt, ProjectStanding } from "../client-receipt.js";
-import { LockedStanding, consumeInbound } from "./client-message.js";
+import { LockedStanding, consumeInbound, dueReceiptMessages, inboundMessageOf, postReceiptOf, projectStandingColumns } from "./client-message.js";
 
 // The receipts owed to the client's messages: an inbound message is owed one until an outbound
 // report names it in receipt_of, whose unique index admits one per message, unless it was consumed
@@ -20,13 +18,6 @@ import { LockedStanding, consumeInbound } from "./client-message.js";
 const InboundKindSchema = z.enum(INBOUND_KINDS);
 const StandingRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.enum(HALT_KINDS).nullable(), visionWritten: z.boolean() });
 const DueRowSchema = z.object({ messageId: z.string(), projectId: z.string(), kind: z.string(), consumed: z.boolean(), stoppedProject: z.boolean() });
-
-/** The project's lifecycle, its open halt's kind and whether its first vision is written: what a receipt states, and what inboundDecision decides the message's fate by. */
-const standingColumns = {
-  lifecycle: projects.lifecycle,
-  halt: openHaltKind(projects.id),
-  visionWritten: visionWritten(projects.id),
-};
 
 /** A stored lifecycle and halt that do not hold together: a stopped or delivered project has no open halt. */
 class ProjectStandingIncoherent extends Error {
@@ -56,25 +47,7 @@ function sameStanding(a: ProjectStanding, b: ProjectStanding): boolean {
 
 /** Every inbound message owed a receipt, oldest first, with its project's state; each read on its own (readEach). */
 export async function listDueReceipts(db: DbHandle): Promise<Array<DueReceipt | UnreadSubject>> {
-  const rows = await db
-    .select({
-      messageId: clientMessages.id,
-      projectId: clientMessages.projectId,
-      kind: clientMessages.kind,
-      consumed: sql<unknown>`(${clientMessages.consumedAt} IS NOT NULL)`,
-      stoppedProject: sql<unknown>`(${clientMessages.stopFoundHalted} IS NOT NULL)`,
-      ...standingColumns,
-    })
-    .from(clientMessages)
-    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    .where(
-      and(
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.receiptWaived, false),
-        sql`NOT EXISTS (SELECT 1 FROM client_messages rc WHERE rc.receipt_of = ${clientMessages.id})`,
-      ),
-    )
-    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+  const rows = await dueReceiptMessages(db);
   return readEach(
     rows,
     (row) => ({ id: receiptSubject(row.messageId), projectId: parseProjectId(row.projectId, "client_messages.project_id") }),
@@ -122,20 +95,12 @@ export async function postClientReceipt(
 ): Promise<"posted" | "already-posted" | "moved"> {
   const { due } = write;
   return db.transaction(async (tx) => {
-    const [project] = await tx.select(standingColumns).from(projects).where(eq(projects.id, due.projectId)).for("update", { of: projects });
-    const [message] = await tx
-      .select({ consumedAt: clientMessages.consumedAt, kind: clientMessages.kind })
-      .from(clientMessages)
-      .where(and(eq(clientMessages.id, due.messageId), eq(clientMessages.projectId, due.projectId), eq(clientMessages.direction, "inbound")));
-    if (project === undefined || message === undefined) throw new ReceiptMessageNotFound(due.messageId, due.projectId);
+    const [project] = await tx.select(projectStandingColumns).from(projects).where(eq(projects.id, due.projectId)).for("update", { of: projects });
+    const message = await inboundMessageOf(tx, due.messageId, due.projectId);
+    if (project === undefined || message === null) throw new ReceiptMessageNotFound(due.messageId, due.projectId);
     if (!sameStanding(standingOf(due.projectId, project), due.standing) || (message.consumedAt !== null) !== due.consumed) return "moved";
 
-    const inserted = await tx
-      .insert(clientMessages)
-      .values({ projectId: due.projectId, direction: "outbound", kind: "report", body: write.body, inReplyTo: due.messageId, receiptOf: due.messageId })
-      .onConflictDoNothing({ target: clientMessages.receiptOf })
-      .returning({ id: clientMessages.id });
-    if (inserted.length === 0) return "already-posted";
+    if ((await postReceiptOf(tx, { projectId: due.projectId, messageId: due.messageId, body: write.body })) === "already-posted") return "already-posted";
 
     if (write.closes) {
       const standing = await LockedStanding.neverRead(tx, due.projectId, InboundKindSchema.parse(message.kind));

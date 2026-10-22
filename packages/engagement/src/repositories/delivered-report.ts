@@ -12,7 +12,8 @@ import { noOpenStop, reportTold } from "../predicates.js";
 import type { DeliveredReportFailureRecord, ReadingTold } from "../delivered-report.js";
 import type { GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
 import { insertGuaranteeVerdicts, readGuaranteeTable } from "./guarantee-report.js";
-import { insertOutboundReport, tellOnce } from "./told-report.js";
+import { insertOutboundReport } from "./client-message.js";
+import { tellOnce } from "./told-report.js";
 
 // The Liaison's delivered report: due while a passed acceptance sweep is not on its told record,
 // rendered only from what is recorded: how each goal task closed, which tasks' checks the sweep ran

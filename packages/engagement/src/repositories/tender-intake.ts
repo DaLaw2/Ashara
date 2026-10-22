@@ -1,10 +1,10 @@
-import { clientMessages, intakeReadings } from "@ashara/db/schema/engagement";
+import { intakeReadings } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { IntakeReading } from "../intake.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { FirstVision } from "../vision.js";
-import { ClientMessageNotConsumable, ClientMessageRepository, LockedStanding, consumeInbound, type StandingMoved } from "./client-message.js";
+import { ClientMessageNotConsumable, ClientMessageRepository, LockedStanding, consumeInbound, postOnSubject, type StandingMoved } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 /** The first vision version a tender's intake writes did not come out as version 1. */
@@ -109,14 +109,7 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
     const questionIds = questions.map((q) => q.id);
     // A second contract draft for the project fails the unique index on (project_id, reports_on) and
     // rolls the intake back: vision v1 and its draft are written once, together.
-    await tx.insert(clientMessages).values({
-      projectId: write.projectId,
-      direction: "outbound",
-      kind: "report",
-      body: write.contractDraft,
-      inReplyTo: write.tenderId,
-      reportsOn: REPORT_SUBJECT.contractDraft,
-    });
+    await postOnSubject(tx, { projectId: write.projectId, body: write.contractDraft, inReplyTo: write.tenderId, reportsOn: REPORT_SUBJECT.contractDraft }, "fail");
     // Once per project with no reports_on subject of its own: it commits only with vision v1, which
     // UNIQUE (project_id, version) lets exactly one intake write.
     if (write.readingReport !== null) {

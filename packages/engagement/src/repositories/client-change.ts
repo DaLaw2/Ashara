@@ -1,14 +1,11 @@
-import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { projects } from "@ashara/db";
-import { clientMessages, visionDocuments } from "@ashara/db/schema/engagement";
+import { visionDocuments } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
-import { projectHalted } from "@ashara/delivery/predicates";
 import { completedImplementationTaskIds, currentTasksCiting } from "@ashara/delivery/reads";
 import { projectWork, projectWorkBudget, tasksWorkDrawn } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { clientMessageReadNow, noOpenStop } from "../predicates.js";
 import type { HoldCorrection } from "../ports.js";
 import { MAX_CHANGE_ATTEMPTS } from "../client-change.js";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
@@ -16,7 +13,7 @@ import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
 import { readVisionVersion } from "../vision.js";
 import type { RevisionOp } from "../vision-language/contract-op.js";
-import { ClientMessageRepository, LockedStanding, consumeInbound } from "./client-message.js";
+import { ClientMessageRepository, LockedStanding, consumeInbound, openChangeMessages, recordReadingFailure } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's changes of direction (client_messages kind 'change'): each read once against its
@@ -77,32 +74,7 @@ const ProposalRowsSchema = z.array(
 );
 
 async function openChangeRows(db: DbHandle, changeId: string | null): Promise<OpenChange[]> {
-  const rows = await db
-    .select({
-      id: clientMessages.id,
-      projectId: clientMessages.projectId,
-      body: clientMessages.body,
-      intakeAttempts: clientMessages.intakeAttempts,
-      intakeLastError: clientMessages.intakeLastError,
-      intakeLastFailure: clientMessages.intakeLastFailure,
-      halted: projectHalted(projects.id),
-    })
-    .from(clientMessages)
-    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    .where(
-      and(
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.kind, "change"),
-        isNull(clientMessages.consumedAt),
-        clientMessageReadNow("change"),
-        or(lt(clientMessages.intakeAttempts, MAX_CHANGE_ATTEMPTS), clientMessageReadNow("change", "atCap")),
-        noOpenStop(clientMessages.projectId),
-        changeId === null ? undefined : eq(clientMessages.id, changeId),
-      ),
-    )
-    // A project at work first, whose reading refused by its own spend cap ends the step (CoreLoop.step) and
-    // halts it; a halted project's refusal waits for its limit without ending the step (waitForLimit).
-    .orderBy(asc(projectHalted(projects.id)), asc(clientMessages.createdAt), asc(clientMessages.id));
+  const rows = await openChangeMessages(db, MAX_CHANGE_ATTEMPTS, changeId);
 
   const visions = new VisionRepository(db);
   const open: OpenChange[] = [];
@@ -222,13 +194,9 @@ class ChangeNotOpen extends Error {
 
 /** Counts one failed attempt to read an unconsumed change with its error and whose failure it was; returns the count after it. */
 export async function recordChangeFailure(db: DbHandle, changeId: string, error: string, failure: "model" | "provider"): Promise<number> {
-  const [row] = await db
-    .update(clientMessages)
-    .set({ intakeAttempts: sql`${clientMessages.intakeAttempts} + 1`, intakeLastError: error, intakeLastFailure: failure })
-    .where(and(eq(clientMessages.id, changeId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "change"), isNull(clientMessages.consumedAt)))
-    .returning({ intakeAttempts: clientMessages.intakeAttempts });
-  if (!row) throw new ChangeNotOpen(changeId, "record a failed attempt to read it");
-  return row.intakeAttempts;
+  const attempts = await recordReadingFailure(db, "change", changeId, error, failure);
+  if (attempts === null) throw new ChangeNotOpen(changeId, "record a failed attempt to read it");
+  return attempts;
 }
 
 /** What the change was composed against no longer holds when the write's transaction reads it: nothing was written. */

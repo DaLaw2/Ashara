@@ -23,6 +23,9 @@
  *   module-allow.<name> = [...]     the other modules of the package <name> may import; none when absent.
  *                                   An item `<module>:<glob>` allows only those files of <module> to <name>
  *   module-entry.<name> = [glob, ...] the only files of <name> another module may import
+ *   module-names.<name> = ["<pkg>[/<subpath>]:<symbol>", ...] symbols of another package's entry that
+ *                                   only the files of module <name> may import; each symbol is held by
+ *                                   one module, and <pkg> must be in the allow list
  *   subpath-importers.<subpath> = [...] the only packages that may import `@ashara/<this>/<subpath>`
  *   test-only-subpaths = [...]      subpaths of this package that only a *.test.ts file may import,
  *                                   from any package or scripts/ by its `@ashara/` name, or from
@@ -68,6 +71,8 @@ export interface PackageRule {
   readonly moduleAllowFiles: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
   /** module -> the only files of it another module may import; a module absent here admits all its files. */
   readonly moduleEntry: ReadonlyMap<string, readonly string[]>;
+  /** module -> the symbols of another package's entries that only its files may import; empty when the section holds none. */
+  readonly moduleNames: ReadonlyMap<string, readonly HeldName[]>;
   /** subpath of this package -> the only packages that may import it; empty when the section states none. */
   readonly subpathImporters: ReadonlyMap<string, readonly string[]>;
   /** Subpaths of this package that only a test file may import; empty when the section states none. */
@@ -77,6 +82,17 @@ export interface PackageRule {
 }
 
 export type BoundaryRules = ReadonlyMap<string, PackageRule>;
+
+/** A symbol of another package's entry that only one module may import. */
+export interface HeldName {
+  /** The package the entry belongs to. */
+  readonly pkg: string;
+  /** The entry as imported, without `@ashara/`: the package, or `<pkg>/<subpath>`. */
+  readonly entry: string;
+  readonly name: string;
+}
+
+const HELD_NAME_RE = /^(([a-z][a-z0-9-]*)(?:\/[a-z0-9][a-z0-9/-]*)?):([A-Za-z_$][\w$]*)$/;
 
 function parseList(inner: string): string[] {
   const trimmed = inner.trim();
@@ -101,6 +117,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       moduleAllow: Map<string, string[]>;
       moduleAllowFiles: Map<string, Map<string, string[]>>;
       moduleEntry: Map<string, string[]>;
+      moduleNames: Map<string, HeldName[]>;
       subpathImporters: Map<string, string[]>;
       testOnlySubpaths: string[];
       classImports: Map<string, string[]>;
@@ -124,7 +141,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), entries: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), subpathImporters: new Map(), testOnlySubpaths: [], classImports: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), entries: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), moduleNames: new Map(), subpathImporters: new Map(), testOnlySubpaths: [], classImports: new Map() });
       }
       continue;
     }
@@ -228,6 +245,22 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
+    const moduleNamesMatch = /^module-names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (moduleNamesMatch) {
+      const items = parseList(moduleNamesMatch[2]);
+      if (items.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "module-names list is empty");
+      if (rule.moduleNames.has(moduleNamesMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `module-names.${moduleNamesMatch[1]} is stated twice`);
+      rule.moduleNames.set(
+        moduleNamesMatch[1],
+        items.map((item) => {
+          const held = HELD_NAME_RE.exec(item);
+          if (held === null) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `"${item}" is not "<pkg>[/<subpath>]:<symbol>"`);
+          return { pkg: held[2], entry: held[1], name: held[3] };
+        }),
+      );
+      continue;
+    }
+
     const subpathMatch = /^subpath-importers\.([a-z0-9][a-z0-9/-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
     if (subpathMatch) {
       const importers = parseList(subpathMatch[2]);
@@ -316,6 +349,19 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       }
     }
     checkModuleRules(rulesPath, pkg, rule.modules, rule.moduleAllow, rule.moduleEntry);
+    const holders = new Map<string, string>();
+    for (const [name, held] of rule.moduleNames) {
+      if (!rule.modules.has(name)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `"${name}" is no module of the section`);
+      for (const each of held) {
+        if (!isWildcard && !rule.allow.includes(each.pkg)) {
+          throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `holds a symbol of "${each.pkg}", which is not in its allow list`);
+        }
+        const key = `${each.entry}:${each.name}`;
+        const holder = holders.get(key);
+        if (holder !== undefined) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `"${key}" is held by module ${holder} too; one module holds it`);
+        holders.set(key, name);
+      }
+    }
     result.set(pkg, {
       allow: rule.allow,
       restrict: rule.restrict,
@@ -330,6 +376,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       moduleAllow: rule.moduleAllow,
       moduleAllowFiles: rule.moduleAllowFiles,
       moduleEntry: rule.moduleEntry,
+      moduleNames: rule.moduleNames,
       subpathImporters: rule.subpathImporters,
       testOnlySubpaths: rule.testOnlySubpaths,
       classImports: rule.classImports,

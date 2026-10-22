@@ -1,6 +1,5 @@
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { projects } from "@ashara/db";
-import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { latestEnvironmentStatement } from "@ashara/delivery/reads";
@@ -8,6 +7,7 @@ import { noOpenStop, projectAtWork } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
+import { postOnSubject } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The stack Sprint 0 chose, told to the client once: a completed environment task
@@ -92,12 +92,8 @@ export async function recordStackChoice(db: Database, write: StackChoiceWrite): 
       .from(projects)
       .where(and(eq(projects.id, write.projectId), projectAtWork(), noOpenStop(projects.id)));
     if (due === undefined) return "not-due";
-    const inserted = await tx
-      .insert(clientMessages)
-      .values({ projectId: write.projectId, direction: "outbound", kind: "report", body: write.report, inReplyTo: null, reportsOn: REPORT_SUBJECT.stackChoice })
-      .onConflictDoNothing({ target: [clientMessages.projectId, clientMessages.reportsOn], where: isNotNull(clientMessages.reportsOn) })
-      .returning({ id: clientMessages.id });
-    if (inserted.length === 0) return "already-reported";
+    const reportId = await postOnSubject(tx, { projectId: write.projectId, body: write.report, inReplyTo: null, reportsOn: REPORT_SUBJECT.stackChoice }, "skip");
+    if (reportId === null) return "already-reported";
 
     const appended = await new VisionRepository(tx).append(write.projectId, write.vision, write.revision);
     if (appended.kind === "moved") throw new StackChoiceVisionMoved(write.projectId, write.vision.basedOnVersion, appended.current);

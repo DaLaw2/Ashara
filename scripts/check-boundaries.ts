@@ -2,9 +2,9 @@
  * The boundary gate of `just check`: runs every lint of scripts/lints/ over the tree, each a module
  * whose `run` returns its violations, against the rules in boundary-rules.toml (scripts/lints/rules.ts
  * states their shapes). The import lints hold each package to its section: the cross-package import
- * matrix, named-only, stand-in and bounds-table files, internal modules, subpath entries, test-only
- * subpaths and the classes of another context a package may import. The others
- * are no import rule, run here so each needs no gate of its own: price-column defaults, unsupplied
+ * matrix, named-only, stand-in and bounds-table files, internal modules, the symbols only one module
+ * may import, subpath entries, test-only subpaths and the classes of another context a package may
+ * import. The others are no import rule, run here so each needs no gate of its own: price-column defaults, unsupplied
  * optional dependencies, stack literals, table ownership, the simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
  * recognise, and the line limits of the modules split by role.
@@ -22,6 +22,7 @@ import { run as fileSizes } from "./lints/file-sizes.js";
 import { run as internalModules } from "./lints/internal-modules.js";
 import { loadLintContext } from "./lints/lint.js";
 import type { LintContext, Violation } from "./lints/lint.js";
+import { run as moduleNames } from "./lints/module-names.js";
 import { run as optionalDeps } from "./lints/optional-deps.js";
 import { run as packageImports } from "./lints/package-imports.js";
 import { run as predicateCopies } from "./lints/predicate-copies.js";
@@ -38,6 +39,7 @@ import { run as verificationSplit } from "./lints/verification-split.js";
 const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   packageImports,
   internalModules,
+  moduleNames,
   priceDefaults,
   optionalDeps,
   stackLiterals,

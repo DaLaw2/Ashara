@@ -136,6 +136,10 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/engagement/src/repositories/client-receipt.ts#listDueReceipts": { kind: "read-each" },
   "packages/engagement/src/repositories/client-message.ts#listByProject": { kind: "not-a-step-listing", why: "one project's messages, for the client channel" },
   "packages/engagement/src/repositories/client-message.ts#listUnconsumedTenders": { kind: "rows-only", why: "message rows as stored" },
+  "packages/engagement/src/repositories/client-message.ts#openAnswerMessages": { kind: "rows-only", why: "message rows as stored, with their projects' columns" },
+  "packages/engagement/src/repositories/client-message.ts#openChangeMessages": { kind: "rows-only", why: "message rows as stored, with their projects' columns" },
+  "packages/engagement/src/repositories/client-message.ts#dueStopReportMessages": { kind: "rows-only", why: "stop and project ids as stored" },
+  "packages/engagement/src/repositories/client-message.ts#dueReceiptMessages": { kind: "rows-only", why: "message rows as stored, with their projects' columns" },
   "packages/engagement/src/repositories/client-stop.ts#listDueStopReports": { kind: "read-each" },
   "packages/engagement/src/repositories/client-stop.ts#listUnconsumedStops": { kind: "rows-only", why: "message and project ids only" },
   "packages/engagement/src/repositories/delivered-report.ts#listDueDeliveredReports": {

@@ -1,23 +1,17 @@
-import { and, asc, eq, isNull, lt, or, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
+import { eq } from "drizzle-orm";
 import { projects } from "@ashara/db";
-import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
-import { projectHalted } from "@ashara/delivery/predicates";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { clientMessageReadNow, noOpenStop } from "../predicates.js";
 import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import type { HoldCorrection } from "../ports.js";
 import { affectedKeysOf } from "./client-change.js";
-import { LockedStanding, consumeInbound } from "./client-message.js";
+import { LockedStanding, consumeInbound, insertOutboundReport, openAnswerMessages, recordReadingFailure } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions: each inbound
 // 'answer' is consumed once, together with what it changes.
-
-const questions = alias(clientMessages, "question");
 
 interface OpenAnswerRow {
   readonly id: string;
@@ -58,36 +52,7 @@ export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<Op
 }
 
 async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<OpenAnswerRow[]> {
-  const rows = await db
-    .select({
-      id: clientMessages.id,
-      projectId: clientMessages.projectId,
-      body: clientMessages.body,
-      questionId: questions.id,
-      intakeAttempts: clientMessages.intakeAttempts,
-      intakeLastError: clientMessages.intakeLastError,
-      intakeLastFailure: clientMessages.intakeLastFailure,
-      firstPlannedAt: projects.firstPlannedAt,
-      // An EXISTS is never null: the driver yields a boolean, decoded as one with no per-row parse to fail.
-      halted: projectHalted(projects.id).mapWith(Boolean),
-    })
-    .from(clientMessages)
-    .innerJoin(questions, eq(questions.id, clientMessages.inReplyTo))
-    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
-    .where(
-      and(
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.kind, "answer"),
-        isNull(clientMessages.consumedAt),
-        clientMessageReadNow("answer"),
-        or(lt(clientMessages.intakeAttempts, MAX_ANSWER_ATTEMPTS), clientMessageReadNow("answer", "atCap")),
-        noOpenStop(clientMessages.projectId),
-        answerId === null ? undefined : eq(clientMessages.id, answerId),
-      ),
-    )
-    // A project at work first, whose reading refused by its own spend cap ends the step (CoreLoop.step) and
-    // halts it; a halted project's refusal waits for its limit without ending the step (waitForLimit).
-    .orderBy(asc(projectHalted(projects.id)), asc(clientMessages.createdAt), asc(clientMessages.id));
+  const rows = await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, answerId);
 
   const visions = new VisionRepository(db);
   const open: OpenAnswerRow[] = [];
@@ -122,20 +87,9 @@ class AnswerNotOpen extends Error {
 
 /** Counts one failed attempt to read an unconsumed answer with its error and whose failure it was; returns the count after it. */
 export async function recordAnswerFailure(db: DbHandle, answerId: string, error: string, failure: "model" | "provider"): Promise<number> {
-  const [row] = await db
-    .update(clientMessages)
-    .set({ intakeAttempts: sql`${clientMessages.intakeAttempts} + 1`, intakeLastError: error, intakeLastFailure: failure })
-    .where(
-      and(
-        eq(clientMessages.id, answerId),
-        eq(clientMessages.direction, "inbound"),
-        eq(clientMessages.kind, "answer"),
-        isNull(clientMessages.consumedAt),
-      ),
-    )
-    .returning({ intakeAttempts: clientMessages.intakeAttempts });
-  if (!row) throw new AnswerNotOpen(answerId, "record a failed attempt to read it");
-  return row.intakeAttempts;
+  const attempts = await recordReadingFailure(db, "answer", answerId, error, failure);
+  if (attempts === null) throw new AnswerNotOpen(answerId, "record a failed attempt to read it");
+  return attempts;
 }
 
 /** What was composed against no longer holds when the write's transaction reads it: nothing was written. */
@@ -241,13 +195,7 @@ function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrectio
       // Every changing answer is on record: the hold names it, the revision that takes it in records
       // itself on the hold, and its report says what it changed.
       await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.answerId, affected: await affectedKeysOf(tx, write.projectId, applied.version, applied.revision.ops) });
-      await tx.insert(clientMessages).values({
-        projectId: write.projectId,
-        direction: "outbound",
-        kind: "report",
-        body: write.replanReport,
-        inReplyTo: write.answerId,
-      });
+      await insertOutboundReport(tx, write.projectId, write.replanReport, write.answerId, `post the report on answer ${write.answerId}`);
     }
     return "recorded";
   });

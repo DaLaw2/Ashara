@@ -1,11 +1,10 @@
-import { isNotNull } from "drizzle-orm";
-import { clientMessages } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { PlanReportSubject } from "../report-subjects.js";
 import type { TableVerdicts } from "../guarantee-report.js";
+import { insertOutboundReport, postOnSubject } from "./client-message.js";
 import { insertGuaranteeVerdicts } from "./guarantee-report.js";
-import { insertOutboundReport, recordTold, tellOnce } from "./told-report.js";
+import { recordTold, tellOnce } from "./told-report.js";
 
 // The Liaison's write of its reports on Delivery's planning outcomes, which Delivery publishes in its
 // plan-report reads: a first plan's or a planning stop's report, once per project by the partial
@@ -43,18 +42,11 @@ export async function postPlanReport(
   verdicts: TableVerdicts | null,
 ): Promise<"posted" | "already-posted"> {
   return db.transaction(async (tx): Promise<"posted" | "already-posted"> => {
-    const [inserted] = await tx
-      .insert(clientMessages)
-      .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo: null, reportsOn: subject })
-      .onConflictDoNothing({
-        target: [clientMessages.projectId, clientMessages.reportsOn],
-        where: isNotNull(clientMessages.reportsOn),
-      })
-      .returning({ id: clientMessages.id });
-    if (inserted === undefined) return "already-posted";
-    const recorded = await recordTold(tx, "plan-revision", revisionIds, projectId, inserted.id);
+    const reportId = await postOnSubject(tx, { projectId, body, inReplyTo: null, reportsOn: subject }, "skip");
+    if (reportId === null) return "already-posted";
+    const recorded = await recordTold(tx, "plan-revision", revisionIds, projectId, reportId);
     if (recorded !== revisionIds.length) throw new RevisionsNotFoldable(projectId, revisionIds, recorded);
-    if (verdicts !== null) await insertGuaranteeVerdicts(tx, projectId, inserted.id, verdicts);
+    if (verdicts !== null) await insertGuaranteeVerdicts(tx, projectId, reportId, verdicts);
     return "posted";
   });
 }

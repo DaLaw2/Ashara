@@ -1133,7 +1133,7 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
     reason: "a predicate on which halts a planning-stopped report already tells; it composes no text",
   },
   {
-    source: `${ENGAGEMENT}/repositories/told-report.ts#insertOutboundReport`,
+    source: `${ENGAGEMENT}/repositories/client-message.ts#insertOutboundReport`,
     kind: "not-a-composer",
     reason: "posts the body it is given",
   },
@@ -1380,12 +1380,18 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
  */
 export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   {
-    source: `${ENGAGEMENT}/repositories/plan-report.ts#postPlanReport`,
-    posts: [`${ENGAGEMENT}/plan-report.ts#firstPlanReport`, `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`],
+    source: `${ENGAGEMENT}/repositories/client-message.ts#postOnSubject`,
+    posts: [
+      `${ENGAGEMENT}/plan-report.ts#firstPlanReport`,
+      `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`,
+      `${ENGAGEMENT}/client-stop.ts#stopReport`,
+      `${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`,
+      `${ENGAGEMENT}/intake.ts#contractDraftReport`,
+    ],
     clientWords: false,
   },
   {
-    source: `${ENGAGEMENT}/repositories/told-report.ts#insertOutboundReport`,
+    source: `${ENGAGEMENT}/repositories/client-message.ts#insertOutboundReport`,
     posts: [
       `${ENGAGEMENT}/plan-report.ts#planRevisionReport`,
       `${ENGAGEMENT}/block-report.ts#projectBlockedReport`,
@@ -1395,12 +1401,9 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
       `${ENGAGEMENT}/block-report.ts#projectResumedReport`,
       `${ENGAGEMENT}/delivered-report.ts#deliveredReport`,
       `${ENGAGEMENT}/delivered-report.ts#unreadNotice`,
+      `${ENGAGEMENT}/answers.ts#replanReport`,
+      `${ENGAGEMENT}/burn-warning.ts#burnWarningReport`,
     ],
-    clientWords: false,
-  },
-  {
-    source: `${ENGAGEMENT}/repositories/client-answer.ts#writeClientAnswer`,
-    posts: [`${ENGAGEMENT}/answers.ts#replanReport`],
     clientWords: false,
   },
   {
@@ -1409,33 +1412,13 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
     clientWords: true,
   },
   {
-    source: `${ENGAGEMENT}/repositories/tender-intake.ts#recordTenderIntake`,
-    posts: [`${ENGAGEMENT}/intake.ts#contractDraftReport`],
-    clientWords: false,
-  },
-  {
     source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`,
     posts: [`${ENGAGEMENT}/intake.ts#questionBody`],
     clientWords: false,
   },
   {
-    source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`,
-    posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`],
-    clientWords: false,
-  },
-  {
-    source: `${ENGAGEMENT}/repositories/client-receipt.ts#postClientReceipt`,
+    source: `${ENGAGEMENT}/repositories/client-message.ts#postReceiptOf`,
     posts: [`${ENGAGEMENT}/client-receipt.ts#receiptReport`],
-    clientWords: false,
-  },
-  {
-    source: `${ENGAGEMENT}/repositories/stack-choice.ts#recordStackChoice`,
-    posts: [`${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`],
-    clientWords: false,
-  },
-  {
-    source: `${ENGAGEMENT}/repositories/burn-warning.ts#postBurnWarning`,
-    posts: [`${ENGAGEMENT}/burn-warning.ts#burnWarningReport`],
     clientWords: false,
   },
 ];

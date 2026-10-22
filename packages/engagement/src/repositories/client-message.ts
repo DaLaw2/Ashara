@@ -1,12 +1,19 @@
-import { and, asc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { PROJECT_LIFECYCLES, ProjectRepository, insertedRow, projects } from "@ashara/db";
+import { PROJECT_LIFECYCLES, ProjectRepository, insertedRow, projects, qualifiedColumn } from "@ashara/db";
 import { clientMessages } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { HALT_KINDS, openHaltKind, type HaltKind } from "@ashara/delivery/predicates";
+import { HALT_KINDS, openHaltKind, projectHalted, type HaltKind } from "@ashara/delivery/predicates";
 import { INBOUND_KINDS, inboundDecision, type InboundKind, type InboundState } from "../inbound-policy.js";
 import { clientMessageReadNow, noOpenStop, visionWritten } from "../predicates.js";
+import { REPORT_SUBJECT, type REPORT_SUBJECTS } from "../report-subjects.js";
+
+// The client channel's one writer and reader in Engagement: the only file that holds the
+// client_messages table object (boundary-rules.toml, module-names.client-messages). Every other file
+// consumes, posts and reads a client message through the entries here, so the consumption below is
+// the only one there is.
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
 
@@ -31,6 +38,13 @@ interface NewClientMessage {
 
 const StateRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.enum(HALT_KINDS).nullable(), visionWritten: z.boolean() });
 
+/** The project's lifecycle, its open halt's kind and whether its first vision is written: what inboundDecision decides a message by, and what a receipt states. */
+export const projectStandingColumns = {
+  lifecycle: projects.lifecycle,
+  halt: openHaltKind(projects.id),
+  visionWritten: visionWritten(projects.id),
+};
+
 /** Why the message's writer may not write under the project's present state: nothing is consumed. */
 export interface StandingMoved {
   readonly kind: "moved";
@@ -51,7 +65,7 @@ async function lockedState(tx: DbHandle, projectId: ProjectId): Promise<InboundS
   const [locked] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
   if (locked === undefined) return null;
   const [row] = await tx
-    .select({ lifecycle: projects.lifecycle, halt: openHaltKind(projects.id), visionWritten: visionWritten(projects.id) })
+    .select(projectStandingColumns)
     .from(projects)
     .where(eq(projects.id, projectId));
   if (row === undefined) return null;
@@ -339,4 +353,281 @@ export async function createProjectWithTender(
     });
     return { project, message };
   });
+}
+
+/** A message that counts its failed readings toward a cap: an answer or a change. */
+type CountedKind = "answer" | "change";
+
+/**
+ * The reading queue of `kind`: unconsumed inbound messages read now by inboundDecision
+ * (clientMessageReadNow), under their cap of `maxAttempts` failed readings or read at it, of a
+ * project with no stop awaiting the Liaison; `id` narrows it to that message.
+ */
+function readingQueue(kind: CountedKind, maxAttempts: number, id: string | null): SQL | undefined {
+  return and(
+    eq(clientMessages.direction, "inbound"),
+    eq(clientMessages.kind, kind),
+    isNull(clientMessages.consumedAt),
+    clientMessageReadNow(kind),
+    or(lt(clientMessages.intakeAttempts, maxAttempts), clientMessageReadNow(kind, "atCap")),
+    noOpenStop(clientMessages.projectId),
+    id === null ? undefined : eq(clientMessages.id, id),
+  );
+}
+
+const readingColumns = {
+  id: clientMessages.id,
+  projectId: clientMessages.projectId,
+  body: clientMessages.body,
+  intakeAttempts: clientMessages.intakeAttempts,
+  intakeLastError: clientMessages.intakeLastError,
+  intakeLastFailure: clientMessages.intakeLastFailure,
+};
+
+// A project at work first, whose reading refused by its own spend cap ends the step (CoreLoop.step) and
+// halts it; a halted project's refusal waits for its limit without ending the step (waitForLimit).
+const readingOrder = (): SQL[] => [asc(projectHalted(projects.id)), asc(clientMessages.createdAt), asc(clientMessages.id)];
+
+const questions = alias(clientMessages, "question");
+
+/** The answers' reading queue, as stored, with the question each answers, its project's first plan and whether Delivery has it halted. */
+export async function openAnswerMessages(db: DbHandle, maxAttempts: number, answerId: string | null) {
+  return db
+    .select({
+      ...readingColumns,
+      questionId: questions.id,
+      firstPlannedAt: projects.firstPlannedAt,
+      // An EXISTS is never null: the driver yields a boolean, decoded as one with no per-row parse to fail.
+      halted: projectHalted(projects.id).mapWith(Boolean),
+    })
+    .from(clientMessages)
+    .innerJoin(questions, eq(questions.id, clientMessages.inReplyTo))
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    .where(readingQueue("answer", maxAttempts, answerId))
+    .orderBy(...readingOrder());
+}
+
+/** The changes' reading queue, as stored, with whether Delivery has each one's project halted. */
+export async function openChangeMessages(db: DbHandle, maxAttempts: number, changeId: string | null) {
+  return db
+    .select({ ...readingColumns, halted: projectHalted(projects.id) })
+    .from(clientMessages)
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    .where(readingQueue("change", maxAttempts, changeId))
+    .orderBy(...readingOrder());
+}
+
+/**
+ * Counts one failed attempt to read the unconsumed inbound `kind` message `id`, with its error and
+ * whose failure it was. The count after it; null when no such message is unconsumed.
+ */
+export async function recordReadingFailure(db: DbHandle, kind: CountedKind, id: string, error: string, failure: "model" | "provider"): Promise<number | null> {
+  const [row] = await db
+    .update(clientMessages)
+    .set({ intakeAttempts: sql`${clientMessages.intakeAttempts} + 1`, intakeLastError: error, intakeLastFailure: failure })
+    .where(and(eq(clientMessages.id, id), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, kind), isNull(clientMessages.consumedAt)))
+    .returning({ intakeAttempts: clientMessages.intakeAttempts });
+  return row === undefined ? null : row.intakeAttempts;
+}
+
+/** Inbound stops not yet consumed, read now by inboundDecision (clientMessageReadNow), oldest first, as stored. */
+export async function unconsumedStopMessages(db: DbHandle): Promise<Array<{ readonly id: string; readonly projectId: string }>> {
+  return db
+    .select({ id: clientMessages.id, projectId: clientMessages.projectId })
+    .from(clientMessages)
+    .where(
+      and(
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.kind, "stop"),
+        isNull(clientMessages.consumedAt),
+        sql`EXISTS (SELECT 1 FROM ${projects} WHERE ${projects.id} = ${clientMessages.projectId} AND ${clientMessageReadNow("stop")})`,
+      ),
+    )
+    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+}
+
+/** Whether the project's stop report is posted. */
+function stopReportPostedSql(projectId: string | SQL): SQL<boolean> {
+  return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = ${REPORT_SUBJECT.clientStop})`;
+}
+
+/** Whether the project's stop report is posted; null when the project does not exist. */
+export async function stopReportPosted(db: DbHandle, projectId: ProjectId): Promise<boolean | null> {
+  const [row] = await db.select({ posted: stopReportPostedSql(projectId) }).from(projects).where(eq(projects.id, projectId));
+  return row === undefined ? null : row.posted;
+}
+
+/** Records on the stop `stopId`, consumed in the proof's transaction, whether Delivery had its project halted when it stopped it. */
+export async function recordStopFoundHalted(standing: LockedStanding, stopId: string, wasHalted: boolean): Promise<void> {
+  await standing.tx
+    .update(clientMessages)
+    .set({ stopFoundHalted: wasHalted })
+    .where(and(eq(clientMessages.id, stopId), eq(clientMessages.projectId, standing.projectId), eq(clientMessages.kind, standing.messageKind)));
+}
+
+/** Every stop that stopped its project, the project still stopped and with no stop report yet, oldest consumed first, as stored. */
+export async function dueStopReportMessages(db: DbHandle) {
+  return db
+    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted })
+    .from(clientMessages)
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    .where(
+      and(
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.kind, "stop"),
+        isNotNull(clientMessages.stopFoundHalted),
+        eq(projects.lifecycle, "stopped"),
+        sql`NOT ${stopReportPostedSql(sql`${clientMessages.projectId}`)}`,
+      ),
+    )
+    .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
+}
+
+/** What posting a stop's report did: posted (its project and the report's id), already posted for the project, or no inbound stop has the id. */
+type StopReportPosting =
+  | { readonly kind: "posted"; readonly projectId: string; readonly reportId: string }
+  | { readonly kind: "already-posted" }
+  | { readonly kind: "not-a-stop" };
+
+/** Posts the report of the stop `stopId` in reply to it, once per project (the unique index on (project_id, reports_on)). */
+export async function postOnStop(tx: DbHandle, stopId: string, body: string): Promise<StopReportPosting> {
+  const [stop] = await tx
+    .select({ projectId: clientMessages.projectId })
+    .from(clientMessages)
+    .where(and(eq(clientMessages.id, stopId), eq(clientMessages.direction, "inbound"), eq(clientMessages.kind, "stop")));
+  if (stop === undefined) return { kind: "not-a-stop" };
+  const reportId = await postOnSubject(tx, { projectId: stop.projectId, body, inReplyTo: stopId, reportsOn: REPORT_SUBJECT.clientStop }, "skip");
+  return reportId === null ? { kind: "already-posted" } : { kind: "posted", projectId: stop.projectId, reportId };
+}
+
+/** An outbound report on one of the subjects a project gets at most one report on. */
+interface SubjectReport {
+  readonly projectId: string;
+  readonly body: string;
+  readonly inReplyTo: string | null;
+  readonly reportsOn: (typeof REPORT_SUBJECTS)[number];
+}
+
+/**
+ * Posts the report on its subject and returns its id. The partial unique index on (project_id,
+ * reports_on) admits one per project: on a repeat, "skip" inserts nothing and returns null, and
+ * "fail" fails the statement, rolling back the transaction it is in.
+ */
+export async function postOnSubject(tx: DbHandle, report: SubjectReport, onRepeat: "skip" | "fail"): Promise<string | null> {
+  const insert = tx
+    .insert(clientMessages)
+    .values({ projectId: report.projectId, direction: "outbound", kind: "report", body: report.body, inReplyTo: report.inReplyTo, reportsOn: report.reportsOn });
+  if (onRepeat === "fail") {
+    return insertedRow(await insert.returning({ id: clientMessages.id }), "client_messages", `post the ${report.reportsOn} report to project ${report.projectId}`).id;
+  }
+  const [row] = await insert
+    .onConflictDoNothing({ target: [clientMessages.projectId, clientMessages.reportsOn], where: isNotNull(clientMessages.reportsOn) })
+    .returning({ id: clientMessages.id });
+  return row === undefined ? null : row.id;
+}
+
+/** Posts an outbound report to the project, in reply to `inReplyTo` when it answers a message, and returns its id. */
+export async function insertOutboundReport(tx: DbHandle, projectId: string, body: string, inReplyTo: string | null, what: string): Promise<string> {
+  const rows = await tx
+    .insert(clientMessages)
+    .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo })
+    .returning({ id: clientMessages.id });
+  return insertedRow(rows, "client_messages", what).id;
+}
+
+/** Every inbound message owed a receipt, oldest first, with its project's standing, as stored. */
+export async function dueReceiptMessages(db: DbHandle) {
+  return db
+    .select({
+      messageId: clientMessages.id,
+      projectId: clientMessages.projectId,
+      kind: clientMessages.kind,
+      consumed: sql<unknown>`(${clientMessages.consumedAt} IS NOT NULL)`,
+      stoppedProject: sql<unknown>`(${clientMessages.stopFoundHalted} IS NOT NULL)`,
+      ...projectStandingColumns,
+    })
+    .from(clientMessages)
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    .where(
+      and(
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.receiptWaived, false),
+        sql`NOT EXISTS (SELECT 1 FROM client_messages rc WHERE rc.receipt_of = ${clientMessages.id})`,
+      ),
+    )
+    .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+}
+
+/** The inbound message `messageId` of the project, as stored: when it was consumed and its kind; null when the project has no such inbound message. */
+export async function inboundMessageOf(db: DbHandle, messageId: string, projectId: string): Promise<{ readonly consumedAt: Date | null; readonly kind: string } | null> {
+  const [message] = await db
+    .select({ consumedAt: clientMessages.consumedAt, kind: clientMessages.kind })
+    .from(clientMessages)
+    .where(and(eq(clientMessages.id, messageId), eq(clientMessages.projectId, projectId), eq(clientMessages.direction, "inbound")));
+  return message === undefined ? null : message;
+}
+
+/** Posts the receipt of the message `messageId` in reply to it; one per message (the unique index on receipt_of). */
+export async function postReceiptOf(tx: DbHandle, receipt: { readonly projectId: string; readonly messageId: string; readonly body: string }): Promise<"posted" | "already-posted"> {
+  const inserted = await tx
+    .insert(clientMessages)
+    .values({ projectId: receipt.projectId, direction: "outbound", kind: "report", body: receipt.body, inReplyTo: receipt.messageId, receiptOf: receipt.messageId })
+    .onConflictDoNothing({ target: clientMessages.receiptOf })
+    .returning({ id: clientMessages.id });
+  return inserted.length === 0 ? "already-posted" : "posted";
+}
+
+/**
+ * A message that carries the guarantee table as a terminal: the delivered report or acceptance notice of a sweep, a
+ * halt's report, the client's stop report, or the planning-stopped report.
+ */
+const terminalReport = sql`(
+  EXISTS (SELECT 1 FROM told_reports t WHERE t.report_id = ${clientMessages.id} AND t.subject_kind IN ('delivered', 'project-blocked'))
+  OR ${inArray(clientMessages.reportsOn, [REPORT_SUBJECT.clientStop, REPORT_SUBJECT.planningStopped])})`;
+
+/** The id of the project's last terminal report; null when it has none. */
+export async function lastTerminalReportId(db: DbHandle, projectId: string): Promise<string | null> {
+  const [last] = await db
+    .select({ reportId: clientMessages.id })
+    .from(clientMessages)
+    .where(and(eq(clientMessages.projectId, projectId), eq(clientMessages.direction, "outbound"), eq(clientMessages.kind, "report"), terminalReport))
+    .orderBy(desc(clientMessages.createdAt), desc(clientMessages.id))
+    .limit(1);
+  return last === undefined ? null : last.reportId;
+}
+
+/** The words of each client message `ids` names that exists. */
+export async function clientMessageBodies(db: DbHandle, ids: readonly string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db.select({ id: clientMessages.id, body: clientMessages.body }).from(clientMessages).where(inArray(clientMessages.id, [...ids]));
+  return new Map(rows.map((row) => [row.id, row.body]));
+}
+
+/** A consumed stop as a reader's filter names it: its id, an SQL expression over the stop the read is of. */
+export interface StopRef {
+  readonly id: SQL;
+}
+
+/**
+ * Every consumed stop that stopped its project, the project still stopped, that `where` admits,
+ * earliest consumed first. The stop that stopped the project is the one that records it
+ * (stop_found_halted), or, on a stop that records nothing of it, the one its stop report answers; a
+ * second stop of a project already stopped stopped nothing.
+ */
+export async function stopsThatStopped(db: DbHandle, where: (stop: StopRef) => SQL | undefined): Promise<Array<{ readonly stopId: string; readonly projectId: string }>> {
+  return db
+    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId })
+    .from(clientMessages)
+    .innerJoin(projects, eq(projects.id, clientMessages.projectId))
+    .where(
+      and(
+        eq(clientMessages.direction, "inbound"),
+        eq(clientMessages.kind, "stop"),
+        isNotNull(clientMessages.consumedAt),
+        eq(projects.lifecycle, "stopped"),
+        sql`(${clientMessages.stopFoundHalted} IS NOT NULL OR EXISTS (SELECT 1 FROM client_messages r WHERE r.in_reply_to = ${clientMessages.id} AND r.reports_on = ${REPORT_SUBJECT.clientStop}))`,
+        where({ id: qualifiedColumn(clientMessages.id) }),
+      ),
+    )
+    .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
 }

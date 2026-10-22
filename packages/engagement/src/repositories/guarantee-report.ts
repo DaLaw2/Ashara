@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lte } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
+import { visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 import { recordedSweep } from "@ashara/quality/published-reads";
@@ -10,7 +10,7 @@ import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { VisionVersion } from "../vision.js";
 import { ContractRevisionMismatch, GuaranteeVerdictsMismatch, guaranteeTableOf } from "../guarantee-report.js";
 import type { ContractRevision, GuaranteeRecords, GuaranteeTable, TableVerdicts } from "../guarantee-report.js";
-import { REPORT_SUBJECT } from "../report-subjects.js";
+import { lastTerminalReportId } from "./client-message.js";
 
 // What a terminal message's guarantee table is read from: its sweep, the vision version that sweep's
 // evidence was recorded against and Quality's verdict on each of its guarantees, or, for a message no
@@ -97,29 +97,16 @@ async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise<Guaran
 }
 
 /**
- * A message that carries the guarantee table as a terminal: the delivered report or acceptance notice of a sweep, a
- * halt's report, the client's stop report, or the planning-stopped report.
- */
-const terminalReport = sql`(
-  EXISTS (SELECT 1 FROM told_reports t WHERE t.report_id = ${clientMessages.id} AND t.subject_kind IN ('delivered', 'project-blocked'))
-  OR ${inArray(clientMessages.reportsOn, [REPORT_SUBJECT.clientStop, REPORT_SUBJECT.planningStopped])})`;
-
-/**
  * The verdict rows the project's last terminal report carries, as stored and unparsed; that the last terminal report
  * carries none (its table judged nothing: no contract, or records that did not read), never an older report's rows in
  * its place; or that the project has no terminal report.
  */
 export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: string) {
-  const [last] = await db
-    .select({ reportId: clientMessages.id })
-    .from(clientMessages)
-    .where(and(eq(clientMessages.projectId, projectId), eq(clientMessages.direction, "outbound"), eq(clientMessages.kind, "report"), terminalReport))
-    .orderBy(desc(clientMessages.createdAt), desc(clientMessages.id))
-    .limit(1);
-  if (last === undefined) return { kind: "no-terminal-report" } as const;
-  const rows = await reportVerdicts(db, last.reportId);
-  if (rows.length === 0) return { kind: "no-verdicts", reportId: last.reportId } as const;
-  return { kind: "verdicts", reportId: last.reportId, rows } as const;
+  const reportId = await lastTerminalReportId(db, projectId);
+  if (reportId === null) return { kind: "no-terminal-report" } as const;
+  const rows = await reportVerdicts(db, reportId);
+  if (rows.length === 0) return { kind: "no-verdicts", reportId } as const;
+  return { kind: "verdicts", reportId, rows } as const;
 }
 
 /**

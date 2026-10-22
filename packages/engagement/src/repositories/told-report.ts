@@ -1,6 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { insertedRow } from "@ashara/db";
-import { clientMessages, toldReports } from "@ashara/db/schema/engagement";
+import { toldReports } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { haltEpisodeOf } from "@ashara/delivery/predicates";
 import { planRevisionProjects } from "@ashara/delivery/reads";
@@ -23,15 +22,6 @@ class SubjectToldConcurrently extends Error {
     super(`the report on ${subject.kind} ${subject.id} was recorded by a concurrent post; this one is rolled back`);
     this.name = "SubjectToldConcurrently";
   }
-}
-
-/** Posts an outbound report to the project, in reply to `inReplyTo` when it answers a message, and returns its id. */
-export async function insertOutboundReport(tx: DbHandle, projectId: string, body: string, inReplyTo: string | null, what: string): Promise<string> {
-  const rows = await tx
-    .insert(clientMessages)
-    .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo })
-    .returning({ id: clientMessages.id });
-  return insertedRow(rows, "client_messages", what).id;
 }
 
 /** A told record was asked for a subject its owner does not publish as the project's: a report on it tells the client of nothing of theirs. */
