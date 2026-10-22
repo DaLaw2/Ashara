@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
+import { ProviderError, ROUTING_RULES, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
 import { CheckSetFreezeRepository, SuiteReviewFindingRepository, SuiteReviewJudgementRepository, TaskCheckRepository, blockingReview, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import { suiteReviewerFor } from "@ashara/quality/testing";
@@ -36,7 +36,7 @@ function secondBy(request: ConstructorParameters<typeof SecondOpinionUnavailable
   const opinion = request.secondOpinion;
   if (opinion === undefined) return FIRST;
   const by = catalog[opinion.strength];
-  if (by === undefined) throw new SecondOpinionUnavailable(opinion, request, []);
+  if (by === undefined) throw new SecondOpinionUnavailable(opinion, request, [], ROUTING_RULES);
   return by;
 }
 
@@ -279,7 +279,7 @@ describe("witnessed findings and the check set freeze", () => {
   });
 
   test("a second review no model answered is stored as failed with its reason, the item kept advisory and undecided", async () => {
-    const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
+    const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, ROUTING_RULES, { cause: new ProviderError("second", "503", "provider") });
     const { outcome, kept, judged, check } = await reviewUndecided({ "other-family": { provider: "second", model: "strong-b", grade: "Frontier" as const } }, true, failure);
     expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
     expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
@@ -377,7 +377,7 @@ describe("witnessed findings and the check set freeze", () => {
   });
 
   test("a clean review whose second review failed stores every covered item undecided, with why", async () => {
-    const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, { cause: new ProviderError("second", "503", "provider") });
+    const failure = new SecondOpinionUnanswered({ avoid: FIRST, strength: "other-family" }, { provider: "second", model: "strong-b" }, ROUTING_RULES, { cause: new ProviderError("second", "503", "provider") });
     const { kept, claims, check } = await reviewClean(failure);
     expect(kept).toEqual([
       { itemId: "S8", judgementId: null, basis: "second-review-failed" },

@@ -30,6 +30,8 @@ import type { ResolvedJudge, ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
+import { describeEqualJudge } from "./routing-rules.js";
+import type { RoutingRules } from "./routing-rules.js";
 import { SchemaUnacceptable, refuseUnacceptableSchema, sendsStructuredSchema, wireSchemaOf } from "./schema-acceptance.js";
 import { outputBudget, thinkingModeFor, thinkingProviderOptions, turnOutputBudget } from "./thinking.js";
 import type { OutputBudget } from "./thinking.js";
@@ -162,8 +164,8 @@ export class LLMGateway {
   private readonly thinking: ThinkingPolicy | undefined;
   private readonly contextOverflow: ContextOverflowSignatures;
 
-  constructor(config: GatewayConfig, clock: () => Date, models: LanguageModelFactory) {
-    this.registry = new ProviderRegistry(config, models);
+  constructor(config: GatewayConfig, clock: () => Date, models: LanguageModelFactory, rules: RoutingRules) {
+    this.registry = new ProviderRegistry(config, models, rules);
     this.clock = clock;
     this.thinking = config.thinking;
     this.contextOverflow = config.contextOverflow;
@@ -415,25 +417,26 @@ export class LLMGateway {
       return this.withFallback(request, routed, execute, "structured request", rethrown, []);
     }
     // A second opinion goes only to a model of the strength it asks for: the catalog has one or the
-    // request is refused unsent. An other-family opinion's failover never returns to the avoided
-    // provider; a same-family or same-model one is pinned to its one model. Moving to a weaker
-    // strength is the caller's explicit step, never a failover here.
+    // request is refused unsent, and its failover is only what its strength's rule allows. Moving to
+    // a weaker strength is the caller's explicit step, never a failover here.
+    const { rules } = this.registry;
     const resolved = this.registry.resolveSecondOpinion(request, opinion, request.site);
-    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request, this.registry.enabledModels(request.site));
-    if (request.judges !== undefined) {
+    if (resolved === null) throw new SecondOpinionUnavailable(opinion, request, this.registry.enabledModels(request.site), rules);
+    // A floor-held opinion at the judged tier is its rule, not a judge rule that found nothing above.
+    if (request.judges !== undefined && rules.secondOpinion[opinion.strength].judging.kind === "judge-rule") {
       this.reportEqualJudge(request.judges, { ...resolved, relation: judgeRelation(request.judges, this.registry.gradeAt(resolved.modelConfig, request.site)) }, request.site);
     }
     try {
-      return opinion.strength === "other-family"
+      return rules.secondOpinion[opinion.strength].failover === "other-providers"
         ? await this.withFallback(request, resolved, execute, "structured request", rethrown, [opinion.avoid.provider])
         : await this.pinned(request, resolved, execute, "structured request", rethrown);
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
-      throw new SecondOpinionUnanswered(opinion, { provider: resolved.providerName, model: resolved.modelConfig.id }, { cause: error });
+      throw new SecondOpinionUnanswered(opinion, { provider: resolved.providerName, model: resolved.modelConfig.id }, rules, { cause: error });
     }
   }
 
-  /** The judge of work at `judges`: one tier above it, else at it, else JudgeUnavailable. */
+  /** The judge of work at `judges` under the judge rule, else JudgeUnavailable. */
   private judge(judges: CapabilityLevel, excluded: readonly string[], site: KnownLLMSite | undefined): ResolvedProvider {
     const resolved = this.registry.resolveJudge(judges, excluded, site);
     this.reportEqualJudge(judges, resolved, site);
@@ -448,12 +451,12 @@ export class LLMGateway {
     return fallback;
   }
 
-  /** A judge no stronger than the work it judges is named: no model one tier above it is routed there. */
+  /** A judge no stronger than the work it judges is named, with why the judge rule found none above it. */
   private reportEqualJudge(judges: CapabilityLevel, resolved: ResolvedJudge, site: KnownLLMSite | undefined): void {
     if (resolved.relation !== "equal") return;
     console.warn(
       `[LLMGateway] the judge of work at ${judges} (site=${site ?? "none"}) is ${resolved.providerName}/${resolved.modelConfig.id}, ` +
-        `graded ${this.registry.gradeAt(resolved.modelConfig, site)} as called there: no stronger than the work, since no model one tier above it is routed there`,
+        `graded ${this.registry.gradeAt(resolved.modelConfig, site)} as called there: no stronger than the work, since ${describeEqualJudge(this.registry.rules.judge)}`,
     );
   }
 

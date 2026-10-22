@@ -4,6 +4,7 @@ import { CAPABILITY_RANK, gradeAsCalled } from "./capability-rank.js";
 import { InvalidGatewayCatalog, JudgePinnedBelowTop, RoutingEntryBelowTier } from "./errors.js";
 import { resolveModelsConfigPath } from "./paths.js";
 import { computeProviderCombo } from "./routing-profiles.js";
+import { ROUTING_RULES, meetsFloor } from "./routing-rules.js";
 import { thinkingModeFor, widestTurnOutputReserve } from "./thinking.js";
 import { JUDGEMENT_SITES, KNOWN_LLM_SITES, PROVIDER_TYPES } from "./types.js";
 import type { CapabilityLevel } from "./capability-level.js";
@@ -150,7 +151,7 @@ function assertNoJudgePinnedBelowTop(providers: readonly ProviderConfig[], routi
       topTier = top;
     }
   }
-  if (topTier !== null) throw new JudgePinnedBelowTop({ combo, pins, topTier, configPath: resolveModelsConfigPath() });
+  if (topTier !== null) throw new JudgePinnedBelowTop({ combo, pins, topTier, configPath: resolveModelsConfigPath(), rules: ROUTING_RULES });
 }
 
 /**
@@ -176,10 +177,10 @@ function assertNoTierMappedBelowIt(providers: readonly ProviderConfig[], routing
       const model = modelId === undefined ? undefined : offered.find((m) => m.id === modelId);
       if (model === undefined) continue;
       const grade = gradeAsCalled(model, mode);
-      if (CAPABILITY_RANK[grade] < CAPABILITY_RANK[tier]) below.push({ site, tier, model: model.id, grade });
+      if (!meetsFloor(ROUTING_RULES.capabilityFloor, grade, tier)) below.push({ site, tier, model: model.id, grade });
     }
   }
-  if (below.length > 0) throw new RoutingEntryBelowTier({ combo, entries: below, configPath: resolveModelsConfigPath() });
+  if (below.length > 0) throw new RoutingEntryBelowTier({ combo, entries: below, configPath: resolveModelsConfigPath(), floor: ROUTING_RULES.capabilityFloor });
 }
 
 /**

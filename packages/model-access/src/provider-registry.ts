@@ -12,8 +12,10 @@ import {
   RoutingProfileUnresolved,
   UnknownProvider,
 } from "./errors.js";
-import { CAPABILITY_RANK, gradeAsCalled, judgeRelation, nextCapability } from "./capability-rank.js";
+import { capabilityAbove, gradeAsCalled, judgeRelation } from "./capability-rank.js";
 import { computeProviderCombo } from "./routing-profiles.js";
+import { describeFloor, judgeTiers, meetsFloor } from "./routing-rules.js";
+import type { CapabilityFloor, RoutingRules, SecondOpinionScope } from "./routing-rules.js";
 import { thinkingModeFor } from "./thinking.js";
 import type {
   GatewayConfig,
@@ -43,12 +45,6 @@ export interface ResolvedJudge extends ResolvedProvider {
 interface Route {
   readonly providerConfig: ProviderConfig;
   readonly model: ModelConfig;
-}
-
-/** The tiers a judge of work at `judged` is asked at, strongest first: one above it, then it. */
-function judgeTiers(judged: CapabilityLevel): CapabilityLevel[] {
-  const above = nextCapability(judged);
-  return above === null ? [judged] : [above, judged];
 }
 
 /** Makes the model a resolved route sends its requests to; the composition root chooses it. */
@@ -109,7 +105,7 @@ export const sdkLanguageModels: LanguageModelFactory = (providerConfig, modelCon
 type GradeOf = (model: ModelConfig) => CapabilityLevel;
 
 /**
- * The cheapest model graded at or above `capability`: base input rate, then
+ * The cheapest model `floor` lets serve `capability`: base input rate, then
  * base output rate, then id, so the choice never depends on catalog order.
  * Picking the lowest qualifying level would send a Light request to a dearer,
  * weaker model whenever a cheaper one is graded higher.
@@ -118,9 +114,9 @@ function findBestModel(
   models: ModelConfig[],
   capability: CapabilityLevel,
   gradeOf: GradeOf,
+  floor: CapabilityFloor,
 ): ModelConfig | undefined {
-  const targetRank = CAPABILITY_RANK[capability];
-  return models.filter((m) => CAPABILITY_RANK[gradeOf(m)] >= targetRank).sort(cheaperFirst)[0];
+  return models.filter((m) => meetsFloor(floor, gradeOf(m), capability)).sort(cheaperFirst)[0];
 }
 
 /** Base input rate, then base output rate, then id: an order that never depends on catalog order. */
@@ -141,10 +137,13 @@ export class ProviderRegistry {
    */
   private readonly enabledCombo: string;
   private readonly createLanguageModel: LanguageModelFactory;
+  /** The rules every selection here reads, and every refusal of one renders. */
+  readonly rules: RoutingRules;
 
-  constructor(config: GatewayConfig, models: LanguageModelFactory) {
+  constructor(config: GatewayConfig, models: LanguageModelFactory, rules: RoutingRules) {
     this.config = config;
     this.createLanguageModel = models;
+    this.rules = rules;
     this.routingProfiles = config.routingProfiles;
     this.enabledCombo = computeProviderCombo(
       config.providers.filter((p) => p.enabled).map((p) => p.name),
@@ -176,6 +175,7 @@ export class ProviderRegistry {
       throw new NoProviderAvailableError(
         capability,
         enabledProviders.flatMap((p) => p.models.map((m) => `${m.id} (${gradeOf(m)})`)),
+        this.rules.capabilityFloor,
       );
     }
     return this.resolvedOf(route);
@@ -230,16 +230,16 @@ export class ProviderRegistry {
   }
 
   /**
-   * The judge of work at `judges` at `site`: a model graded one tier above it, else one graded at
-   * it, by the same routing as any request at `site` asked at that tier. A routing profile's entry
-   * is held to the tier it is asked at like any candidate: one graded below it is passed over, never
-   * used. Throws JudgeUnavailable, naming the judged tier and the candidates, when neither tier finds
-   * a model: no weaker one is substituted.
+   * The judge of work at `judges` at `site`: a model at the first tier of the judge rule
+   * (RoutingRules.judge) that finds one, by the same routing as any request at `site` asked at that
+   * tier. A routing profile's entry is held to the tier it is asked at like any candidate: one below
+   * the capability floor is passed over, never used. Throws JudgeUnavailable, naming the judged tier
+   * and the candidates, when no tier finds a model: no weaker one is substituted.
    */
   resolveJudge(judges: CapabilityLevel, excludeProviders: readonly string[] = [], site?: KnownLLMSite): ResolvedJudge {
     const enabledProviders = this.config.providers.filter((p) => p.enabled && !excludeProviders.includes(p.name));
     const steps: string[] = [];
-    for (const tier of judgeTiers(judges)) {
+    for (const tier of judgeTiers(this.rules.judge, judges)) {
       const route = this.judgeRouteAt(enabledProviders, excludeProviders, site, tier);
       if ("refused" in route) {
         steps.push(`at ${tier}: ${route.refused}`);
@@ -252,6 +252,7 @@ export class ProviderRegistry {
       site: site ?? null,
       candidates: enabledProviders.flatMap((p) => p.models.map((m) => `${p.name}/${m.id} (${this.gradeAt(m, site)})`)),
       steps,
+      rules: this.rules,
     });
   }
 
@@ -286,67 +287,79 @@ export class ProviderRegistry {
         if (!(err instanceof RoutingProfileUnresolved) || err.mappedModel !== null) throw err;
         return { refused: `routing profile "${this.enabledCombo}" maps site="${site}" at no model for it` };
       }
-      if (route !== null && CAPABILITY_RANK[this.gradeAt(route.model, site)] < CAPABILITY_RANK[tier]) {
+      if (route !== null && !meetsFloor(this.rules.capabilityFloor, this.gradeAt(route.model, site), tier)) {
         return {
           refused: `routing profile "${this.enabledCombo}" maps site="${site}" to ${route.providerConfig.name}/${route.model.id}, graded ${this.gradeAt(route.model, site)} as called there`,
         };
       }
     }
-    return route ?? this.defaultRoute(enabledProviders, tier, site) ?? { refused: "no enabled provider offers a model graded at or above it" };
+    return route ?? this.defaultRoute(enabledProviders, tier, site) ?? { refused: `no enabled provider offers a model ${describeFloor(this.rules.capabilityFloor)}` };
   }
 
   /**
    * The model a second opinion of `opinion.strength` goes to for `ask` at `site`, chosen from the
-   * catalog by provider and graded tier alone; null when the catalog offers none. A judging request's
-   * other-family second opinion is a judge like its first: one tier above, else equal, never below.
-   * A same-family one (another model, or the same model) is held to the judged tier as a floor and
-   * takes the cheapest model graded at or above it: a dearer model one tier above is never chosen
-   * over one at the tier, since the verdict reads the weaker of the two reviewers' grades. At a tier:
-   * - other-family: another provider's model, by the same routing as any request at `site`;
-   * - same-family-other-model: the cheapest other model of the avoided provider graded at or above
-   *   the tier;
-   * - same-model: the avoided model itself, graded at or above the tier, and only when no other
-   *   enabled model is: a deployment that offers another model never re-asks the same one.
+   * catalog by provider and graded tier alone under that strength's rule (RoutingRules.secondOpinion);
+   * null when the catalog offers none. Its scope names the models it may go to; a judging request's
+   * opinion is asked at the tiers of the judge rule, or at the one tier its floor holds it to.
    */
   resolveSecondOpinion(ask: TierAsk, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
-    if (ask.judges === undefined) return this.secondOpinionAt(ask.capability, opinion, site);
-    if (opinion.strength === "other-family") return this.resolveJudgeFallback(ask.judges, [opinion.avoid.provider], site);
-    return this.secondOpinionAt(ask.judges, opinion, site);
+    const rule = this.rules.secondOpinion[opinion.strength];
+    if (ask.judges === undefined) return this.secondOpinionAt(ask.capability, rule.scope, opinion, site);
+    const tiers =
+      rule.judging.kind === "judge-rule" ? judgeTiers(this.rules.judge, ask.judges) : [capabilityAbove(ask.judges, rule.judging.tiersAbove)];
+    for (const tier of tiers) {
+      if (tier === null) continue;
+      const resolved =
+        rule.scope === "other-provider" ? this.otherProviderAt(tier, opinion.avoid.provider, site) : this.secondOpinionAt(tier, rule.scope, opinion, site);
+      if (resolved !== null) return resolved;
+    }
+    return null;
   }
 
-  private secondOpinionAt(capability: CapabilityLevel, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
+  /** A model of a provider other than `avoided` held to `tier` at `site`, as a judge's is; null when none is. */
+  private otherProviderAt(tier: CapabilityLevel, avoided: string, site: KnownLLMSite | undefined): ResolvedProvider | null {
+    const enabledProviders = this.config.providers.filter((p) => p.enabled && p.name !== avoided);
+    const route = this.judgeRouteAt(enabledProviders, [avoided], site, tier);
+    return "refused" in route ? null : this.resolvedOf(route);
+  }
+
+  /**
+   * At `capability`: an other-provider scope routes as any request at `site`; another model of the
+   * avoided provider is its cheapest one the capability floor admits; the avoided model itself only
+   * when the floor admits it and no other enabled model.
+   */
+  private secondOpinionAt(capability: CapabilityLevel, scope: SecondOpinionScope, opinion: SecondOpinion, site?: KnownLLMSite): ResolvedProvider | null {
     const { avoid } = opinion;
-    if (opinion.strength === "other-family") return this.resolveFallback(capability, [avoid.provider], site);
+    if (scope === "other-provider") return this.resolveFallback(capability, [avoid.provider], site);
     const same = this.config.providers.find((p) => p.enabled && p.name === avoid.provider);
     if (!same) return null;
-    const targetRank = CAPABILITY_RANK[capability];
+    const floor = this.rules.capabilityFloor;
     const gradeOf = this.gradesAt(site);
     let modelConfig: ModelConfig | undefined;
-    if (opinion.strength === "same-family-other-model") {
-      modelConfig = findBestModel(same.models.filter((m) => m.id !== avoid.model), capability, gradeOf);
+    if (scope === "avoided-provider-other-model") {
+      modelConfig = findBestModel(same.models.filter((m) => m.id !== avoid.model), capability, gradeOf, floor);
     } else {
       const others = this.config.providers
         .filter((p) => p.enabled)
         .flatMap((p) => p.models.filter((m) => !(p.name === avoid.provider && m.id === avoid.model)))
-        .filter((m) => CAPABILITY_RANK[gradeOf(m)] >= targetRank);
+        .filter((m) => meetsFloor(floor, gradeOf(m), capability));
       const itself = same.models.find((m) => m.id === avoid.model);
-      modelConfig = others.length === 0 && itself !== undefined && CAPABILITY_RANK[gradeOf(itself)] >= targetRank ? itself : undefined;
+      modelConfig = others.length === 0 && itself !== undefined && meetsFloor(floor, gradeOf(itself), capability) ? itself : undefined;
     }
     if (!modelConfig) return null;
     return this.resolvedOf({ providerConfig: same, model: modelConfig });
   }
 
   /**
-   * The cheapest model of an enabled provider graded at or above `capability` whose context window
+   * The cheapest model of an enabled provider the capability floor admits at `capability` whose context window
    * is larger than `windowTokens`, by capability logic alone (a routing profile pins one model per
    * site, which is the one whose window was too small); null when the catalog offers none.
    */
   resolveWithWindowAbove(capability: CapabilityLevel, windowTokens: number, site: KnownLLMSite): ResolvedProvider | null {
-    const targetRank = CAPABILITY_RANK[capability];
     const [best] = this.config.providers
       .filter((p) => p.enabled)
       .flatMap((provider) => provider.models.map((model) => ({ provider, model })))
-      .filter(({ model }) => model.maxContextTokens > windowTokens && CAPABILITY_RANK[this.gradeAt(model, site)] >= targetRank)
+      .filter(({ model }) => model.maxContextTokens > windowTokens && meetsFloor(this.rules.capabilityFloor, this.gradeAt(model, site), capability))
       .sort((a, b) => cheaperFirst(a.model, b.model));
     if (best === undefined) return null;
     return {
@@ -452,7 +465,7 @@ export class ProviderRegistry {
     });
   }
 
-  /** Capability logic: the default provider first, then the others, each offering its cheapest model at or above `capability`. */
+  /** Capability logic: the default provider first, then the others, each offering its cheapest model the capability floor admits at `capability`. */
   private defaultRoute(enabledProviders: ProviderConfig[], capability: CapabilityLevel, site: KnownLLMSite | undefined): Route | null {
     const gradeOf = this.gradesAt(site);
     const defaultFirst = [...enabledProviders].sort((a, b) => {
@@ -462,7 +475,7 @@ export class ProviderRegistry {
     });
 
     for (const providerConfig of defaultFirst) {
-      const model = findBestModel(providerConfig.models, capability, gradeOf);
+      const model = findBestModel(providerConfig.models, capability, gradeOf, this.rules.capabilityFloor);
       if (model) return { providerConfig, model };
     }
     return null;

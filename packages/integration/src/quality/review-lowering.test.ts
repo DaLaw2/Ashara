@@ -7,7 +7,7 @@ import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } fro
 import type { AcceptanceStore } from "@ashara/delivery";
 import { createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import type { VisionSource } from "@ashara/engagement";
-import { SecondOpinionUnavailable } from "@ashara/finance";
+import { ROUTING_RULES, SecondOpinionUnavailable } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
 import { SuiteReviewJudgementRepository, suiteReviewClaimsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
@@ -191,7 +191,7 @@ function reviewed(first: readonly unknown[], second: readonly unknown[]): Contex
     forCall: () => ({
       generateStructured: async (request) => {
         const opinion = request.secondOpinion;
-        if (opinion !== undefined && opinion.strength !== "other-family") throw new SecondOpinionUnavailable(opinion, request, []);
+        if (opinion !== undefined && opinion.strength !== "other-family") throw new SecondOpinionUnavailable(opinion, request, [], ROUTING_RULES);
         const by = opinion === undefined ? { provider: "first", model: "strong-a" } : { provider: "second", model: "strong-b" };
         return { data: request.schema.parse({ problems: opinion === undefined ? first : second }), ...by, grade: "Frontier" as const };
       },

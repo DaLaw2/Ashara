@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { BudgetExceeded, PreCallRefusal, ProviderError } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm } from "@ashara/finance";
-import { SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
+import { ROUTING_RULES, SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment, notExercised } from "@ashara/shared/testing";
 import { TenderIntake } from "./intake.js";
@@ -706,7 +706,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
   }
 
   const unavailable = (request: Request): never => {
-    throw new SecondOpinionUnavailable(request.secondOpinion, { judges: request.judges }, []);
+    throw new SecondOpinionUnavailable(request.secondOpinion, { judges: request.judges }, [], ROUTING_RULES);
   };
 
   test.each(["Light", "Frontier"] as const)(

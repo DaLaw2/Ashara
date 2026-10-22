@@ -51,5 +51,7 @@ export { ContextBudgetExceeded } from "@ashara/model-access";
 // A second opinion the catalog cannot serve at a strength, or that got no answer at it: its caller
 // moves to the next strength or reports it as failed.
 export { SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/model-access";
+/** @testseam a scripted gateway in a caller's test builds those refusals with the rules the gateway routes by */
+export { ROUTING_RULES } from "@ashara/model-access";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "@ashara/model-access";

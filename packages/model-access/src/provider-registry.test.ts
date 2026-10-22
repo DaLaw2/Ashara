@@ -7,11 +7,12 @@ import { LLMGateway } from "./gateway.js";
 import { resolveModelsConfigPath } from "./paths.js";
 import { ProviderRegistry, sdkLanguageModels } from "./provider-registry.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
+import { ROUTING_RULES } from "./routing-rules.js";
 import { loadThinkingPolicyFromToml } from "./thinking.js";
 import type { GatewayConfig, ModelConfig } from "./types.js";
 
 function registryOf(config: GatewayConfig): ProviderRegistry {
-  return new ProviderRegistry(config, sdkLanguageModels);
+  return new ProviderRegistry(config, sdkLanguageModels, ROUTING_RULES);
 }
 
 const MODEL: ModelConfig = {
@@ -127,7 +128,7 @@ describe("ProviderRegistry base_url guard", () => {
     const registry = new ProviderRegistry(config, (provider, model) => {
       made.push(`${provider.name}/${model.id}`);
       return scripted;
-    });
+    }, ROUTING_RULES);
 
     expect(registry.resolve("Strong").provider).toBe(scripted);
     expect(made).toEqual(["mistral/mistral-large"]);
@@ -306,7 +307,7 @@ describe("a model whose context window is larger than one overflowed", () => {
   });
 
   test("the gateway: the routed model when its window is larger, else a larger one, never the routed one again", () => {
-    const pinned = (id: string) => new LLMGateway(config([small, wideCheap], { mistral: { "agent-runner": id } }), () => new Date(), () => new MockLanguageModelV4());
+    const pinned = (id: string) => new LLMGateway(config([small, wideCheap], { mistral: { "agent-runner": id } }), () => new Date(), () => new MockLanguageModelV4(), ROUTING_RULES);
     expect(pinned("small").resolveModelWithWindowAbove("Strong", "agent-runner", 32_000)?.modelId).toBe("wide-cheap");
     expect(pinned("wide-cheap").resolveModelWithWindowAbove("Strong", "agent-runner", 32_000)?.modelId).toBe("wide-cheap");
     expect(pinned("small").resolveModelWithWindowAbove("Strong", "agent-runner", 200_000)).toBeNull();
@@ -423,7 +424,7 @@ describe("ProviderRegistry.resolveJudge", () => {
       defaultProvider: "alpha",
       contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     };
-    const gated = new LLMGateway(config, () => new Date(), () => answered).gated("suite-review", { admit: async () => {}, settle: async () => {} });
+    const gated = new LLMGateway(config, () => new Date(), () => answered, ROUTING_RULES).gated("suite-review", { admit: async () => {}, settle: async () => {} });
     const response = await gated.generateStructured({ judges: "Medium", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, site: "suite-review" });
     expect(response.model).toBe("alpha-strong");
     await expect(gated.generateStructured({ judges: "Frontier", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10 })).rejects.toBeInstanceOf(JudgeUnavailable);

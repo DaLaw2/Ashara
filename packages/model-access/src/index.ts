@@ -15,6 +15,8 @@ export { loadThinkingPolicyFromToml } from "./thinking.js";
 export { loadContextOverflowFromToml } from "./context-window.js";
 export { buildGateway } from "./build-gateway.js";
 export { sdkLanguageModels } from "./provider-registry.js";
+/** @testseam a scripted gateway in a caller's test builds the refusals the gateway throws with the rules it routes by */
+export { ROUTING_RULES } from "./routing-rules.js";
 export type { LanguageModelFactory } from "./provider-registry.js";
 export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";

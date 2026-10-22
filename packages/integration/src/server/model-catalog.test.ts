@@ -13,6 +13,7 @@ import {
   loadRoutingProfilesFromToml,
   loadThinkingPolicyFromToml,
   resolveModelsConfigPath,
+  ROUTING_RULES,
   sdkLanguageModels,
   StructuredOutputExhausted,
   toModelConfig,
@@ -95,6 +96,7 @@ describe("the model catalog", () => {
       },
       () => new Date(),
       sdkLanguageModels,
+      ROUTING_RULES,
     );
 
     expect(gateway.resolveModel("Strong", "decomposition").modelId).toBe("claude-sonnet-5-5");

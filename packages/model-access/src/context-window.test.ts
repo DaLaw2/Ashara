@@ -9,6 +9,7 @@ import { contextOverflowOf, contextPreflight, loadContextOverflowFromToml, proje
 import { ContextBudgetExceeded, InvalidContextOverflowSignatures, ModelsConfigUnreadable, ProviderError } from "./errors.js";
 import { LLMGateway } from "./gateway.js";
 import { resolveModelsConfigPath } from "./paths.js";
+import { ROUTING_RULES } from "./routing-rules.js";
 import type { ModelConfig, ProviderRequest } from "./types.js";
 
 /** Two bytes a token, the estimate context-window.ts makes of unmeasured input. */
@@ -148,6 +149,7 @@ describe("an agent turn that does not fit its window", () => {
       { providers: [{ name: "any", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://provider.invalid/v1", models: [MODEL], enabled: true }], defaultProvider: "any", contextOverflow: { statuses: [400], codes: [], phrases: ["exceeds the maximum number of tokens allowed"] } },
       () => new Date("2026-10-17T00:00:00Z"),
       () => model,
+      ROUTING_RULES,
     );
     const admitted: ProviderRequest[] = [];
     const port = gateway.gated("agent-runner", { admit: async (request) => void admitted.push(request), settle: async () => {} });

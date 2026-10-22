@@ -1,6 +1,8 @@
 import { describeErrorChain } from "@ashara/shared";
 import type { CapabilityLevel } from "./capability-level.js";
 import { tierOf } from "./capability-rank.js";
+import { describeFailover, describeFloor, describeJudgeRule, describeSecondOpinion } from "./routing-rules.js";
+import type { CapabilityFloor, RoutingRules } from "./routing-rules.js";
 import type { ModelIdentity, SecondOpinion, TierAsk } from "./types.js";
 
 export class GatewayError extends Error {
@@ -39,7 +41,7 @@ export class ProviderError extends GatewayError {
 }
 
 /**
- * Thrown when no enabled provider has a model at or above the requested
+ * Thrown when no enabled provider has a model the capability floor admits at the requested
  * capability. There is no downgrade: a lower-tier model is never substituted.
  */
 export class NoProviderAvailableError extends GatewayError {
@@ -47,10 +49,10 @@ export class NoProviderAvailableError extends GatewayError {
   /** `id (capability)` of every model the enabled providers offered. */
   readonly availableModels: readonly string[];
 
-  constructor(capability: CapabilityLevel, availableModels: readonly string[]) {
+  constructor(capability: CapabilityLevel, availableModels: readonly string[], floor: CapabilityFloor) {
     super(
-      `No provider available for capability level "${capability}" or above: no enabled provider offers a model ` +
-        `graded at that level or higher, and no lower model is substituted ` +
+      `No provider available for capability level "${capability}": no enabled provider offers a model ` +
+        `${describeFloor(floor, "that level")}, and no lower model is substituted ` +
         `(available models: ${availableModels.length > 0 ? availableModels.join(", ") : "none"})`,
     );
     this.name = "NoProviderAvailableError";
@@ -551,19 +553,18 @@ export class ContextBudgetExceeded extends GatewayError {
 
 /**
  * A second opinion (StructuredRequest.secondOpinion) of one strength got no answer: the model the
- * catalog offered for it failed, and so did every failover an other-family opinion may take, none of
- * which is of the avoided provider. Never answered by a model of another strength instead.
+ * catalog offered for it failed, and so did every failover its rule allows. Never answered by a
+ * model of another strength instead.
  */
 export class SecondOpinionUnanswered extends GatewayError {
   readonly opinion: SecondOpinion;
   /** The provider and model the request was routed to first. */
   readonly routedTo: ModelIdentity;
 
-  constructor(opinion: SecondOpinion, routedTo: ModelIdentity, options: { readonly cause: unknown }) {
+  constructor(opinion: SecondOpinion, routedTo: ModelIdentity, rules: RoutingRules, options: { readonly cause: unknown }) {
     super(
       `a ${opinion.strength} second opinion on ${opinion.avoid.provider}/${opinion.avoid.model} got no answer: routed to ` +
-        `${routedTo.provider}/${routedTo.model}` +
-        `${opinion.strength === "other-family" ? `, and no failover went to ${opinion.avoid.provider}` : ", with no failover to a model of another strength"}: ` +
+        `${routedTo.provider}/${routedTo.model}, ${describeFailover(rules.secondOpinion[opinion.strength], opinion.avoid.provider)}: ` +
         describeErrorChain(options.cause),
       options,
     );
@@ -573,11 +574,9 @@ export class SecondOpinionUnanswered extends GatewayError {
   }
 }
 
-/** The tier a request asks the catalog at, as a refusal states it. */
+/** The tier a request asks the catalog at, as a refusal names it; the rule it is held to is stated beside it. */
 function askText(ask: TierAsk): string {
-  return ask.judges === undefined
-    ? `capability "${ask.capability}" or above`
-    : `a judge of work at "${ask.judges}" (one tier above it, else at it)`;
+  return ask.judges === undefined ? `capability "${ask.capability}"` : `judging work at "${ask.judges}"`;
 }
 
 /**
@@ -587,11 +586,12 @@ function askText(ask: TierAsk): string {
 export class SecondOpinionUnavailable extends NoProviderAvailableError {
   readonly opinion: SecondOpinion;
 
-  constructor(opinion: SecondOpinion, ask: TierAsk, availableModels: readonly string[]) {
-    super(tierOf(ask), availableModels);
+  constructor(opinion: SecondOpinion, ask: TierAsk, availableModels: readonly string[], rules: RoutingRules) {
+    super(tierOf(ask), availableModels, rules.capabilityFloor);
     this.message =
-      `no model serves a ${opinion.strength} second opinion on ${opinion.avoid.provider}/${opinion.avoid.model} at ` +
-      `${askText(ask)} (${SECOND_OPINION_RULE[opinion.strength]}; enabled models: ${availableModels.length > 0 ? availableModels.join(", ") : "none"})`;
+      `no model serves a ${opinion.strength} second opinion on ${opinion.avoid.provider}/${opinion.avoid.model} ` +
+      `${askText(ask)} (${describeSecondOpinion(rules, opinion.strength, ask.judges !== undefined)}; ` +
+      `enabled models: ${availableModels.length > 0 ? availableModels.join(", ") : "none"})`;
     this.name = "SecondOpinionUnavailable";
     this.opinion = opinion;
   }
@@ -605,11 +605,13 @@ interface JudgeUnavailableContext {
   readonly candidates: readonly string[];
   /** Why each tier the judge was asked at found no model, strongest first. */
   readonly steps: readonly string[];
+  /** The rules the judge was chosen by, which the message states. */
+  readonly rules: RoutingRules;
 }
 
 /**
- * No model may judge work at `judgedTier`: none is graded one tier above it or at it, or the routing
- * profile maps the site to a model graded below it. Nothing was sent, and no weaker model is
+ * No model may judge work at `judgedTier`: no tier of the judge rule finds one, or the routing
+ * profile maps the site to a model below the floor. Nothing was sent, and no weaker model is
  * substituted. A NoProviderAvailableError, so a ladder's escalation tier and a failover read it as
  * a tier the catalog cannot serve.
  */
@@ -620,10 +622,10 @@ export class JudgeUnavailable extends NoProviderAvailableError {
   readonly steps: readonly string[];
 
   constructor(context: JudgeUnavailableContext) {
-    super(context.judgedTier, context.candidates);
+    super(context.judgedTier, context.candidates, context.rules.capabilityFloor);
     this.message =
-      `no judge for work at "${context.judgedTier}" (site=${context.site ?? "none"}): a judge is graded one tier above the ` +
-      `work, else at its tier, never below (${context.steps.join("; ")}; candidates: ` +
+      `no judge for work at "${context.judgedTier}" (site=${context.site ?? "none"}): a judge is ` +
+      `${describeJudgeRule(context.rules.judge)} (${context.steps.join("; ")}; candidates: ` +
       `${context.candidates.length > 0 ? context.candidates.join(", ") : "none"})`;
     this.name = "JudgeUnavailable";
     this.judgedTier = context.judgedTier;
@@ -640,13 +642,15 @@ interface JudgePinnedBelowTopContext {
   /** The highest tier a model of the deployment's enabled providers is graded at. */
   readonly topTier: CapabilityLevel;
   readonly configPath: string;
+  /** The rules a judge is chosen by, which the advice states. */
+  readonly rules: RoutingRules;
 }
 
 /**
  * Thrown by `buildGatewayConfig` when the deployment's routing profile pins a judgement site flatly
  * to a model graded below the top tier its catalog offers. A flat entry applies whatever tier is
- * asked, so it would judge work of a tier above its model's, or deny a judge one tier above the
- * work that the catalog has.
+ * asked, so it would judge work of a tier above its model's, or deny a judge the catalog has at a
+ * tier the judge rule asks.
  */
 export class JudgePinnedBelowTop extends GatewayError {
   readonly combo: string;
@@ -657,8 +661,8 @@ export class JudgePinnedBelowTop extends GatewayError {
   constructor(context: JudgePinnedBelowTopContext) {
     super(
       `Routing profile "${context.combo}" pins judgement site(s) flatly below the catalog's top tier ` +
-        `"${context.topTier}": ${context.pins.join(", ")}. Config: ${context.configPath}. A judge is graded one tier ` +
-        "above the work it judges, else at its tier: map each such site per capability " +
+        `"${context.topTier}": ${context.pins.join(", ")}. Config: ${context.configPath}. A judge is ` +
+        `${describeJudgeRule(context.rules.judge)}: map each such site per capability ` +
         '(`{ <Capability> = "<model>", default = "<model>" }`) so the judge follows the judged tier, or pin a model ' +
         "graded at the top tier.",
     );
@@ -682,6 +686,7 @@ interface RoutingEntryBelowTierContext {
   readonly combo: string;
   readonly entries: readonly RoutingEntryBelowTierItem[];
   readonly configPath: string;
+  readonly floor: CapabilityFloor;
 }
 
 /**
@@ -697,9 +702,9 @@ export class RoutingEntryBelowTier extends GatewayError {
 
   constructor(context: RoutingEntryBelowTierContext) {
     super(
-      `Routing profile "${context.combo}" maps tier(s) to a model graded below them as called at the site: ` +
+      `Routing profile "${context.combo}" maps tier(s) to a model not ${describeFloor(context.floor, "them")} as called at the site: ` +
         context.entries.map((e) => `"${e.site}" at ${e.tier} -> "${e.model}" (${e.grade} as called there)`).join(", ") +
-        `. Config: ${context.configPath}. Map each such tier to a model graded at or above it at that site.`,
+        `. Config: ${context.configPath}. Map each such tier to a model ${describeFloor(context.floor)} at that site.`,
     );
     this.name = "RoutingEntryBelowTier";
     this.combo = context.combo;
@@ -708,9 +713,3 @@ export class RoutingEntryBelowTier extends GatewayError {
   }
 }
 
-/** Which models each strength may go to, as SecondOpinionUnavailable states it. */
-const SECOND_OPINION_RULE: Readonly<Record<SecondOpinion["strength"], string>> = {
-  "other-family": "it goes only to an enabled provider other than the avoided one",
-  "same-family-other-model": "it goes only to another model of the avoided provider",
-  "same-model": "it goes only to the avoided model itself, and only when no other model serves the capability",
-};

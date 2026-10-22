@@ -3,6 +3,7 @@ import type { LanguageModelFactory } from "./provider-registry.js";
 import { NoLLMProvidersConfigured, RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
 import { resolveModelsConfigPath } from "./paths.js";
 import { computeProviderCombo } from "./routing-profiles.js";
+import { ROUTING_RULES } from "./routing-rules.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { GatewayConfig } from "./types.js";
 
@@ -123,5 +124,5 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
 
   assertRoutingProfileComplete(config);
   assertRoutingProfileModelsPresent(config);
-  return new LLMGateway(config, options.clock, options.models);
+  return new LLMGateway(config, options.clock, options.models, ROUTING_RULES);
 }

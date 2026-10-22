@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { PreCallRefusal, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
+import { PreCallRefusal, ROUTING_RULES, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
 import { StructuredOutputExhausted } from "@ashara/finance";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
@@ -103,7 +103,7 @@ function bounds(into: number[]): ContextualLlm {
     forCall: () => ({
       generateStructured: async (request) => {
         const opinion = request.secondOpinion;
-        if (opinion !== undefined && opinion.strength !== "same-model") throw new SecondOpinionUnavailable(opinion, request, []);
+        if (opinion !== undefined && opinion.strength !== "same-model") throw new SecondOpinionUnavailable(opinion, request, [], ROUTING_RULES);
         into.push(request.maxTokens);
         return { data: request.schema.parse({ problems: [] }), provider: "stub", model: "stub-model", grade: "Frontier" };
       },
@@ -126,7 +126,7 @@ function scripted(answers: readonly unknown[], prompts: string[] = [], catalog: 
         let by: { readonly provider: string; readonly model: string; readonly grade: CapabilityLevel } = { provider: "stub", model: "stub-model", grade: "Frontier" };
         if (opinion !== undefined) {
           const served = catalog[opinion.strength];
-          if (served === undefined) throw new SecondOpinionUnavailable(opinion, request, []);
+          if (served === undefined) throw new SecondOpinionUnavailable(opinion, request, [], ROUTING_RULES);
           by = served;
         }
         prompts.push(request.prompt);
@@ -349,7 +349,7 @@ describe("SuiteReviewer", () => {
     test("only the items the second review confirmed are confirmed: none when it names them or fails", async () => {
       const recorded: Recorded[] = [];
       const doubt = { checkTasks: [CHECK_B], kind: "undecided-item", item: REFUSAL.id, problem: "stdout-empty never feeds a malformed row", evidence: "sh checks/empty.sh" };
-      const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, { cause: new Error("503 overloaded") });
+      const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, ROUTING_RULES, { cause: new Error("503 overloaded") });
       await reviewerWith({ llm: scripted([{ problems: [] }, { problems: [doubt] }], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) }).review(TASK, PROJECT_PATH);
       await reviewerWith({ llm: scripted([{ problems: [] }, failed], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) }).review(TASK, PROJECT_PATH);
       expect(recorded.map((each) => [each.claim?.unconfirmed, each.claim?.confirmed])).toEqual([
@@ -388,7 +388,7 @@ describe("SuiteReviewer", () => {
 
     test("a second review that fails at every strength leaves every covered item unverified with why, and the plan still proceeds", async () => {
       const recorded: Recorded[] = [];
-      const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, { cause: new Error("503 overloaded") });
+      const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, ROUTING_RULES, { cause: new Error("503 overloaded") });
       const logger = recordingLogger();
       const reviewer = reviewerWith({ logger, llm: scripted([{ problems: [] }, failed], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) });
       const outcome = await reviewer.review(TASK, PROJECT_PATH);
@@ -777,7 +777,7 @@ describe("SuiteReviewer", () => {
   // A second review that failed is recorded and reported as failed, never as a disagreement.
   test("a second review no model answered leaves every finding advisory, recorded as failed with why, and the item undecided", async () => {
     const recorded: Recorded[] = [];
-    const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, { cause: new Error("400 Invalid schema") });
+    const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, ROUTING_RULES, { cause: new Error("400 Invalid schema") });
     const reviewer = reviewerWith({ llm: scripted([{ problems: [undecided, conflict] }, failed], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) });
 
     const outcome = await reviewer.review(TASK, PROJECT_PATH);

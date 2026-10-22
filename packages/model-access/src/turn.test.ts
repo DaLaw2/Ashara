@@ -2,6 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { LLMGateway } from "./gateway.js";
+import { ROUTING_RULES } from "./routing-rules.js";
 import { cachedTurnPrompt, mapFinishReason, parseToolCalls } from "./turn.js";
 import type { ModelConfig, SentProviderRequest } from "./types.js";
 
@@ -53,6 +54,7 @@ describe("Anthropic prompt caching on agent turns", () => {
       },
       () => new Date("2026-10-14T12:00:00Z"),
       (provider, modelConfig) => createAnthropic({ apiKey: provider.apiKey, fetch: fetchStub })(modelConfig.apiModelId),
+      ROUTING_RULES,
     );
 
     await gateway

@@ -10,9 +10,14 @@ export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
 
 const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong", "Frontier"];
 
+/** The tier `steps` tiers above `capability`, or null past the top. */
+export function capabilityAbove(capability: CapabilityLevel, steps: number): CapabilityLevel | null {
+  return CAPABILITY_ORDER[CAPABILITY_RANK[capability] + steps] ?? null;
+}
+
 /** The next capability tier up, or null at the top. */
 export function nextCapability(capability: CapabilityLevel): CapabilityLevel | null {
-  return CAPABILITY_ORDER[CAPABILITY_RANK[capability] + 1] ?? null;
+  return capabilityAbove(capability, 1);
 }
 
 /** The tier a request asks at: its capability, or the judged tier of a judging request. */
