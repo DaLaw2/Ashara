@@ -185,7 +185,7 @@ const HALT_EPISODE: HaltEpisodeRef = {
   kind: qualifiedColumn(projectBlocks.kind),
   blockedAt: qualifiedColumn(projectBlocks.blockedAt),
   open: sql`${qualifiedColumn(projectBlocks.endedAt)} IS NULL`,
-  resumed: sql`${qualifiedColumn(projectBlocks.endKind)} IN ('unblocked', 'probe_passed')`,
+  resumed: sql`${qualifiedColumn(projectBlocks.endKind)} IN ('unblocked', 'probe_passed', 'answered')`,
 };
 
 /**
@@ -231,7 +231,7 @@ export async function openHaltEpisodesWhere(db: DbHandle, where: (episode: HaltE
     .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
 }
 
-/** A halt episode that ended, and how ('unblocked', 'probe_passed' or 'client_stop', the project_blocks_end_kind_check CHECK). */
+/** A halt episode that ended, and how ('unblocked', 'probe_passed', 'answered' or 'client_stop', the project_blocks_end_kind_check CHECK). */
 export interface EndedHaltEpisode {
   readonly id: string;
   readonly projectId: string;

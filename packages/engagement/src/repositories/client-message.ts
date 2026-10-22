@@ -23,6 +23,8 @@ type ClientMessageRow = typeof clientMessages.$inferSelect;
  * kind that does not belong to that direction.
  */
 interface NewClientMessage {
+  /** The id a writer chose before posting, so it can tell whether the post is on record; generated when absent. */
+  readonly id?: string;
   readonly projectId: ProjectId;
   readonly kind: string;
   readonly body: string;
@@ -321,6 +323,7 @@ export class ClientMessageRepository {
     const rows = await this.db
       .insert(clientMessages)
       .values({
+        ...(message.id === undefined ? {} : { id: message.id }),
         projectId: message.projectId,
         direction,
         kind: message.kind,
@@ -330,6 +333,16 @@ export class ClientMessageRepository {
       .returning();
     return insertedRow(rows, "client_messages", `insert a ${direction} ${message.kind} for project ${message.projectId}`);
   }
+}
+
+/** Whether an answer to the question has been read by the Liaison: one replying to it is consumed. */
+export async function questionAnswerRead(db: DbHandle, questionId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: clientMessages.id })
+    .from(clientMessages)
+    .where(and(eq(clientMessages.inReplyTo, questionId), eq(clientMessages.kind, "answer"), isNotNull(clientMessages.consumedAt)))
+    .limit(1);
+  return row !== undefined;
 }
 
 export interface CreatedTender {

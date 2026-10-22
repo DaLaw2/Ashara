@@ -45,7 +45,30 @@ const disputeCheckArgs = z
   })
   .strict();
 const MAX_STATEMENT_CHARS = 1500;
-const blockedFinish = z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty }).strict();
+const MAX_QUESTION_CHARS = 2000;
+const MAX_BLOCKING_ENTRIES = 20;
+/**
+ * What a blocked finish waits on. Each kind is checked whole: a cause outside the task names the
+ * interface entries another task delivers, or the question only the client can answer with what
+ * stands until it does; `other` attributes the block to nothing outside the task.
+ */
+const blockedOnArgs = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("needs-work"),
+      interfaceEntries: z.tuple([nonBlank], nonBlank).refine((entries) => entries.length <= MAX_BLOCKING_ENTRIES, `at most ${MAX_BLOCKING_ENTRIES} entries`),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("needs-client-decision"),
+      question: nonBlank.pipe(z.string().max(MAX_QUESTION_CHARS)),
+      assumption: nonBlank.pipe(z.string().max(MAX_QUESTION_CHARS)),
+    })
+    .strict(),
+  z.object({ kind: z.literal("other") }).strict(),
+]);
+const blockedFinish = z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty, blockedOn: blockedOnArgs }).strict();
 const finishArgs = z.discriminatedUnion("status", [z.object({ status: z.literal("done"), summary: nonEmpty }).strict(), blockedFinish]);
 /** Environment work's done carries the stack statement apart from the summary: only the statement reaches the client. */
 const environmentFinishArgs = z.discriminatedUnion("status", [
@@ -58,6 +81,26 @@ type FinishArgs = z.infer<typeof finishArgs> | z.infer<typeof environmentFinishA
 const pathProperty = { type: "string", description: "Path relative to the workspace root." } as const;
 
 type ToolSchemas = Readonly<Record<string, TurnToolSchema>>;
+
+const BLOCKED_ON_DESCRIPTION =
+  'Required when status is "blocked": whose it is to clear. "needs-work": interfaceEntries names, by key as the brief\'s ' +
+  "Public interface lists them, the entries another task must deliver first; you wait for it, the attempt not counted. \"needs-client-decision\": " +
+  "only the client can decide (e.g. the tender contradicts itself); question goes to the client as written, assumption " +
+  'is what the tender and vision say now; you wait for the answer, the attempt not counted. "other": anything else; the ' +
+  "attempt counts as failed.";
+
+const BLOCKED_ON_PROPERTY: TurnToolSchema["inputSchema"] = {
+  type: "object",
+  description: BLOCKED_ON_DESCRIPTION,
+  properties: {
+    kind: { type: "string", enum: ["needs-work", "needs-client-decision", "other"] },
+    interfaceEntries: { type: "array", items: { type: "string" }, minItems: 1, maxItems: MAX_BLOCKING_ENTRIES },
+    question: { type: "string", maxLength: MAX_QUESTION_CHARS },
+    assumption: { type: "string", maxLength: MAX_QUESTION_CHARS },
+  },
+  required: ["kind"],
+  additionalProperties: false,
+};
 
 /** What the model sees: description and input schema only; the loop executes every call. */
 const TOOL_SCHEMAS: ToolSchemas = {
@@ -134,13 +177,15 @@ const TOOL_SCHEMAS: ToolSchemas = {
   finish: {
     description:
       'End the attempt. status "done": every deliverable exists and passes its checks. ' +
-      'status "blocked": you cannot proceed; blockedReason says what is missing.',
+      'status "blocked": you cannot proceed; blockedReason says what is missing and blockedOn whose it is to provide ' +
+      "(another task's work, the client's decision, or other).",
     inputSchema: {
       type: "object",
       properties: {
         status: { type: "string", enum: ["done", "blocked"] },
         summary: { type: "string", description: "What you changed, in 1-2 sentences." },
         blockedReason: { type: "string", description: 'Required when status is "blocked".' },
+        blockedOn: BLOCKED_ON_PROPERTY,
       },
       required: ["status", "summary"],
       additionalProperties: false,
@@ -162,7 +207,8 @@ const BUILD_ENVIRONMENT_SCHEMA: TurnToolSchema = {
 const ENVIRONMENT_FINISH_SCHEMA: TurnToolSchema = {
   description:
     'End the attempt. status "done": build_environment reported PASSED on the files as they are. ' +
-    'status "blocked": you cannot proceed; blockedReason says what is missing.',
+    'status "blocked": you cannot proceed; blockedReason says what is missing and blockedOn whose it is to provide ' +
+    "(another task's work, the client's decision, or other).",
   inputSchema: {
     type: "object",
     properties: {
@@ -179,6 +225,7 @@ const ENVIRONMENT_FINISH_SCHEMA: TurnToolSchema = {
           "list of changes.",
       },
       blockedReason: { type: "string", description: 'Required when status is "blocked".' },
+      blockedOn: BLOCKED_ON_PROPERTY,
     },
     required: ["status", "summary"],
     additionalProperties: false,

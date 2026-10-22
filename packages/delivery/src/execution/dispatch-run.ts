@@ -274,8 +274,10 @@ async function runCountedDispatch(run: CountedDispatch): Promise<TaskResult> {
     // Exhaustive over WorkItemStatus: adding a status without a case here is
     // a compile error, not a new silent fall-through. The routing commits the
     // WorkItem to Failed for BOTH failed and blocked TaskResults from an agent
-    // dispatch (a "blocked" result is a routine agent outcome — a BLOCKED:
-    // marker or turn-limit — not a dependency wait). Blocked status is reached
+    // dispatch (a "blocked" result is a block the agent attributed to nothing outside
+    // its task; one on another task's work or the client's decision is
+    // prerequisite_needed or client_decision_needed, routed above to that owner without
+    // spending an attempt, so never reaches here). Blocked status is reached
     // only by the parked dispatch outcomes (routeAsParked), which returned
     // above. Any item that landed at Failed is routed through
     // the FailureRouter so it recovers (replan) or terminates

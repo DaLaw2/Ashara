@@ -379,7 +379,7 @@ export function sourceOf(raw: unknown): (typeof BLOCKED_REASON_SOURCES)[number] 
 }
 
 /** `unrecognized`: a block kind outside the code's list, whose cause the simulator cannot name. */
-type HaltCause = "spend_cap" | "work_budget" | "infrastructure" | "undeliverable" | "unrecognized";
+type HaltCause = "spend_cap" | "work_budget" | "infrastructure" | "client_wait" | "undeliverable" | "unrecognized";
 
 /** What a run ended in, mapped onto today's project states. */
 export type Outcome =
@@ -397,6 +397,7 @@ export type Outcome =
  * ledger's halt on a project's spent model requests, which the owner's grant
  * and the operator's unblock end. `acceptance_uncovered` is a passed sweep that leaves a guarantee
  * Ashara can verify unjudged: the project cannot be accepted, and only the operator ends it.
+ * `client_wait` is a project whose only work left waits on the client's answers, which the answer ends.
  */
 const HALT_CAUSES = {
   budget_cap: "spend_cap",
@@ -414,6 +415,7 @@ const HALT_CAUSES = {
   provider_failed: "undeliverable",
   work_budget: "work_budget",
   acceptance_uncovered: "undeliverable",
+  client_wait: "client_wait",
 } as const satisfies Record<(typeof PROJECT_BLOCK_KINDS)[number], HaltCause>;
 const HALT_CAUSE_OF: ReadonlyMap<string, HaltCause> = new Map(Object.entries(HALT_CAUSES));
 

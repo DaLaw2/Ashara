@@ -401,6 +401,7 @@ describe("CoreLoop first plan", () => {
       "plan-report": "halted",
       "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; only a project at work has a choice due, so a project halted at the cap has its choice recorded and reported once it resumes, in a full cycle after the process restarts" },
       "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
+      "client-wait-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
       "parked-exits": { excluded: "it moves Blocked tasks toward dispatch, and a halted cycle dispatches nothing" },
       "acceptance": { excluded: "it sweeps main on cells, which is work, not a report" },
       "terminal-sweep": "halted",

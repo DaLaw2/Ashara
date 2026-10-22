@@ -412,7 +412,8 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
     );
     // ONE seam covering every return path inside runExecution: only the agent's own work
     // failing is a lesson about the task (fault-class.ts). A substrate or Z0 fault, a refused call,
-    // stale stored checks, a disputed check, a requested environment change and a shutdown are not.
+    // stale stored checks, a disputed check, a requested environment change, a shutdown and a block
+    // on another task's work or the client's decision are not.
     if (result.status === "failed" || result.status === "blocked") {
       await storeFailureKnowledge(deps.knowledgeSink, task, result);
     }

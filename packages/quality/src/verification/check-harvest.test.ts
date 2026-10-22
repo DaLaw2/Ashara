@@ -21,6 +21,7 @@ const done: Outcome = {
   status: "done",
   summary: "wrote the checks",
   blockedReason: null,
+  blockedOn: null,
   statement: null,
   turnsUsed: 1,
   cost: { measured: true, totalUsd: 0, turns: 1 },

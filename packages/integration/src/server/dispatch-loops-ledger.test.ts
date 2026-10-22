@@ -199,7 +199,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets, shutdown: AbortControl
     config: { workdirBase: at.workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", assumptions: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", assumptions: [], interfaceEntries: [] }) },
     cells: {
       substrate: scriptedSubstrate(root),
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
@@ -246,6 +246,8 @@ function serverProcess(at: Fixture, budgets: WorkBudgets, shutdown: AbortControl
           listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === at.projectId),
           block: (id, cause) => projects.block(id, cause),
           listInfrastructureHalted: async () => [],
+          listClientWaitHalted: async () => [],
+          resumeFromClientWait: notExercised("resumeFromClientWait"),
           resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
           blockAllActive: async () => [],
         },

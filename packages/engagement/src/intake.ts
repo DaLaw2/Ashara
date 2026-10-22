@@ -26,7 +26,7 @@ import {
   verifiableCountLine,
 } from "./vision-language/guarantee.js";
 import type { ContractStanding, GuaranteeBasis } from "./vision-language/guarantee.js";
-import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
+import { ASSUMPTION_KIND_RULE, ASSUMPTION_LABEL, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { VisionWriteRefused, visionWritable } from "./vision.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 
@@ -57,9 +57,6 @@ const MAX_QUESTIONS_PER_TENDER = 5;
  * use up the client's tender.
  */
 const MAX_INTAKE_ATTEMPTS = 3;
-
-/** What the client reads before a question's assumption; the statement itself never carries it. */
-const ASSUMPTION_LABEL = "Until you answer, we proceed on this assumption:";
 
 /** The label on a contract Ashara declines: no work proceeds on it, so the assumption is only what the contract rests on. */
 const HELD_ASSUMPTION_LABEL = "Until you answer, the contract rests on this assumption:";

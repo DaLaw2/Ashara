@@ -246,6 +246,8 @@ function loopWith(
           listWithWorkspace: async () => [],
           block: (id, cause) => projects.block(id, cause),
           listInfrastructureHalted: async () => [],
+          listClientWaitHalted: async () => [],
+          resumeFromClientWait: notExercised("resumeFromClientWait"),
           resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
           blockAllActive: async () => [],
         },

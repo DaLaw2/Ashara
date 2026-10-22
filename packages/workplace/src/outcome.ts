@@ -32,6 +32,16 @@ interface OutcomeBase {
   readonly detail: string;
 }
 
+/**
+ * What a blocked finish says it waits on: work another task of the plan delivers (named by the public
+ * interface entries it needs), a decision only the client can make (the question, with what the
+ * tender and the vision say now), or nothing it attributes outside the task.
+ */
+export type BlockedOn =
+  | { readonly kind: "needs-work"; readonly interfaceEntries: readonly [string, ...string[]] }
+  | { readonly kind: "needs-client-decision"; readonly question: string; readonly assumption: string }
+  | { readonly kind: "other" };
+
 /** The terminals of an attempt; there is no other way out of runAttempt except InvalidAssignment. */
 export type Outcome =
   | (OutcomeBase & {
@@ -40,6 +50,8 @@ export type Outcome =
       readonly summary: string;
       /** Present exactly when status is "blocked". */
       readonly blockedReason: string | null;
+      /** What the blocked finish waits on; present exactly when status is "blocked". */
+      readonly blockedOn: BlockedOn | null;
       /** Environment work's stack statement: present exactly when environment work finished done. */
       readonly statement: string | null;
     })

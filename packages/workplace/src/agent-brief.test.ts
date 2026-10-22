@@ -10,6 +10,7 @@ function minimalBrief(): AgentBrief {
     intent: "a project",
     visionVersion: 1,
     assumptions: [],
+    interfaceEntries: [],
     projectEnvironment: { kind: "to-define" },
     context: "end state: the thing works",
     deliverables: [],

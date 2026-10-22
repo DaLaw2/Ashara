@@ -239,7 +239,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     sessionStore: sessions,
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [], interfaceEntries: [] }) },
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {

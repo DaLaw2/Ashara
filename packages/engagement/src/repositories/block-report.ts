@@ -215,9 +215,9 @@ type DueBlockReportRow =
       readonly guarantees: GuaranteeTable;
       readonly visionWritten: boolean;
     }
-  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
+  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" | "answered" };
 
-const ResumeKindSchema = z.enum(["unblocked", "probe_passed"]);
+const ResumeKindSchema = z.enum(["unblocked", "probe_passed", "answered"]);
 
 /** A project_blocks row holds a kind outside the vocabulary its CHECK admits. */
 class ProjectBlockKindUnknown extends Error {
@@ -258,7 +258,7 @@ class BlockEpisodeNotFound extends Error {
   }
 }
 
-const RESUMED_END_KINDS = ["unblocked", "probe_passed"];
+const RESUMED_END_KINDS = ["unblocked", "probe_passed", "answered"];
 
 /** A resumption report was asked for an episode no unblock or passing probe ended. */
 class BlockEpisodeNotResumed extends Error {
@@ -266,7 +266,7 @@ class BlockEpisodeNotResumed extends Error {
     readonly episodeId: string,
     readonly endKind: string | null,
   ) {
-    super(`cannot post a resumption report on block episode ${episodeId}: it ${endKind === null ? "is still open" : `ended as '${endKind}'`}, not by an unblock or a passing probe`);
+    super(`cannot post a resumption report on block episode ${episodeId}: it ${endKind === null ? "is still open" : `ended as '${endKind}'`}, not by an unblock, a passing probe or the client's answer`);
     this.name = "BlockEpisodeNotResumed";
   }
 }

@@ -79,10 +79,15 @@ function givenUpEvidence(reason: GivenUpReason): string {
       );
     case "crash_loop":
       return `Ashara's process died while it was in progress at ${reason.boots} startups in a row, so it is not dispatched again: ${reason.reason}`;
+    case "prerequisite_unresolved":
+      return `It was blocked on work or a client decision outside it, and the wait could not end (${reason.why}): ${reason.reason}`;
     case "task_failed":
     case "orchestrator_error":
     case "merge_unrecorded":
     case "correction_pending":
+    case "awaiting_work":
+    case "awaiting_client":
+    case "client_answered":
       return reason.reason;
   }
 }

@@ -584,6 +584,21 @@ export class Vision {
   }
 
   /**
+   * The next version with the Inferred assumption appended (appendInferred) and the question posted to
+   * the client as `question.messageId` open on it, so the client's answer is read against it.
+   */
+  appendAsked(
+    assumption: Parameters<Vision["appendInferred"]>[0],
+    question: { readonly messageId: string; readonly text: string },
+  ): VisionAppend & { readonly key: string } {
+    const appended = this.appendInferred(assumption);
+    return {
+      ...appended,
+      openQuestions: [...this.questions, { messageId: question.messageId, text: question.text, assumptionKey: appended.key }],
+    };
+  }
+
+  /**
    * The next version with the assumption `key` Stated by the client's answer to the open question
    * `answer.questionMessageId`, which closes; every other record is carried over as stored.
    */

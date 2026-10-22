@@ -63,6 +63,7 @@ function brief(): AgentBrief {
       intent: "a thing",
       visionVersion: 1,
       assumptions: [],
+      interfaceEntries: [],
       projectEnvironment: { kind: "to-define" },
       context: "end state: the thing exists",
       deliverables: [],
@@ -95,6 +96,23 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "cell failed", chain: wrapError("development", "agentAttempt", "cell failed") },
     };
   }
+  if (status === "prerequisite_needed" || status === "client_decision_needed") {
+    const blockedOn =
+      status === "prerequisite_needed"
+        ? ({ kind: "needs-work", interfaceEntries: ["I10"] } as const)
+        : ({ kind: "needs-client-decision", question: "q", assumption: "a" } as const);
+    const settled = {
+      detail: `${status} detail`,
+      reason: "r",
+      outcome: { ...base, kind: "finished" as const, status: "blocked" as const, summary: "s", blockedReason: "r", blockedOn, statement: null },
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked" as const, summary: "waits", chain: wrapError("development", "agentAttempt", "waits") },
+    };
+    return status === "prerequisite_needed"
+      ? { status, interfaceEntries: ["I10"], interfaceTable: [{ key: "I10", text: "an entry" }], ...settled }
+      : { status, question: "q", assumption: "a", ...settled };
+  }
   if (status === "checks_stale") {
     return {
       status,
@@ -114,7 +132,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       need: "s",
       diff: "",
       detail: `${status} detail`,
-      outcome: { ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null },
+      outcome: { ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, blockedOn: null, statement: null },
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "environment change", chain: wrapError("development", "ownershipGate", "environment change") },
@@ -177,7 +195,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       status,
       delivered: { kind: "merged", mergeCommit: "0123456789abcdef0123456789abcdef01234567" },
       detail: `${status} detail`,
-      outcome: { ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null },
+      outcome: { ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, blockedOn: null, statement: null },
       sessionId: "s",
       attempt: 1,
     };
@@ -240,7 +258,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_requested", "interrupted", "context_exceeded"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_requested", "interrupted", "context_exceeded", "prerequisite_needed", "client_decision_needed"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -370,6 +388,7 @@ const VISION = {
     { key: "A1", statement: "Greetings are written in lower case.", note: "Inferred; reported to the client; client-visible behaviour" },
     { key: "A2", statement: "The greeting file is plain text, one line.", note: "Stated by the client; client-visible behaviour" },
   ],
+  interfaceEntries: [{ key: "I1", text: "the greeting file holds one line" }],
 };
 
 /** The checks a check author stored for the task: one that reads the greeting file the agent writes. */
@@ -1089,6 +1108,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(system).toContain("vision version 2");
     expect(system).toContain("- A1 (Inferred; reported to the client; client-visible behaviour): Greetings are written in lower case.");
     expect(system).toContain("- A2 (Stated by the client; client-visible behaviour): The greeting file is plain text, one line.");
+    // And its public interface by key: the keys a blocked finish on another task's work names.
+    expect(system).toContain("- I1: the greeting file holds one line");
   });
 
   test.each([

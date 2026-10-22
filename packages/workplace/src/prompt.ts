@@ -43,7 +43,7 @@ const staticPrompt = (identity: string): string => [
     `- Use list_directory to see what exists and search_codebase to find text across files.`,
     `- Use run_command for build, test and other shell operations.`,
     `- Call finish with status "done" when every deliverable exists and passes its checks, or with status`,
-    `  "blocked" and a blockedReason when you cannot proceed without something you do not have.`,
+    `  "blocked", a blockedReason and a blockedOn when you cannot proceed without something you do not have.`,
     ``,
     `If you need information about the project, use tools to get it; do not guess.`,
   ].join("\n"),
@@ -156,6 +156,20 @@ function assumptionsSection(brief: AssignmentBrief): string {
 }
 
 /**
+ * The public interface the vision states, each entry by its key: a blocked finish on another task's
+ * work names the entries it needs by these keys, which is how the work that builds them is found.
+ */
+function interfaceSection(brief: AssignmentBrief): string {
+  const header = [
+    `## Public interface (vision version ${brief.visionVersion})`,
+    `The product's public interface as the client's contract states it. If you cannot proceed until another task`,
+    `delivers some of these entries, finish as blocked with blockedOn naming them by key.`,
+  ];
+  if (brief.interfaceEntries.length === 0) return [...header, `None is recorded.`].join("\n");
+  return [...header, ...brief.interfaceEntries.map((entry) => `- ${entry.key}: ${entry.text}`)].join("\n");
+}
+
+/**
  * The project first: an agent that reads the task first has committed to a stack before it
  * learns what the project is and what it is built with.
  */
@@ -167,6 +181,8 @@ function buildTaskPrompt(brief: AssignmentBrief): string {
       brief.intent,
       ``,
       assumptionsSection(brief),
+      ``,
+      interfaceSection(brief),
       ``,
       environmentSection(brief.projectEnvironment),
     ].join("\n"),

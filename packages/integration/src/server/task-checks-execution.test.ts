@@ -179,7 +179,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", assumptions: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", assumptions: [], interfaceEntries: [] }) },
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
@@ -806,7 +806,7 @@ describe("post-merge regression suite", () => {
     const mainBefore = await git("rev-parse", "main");
 
     const { result, events } = await runTask({ ...delivered.check, attempt: 2, dispatchCount: 1 }, [
-      toolCallTurn("finish", { status: "blocked", summary: "hello.txt already says hello on main.", blockedReason: "The task is already delivered." }),
+      toolCallTurn("finish", { status: "blocked", summary: "hello.txt already says hello on main.", blockedReason: "The task is already delivered.", blockedOn: { kind: "other" } }),
     ]);
 
     expect(result.status, result.detail).toBe("completed");
@@ -820,7 +820,7 @@ describe("post-merge regression suite", () => {
     const missing = await checkedPair("Write missing.txt", { name: "missing", command: "grep missing missing.txt || exit 99" });
 
     const { result } = await runTask({ ...missing.check, attempt: 2, dispatchCount: 1 }, [
-      toolCallTurn("finish", { status: "blocked", summary: "It is already there.", blockedReason: "The task is already delivered." }),
+      toolCallTurn("finish", { status: "blocked", summary: "It is already there.", blockedReason: "The task is already delivered.", blockedOn: { kind: "other" } }),
     ]);
 
     expect(result.status).toBe("blocked");

@@ -118,6 +118,7 @@ describe("runAttempt on a real cell", () => {
             intent: "A greeting file",
             visionVersion: 1,
             assumptions: [],
+            interfaceEntries: [],
             projectEnvironment: { kind: "to-define" },
             context: "An empty workspace.",
             deliverables: ["src/hello.txt"],

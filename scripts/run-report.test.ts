@@ -153,6 +153,7 @@ describe("the trace contract on a scripted run", () => {
         intent: "Two files",
         visionVersion: 1,
         assumptions: [],
+        interfaceEntries: [],
         projectEnvironment: { kind: "to-define" },
         context: "An empty workspace.",
         deliverables: ["a.txt", "b.txt"],

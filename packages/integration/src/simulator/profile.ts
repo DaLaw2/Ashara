@@ -57,6 +57,10 @@ export interface AdversaryRates {
   readonly recipeDefect: number;
   /** An implementation leaves the public interface file as the scaffold wrote it. */
   readonly interfaceLeftStale: number;
+  /** An implementation finishes blocked on an interface entry another task of the plan builds. */
+  readonly blockedOnWork: number;
+  /** An implementation finishes blocked on a decision only the client can make. */
+  readonly blockedOnClient: number;
   /** The client answers a question by changing its assumption after the first merge. */
   readonly lateChange: number;
   /** The client stops the project at a random step. */
@@ -132,6 +136,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     unaskedReading: 0,
     recipeDefect: 0,
     interfaceLeftStale: 0,
+    blockedOnWork: 0,
+    blockedOnClient: 0,
     lateChange: 0,
     clientStop: 0,
     lowBudget: 0,
@@ -159,6 +165,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     unaskedReading: 0.1,
     recipeDefect: 0.05,
     interfaceLeftStale: 0.3,
+    blockedOnWork: 0.05,
+    blockedOnClient: 0.03,
     lateChange: 0.1,
     clientStop: 0.02,
     lowBudget: 0.05,
@@ -186,6 +194,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     unaskedReading: 0.2,
     recipeDefect: 0.15,
     interfaceLeftStale: 0.5,
+    blockedOnWork: 0.1,
+    blockedOnClient: 0.05,
     lateChange: 0.2,
     clientStop: 0.05,
     lowBudget: 0.1,
@@ -221,6 +231,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     unaskedReading: 0.3,
     recipeDefect: 0.3,
     interfaceLeftStale: 0.6,
+    blockedOnWork: 0.15,
+    blockedOnClient: 0.1,
     lateChange: 0.3,
     clientStop: 0.1,
     lowBudget: 0.2,
@@ -256,6 +268,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     unaskedReading: 0.2,
     recipeDefect: 0.05,
     interfaceLeftStale: 0.3,
+    blockedOnWork: 0.05,
+    blockedOnClient: 0.03,
     lateChange: 0.1,
     clientStop: 0.02,
     lowBudget: 0,
@@ -295,6 +309,8 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     unaskedReading: 0.1,
     recipeDefect: 0.05,
     interfaceLeftStale: 0.3,
+    blockedOnWork: 0.05,
+    blockedOnClient: 0.03,
     lateChange: 0.1,
     clientStop: 0,
     lowBudget: 0,

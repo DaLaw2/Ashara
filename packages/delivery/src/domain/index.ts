@@ -18,6 +18,17 @@ export { exitDisputedCheck, exitStaleChecks, exitSuiteReview } from "./stale-che
 
 export { requestEnvironmentChange } from "./environment-change.js";
 
+export {
+  awaitWork,
+  clientWaitPastBound,
+  deliveringTasks,
+  giveUpUnaskable,
+  holdForClient,
+  resolveInterfaceEntries,
+  resumeOnAnswer,
+} from "./prerequisite-wait.js";
+export type { InterfaceTable } from "./prerequisite-wait.js";
+
 export { salvagedReason } from "./salvaged-result.js";
 
 export { giveUpAcceptanceDefect, openAcceptanceDefect } from "./acceptance.js";

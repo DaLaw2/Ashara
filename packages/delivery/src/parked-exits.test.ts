@@ -11,6 +11,7 @@ import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { BLOCKED_REASON_SOURCES, blockedExitOf } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
+import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 import { inertWorkItemRepo } from "./testing.js";
 
@@ -35,16 +36,28 @@ function blocked(reason: StoredBlockedReason | undefined): WorkItem {
   };
 }
 
+/** The client's side of a held task's question: whether it can be asked, and whether its answer is read. */
+interface ClientSide {
+  readonly askable: boolean;
+  readonly answered: boolean;
+}
+
 function run(
   items: WorkItem[],
   saveRefused = false,
   recordMergeCommit: WorkItemRepository["recordMergeCommit"] = notExercised("recordMergeCommit"),
   workspacePath: string | null = null,
+  client: ClientSide = { askable: true, answered: true },
 ) {
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
   const published: Array<Pick<DomainEvent, "eventType">> = [];
+  const asked: string[] = [];
+  const posted = new Set<string>();
+  const blocks: Array<{ readonly projectId: string; readonly cause: ProjectBlockCause }> = [];
   const workItemRepo: WorkItemRepository = inertWorkItemRepo({
     findByProjectAndStatus: async (_projectId, status) => items.filter((i) => i.status === status).map((i) => ({ ...i, events: [] })),
+    listByProject: async () => items.map((i) => ({ ...i, events: [] })),
+    listDependenciesByProject: async () => [],
     save: async (item, prev) => {
       if (saveRefused) throw new InvalidStatusTransition(item.id, "Abandoned", item.status);
       saves.push({ id: item.id, prev, status: item.status, reason: item.blockedReason });
@@ -56,12 +69,29 @@ function run(
   const released = releaseClearedBlocks({
     workItemRepo,
     eventStore: { publish: async (event) => void published.push(event) },
-    projects: { listActiveIds: async () => [PROJECT], get: async () => ({ workspacePath }) },
+    projects: {
+      listActiveIds: async () => [PROJECT],
+      get: async () => ({ workspacePath }),
+      block: async (projectId, cause) => {
+        blocks.push({ projectId, cause });
+        return "blocked";
+      },
+    },
+    clientQuestions: {
+      ask: async (question) => {
+        asked.push(question.questionId);
+        if (!client.askable) return { kind: "not-askable", why: "the project is not at work" };
+        if (posted.has(question.questionId)) return { kind: "on-record", questionId: question.questionId };
+        posted.add(question.questionId);
+        return { kind: "posted", questionId: question.questionId, assumptionKey: "A9", visionVersion: 2 };
+      },
+      answered: async () => client.answered,
+    },
     workdirBase: tmpdir(),
     containment: memoryStepContainment(() => true),
     logger: recordingLogger(),
   });
-  return { released, saves, published };
+  return { released, saves, published, asked, blocks };
 }
 
 const repos: string[] = [];
@@ -177,6 +207,10 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     correction_pending: { source: "correction_pending", visionVersion: 3, affected: ["G2"], reason: "held" },
     superseded: { source: "superseded", planRevision: 2, requestedBy: null, reason: "replaced" },
     acceptance_failed: { source: "acceptance_failed", mainCommit: MERGE, reason: "check failed on main" },
+    awaiting_work: { source: "awaiting_work", waits: 1, interfaceEntries: ["I10"], on: ["t"], reason: "needs I10" },
+    awaiting_client: { source: "awaiting_client", waits: 1, questionId: "q", question: "which command?", assumption: "the tender's command", reason: "contradiction" },
+    client_answered: { source: "client_answered", waits: 1, questionId: "q", reason: "answered" },
+    prerequisite_unresolved: { source: "prerequisite_unresolved", why: "unplanned", waits: 0, reason: "no task delivers I10" },
     api: { source: "api" },
   };
   // Each exit names the production code that takes it; a new exit kind fails to compile here until
@@ -186,6 +220,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     "read-main": "parked-exits.ts settleOnMain: mergeOnMainOf reads main; none found (no target here), release: unblockWorkItem to Pending",
     requeue: "parked-exits.ts release: unblockWorkItem to Pending",
     "await-revision": "replan.ts Replanner.compose: supersedeWorkItem to Abandoned, in the plan revision the replanning step writes for the correction holding it",
+    "await-answer": "parked-exits.ts awaitAnswer: the question posted if not on record, then resumeOnAnswer to Pending once the client's answer is read",
     "give-up": "parked-exits.ts giveUp: giveUpWorkItem to Abandoned; the plan_repair_on_abandon trigger opens the repair the Replanner answers",
   };
   const LEAVES_TO: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: WorkItemStatus } = {
@@ -193,6 +228,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     "read-main": "Pending",
     requeue: "Pending",
     "await-revision": "Abandoned",
+    "await-answer": "Pending",
     "give-up": "Abandoned",
   };
 
@@ -223,12 +259,12 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     expect(saves).toEqual([expect.objectContaining({ status: "Abandoned", reason: expect.objectContaining({ source: "orchestrator_error" }) })]);
   });
 
-  test("only a merge-record wait, an unreadable main or a correction's hold stays Blocked past its sweep; every other source requeues or is given up", () => {
+  test("only a merge-record wait, an unreadable main, a correction's hold or a client's answer awaited stays Blocked past its sweep; every other source requeues or is given up", () => {
     const waiting = BLOCKED_REASON_SOURCES.filter((source) => {
       const exit = blockedExitOf(SAMPLE[source]);
       return exit.kind !== "requeue" && exit.kind !== "give-up";
     });
-    expect([...waiting]).toEqual(["merge_unrecorded", "orphan_unreconciled", "correction_pending"]);
+    expect([...waiting]).toEqual(["merge_unrecorded", "orphan_unreconciled", "correction_pending", "awaiting_client"]);
   });
 
   test("an infrastructure block from a legacy row goes back to Pending at once, unblocked by its automatic exit", async () => {
@@ -286,5 +322,61 @@ describe("orphan_unreconciled reads main again before it leaves Blocked", () => 
 
     expect(await released).toBe(0);
     expect(saves).toEqual([]);
+  });
+});
+
+describe("a task held for the client's answer: its question is posted from the hold, and its project waits on the client, never gives it up", () => {
+  const held: StoredBlockedReason = {
+    source: "awaiting_client",
+    waits: 1,
+    questionId: "6f1c3c1e-8a52-4d43-9d7a-2b2f3e0e9a11",
+    question: "Which command should start the product?",
+    assumption: "The product starts as the tender describes it.",
+    reason: "the tender contradicts itself",
+  };
+
+  test("a hold whose question is not on record (a crash after the hold was written) has it posted under the hold's id, once", async () => {
+    const item = blocked(held);
+    const first = run([item], false, notExercised("recordMergeCommit"), null, { askable: true, answered: false });
+    expect(await first.released).toBe(0);
+    expect(first.asked).toEqual([held.questionId]);
+    expect(first.saves).toEqual([]);
+  });
+
+  test("its answer read, the task goes back to Pending, the count of waits carried", async () => {
+    const item = blocked(held);
+    const { released, saves, published } = run([item], false, notExercised("recordMergeCommit"), null, { askable: true, answered: true });
+    expect(await released).toBe(1);
+    expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Pending", reason: expect.objectContaining({ source: "client_answered", waits: 1, questionId: held.questionId }) }]);
+    expect(published.map((e) => e.eventType)).toEqual(["work_item.client_answered"]);
+  });
+
+  test("unanswered once no other work of the project could proceed, the project halts on client_wait and the task is neither given up nor moved", async () => {
+    const item = blocked(held);
+    const { released, saves, published, blocks } = run([item], false, notExercised("recordMergeCommit"), null, { askable: true, answered: false });
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(published).toEqual([]);
+    expect(blocks).toEqual([
+      { projectId: PROJECT, cause: { category: "client_wait", errorClass: "ClientDecisionAwaited", reason: expect.stringContaining(held.question) } },
+    ]);
+  });
+
+  test("unanswered while other work of the project could still proceed, it holds and the project works on", async () => {
+    const pending: WorkItem = { ...blocked(undefined), status: "Pending", blockedReason: undefined };
+    const { released, saves, blocks } = run([blocked(held), pending], false, notExercised("recordMergeCommit"), null, { askable: true, answered: false });
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(blocks).toEqual([]);
+  });
+
+  test("a question that cannot be put to the client gives the task up under its own cause, never as a failed attempt", async () => {
+    const item = blocked(held);
+    const { released, saves, blocks } = run([item], false, notExercised("recordMergeCommit"), null, { askable: false, answered: false });
+    expect(await released).toBe(1);
+    expect(saves).toEqual([
+      { id: item.id, prev: "Blocked", status: "Abandoned", reason: expect.objectContaining({ source: "prerequisite_unresolved", why: "unaskable", waits: 1 }) },
+    ]);
+    expect(blocks).toEqual([]);
   });
 });

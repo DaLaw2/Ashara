@@ -53,6 +53,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
     },
   ),
   resumeInfrastructureHalts: { kind: "step", file: "packages/delivery/src/infrastructure-halts.ts", declaration: "export async function resumeInfrastructureHalts(" },
+  resumeClientWaitHalts: { kind: "step", file: "packages/delivery/src/client-wait-halts.ts", declaration: "export async function resumeClientWaitHalts(" },
   releaseClearedBlocks: { kind: "step", file: "packages/delivery/src/parked-exits.ts", declaration: "export async function releaseClearedBlocks(" },
   releaseBranchesOfSettledTasks: {
     kind: "step",
@@ -126,6 +127,8 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/delivery/src/repositories/project-halt.ts#listActiveIds": { kind: "rows-only", why: "project ids only" },
   "packages/delivery/src/repositories/project-halt.ts#listByClient": { kind: "not-a-step-listing", why: "one client's projects with their halt, for the HTTP API" },
   "packages/delivery/src/repositories/project-halt.ts#listInfrastructureHalted": { kind: "rows-only", why: "project ids only" },
+  "packages/delivery/src/repositories/project-halt.ts#listClientWaitHalted": { kind: "rows-only", why: "project ids only" },
+  "packages/delivery/src/repositories/project-halt.ts#listReportedHalts": { kind: "rows-only", why: "project ids only" },
   "packages/delivery/src/repositories/replan.ts#listProjectsAwaitingReplan": { kind: "read-each" },
   "packages/delivery/src/repositories/replan.ts#listDuePlanRevisionReports": { kind: "read-each" },
   "packages/delivery/src/repositories/work-item-adapter.ts#listByProject": { kind: "not-a-step-listing", why: "one project's work items" },

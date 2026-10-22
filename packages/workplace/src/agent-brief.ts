@@ -28,6 +28,12 @@ const VisionAssumptionSchema = z.strictObject({
   note: z.string().min(1),
 });
 
+/** One entry of the product's public interface as the vision states it, by the key the plan cites it by. */
+const InterfaceEntrySchema = z.strictObject({
+  key: z.string().min(1),
+  text: z.string().min(1),
+});
+
 /**
  * AgentBriefSchema: the validated task instruction Delivery's dispatch assembles for one attempt.
  * It is built in-process, handed to the Workplace attempt loop as its
@@ -38,7 +44,8 @@ const VisionAssumptionSchema = z.strictObject({
  *
  * Field tiers:
  *  - PROJECT: `intent`, the owner's vision verbatim, `assumptions`, the assumptions of that same
- *    vision version (`visionVersion`) work proceeds on, and `projectEnvironment`, the environment
+ *    vision version (`visionVersion`) work proceeds on, `interfaceEntries`, the public interface that
+ *    version states, each by the key the plan cites it by, and `projectEnvironment`, the environment
  *    the task works in. Rendered first: what the project is and what it is built with are the things
  *    the agent cannot discover for itself and would otherwise fill in from its training prior.
  *  - BINDING: `taskId`, `goal`, `context`, `deliverables`, `priorAttemptFailure`,
@@ -52,6 +59,8 @@ const AgentBriefSchema = z
     intent: z.string().min(1),
     visionVersion: z.number().int().min(1),
     assumptions: z.array(VisionAssumptionSchema),
+    // Empty when the vision records no public interface.
+    interfaceEntries: z.array(InterfaceEntrySchema),
     projectEnvironment: ProjectEnvironmentSchema,
     context: z.string().min(1),
     deliverables: z.array(z.string()),

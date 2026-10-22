@@ -666,6 +666,49 @@ interface SuiteReviewProblemsResult {
 }
 
 /**
+ * The implementer finished blocked on work another task of the plan delivers, naming the public
+ * interface entries it needs. Not the task's failure and no lesson: the orchestrator makes the item
+ * wait on the open tasks that deliver those entries, its dispatch given back, never routing it
+ * through the FailureRouter; with no such task the need is a gap in the plan, which is repaired.
+ * The partial work is committed on the task branch for the next dispatch.
+ */
+interface PrerequisiteNeededResult {
+  readonly status: "prerequisite_needed";
+  /** The public interface entries the implementer named, each resolved to its key in `interfaceTable`. */
+  readonly interfaceEntries: readonly [string, ...string[]];
+  /** The public interface as the implementer's brief showed it, each entry by key: what the names were resolved against. */
+  readonly interfaceTable: ReadonlyArray<{ readonly key: string; readonly text: string }>;
+  /** The implementer's own statement of what is missing. */
+  readonly reason: string;
+  readonly detail: string;
+  readonly outcome: Outcome;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
+ * The implementer finished blocked on a decision only the client can make (a contradiction in the
+ * tender, a choice it leaves open). Not the task's failure and no lesson: the orchestrator sends the
+ * question to the client and the item holds until it is answered, its dispatch given back, never
+ * routing it through the FailureRouter.
+ */
+interface ClientDecisionNeededResult {
+  readonly status: "client_decision_needed";
+  /** The question as the implementer wrote it for the client. */
+  readonly question: string;
+  /** What the tender and the vision say now, which stands until the client answers. */
+  readonly assumption: string;
+  /** The implementer's own statement of what is missing. */
+  readonly reason: string;
+  readonly detail: string;
+  readonly outcome: Outcome;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
  * Every status an ExecutionResult can carry. `satisfies` keeps each member a real status;
  * dispatch-result.test.ts checks the converse, that no status is missing.
  */
@@ -684,6 +727,8 @@ export const EXECUTION_STATUSES = [
   "interrupted",
   "context_exceeded",
   "no_wider_model",
+  "prerequisite_needed",
+  "client_decision_needed",
 ] as const satisfies readonly ExecutionResult["status"][];
 
 export type ExecutionResult =
@@ -699,7 +744,9 @@ export type ExecutionResult =
   | OwnerUnresolvedResult
   | InterruptedResult
   | ContextExceededResult
-  | NoWiderModelResult;
+  | NoWiderModelResult
+  | PrerequisiteNeededResult
+  | ClientDecisionNeededResult;
 
 interface AgentExecutionResult {
   readonly status: "failed" | "blocked";

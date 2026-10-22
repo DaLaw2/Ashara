@@ -759,6 +759,28 @@ describe("a plan against a vision stated as guarantees", () => {
         expect(seen.verdicts).toEqual([{ ok: true }]);
     });
 
+    // A task judged through an interface entry another task builds needs that task merged first: its
+    // checks exercise the entry before its own work could pass them.
+    test("a task whose acceptance exercises an interface entry only another task's deliverables build depends on that task, never in a cycle", async () => {
+        const judgedThroughOther = task("t1", {
+            deliverables: [{ text: "deleted keys are gone", sources: ["G2"] }],
+            acceptance: [{ text: "a get after a delete finds nothing", sources: ["G2", "G1"] }],
+        });
+        const derived = await new DecompositionEngine(
+            scriptedLlm({ assumptions: [], tasks: [judgedThroughOther, task("t2", {}, ["G1"])] }, { prompts: [], verdicts: [] }),
+        ).decompose(contractInput());
+        const [t1, t2] = derived.tasks.filter((t) => t.taskSpec.origin === "decomposition");
+        expect(derived.dependencyEdges).toContainEqual({ from: t1?.id, to: t2?.id });
+        expect(derived.dependencyEdges).not.toContainEqual({ from: t2?.id, to: t1?.id });
+
+        const plannedTheOtherWay = await new DecompositionEngine(
+            scriptedLlm({ assumptions: [], tasks: [judgedThroughOther, task("t2", { dependsOn: ["t1"] }, ["G1"])] }, { prompts: [], verdicts: [] }),
+        ).decompose(contractInput());
+        const [u1, u2] = plannedTheOtherWay.tasks.filter((t) => t.taskSpec.origin === "decomposition");
+        expect(plannedTheOtherWay.dependencyEdges).toContainEqual({ from: u2?.id, to: u1?.id });
+        expect(plannedTheOtherWay.dependencyEdges).not.toContainEqual({ from: u1?.id, to: u2?.id });
+    });
+
     test("the scaffold's brief carries every interface entry verbatim and its success criterion names each", async () => {
         const result = await new DecompositionEngine(
             scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, { prompts: [], verdicts: [] }),

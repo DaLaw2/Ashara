@@ -19,6 +19,10 @@ import { DEFAULT_CONFIG, withOverrides } from "../types.js";
 import type { CoreLoopDeps, CoreLoopOverrides, DispatchSteps, LoopCore } from "../types.js";
 import { inertCoreLoopDeps, inertWorkItemRepo } from "../testing.js";
 import { handleProcessingError, processTask } from "./dispatch-run.js";
+import { GiveUpMisrouted } from "./give-up-causes.js";
+import type { GiveUpCause } from "./give-up-causes.js";
+import { routeAsGivenUp } from "./reopen-routes.js";
+import { routingDepsOf } from "./routing-deps.js";
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 // Stable ID shared by every item copy the mock repo returns, so the domain
@@ -33,7 +37,7 @@ const OUTCOME_BASE = {
   promptDigest: "0".repeat(64),
   detail: "finished done",
 };
-const COMPLETED_OUTCOME: Outcome = { ...OUTCOME_BASE, kind: "finished", status: "done", summary: "done", blockedReason: null, statement: null };
+const COMPLETED_OUTCOME: Outcome = { ...OUTCOME_BASE, kind: "finished", status: "done", summary: "done", blockedReason: null, blockedOn: null, statement: null };
 
 const targets: string[] = [];
 afterAll(() => {
@@ -120,6 +124,8 @@ function coreLoopDeps(
         listActiveIds: notExercised("listActiveIds"),
         block: notExercised("block"),
         listInfrastructureHalted: notExercised("listInfrastructureHalted"),
+        listClientWaitHalted: notExercised("listClientWaitHalted"),
+        resumeFromClientWait: notExercised("resumeFromClientWait"),
         resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
         blockAllActive: notExercised("blockAllActive"),
         listWithWorkspace: async () => [],
@@ -1387,6 +1393,8 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
           return "blocked";
         },
         listInfrastructureHalted: notExercised("listInfrastructureHalted"),
+        listClientWaitHalted: notExercised("listClientWaitHalted"),
+        resumeFromClientWait: notExercised("resumeFromClientWait"),
         resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
         blockAllActive: notExercised("blockAllActive"),
         listWithWorkspace: async () => [],
@@ -1769,5 +1777,143 @@ describe("a review of the plan's suites with problems: the named check tasks are
     expect([rowOf(CHECK_A).status, rowOf(CHECK_B).status]).toEqual(["Completed", "Completed"]);
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);
+  });
+});
+
+// A block on another task's work is that task's to clear: the item waits on it, its attempt given
+// back, and neither the failure router nor a give-up is reached.
+describe("a blocked finish on another task's work: the item waits on the task building the entry, its attempt given back", () => {
+  const BUILDER_ID: WorkItemId = createWorkItemId();
+  const INTERFACE = [{ key: "I1", text: "POST /loans" }];
+
+  function builderTask(): WorkItem {
+    return {
+      ...freshPendingItem(),
+      id: BUILDER_ID,
+      title: "record loans",
+      taskSpec: {
+        origin: "decomposition",
+        sources: [{ type: "guarantee", id: "G1", text: "loans are recorded", observation: "output", interface: ["I1"], refutedBy: [] }],
+      },
+    };
+  }
+
+  function buildNeedDeps(entries: readonly [string, ...string[]]) {
+    const rows = new Map<string, WorkItem>([
+      [ITEM_ID, freshPendingItem()],
+      [BUILDER_ID, builderTask()],
+    ]);
+    const dependencies: Array<readonly [WorkItemId, WorkItemId]> = [];
+    const events: string[] = [];
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const rowOf = (id: string): WorkItem => {
+      const row = rows.get(id);
+      if (row === undefined) throw new Error(`no row ${id}`);
+      return row;
+    };
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
+      findById: async (id) => {
+        const row = rows.get(id);
+        return row === undefined ? null : copy(row);
+      },
+      listByProject: async () => [...rows.values()].map(copy),
+      listDependenciesByProject: async () => [],
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        const row = rowOf(item.id);
+        if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
+        rows.set(item.id, { ...copy(item), dispatchCount: row.dispatchCount });
+      },
+      incrementDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
+        return row.dispatchCount + 1;
+      },
+      saveRefundedOverflow: async () => 0,
+      recordCrashOrphan: async () => 1,
+      async saveRefunded(item, expectedPreviousStatus) {
+        await workItemRepo.save(item, expectedPreviousStatus);
+        const row = rowOf(item.id);
+        rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
+        return row.dispatchCount - 1;
+      },
+      withTransaction: async (run) => run(workItemRepo),
+      getDependencies: async (id) => dependencies.filter(([from]) => from === id).map(([, to]) => to),
+      addDependency: async (from, to) => void dependencies.push([from, to]),
+      findChildren: async () => [],
+    });
+    const detail = "agent reported blocked: the check sets up a loan through I1";
+    const outcome: Outcome = {
+      ...OUTCOME_BASE,
+      kind: "finished",
+      status: "blocked",
+      summary: "Stuck.",
+      blockedReason: "needs I1",
+      blockedOn: { kind: "needs-work", interfaceEntries: entries },
+      statement: null,
+    };
+    const logger = recordingLogger();
+    const deps = coreLoopDeps({
+      loop: { workItemRepo, logger, eventStore: { publish: async (event) => void events.push(event.eventType) } },
+      dispatch: {
+        dispatchService: {
+          execute: async () => ({
+            status: "prerequisite_needed",
+            interfaceEntries: entries,
+            interfaceTable: INTERFACE,
+            reason: "needs I1",
+            detail,
+            outcome,
+            sessionId: "test-session",
+            attempt: 1,
+            errorEnvelope: {
+              outcome: "blocked",
+              summary: detail,
+              chain: { boundary: "development", operation: "agentAttempt", message: detail, timestamp: new Date().toISOString() },
+            },
+          }),
+        },
+        failedApproachRepo: { record: async () => { approaches++; } },
+        failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+      },
+    });
+    return { deps, logger, item: () => rowOf(ITEM_ID), dependencies, events, routed: () => routed, approaches: () => approaches };
+  }
+
+  test("the item is back at Pending waiting on the builder, its dispatch count unchanged, no failure routed and nothing given up", async () => {
+    const { deps, logger, item, dependencies, events, routed, approaches } = buildNeedDeps(["I1"]);
+
+    await processTask(deps, freshPendingItem());
+
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0, blockedReason: { source: "awaiting_work", waits: 1, interfaceEntries: ["I1"], on: [BUILDER_ID] } });
+    expect(dependencies).toEqual([[ITEM_ID, BUILDER_ID]]);
+    expect(events).toContain("work_item.awaiting_work");
+    expect(events).not.toContain("work_item.given_up");
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+    expect(logger.records.filter((record) => record.event === "delivery.task-given-up")).toEqual([]);
+  });
+
+  test("routeAsGivenUp refuses an owner-wait's give-up, which only the wait's own exit writes, and writes nothing", async () => {
+    const { deps, item } = buildNeedDeps(["I1"]);
+    const owner: GiveUpCause = { source: "prerequisite_unresolved", why: "unplanned", waits: 0, reason: "no task builds I1" };
+
+    await expect(routeAsGivenUp(routingDepsOf(deps), ITEM_ID, owner, "refund")).rejects.toBeInstanceOf(GiveUpMisrouted);
+    expect(item().status).toBe("Pending");
+    expect(item().blockedReason).toBeUndefined();
+  });
+
+  test("routeAsGivenUp refuses an environment change's give-up, which only the environment exit writes, and writes nothing", async () => {
+    const { deps, item } = buildNeedDeps(["I1"]);
+    const environment: GiveUpCause = { source: "environment_change_needed", paths: ["Dockerfile"], reason: "past the bound" };
+
+    await expect(routeAsGivenUp(routingDepsOf(deps), ITEM_ID, environment, "refund")).rejects.toMatchObject({
+      name: "GiveUpMisrouted",
+      source: "environment_change_needed",
+      route: "environment-exit",
+    });
+    expect(item().status).toBe("Pending");
+    expect(item().blockedReason).toBeUndefined();
   });
 });

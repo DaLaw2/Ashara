@@ -15,6 +15,7 @@ export type AssignmentBrief = Pick<
   | "intent"
   | "visionVersion"
   | "assumptions"
+  | "interfaceEntries"
   | "projectEnvironment"
   | "context"
   | "deliverables"

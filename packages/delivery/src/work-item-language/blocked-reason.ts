@@ -346,6 +346,71 @@ const acceptanceFailedSchema = z.object({
 });
 
 /**
+ * The task's implementer finished blocked on work another task of the plan delivers, naming the
+ * public interface entries it needs (`interfaceEntries`), and the task waits at Pending on the open
+ * tasks that deliver them (`on`, each a dependency of it now), its dispatch given back: it is the
+ * scheduler's to release, never the failure router's. `waits` counts the waits on an owner outside
+ * the task in a row, this one included, and bounds them. Written on the Pending item; the next
+ * dispatch carries it until another reason replaces it.
+ */
+const awaitingWorkSchema = z.object({
+  source: z.literal("awaiting_work"),
+  waits: z.number().int().min(1),
+  interfaceEntries: z.array(z.string().min(1)).min(1),
+  on: z.array(z.string().min(1)).min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The task's implementer finished blocked on a decision only the client can make: the task holds at
+ * Blocked until the client's answer to its question is read, its dispatch given back. `questionId`
+ * is the client message the question is posted as, chosen with the hold and posted after it, with
+ * `question` and what stands until it is answered (`assumption`). Its exit is automatic (orchestrator
+ * parked-exits.ts): the question is posted if it is not yet on record, an answer read sends it back
+ * to Pending, and with no other work of the project left that could proceed the project halts on
+ * client_wait until the answer comes. `waits` counts the waits on an owner outside the task in a
+ * row, this one included.
+ */
+const awaitingClientSchema = z.object({
+  source: z.literal("awaiting_client"),
+  waits: z.number().int().min(1),
+  questionId: z.string().min(1),
+  question: z.string().min(1),
+  assumption: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The client answered the question an awaiting_client task held for (`questionId`): the task is
+ * back at Pending and its next attempt reads the answer in the vision. `waits` carries the count of
+ * waits on an owner outside the task, which the next one adds to.
+ */
+const clientAnsweredSchema = z.object({
+  source: z.literal("client_answered"),
+  waits: z.number().int().min(1),
+  questionId: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The task was blocked on an owner outside it, and the wait cannot end: `unplanned`, no open task of
+ * the plan delivers the interface entries it needs (a gap in the plan); `bound`, it reached the
+ * bound of waits in a row (`waits`); `unaskable`, the question could not be put to the client. The
+ * task is given up (Abandoned) and its plan repaired: the attempt is never counted as failed.
+ * `reason` carries the implementer's need and why the wait ends.
+ */
+const prerequisiteUnresolvedSchema = z.object({
+  source: z.literal("prerequisite_unresolved"),
+  why: z.enum(["unplanned", "bound", "unaskable"]),
+  waits: z.number().int().min(0),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * HTTP API (PATCH /work-items/:id/status): a Failed or Abandoned item an operator moved, or a
  * legacy Blocked row (the route never blocks a task). Passthrough
  * preserves caller-supplied fields — the user content is open-world.
@@ -380,6 +445,10 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   correctionPendingSchema,
   supersededSchema,
   acceptanceFailedSchema,
+  awaitingWorkSchema,
+  awaitingClientSchema,
+  clientAnsweredSchema,
+  prerequisiteUnresolvedSchema,
   apiSchema,
 ]);
 
@@ -419,6 +488,10 @@ export const BLOCKED_REASON_SOURCES = [
   "correction_pending",
   "superseded",
   "acceptance_failed",
+  "awaiting_work",
+  "awaiting_client",
+  "client_answered",
+  "prerequisite_unresolved",
   "api",
 ] as const satisfies readonly StoredBlockedReason["source"][];
 
@@ -466,6 +539,10 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "correction_pending":
     case "superseded":
     case "acceptance_failed":
+    case "awaiting_work":
+    case "awaiting_client":
+    case "client_answered":
+    case "prerequisite_unresolved":
     case "api":
       return { ...reason };
   }
@@ -482,19 +559,22 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * Completed with the merge found or to Pending when main holds none; main still unreadable stays
  * Blocked for the next cycle. `requeue`: back to Pending at once, uncharged: an
  * infrastructure fault is not the task's. `await-revision`: it stays Blocked until the plan revision
- * the loop writes for the correction holding it supersedes it. `give-up`: the cause cannot clear by
- * itself, so the task is given up (Abandoned) and its plan repaired.
+ * the loop writes for the correction holding it supersedes it. `await-answer`: it stays Blocked until
+ * the client's answer to its question is read (posted first if it is not yet on record), then back to
+ * Pending; its project halts on client_wait while no other work of it could proceed. `give-up`: the cause cannot clear by itself, so the task is given up
+ * (Abandoned) and its plan repaired.
  */
 type BlockedExit =
   | { readonly kind: "merge-recorded"; readonly mergeCommit: string; readonly mergeKind: MergeKind | null }
   | { readonly kind: "read-main" }
   | { readonly kind: "requeue" }
   | { readonly kind: "await-revision" }
+  | { readonly kind: "await-answer"; readonly held: Extract<StoredBlockedReason, { source: "awaiting_client" }> }
   | { readonly kind: "give-up" };
 
 /**
- * The exit of a Blocked item's stored reason. Only merge_unrecorded, orphan_unreconciled and
- * correction_pending are written on Blocked items; every other source on a Blocked row is a legacy row's (or is no Blocked
+ * The exit of a Blocked item's stored reason. Only merge_unrecorded, orphan_unreconciled,
+ * correction_pending and awaiting_client are written on Blocked items; every other source on a Blocked row is a legacy row's (or is no Blocked
  * reason at all: task_failed, orchestrator_error, replan, failure_given_up, superseded), as is a
  * Blocked item with no reason. None of those waits: an infrastructure fault is requeued, anything
  * else is given up.
@@ -510,6 +590,8 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
       return { kind: "requeue" };
     case "correction_pending":
       return { kind: "await-revision" };
+    case "awaiting_client":
+      return { kind: "await-answer", held: reason };
     case "owner_unresolved":
     case "environment_undefined":
     case "checks_stale":
@@ -529,6 +611,9 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "failure_given_up":
     case "superseded":
     case "acceptance_failed":
+    case "awaiting_work":
+    case "client_answered":
+    case "prerequisite_unresolved":
       return { kind: "give-up" };
   }
   const _: never = reason;

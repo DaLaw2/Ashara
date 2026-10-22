@@ -20,6 +20,7 @@ const blocked: Outcome = {
   status: "blocked",
   summary: "already on main",
   blockedReason: "already on main",
+  blockedOn: { kind: "other" },
   statement: null,
   turnsUsed: 1,
   cost: { measured: true, totalUsd: 0, turns: 1 },

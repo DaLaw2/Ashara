@@ -10,6 +10,7 @@ import type { CoreLoopDeps, CycleResult, LaneSettlement, LoopStop, TaskLanes, Ta
 import { processTask, handleProcessingError } from "./execution/dispatch-run.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import { runTerminalSweeps } from "./terminal-sweep.js";
+import { resumeClientWaitHalts } from "./client-wait-halts.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import { deploymentCapCause, projectBlockCause, projectCapCause, projectWorkCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
@@ -161,6 +162,18 @@ export class CoreLoop {
     // is reported below first, and resumes from the next cycle on.
     const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.loop.projectRepo, deps.dispatch.infrastructureProbe, deps.loop.containment, deps.loop.logger));
     if (resumed.kind === "stop") return this.haltAtCap(resumed.stop);
+    // A project halted on client_wait resumes by itself once the client's answer to a question its held
+    // tasks wait on is read (no LLM call); like an infrastructure halt, only once its halt is told.
+    const answered = await this.step("client-wait-resume", () =>
+      resumeClientWaitHalts({
+        halts: deps.loop.projectRepo,
+        workItemRepo: deps.loop.workItemRepo,
+        clientQuestions: deps.dispatch.clientQuestions,
+        containment: deps.loop.containment,
+        logger: deps.loop.logger,
+      }),
+    );
+    if (answered.kind === "stop") return this.haltAtCap(answered.stop);
 
     // Each stop and halt episode still owed one gets its terminal sweep on main (no LLM call), before
     // the stop's and the halt's report, so each guarantee's evidence on the last commit is on record
@@ -261,6 +274,7 @@ export class CoreLoop {
         workItemRepo: deps.loop.workItemRepo,
         eventStore: deps.loop.eventStore,
         projects: deps.loop.projectRepo,
+        clientQuestions: deps.dispatch.clientQuestions,
         workdirBase: deps.loop.config.workdirBase,
         containment: deps.loop.containment,
         logger: deps.loop.logger,

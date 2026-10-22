@@ -26,6 +26,7 @@ const visionRow = z.object({
   inferences: z.unknown(),
   openQuestions: z.unknown(),
   guarantees: z.unknown(),
+  interface: z.unknown(),
 });
 const briefRow = z.object({
   title: z.string(),
@@ -34,6 +35,8 @@ const briefRow = z.object({
   taskSpec: z.unknown(),
 });
 const messageRow = z.object({ id: z.string(), body: z.string() });
+/** A question to the client: intake's reply to the tender, or a task's question, posted in reply to nothing. */
+const questionRow = messageRow.extend({ intake: z.boolean() });
 const replyRow = z.object({ answerId: z.string(), body: z.string() });
 const deliveredRow = z.object({
   sweepId: z.string(),
@@ -55,7 +58,7 @@ export interface TextFactRecords {
   readonly visions: ReadonlyArray<z.infer<typeof visionRow>>;
   /** Every recorded brief, with the latest vision version written before its session was. */
   readonly briefs: ReadonlyArray<z.infer<typeof briefRow>>;
-  readonly questions: ReadonlyArray<z.infer<typeof messageRow>>;
+  readonly questions: ReadonlyArray<z.infer<typeof questionRow>>;
   /**
    * Outbound reports posted in reply to a client answer, other than its receipt and the plan revision's report (which
    * replies to the answer that asked for it).
@@ -203,7 +206,7 @@ async function readStoreRecords(
     intakeReading: intakeReading === undefined ? null : intakeReading,
     visions: await rows(
       visionRow,
-      sql`SELECT version, inferences, open_questions AS "openQuestions", guarantees FROM vision_documents
+      sql`SELECT version, inferences, open_questions AS "openQuestions", guarantees, interface FROM vision_documents
              WHERE project_id = ${projectId} ORDER BY version`,
     ),
     briefs: await rows(
@@ -216,9 +219,10 @@ async function readStoreRecords(
           ORDER BY s.created_at, s.id`,
     ),
     questions: await rows(
-      messageRow,
-      sql`SELECT id, body FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound'
-             AND kind = 'question' ORDER BY created_at, position`,
+      questionRow,
+      sql`SELECT id, body, in_reply_to IS NOT NULL AS intake FROM client_messages
+          WHERE project_id = ${projectId} AND direction = 'outbound' AND kind = 'question'
+          ORDER BY created_at, position`,
     ),
     answerReplies: await rows(
       replyRow,
@@ -306,6 +310,8 @@ type VisionReading =
       readonly kind: "read";
       readonly assumptions: readonly Assumption[];
       readonly questions: ReadonlyArray<z.infer<typeof openQuestion>>;
+      /** The public interface the version states, each entry by its key. */
+      readonly interfaceEntries: ReadonlyArray<{ readonly key: string; readonly text: string }>;
     }
   | { readonly kind: "unreadable"; readonly detail: string };
 
@@ -322,9 +328,16 @@ function readVision(vision: z.infer<typeof visionRow>): VisionReading {
       kind: "unreadable",
       detail: `vision v${vision.version} open questions: ${z.prettifyError(questions.error)}`,
     };
+  const entries = z.array(z.looseObject({ id: z.string(), text: z.string() })).safeParse(vision.interface);
+  if (!entries.success)
+    return {
+      kind: "unreadable",
+      detail: `vision v${vision.version} interface: ${z.prettifyError(entries.error)}`,
+    };
   return {
     kind: "read",
     questions: questions.data,
+    interfaceEntries: entries.data.map((entry) => ({ key: entry.id, text: entry.text })),
     assumptions: inferences.data.map((record, i) => ({
       key: record.key ?? `A${i + 1}`,
       statement: record.statement,
@@ -392,6 +405,7 @@ const storedBrief = z.looseObject({
   context: z.string(),
   visionVersion: z.number().int(),
   assumptions: z.array(briefAssumption),
+  interfaceEntries: z.array(z.object({ key: z.string(), text: z.string() })),
 });
 
 interface TextViolation {
@@ -481,6 +495,15 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: Versions, add: Add)
       `brief-assumptions:${title}`,
       `the brief of "${title}" states the assumptions ${stated.join(" ").slice(0, 200)}; vision ` +
         `v${brief.visionVersion} records ${expected.join(" ").slice(0, 200)}`,
+    );
+  }
+  const interfaceStated = JSON.stringify(brief.interfaceEntries.map((entry) => [entry.key, entry.text]));
+  const interfaceRecorded = JSON.stringify(vision.interfaceEntries.map((entry) => [entry.key, entry.text]));
+  if (interfaceStated !== interfaceRecorded) {
+    add(
+      `brief-interface:${title}`,
+      `the brief of "${title}" states the public interface ${interfaceStated.slice(0, 200)}; vision ` +
+        `v${brief.visionVersion} records ${interfaceRecorded.slice(0, 200)}`,
     );
   }
   const byKey = new Map(vision.assumptions.map((a) => [a.key, a]));
@@ -805,7 +828,8 @@ function checkDeclinedContract(records: TextFactRecords, add: Add): void {
     return;
   }
   if (declined) {
-    for (const [index, message] of [...records.questions, ...records.tenderReports].entries()) {
+    const intakeQuestions = records.questions.filter((question) => question.intake);
+    for (const [index, message] of [...intakeQuestions, ...records.tenderReports].entries()) {
       const missing = DECLINE_WORDS.filter((words) => !message.body.includes(words));
       const underWay = UNDER_WAY_WORDS.filter((words) => message.body.includes(words));
       if (missing.length > 0 || underWay.length > 0)
@@ -1246,7 +1270,9 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${DELIVERY}/dispatch/execute-task.ts#buildBrief`, judges: [i9(checkBriefs)] },
   { source: `${WORKPLACE}/prompt.ts#buildTaskPrompt`, judges: [i9(checkBriefs)] },
   { source: `${WORKPLACE}/prompt.ts#assumptionsSection`, judges: [i9(checkBriefs)] },
+  { source: `${WORKPLACE}/prompt.ts#interfaceSection`, judges: [i9(checkBriefs)] },
   { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions), i9(checkDeclinedContract)] },
+  { source: `${ENGAGEMENT}/client-question.ts#questionBody`, judges: [i9(checkQuestions)] },
   { source: `${ENGAGEMENT}/answers.ts#replanReport`, judges: [i9(checkAnswerReplies)] },
   // A contract Ashara declines: the draft, like every intake message, states the decline, and no work starts on it.
   {
@@ -1592,7 +1618,11 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
   },
   {
     source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insert`,
-    posts: [`${ENGAGEMENT}/intake.ts#readingReport`, `${ENGAGEMENT}/correction.ts#correctionReport`],
+    posts: [
+      `${ENGAGEMENT}/intake.ts#readingReport`,
+      `${ENGAGEMENT}/correction.ts#correctionReport`,
+      `${ENGAGEMENT}/client-question.ts#questionBody`,
+    ],
     clientWords: true,
   },
   {

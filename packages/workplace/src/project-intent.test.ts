@@ -5,8 +5,9 @@ import type { ProjectIntentSource } from "./project-intent.js";
 
 const taskId = createWorkItemId();
 const assumptions = [{ key: "A1", statement: "Amounts are in one currency.", note: "Inferred; reported to the client; client-visible behaviour" }];
+const interfaceEntries = [{ key: "I1", text: "report FILE prints the totals" }];
 const source = (vision: { version: number; visionText: string } | null): ProjectIntentSource => ({
-  loadIntent: async () => (vision === null ? null : { ...vision, assumptions }),
+  loadIntent: async () => (vision === null ? null : { ...vision, assumptions, interfaceEntries }),
 });
 
 describe("the brief's project intent is the current vision's text and its assumptions", () => {
@@ -15,6 +16,7 @@ describe("the brief's project intent is the current vision's text and its assump
       intent: "An expense report tool.",
       visionVersion: 3,
       assumptions,
+      interfaceEntries,
     });
   });
 

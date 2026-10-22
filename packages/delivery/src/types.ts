@@ -21,9 +21,12 @@ import type {
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
+  TaskQuestion,
+  TaskQuestionPosting,
 } from "./acl/engagement-acl.js";
 import type { AcceptanceStore } from "./acceptance.js";
 import type { TerminalSweepStore } from "./terminal-sweep.js";
+import type { ClientWaitHalts } from "./client-wait-halts.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
@@ -159,7 +162,7 @@ export interface LoopCore {
    * every target, whose settled tasks' branches each cycle releases.
    * ProjectHaltRepository satisfies it.
    */
-  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts & SettledTargets;
+  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & ClientWaitHalts & SpendCapHalts & SettledTargets;
   /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */
   readonly spendCap: SpendCapPort;
   /**
@@ -214,6 +217,16 @@ interface PlanningSteps {
   readonly replanning: Replanning;
 }
 
+/**
+ * The client's channel for a decision only the client can make, which Engagement keeps: `ask` posts a
+ * task's question to the client, as intake's questions are posted, and `answered` says whether the
+ * client's answer to one has been read.
+ */
+export interface ClientQuestions {
+  ask(question: TaskQuestion): Promise<TaskQuestionPosting>;
+  answered(questionId: string): Promise<boolean>;
+}
+
 /** A task's dispatch, the routing of its result, and the cells and substrate its attempts run on. */
 export interface DispatchSteps {
   readonly dispatchService: Pick<DispatchService, "execute">;
@@ -238,6 +251,8 @@ export interface DispatchSteps {
    * why, when the roster names no such role; a roster that cannot be read throws.
    */
   readonly environmentOwner: (projectId: ProjectId) => Promise<EnvironmentOwner>;
+  /** Where a task blocked on a decision only the client can make has its question posted, and its answer read. */
+  readonly clientQuestions: ClientQuestions;
   /**
    * Removes every cell this process still holds, run each cycle before anything is dispatched: no
    * attempt is in flight then, so each one held is a cell whose teardown failed. Never throws.

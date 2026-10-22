@@ -1,29 +1,45 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach } from "@ashara/shared";
-import type { MergeKind } from "./work-item-language/blocked-reason.js";
+import type { MergeKind, StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import { blockedExitOf } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
+import { OPEN_WORK_ITEM_STATUSES } from "./work-item-language/work-item-status.js";
 import { WorkItemRowCorrupt } from "./work-item-language/work-item-row.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
-import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./domain/index.js";
+import { giveUpUnaskable, giveUpWorkItem, PlanningService, resumeOnAnswer, takeEvents, unblockWorkItem } from "./domain/index.js";
 import { mergeOnMainOf, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
+import { clientWaitCause } from "./project-halt.js";
+import type { ProjectBlockCause } from "./project-halt.js";
+import type { ClientQuestions } from "./types.js";
+
+type HeldReason = Extract<StoredBlockedReason, { source: "awaiting_client" }>;
 
 // The exits of Blocked work items (no work item waits on a person), each taken by the loop every
 // cycle: a merged task whose merge record was not written has the record written again, then
 // Completed; a crash orphan the startup reconciler could not settle has main read again, then
 // Completed with its merge or back to Pending; an infrastructure block from a legacy row goes back
 // to Pending at once; a task a client's correction holds waits for the correction's plan revision,
-// which supersedes it; any other block (from a legacy row, or with no reason) has no cause that
-// clears by itself, so the task is given up and its plan repaired.
+// which supersedes it; a task held for the client's answer has its question posted if it is not on
+// record yet, and goes back to Pending once the answer is read, its project halting on client_wait
+// while no other work of it could proceed; any other block (from a legacy row, or with no reason) has
+// no cause that clears by itself, so the task is given up and its plan repaired.
 // Shared blockedExitOf decides which is which.
 
 interface ParkedExitDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
-  /** `get` names the target whose main an orphan_unreconciled task's merge is read from. */
-  readonly projects: { listActiveIds(): Promise<ProjectId[]> } & TargetPathSource;
+  /**
+   * `get` names the target whose main an orphan_unreconciled task's merge is read from; `block`
+   * halts a project whose only work left waits on the client's answers.
+   */
+  readonly projects: {
+    listActiveIds(): Promise<ProjectId[]>;
+    block(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
+  } & TargetPathSource;
+  /** Where a held task's question is posted, and whether the client's answer to it has been read. */
+  readonly clientQuestions: ClientQuestions;
   /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
   readonly workdirBase: string;
   /** Each project's own fault is contained to it (containEach). */
@@ -58,6 +74,7 @@ async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promi
     return 0;
   }
   let released = 0;
+  const stillHeld: HeldReason[] = [];
   for (const item of blocked) {
     const exit = blockedExitOf(item.blockedReason);
     let left: boolean;
@@ -78,9 +95,14 @@ async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promi
         // Held by a client's correction: the revision the replanning step writes for it supersedes it.
         left = false;
         break;
+      case "await-answer":
+        left = await awaitAnswer(deps, item, exit.held);
+        if (!left) stillHeld.push(exit.held);
+        break;
     }
     if (left) released++;
   }
+  await haltOnClientWait(deps, projectId, stillHeld);
   return released;
 }
 
@@ -133,6 +155,118 @@ async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boole
   }
   if (merge !== null) return completeRecordedMerge(deps, item, merge, "merged");
   return release(deps, item);
+}
+
+/**
+ * A task held for the client's answer to its question: the question is posted under the id the hold
+ * chose, unless it is on record already (a hold written before a crash is posted here, from the next
+ * cycle on); once the answer is read the task goes back to Pending, its next attempt reading the
+ * answer in the vision. A question that cannot be put to the client gives the task up, its plan
+ * repaired, never counted as a failed attempt. Returns whether it left Blocked; still held, it is
+ * one the project may halt on (haltOnClientWait).
+ */
+async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReason): Promise<boolean> {
+  const { questionId } = held;
+  const posting = await deps.clientQuestions.ask({
+    questionId,
+    projectId: item.projectId,
+    taskId: item.id,
+    taskTitle: item.title,
+    question: held.question,
+    assumption: held.assumption,
+    underpins: guaranteesOf(item),
+  });
+  if (posting.kind === "not-askable") {
+    giveUpUnaskable(item, posting.why);
+    if (!(await saveBlocked(deps, item, "not given up on a question that cannot be asked"))) return false;
+    deps.logger.info("delivery.task-given-up", `question ${questionId} cannot be put to the client (${posting.why}); given up, its plan is repaired`, {
+      taskId: item.id,
+      source: "prerequisite_unresolved",
+      questionId,
+    });
+    await publishAll(deps, item.id, takeEvents(item));
+    return true;
+  }
+  if (posting.kind === "posted") {
+    deps.logger.info("delivery.client-question-posted", `question ${questionId} is posted to the client as assumption ${posting.assumptionKey} (vision v${posting.visionVersion})`, {
+      taskId: item.id,
+      questionId,
+      assumptionKey: posting.assumptionKey,
+      visionVersion: posting.visionVersion,
+    });
+  }
+  if (!(await deps.clientQuestions.answered(questionId))) return false;
+  resumeOnAnswer(item);
+  if (!(await saveBlocked(deps, item, "not resumed on the client's answer"))) return false;
+  deps.logger.info("delivery.client-answered", `the client's answer to question ${questionId} is read; back to Pending`, { taskId: item.id, questionId });
+  await publishAll(deps, item.id, takeEvents(item));
+  return true;
+}
+
+/** The guarantees a task delivers, by key: what a decision it waits on underpins. */
+function guaranteesOf(item: WorkItem): string[] {
+  const spec = item.taskSpec;
+  if (spec === undefined || !("sources" in spec) || spec.sources === undefined) return [];
+  return spec.sources.flatMap((source) => (source.type === "guarantee" ? [source.id] : []));
+}
+
+/**
+ * Once no work of the project could proceed but on the client's answers to the questions `held`
+ * tasks wait on, the wait cannot end by itself: the project halts on client_wait, which tells the
+ * client and the operator, until the client's answer to one of them is read (client-wait-halts.ts).
+ * No task is given up and no plan repaired for it. Unanswered while other work could proceed, the
+ * tasks stay held and the project works on.
+ */
+async function haltOnClientWait(deps: ParkedExitDeps, projectId: ProjectId, held: readonly HeldReason[]): Promise<void> {
+  if (held.length === 0 || !(await stalledOnClient(deps, projectId))) return;
+  const questions = held.map((each) => `question ${each.questionId}: ${each.question}`).join("\n");
+  const outcome = await deps.projects.block(
+    projectId,
+    clientWaitCause(`no work of the project can proceed until the client answers ${held.length === 1 ? "this question" : "one of these questions"}:\n${questions}`),
+  );
+  deps.logger.info(
+    "delivery.client-wait-halt",
+    outcome === "blocked" ? `halted until the client answers: ${held.map((each) => each.questionId).join(", ")}` : "already halted; its first cause stands",
+    { projectId, questionIds: held.map((each) => each.questionId), outcome },
+  );
+}
+
+/** Saves a task that was Blocked; false when it moved meanwhile, which is warned of. */
+async function saveBlocked(deps: ParkedExitDeps, item: WorkItem, what: string): Promise<boolean> {
+  try {
+    await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
+  } catch (err) {
+    if (!(err instanceof InvalidStatusTransition)) throw err;
+    deps.logger.warn("delivery.transition-rejected", `${what}: it changed concurrently (${err.from} -> ${err.to})`, { taskId: item.id, from: err.from, to: err.to }, err);
+    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task is left where it moved; the record above names why
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Whether no work of the project could proceed but the client's answers: no task is in progress or
+ * Failed (whose recovery the failure router decides), no Blocked task but one held for an answer, and
+ * every Pending task depends, directly or transitively, on one held for an answer.
+ */
+async function stalledOnClient(deps: ParkedExitDeps, projectId: ProjectId): Promise<boolean> {
+  const tasks = (await deps.workItemRepo.listByProject(projectId)).filter((each) => each.level === "Task");
+  const held = new Set(tasks.filter((each) => each.status === "Blocked" && each.blockedReason?.source === "awaiting_client").map((each) => each.id));
+  // Open and neither Pending nor held: in progress, Failed, or Blocked on a cause that clears without the client.
+  const others = tasks.filter((each) => !held.has(each.id) && OPEN_WORK_ITEM_STATUSES.includes(each.status));
+  if (others.some((each) => each.status !== "Pending")) return false;
+  const edges = await deps.workItemRepo.listDependenciesByProject(projectId);
+  const waitsOnHeld = new Set<string>(held);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const { fromId, toId } of edges) {
+      if (waitsOnHeld.has(toId) && !waitsOnHeld.has(fromId)) {
+        waitsOnHeld.add(fromId);
+        grew = true;
+      }
+    }
+  }
+  return tasks.every((each) => each.status !== "Pending" || waitsOnHeld.has(each.id));
 }
 
 async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: readonly DomainEvent[]): Promise<void> {

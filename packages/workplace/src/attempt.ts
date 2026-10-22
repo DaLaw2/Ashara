@@ -322,6 +322,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
           status: args.status,
           summary: args.summary,
           blockedReason: args.status === "blocked" ? args.blockedReason : null,
+          blockedOn: args.status === "blocked" ? args.blockedOn : null,
           statement: args.status === "done" && "statement" in args ? args.statement : null,
           detail: `turn ${turn}: the model called finish with status ${args.status}`,
         });

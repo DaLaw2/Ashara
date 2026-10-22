@@ -148,7 +148,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A shared notes file", assumptions: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A shared notes file", assumptions: [], interfaceEntries: [] }) },
     cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {

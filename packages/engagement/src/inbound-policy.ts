@@ -82,6 +82,8 @@ const HALT_READING = {
   plan_repair: READ,
   infrastructure: READ,
   acceptance_uncovered: READ,
+  // The answer the halt waits for is read during it: reading it is what ends the halt.
+  client_wait: READ,
 } as const satisfies Record<HaltKind, HaltReading>;
 
 const STOP: InboundDecision = { reading: "now", atCap: "now", resetOnHaltEnd: false, told: "stop" };

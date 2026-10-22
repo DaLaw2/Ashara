@@ -14,7 +14,7 @@ import type { InterfaceForm, SimTask } from "../product.js";
 import type { StandInContext, TaskRow } from "./context.js";
 import { latestChecks, specsOf } from "./context.js";
 import { StandInUnanswerable } from "./responses.js";
-import { finished } from "./tool-steps.js";
+import { blockedOn, finished } from "./tool-steps.js";
 import type { ToolStep } from "./tool-steps.js";
 
 /** The developer's turns, scaffold, public interface repair and implementation alike, as the stand-in scripts them. */
@@ -74,6 +74,8 @@ export class ImplementerStandIn {
       });
       if (!leaves) steps.push(["run_command", { command: `sim resolve ${file}` }]);
     }
+    const block = this.blockedFinish();
+    if (block !== null) return [...steps, block];
     let behaviours = [...mine.behaviours];
     const underDelivers =
       behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery, "implementation");
@@ -116,6 +118,27 @@ export class ImplementerStandIn {
     }
     steps.push(finished(`Delivered ${behaviours.join(", ")}.`));
     return steps;
+  }
+
+  /**
+   * A blocked finish naming its owner, or null to do the work: a task may need the product's
+   * interface entry every task of the plan builds (a wait when another task building it is open and
+   * not waiting on this one, a gap in the plan otherwise), or meet a decision only the client can make.
+   */
+  private blockedFinish(): ToolStep | null {
+    const { tape, rates } = this.context;
+    if (tape.chance("agent.blocked-on-work", rates.blockedOnWork, "implementation"))
+      return blockedOn("Needs the product entry another task builds.", {
+        kind: "needs-work",
+        interfaceEntries: ["I1"],
+      });
+    if (tape.chance("agent.blocked-on-client", rates.blockedOnClient, "implementation"))
+      return blockedOn("The tender leaves the start command open.", {
+        kind: "needs-client-decision",
+        question: "Which command should start the product?",
+        assumption: "The product starts as the tender describes it.",
+      });
+    return null;
   }
 
   /** The scaffold's public interface file: written as briefed, left out, or longer than any report quotes whole. */

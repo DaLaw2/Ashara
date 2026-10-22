@@ -22,6 +22,8 @@ export type { LiaisonBurnWarnings } from "./burn-warning.js";
 export { DeliveredReports } from "./delivered-report.js";
 export type { DeliveredReportStore, LiaisonDeliveredReports } from "./delivered-report.js";
 export { StackChoiceReports } from "./stack-choice.js";
+export { askTaskQuestion, taskQuestionAnswered } from "./client-question.js";
+export type { TaskQuestion, TaskQuestionPosting } from "./client-question.js";
 export type { LiaisonStackChoices, StackChoiceStore } from "./stack-choice.js";
 export {
   ClientPostSchema,

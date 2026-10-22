@@ -17,6 +17,7 @@ export interface ExecutionRoutingDeps {
   readonly checkDisputes: DispatchSteps["checkDisputes"];
   readonly suiteReviewFindings: DispatchSteps["suiteReviewFindings"];
   readonly environmentOwner: DispatchSteps["environmentOwner"];
+  readonly clientQuestions: DispatchSteps["clientQuestions"];
   /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
   readonly workdirBase: string;
   readonly logger: Logger;
@@ -31,6 +32,7 @@ export function routingDepsOf(deps: DispatchRunDeps): ExecutionRoutingDeps {
     checkDisputes: deps.dispatch.checkDisputes,
     suiteReviewFindings: deps.dispatch.suiteReviewFindings,
     environmentOwner: deps.dispatch.environmentOwner,
+    clientQuestions: deps.dispatch.clientQuestions,
     workdirBase: deps.loop.config.workdirBase,
     logger: deps.loop.logger,
   };

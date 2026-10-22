@@ -11,8 +11,11 @@ import {
 } from "@ashara/quality";
 import type { AgentWork, ExecutionResult, TaskChecks } from "@ashara/quality";
 import { wrapError } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import type { ErrorEnvelope, Outcome } from "@ashara/workplace";
 import { attemptSummary, outcomeRecord, turnFailureOf } from "@ashara/workplace";
+import { resolveInterfaceEntries } from "../domain/index.js";
+import type { InterfaceTable } from "../domain/index.js";
 import type { Dispatch, DispatchContext, DispatchWork } from "./dispatch-types.js";
 
 /** The agent's work as the partial commit left it: stated by what git did, never by the kind of work. */
@@ -65,7 +68,9 @@ function disputedCheckOf(
 }
 
 /**
- * Every terminal except finished(done): finished(blocked) is `blocked`; a cell that failed under
+ * Every terminal except finished(done): finished(blocked) is `blocked`, or, when its cause names
+ * another task's work or the client's decision, `prerequisite_needed` or `client_decision_needed`
+ * (agentBlocked); a cell that failed under
  * the attempt is environment-blocked (the operator's to fix), and so is a model call that failed
  * (transport_exhausted), under the provider's or Ashara's class; a turn that did not fit its
  * model's window (context_budget_exceeded) is `context_exceeded`, with the catalog model of a
@@ -128,22 +133,11 @@ export async function endWithoutDone({ context, dispatch: d, outcome }: EndedRun
   }
 
   if (outcome.kind === "finished") {
-    const chain = wrapError("development", "agentAttempt", `${outcome.blockedReason ?? outcome.summary}${notDelivered}`, ending.chainFields);
-    const envelope: ErrorEnvelope = {
-      outcome: "blocked",
-      summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${attemptSummary(outcome)}${notDelivered}`,
-      chain,
-      agentOutput: outcomeRecord(outcome),
-    };
-    return {
-      status: "blocked",
-      verdict: WORK_FAILED,
-      detail: envelope.summary,
+    return agentBlocked(
+      { logger: deps.logger, task, sessionId: d.sessionId, interfaceTable: d.brief.interfaceEntries, chainFields: ending.chainFields },
       outcome,
-      sessionId: d.sessionId,
-      attempt: task.attempt,
-      errorEnvelope: envelope,
-    };
+      notDelivered,
+    );
   }
 
   const cause = outcome.kind === "cancelled" ? outcome.reason : outcome.detail;
@@ -163,6 +157,55 @@ export async function endWithoutDone({ context, dispatch: d, outcome }: EndedRun
     attempt: task.attempt,
     errorEnvelope: envelope,
   };
+}
+
+/** What routing a finished(blocked) reads besides the outcome: its task, its session and the interface its brief showed. */
+interface BlockedFinish {
+  readonly logger: Logger;
+  readonly task: { readonly id: string; readonly attempt: number };
+  readonly sessionId: string;
+  /** The public interface the brief showed, by key: what a finish on another task's work names entries from. */
+  readonly interfaceTable: InterfaceTable;
+  readonly chainFields: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * finished(blocked), routed by whose the block is to clear, as the finish's checked cause names it:
+ * another task's work (prerequisite_needed), once every entry it names resolves to one key of the
+ * interface its brief showed, or a decision only the client can make (client_decision_needed) is that
+ * owner's, never the task's failure; a block attributed to nothing outside the task, with no cause
+ * recorded, or naming entries that resolve to none, is the agent's work failing.
+ * @testseam end-without-done.test.ts maps each cause; production calls it from endWithoutDone only
+ */
+export function agentBlocked(finish: BlockedFinish, outcome: OutcomeOf<"finished">, notDelivered: string): ExecutionResult {
+  const { task, logger } = finish;
+  const reason = `${outcome.blockedReason ?? outcome.summary}${notDelivered}`;
+  const blockedOn = outcome.blockedOn;
+  const resolved = blockedOn?.kind === "needs-work" ? resolveInterfaceEntries(blockedOn.interfaceEntries, finish.interfaceTable) : null;
+  const unresolved = resolved?.kind === "unresolved" ? `; the entries it names are not the public interface's: ${resolved.problems.join("; ")}` : "";
+  const envelope: ErrorEnvelope = {
+    outcome: "blocked",
+    summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${attemptSummary(outcome)}${notDelivered}${unresolved}`,
+    chain: wrapError("development", "agentAttempt", `${reason}${unresolved}`, finish.chainFields),
+    agentOutput: outcomeRecord(outcome),
+  };
+  const settled = { detail: envelope.summary, outcome, sessionId: finish.sessionId, attempt: task.attempt, errorEnvelope: envelope };
+  switch (blockedOn?.kind) {
+    case "needs-work":
+      if (resolved?.kind !== "resolved") return { status: "blocked", verdict: WORK_FAILED, ...settled };
+      logger.info("delivery.prerequisite-needed", `blocked on other work (${resolved.keys.join(", ")}): ${reason}`, {
+        taskId: task.id,
+        attempt: task.attempt,
+        interfaceEntries: [...resolved.keys],
+      });
+      return { status: "prerequisite_needed", interfaceEntries: resolved.keys, interfaceTable: finish.interfaceTable, reason, ...settled };
+    case "needs-client-decision":
+      logger.info("delivery.client-decision-needed", `blocked on the client's decision: ${blockedOn.question}`, { taskId: task.id, attempt: task.attempt });
+      return { status: "client_decision_needed", question: blockedOn.question, assumption: blockedOn.assumption, reason, ...settled };
+    case "other":
+    case undefined:
+      return { status: "blocked", verdict: WORK_FAILED, ...settled };
+  }
 }
 
 /**

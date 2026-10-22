@@ -32,9 +32,11 @@ import {
   PlanReports,
   StackChoiceReports,
   TenderIntake,
+  askTaskQuestion,
   listProjectBurns,
   postBurnWarning,
   readRiskRecords,
+  taskQuestionAnswered,
 } from "@ashara/engagement";
 import { releaseHeldCells, substrateProbe } from "@ashara/execution-infra";
 import type { PodmanSubstrate } from "@ashara/execution-infra";
@@ -202,6 +204,8 @@ export function composeCoreLoopDeps(parts: CoreLoopParts, overrides: CoreLoopOve
             return { kind: "none", why: e.message };
           }
         },
+        // A task's question for the client goes out on the channel intake's questions use.
+        clientQuestions: { ask: (question) => askTaskQuestion(db, question), answered: (questionId) => taskQuestionAnswered(db, questionId) },
         heldCells: parts.cells.heldCells,
         infrastructureProbe: parts.cells.infrastructureProbe,
       },

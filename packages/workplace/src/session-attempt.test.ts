@@ -47,8 +47,8 @@ function terminal(kind: FailedKind): Outcome {
 // Delivery reads the Outcome itself; these are only how it is worded and recorded in an envelope.
 describe("attemptSummary and outcomeRecord", () => {
   test("finished(done) is its summary; finished(blocked) carries the reason", () => {
-    expect(attemptSummary({ ...base, kind: "finished", status: "done", summary: "did it", blockedReason: null, statement: null })).toBe("did it");
-    expect(attemptSummary({ ...base, kind: "finished", status: "blocked", summary: "stuck", blockedReason: "needs a key", statement: null })).toBe(
+    expect(attemptSummary({ ...base, kind: "finished", status: "done", summary: "did it", blockedReason: null, blockedOn: null, statement: null })).toBe("did it");
+    expect(attemptSummary({ ...base, kind: "finished", status: "blocked", summary: "stuck", blockedReason: "needs a key", blockedOn: { kind: "other" }, statement: null })).toBe(
       "stuck (blocked: needs a key)",
     );
   });

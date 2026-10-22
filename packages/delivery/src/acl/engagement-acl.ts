@@ -37,6 +37,8 @@ export type {
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
+  TaskQuestion,
+  TaskQuestionPosting,
 } from "@ashara/engagement";
 
 // The behaviour a plan adds beyond what the contract states is recorded on it, in the plan's own
@@ -147,11 +149,12 @@ class AssumptionUnkeyed extends Error {
   }
 }
 
-/** The project's vision as an Assignment carries it: the client's text and every assumption, by key, in neutral words. */
+/** The project's vision as an Assignment carries it: the client's text, every assumption by key in neutral words, and every interface entry by key. */
 interface AssignmentIntent {
   readonly version: number;
   readonly visionText: string;
   readonly assumptions: AgentBrief["assumptions"];
+  readonly interfaceEntries: AgentBrief["interfaceEntries"];
 }
 
 /**
@@ -169,5 +172,7 @@ export function assignmentIntentOf(stored: StoredVision): AssignmentIntent {
       if (!a.keyed) throw new AssumptionUnkeyed(vision.projectId, vision.version, a.id);
       return { key: a.id, statement: a.statement, note: `${ASSUMPTION_STANDING_LABEL[a.standing]}; ${ASSUMPTION_KIND_LABEL[a.kind]}` };
     }),
+    // The entries as planning reads them (planningVisionOf), so the keys a blocked finish names are the ones tasks cite.
+    interfaceEntries: vision.interface.map((entry: InterfaceEntry) => ({ key: entry.id, text: entry.text })),
   };
 }

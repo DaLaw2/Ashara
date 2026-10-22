@@ -311,7 +311,7 @@ describe("halt reports state the observed cause", () => {
 describe("each halt kind's report tells what a change sent meanwhile does", () => {
   const cause = { errorClass: "SomethingFailed", reason: "the cause as recorded", spend: null, work: null };
   const halts = [
-    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered"] as const).map(
+    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered", "client_wait"] as const).map(
       (kind) => ({ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }) as const,
     ),
     { subject: "project-blocked", episodeId: "e1", projectId, kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port", attempts: 2, cause: { source: "api", reason: "r" } }] } as const,
@@ -418,7 +418,7 @@ describe("no halt or resumption report on a held contract promises that work res
   ];
   const cause = { errorClass: "SomethingFailed", reason: "the cause as recorded", spend: null, work: null };
   const halts: readonly Spelled[] = [
-    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered"] as const).map(
+    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered", "client_wait"] as const).map(
       (kind) => ({ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }) as const,
     ),
     { subject: "project-blocked", episodeId: "e1", projectId, kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port", attempts: 2, cause: { source: "api", reason: "r" } }] },
@@ -427,7 +427,7 @@ describe("no halt or resumption report on a held contract promises that work res
   ];
   const reports: ReadonlyArray<readonly [string, Spelled]> = [
     ...halts.flatMap((halt) => [true, false].map((visionWritten) => [`${halt.subject === "project-blocked" ? halt.kind : ""}, vision written ${visionWritten}`, { ...halt, visionWritten }] as const)),
-    ...(["unblocked", "probe_passed"] as const).map((how) => [`resumed (${how})`, { subject: "project-resumed", episodeId: "e1", projectId, how }] as const),
+    ...(["unblocked", "probe_passed", "answered"] as const).map((how) => [`resumed (${how})`, { subject: "project-resumed", episodeId: "e1", projectId, how }] as const),
   ];
 
   test("the halts enumerated are every halt kind", () => {
@@ -454,5 +454,27 @@ describe("no halt or resumption report on a held contract promises that work res
     const { reports: open, posted } = reportsFor([report]);
     await open.runPending();
     expect(PROMISES.some((promise) => posted[0].body.includes(promise))).toBe(true);
+  });
+});
+
+// A project whose only work left waits on the client's answer is paused for that answer, not for
+// the operator: its report asks for the reply, and its resumption names the answer as what ended it.
+describe("a client_wait halt's report asks the client for the answer that ends it", () => {
+  const cause = { errorClass: "ClientDecisionAwaited", reason: "question q1: Which command?", spend: null, work: null };
+
+  test("the pause, its cause in the client's words, and that the answer read ends it; no operator awaited, nothing charged", async () => {
+    const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind: "client_wait", cause }]);
+    await reports.runPending();
+    const body = posted[0].body;
+    expect(body).toContain("every piece of work left on this project waits on your answer to a question the team asked you");
+    expect(body).toContain("Reply to the question you were asked: Ashara reads your answer during the pause, and once it is read the pause ends by itself");
+    expect(body).toContain("This pause is not charged as an attempt at the work, and nothing is given up for it.");
+    expect(body).not.toContain("waiting on its operator");
+  });
+
+  test("its resumption names the answer read as what ended it", async () => {
+    const { reports, posted } = reportsFor([{ subject: "project-resumed", episodeId: "e1", projectId, how: "answered" }]);
+    await reports.runPending();
+    expect(posted[0].body).toContain("your answer to the team's question was read");
   });
 });

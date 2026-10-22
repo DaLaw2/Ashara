@@ -19,8 +19,8 @@ const none: TextFactRecords = {
 
 const asked = { key: "A1", statement: "Commands wait for the lock.", status: "Inferred", kind: "client-visible", disclosed: "asked" };
 const confirmed = { ...asked, status: "Stated", clientAnswer: { messageId: "ans1", verdict: "confirms" } };
-const v1 = { version: 1, inferences: [asked], openQuestions: [{ messageId: "q1", text: "Should commands wait?", assumptionKey: "A1" }], guarantees: [] };
-const v2 = { version: 2, inferences: [confirmed], openQuestions: [], guarantees: [] };
+const v1 = { version: 1, inferences: [asked], openQuestions: [{ messageId: "q1", text: "Should commands wait?", assumptionKey: "A1" }], guarantees: [], interface: [{ id: "I1", text: "put KEY VALUE" }] };
+const v2 = { version: 2, inferences: [confirmed], openQuestions: [], guarantees: [], interface: [{ id: "I1", text: "put KEY VALUE" }] };
 
 const keysOf = (records: Partial<TextFactRecords>): string[] => checkTextFacts({ ...none, ...records }).map((each) => each.key);
 
@@ -38,6 +38,7 @@ describe("checkTextFacts, briefs", () => {
       context,
       visionVersion,
       assumptions: [{ key: "A1", statement: "Commands wait for the lock.", note: `${note}; client-visible behaviour` }],
+      interfaceEntries: [{ key: "I1", text: "put KEY VALUE" }],
     },
   });
 
@@ -69,6 +70,12 @@ describe("checkTextFacts, briefs", () => {
     expect(keysOf({ visions: [v1, v2], briefs: [unrecorded] })).toEqual(['brief-spec-unrecorded:Write the checks for "Lock"']);
   });
 
+  it("names a brief whose public interface is not the one its vision states", () => {
+    const stale = brief(2, "Stated by the client", "Stated by the client");
+    const renamed = { ...stale, brief: { ...stale.brief, interfaceEntries: [{ key: "I1", text: "set KEY VALUE" }] } };
+    expect(keysOf({ visions: [v1, v2], briefs: [renamed] })).toEqual(['brief-interface:Write the checks for "Lock"']);
+  });
+
   it("names structured assumptions that are not the vision's", () => {
     expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", "Inferred; asked of the client, not yet answered")] })).toEqual([
       'brief-assumptions:Write the checks for "Lock"',
@@ -77,12 +84,12 @@ describe("checkTextFacts, briefs", () => {
 });
 
 describe("checkTextFacts, the Liaison's questions and replies", () => {
-  const question = (statement: string) => ({ id: "q1", body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, we proceed on this assumption: ${statement}\n\nWhy this assumption: y` });
+  const question = (statement: string) => ({ id: "q1", intake: true, body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, we proceed on this assumption: ${statement}\n\nWhy this assumption: y` });
 
   it("holds a question to the assumption its vision records for it", () => {
     expect(keysOf({ visions: [v1], questions: [question("Commands wait for the lock.")] })).toEqual([]);
     expect(keysOf({ visions: [v1], questions: [question("Commands fail at once.")] })).toEqual(["question:A1"]);
-    expect(keysOf({ visions: [v1], questions: [{ id: "q9", body: "Anything?" }] })).toEqual(["question-unrecorded:1"]);
+    expect(keysOf({ visions: [v1], questions: [{ id: "q9", intake: true, body: "Anything?" }] })).toEqual(["question-unrecorded:1"]);
   });
 
   it("holds a reply to a changing answer to the two vision versions around it, and refuses one for a confirmation", () => {
@@ -137,7 +144,7 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
       ].join("\n\n"),
     });
     const listed = "an assumption you have not confirmed; at risk until you confirm A1; not verifiable by Ashara: no check Ashara can run today shows it holding";
-    const question = { id: "q1", body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, the contract rests on this assumption: Commands wait for the lock.\n\nWhy this assumption: y\n\n${decline}` };
+    const question = { id: "q1", intake: true, body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, the contract rests on this assumption: Commands wait for the lock.\n\nWhy this assumption: y\n\n${decline}` };
     const declined = `This is the contract drafted from your tender, and Ashara declines it as written. ${decline}`;
     expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(declined, listed)] })).toEqual([]);
     expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(declined, "an assumption you have not confirmed; at risk until you confirm A1")] })).toEqual([
@@ -151,6 +158,9 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
     ]);
     const proceeds = question.body.replace("the contract rests on this assumption", "we proceed on this assumption");
     expect(keysOf({ visions: [vision], questions: [{ ...question, body: proceeds }], tenderReports: [draft(declined, listed)] })).toEqual(["declined-intake:1"]);
+    // A task's question, posted once work is under way on a restated contract, is no intake message.
+    const taskQuestion = { id: "q2", intake: false, body: "Which start command?" };
+    expect(keysOf({ visions: [vision], questions: [question, taskQuestion], tenderReports: [draft(declined, listed)] }).filter((key) => key.startsWith("declined-intake"))).toEqual([]);
   });
 
   it("finds work on a project whose every vision version is declined, and none once a version holds a guarantee Ashara can verify", () => {

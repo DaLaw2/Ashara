@@ -239,6 +239,8 @@ function executionEvidence(snapshot: Snapshot, statuses: readonly string[]): str
     if (source === "owner_unresolved") seen.add("owner_unresolved");
     if (source === "context_window_exceeded") seen.add("context_exceeded");
     if (source === "no_wider_model") seen.add("no_wider_model");
+    if (source === "awaiting_work") seen.add("prerequisite_needed");
+    if (source === "awaiting_client" || source === "client_answered") seen.add("client_decision_needed");
   }
   // A task waits on an environment change only once its environment task is opened, and on
   // rewritten checks only once a check task is reopened: each leaves that durable record.

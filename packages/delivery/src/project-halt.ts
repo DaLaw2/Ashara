@@ -35,6 +35,8 @@ import type { ModelCallFailure, SpendAtCap, WorkAtBudget } from "./acl/finance-a
  * ledger); the owner's grant and then the operator's unblock end it. `acceptance_uncovered`: the
  * project's acceptance sweep passed, but it does not cover the contract (a guarantee in coverage not
  * judged pass, or none in coverage), so the project cannot be accepted; the operator's unblock ends it.
+ * `client_wait`: no work of the project could proceed but tasks held for the client's answers to
+ * their questions; the client's answer to one of them ends it by itself (client-wait-halts.ts).
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -50,7 +52,8 @@ type ProjectBlockCategory =
   | "model_failed"
   | "provider_failed"
   | "work_budget"
-  | "acceptance_uncovered";
+  | "acceptance_uncovered"
+  | "client_wait";
 
 /**
  * Why a project was blocked: the cause's category, the error's class and its full
@@ -101,6 +104,14 @@ export function modelCallBlockCategory(failure: ModelCallFailure): "fault" | "mo
  */
 export function recordedFailureOf(stored: unknown): ModelCallFailure {
   return stored === "model" || stored === "provider" ? stored : "ashara";
+}
+
+/** The class a client_wait halt records: no error was raised, the work waits on the client's decision. */
+const CLIENT_WAIT_CLASS = "ClientDecisionAwaited";
+
+/** No work of the project could proceed but on the client's answers: the project halts until one is read, never as anyone's fault. */
+export function clientWaitCause(reason: string): UnpricedBlockCause {
+  return { category: "client_wait", errorClass: CLIENT_WAIT_CLASS, reason };
 }
 
 /** A passed sweep does not cover the contract: the project halts short of acceptance, never as Ashara's fault. */

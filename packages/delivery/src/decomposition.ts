@@ -284,28 +284,32 @@ export class DecompositionEngine {
             return { raw, id, traced };
         });
 
-        return assigned.map(({ raw, id, traced }) => ({
-            id,
-            level: "task" as const,
-            title: raw.title,
-            description: raw.description,
-            successCriteria: traced.acceptance.map((line) => line.line),
-            parentId,
-            dependsOn: this.resolveDependsOn(raw, id, refToId, titleToId, parentId),
-            taskSpec: {
-                goal: raw.goal || raw.description || raw.title,
-                endState: raw.endState,
-                scope: raw.scope,
-                deliverables: raw.deliverables.map((deliverable) => deliverable.text),
-                capability: raw.capability,
-                capabilityReason: raw.capabilityReason,
-                origin: "decomposition" as const,
-                visionItems: traced.sources.map((item) => item.text),
-                sources: traced.sources,
-                acceptance: traced.acceptance,
-                addedAssumptions: traced.added,
+        const built = assigned.map(({ raw, id, traced }) => ({
+            delivered: raw.deliverables.flatMap((deliverable) => deliverable.sources.map((source) => source.trim())),
+            task: {
+                id,
+                level: "task" as const,
+                title: raw.title,
+                description: raw.description,
+                successCriteria: traced.acceptance.map((line) => line.line),
+                parentId,
+                dependsOn: this.resolveDependsOn(raw, id, refToId, titleToId, parentId),
+                taskSpec: {
+                    goal: raw.goal || raw.description || raw.title,
+                    endState: raw.endState,
+                    scope: raw.scope,
+                    deliverables: raw.deliverables.map((deliverable) => deliverable.text),
+                    capability: raw.capability,
+                    capabilityReason: raw.capabilityReason,
+                    origin: "decomposition" as const,
+                    visionItems: traced.sources.map((item) => item.text),
+                    sources: traced.sources,
+                    acceptance: traced.acceptance,
+                    addedAssumptions: traced.added,
+                },
             },
         }));
+        return orderedByInterface(built, visionItems);
     }
 
     private resolveDependsOn(
@@ -932,6 +936,63 @@ function plannedProblems(rawPlanned: readonly RawPlanned[], rawTasks: readonly R
         if (!named.has(planned.ref)) problems.push(`${planned.ref} is cited by no line: drop it, or name it in the sources of the lines that use it`);
         return problems;
     });
+}
+
+/**
+ * The public interface entries the guarantees `cited` (by id or text) are observed through: what a
+ * check of a line citing them exercises.
+ */
+function entriesOf(cited: readonly string[], visionItems: readonly VisionItem[]): Set<string> {
+    const entries = new Set<string>();
+    for (const entry of cited) {
+        const item = visionItems.find((each) => each.id === entry || each.text === entry);
+        if (item?.type === "guarantee") for (const key of item.interface) entries.add(key);
+    }
+    return entries;
+}
+
+/**
+ * The plan's tasks with the ordering their checks need: a task's checks are written from its
+ * acceptance lines and exercise the interface entries their guarantees are observed through, and the
+ * entries its deliverables' guarantees are observed through are the ones it builds. So a task whose
+ * acceptance exercises an entry it does not build depends on every other task of the plan that builds
+ * it. That is all the plan states: an entry a check author reaches for only to set up data is chosen
+ * when the checks are written, after planning, and is met at run time by the implementer's blocked
+ * finish naming it (the scheduler's wait). An edge that would close a cycle is not added, so the
+ * derived order never makes a plan unsatisfiable. `delivered[i]` holds what task i's deliverables cite.
+ */
+function orderedByInterface<T extends WorkItemSpec & { readonly taskSpec: DecomposedTaskSpec }>(
+    planned: ReadonlyArray<{ readonly task: T; readonly delivered: readonly string[] }>,
+    visionItems: readonly VisionItem[],
+): T[] {
+    const plan = planned.map(({ task, delivered }) => ({
+        task,
+        builds: entriesOf(delivered, visionItems),
+        exercises: entriesOf(task.taskSpec.acceptance.flatMap((line) => line.sources), visionItems),
+        dependsOn: [...task.dependsOn],
+    }));
+    const byId = new Map(plan.map((each) => [each.task.id, each]));
+    const reaches = (from: string, to: string): boolean => {
+        const seen = new Set<string>();
+        const frontier = [from];
+        for (let next = frontier.pop(); next !== undefined; next = frontier.pop()) {
+            if (next === to) return true;
+            if (seen.has(next)) continue;
+            seen.add(next);
+            const node = byId.get(next);
+            if (node !== undefined) frontier.push(...node.dependsOn);
+        }
+        return false;
+    };
+    for (const each of plan) {
+        const needed = [...each.exercises].filter((entry) => !each.builds.has(entry));
+        for (const other of plan) {
+            if (other === each || !needed.some((entry) => other.builds.has(entry))) continue;
+            if (each.dependsOn.includes(other.task.id) || reaches(other.task.id, each.task.id)) continue;
+            each.dependsOn.push(other.task.id);
+        }
+    }
+    return plan.map((each) => ({ ...each.task, dependsOn: each.dependsOn }));
 }
 
 /** Every planned task depends on the environment task already done; returns its id. */

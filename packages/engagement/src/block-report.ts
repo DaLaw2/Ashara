@@ -128,8 +128,8 @@ type DueBlockReport =
       /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
       readonly visionWritten: boolean;
     }
-  /** `how` the halt ended: an owner's unblock, or the substrate probe passing after an infrastructure halt. */
-  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
+  /** `how` the halt ended: an owner's unblock, the substrate probe passing after an infrastructure halt, or the client's answer read after a client_wait halt. */
+  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" | "answered" };
 
 /** A recorded halt the client has not been told about. */
 type ProjectBlockedReport = Extract<DueBlockReport, { readonly subject: "project-blocked" }>;
@@ -271,6 +271,8 @@ function recordedKind(halt: ToldHalt): string {
         "every check Ashara ran on the finished work passed, but those checks do not show every guarantee of your contract " +
         "to hold, so the project cannot be accepted; each guarantee not shown to hold, and why, is listed below"
       );
+    case "client_wait":
+      return "every piece of work left on this project waits on your answer to a question the team asked you, so none of it can go on until you answer";
     case "work_budget":
       return halt.work?.reserveProtected === true
         ? "the budget of model requests set for this project was used up except for the share set aside for checking and accepting the " +
@@ -374,6 +376,12 @@ function nextStep(halt: ToldHalt, waits: string, standing: ContractStanding): st
         `This pause is not charged as an attempt at the work. Ashara checks the machines it runs the work on again ` +
         `on every round of work and ${words.machinesEnd("they answer")}; you will be told when it does.`
       );
+    case "client_wait":
+      // What ends this halt (client-wait-halts.ts): the client's answer, read during the pause.
+      return (
+        `This pause is not charged as an attempt at the work, and nothing is given up for it. Reply to the question you were ` +
+        `asked: Ashara reads your answer during the pause, and once it is read the pause ends by itself; you will be told when it does.`
+      );
   }
   throw new HaltKindUnworded(halt);
 }
@@ -400,7 +408,7 @@ const CHANGE_DOES_NOT_END_PAUSE = "A change you send meanwhile does not end this
 
 /**
  * What a change the client sends during the halt does, as inboundDecision decides for the halt's
- * kind. It never ends the halt, whose exits are the operator's resumption and the substrate probe.
+ * kind. It never ends the halt, whose exits are the operator's resumption, the substrate probe and the answer a client_wait halt waits for.
  * Under a halt its reading can get past it is read during the halt, except while a spend limit
  * refuses the reading's model call: the deployment's, which stops all work, or the project's own,
  * which the reading meets under this halt and waits out without holding up any other project's
@@ -517,6 +525,12 @@ function givenUpCategory(cause: StoredBlockedReason): string {
       return "the client's correction changed what it rests on, and a revision of the plan replaces it";
     case "superseded":
       return "a revision of the plan replaced it";
+    case "prerequisite_unresolved":
+      return "it needed other work, or a decision of yours, before it could go on, and that wait could not end";
+    case "awaiting_work":
+    case "awaiting_client":
+    case "client_answered":
+      return "it was waiting on other work, or on your answer to a question, before it could go on";
     case "api":
       return "it was moved by hand through Ashara's API";
   }
@@ -543,8 +557,19 @@ function plural(count: number, noun: string): string {
 }
 
 /** What the client reads when a pause ends: what ended it, and what follows as the contract's `standing` allows. */
-function projectResumedReport(how: "unblocked" | "probe_passed", standing: ContractStanding): string {
-  return WORK_WORDS[standing].resumed(how === "probe_passed" ? "the machines Ashara runs the work on work again" : "the team cleared what paused it");
+function projectResumedReport(how: "unblocked" | "probe_passed" | "answered", standing: ContractStanding): string {
+  return WORK_WORDS[standing].resumed(resumedBecause(how));
+}
+
+function resumedBecause(how: "unblocked" | "probe_passed" | "answered"): string {
+  switch (how) {
+    case "probe_passed":
+      return "the machines Ashara runs the work on work again";
+    case "answered":
+      return "your answer to the team's question was read";
+    case "unblocked":
+      return "the team cleared what paused it";
+  }
 }
 
 function haltBody(due: ProjectBlockedReport, standing: ContractStanding): string {
@@ -566,6 +591,7 @@ function haltBody(due: ProjectBlockedReport, standing: ContractStanding): string
     case "model_failed":
     case "provider_failed":
     case "work_budget":
+    case "client_wait":
       return projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing);
     case "acceptance_uncovered":
       return `${projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing)}\n\n${unverifiedGuarantees(due.guarantees)}`;

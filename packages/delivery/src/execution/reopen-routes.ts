@@ -1,16 +1,22 @@
+import { randomUUID } from "node:crypto";
 import { InvalidId, parseWorkItemId } from "@ashara/shared";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
-import type { WorkItem } from "../domain/index.js";
+import type { InterfaceTable, WorkItem } from "../domain/index.js";
 import {
   PlanningService,
+  awaitWork,
   blockWorkItem,
+  clientWaitPastBound,
+  deliveringTasks,
   exitDisputedCheck,
   exitStaleChecks,
   exitSuiteReview,
   giveUpWorkItem,
+  holdForClient,
   requeueWorkItem,
   requestEnvironmentChange,
 } from "../domain/index.js";
+import { GiveUpMisrouted, giveUpRoute } from "./give-up-causes.js";
 import type { GiveUpCause } from "./give-up-causes.js";
 import type { ExecutionRoutingDeps } from "./routing-deps.js";
 import type { ItemWrite, ReopenPlan } from "./reopen.js";
@@ -63,6 +69,22 @@ interface EnvironmentChangeResult {
   readonly paths: readonly string[];
   readonly need: string;
   readonly diff: string;
+  readonly detail: string;
+}
+
+/** An implementer's blocked finish on work another task delivers, as development returned it. */
+interface PrerequisiteNeededResult {
+  readonly interfaceEntries: readonly [string, ...string[]];
+  readonly interfaceTable: InterfaceTable;
+  readonly reason: string;
+  readonly detail: string;
+}
+
+/** An implementer's blocked finish on a decision only the client can make, as development returned it. */
+interface ClientDecisionNeededResult {
+  readonly question: string;
+  readonly assumption: string;
+  readonly reason: string;
   readonly detail: string;
 }
 
@@ -178,12 +200,15 @@ export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem
 }
 
 /**
- * Gives the item up with the stated cause; its abandonment opens a plan repair.
+ * Gives the item up with the stated cause; its abandonment opens a plan repair. Only a cause no
+ * other route writes is given up here (giveUpRoute): an owner-wait's end never reaches it.
  * An item that is no longer open (moved during the dispatch) is left where it is. `refund` gives
  * the dispatch back in the same write as the give-up, when the attempt did no work the retry bound
  * should charge; `keep` leaves it counted.
  */
 export async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: GiveUpCause, dispatch: "refund" | "keep"): Promise<void> {
+  const route = giveUpRoute(reason);
+  if (route !== "given-up") throw new GiveUpMisrouted(taskId, reason.source, route);
   await reopen(deps, {
     taskId,
     site: "execution.routeAsGivenUp",
@@ -528,6 +553,141 @@ export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task:
             `needs a change to the environment recipe (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
               `(${opened + 1} for this task), item back at Pending waiting on it (dispatch count ${dispatchCount})`,
             { taskId: task.id, environmentTaskId: environment.id, paths: request.paths, opened: opened + 1, dispatchCount },
+          ),
+      };
+    },
+  });
+}
+
+/**
+ * The exit of an item whose implementer finished blocked on work another task of the plan delivers
+ * (planning's awaitWork): the open tasks that deliver the interface entries it named are read from
+ * the plan, and within the bound of waits the item goes back to Pending with its dependency on each
+ * written in the same transaction, its dispatch given back, so the scheduler releases it once they
+ * complete. With no such task the need is a gap in the plan, and the item is given up for its plan to
+ * be repaired; past the bound it is given up too. No attempt is counted toward the failure router's
+ * give-up on any of these.
+ */
+export async function routeAsAwaitingWork(deps: ExecutionRoutingDeps, task: WorkItem, needed: PrerequisiteNeededResult): Promise<void> {
+  await reopen(deps, {
+    taskId: task.id,
+    site: "execution.routeAsAwaitingWork",
+    vanished: `work item vanished before its need of other work could be routed (${needed.detail})`,
+    transition: async (item) => {
+      const delivering = deliveringTasks(
+        item,
+        needed.interfaceEntries,
+        needed.interfaceTable,
+        await deps.workItemRepo.listByProject(item.projectId),
+        await deps.workItemRepo.listDependenciesByProject(item.projectId),
+      );
+      if (delivering.kind === "unresolved") throw new NeededEntriesUnresolved(item.id, delivering.problems);
+      return awaitWork(item, { interfaceEntries: delivering.keys, reason: `${needed.reason}\n${needed.detail}` }, delivering.owners);
+    },
+    transitionRejected: (e) => ({ message: `awaiting-work exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${needed.detail})`, to: e.to }),
+    plan: (exit): ReopenPlan => {
+      if (exit.kind !== "waiting") {
+        return {
+          before: [],
+          write: { kind: "refund" },
+          rejected: (e) => ({ kind: "left", left: { message: `awaiting-work give-up rejected (${e.from} -> Abandoned); item left at ${e.from}`, to: "Abandoned" } }),
+          log: () =>
+            deps.logger.info(
+              "delivery.task-given-up",
+              exit.kind === "unplanned"
+                ? `given up, it needs ${needed.interfaceEntries.join(", ")} and no open task of the plan delivers it; its plan is repaired`
+                : `given up, blocked on other work again past the bound of ${exit.bound} waits; its plan is repaired`,
+              { taskId: task.id, source: "prerequisite_unresolved", interfaceEntries: [...needed.interfaceEntries] },
+            ),
+        };
+      }
+      return {
+        before: [],
+        write: {
+          kind: "refund-with",
+          items: [],
+          write: async (tx) => {
+            const known = new Set(await tx.getDependencies(task.id));
+            for (const owner of exit.on) if (!known.has(owner)) await tx.addDependency(task.id, owner);
+          },
+        },
+        rejected: (e) => ({
+          kind: "left",
+          left: { message: `awaiting-work exit rejected (${e.from} -> Pending); item left at ${e.from}, no dependency written`, to: "Pending" },
+        }),
+        log: (dispatchCount) =>
+          deps.logger.info(
+            "delivery.task-awaiting-work",
+            `needs ${needed.interfaceEntries.join(", ")}; back at Pending waiting on ${exit.on.join(", ")} (wait ${exit.waits}, dispatch count ${dispatchCount})`,
+            { taskId: task.id, on: [...exit.on], interfaceEntries: [...needed.interfaceEntries], waits: exit.waits, dispatchCount },
+          ),
+      };
+    },
+  });
+}
+
+/**
+ * Development routes a blocked finish here only once every entry it named resolved against the
+ * interface its brief showed (agentBlocked), so a name that resolves to none here is Ashara's own
+ * defect, never the task's: it stops the routing rather than guess what the task waits on.
+ */
+class NeededEntriesUnresolved extends Error {
+  constructor(
+    readonly taskId: WorkItem["id"],
+    readonly problems: readonly string[],
+  ) {
+    super(`task ${taskId}: development routed a need of other work whose entries resolve to none: ${problems.join("; ")}`);
+    this.name = "NeededEntriesUnresolved";
+  }
+}
+
+/**
+ * The exit of an item whose implementer finished blocked on a decision only the client can make:
+ * within the bound of waits the item holds at Blocked for the client's answer under a question id
+ * chosen now, its dispatch given back; the loop posts the question under that id on the question
+ * path intake's questions take (Engagement) and takes the item's exit once the answer is read
+ * (parked-exits.ts). The hold is written before the question is posted, so no crash between the two
+ * leaves a question no task waits on. Past the bound the item is given up and its plan repaired.
+ */
+export async function routeAsAwaitingClient(deps: ExecutionRoutingDeps, task: WorkItem, needed: ClientDecisionNeededResult): Promise<void> {
+  const reason = `${needed.reason}\n${needed.detail}`;
+  await reopen(deps, {
+    taskId: task.id,
+    site: "execution.routeAsAwaitingClient",
+    vanished: `work item vanished before its question for the client could be routed (${needed.detail})`,
+    transition: (item) => {
+      if (clientWaitPastBound(item, reason)) return { kind: "bound" as const };
+      const questionId = randomUUID();
+      holdForClient(item, { questionId, question: needed.question, assumption: needed.assumption, reason });
+      return { kind: "held" as const, questionId };
+    },
+    transitionRejected: (e) => ({ message: `client-question exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${needed.detail})`, to: e.to }),
+    plan: (exit): ReopenPlan => {
+      if (exit.kind === "bound") {
+        return {
+          before: [],
+          write: { kind: "refund" },
+          rejected: (e) => ({ kind: "left", left: { message: `client-question give-up rejected (${e.from} -> Abandoned); item left at ${e.from}`, to: "Abandoned" } }),
+          log: () =>
+            deps.logger.info(
+              "delivery.task-given-up",
+              "given up, blocked on the client's decision again past the bound of waits; no question posted; its plan is repaired",
+              { taskId: task.id, source: "prerequisite_unresolved" },
+            ),
+        };
+      }
+      return {
+        before: [],
+        write: { kind: "refund" },
+        rejected: (e) => ({
+          kind: "left",
+          left: { message: `client-question hold rejected (${e.from} -> Blocked); item left at ${e.from}, no question posted`, to: "Blocked" },
+        }),
+        log: (dispatchCount) =>
+          deps.logger.info(
+            "delivery.task-awaiting-client",
+            `needs the client's decision; held for the answer to question ${exit.questionId}, which the loop posts (dispatch count ${dispatchCount})`,
+            { taskId: task.id, questionId: exit.questionId, dispatchCount },
           ),
       };
     },

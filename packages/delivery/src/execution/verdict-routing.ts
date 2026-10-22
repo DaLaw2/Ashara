@@ -16,6 +16,8 @@ import type { InfrastructureFault } from "./halt-causes.js";
 import { INFRASTRUCTURE_FAULT_BUDGET, haltOnFaultBudget, haltOnRefusal } from "./halt-causes.js";
 import { MERGE_RECORD_BACKOFF_MS, recordMergeWithRetry } from "./merge-record.js";
 import {
+  routeAsAwaitingClient,
+  routeAsAwaitingWork,
   routeAsContextExceeded,
   routeAsDisputed,
   routeAsEnvironmentChange,
@@ -137,6 +139,19 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
         { source: "no_wider_model", overflowedWindowTokens: executed.overflowedWindowTokens, reason: executed.detail },
         "refund",
       );
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "prerequisite_needed":
+      // Not a task failure and no lesson: what it needs is another task's to deliver, so it waits for
+      // that task at Pending, its dispatch given back, never counted toward its give-up; with no task to
+      // deliver it, the plan has a gap and is repaired.
+      await routeAsAwaitingWork(deps, task, executed);
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "client_decision_needed":
+      // Not a task failure and no lesson: the decision is the client's, so the question goes to the
+      // client and the item holds for the answer, its dispatch given back, never counted toward its give-up.
+      await routeAsAwaitingClient(deps, task, executed);
       return routedHere(executed, blockedResult(task.id, executed.detail));
 
     case "refused":

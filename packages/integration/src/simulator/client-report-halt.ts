@@ -48,6 +48,7 @@ const KIND_JUDGEMENT = {
   provider_failed: "stated",
   work_budget: "stated",
   acceptance_uncovered: "stated",
+  client_wait: "stated",
   plan_repair: "repair",
   check_dispute: "retired",
   suite_review: "retired",
@@ -68,6 +69,7 @@ const STATED_KINDS: ReadonlyArray<StatedKind> = [
   "provider_failed",
   "work_budget",
   "acceptance_uncovered",
+  "client_wait",
 ];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
@@ -134,6 +136,12 @@ function categoryWords(reason: StoredBlockedReason): string {
       return "the client's correction changed what it rests on, and a revision of the plan replaces it";
     case "superseded":
       return "a revision of the plan replaced it";
+    case "prerequisite_unresolved":
+      return "it needed other work, or a decision of yours, before it could go on, and that wait could not end";
+    case "awaiting_work":
+    case "awaiting_client":
+    case "client_answered":
+      return "it was waiting on other work, or on your answer to a question, before it could go on";
     case "api":
       return "it was moved by hand through Ashara's API";
   }
@@ -212,6 +220,11 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
         "every check Ashara ran on the finished work passed, but those checks do not show every guarantee of your " +
         "contract to hold, so the project cannot be accepted; each guarantee not shown to hold, and why, is " +
         "listed below"
+      );
+    case "client_wait":
+      return (
+        "every piece of work left on this project waits on your answer to a question the team asked you, so none " +
+        "of it can go on until you answer"
       );
   }
 }

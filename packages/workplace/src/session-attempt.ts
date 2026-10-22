@@ -1,6 +1,6 @@
 import type { AttemptCellImage } from "@ashara/execution-infra";
 import type { AttemptTerminal } from "./session-vocabulary.js";
-import type { Outcome } from "./outcome.js";
+import type { BlockedOn, Outcome } from "./outcome.js";
 import { toRecordedOutcome } from "./records.js";
 
 /**
@@ -9,7 +9,22 @@ import { toRecordedOutcome } from "./records.js";
  */
 export function attemptSummary(outcome: Outcome): string {
   if (outcome.kind !== "finished") return `attempt ended as ${outcome.kind}: ${outcome.detail}`;
-  return outcome.status === "blocked" ? `${outcome.summary} (blocked: ${outcome.blockedReason ?? "no reason given"})` : outcome.summary;
+  return outcome.status === "blocked"
+    ? `${outcome.summary} (blocked: ${outcome.blockedReason ?? "no reason given"}${blockedOnText(outcome.blockedOn)})`
+    : outcome.summary;
+}
+
+/** Whose the block is to clear, as the finish named it; empty for a block it attributed to nothing outside the task. */
+function blockedOnText(blockedOn: BlockedOn | null): string {
+  if (blockedOn === null) return "; on nothing named";
+  switch (blockedOn.kind) {
+    case "needs-work":
+      return `; needs work on interface entries ${blockedOn.interfaceEntries.join(", ")}`;
+    case "needs-client-decision":
+      return `; needs the client's decision: ${blockedOn.question}`;
+    case "other":
+      return "";
+  }
 }
 
 /** The Outcome as plain data for an error envelope, its error (or cancellation reason) serialized with its chain. */

@@ -240,6 +240,18 @@ export class ProjectHaltRepository extends ProjectRepository {
    * told of a resumption it was never told the pause of.
    */
   async listInfrastructureHalted(): Promise<ProjectId[]> {
+    return this.listReportedHalts("infrastructure");
+  }
+
+  /**
+   * The projects halted on client_wait whose halt the client has been told, oldest first: what the
+   * client's answer resumes. A halt not yet reported is not listed, as with listInfrastructureHalted.
+   */
+  async listClientWaitHalted(): Promise<ProjectId[]> {
+    return this.listReportedHalts("client_wait");
+  }
+
+  private async listReportedHalts(kind: "infrastructure" | "client_wait"): Promise<ProjectId[]> {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
@@ -247,7 +259,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         and(
           noOpenStop(projects.id),
           sql`EXISTS (SELECT 1 FROM project_blocks b WHERE b.project_id = ${projects.id} AND b.ended_at IS NULL
-            AND b.kind = 'infrastructure' AND ${haltReported(sql`b.id`)})`,
+            AND b.kind = ${kind} AND ${haltReported(sql`b.id`)})`,
         ),
       )
       .orderBy(asc(projects.createdAt), asc(projects.id));
@@ -264,14 +276,31 @@ export class ProjectHaltRepository extends ProjectRepository {
    * so it is told before it can end.
    */
   async resumeFromInfrastructureHalt(id: ProjectId, evidence: string): Promise<"resumed" | "moved" | "unreported"> {
+    return this.resumeOnItsOwn(id, "infrastructure", "probe_passed", evidence);
+  }
+
+  /**
+   * The automatic way out of a client_wait halt, as resumeFromInfrastructureHalt: the open episode is
+   * ended as 'answered' with what the client answered, "moved" when the project is not so halted.
+   */
+  async resumeFromClientWait(id: ProjectId, evidence: string): Promise<"resumed" | "moved" | "unreported"> {
+    return this.resumeOnItsOwn(id, "client_wait", "answered", evidence);
+  }
+
+  private async resumeOnItsOwn(
+    id: ProjectId,
+    kind: "infrastructure" | "client_wait",
+    endKind: "probe_passed" | "answered",
+    evidence: string,
+  ): Promise<"resumed" | "moved" | "unreported"> {
     return this.db.transaction(async (tx) => {
       if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "resume the project");
       const open = await openEpisode(tx, id);
-      if (!open || open.kind !== "infrastructure") return "moved";
+      if (!open || open.kind !== kind) return "moved";
       if (!open.reported) return "unreported";
       const [episode] = await tx
         .update(projectBlocks)
-        .set({ endedAt: sql`now()`, endKind: "probe_passed", resumeEvidence: evidence })
+        .set({ endedAt: sql`now()`, endKind, resumeEvidence: evidence })
         .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)))
         .returning({ id: projectBlocks.id });
       if (!episode) throw new BlockEpisodeMissing(id);

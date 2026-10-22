@@ -22,6 +22,9 @@ export const ClassifiedAssumptionKindSchema = z
   .enum(["client-visible", "internal-design", "undecided"])
   .transform((kind): AssumptionKind => (kind === "undecided" ? "client-visible" : kind));
 
+/** What the client reads before a question's assumption; the statement itself never carries it. */
+export const ASSUMPTION_LABEL = "Until you answer, we proceed on this assumption:";
+
 /**
  * The classification rule every prompt that asks a model for an assumption's kind states, worded
  * once: a breach the client could observe makes it client-visible, doubt is "undecided"

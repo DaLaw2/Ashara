@@ -158,6 +158,8 @@ describe("a project whose workspace path is refused", () => {
               listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
               block: (id, cause) => projects.block(id, cause),
               listInfrastructureHalted: async () => [],
+              listClientWaitHalted: async () => [],
+              resumeFromClientWait: notExercised("resumeFromClientWait"),
               resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
               blockAllActive: async () => [],
             },

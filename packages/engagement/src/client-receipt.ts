@@ -118,12 +118,20 @@ function standingLine(standing: ProjectStanding, work: DeploymentWork): string {
   }
 }
 
-/** What ends a pause: only the substrate probe for an infrastructure halt, the operator for every other; what follows, as the contract's standing allows. */
+/**
+ * What ends a pause: only the substrate probe for an infrastructure halt, the client's answer for a
+ * client_wait halt, the operator for every other; what follows, as the contract's standing allows.
+ */
 function pauseEnd(halt: HaltKind, standing: ContractStanding): string {
   const words = WORK_WORDS[standing];
-  return halt === "infrastructure"
-    ? `Ashara ${words.machinesEnd("the machines it runs the work on answer again")}, and you will be told when it does.`
-    : `The pause ends when the team's operator ${words.operatorEnds}, and you will be told when it does.`;
+  switch (halt) {
+    case "infrastructure":
+      return `Ashara ${words.machinesEnd("the machines it runs the work on answer again")}, and you will be told when it does.`;
+    case "client_wait":
+      return "The pause ends once your answer to the question the team asked you is read, and you will be told when it does.";
+    default:
+      return `The pause ends when the team's operator ${words.operatorEnds}, and you will be told when it does.`;
+  }
 }
 
 /** What reading the message leads to, once it is read, as the contract's standing allows. */

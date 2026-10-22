@@ -6,7 +6,7 @@ import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/ro
 import { releaseClearedBlocks, PlanningService, failWorkItem, giveUpWorkItem, recoverFailedItem, createAgentStaffing, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { VisionRepository, readVisionVersion } from "@ashara/engagement";
 import { parseWorkItemId, type DomainEvent } from "@ashara/shared";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import { replanStoreSuite } from "./replan-store-suite.js";
 
 // A task given up is planned around. The rows, stores and scripted model are the shared plan
@@ -259,7 +259,8 @@ describe("a task no roster role can work is planned around, never left waiting",
       logger: recordingLogger(),
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
-      projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectHaltRepository(suite.db).get(id) },
+      projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectHaltRepository(suite.db).get(id), block: notExercised("projects.block") },
+      clientQuestions: { ask: notExercised("clientQuestions.ask"), answered: notExercised("clientQuestions.answered") },
       workdirBase: tmpdir(),
       containment: memoryStepContainment(() => true),
     });

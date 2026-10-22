@@ -37,7 +37,8 @@ export type CycleStep =
   | "terminal-sweep"
   | "gate"
   | "parked-exits"
-  | "infrastructure-resume";
+  | "infrastructure-resume"
+  | "client-wait-resume";
 
 /**
  * A subject with a fault on record: how many in a row, and whether it is tried again now (its

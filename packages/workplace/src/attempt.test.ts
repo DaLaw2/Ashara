@@ -140,6 +140,7 @@ function assignment(limits: Partial<Assignment["limits"]> = {}): Assignment {
       intent: "A greeting file",
       visionVersion: 1,
       assumptions: [],
+      interfaceEntries: [],
       projectEnvironment: { kind: "to-define" },
       context: "An empty workspace.",
       deliverables: ["hello.txt"],
@@ -223,18 +224,48 @@ describe("runAttempt", () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "write_file", input: { path: "a.txt" } }, { name: "nope", input: "{", invalid: "AI_NoSuchToolError" }]),
       () => turn([{ name: "finish", input: { status: "blocked", summary: "Stuck." } }]),
-      () => turn([{ name: "finish", input: { status: "blocked", summary: "Stuck.", blockedReason: "No spec." } }]),
+      () => turn([{ name: "finish", input: { status: "blocked", summary: "Stuck.", blockedReason: "No spec.", blockedOn: { kind: "other" } } }]),
     ]);
     const { cell, files } = fakeCell();
 
     const outcome = await runAttempt(assignment(), deps(llm, cell).deps);
 
-    expect(outcome).toMatchObject({ kind: "finished", status: "blocked", blockedReason: "No spec.", turnsUsed: 3 });
+    expect(outcome).toMatchObject({ kind: "finished", status: "blocked", blockedReason: "No spec.", blockedOn: { kind: "other" }, turnsUsed: 3 });
     expect(files.size).toBe(0);
     const [argsError, invalidCall] = toolResultsOf(requests[1]?.messages.at(-1));
     expect(argsError).toMatchObject({ type: "error-text", value: expect.stringContaining("Invalid arguments for write_file: content") });
     expect(invalidCall).toMatchObject({ type: "error-text", value: expect.stringContaining("AI_NoSuchToolError") });
     expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("blockedReason") });
+  });
+
+  // The cause of a block decides whose it is to clear: a free-text cause, a cause missing what its
+  // owner needs, or one with a field of another kind is refused and asked again, never read as any kind.
+  it("refuses a blocked finish whose cause is not one whole kind, and carries the one that is", async () => {
+    const refused = [
+      { status: "blocked", summary: "Stuck.", blockedReason: "Needs the loans task." },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Needs the loans task.", blockedOn: "needs-work: I10" },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Needs the loans task.", blockedOn: { kind: "needs-work", interfaceEntries: [] } },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Needs the loans task.", blockedOn: { kind: "needs-work", reason: "I10 first" } },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Contradiction.", blockedOn: { kind: "needs-client-decision", question: "Which start command?" } },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Contradiction.", blockedOn: { kind: "needs-client-decision", question: " ", assumption: "php -S" } },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Stuck.", blockedOn: { kind: "other", question: "?" } },
+      { status: "blocked", summary: "Stuck.", blockedReason: "Stuck.", blockedOn: { kind: "dependency" } },
+    ];
+    const blockedOn = { kind: "needs-client-decision", question: "Which start command?", assumption: "php -S without a router, as the tender states" };
+    const { llm, requests } = scriptedLlm([
+      ...refused.map((input) => () => turn([{ name: "finish", input }])),
+      () => turn([{ name: "finish", input: { status: "blocked", summary: "Stuck.", blockedReason: "Contradiction.", blockedOn } }]),
+    ]);
+
+    const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+
+    expect(outcome).toMatchObject({ kind: "finished", status: "blocked", blockedReason: "Contradiction.", blockedOn, turnsUsed: refused.length + 1 });
+    for (const [index] of refused.entries()) {
+      expect(toolResultsOf(requests[index + 1]?.messages.at(-1))[0], JSON.stringify(refused[index])).toMatchObject({
+        type: "error-text",
+        value: expect.stringContaining("Invalid arguments for finish"),
+      });
+    }
   });
 
   it("reports a command's own failure and a missing file to the model, not as an environment failure", async () => {
@@ -592,7 +623,7 @@ describe("build_environment", () => {
   it("a check Quality did not pass is a tool error the model can act on, with Quality's report", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "build_environment", input: {} }]),
-      () => turn([{ name: "finish", input: { status: "blocked", summary: "No.", blockedReason: "It fails." } }]),
+      () => turn([{ name: "finish", input: { status: "blocked", summary: "No.", blockedReason: "It fails.", blockedOn: { kind: "other" } } }]),
     ]);
     const { environment } = port({ passed: false, report: "Environment work refused: it touches paths outside the recipe.\n- src/x" });
     await runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(llm, fakeCell().cell, { environment }).deps);
@@ -672,7 +703,7 @@ describe("define_check", () => {
     for (const toolProfile of ["run-and-dispute-checks", "build-environment", "run-checks"] as const) {
       const { llm, requests } = scriptedLlm([
         () => turn([{ name: "define_check", input: { name: "x", command: "false", decides: ["S1"] } }]),
-        () => turn([{ name: "finish", input: { status: "blocked", summary: "Done.", blockedReason: "No check tool." } }]),
+        () => turn([{ name: "finish", input: { status: "blocked", summary: "Done.", blockedReason: "No check tool.", blockedOn: { kind: "other" } } }]),
       ]);
       const environment: EnvironmentCheckPort | null =
         toolProfile === "build-environment" ? { check: async () => ({ passed: false, report: "unused" }) } : null;
