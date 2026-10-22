@@ -93,12 +93,18 @@ async function corruptRows(
   trace: string[],
 ): Promise<void> {
   if (!corruption.taskSpec && snapshot.items.some((item) => item.level === "Task")) {
-    await db.execute(sql`
+    // Never while that task runs: a lane may be in flight when the world acts between settlements,
+    // and the plant is the gate's to meet, not the attempt's.
+    const written = await db.execute(sql`
       UPDATE work_items SET task_spec = '"planted: not a task spec"'::jsonb
       WHERE id = (SELECT id FROM work_items WHERE project_id = ${projectId} AND level = 'Task'
-                  ORDER BY created_at, id LIMIT 1)`);
-    corruption.taskSpec = true;
-    trace.push("plant: the second project's first task_spec corrupted");
+                  ORDER BY created_at, id LIMIT 1)
+        AND status <> 'InProgress'
+      RETURNING id`);
+    if (written.rows.length > 0) {
+      corruption.taskSpec = true;
+      trace.push("plant: the second project's first task_spec corrupted");
+    }
   }
   // The open episode the silence clause owes a halt report (owedReports), so the one corrupted is
   // one I2 then names untold.
@@ -302,10 +308,11 @@ interface CorrectionTarget {
 
 /**
  * The client's correction of the first project: whether it was posted, whether a post that failed
- * mid-cycle may have landed, and the in-progress arrival, posted before an agent turn of a task citing a
- * contract key of the first project, once, while that task is InProgress. A request that fails is
- * tried again at a later turn or cycle; the instance it failed on is restarted by the loop after its
- * cycle, never from inside it. Before the first project is tendered an agent turn posts nothing.
+ * mid-cycle may have landed, the in-progress arrival, posted before an agent turn of a task citing a
+ * contract key of the first project, once, while that task is InProgress, and every other arrival
+ * reached at a settlement of the cycle's lanes. A request that fails is tried again at a later
+ * turn, settlement or cycle; the instance it failed on is restarted by the loop after its cycle,
+ * never from inside it. Before the first project is tendered nothing is posted.
  */
 export class ClientCorrection {
   corrected = false;
@@ -323,11 +330,10 @@ export class ClientCorrection {
   }
 
   async duringAgentTurn(task: { readonly id: string; readonly projectId: string }): Promise<void> {
-    const { draw, target, state } = this;
+    const { draw, target } = this;
     if (target === null) return;
     if (draw?.arrival !== "in-progress" || this.corrected || task.projectId !== target.projectId) return;
-    const current = state.live;
-    if (current === null || current.handle.dead || current.handle.sigtermed) return;
+    if (!this.liveNow()) return;
     const cites = await target.observer.execute(
       sql`SELECT CASE WHEN jsonb_typeof(task_spec->'sources') = 'array'
                       THEN jsonb_array_length(task_spec->'sources') > 0 ELSE false END AS cites
@@ -335,6 +341,42 @@ export class ClientCorrection {
     );
     const [row] = z.array(z.object({ cites: z.boolean() })).parse(cites.rows);
     if (row?.cites !== true) return;
+    await this.postMidCycle(draw, target, task.id, "during an agent turn", "while its task is InProgress");
+  }
+
+  /**
+   * The correction whose arrival a settlement of the cycle's lanes reached, posted before the freed
+   * lane refills, as a client's message arrives while the loop works; the arrivals and their order
+   * are those posted between cycles (CycleLoop clientActs).
+   */
+  async afterSettlement(snapshot: Snapshot, reviewsAnswered: number): Promise<void> {
+    const { draw, target } = this;
+    if (target === null || draw === null || this.corrected) return;
+    if (!correctionArrives(draw.arrival, snapshot, reviewsAnswered)) return;
+    if (!this.liveNow()) return;
+    await this.postMidCycle(draw, target, null, "between two settlements", "between two settlements");
+  }
+
+  /** Whether the live instance can take a request now; a dead or SIGTERMed one is restarted after its cycle. */
+  private liveNow(): boolean {
+    const current = this.state.live;
+    return current !== null && !current.handle.dead && !current.handle.sigtermed;
+  }
+
+  /**
+   * One try at the correction from inside a cycle: a post that may have landed is read back first,
+   * and one that fails is left unsure, to be read back at a later turn, settlement or cycle.
+   */
+  private async postMidCycle(
+    draw: CorrectionDraw,
+    target: CorrectionTarget,
+    taskId: string | null,
+    during: string,
+    at: string,
+  ): Promise<void> {
+    const { state } = this;
+    const current = state.live;
+    if (current === null) return;
     try {
       if (this.unsure) {
         const seen = await onRecord(target.client, target.projectId, current.ashara.app, isCorrection);
@@ -346,28 +388,27 @@ export class ClientCorrection {
           return;
         }
       }
-      target.standIns.askCorrection(draw.kind, task.id);
+      target.standIns.askCorrection(draw.kind, taskId);
       const reply = await target.client.post(current.ashara.app, target.projectId, {
         kind: "change",
         body: CORRECTION_BODY,
       });
       if (!reply.ok) {
         this.unsure = true;
-        state.trace.push(`client change during an agent turn: answered ${reply.status}`);
+        state.trace.push(`client change ${during}: answered ${reply.status}`);
         return;
       }
       this.corrected = true;
       state.coverage.corrections.add(correctionPair(draw));
-      state.trace.push(
-        `client correction ${correctionPair(draw)} at cycle ${state.cycles}, while its task is InProgress`,
-      );
+      state.trace.push(`client correction ${correctionPair(draw)} at cycle ${state.cycles}, ${at}`);
     } catch (err) {
       /* eslint-disable-next-line ashara/catch-continue -- best effort: a post the server's process failed under is
-         read back and sent again at a later turn; the cycle's own fault handling judges the fault */
+         read back and sent again at a later turn, settlement or cycle; the cycle's own fault handling judges
+         the fault */
       this.unsure = true;
       const thrown = err instanceof SimulatedCrash ? "SimulatedCrash" : err instanceof Error ? err.name : "error";
-      state.trace.push(`client change during an agent turn: ${thrown}`);
-      state.log.push(`client change during an agent turn: ${describeErrorChain(err)}`);
+      state.trace.push(`client change ${during}: ${thrown}`);
+      state.log.push(`client change ${during}: ${describeErrorChain(err)}`);
     }
   }
 }
@@ -474,6 +515,24 @@ export class CycleLoop {
       if (await this.noProgressAfter(snapshots, repeats, owedReceipts)) break;
       if (this.settled(snapshots)) break;
     }
+  }
+
+  /**
+   * The world between two settlements of a cycle's lanes, before the freed lane refills: a lane takes
+   * the next task at once, so what the world does after a cycle it also does here, where it acts
+   * while the loop works: the second project's rows corrupted as the run reaches them, and the
+   * client's correction once its arrival is reached. Judging waits for the cycle's end.
+   */
+  async betweenSettlements(): Promise<void> {
+    const { draws, state, provisioned, correction } = this.parts;
+    const { observer, projectIds, standIns } = provisioned;
+    const snapshots = await snapshotsOf(observer, projectIds);
+    const corrupted = projectIds[1];
+    const second = snapshots[1];
+    if (draws.corruption !== null && corrupted !== undefined && second !== undefined) {
+      await corruptRows(observer, corrupted, second, draws.corruption, state.trace);
+    }
+    await correction.afterSettlement(snapshots[0], standIns.observedReviews().length);
   }
 
   /** The first project's client asks the work to stop. */
@@ -681,11 +740,30 @@ export class CycleLoop {
     state.trace.push(`client answer changes an assumption at cycle ${state.cycles}`);
   }
 
-  /** The client's correction, posted after the cycle its arrival is drawn for. */
+  /**
+   * The client's correction, posted after the cycle its arrival is drawn for; one whose post inside
+   * the cycle may have landed is read back first.
+   */
   private async correct(draw: CorrectionDraw): Promise<void> {
     const { server, provisioned, state, correction } = this.parts;
     const { client, standIns } = provisioned;
     const projectId = this.projectId;
+    if (correction.unsure) {
+      const landed = await server.clientAct<boolean>(
+        "reading its messages",
+        async (app) => {
+          const seen = await onRecord(client, projectId, app, isCorrection);
+          return seen.ok ? { ok: true, value: seen.value.found } : seen;
+        },
+        null,
+      );
+      correction.unsure = false;
+      if (landed) {
+        correction.corrected = true;
+        state.coverage.corrections.add(correctionPair(draw));
+        return;
+      }
+    }
     standIns.askCorrection(draw.kind, null);
     await server.clientAct<null>(
       "change",

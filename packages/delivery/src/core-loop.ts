@@ -4,9 +4,9 @@ import type { AnswerOutcome, ClientChangeOutcome, IntakeOutcome } from "./acl/en
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";
 import type { ReplanOutcome } from "./replan-port.js";
-import type { WorkItem } from "./domain/index.js";
+import type { GatedWork, WorkItem } from "./domain/index.js";
 import { PlanningService } from "./domain/index.js";
-import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from "./types.js";
+import type { CoreLoopDeps, CycleResult, LaneSettlement, LoopStop, TaskLanes, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution/dispatch-run.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import { runTerminalSweeps } from "./terminal-sweep.js";
@@ -178,13 +178,8 @@ export class CoreLoop {
     // A project whose model requests run ahead of its finished work is warned once per zone and plan
     // revision, from the ledger's rows (no LLM call), so the warning reaches the client and the
     // operator before the budget halts the project.
-    const warnings = await this.step("burn-warning", () => deps.reporting.burnWarnings.runPending());
-    if (warnings.kind === "stop") return this.haltAtCap(warnings.stop);
-    for (const warning of warnings.kind === "ran" ? warnings.value : []) {
-      if (warning.kind !== "step-faulted") {
-        deps.loop.logger.info("delivery.burn-warning", `${warning.zone} warning ${warning.kind}`, { projectId: warning.projectId, zone: warning.zone, outcome: warning.kind });
-      }
-    }
+    const warnings = await this.postBurnWarnings();
+    if (warnings !== null) return this.haltAtCap(warnings);
     // An acceptance recorded before a restart, or before the cap stopped the loop, is told here.
     const delivered = await this.postDeliveredReports();
     if (delivered !== null) return this.haltAtCap(delivered);
@@ -284,34 +279,201 @@ export class CoreLoop {
     if (gated.kind === "stop") return this.haltAtCap(gated.stop);
     if (gated.kind === "refused" || gated.value.available.length === 0) return { tasksProcessed: 0, results: [], stop: null };
 
-    const batch = PlanningService.select(gated.value.available, deps.loop.config.maxBatchSize, gated.value.unlockWeights);
-
     // Each task gets its own worktree (execution-infra's worktree.ts creates per-task branches),
     // so concurrent execution is safe at the process boundary. Every LLM call a
     // task makes is admitted by the spend cap; a refused call ends that task's
     // attempt and returns the item to Pending: a project refusal has already
     // blocked the project, and a deployment refusal stops the loop here.
-    const settled = await deps.loop.taskLanes(batch, (task) => processTask(deps, task));
-    const results: TaskResult[] = [];
+    const lanes = await this.runLanes(gated.value);
+    deps.loop.cycleLog.emit({
+      event: "cycle_complete",
+      eligible: gated.value.available.length,
+      dispatched: lanes.results.length,
+      lanes: deps.loop.config.laneCount,
+      tasksProcessed: lanes.results.length,
+      completed: lanes.results.filter((r) => r.status === "completed").length,
+      failed: lanes.results.filter((r) => r.status === "failed").length,
+      refused: lanes.results.filter((r) => r.status === "refused").length,
+      interrupted: lanes.results.filter((r) => r.status === "interrupted").length,
+    });
+
+    const stop = lanes.refusedAtDeployment ?? (await deps.loop.spendCap.deploymentStop());
+    if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: lanes.results.length, results: lanes.results };
+    return { tasksProcessed: lanes.results.length, results: lanes.results, stop: null };
+  }
+
+  /**
+   * The cycle's dispatch: up to laneCount tasks at once, and a lane whose task settles takes the next
+   * eligible one at once, re-gated after every settlement, so it never waits for another lane's task.
+   * Every task is settled before the cycle ends, since the cycle's other steps run only while no
+   * attempt is in flight (the client's stops, the release of what attempts held, the terminal
+   * sweeps); so the lanes stop taking tasks only once those steps have work due (cycleWorkDue) or a
+   * task settled Blocked, whose exit is a cycle step, and the cycle ends when its lanes settle. A
+   * project's burn warning is posted between settlements, before its budget can halt it. A task runs
+   * at most once per cycle. A refill stops at the deployment's cap, and a gate that fails while
+   * refilling stops the refills, leaving that gate to the next cycle.
+   */
+  private async runLanes(first: GatedWork): Promise<{ readonly results: TaskResult[]; readonly refusedAtDeployment: LoopStop | null }> {
+    const { deps } = this;
+    const taken = new Set<string>();
+    let settledCount = 0;
+    let gatedAtSettled = 0;
+    let eligible = first;
     let refusedAtDeployment: LoopStop | null = null;
-    for (const [i, s] of settled.entries()) {
-      const task: WorkItem = batch[i];
-      const result = s.status === "fulfilled" ? s.value : await handleProcessingError(deps, task, s.reason);
-      if (result.status === "refused" && result.refusal.kind === "deployment") {
-        refusedAtDeployment ??= { reason: result.refusal.reason, spend: result.refusal.spend };
+    let drained = false;
+    const atStart = await this.cycleWorkSnapshot();
+    const drain = (reason: string) => {
+      if (drained) return;
+      drained = true;
+      deps.loop.logger.info("delivery.lanes-drain", `no lane takes another task this cycle: ${reason}`, { reason, settled: settledCount });
+    };
+
+    const next = async (): Promise<WorkItem | null> => {
+      if (refusedAtDeployment !== null || drained) return null;
+      if (deps.loop.shutdownSignal.aborted) {
+        drain("the process is shutting down");
+        return null;
       }
-      results.push(result);
+      if (settledCount > 0 && gatedAtSettled !== settledCount) {
+        const warned = await this.refillBurnWarnings();
+        if (warned.kind === "stop") {
+          refusedAtDeployment = warned.stop;
+          return null;
+        }
+        if (warned.kind === "failed") {
+          drain("the burn warnings failed while refilling a lane");
+          return null;
+        }
+        const due = atStart === null ? "the cycle's work could not be read when its dispatch began" : await this.cycleWorkDue(atStart);
+        if (due !== null) {
+          drain(due);
+          return null;
+        }
+        const regated = await this.regate();
+        if (regated.kind === "stop") {
+          refusedAtDeployment = regated.stop;
+          return null;
+        }
+        if (regated.kind === "none") return null;
+        eligible = regated.work;
+        gatedAtSettled = settledCount;
+      }
+      const task = PlanningService.next(eligible.available, taken, eligible.unlockWeights);
+      if (task === null) return null;
+      taken.add(task.id);
+      return task;
+    };
+
+    const run = async (task: WorkItem): Promise<TaskResult> => {
+      try {
+        const result = await this.settledTask(task);
+        if (result.status === "refused" && result.refusal.kind === "deployment") {
+          refusedAtDeployment ??= { reason: result.refusal.reason, spend: result.refusal.spend };
+        }
+        if (result.status === "blocked") drain(`task ${task.id} settled Blocked; its exit is a cycle step`);
+        return result;
+      } finally {
+        settledCount += 1;
+      }
+    };
+
+    const settled = await deps.loop.taskLanes(deps.loop.config.laneCount, next, run);
+    const results: TaskResult[] = [];
+    for (const { settled: each } of settled) {
+      // A recovery that itself threw throws out of the cycle, as any step's own failure does, once every lane settled.
+      if (each.status === "rejected") throw each.reason;
+      results.push(each.value);
     }
+    return { results, refusedAtDeployment };
+  }
 
-    const completed = results.filter((r) => r.status === "completed").length;
-    const failed = results.filter((r) => r.status === "failed").length;
-    const refused = results.filter((r) => r.status === "refused").length;
-    const interrupted = results.filter((r) => r.status === "interrupted").length;
-    deps.loop.cycleLog.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed, refused, interrupted });
+  /**
+   * What the cycle's other steps act on, read when its dispatch begins: the messages owed a receipt
+   * then (one whose receipt faulted stays owed) and the active projects. Null, logged at warn, when
+   * either read failed; the lanes then take no task after the first settles.
+   */
+  private async cycleWorkSnapshot(): Promise<{ readonly messages: ReadonlySet<string>; readonly active: ReadonlySet<string> } | null> {
+    try {
+      const messages = await this.deps.client.clientReceipts.dueMessages();
+      const active = new Set<string>(await this.deps.loop.projectRepo.listActiveIds());
+      return { messages, active };
+    } catch (err) {
+      this.deps.loop.logger.warn("delivery.cycle-work-unread", "the cycle's due work could not be read: the lanes take no task after the first settles", {}, err);
+      return null;
+    }
+  }
 
-    const stop = refusedAtDeployment ?? (await deps.loop.spendCap.deploymentStop());
-    if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: batch.length, results };
-    return { tasksProcessed: batch.length, results, stop: null };
+  /**
+   * Why the cycle's other steps have work due since its dispatch began, or null: a message of the
+   * client's arrived (a stop, an answer, a change or a tender, each read only between dispatches), or
+   * a project left the active set (halted, stopped, accepted, or awaiting the repair of a given-up
+   * task), whose report or repair is a cycle step. A read that fails is due work too, logged at warn.
+   */
+  private async cycleWorkDue(atStart: { readonly messages: ReadonlySet<string>; readonly active: ReadonlySet<string> }): Promise<string | null> {
+    try {
+      const messages = await this.deps.client.clientReceipts.dueMessages();
+      const arrived = [...messages].find((subject) => !atStart.messages.has(subject));
+      if (arrived !== undefined) return `a message of the client's arrived (${arrived})`;
+      const active = new Set<string>(await this.deps.loop.projectRepo.listActiveIds());
+      const left = [...atStart.active].find((id) => !active.has(id));
+      if (left !== undefined) return `project ${left} left the active set`;
+      return null;
+    } catch (err) {
+      this.deps.loop.logger.warn("delivery.cycle-work-unread", "the cycle's due work could not be read while refilling a lane", {}, err);
+      return "the cycle's due work could not be read";
+    }
+  }
+
+  /** The burn warnings posted between settlements; a failure is logged at warn and stops the refills. */
+  private async refillBurnWarnings(): Promise<{ readonly kind: "posted" } | { readonly kind: "stop"; readonly stop: LoopStop } | { readonly kind: "failed" }> {
+    try {
+      const stop = await this.postBurnWarnings();
+      return stop === null ? { kind: "posted" } : { kind: "stop", stop };
+    } catch (err) {
+      this.deps.loop.logger.warn("delivery.refill-burn-warning-failed", "the burn warnings failed while refilling a lane: no more tasks are dispatched this cycle", {}, err);
+      return { kind: "failed" };
+    }
+  }
+
+  /** The burn warnings due, each posted once (no LLM call); the deployment cap's stop when a refusal named it, else null. */
+  private async postBurnWarnings(): Promise<LoopStop | null> {
+    const warnings = await this.step("burn-warning", () => this.deps.reporting.burnWarnings.runPending());
+    if (warnings.kind === "stop") return warnings.stop;
+    for (const warning of warnings.kind === "ran" ? warnings.value : []) {
+      if (warning.kind !== "step-faulted") {
+        this.deps.loop.logger.info("delivery.burn-warning", `${warning.zone} warning ${warning.kind}`, { projectId: warning.projectId, zone: warning.zone, outcome: warning.kind });
+      }
+    }
+    return null;
+  }
+
+  /** One task's lane: its processing, or the recovery of a processing that threw. */
+  private async settledTask(task: WorkItem): Promise<TaskResult> {
+    try {
+      return await processTask(this.deps, task);
+    } catch (err) {
+      return handleProcessingError(this.deps, task, err);
+    }
+  }
+
+  /**
+   * The gate again for a refill, after a settlement: the deployment cap's stop, the work admitted
+   * now, or none when the gate's step was refused for a project or the gate failed. A failed gate is
+   * logged at warn and dispatches nothing more this cycle; the next cycle's gate reads every project again.
+   */
+  private async regate(): Promise<{ readonly kind: "work"; readonly work: GatedWork } | { readonly kind: "stop"; readonly stop: LoopStop } | { readonly kind: "none" }> {
+    const { deps } = this;
+    try {
+      const atCap = await deps.loop.spendCap.deploymentStop();
+      if (atCap) return { kind: "stop", stop: atCap };
+      const gated = await this.step("gate", () => PlanningService.gate(deps.loop.workItemRepo, deps.loop.projectRepo, deps.loop.eventStore, deps.loop.containment, deps.loop.logger));
+      if (gated.kind === "stop") return { kind: "stop", stop: gated.stop };
+      if (gated.kind === "refused") return { kind: "none" };
+      return { kind: "work", work: gated.value };
+    } catch (err) {
+      deps.loop.logger.warn("delivery.refill-gate-failed", "the gate failed while refilling a lane: no more tasks are dispatched this cycle", {}, err);
+      return { kind: "none" };
+    }
   }
 
   /**
@@ -342,7 +504,7 @@ export class CoreLoop {
    * What every attempt held on the host is released, whichever path ended it: the cells a failed
    * teardown left, then every settled task's branches. Called only where no attempt is in flight:
    * before a full cycle's dispatch (the previous cycle awaited every attempt it dispatched), in the
-   * cycle that stops at the cap (haltAtCap, after its batch settled), and on each halted cycle,
+   * cycle that stops at the cap (haltAtCap, after its lanes settled), and on each halted cycle,
    * which dispatches nothing and retries a release the stopping cycle failed. No LLM call. The
    * branch release is a cycle step like any other: a stop it returns is the caller's to act on.
    */
@@ -533,8 +695,68 @@ export class CoreLoop {
   }
 }
 
-/** The policy default: every task of the batch at once, each settled on its own. */
-export const concurrentTaskLanes: TaskLanes = (items, run) => Promise.allSettled(items.map(run));
+/**
+ * The policy default: every lane truly at once, each asking for its next item as soon as its own
+ * settles; `next` is asked from this one loop only, so never twice at once.
+ */
+export const concurrentTaskLanes: TaskLanes = async <I extends { readonly id: string }, T>(
+  lanes: number,
+  next: () => Promise<I | null>,
+  run: (item: I) => Promise<T>,
+): Promise<Array<LaneSettlement<I, T>>> => {
+  const settlements: Array<{ readonly item: I; settled: PromiseSettledResult<T> | null }> = [];
+  const running = new Set<Promise<void>>();
+  let failure: { readonly error: unknown } | null = null;
+  for (;;) {
+    while (running.size < lanes && failure === null) {
+      const asked = await askedFor(next);
+      if (asked.kind === "failed") {
+        failure = { error: asked.error };
+        break;
+      }
+      const item = asked.item;
+      if (item === null) break;
+      const entry: { readonly item: I; settled: PromiseSettledResult<T> | null } = { item, settled: null };
+      settlements.push(entry);
+      const lane: Promise<void> = Promise.resolve()
+        .then(() => run(entry.item))
+        .then(
+          (value) => {
+            entry.settled = { status: "fulfilled", value };
+          },
+          (reason: unknown) => {
+            entry.settled = { status: "rejected", reason };
+          },
+        )
+        .finally(() => running.delete(lane));
+      running.add(lane);
+    }
+    if (running.size === 0) break;
+    await Promise.race(running);
+  }
+  if (failure !== null) throw failure.error;
+  return settlements.map((entry) => {
+    if (entry.settled === null) throw new LaneNeverSettled(entry.item.id);
+    return { item: entry.item, settled: entry.settled };
+  });
+};
+
+/** What `next` answered: an item or null, or the error it threw, which ends the asking. */
+async function askedFor<I>(next: () => Promise<I | null>): Promise<{ readonly kind: "answered"; readonly item: I | null } | { readonly kind: "failed"; readonly error: unknown }> {
+  try {
+    return { kind: "answered", item: await next() };
+  } catch (error) {
+    return { kind: "failed", error };
+  }
+}
+
+/** A lane the pool counted as settled that recorded no settlement: a defect of the pool itself. */
+class LaneNeverSettled extends Error {
+  constructor(readonly itemId: string) {
+    super(`the lane of item ${itemId} left the pool without a settlement`);
+    this.name = "LaneNeverSettled";
+  }
+}
 
 function stopped(stop: LoopStop): CycleResult {
   return { tasksProcessed: 0, results: [], stop };

@@ -43,7 +43,7 @@ export function wholeDatabaseStepsIdle(): WholeDatabaseSteps {
     loop: {},
     client: {
       clientStops: { runPending: idle, reportPending: idle },
-      clientReceipts: { runPending: idle },
+      clientReceipts: { runPending: idle, dueMessages: async () => new Set() },
       clientChanges: { runPending: idle },
       liaisonIntake: { runPending: idle },
       liaisonAnswers: { runPending: idle },
@@ -145,6 +145,7 @@ export function inertCoreLoopDeps(overrides: CoreLoopOverrides = {}): CoreLoopDe
         spendCap: { deploymentStop: async () => null, refusalOf: () => null },
         containment: memoryStepContainment(() => false),
         taskLanes: concurrentTaskLanes,
+        shutdownSignal: new AbortController().signal,
       },
       client: idleSteps.client,
       planning: idleSteps.planning,

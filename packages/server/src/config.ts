@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import type { CoreLoopConfig } from "@ashara/delivery";
@@ -42,6 +43,42 @@ class InvalidBudgetLimit extends Error {
   }
 }
 
+/** The configured task lanes' cells cannot all fit the host at once: the server refuses to boot. */
+class TaskLanesExceedHost extends Error {
+  constructor(
+    readonly lanes: number,
+    readonly cellsAtOnce: number,
+    readonly resource: "memory" | "cpus",
+    readonly needed: number,
+    readonly host: number,
+  ) {
+    const amount = (value: number) => (resource === "memory" ? `${(value / 1024 ** 3).toFixed(1)} GiB` : `${value} CPUs`);
+    super(
+      `ASHARA_TASK_LANES=${lanes} runs up to ${cellsAtOnce} cells at once, whose ${resource} caps need ${amount(needed)}, ` +
+        `but this host has ${amount(host)}; lower ASHARA_TASK_LANES or the cell caps (ASHARA_CELL_MEMORY, ASHARA_CELL_CPUS)`,
+    );
+    this.name = "TaskLanesExceedHost";
+  }
+}
+
+/** What the host offers every cell together: its total memory and the CPUs this process may use. */
+interface HostCapacity {
+  readonly memoryBytes: number;
+  readonly cpus: number;
+}
+
+/**
+ * Refuses lanes whose cells cannot all run at once on `host`: each lane holds one cell at a time, and
+ * one more (a check cell or an image build) may run beside them, each capped at `cells`.
+ */
+function assertLanesFitHost(lanes: number, cells: CellResourceLimits, host: HostCapacity): void {
+  const cellsAtOnce = lanes + 1;
+  if (cellsAtOnce * cells.memoryBytes > host.memoryBytes) {
+    throw new TaskLanesExceedHost(lanes, cellsAtOnce, "memory", cellsAtOnce * cells.memoryBytes, host.memoryBytes);
+  }
+  if (cellsAtOnce * cells.cpus > host.cpus) throw new TaskLanesExceedHost(lanes, cellsAtOnce, "cpus", cellsAtOnce * cells.cpus, host.cpus);
+}
+
 /** A server setting that is unset with no default, or set to a value it cannot take. */
 class InvalidServerSetting extends Error {
   constructor(
@@ -55,6 +92,18 @@ class InvalidServerSetting extends Error {
         : `${variable}="${raw}" is not ${expected}`,
     );
     this.name = "InvalidServerSetting";
+  }
+}
+
+/** A setting under a name the server no longer reads: honoured silently, it would be ignored. */
+class RetiredServerSetting extends Error {
+  constructor(
+    readonly variable: string,
+    readonly raw: string,
+    readonly replacement: string,
+  ) {
+    super(`${variable}="${raw}" is no longer read; set ${replacement} instead and unset ${variable}`);
+    this.name = "RetiredServerSetting";
   }
 }
 
@@ -78,13 +127,14 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   }
   const workdirBase = path.resolve(workdirBaseRaw);
 
-  // Policy default: unset, the loop's own batch size (DEFAULT_CONFIG). It sets throughput only;
-  // a set but unusable one is refused, never replaced.
-  const rawBatchSize = nonEmptyEnv("MAX_BATCH_SIZE");
-  const maxBatchSize =
-    rawBatchSize === undefined
-      ? DEFAULT_CONFIG.maxBatchSize
-      : parseIntegerSetting("MAX_BATCH_SIZE", rawBatchSize, 1, Number.MAX_SAFE_INTEGER);
+  // MAX_BATCH_SIZE is not read: a value set under it would be ignored without a word, so the boot
+  // is refused while it is set.
+  const retiredBatchSize = nonEmptyEnv("MAX_BATCH_SIZE");
+  if (retiredBatchSize !== undefined) throw new RetiredServerSetting("MAX_BATCH_SIZE", retiredBatchSize, "ASHARA_TASK_LANES");
+  // Policy default: unset, the loop's own lane count (DEFAULT_CONFIG). It sets throughput only, and
+  // is checked against the host below with the cell caps; a set but unusable one is refused, never replaced.
+  const rawLanes = nonEmptyEnv("ASHARA_TASK_LANES");
+  const laneCount = rawLanes === undefined ? DEFAULT_CONFIG.laneCount : parseIntegerSetting("ASHARA_TASK_LANES", rawLanes, 1, Number.MAX_SAFE_INTEGER);
   // Both names set the one deployment cap, so a cap the owner set under either
   // name is enforced; the dedicated ASHARA_BUDGET_LIMIT_USD wins
   // when both are set. Blank values are treated
@@ -122,7 +172,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const coreLoop: CoreLoopConfig = {
     ...DEFAULT_CONFIG,
     workdirBase,
-    maxBatchSize,
+    laneCount,
   };
 
   // Policy default: unset means "podman on PATH". Pointing it at a missing
@@ -130,6 +180,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const podmanBinary = nonEmptyEnv("ASHARA_PODMAN_BINARY") ?? "podman";
   // No default: the host also runs Postgres and Z0, so the caps are the owner's choice.
   const cellLimits = readCellLimits(process.env);
+  assertLanesFitHost(laneCount, cellLimits, { memoryBytes: os.totalmem(), cpus: os.availableParallelism() });
 
   return {
     databaseUrl,

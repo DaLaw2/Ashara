@@ -27,3 +27,4 @@ export type { ActiveProjects, WorkItemRepository } from "./repository.js";
 
 export { PlanningService } from "./service.js";
 export { TaskHeldForCorrection, startUnlessHeld } from "./gate.js";
+export type { GatedWork } from "./gate.js";

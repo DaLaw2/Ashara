@@ -36,20 +36,23 @@ describe("lifecycle simulator, directed", () => {
   }, 90_000);
 
   // With one project the admission queue's absence admits nothing more, so here two projects share
-  // one deployment cap of $10, spent to the cap. The turn is handed on after every database call
-  // returns, so an admission's spend read is followed by the other task's: skipping the queue lets
-  // both pass on one headroom smaller than their two estimates. The in-flight read precedes the
-  // spend read, so what this catches is the queue's race, not a race between those two reads.
+  // one deployment cap of $3, spent to the cap by the first two lanes' tasks. The turn is handed on
+  // after every database call returns, so an admission's spend read is followed by the other task's:
+  // skipping the queue lets both pass on one headroom smaller than their two estimates. The race
+  // needs the two tasks' admissions in step, as the first two lanes are, starting together; a lane
+  // that refills starts part-way through the other lane's task, so the cap is one the first two
+  // tasks reach. The in-flight read precedes the spend read, so what this catches is the queue's
+  // race, not a race between those two reads.
   const ADMISSION_RACE = [...BATCH_OF_TWO, switchAtEvery(/^interleave:db:.*:returned$/)];
-  const SHARED_CAP_10 = { projects: 2, capUsd: 10 } as const;
+  const SHARED_CAP_3 = { projects: 2, capUsd: 3 } as const;
   it("admits two projects' tasks racing on one deployment cap within it", async (ctx) => {
-    const clean = await directed(ctx, ADMISSION_RACE, SHARED_CAP_10);
+    const clean = await directed(ctx, ADMISSION_RACE, SHARED_CAP_3);
     expect(keys(clean), statements(clean)).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
   }, 90_000);
 
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async (ctx) => {
-    const planted = await directed(ctx, ADMISSION_RACE, { ...SHARED_CAP_10, mutation: "no-admission-queue" });
+    const planted = await directed(ctx, ADMISSION_RACE, { ...SHARED_CAP_3, mutation: "no-admission-queue" });
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 

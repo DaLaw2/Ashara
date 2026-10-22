@@ -210,14 +210,21 @@ async function harness(name: string): Promise<Harness> {
             resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
             blockAllActive: async () => [],
           },
-          // One task after another, in the batch's order: the cells and merges of a cycle never interleave.
-          taskLanes: async (items, runOne) => {
-            const settled: Array<PromiseSettledResult<Awaited<ReturnType<typeof runOne>>>> = [];
+          // The cycle's first tasks taken as its lanes would take them, then run one after another in
+          // that order: the cells and merges of a cycle never interleave.
+          taskLanes: async <I extends { readonly id: string }, T>(lanes: number, next: () => Promise<I | null>, runOne: (item: I) => Promise<T>) => {
+            const items: I[] = [];
+            while (items.length < lanes) {
+              const item = await next();
+              if (item === null) break;
+              items.push(item);
+            }
+            const settled: Array<{ item: I; settled: PromiseSettledResult<T> }> = [];
             for (const item of items) {
               try {
-                settled.push({ status: "fulfilled", value: await runOne(item) });
+                settled.push({ item, settled: { status: "fulfilled", value: await runOne(item) } });
               } catch (reason) {
-                settled.push({ status: "rejected", reason });
+                settled.push({ item, settled: { status: "rejected", reason } });
               }
             }
             return settled;

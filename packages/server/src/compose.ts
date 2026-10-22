@@ -138,7 +138,7 @@ export interface AsharaPorts {
   readonly git: GitRunner;
   /** What attempts' wall clocks and the gateway's pricing instant read. */
   readonly clock: Clock;
-  /** How the tasks of one cycle's batch run together (production: concurrentTaskLanes). */
+  /** How the task lanes of a cycle run their tasks (production: concurrentTaskLanes). */
   readonly taskLanes: TaskLanes;
   /** Where every log record of this process goes (production: stdoutSink, one JSON line each). */
   readonly log: LogSink;
@@ -451,6 +451,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     containment,
     failureRouter,
     taskLanes: ports.taskLanes,
+    shutdownSignal: abortController.signal,
     dispatchService,
     sweepers,
     cells: cellPortsOf(cellSubstrate),

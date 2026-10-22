@@ -96,6 +96,8 @@ export interface CoreLoopParts {
   readonly containment: StepContainment;
   readonly failureRouter: DispatchSteps["failureRouter"];
   readonly taskLanes: TaskLanes;
+  /** Aborted on shutdown, the dispatcher's own signal. */
+  readonly shutdownSignal: AbortSignal;
   /** The dispatcher, composed by composeDispatchService. */
   readonly dispatchService: DispatchSteps["dispatchService"];
   /** The sweepers of main, composed by composeSweepers. */
@@ -169,6 +171,7 @@ export function composeCoreLoopDeps(parts: CoreLoopParts, overrides: CoreLoopOve
         spendCap: parts.spendCap,
         containment,
         taskLanes: parts.taskLanes,
+        shutdownSignal: parts.shutdownSignal,
       },
       client: {
         clientStops: new ClientStops(createClientStopStore(db), containment),

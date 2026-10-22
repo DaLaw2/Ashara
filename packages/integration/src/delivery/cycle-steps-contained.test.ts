@@ -28,6 +28,14 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.client.clientStops.reportPending": { kind: "step", file: "packages/engagement/src/client-stop.ts", declaration: "async reportPending(" },
   "deps.client.clientChanges.runPending": runPending("packages/engagement/src/client-change.ts"),
   "deps.client.clientReceipts.runPending": runPending("packages/engagement/src/client-receipt.ts"),
+  "deps.client.clientReceipts.dueMessages": {
+    kind: "not-per-project",
+    reason: "the ids of every message owed a receipt, one read for every project and nothing run per message; its failure is logged at warn and stops the refills",
+  },
+  "deps.loop.projectRepo.listActiveIds": {
+    kind: "not-per-project",
+    reason: "the active projects' ids, compared as a set while refilling a lane and nothing run per project; its failure is logged at warn and stops the refills",
+  },
   "deps.reporting.stackChoices.runPending": runPending("packages/engagement/src/stack-choice.ts"),
   "deps.client.liaisonIntake.runPending": runPending("packages/engagement/src/intake.ts"),
   "deps.client.liaisonAnswers.runPending": runPending("packages/engagement/src/answers.ts"),
@@ -58,8 +66,8 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   runAcceptanceSweeps: { kind: "step", file: "packages/delivery/src/acceptance.ts", declaration: "export async function runAcceptanceSweeps(" },
   runTerminalSweeps: { kind: "step", file: "packages/delivery/src/terminal-sweep.ts", declaration: "export async function runTerminalSweeps(" },
   "PlanningService.gate": { kind: "step", file: "packages/delivery/src/domain/gate.ts", declaration: "static async filterAvailable(" },
-  "PlanningService.select": { kind: "not-per-project", reason: "a pure choice over the tasks already gated; reads nothing" },
-  "deps.loop.taskLanes": { kind: "not-per-project", reason: "each task runs in its own lane and settles on its own (Promise.allSettled); a rejection goes to handleProcessingError" },
+  "PlanningService.next": { kind: "not-per-project", reason: "a pure choice over the tasks already gated; reads nothing" },
+  "deps.loop.taskLanes": { kind: "not-per-project", reason: "each task runs in its own lane and settles on its own; a rejection goes to handleProcessingError inside the lane, and a failed refill gate is logged at warn and stops the refills" },
   processTask: { kind: "not-per-project", reason: "runs inside a task's lane, whose rejection is settled per task" },
   handleProcessingError: { kind: "not-per-project", reason: "one task's recovery; it catches its own recovery failure and returns the task interrupted" },
   "deps.dispatch.heldCells.release": { kind: "not-per-project", reason: "the deployment's cells a failed teardown left, one substrate call for every project; it logs its own failure at warn and never throws" },
@@ -69,6 +77,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.loop.projectRepo.block": { kind: "not-per-project", reason: "the halt of one project, which is how a step's own failure is contained" },
   "deps.loop.cycleLog.emit": { kind: "not-per-project", reason: "the cycle's own log line" },
   "deps.loop.logger.info": { kind: "not-per-project", reason: "a log record; the Logger never throws and never stops the path that logs" },
+  "deps.loop.logger.warn": { kind: "not-per-project", reason: "a log record; the Logger never throws and never stops the path that logs" },
   "deps.loop.logger.scope": { kind: "not-per-project", reason: "runs a project's halt in a trace of its own; it adds no step, and passes the halt's result or failure through unchanged" },
   parseProjectId: { kind: "not-per-project", reason: "a pure parse" },
   projectCapCause: { kind: "not-per-project", reason: "a pure constructor" },
@@ -254,17 +263,30 @@ describe("the cycle's per-project steps", () => {
   });
 
   test("every loop over the active projects contains each project with containEach", () => {
+    // A function that reads the active projects as a set and runs nothing per project, with the reason.
+    const notALoop: Readonly<Record<string, string>> = {
+      [`${CORE_LOOP}#cycleWorkSnapshot`]: "the active projects when the dispatch begins, compared as a set; nothing runs per project",
+      [`${CORE_LOOP}#cycleWorkDue`]: "the active projects while refilling a lane, compared as a set; nothing runs per project",
+    };
     const uncontained: string[] = [];
+    const exempted = new Set<string>();
     for (const pkg of readdirSync(join(ROOT, "packages")).filter((name) => name !== "integration")) {
       for (const path of sourceFiles(join(ROOT, "packages", pkg, "src"))) {
         const text = readFileSync(path, "utf8");
         for (const match of text.matchAll(/\.listActiveIds\(\)/g)) {
           const fn = text.lastIndexOf("async ", match.index);
+          const name = fn === -1 ? undefined : /^async (?:function )?(\w+)/.exec(text.slice(fn))?.[1];
+          const key = name === undefined ? null : `${relative(ROOT, path)}#${name}`;
+          if (key !== null && notALoop[key] !== undefined) {
+            exempted.add(key);
+            continue;
+          }
           if (fn === -1 || !bodyFrom(text, fn).includes("containEach(")) uncontained.push(relative(ROOT, path));
         }
       }
     }
     expect(uncontained).toEqual([]);
+    expect(Object.keys(notALoop).filter((key) => !exempted.has(key))).toEqual([]);
   });
 
   test("every listing is classified, and none can throw for one project's row: each row is read on its own, or none can fail", () => {

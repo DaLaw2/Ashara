@@ -19,7 +19,7 @@ const WATCH_INTERVAL_MS = 1_000;
  */
 type LaneState = "ready" | "running" | "blocked" | "ended";
 
-/** One task of the batch in flight, as the scheduler knows it. */
+/** One task of the pool in flight, as the scheduler knows it. */
 interface Lane {
   readonly index: number;
   readonly taskId: string;
@@ -38,11 +38,19 @@ export type InterleaveEvent =
   | { readonly kind: "lane-ended"; readonly taskId: string }
   | { readonly kind: "stall"; readonly detail: string };
 
-/** A batch began while another was still running: the loop awaits each batch, so the driver is wrong. */
-class BatchesOverlapped extends Error {
+/** A pool began while another was still running: the loop awaits each cycle's lanes, so the driver is wrong. */
+class PoolsOverlapped extends Error {
   constructor(readonly running: readonly string[]) {
-    super(`a batch began while the batch of ${running.join(", ")} was still running`);
-    this.name = "BatchesOverlapped";
+    super(`a pool of lanes began while the lanes of ${running.join(", ")} were still running`);
+    this.name = "PoolsOverlapped";
+  }
+}
+
+/** A lane that ended with no settlement recorded: a defect of the scheduler itself. */
+class LaneNeverSettled extends Error {
+  constructor(readonly taskId: string) {
+    super(`the lane of task ${taskId} ended without a settlement`);
+    this.name = "LaneNeverSettled";
   }
 }
 
@@ -50,12 +58,21 @@ function newLane(index: number, taskId: string): Lane {
   return { index, taskId, state: "ready", grants: [], connections: 0 };
 }
 
+/** How `run` on `item` settled: its value, or what it threw. */
+async function settledRun<I, T>(run: (item: I) => Promise<T>, item: I): Promise<PromiseSettledResult<T>> {
+  try {
+    return { status: "fulfilled", value: await run(item) };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
 function nextMacrotask(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
 /**
- * Runs a batch's tasks one at a time, so two admissions race the spend cap: exactly one task holds the turn, and it
+ * Runs a pool's tasks one at a time, so two admissions race the spend cap: exactly one task holds the turn, and it
  * gives the turn up only at a seam call (drawn from the tape, keyed `interleave:<seam>:<label>`
  * like a fault), when it ends, or when it must wait on another task (a contended wait: the
  * checkout lock, the spend cap's admission queue). Every other task is parked at a seam call or
@@ -65,8 +82,13 @@ function nextMacrotask(): Promise<void> {
  * A turn is also offered after a call ran, before its caller sees the result (Scheduler.returned),
  * and never while the running task holds a pool connection (a transaction's row locks).
  *
+ * A lane whose task settled lets the world act (betweenSettlements), then asks the pool's `next` for
+ * the following task, while it still holds the turn, outside any task (no seam call in either hands
+ * the turn on, and none is the ended task's), and only then gives the turn up: when the world acts,
+ * when a lane refills, and with what, are a function of the seed too.
+ *
  * Not modelled: a task waiting on another through an in-process wait production does not pass
- * through `contendedWait`. That stalls the batch, and the watchdog names it (I1:interleave-stall)
+ * through `contendedWait`. That stalls the pool, and the watchdog names it (I1:interleave-stall)
  * and releases every task, so the run ends instead of hanging.
  */
 export class Interleaver {
@@ -85,42 +107,127 @@ export class Interleaver {
     private readonly observe: (event: InterleaveEvent) => void,
   ) {}
 
-  /** The task of the lane running this code, or null outside a batch's tasks. */
+  /** What the world does after each settlement of a pool's lanes, before the freed lane refills. */
+  private settled: () => Promise<void> = () => Promise.resolve();
+
+  /** Sets what the world does after each settlement; the cycle loop acts as the client there (run-cycle-loop.ts). */
+  betweenSettlements(world: () => Promise<void>): void {
+    this.settled = world;
+  }
+
+  /** The task of the lane running this code, or null outside a pool's tasks. */
   currentTask(): string | null {
     return this.current.getStore()?.taskId ?? null;
   }
 
   readonly lanes: TaskLanes = async <I extends { readonly id: string }, T>(
-    items: readonly I[],
+    count: number,
+    next: () => Promise<I | null>,
     run: (item: I) => Promise<T>,
-  ): Promise<Array<PromiseSettledResult<T>>> => {
-    if (this.lanesNow.length > 0) throw new BatchesOverlapped(this.lanesNow.map((lane) => lane.taskId));
-    const work = items.map((item, index) => ({ item, lane: newLane(index, item.id) }));
-    this.lanesNow = work.map((w) => w.lane);
+  ) => {
+    if (this.lanesNow.length > 0) throw new PoolsOverlapped(this.lanesNow.map((lane) => lane.taskId));
     this.holder = null;
     this.stalled = false;
     this.lastProgress = -1;
-    if (items.length > 1) this.observe({ kind: "batch", size: items.length });
+    const settlements: Array<{ readonly item: I; settled: PromiseSettledResult<T> | null }> = [];
+    const asking: { failure: { readonly error: unknown } | null } = { failure: null };
+    let inFlight = 0;
+    let alive = 0;
+    let observedTwo = false;
+    let drained: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      drained = resolve;
+    });
+
+    // Asked outside any lane: the gate's calls are no task's, and none of them hands the turn on.
+    const askNow = async (): Promise<I | null> => {
+      if (asking.failure !== null) return null;
+      try {
+        return await this.current.exit(next);
+      } catch (error) {
+        asking.failure = { error };
+        return null;
+      }
+    };
+    // One question at a time even once a stall released every lane at once.
+    let asked: Promise<unknown> = Promise.resolve();
+    const ask = (): Promise<I | null> => {
+      const answer = asked.then(askNow);
+      asked = answer;
+      return answer;
+    };
+    // The world's turn after a settlement, outside any lane and in line with the questions, so what
+    // it does is read by the next question; a world that throws ends the asking as `next` does.
+    const settleNow = async (): Promise<void> => {
+      if (asking.failure !== null) return;
+      try {
+        await this.current.exit(this.settled);
+      } catch (error) {
+        asking.failure = { error };
+        return;
+      }
+    };
+    const settle = (): Promise<void> => {
+      const turn = asked.then(settleNow);
+      asked = turn;
+      return turn;
+    };
+    const start = (item: I): void => {
+      const lane = newLane(this.lanesNow.length, item.id);
+      this.lanesNow.push(lane);
+      const entry: { readonly item: I; settled: PromiseSettledResult<T> | null } = { item, settled: null };
+      settlements.push(entry);
+      inFlight += 1;
+      alive += 1;
+      if (inFlight >= 2 && !observedTwo) {
+        observedTwo = true;
+        this.observe({ kind: "batch", size: inFlight });
+      }
+      void this.current.run(lane, async () => {
+        await this.acquire(lane);
+        entry.settled = await settledRun(run, item);
+        inFlight -= 1;
+        // Still holding the turn: the world's turn and the refill happen before any other lane runs.
+        try {
+          await settle();
+          await refill();
+        } finally {
+          this.end(lane);
+          alive -= 1;
+          if (alive === 0) drained();
+        }
+      });
+    };
+    const refill = async (): Promise<void> => {
+      while (inFlight < count) {
+        const item = await ask();
+        if (item === null) return;
+        start(item);
+      }
+    };
+
     const watchdog = setInterval(() => this.watch(), WATCH_INTERVAL_MS);
     watchdog.unref();
     try {
-      return await Promise.allSettled(
-        work.map(({ item, lane }) =>
-          this.current.run(lane, async () => {
-            await this.acquire(lane);
-            try {
-              return await run(item);
-            } finally {
-              this.end(lane);
-            }
-          }),
-        ),
-      );
+      // The first lanes are all asked for before any starts, so each of them starts waiting for the turn at once.
+      const first: I[] = [];
+      while (first.length < count) {
+        const item = await ask();
+        if (item === null) break;
+        first.push(item);
+      }
+      for (const item of first) start(item);
+      if (alive > 0) await done;
     } finally {
       clearInterval(watchdog);
       this.lanesNow = [];
       this.holder = null;
     }
+    if (asking.failure !== null) throw asking.failure.error;
+    return settlements.map((entry) => {
+      if (entry.settled === null) throw new LaneNeverSettled(entry.item.id);
+      return { item: entry.item, settled: entry.settled };
+    });
   };
 
   /** Before every seam call (Scheduler.enter): the running task may hand the turn on here. */
@@ -259,7 +366,7 @@ export class Interleaver {
   }
 
   private watch(): void {
-    if (this.stalled || this.lanesNow.length < 2) return;
+    if (this.stalled || this.lanesNow.filter((lane) => lane.state !== "ended").length < 2) return;
     if (this.progress !== this.lastProgress) {
       this.lastProgress = this.progress;
       this.quietSince = Date.now();

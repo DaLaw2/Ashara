@@ -7,8 +7,8 @@ import { seeded, statements, useSimulatorDatabase } from "./simulator-harness.js
 /**
  * The fast tier: fixed seeds on today's code, each judged against
  * expected-failures.ts. A seed listed there must fail exactly the violation keys listed; any
- * other seed must pass every invariant. The soak tier is `just simulate`. Every run is a batch of
- * two (production's MAX_BATCH_SIZE default). A test that needs one behaviour forces it on a directed
+ * other seed must pass every invariant. The soak tier is `just simulate`. Every run has
+ * two lanes (production's ASHARA_TASK_LANES default). A test that needs one behaviour forces it on a directed
  * tape (the directed tier, the simulator-faults*.test.ts and simulator-plants*.test.ts files), never
  * by a seed found to reach it. The fast tier's determinism tests are the simulator-determinism*.test.ts
  * files.

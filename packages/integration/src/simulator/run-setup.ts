@@ -65,7 +65,8 @@ const SIM_ENV = [
   "ASHARA_TASK_WORK_BUDGET_REQUESTS",
   "ASHARA_PROJECT_WORK_BUDGET_REQUESTS",
   "ASHARA_WORK_RESERVE_PERCENT",
-  // Unset for the run: the batch size is production's default (server config.ts), a batch of two.
+  // Unset for the run: the lane count is production's default (server config.ts), two lanes.
+  "ASHARA_TASK_LANES",
   "MAX_BATCH_SIZE",
   "ASHARA_CELL_MEMORY",
   "ASHARA_CELL_CPUS",
@@ -279,10 +280,12 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   delete process.env["ASHARA_TASK_WORK_BUDGET_REQUESTS"];
   delete process.env["ASHARA_PROJECT_WORK_BUDGET_REQUESTS"];
   delete process.env["ASHARA_WORK_RESERVE_PERCENT"];
+  delete process.env["ASHARA_TASK_LANES"];
   delete process.env["MAX_BATCH_SIZE"];
-  // Required configuration; the fake runtime accepts and ignores the caps they become.
-  process.env["ASHARA_CELL_MEMORY"] = "4g";
-  process.env["ASHARA_CELL_CPUS"] = "4";
+  // Required configuration; the fake runtime accepts and ignores the caps they become. Small, so the
+  // boot's check that the lanes' cells fit the host passes on any host the simulator runs on.
+  process.env["ASHARA_CELL_MEMORY"] = "256m";
+  process.env["ASHARA_CELL_CPUS"] = "0.25";
   process.env["ASHARA_CELL_PIDS_LIMIT"] = "1024";
   return () => {
     for (const [key, value] of saved) {

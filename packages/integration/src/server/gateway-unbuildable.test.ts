@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import type pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { z } from "zod";
+import { concurrentTaskLanes } from "@ashara/delivery";
 import { createProjectWithTender } from "@ashara/engagement";
 import { ClientRepository, createDb, createPgPool, resolveTestDatabaseUrl } from "@ashara/db";
 import { SecretRepository } from "@ashara/security";
@@ -29,7 +30,7 @@ import type { RunDatabase } from "../simulator/database.js";
 // keys the test puts there. No model, podman or git call is made: every such port refuses.
 
 const BASE_URL = resolveTestDatabaseUrl(process.env);
-const ENV_KEYS = ["WORKDIR_BASE", "ASHARA_BUDGET_LIMIT_USD", "ASHARA_BUDGET_TOTAL", "ASHARA_PROJECT_BUDGET_LIMIT_USD"] as const;
+const ENV_KEYS = ["WORKDIR_BASE", "ASHARA_BUDGET_LIMIT_USD", "ASHARA_BUDGET_TOTAL", "ASHARA_PROJECT_BUDGET_LIMIT_USD", "ASHARA_CELL_CPUS"] as const;
 const TENDER = "Build a booking page for our two pottery studios.";
 
 /** A port composeAshara reached although no gateway could be built. */
@@ -78,6 +79,8 @@ beforeAll(async () => {
   process.env["ASHARA_BUDGET_LIMIT_USD"] = "1";
   delete process.env["ASHARA_BUDGET_TOTAL"];
   delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
+  // No cell runs here; one CPU per cell lets the boot's check that the lanes' cells fit pass on a four-CPU host.
+  process.env["ASHARA_CELL_CPUS"] = "1";
 });
 
 afterAll(async () => {
@@ -130,7 +133,7 @@ function compose(url: string, log: LogSink = { write: () => undefined }) {
     processRunner: refusingProcesses,
     git: refusingGit,
     clock: systemClock,
-    taskLanes: (items, run) => Promise.allSettled(items.map(run)),
+    taskLanes: concurrentTaskLanes,
     log,
   });
 }

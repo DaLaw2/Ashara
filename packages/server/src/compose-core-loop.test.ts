@@ -63,6 +63,7 @@ function parts(): CoreLoopParts {
     containment: memoryStepContainment(() => false),
     failureRouter: new FailureRouter(3),
     taskLanes: concurrentTaskLanes,
+    shutdownSignal: idle.loop.shutdownSignal,
     dispatchService: idle.dispatch.dispatchService,
     sweepers: idle.sweeps,
     cells: idle.dispatch,

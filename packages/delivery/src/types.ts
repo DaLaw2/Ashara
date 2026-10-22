@@ -30,7 +30,8 @@ import type { SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
-  readonly maxBatchSize: number;
+  /** How many tasks run at once: each lane takes the next eligible task as soon as its own settles. */
+  readonly laneCount: number;
 }
 
 /**
@@ -41,7 +42,7 @@ export interface CoreLoopConfig {
  * absent here forces every spread to supply it.
  */
 export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
-  maxBatchSize: 2,
+  laneCount: 2,
 };
 
 /** Why the loop must stop for good, the deployment's spend cap; the runner ends on it instead of cycling again. */
@@ -124,9 +125,14 @@ interface SpendCapHalts {
   blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]>;
 }
 
-/** A cycle's tally of its batch's outcomes, as the server log records it. */
+/** A cycle's tally of its lanes' outcomes, as the server log records it. */
 interface CycleComplete {
   readonly event: "cycle_complete";
+  /** The tasks the cycle's gate admitted before its first dispatch. */
+  readonly eligible: number;
+  /** The tasks its lanes took, the first ones and every refill. */
+  readonly dispatched: number;
+  readonly lanes: number;
   readonly tasksProcessed: number;
   readonly completed: number;
   readonly failed: number;
@@ -161,8 +167,10 @@ export interface LoopCore {
    * escape to the cycle instead: a spend-cap refusal, which halts at the cap.
    */
   readonly containment: StepContainment;
-  /** How a cycle's batch runs: production's concurrentTaskLanes runs every task at once. */
+  /** How a cycle's lanes run their tasks: production's concurrentTaskLanes runs them truly at once. */
   readonly taskLanes: TaskLanes;
+  /** Aborted on shutdown: no lane takes another task, and the cycle ends once its lanes settle. */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /** Engagement's Liaison reading the client's inbound messages: stops, receipts, changes, the tender and answers. */
@@ -304,15 +312,26 @@ export function withOverrides(base: CoreLoopDeps, overrides: CoreLoopOverrides):
   };
 }
 
+/** One item a lane ran, and how its run settled. */
+export interface LaneSettlement<I, T> {
+  readonly item: I;
+  readonly settled: PromiseSettledResult<T>;
+}
+
 /**
- * Runs `run` on every item at once and settles each on its own, in the items' order. The
- * composition root chooses it, so whatever drives the process can also decide how the tasks of
- * one batch interleave (the lifecycle simulator serialises them by its seed).
+ * Runs `run` on the items `next` hands out, at most `lanes` at once. A lane asks `next` for its next
+ * item as soon as its own settles, never waiting for another lane; `next` is never asked twice at once,
+ * and answers null when nothing is eligible now, which is asked again after the next settlement.
+ * Resolves once no item is in flight and `next` answered null: each item's settlement, in the order
+ * the items started. A `next` that throws ends the asking; the items in flight still settle, and then
+ * the pool rejects with that error. The composition root chooses it, so whatever drives the process
+ * can also decide how the lanes interleave (the lifecycle simulator serialises them by its seed).
  */
 export type TaskLanes = <I extends { readonly id: string }, T>(
-  items: readonly I[],
+  lanes: number,
+  next: () => Promise<I | null>,
   run: (item: I) => Promise<T>,
-) => Promise<Array<PromiseSettledResult<T>>>;
+) => Promise<Array<LaneSettlement<I, T>>>;
 
 /** Who does a project's environment work, as the latest roster says. */
 type EnvironmentOwner = { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };

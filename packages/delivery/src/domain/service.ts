@@ -24,12 +24,13 @@ export class PlanningService {
     return GateKeeper.filterAvailable(repo, projects, events, containment, logger);
   }
 
-  static select(
-    eligible: WorkItem[],
-    maxBatchSize: number,
+  /** The eligible task a free lane takes next, never one in `taken`; null when every one is taken. */
+  static next(
+    eligible: readonly WorkItem[],
+    taken: ReadonlySet<string>,
     unlockWeights?: Map<string, number>,
-  ): WorkItem[] {
-    return TaskSelector.selectBatch(eligible, maxBatchSize, unlockWeights);
+  ): WorkItem | null {
+    return TaskSelector.next(eligible, taken, unlockWeights);
   }
 
   static async route(

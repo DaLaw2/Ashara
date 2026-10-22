@@ -1,6 +1,6 @@
 import type { HaltKind } from "@ashara/delivery/predicates";
-import { containEach } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
+import { UnreadSubject, containEach } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { WAITS_FOR_HALT_END, inboundDecision } from "./inbound-policy.js";
 import type { InboundKind, InboundState, Told } from "./inbound-policy.js";
 import { NOTHING_VERIFIABLE } from "./vision-language/guarantee.js";
@@ -74,6 +74,8 @@ interface ClientReceiptOutcome {
 /** What the core loop asks of the Liaison every cycle, at the spend cap too (no LLM call). */
 export interface LiaisonClientReceipts {
   runPending(work: DeploymentWork): Promise<ReadonlyArray<ClientReceiptOutcome | StepFaulted>>;
+  /** The subject of every message owed a receipt now, posted or not (no LLM call, nothing written). */
+  dueMessages(): Promise<ReadonlySet<string>>;
 }
 
 const NOUN: Readonly<Record<InboundKind, string>> = {
@@ -245,6 +247,10 @@ export class ClientReceipts implements LiaisonClientReceipts {
         return { kind, messageId: due.messageId, projectId: due.projectId };
       },
     );
+  }
+
+  async dueMessages(): Promise<ReadonlySet<string>> {
+    return new Set((await this.store.dueReceipts()).map((due) => (due instanceof UnreadSubject ? due.id : receiptSubject(due.messageId))));
   }
 }
 

@@ -401,6 +401,7 @@ async function runBody(
   }
   correction.arm({ projectId, client, standIns, observer });
   const loop = new CycleLoop({ options, started, draws, world, state, server, provisioned, correction });
+  world.interleaver.betweenSettlements(() => loop.betweenSettlements());
   await loop.run();
   await judgeRunEnd({ options, draws, world, state, provisioned, resources, processWide, noProgress: loop.noProgress });
 }

@@ -122,6 +122,7 @@ answers `ok` once the server is up.
 | `ASHARA_CELL_CPUS` | Required. The CPU cap of each such container, such as `4`. |
 | `ASHARA_CELL_PIDS_LIMIT` | Required. The most processes one such container may hold, such as `1024`. |
 | `ASHARA_PROJECT_BUDGET_LIMIT_USD` | Optional. A smaller limit for each project. |
+| `ASHARA_TASK_LANES` | Optional. How many tasks run at once (default 2); a free lane takes the next ready task as soon as its own ends. Ashara will not start when that many containers, plus one, cannot fit the host's memory and CPUs at the caps above. |
 | `ASHARA_TASK_WORK_BUDGET_REQUESTS` | Optional. The most model requests one task may make (default 60); past it the task is given up. |
 | `ASHARA_PROJECT_WORK_BUDGET_REQUESTS` | Optional. The most model requests one project may make (default 600); past it the project pauses until you grant more with `npx tsx scripts/project.ts grant`. |
 | `ASHARA_WORK_RESERVE_PERCENT` | Optional. The share of each project's request budget, a whole percent from 0 to 99 (default 25), that only verification and acceptance may draw; planning, check authoring, review and implementation pause the project when only this share is left. |

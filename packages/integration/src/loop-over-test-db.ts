@@ -32,6 +32,7 @@ export function composedLoopOverTestDb(parts: SuiteLoopParts, overrides: CoreLoo
       cycleLog: { emit: () => {} },
       onAttempt: () => {},
       taskLanes: concurrentTaskLanes,
+      shutdownSignal: new AbortController().signal,
       sweepers: {
         acceptanceSweeper: { sweepForAcceptance: notExercised("acceptanceSweeper.sweepForAcceptance") },
         terminalSweeper: { sweepForTerminal: notExercised("terminalSweeper.sweepForTerminal") },

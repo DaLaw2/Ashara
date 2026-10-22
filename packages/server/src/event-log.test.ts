@@ -27,7 +27,7 @@ describe("createEventLog", () => {
     const { records, log } = capture();
     log.emit({ event: "task_failed", taskId: "t-1", attempt: 2, reason: "gate red", detail: undefined });
     log.emit({ event: "ladder_attempt", site: "intake", attempt: 1, capability: "Strong", model: "m", outcome: "valid" });
-    log.emit({ event: "cycle_complete", tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 });
+    log.emit({ event: "cycle_complete", eligible: 3, dispatched: 2, lanes: 2, tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 });
 
     const [failed, ladder, cycle] = records();
     expect(records()).toHaveLength(3);
@@ -38,7 +38,7 @@ describe("createEventLog", () => {
       ts: TS,
       level: "info",
       event: "delivery.cycle-complete",
-      fields: { tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 },
+      fields: { eligible: 3, dispatched: 2, lanes: 2, tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 },
     });
   });
 
@@ -65,7 +65,7 @@ describe("createEventLog", () => {
   test("an event its schema still refuses is logged at error, never thrown, and no event record is written", () => {
     const { records, log } = capture();
     expect(() => log.emit({ event: "task_failed", taskId: "t-1", attempt: 1, cost: Number.NaN })).not.toThrow();
-    log.emit({ event: "cycle_complete", tasksProcessed: -1, completed: 0, failed: 0, refused: 0, interrupted: 0 });
+    log.emit({ event: "cycle_complete", eligible: 0, dispatched: 0, lanes: 2, tasksProcessed: -1, completed: 0, failed: 0, refused: 0, interrupted: 0 });
     const refused = records();
     expect(refused).toHaveLength(2);
     for (const record of refused) {

@@ -44,7 +44,7 @@ vi.mock("./domain/index.js", async (importOriginal) => {
     ...original,
     PlanningService: {
       gate: async () => ({ available: twoTasks(), unlockWeights: new Map<string, number>() }),
-      select: (_eligible: WorkItem[], _max: number) => twoTasks(),
+      next: original.PlanningService.next,
     },
   };
 });
@@ -90,7 +90,7 @@ function buildDeps(
 ): CoreLoopDeps {
   return inertCoreLoopDeps({
     loop: {
-      config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
+      config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", laneCount: 4 },
       cycleLog: { emit: (tally) => cycleTallies.push(tally) },
       containment: memoryStepContainment(() => true),
       workItemRepo: inertWorkItemRepo({
@@ -189,7 +189,7 @@ describe("CoreLoop batch dispatch parallelism", () => {
     const statuses = cycleResult.results.map((r) => r.status).sort();
     expect(statuses).toEqual(["completed", "failed"]);
     expect(cycleTallies).toEqual([
-      { event: "cycle_complete", tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 },
+      { event: "cycle_complete", eligible: 2, dispatched: 2, lanes: 4, tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 },
     ]);
   });
 });
@@ -353,7 +353,7 @@ describe("CoreLoop first plan", () => {
         return [];
       });
     const deps = buildDeps({ runPending: step("intake") }, undefined, undefined, { runPending: step("stop"), reportPending: step("stop-report") });
-    const loop = new CoreLoop(withOverrides(deps, { client: { clientReceipts: { runPending: step("receipt") }, clientChanges: { runPending: step("change") } } }));
+    const loop = new CoreLoop(withOverrides(deps, { client: { clientReceipts: { runPending: step("receipt"), dueMessages: async () => new Set() }, clientChanges: { runPending: step("change") } } }));
 
     await loop.runCycle();
     expect(order).toEqual(["stop", "receipt", "stop-report", "intake", "change", "dispatch", "dispatch", "receipt"]);
@@ -368,7 +368,7 @@ describe("CoreLoop first plan", () => {
   test("the receipts are told all work is stopped in a halted cycle and when recorded spend is at the deployment's cap, and that it runs otherwise", async () => {
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({ taskId: task.id, status: "completed" as const, detail: "ok" }));
     const asked: unknown[] = [];
-    const receipts = { runPending: vi.fn(async (work: unknown) => (asked.push(work), [])) };
+    const receipts = { runPending: vi.fn(async (work: unknown) => (asked.push(work), [])), dueMessages: async () => new Set<string>() };
     let atCap = false;
     const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => atCap));
     const loop = new CoreLoop(withOverrides(deps, { client: { clientReceipts: receipts } }));

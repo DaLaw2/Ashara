@@ -20,6 +20,9 @@ const ladderAttemptSchema = z.strictObject({
 
 const cycleCompleteSchema = z.strictObject({
   event: z.literal("cycle_complete"),
+  eligible: count,
+  dispatched: count,
+  lanes: z.number().int().positive(),
   tasksProcessed: count,
   completed: count,
   failed: count,

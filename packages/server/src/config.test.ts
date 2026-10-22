@@ -1,3 +1,4 @@
+import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
@@ -22,6 +23,9 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     "WORKDIR_BASE",
     "ASHARA_PORT",
     "MAX_BATCH_SIZE",
+    "ASHARA_TASK_LANES",
+    "ASHARA_CELL_MEMORY",
+    "ASHARA_CELL_CPUS",
   ] as const;
 
   beforeEach(() => {
@@ -34,6 +38,10 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     delete process.env["ASHARA_WORK_RESERVE_PERCENT"];
     delete process.env["ASHARA_PORT"];
     delete process.env["MAX_BATCH_SIZE"];
+    delete process.env["ASHARA_TASK_LANES"];
+    // Small enough that the default lanes' cells fit a four-CPU host; the host check is tested on its own.
+    process.env["ASHARA_CELL_MEMORY"] = "1g";
+    process.env["ASHARA_CELL_CPUS"] = "1";
     process.env["WORKDIR_BASE"] = "/srv/ashara-work";
   });
 
@@ -100,24 +108,53 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/ASHARA_PROJECT_WORK_BUDGET_REQUESTS="0"/);
   });
 
-  test("unset ASHARA_PORT and MAX_BATCH_SIZE take their policy defaults; set ones are read", () => {
+  test("unset ASHARA_PORT and ASHARA_TASK_LANES take their policy defaults; set ones are read", () => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     const defaults = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect([defaults.port, defaults.coreLoop.maxBatchSize]).toEqual([3000, 2]);
+    expect([defaults.port, defaults.coreLoop.laneCount]).toEqual([3000, 2]);
     process.env["ASHARA_PORT"] = "8080";
-    process.env["MAX_BATCH_SIZE"] = "4";
+    process.env["ASHARA_TASK_LANES"] = "3";
     const set = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect([set.port, set.coreLoop.maxBatchSize]).toEqual([8080, 4]);
+    expect([set.port, set.coreLoop.laneCount]).toEqual([8080, 3]);
+  });
+
+  test("lanes whose cells cannot all fit the host refuse the boot with TaskLanesExceedHost, by memory and by CPUs", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    const refusal = (): unknown => {
+      try {
+        loadServerConfig(TEST_DB_URL, TEST_TOKEN);
+      } catch (err) {
+        return err;
+      }
+      return null;
+    };
+    const lanesBeyond = (perCell: number, host: number) => String(Math.floor(host / perCell) + 1);
+
+    process.env["ASHARA_CELL_MEMORY"] = "1g";
+    process.env["ASHARA_CELL_CPUS"] = "0.01";
+    process.env["ASHARA_TASK_LANES"] = lanesBeyond(1024 ** 3, totalmem());
+    expect(refusal()).toMatchObject({ name: "TaskLanesExceedHost", resource: "memory" });
+
+    process.env["ASHARA_CELL_MEMORY"] = "6m";
+    process.env["ASHARA_CELL_CPUS"] = "1";
+    process.env["ASHARA_TASK_LANES"] = lanesBeyond(1, availableParallelism());
+    expect(refusal()).toMatchObject({ name: "TaskLanesExceedHost", resource: "cpus" });
+  });
+
+  test("a MAX_BATCH_SIZE still set refuses the boot instead of being ignored", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    process.env["MAX_BATCH_SIZE"] = "4";
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow('MAX_BATCH_SIZE="4" is no longer read; set ASHARA_TASK_LANES instead');
   });
 
   test.each([
     ["ASHARA_PORT", "80a"],
     ["ASHARA_PORT", "0"],
     ["ASHARA_PORT", "70000"],
-    ["MAX_BATCH_SIZE", "two"],
-    ["MAX_BATCH_SIZE", "0"],
-    ["MAX_BATCH_SIZE", "-1"],
-    ["MAX_BATCH_SIZE", "1.5"],
+    ["ASHARA_TASK_LANES", "two"],
+    ["ASHARA_TASK_LANES", "0"],
+    ["ASHARA_TASK_LANES", "-1"],
+    ["ASHARA_TASK_LANES", "1.5"],
   ])("a set but unusable %s=%s is refused, never replaced by the default", (variable, raw) => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     process.env[variable] = raw;
