@@ -7,7 +7,7 @@ import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { HALT_KINDS, firstPlanned, openHaltKind, projectHalted, type HaltKind } from "@ashara/delivery/predicates";
 import { INBOUND_KINDS, inboundDecision, type InboundKind, type InboundState } from "../inbound-policy.js";
-import { clientMessageReadNow, noOpenStop, visionWritten } from "../predicates.js";
+import { clientMessageReadNow, noOpenStop, unverifiableContractHeld, visionWritten } from "../predicates.js";
 import { REPORT_SUBJECT, type REPORT_SUBJECTS } from "../report-subjects.js";
 
 // The client channel's one writer and reader in Engagement: the only file that holds the
@@ -38,11 +38,15 @@ interface NewClientMessage {
 
 const StateRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.enum(HALT_KINDS).nullable(), visionWritten: z.boolean() });
 
-/** The project's lifecycle, its open halt's kind and whether its first vision is written: what inboundDecision decides a message by, and what a receipt states. */
+/**
+ * The project's lifecycle, its open halt's kind, whether its first vision is written and whether its
+ * contract in force is declined: what inboundDecision decides a message by, and what a receipt states.
+ */
 export const projectStandingColumns = {
   lifecycle: projects.lifecycle,
   halt: openHaltKind(projects.id),
   visionWritten: visionWritten(projects.id),
+  contractHeld: unverifiableContractHeld(projects.id),
 };
 
 /** Why the message's writer may not write under the project's present state: nothing is consumed. */

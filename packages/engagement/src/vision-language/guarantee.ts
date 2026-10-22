@@ -39,20 +39,46 @@ const StoredSourceSchema = z.discriminatedUnion("kind", [
 export type StoredSource = z.infer<typeof StoredSourceSchema>;
 
 /**
- * Where the client could see a guarantee hold or break: in what the deliverable outputs, in how it
- * reports errors, in its exit status, or in the data the client stores with it.
+ * Where a check sees a guarantee hold or break: in what the deliverable outputs through its interface,
+ * in how it reports errors, in its exit status, or only outside what its interface shows ("stored-data":
+ * in the stored data itself, or only under an injected fault). OBSERVATION_RULE is how a drafter tells them apart.
  */
 const ObservationSchema = z.enum(["output", "errors", "exit-status", "stored-data"]);
 
 export type Observation = z.infer<typeof ObservationSchema>;
 
 /**
- * An observation kind as a drafter classifies it: "undecided" is a value it may give, and it is
- * recorded as stored-data, the stricter class, so doubt never buys a verdict an easier class would.
+ * An observation kind as a drafter classifies it: "undecided" is a value it may give when it cannot
+ * tell whether the interface shows the guarantee. It is kept and stored as given, never read as a
+ * class the drafter did not choose: an undecided guarantee is marked undecided (markOf).
  */
-export const ClassifiedObservationSchema = z
-  .enum(["output", "errors", "exit-status", "stored-data", "undecided"])
-  .transform((kind): Observation => (kind === "undecided" ? "stored-data" : kind));
+export const ClassifiedObservationSchema = z.enum([...ObservationSchema.options, "undecided"]);
+
+export type ClassifiedObservation = z.infer<typeof ClassifiedObservationSchema>;
+
+/**
+ * How every drafter of a guarantee is told to classify its observation, the same for a tender's
+ * reading and a client's change. It asks what someone using only the product's interface could see,
+ * in whatever terms the product's kind has, so it holds for any product without naming one.
+ */
+export const OBSERVATION_RULE: readonly string[] = [
+  `  "observation" is where a check sees the guarantee hold or break. Decide it by asking whether someone`,
+  `  who uses the product only through its interface entries could see it: using them in any order and`,
+  `  any number of times, setting the environment and configuration the product is given, stopping the`,
+  `  product and starting it again, then reading what comes back through the interface. If they could,`,
+  `  the observation is the kind of thing they read:`,
+  `  - "output": what the product outputs or returns through an interface entry, including what reading`,
+  `    back through the interface shows after earlier uses, after a change to its environment, or after`,
+  `    it was stopped and started again;`,
+  `  - "errors": how it reports an error;`,
+  `  - "exit-status": the status it ends with.`,
+  `  - "stored-data" only when nothing read through the interface shows it: it is seen only by opening`,
+  `    what the product stores directly, or only by injecting a fault, such as stopping the product in`,
+  `    the middle of a write. A promise that something is kept, persists or survives a restart is not`,
+  `    "stored-data" when reading it back through the interface shows it.`,
+  `  - "undecided" only when you cannot tell whether the interface shows it; the client is then asked`,
+  `    where they would see it, and Ashara does not count it as one it can verify until they say.`,
+];
 
 /** An interface entry's key: "I" and its number. */
 export const InterfaceKeySchema = z.string().regex(INTERFACE_ID);
@@ -61,26 +87,89 @@ export const InterfaceKeySchema = z.string().regex(INTERFACE_ID);
 export const ExclusionKeySchema = z.string().regex(EXCLUSION_ID);
 
 /**
- * Whether Ashara judges a guarantee with the checks it can run, as the contract recorded it when the
- * guarantee was proposed and the client was told: "not-by-ashara" is reported as not verified, never
- * as passed, and lies outside what acceptance requires judged. Quality decides it (verificationOf).
+ * Why Ashara cannot verify a guarantee with the checks it can run: a positive reason, never the
+ * absence of a classification. "outside-interface": it is seen only outside what the product's
+ * interface shows, and no check Ashara runs today reads stored data directly or injects a fault.
  */
-const VerificationSchema = z.enum(["by-ashara", "not-by-ashara"]);
+const NotVerifiableReasonSchema = z.enum(["outside-interface"]);
 
-export { verificationOf };
+export type NotVerifiableReason = z.infer<typeof NotVerifiableReasonSchema>;
 
-/** What the client is told of a guarantee Ashara cannot verify with the checks it can run, when it is proposed and before work on it starts. */
-export const NOT_VERIFIABLE_BY_ASHARA =
-  "not verifiable by Ashara: no check Ashara can run today shows it holding, so Ashara's reports list it as not verified, never as passed, and the project is accepted without it";
+/**
+ * Whether Ashara judges a guarantee with the checks it can run, as the contract recorded it when the
+ * guarantee was proposed and the client was told: "not-by-ashara", always with its reason, is reported
+ * as not verified, never as passed, and lies outside what acceptance requires judged; "undecided" is a
+ * guarantee whose drafter could not tell where it is seen: it is neither counted verifiable nor taken
+ * out of what acceptance requires, and the client is asked where they would see it. Quality decides
+ * which classified observation Ashara can verify (verificationOf).
+ */
+export type GuaranteeMark =
+  | { readonly verification: "by-ashara" }
+  | { readonly verification: "not-by-ashara"; readonly unverifiableBecause: NotVerifiableReason }
+  | { readonly verification: "undecided" };
+
+const VerificationSchema = z.enum(["by-ashara", "not-by-ashara", "undecided"]);
+
+/** Quality marks a guarantee not verifiable for an observation no stated reason covers: nothing is told without a reason. */
+class UnverifiableWithoutReason extends Error {
+  constructor(readonly observation: Observation) {
+    super(`Quality marks a guarantee observed at '${observation}' not verifiable by Ashara, and no reason is stated for that observation; it is not recorded`);
+    this.name = "UnverifiableWithoutReason";
+  }
+}
+
+/**
+ * How the contract marks a guarantee drafted with `observation`: undecided as the drafter gave it, or
+ * as Quality decides for its class, one Ashara cannot verify always with the reason why.
+ */
+export function markOf(observation: ClassifiedObservation): GuaranteeMark {
+  if (observation === "undecided") return { verification: "undecided" };
+  if (verificationOf(observation) === "by-ashara") return { verification: "by-ashara" };
+  if (observation === "stored-data") return { verification: "not-by-ashara", unverifiableBecause: "outside-interface" };
+  throw new UnverifiableWithoutReason(observation);
+}
+
+/** Why Ashara cannot verify a guarantee, in the client's words, by the reason. */
+const NOT_VERIFIABLE_WORDS: Readonly<Record<NotVerifiableReason, string>> = {
+  "outside-interface":
+    "it is seen only outside what the product's interface shows, in the stored data itself or only under a fault such as a crash in the middle of a write, " +
+    "and no check Ashara can run today reads stored data directly or injects such a fault",
+};
+
+/** Why Ashara cannot verify a guarantee marked so for `reason`, in the client's words. */
+export function whyNotVerifiable(reason: NotVerifiableReason): string {
+  return NOT_VERIFIABLE_WORDS[reason];
+}
+
+/** What the client is told of a guarantee Ashara cannot verify: that it is not, why, and what that means at acceptance. */
+function notVerifiableByAshara(reason: NotVerifiableReason): string {
+  return `not verifiable by Ashara: ${whyNotVerifiable(reason)}, so Ashara's reports list it as not verified, never as passed, and the project is accepted without it`;
+}
+
+/** What the client is told of a guarantee whose drafter could not tell where they would see it hold or break. */
+export const OBSERVATION_UNDECIDED =
+  "Ashara could not tell where you would see it hold or break, so it does not count it as one it can verify and it cannot be shown to hold; tell us where you would see it and Ashara can check it";
+
+/** What the client is told of a guarantee marked `mark`: nothing for one Ashara can verify. */
+export function markWords(mark: GuaranteeMark): string | null {
+  switch (mark.verification) {
+    case "by-ashara":
+      return null;
+    case "not-by-ashara":
+      return notVerifiableByAshara(mark.unverifiableBecause);
+    case "undecided":
+      return OBSERVATION_UNDECIDED;
+  }
+}
 
 /** One guarantee: its key, what it promises, where it is observed, what would refute it and where it comes from. */
-const guaranteeShape = <O extends z.ZodType<Observation, unknown>, S extends z.ZodType<StoredSource>>(observation: O, source: S) =>
+const guaranteeShape = <S extends z.ZodType<StoredSource>>(source: S) =>
   z.strictObject({
     id: GuaranteeKeySchema,
     statement: z.string().trim().min(1),
     observable: z.strictObject({
       interface: z.array(InterfaceKeySchema).min(1),
-      observation,
+      observation: ClassifiedObservationSchema,
     }),
     refutedBy: z.array(z.string().trim().min(1)).min(1),
     source,
@@ -99,33 +188,134 @@ const contractShape = <G extends z.ZodType, S extends z.ZodType<StoredSource>>(g
   });
 
 /**
+ * What a stored guarantee records beyond its terms: the mark the client was told, absent on one stored
+ * before the contract carried the mark, and the reason on one marked not verifiable.
+ */
+const storedMarks = { verification: VerificationSchema.optional(), unverifiableBecause: NotVerifiableReasonSchema.optional() };
+
+const markedGuarantee = guaranteeShape(StoredSourceSchema).extend(storedMarks);
+type MarkedGuarantee = z.infer<typeof markedGuarantee>;
+type GuaranteeTerms = Omit<MarkedGuarantee, "verification" | "unverifiableBecause">;
+
+/** A stored guarantee: its terms and the mark the client was told, or none on one stored before the contract carried the mark. */
+export type StoredGuarantee = GuaranteeTerms & (GuaranteeMark | { readonly verification?: undefined });
+
+/**
+ * The mark a guarantee carries, as stored: null when it carries none. A mark that does not hold
+ * together with its observation is an issue: an undecided observation is marked undecided and nothing
+ * else is, and a reason goes with "not-by-ashara" alone. A "not-by-ashara" stored on a stored-data
+ * guarantee before the reason was recorded reads the reason of the one rule that marked it so.
+ */
+function storedMarkOf(guarantee: MarkedGuarantee, ctx: z.RefinementCtx): GuaranteeMark | null {
+  const { verification, unverifiableBecause, observable, id } = guarantee;
+  const issue = (message: string): typeof z.NEVER => {
+    ctx.addIssue({ code: "custom", message: `guarantee ${id}: ${message}`, input: guarantee });
+    return z.NEVER;
+  };
+  if (unverifiableBecause !== undefined && verification !== "not-by-ashara") return issue("a reason it is not verifiable goes only with the mark not-by-ashara");
+  if (observable.observation === "undecided" && verification !== "undecided") return issue(`an undecided observation is marked '${verification ?? "nothing"}'`);
+  switch (verification) {
+    case undefined:
+      return null;
+    case "by-ashara":
+      return { verification };
+    case "undecided":
+      return observable.observation === "undecided" ? { verification } : issue(`a '${observable.observation}' observation is marked undecided`);
+    case "not-by-ashara":
+      if (unverifiableBecause !== undefined) return { verification, unverifiableBecause };
+      return observable.observation === "stored-data" ? { verification, unverifiableBecause: "outside-interface" } : issue("it is marked not-by-ashara with no reason");
+  }
+}
+
+/** A guarantee as stored: its terms, and its mark when it has one. */
+function storedGuarantee(guarantee: MarkedGuarantee, mark: GuaranteeMark | null): StoredGuarantee {
+  const { verification: _mark, unverifiableBecause: _reason, ...terms } = guarantee;
+  return mark === null ? terms : { ...terms, ...mark };
+}
+
+/**
  * The contract records of a guarantees-form version, as stored: never an empty interface or guarantee
- * list. A guarantee stored before the contract recorded whether Ashara can verify it carries no mark.
+ * list. A guarantee stored before the contract recorded whether Ashara can verify it carries no mark,
+ * and is carried over unmarked by a later version, never marked by being carried, since the client was
+ * never told it is not verifiable. The writer of a guarantee a change adds or rewords marks it
+ * (vision.ts, observed), so an undecided observation that reaches this unmarked is refused.
  */
 export const StoredContractSchema = contractShape(
-  guaranteeShape(ObservationSchema, StoredSourceSchema).extend({ verification: VerificationSchema.optional() }),
+  markedGuarantee.transform((guarantee, ctx) => storedGuarantee(guarantee, storedMarkOf(guarantee, ctx))),
   StoredSourceSchema,
 );
 
 /**
- * The contract records a version's writer hands over: an undecided observation is recorded as
- * stored-data, and a guarantee that carries no mark yet is marked as Quality decides for its
- * observation; one already marked keeps the mark the client was told.
+ * The contract records of a project's first version: every guarantee in it is proposed now, so one
+ * that carries no verification mark is marked as markOf decides for the observation it was drafted with.
  */
-export const WritableContractSchema = contractShape(
-  guaranteeShape(ClassifiedObservationSchema, StoredSourceSchema)
-    .extend({ verification: VerificationSchema.optional() })
-    .transform((guarantee) => ({ ...guarantee, verification: guarantee.verification ?? verificationOf(guarantee.observable.observation) })),
+export const FirstContractSchema = contractShape(
+  markedGuarantee.transform((guarantee, ctx) => {
+    const unmarked = guarantee.verification === undefined && guarantee.unverifiableBecause === undefined;
+    return storedGuarantee(guarantee, unmarked ? markOf(guarantee.observable.observation) : storedMarkOf(guarantee, ctx));
+  }),
   StoredSourceSchema,
 );
 
 /** The contract records a reading of the tender drafts: sourced only from the tender and its assumptions, and never marked by it. */
-export const ContractDraftSchema = contractShape(guaranteeShape(ClassifiedObservationSchema, ContractSourceSchema), ContractSourceSchema);
+export const ContractDraftSchema = contractShape(guaranteeShape(ContractSourceSchema), ContractSourceSchema);
 
 export type ContractDraft = z.input<typeof ContractDraftSchema>;
 export type StoredContract = z.infer<typeof StoredContractSchema>;
 export type InterfaceEntry = StoredContract["interface"][number];
-type Guarantee = StoredContract["guarantees"][number];
+
+/**
+ * Whether the client is told Ashara can verify a guarantee: the contract's mark, or on a guarantee
+ * recorded before the contract carried one, what Quality decides for its observation, an unclassified
+ * one never. The count only informs: an unmarked guarantee stays in coverage whatever it reads.
+ */
+export function verifiableByAshara(guarantee: Pick<VisionGuarantee, "verification" | "observation">): boolean {
+  if (guarantee.verification !== "unmarked") return guarantee.verification === "by-ashara";
+  return guarantee.observation !== "unclassified" && verificationOf(guarantee.observation) === "by-ashara";
+}
+
+/** How many of a contract's guarantees Ashara can verify, in the client's words. */
+export function verifiableCountLine(verifiable: number, total: number): string {
+  const of = total === 1 ? "the one guarantee" : `the ${total} guarantees`;
+  return `Ashara can verify ${verifiable} of ${of} of this contract with the checks it can run today.`;
+}
+
+/**
+ * A contract version Ashara declines: it holds guarantees, and every one is marked either not
+ * verifiable by Ashara or undecided, so Ashara can verify none as written. Work never starts on it,
+ * and confirming it as written changes nothing: only a version holding a guarantee Ashara can verify
+ * ends the decline. A guarantee recorded before the contract carried the mark is not counted either
+ * way, so a contract stored before the mark is never declined by it (unverifiableContractHeld in
+ * predicates.ts reads the same rule in SQL).
+ */
+export function declinesUnverifiable(guarantees: readonly Pick<VisionGuarantee, "verification">[]): boolean {
+  return guarantees.length > 0 && guarantees.every((g) => g.verification === "not-by-ashara" || g.verification === "undecided");
+}
+
+/**
+ * Where the contract in force leaves the work, as every client message that says what happens to the
+ * work reads it: "workable" when work may run on it, "held" when Ashara declines it
+ * (declinesUnverifiable), so no work runs until the client restates it, and "unread" when the records
+ * that say which do not read, so nothing is promised either way. Every composer of a message that
+ * says what happens to the work takes it, and takes those words from WORK_WORDS (work-promise.ts).
+ */
+export type ContractStanding = "workable" | "held" | "unread";
+
+/** The standing of a contract version holding `guarantees`: held exactly when Ashara declines it. */
+export function contractStandingOf(guarantees: readonly Pick<VisionGuarantee, "verification">[]): Exclude<ContractStanding, "unread"> {
+  return declinesUnverifiable(guarantees) ? "held" : "workable";
+}
+
+/**
+ * What every message posted while a contract is declined tells the client: plainly that Ashara cannot
+ * verify any guarantee as written, what that means at acceptance, that work does not start and that
+ * confirming it as written does not start it, and how to restate the guarantees.
+ */
+export const NOTHING_VERIFIABLE =
+  "Ashara cannot verify any guarantee of this contract as written: no check Ashara can run today would show any of them holding, " +
+  "so the finished work could not be shown to hold and the project could not be accepted. " +
+  "Please restate the guarantees so that at least one is seen through what the product shows when it is used: what it outputs, how it reports an error or the status it ends with. " +
+  "No work starts on this contract until you do: confirming it as written does not start it.";
 
 /**
  * Where a guarantee comes from as every reader sees it: a contract source, or, on a version written
@@ -143,25 +333,30 @@ export type GuaranteeSource =
  */
 export type GuaranteeBasis = "client-stated" | "assumed-unconfirmed" | "derived";
 
-/** One guarantee of a vision version, as every reader of the vision sees it. */
-export interface VisionGuarantee {
+/** The terms of one guarantee of a vision version, as every reader of the vision sees them. */
+interface VisionGuaranteeTerms {
   /** Its key in the vision; on a legacy version, the id of the scope line or assumption it is read from. */
   readonly id: string;
   readonly statement: string;
   /** The interface entries it is observed at; empty on a legacy guarantee, which names none. */
   readonly interface: readonly string[];
-  /** "unclassified" on a legacy guarantee: it was never classified, so no verdict reads it as checkable. */
+  /**
+   * "unclassified" on a legacy guarantee, never classified, and on one whose drafter could not tell
+   * where it is seen (marked undecided): no verdict reads either as checkable, and neither is stored-data.
+   */
   readonly observation: Observation | "unclassified";
   /** What would show it broken; empty on a legacy guarantee, which is not checkable as written. */
   readonly refutedBy: readonly string[];
-  /**
-   * Whether the contract marks it verifiable by Ashara; "unmarked" on a guarantee recorded before the
-   * contract carried the mark, or a legacy one: it was never told as not verifiable, so it stays in coverage.
-   */
-  readonly verification: z.infer<typeof VerificationSchema> | "unmarked";
   readonly source: GuaranteeSource;
   readonly basis: GuaranteeBasis;
 }
+
+/**
+ * One guarantee of a vision version, as every reader of the vision sees it, with the mark the contract
+ * gives it; "unmarked" on a guarantee recorded before the contract carried the mark, or a legacy one:
+ * it was never told as not verifiable, so it stays in coverage.
+ */
+export type VisionGuarantee = VisionGuaranteeTerms & (GuaranteeMark | { readonly verification: "unmarked" });
 
 /** One exclusion of a vision version, as every reader sees it; on a legacy version, an out-of-scope line. */
 export interface VisionExclusion {
@@ -198,17 +393,26 @@ export function basisOf(
 }
 
 /** A stored guarantee as every reader sees it, its basis computed in the version it is read in. */
-export function visionGuaranteeOf(guarantee: Guarantee, assumptions: readonly AssumptionFooting[]): VisionGuarantee {
-  return {
+export function visionGuaranteeOf(guarantee: StoredGuarantee, assumptions: readonly AssumptionFooting[]): VisionGuarantee {
+  const { observation } = guarantee.observable;
+  const terms: VisionGuaranteeTerms = {
     id: guarantee.id,
     statement: guarantee.statement,
     interface: guarantee.observable.interface,
-    observation: guarantee.observable.observation,
+    observation: observation === "undecided" ? "unclassified" : observation,
     refutedBy: guarantee.refutedBy,
-    verification: guarantee.verification ?? "unmarked",
     source: guarantee.source,
     basis: basisOf(guarantee, assumptions),
   };
+  switch (guarantee.verification) {
+    case undefined:
+      return { ...terms, verification: "unmarked" };
+    case "not-by-ashara":
+      return { ...terms, verification: guarantee.verification, unverifiableBecause: guarantee.unverifiableBecause };
+    case "by-ashara":
+    case "undecided":
+      return { ...terms, verification: guarantee.verification };
+  }
 }
 
 /** The text a quote is matched in: runs of whitespace collapsed, so a line break never fails a verbatim quote. */

@@ -3,6 +3,9 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { WAITS_FOR_HALT_END, inboundDecision } from "./inbound-policy.js";
 import type { InboundKind, InboundState, Told } from "./inbound-policy.js";
+import { NOTHING_VERIFIABLE } from "./vision-language/guarantee.js";
+import type { ContractStanding } from "./vision-language/guarantee.js";
+import { WORK_WORDS } from "./vision-language/work-promise.js";
 
 // The Liaison's receipt for every message the client sends. A message is never left unanswered,
 // whatever state its project is in: each inbound message gets one receipt, posted in reply to it the
@@ -15,11 +18,12 @@ import type { InboundKind, InboundState, Told } from "./inbound-policy.js";
 /**
  * The project's state as the receipt tells it: at work, paused by a halt of its recorded kind,
  * stopped by the client, or delivered; while it is open, whether its tender's reading has written
- * its first vision, which a change waits for.
+ * its first vision, which a change waits for, and the standing of the contract in force, which
+ * decides what the receipt says of the work (WORK_WORDS); a held one's receipt ends with the decline.
  */
 export type ProjectStanding =
-  | { readonly kind: "at-work"; readonly visionWritten: boolean }
-  | { readonly kind: "paused"; readonly halt: HaltKind; readonly visionWritten: boolean }
+  | { readonly kind: "at-work"; readonly visionWritten: boolean; readonly contract: Exclude<ContractStanding, "unread"> }
+  | { readonly kind: "paused"; readonly halt: HaltKind; readonly visionWritten: boolean; readonly contract: Exclude<ContractStanding, "unread"> }
   | { readonly kind: "stopped" }
   | { readonly kind: "accepted" };
 
@@ -81,22 +85,30 @@ const NOUN: Readonly<Record<InboundKind, string>> = {
 
 const ALL_WORK_STOPPED = "Ashara has stopped all work: the spending limit set for the whole deployment is reached.";
 
+/**
+ * The standing of the contract in force on an open project, which every sentence the receipt says of
+ * the work follows; a closed project has no work to promise, so it reads as one with none promised.
+ */
+function contractOf(standing: ProjectStanding): ContractStanding {
+  return standing.kind === "at-work" || standing.kind === "paused" ? standing.contract : "unread";
+}
+
 /** A project that is not closed, while every round of work is stopped at the deployment's cap. */
 function openWhileStopped(standing: ProjectStanding, work: DeploymentWork): boolean {
   return work.kind === "stopped-at-cap" && (standing.kind === "at-work" || standing.kind === "paused");
 }
 
 function standingLine(standing: ProjectStanding, work: DeploymentWork): string {
+  const words = WORK_WORDS[contractOf(standing)];
   if (openWhileStopped(standing, work)) {
-    return standing.kind === "paused"
-      ? `Work on this project is paused, for the reason Ashara's report of the pause gives, and that pause still has to end before work on it resumes. ${ALL_WORK_STOPPED}`
-      : ALL_WORK_STOPPED;
+    if (standing.kind !== "paused") return ALL_WORK_STOPPED;
+    return `${words.pausedFor}, and that pause still has to end${words.before("work on it resumes")}. ${ALL_WORK_STOPPED}`;
   }
   switch (standing.kind) {
     case "at-work":
-      return "This project is at work.";
+      return words.atWork;
     case "paused":
-      return "Work on this project is paused, for the reason Ashara's report of the pause gives.";
+      return `${words.pausedFor}.`;
     case "stopped":
       return "Work on this project has stopped at your request, and Ashara does no further work on it.";
     case "accepted":
@@ -104,22 +116,23 @@ function standingLine(standing: ProjectStanding, work: DeploymentWork): string {
   }
 }
 
-/** What ends a pause: only the substrate probe for an infrastructure halt, the operator's resumption for every other. */
-function pauseEnd(halt: HaltKind): string {
+/** What ends a pause: only the substrate probe for an infrastructure halt, the operator for every other; what follows, as the contract's standing allows. */
+function pauseEnd(halt: HaltKind, standing: ContractStanding): string {
+  const words = WORK_WORDS[standing];
   return halt === "infrastructure"
-    ? "Ashara resumes the project by itself as soon as the machines it runs the work on answer again, and you will be told when it does."
-    : "The pause ends when the team's operator resumes the project, and you will be told when it does.";
+    ? `Ashara ${words.machinesEnd("the machines it runs the work on answer again")}, and you will be told when it does.`
+    : `The pause ends when the team's operator ${words.operatorEnds}, and you will be told when it does.`;
 }
 
-/** What reading the message leads to, once it is read. */
-function afterReading(kind: Exclude<InboundKind, "stop">): string {
+/** What reading the message leads to, once it is read, as the contract's standing allows. */
+function afterReading(kind: Exclude<InboundKind, "stop">, standing: ContractStanding): string {
   switch (kind) {
     case "tender":
       return "and replies with its understanding of what you asked for and any questions it has";
     case "answer":
-      return "and, if it changes what the plan rests on, the work that rests on it is planned again and you are told what changes";
+      return WORK_WORDS[standing].answerRead;
     case "change":
-      return "and replies with what it changes, the work it touches and what that costs";
+      return WORK_WORDS[standing].changeRead;
   }
 }
 
@@ -129,7 +142,7 @@ function stopFate(due: DueReceipt): string {
       ? "Your request is taken: the report of the stop, with what is on record as merged, follows."
       : "The project was already stopped, so this request changes nothing.";
   }
-  if (due.consumed) return "Your request was taken when it arrived; the project has since been returned to work.";
+  if (due.consumed) return `Your request was taken when it arrived; ${WORK_WORDS[contractOf(due.standing)].reopened}`;
   return "No new work starts on this project from now on, and Ashara takes the stop in at the start of its next round of work.";
 }
 
@@ -166,13 +179,15 @@ function messageFate(due: DueReceipt & { readonly kind: Exclude<InboundKind, "st
     return "It is recorded, and nothing reads it while all work is stopped: Ashara reads it once the owner raises that limit and Ashara is started again.";
   }
   const told = inboundDecision(inboundState(standing), due.kind).told;
+  const words = WORK_WORDS[contractOf(standing)];
+  const after = afterReading(due.kind, contractOf(standing));
   switch (told) {
     case "closed":
       return `It is recorded, but not acted on: Ashara does no further work on a ${standing.kind === "stopped" ? "stopped" : "delivered"} project.`;
     case "read-at-work":
-      return `Ashara reads it in this or the next round of work, ${afterReading(due.kind)}.`;
+      return `Ashara reads it in this or the next round of work, ${after}.`;
     case "waits-for-tender":
-      return `Ashara reads it once it has read the tender this project began with, ${afterReading(due.kind)}.`;
+      return `Ashara reads it once it has read the tender this project began with, ${after}.`;
     case "waits-for-pause":
       return "Ashara reads it once the pause ends.";
     case "waits-for-budget":
@@ -184,22 +199,26 @@ function messageFate(due: DueReceipt & { readonly kind: Exclude<InboundKind, "st
       // A reading that fails on every attempt, or a message the record cannot take while paused, waits for the
       // pause's end, whose every exit sets its count of failed readings back to none (inboundDecision's resetOnHaltEnd).
       return (
-        `Ashara reads it all the same, in this or the next round of work, ${afterReading(due.kind)}, unless this project has ` +
+        `Ashara reads it all the same, in this or the next round of work, ${after}, unless this project has ` +
         `reached its own spending limit, in which case it is read once that limit is raised. ` +
-        `If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh once work resumes. ` +
-        `This ${NOUN[due.kind]} does not end the pause: the work it touches is planned for it once work resumes.`
+        `If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh ${words.afterPause}. ` +
+        `This ${NOUN[due.kind]} does not end the pause${words.workAfterPause === null ? "." : `: ${words.workAfterPause}.`}`
       );
     case "stop":
       throw new ReceiptToldIncoherent(due.messageId, due.kind, told);
   }
 }
 
-/** The receipt: that the message arrived, the project's state, and what happens to the message and when. */
+/**
+ * The receipt: that the message arrived, the project's state, and what happens to the message and
+ * when; on an open project whose contract Ashara declines, then the decline.
+ */
 function receiptReport(due: DueReceipt, work: DeploymentWork): string {
   const fate = due.kind === "stop" ? stopFate(due) : messageFate({ ...due, kind: due.kind }, work);
   // While all work is stopped nothing ends a pause by itself, so its usual end is not promised.
-  const end = due.standing.kind === "paused" && due.kind !== "stop" && !openWhileStopped(due.standing, work) ? [pauseEnd(due.standing.halt)] : [];
-  return [`Ashara has received your ${NOUN[due.kind]}.`, standingLine(due.standing, work), fate, ...end].join("\n\n");
+  const end = due.standing.kind === "paused" && due.kind !== "stop" && !openWhileStopped(due.standing, work) ? [pauseEnd(due.standing.halt, due.standing.contract)] : [];
+  const declined = contractOf(due.standing) === "held" ? [NOTHING_VERIFIABLE] : [];
+  return [`Ashara has received your ${NOUN[due.kind]}.`, standingLine(due.standing, work), fate, ...end, ...declined].join("\n\n");
 }
 
 /** A message no reader consumed and inboundDecision says is never read: nothing will act on it, so its receipt consumes it. */

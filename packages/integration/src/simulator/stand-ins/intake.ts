@@ -28,11 +28,13 @@ export class IntakeStandIn {
   async reading(options: LanguageModelV4CallOptions, modelId: string): Promise<LanguageModelV4GenerateResult> {
     const projectId = await this.intakeProject();
     const model = modelId.slice(providerOf(modelId).length + 1);
+    // Only the first project's tender is the unverifiable one: its client is the one that restates it.
+    const unverifiable = this.context.universe.unverifiable && projectId === this.context.projectIds[0];
     return structuredAnswer(
       this.context,
       options,
       "liaison-intake",
-      () => this.intake(),
+      () => this.intake(unverifiable),
       (answer) => {
         this.readings.push({
           projectId,
@@ -72,9 +74,10 @@ export class IntakeStandIn {
    * behaviour's place and quoting it from the tender, and one more naming no behaviour; the one
    * question the tender leaves open, or none, when the lazy intake persona fires (sticky: it asks
    * nothing whatever the tender leaves open) or a reading misses the open decision
-   * (`unaskedReading`, per reading).
+   * (`unaskedReading`, per reading). On an `unverifiable` tender every guarantee is observed in stored
+   * data, so Ashara can verify none of them.
    */
-  private intake(): { readonly questions: readonly unknown[] } & Record<string, unknown> {
+  private intake(unverifiable: boolean): { readonly questions: readonly unknown[] } & Record<string, unknown> {
     const { universe, personas, tape, rates } = this.context;
     const persona = personas.of("intake") === "lazy" && personas.fires("intake");
     const lazy = persona || tape.chance("model.liaison-intake.unasked", rates.unaskedReading);
@@ -87,7 +90,7 @@ export class IntakeStandIn {
     const guarantee = (id: string, statement: string, quote: string) => ({
       id,
       statement,
-      observable: { interface: ["I1"], observation: "output" },
+      observable: { interface: ["I1"], observation: unverifiable ? "stored-data" : "output" },
       refutedBy: [`The product does not hold that ${statement.charAt(0).toLowerCase()}${statement.slice(1)}`],
       source: tender(quote),
     });

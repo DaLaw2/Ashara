@@ -84,10 +84,18 @@ export interface Universe {
    * finalize together (the checkout lock's race); otherwise each depends on the one before.
    */
   readonly independent: boolean;
+  /**
+   * The first project's tender is drafted with every guarantee observed in stored data, so Ashara can
+   * verify none: its contract is declined at proposal, the client's plain confirmation leaves it so,
+   * and its restatement releases the work.
+   */
+  readonly unverifiable: boolean;
 }
 
 /** How often a seed's plan has independent tasks. */
 const INDEPENDENT_PLAN_RATE = 0.5;
+/** How often a seed's first tender is one whose contract Ashara can verify no guarantee of. */
+const UNVERIFIABLE_TENDER_RATE = 0.1;
 
 /**
  * 2-4 behaviours, one guarantee each (keyed by its place, as the scripted intake drafts them), cut into 1-3 vertical
@@ -107,6 +115,7 @@ export function drawUniverse(tape: Tape): Universe {
     outOfVision: "x1",
     tasks,
     independent: tape.chance("universe.independent-tasks", INDEPENDENT_PLAN_RATE),
+    unverifiable: tape.chance("universe.unverifiable-tender", UNVERIFIABLE_TENDER_RATE),
   };
 }
 

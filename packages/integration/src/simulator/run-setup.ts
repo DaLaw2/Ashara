@@ -132,7 +132,8 @@ export function drawRun(options: RunOptions, state: RunState): RunDraws {
   const heldReturns = correctionDraw !== null && tape.chance("correction.held-returns", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
   const tasks = universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ");
-  const shape = `${universe.independent ? " independent" : ""} cap=${capUsd}`;
+  const independent = universe.independent ? " independent" : "";
+  const shape = `${independent}${universe.unverifiable ? " unverifiable" : ""} cap=${capUsd}`;
   state.trace.push(
     `universe ${tasks}${shape}${projectCount > 1 ? ` projects=${projectCount}` : ""}`,
     personas.describe(),

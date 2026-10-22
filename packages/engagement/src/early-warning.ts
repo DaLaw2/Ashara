@@ -1,5 +1,7 @@
 import type { BurnZone } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
+import { NOTHING_VERIFIABLE, OBSERVATION_UNDECIDED, declinesUnverifiable, verifiableByAshara, verifiableCountLine } from "./vision-language/guarantee.js";
+import type { ContractStanding } from "./vision-language/guarantee.js";
 import type { VisionVersion } from "./vision.js";
 
 // The early-warning register: the guarantees of the vision in force that the records show at risk,
@@ -38,8 +40,10 @@ type Risk =
   | { readonly kind: "unconfirmed-assumption"; readonly assumptions: readonly string[] }
   /** Work citing it is done, and no stored check decides it. */
   | { readonly kind: "done-unchecked" }
-  /** It is observed in stored data, which Ashara injects no fault into, so it reads unjudged at best. */
+  /** It is seen only outside what the product's interface shows, which no check Ashara runs reads, so it reads unjudged at best. */
   | { readonly kind: "stored-data" }
+  /** Its drafter could not tell where it is seen, so it cannot be shown to hold until the client says. */
+  | { readonly kind: "undecided" }
   /** Its work is not done, and the project's requests have drawn past the budget forecast. */
   | { readonly kind: "burn"; readonly zone: BurnZone };
 
@@ -50,7 +54,11 @@ interface RegisterRow {
 }
 
 type Register =
-  | { readonly kind: "rows"; readonly rows: readonly RegisterRow[] }
+  /**
+   * The rows, how many guarantees of the version Ashara can verify, of how many it holds, and whether
+   * the version is one Ashara declines (declinesUnverifiable).
+   */
+  | { readonly kind: "rows"; readonly rows: readonly RegisterRow[]; readonly verifiable: number; readonly total: number; readonly declined: boolean }
   | { readonly kind: "no-vision" }
   | { readonly kind: "unreadable"; readonly detail: string };
 
@@ -81,11 +89,34 @@ export function registerOf(records: RiskRecords): Register {
     if (footing.length > 0 && resting.some((task) => !task.done)) risks.push({ kind: "unconfirmed-assumption", assumptions: footing });
     if (citing.some((task) => task.done) && !decided.has(guarantee.id)) risks.push({ kind: "done-unchecked" });
     if (guarantee.observation === "stored-data") risks.push({ kind: "stored-data" });
+    if (guarantee.verification === "undecided") risks.push({ kind: "undecided" });
     if (standing.burnZone !== null && citing.some((task) => !task.done)) risks.push({ kind: "burn", zone: standing.burnZone });
     const [first, ...rest] = risks;
     if (first !== undefined) rows.push({ id: guarantee.id, statement: guarantee.statement, risks: [first, ...rest] });
   }
-  return { kind: "rows", rows };
+  return {
+    kind: "rows",
+    rows,
+    verifiable: version.guarantees.filter(verifiableByAshara).length,
+    total: version.guarantees.length,
+    declined: declinesUnverifiable(version.guarantees),
+  };
+}
+
+/**
+ * The standing of the contract the register reads, for every report that ends with it: held when the
+ * version is one Ashara declines; workable when it is not, or when no contract is drafted yet, so none
+ * is held; unread when its records do not read, so the report promises nothing either way.
+ */
+export function standingOfRegister(register: Register): ContractStanding {
+  switch (register.kind) {
+    case "rows":
+      return register.declined ? "held" : "workable";
+    case "no-vision":
+      return "workable";
+    case "unreadable":
+      return "unread";
+  }
 }
 
 const NO_RISK_LINE = "No guarantee is at risk on the records.";
@@ -97,7 +128,9 @@ function riskWords(risk: Risk): string {
     case "done-unchecked":
       return "work on it is finished, but no stored check decides it yet";
     case "stored-data":
-      return "it is seen in the data you store, which Ashara cannot yet break on purpose to test, so it cannot be shown to hold";
+      return "it is seen only outside what the product's interface shows, which no check Ashara can run today reads, so it cannot be shown to hold";
+    case "undecided":
+      return OBSERVATION_UNDECIDED;
     case "burn":
       return risk.zone === "red"
         ? "its work is not finished, and most of the model requests this project's work may use are spent"
@@ -107,7 +140,8 @@ function riskWords(risk: Risk): string {
 
 /**
  * The register as the paragraph every progress report ends with; never empty. A register whose
- * records do not read says so, never that nothing is at risk, and the detail goes to the log.
+ * records do not read says so, never that nothing is at risk, and the detail goes to the log. On a
+ * version Ashara declines it ends with the decline, so no report posted while it is in force omits it.
  */
 export function registerParagraph(projectId: ProjectId, register: Register): string {
   switch (register.kind) {
@@ -116,11 +150,17 @@ export function registerParagraph(projectId: ProjectId, register: Register): str
     case "unreadable":
       console.warn(`[early-warning] project ${projectId}: the register of guarantees at risk does not read: ${register.detail}`);
       return "Which guarantees are at risk cannot be told from Ashara's records for this report; Ashara keeps the record that does not read for its operator.";
-    case "rows":
-      if (register.rows.length === 0) return NO_RISK_LINE;
+    case "rows": {
+      // A version holding no guarantee has nothing to count; every contract version holds one.
+      const count = register.total === 0 ? "" : verifiableCountLine(register.verifiable, register.total);
+      const declined = register.declined ? `\n${NOTHING_VERIFIABLE}` : "";
+      if (register.rows.length === 0) return `${count === "" ? NO_RISK_LINE : `${NO_RISK_LINE} ${count}`}${declined}`;
       return (
         `Guarantees at risk, as Ashara's records stand now:\n` +
-        register.rows.map((row) => `- ${row.id} (${row.statement}): ${row.risks.map(riskWords).join("; ")}.`).join("\n")
+        register.rows.map((row) => `- ${row.id} (${row.statement}): ${row.risks.map(riskWords).join("; ")}.`).join("\n") +
+        (count === "" ? "" : `\n${count}`) +
+        declined
       );
+    }
   }
 }

@@ -80,6 +80,8 @@ export interface TextFactRecords {
     readonly items: ReadonlyArray<z.infer<typeof planItemRow>>;
     readonly revisions: ReadonlyArray<z.infer<typeof planRevisionRow>>;
   };
+  /** How many work items the project has, of any level or origin. */
+  readonly workItems: number;
 }
 
 /** A file of main at one commit, as the observer's own git reads it. */
@@ -196,6 +198,12 @@ async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<Tex
           JOIN client_messages m ON m.id = t.report_id
           WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
     ),
+    workItems: (
+      await rows(
+        z.object({ count: z.number() }),
+        sql`SELECT count(*)::int AS count FROM work_items WHERE project_id = ${projectId}`,
+      )
+    ).reduce((sum, row) => sum + row.count, 0),
     firstPlan: {
       report: firstPlan ?? null,
       items:
@@ -509,6 +517,8 @@ function checkBriefTask(title: string, context: string, rawSpec: unknown, add: A
 
 /** What the client reads before a question's assumption, as the oracle words it. */
 const PROCEEDS_ON = "Until you answer, we proceed on this assumption:";
+/** The same label on a contract Ashara declines, where no work proceeds on anything. */
+const CONTRACT_RESTS_ON = "Until you answer, the contract rests on this assumption:";
 
 /**
  * Every Liaison question: the assumption it says work proceeds on is the one its vision records for it, Inferred and
@@ -539,9 +549,9 @@ function checkQuestions(records: TextFactRecords, add: Add, versions: Versions):
       ...(question.body.startsWith(open.text)
         ? []
         : [`does not open with its recorded text "${open.text.slice(0, 80)}"`]),
-      ...(question.body.includes(`${PROCEEDS_ON} ${assumption.statement}`)
+      ...([PROCEEDS_ON, CONTRACT_RESTS_ON].some((label) => question.body.includes(`${label} ${assumption.statement}`))
         ? []
-        : [`does not say work proceeds on "${assumption.statement.slice(0, 120)}"`]),
+        : [`does not say work proceeds, or the contract rests, on "${assumption.statement.slice(0, 120)}"`]),
       ...(assumption.status === "Inferred" && assumption.standing === "asked"
         ? []
         : [
@@ -604,12 +614,20 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
   }
 }
 
-/** How the contract draft opens, as the oracle words it. */
-const CONTRACT_OPENING = "This is the contract we are working to";
+/** How the contract draft opens, as the oracle words it: one Ashara declines opens with that. */
+const CONTRACT_OPENING = "This is the contract";
+
+/** How the draft marks a guarantee Ashara cannot verify, as the oracle words it. */
+const NOT_VERIFIABLE_WORDS = "not verifiable by Ashara";
+/** How the draft marks a guarantee whose drafter could not tell where it is observed, as the oracle words it. */
+const UNDECIDED_WORDS =
+  "Ashara could not tell where you would see it hold or break, so it does not count it as one it can verify " +
+  "and it cannot be shown to hold; tell us where you would see it and Ashara can check it";
 
 const draftedGuarantee = z.looseObject({
   id: z.string().min(1),
   statement: z.string().min(1),
+  verification: z.string().optional(),
   source: z.looseObject({ kind: z.string(), id: z.string().optional() }),
 });
 const draftedAssumption = z.looseObject({
@@ -665,8 +683,14 @@ function checkContractDraft(records: TextFactRecords, add: Add): void {
         : g.source.kind === "tender"
           ? "what your tender states"
           : "our reading of your tender";
-    const line = `- ${g.id}: ${g.statement} (basis: ${basis})`;
-    if (!lines.includes(line))
+    // One whose drafter could not tell where it is observed, and one Ashara cannot verify, is marked so after its
+    // basis, as v1 records it.
+    const doubted = g.verification === "undecided" ? `; ${UNDECIDED_WORDS}` : "";
+    const marked = g.verification === "not-by-ashara" ? `; ${NOT_VERIFIABLE_WORDS}` : "";
+    const line = `- ${g.id}: ${g.statement} (basis: ${basis}${doubted}${marked}`;
+    const listed = lines.find((each) => each.startsWith(line));
+    const next = listed?.charAt(line.length);
+    if (listed === undefined || !(next === ")" || (marked !== "" && next === ":")))
       add(
         `contract-draft:${g.id}`,
         `the contract draft does not list ${g.id} with its basis as v${first.version} records it ` +
@@ -684,6 +708,87 @@ function checkContractDraft(records: TextFactRecords, add: Add): void {
         `the contract draft does not list assumption ${a.key} ("${a.statement.slice(0, 120)}"), ${a.kind}`,
       );
   }
+}
+
+/** How every message posted for a contract Ashara declines states the decline, as the oracle words it. */
+const DECLINE_WORDS = [
+  "Ashara cannot verify any guarantee of this contract as written",
+  "Please restate the guarantees",
+  "confirming it as written does not start it",
+];
+/** What no message posted for a declined contract says: each tells the client work is under way or waits. */
+const UNDER_WAY_WORDS = [
+  "Work does not wait",
+  "work proceeds",
+  "Work proceeds",
+  "Work has started",
+  "nothing waits",
+  PROCEEDS_ON,
+];
+
+const markedGuarantee = z.looseObject({ verification: z.string().optional() });
+
+/**
+ * Whether a vision version is one Ashara declines, read from its stored guarantees as the oracle reads
+ * them: it holds guarantees and every one is marked not verifiable by Ashara or undecided; null when they do
+ * not read.
+ */
+function declinedVersion(vision: z.infer<typeof visionRow>): boolean | null {
+  const guarantees = z.array(markedGuarantee).safeParse(vision.guarantees);
+  if (!guarantees.success) return null;
+  return (
+    guarantees.data.length > 0 &&
+    guarantees.data.every((g) => g.verification === "not-by-ashara" || g.verification === "undecided")
+  );
+}
+
+/**
+ * A contract Ashara can verify no guarantee of is declined at proposal: when vision v1 is one, every
+ * message intake posted with it (the questions, the contract draft and the reading report) states the
+ * decline, asks for the guarantees restated and says no confirmation starts work, and none says work
+ * is under way.
+ */
+function checkDeclinedContract(records: TextFactRecords, add: Add): void {
+  const [first] = records.visions;
+  if (first === undefined) return;
+  const declined = declinedVersion(first);
+  if (declined === null) {
+    add("declined-unreadable", `vision v${first.version}'s guarantees cannot be read with their verification marks`);
+    return;
+  }
+  if (declined) {
+    for (const [index, message] of [...records.questions, ...records.tenderReports].entries()) {
+      const missing = DECLINE_WORDS.filter((words) => !message.body.includes(words));
+      const underWay = UNDER_WAY_WORDS.filter((words) => message.body.includes(words));
+      if (missing.length > 0 || underWay.length > 0)
+        add(
+          `declined-intake:${index + 1}`,
+          `intake message ${index + 1} ("${message.body.slice(0, 80)}") on a contract Ashara declines ` +
+            `${missing.length > 0 ? `does not state ${missing.map((w) => `"${w}"`).join(", ")}` : ""}` +
+            `${missing.length > 0 && underWay.length > 0 ? " and " : ""}` +
+            `${underWay.length > 0 ? `says ${underWay.map((w) => `"${w}"`).join(", ")}` : ""}`,
+        );
+    }
+  }
+}
+
+/**
+ * No work starts on a contract Ashara declines: while no version the project held is one Ashara can
+ * verify a guarantee of, whatever the client confirmed, the project has no work item. Null when it
+ * holds; the violation's statement otherwise. Judged on every snapshot (I6), since a restatement later
+ * in the run would hide work started before it.
+ */
+export function declinedWork(records: TextFactRecords): string | null {
+  if (records.visions.length === 0 || records.workItems === 0) return null;
+  const declined = records.visions.map(declinedVersion);
+  if (declined.some((each) => each === null))
+    return "a vision version's guarantees cannot be read with their verification marks";
+  if (!declined.every((each) => each === true)) return null;
+  return (
+    `the project has ${records.workItems} work item(s), yet every vision version it held ` +
+    `(v1-v${records.visions.length}) ` +
+    `is one Ashara declines, holding no guarantee Ashara can verify`
+  );
 }
 
 /** How a reading report opens, as the oracle words it: the first reading asked the client nothing. */
@@ -1077,11 +1182,15 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${DELIVERY}/dispatch/execute-task.ts#buildBrief`, judges: [i9(checkBriefs)] },
   { source: `${WORKPLACE}/prompt.ts#buildTaskPrompt`, judges: [i9(checkBriefs)] },
   { source: `${WORKPLACE}/prompt.ts#assumptionsSection`, judges: [i9(checkBriefs)] },
-  { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions)] },
+  { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions), i9(checkDeclinedContract)] },
   { source: `${ENGAGEMENT}/answers.ts#replanReport`, judges: [i9(checkAnswerReplies)] },
-  { source: `${ENGAGEMENT}/intake.ts#contractDraftReport`, judges: [i9(checkContractDraft)] },
+  // A contract Ashara declines: the draft, like every intake message, states the decline, and no work starts on it.
+  {
+    source: `${ENGAGEMENT}/intake.ts#contractDraftReport`,
+    judges: [i9(checkContractDraft), i9(checkDeclinedContract)],
+  },
   // A reading that asked nothing: its confirmation's strength and what it found, against intake_readings.
-  { source: `${ENGAGEMENT}/intake.ts#readingReport`, judges: [i9(checkIntakeReading)] },
+  { source: `${ENGAGEMENT}/intake.ts#readingReport`, judges: [i9(checkIntakeReading), i9(checkDeclinedContract)] },
   { source: `${ENGAGEMENT}/delivered-report.ts#readingSection`, judges: [i9(checkIntakeReading)] },
   { source: `${ENGAGEMENT}/plan-report.ts#firstPlanReport`, judges: [i9(checkFirstPlan)] },
   // Every terminal message's table: each guarantee in force once with the verdict its sweep's evidence

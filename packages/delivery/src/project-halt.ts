@@ -33,8 +33,8 @@ import type { ModelCallFailure, SpendAtCap, WorkAtBudget } from "./acl/finance-a
  * `provider_failed`: any other step stopped on its model provider failing the request, so no answer
  * was read. `work_budget`: the project's model requests are spent (the work
  * ledger); the owner's grant and then the operator's unblock end it. `acceptance_uncovered`: the
- * project's acceptance sweep passed, but a guarantee of its contract that Ashara can verify was not
- * judged pass on it, so the project cannot be accepted; the operator's unblock ends it.
+ * project's acceptance sweep passed, but it does not cover the contract (a guarantee in coverage not
+ * judged pass, or none in coverage), so the project cannot be accepted; the operator's unblock ends it.
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -103,7 +103,7 @@ export function recordedFailureOf(stored: unknown): ModelCallFailure {
   return stored === "model" || stored === "provider" ? stored : "ashara";
 }
 
-/** A passed sweep left a guarantee Ashara can verify unjudged: the project halts short of acceptance, never as Ashara's fault. */
+/** A passed sweep does not cover the contract: the project halts short of acceptance, never as Ashara's fault. */
 export function acceptanceUncoveredCause(err: Error): UnpricedBlockCause {
   return { category: "acceptance_uncovered", errorClass: err.name, reason: describeErrorChain(err) };
 }

@@ -3,7 +3,7 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { projects } from "@ashara/db";
 import { projectPlans, workItems } from "@ashara/db/schema/delivery";
-import { noOpenAnswer, noOpenStop, projectAtWork } from "../acl/engagement-predicates-acl.js";
+import { noOpenAnswer, noOpenStop, noUnverifiableContractHeld, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { currentStoredVision, hasVision } from "../acl/engagement-vision-acl.js";
 import { hasRoster, roleOfLatestRoster } from "../acl/organization-roster-acl.js";
 import { noPlanningOutcome } from "../predicates.js";
@@ -72,6 +72,8 @@ const awaitingPlan = () =>
     sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id)`,
     // First planning requires a roster: every task gets an owner.
     hasRoster(projects.id),
+    // A contract Ashara declines, since it can verify none of its guarantees, is planned only once a restatement makes one verifiable.
+    noUnverifiableContractHeld(projects.id),
   );
 
 /**

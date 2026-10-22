@@ -1,7 +1,7 @@
 import type { ContendedWaitKind } from "@ashara/shared";
 import { pendingUncounted } from "./admissions.js";
 import { correctionHoldMissesReturned, correctionHoldsWholePlan } from "./correction-plants.js";
-import { intakeSecondReadingDropped } from "./intake-plants.js";
+import { declinedContractPlanned, intakeSecondReadingDropped } from "./intake-plants.js";
 import { receiptSkipped } from "./receipts.js";
 import {
   pinInfrastructureFaults,
@@ -99,7 +99,9 @@ import { abandonedReleaseSkipped } from "./residue.js";
  * - correction-hold-misses-returned: a correction holds a task only as it stood when recorded, so a
  *   citing task back at Pending after the hold is dispatched before its revision (I2, dispatched-held);
  * - receipt-skipped: the listing of the messages owed a receipt lists none, so no message the client
- *   sends is answered (I4's receipt clause).
+ *   sends is answered (I4's receipt clause);
+ * - declined-contract-planned: a contract Ashara can verify no guarantee of is read as one it can,
+ *   so work starts on it before the client restates it (I6's declined-work clause).
  */
 export const MUTATIONS = [
   "skip-merge-record",
@@ -132,6 +134,7 @@ export const MUTATIONS = [
   "correction-holds-whole-plan",
   "correction-hold-misses-returned",
   "receipt-skipped",
+  "declined-contract-planned",
   "halt-report-suppressed",
   "resumption-report-suppressed",
   "stop-report-suppressed",
@@ -178,6 +181,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "correction-holds-whole-plan": { bypassed: [], queries: correctionHoldsWholePlan, code: null },
   "correction-hold-misses-returned": { bypassed: [], queries: correctionHoldMissesReturned, code: null },
   "receipt-skipped": { bypassed: [], queries: receiptSkipped, code: null },
+  "declined-contract-planned": { bypassed: [], queries: declinedContractPlanned, code: null },
   "halt-report-suppressed": { bypassed: [], queries: haltReportSuppressed, code: null },
   "resumption-report-suppressed": { bypassed: [], queries: resumptionReportSuppressed, code: null },
   "stop-report-suppressed": { bypassed: [], queries: stopReportSuppressed, code: null },

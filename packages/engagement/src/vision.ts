@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { StoredContractSchema, WritableContractSchema, collapseWhitespace, verificationOf, visionGuaranteeOf } from "./vision-language/guarantee.js";
-import type { ContractDraft, StoredContract, VisionExclusion } from "./vision-language/guarantee.js";
+import { FirstContractSchema, StoredContractSchema, collapseWhitespace, markOf, visionGuaranteeOf } from "./vision-language/guarantee.js";
+import type { ContractDraft, StoredContract, StoredGuarantee, VisionExclusion } from "./vision-language/guarantee.js";
 import type { ContractOp } from "./vision-language/contract-op.js";
 import { basisOf } from "./vision-language/index.js";
 import type { InterfaceEntry, VisionGuarantee } from "./vision-language/index.js";
@@ -671,14 +671,7 @@ export class Vision {
     switch (op.op) {
       case "add-guarantee": {
         const id = nextKey("G");
-        const guarantee = {
-          id,
-          statement: op.statement,
-          observable: { interface: op.interface, observation: op.observation },
-          refutedBy: op.refutedBy,
-          verification: verificationOf(op.observation),
-          source: correction,
-        };
+        const guarantee = observed(op, { id, statement: op.statement, refutedBy: op.refutedBy, source: correction });
         return done({ contract: { ...contract, guarantees: [...contract.guarantees, guarantee] } }, id);
       }
       case "amend-guarantee": {
@@ -687,14 +680,12 @@ export class Vision {
         // A guarantee Ashara read into the tender, put back in the tender's own words, was Ashara's misreading.
         const basis = visionGuaranteeOf(old, records.map(assumptionOf)).basis;
         const restores = basis !== "client-stated" && collapseWhitespace(this.current.visionText).includes(collapseWhitespace(op.statement));
-        const amended = {
+        const amended = observed(op, {
           id: op.id,
           statement: op.statement,
-          observable: { interface: op.interface, observation: op.observation },
           refutedBy: op.refutedBy,
-          verification: verificationOf(op.observation),
           source: restores ? ({ kind: "tender", quote: op.statement } as const) : correction,
-        };
+        });
         return done({ contract: { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? amended : g)) } }, op.id, restores ? "misread" : "client-change");
       }
       case "withdraw-guarantee": {
@@ -751,6 +742,17 @@ export class Vision {
   }
 }
 
+/**
+ * The terms and mark of a guarantee a correction states, as the contract records it: its observation
+ * as the drafter gave it, an undecided one included, and the mark markOf gives it.
+ */
+function observed(
+  op: Extract<ContractOp, { readonly op: "add-guarantee" | "amend-guarantee" }>,
+  terms: Omit<StoredGuarantee, "observable" | "verification">,
+): StoredGuarantee {
+  return { ...terms, observable: { interface: op.interface, observation: op.observation }, ...markOf(op.observation) };
+}
+
 /** A vision version about to be written does not read back as one: nothing is written. */
 export class VisionWriteRefused extends Error {
   constructor(
@@ -774,7 +776,9 @@ interface WritableContract {
 /**
  * Holds a version about to be written to the reader's own schemas and to the contract's rules, so
  * nothing is stored that the reader refuses; returns the contract columns to store, an undecided
- * observation recorded as stored-data. Throws VisionWriteRefused.
+ * observation kept as given with its guarantee marked undecided. `version` says whether it is
+ * the project's first, whose guarantees are all proposed now and marked, or a later one, whose carried
+ * guarantees keep the mark they were stored with or its absence. Throws VisionWriteRefused.
  */
 export function visionWritable(
   projectId: string,
@@ -785,6 +789,7 @@ export function visionWritable(
     readonly openQuestions: unknown;
     readonly contract: { readonly form: unknown; readonly interface: unknown; readonly guarantees: unknown; readonly exclusions: unknown };
   },
+  version: "first" | "next",
 ): WritableContract {
   const field = <T>(schema: z.ZodType<T>, value: unknown, name: string): T => {
     const parsed = schema.safeParse(value);
@@ -797,7 +802,7 @@ export function visionWritable(
   const form = field(ContractFormSchema, fields.contract.form, "contractForm");
   const columns = { interface: fields.contract.interface, guarantees: fields.contract.guarantees, exclusions: fields.contract.exclusions };
   let contract: StoredContract | null = null;
-  if (form === "guarantees") contract = field(WritableContractSchema, columns, "contract");
+  if (form === "guarantees") contract = field(version === "first" ? FirstContractSchema : StoredContractSchema, columns, "contract");
   else field(NoContractSchema, columns, "contract");
   try {
     const assumptions = records.map(assumptionOf);

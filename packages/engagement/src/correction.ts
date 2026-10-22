@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { ContractOpSchema, opKey, opShape } from "./vision-language/contract-op.js";
 import type { ContractOp, Direction, Pushback, PushbackReason, RevisionCause, RevisionOp } from "./vision-language/contract-op.js";
-import { NOT_VERIFIABLE_BY_ASHARA, verificationOf } from "./vision-language/guarantee.js";
-import type { Observation } from "./vision-language/guarantee.js";
+import { NOTHING_VERIFIABLE, OBSERVATION_RULE, declinesUnverifiable, markOf, markWords, verifiableByAshara, verifiableCountLine } from "./vision-language/guarantee.js";
+import type { ClassifiedObservation, ContractStanding } from "./vision-language/guarantee.js";
+import { WORK_WORDS } from "./vision-language/work-promise.js";
 import type { AppliedOp, UnappliedOp, VisionVersion } from "./vision.js";
 
 // A client's correction: a change message read into typed operations on the contract of the version in
@@ -179,10 +180,30 @@ export function costBandOf(ops: readonly ContractOp[], impact: ChangeImpact): Co
   return { kind: "measured", tasks, lowRequests: tasks * Math.min(...drawn), highRequests: tasks * Math.max(...drawn) };
 }
 
+/** How many guarantees of a version Ashara can verify, of how many it holds. */
+export interface VerifiableCount {
+  readonly verifiable: number;
+  readonly total: number;
+}
+
+export function verifiableCountOf(vision: Pick<VisionVersion, "guarantees">): VerifiableCount {
+  return { verifiable: vision.guarantees.filter(verifiableByAshara).length, total: vision.guarantees.length };
+}
+
+/**
+ * Whether a correction that changes the guarantees is declined: the version it would write is one
+ * Ashara declines (declinesUnverifiable), so it is not made, and no confirmation makes it. A
+ * correction that changes no guarantee is never declined for this: it leaves the guarantees as the
+ * version in force holds them.
+ */
+export function declinedCorrection(applied: readonly AppliedOp[], rewritten: Pick<VisionVersion, "guarantees">): boolean {
+  return applied.some((done) => opShape(done.op).target === "guarantee") && declinesUnverifiable(rewritten.guarantees);
+}
+
 /**
  * Whether the Liaison holds the correction for the client's confirmation: when it
  * withdraws or narrows a guarantee a merged task delivers, or the upper end of its cost band exceeds
- * * what the work budget has left. Never on a model's judgement; null when neither holds.
+ * what the work budget has left. Never on a model's judgement; null when neither holds.
  */
 export function pushbackOf(ops: readonly CheckedOp[], impact: ChangeImpact, band: CostBand): Pushback | null {
   const reasons: PushbackReason[] = [];
@@ -220,14 +241,29 @@ export function causeOf(applied: readonly AppliedOp[]): RevisionCause {
 export interface CorrectionNote {
   /** The version the operations were read against, for naming the records they act on. */
   readonly vision: VisionVersion;
-  readonly confirmed: ReadonlyArray<{ readonly label: string; readonly version: number; readonly unapplied: readonly UnappliedOp[] }>;
+  readonly confirmed: ReadonlyArray<{ readonly label: string; readonly version: number; readonly verifiable: VerifiableCount; readonly unapplied: readonly UnappliedOp[] }>;
+  /** The labels of the held changes the message confirmed that are declined (declinedCorrection), so not made. */
+  readonly declinedConfirmations: readonly string[];
   readonly ops: readonly CheckedOp[];
   /** The keys the operations affect, as the hold reads them when they apply (affectedKeys). */
   readonly affected: readonly string[];
   readonly outcome:
-    | { readonly status: "applied"; readonly version: number; readonly direction: Direction; readonly applied: readonly AppliedOp[]; readonly unapplied: readonly UnappliedOp[] }
-    | { readonly status: "proposed"; readonly direction: Direction; readonly pushback: Pushback; readonly unapplied: readonly UnappliedOp[] }
+    | {
+        readonly status: "applied";
+        readonly version: number;
+        readonly direction: Direction;
+        readonly applied: readonly AppliedOp[];
+        readonly unapplied: readonly UnappliedOp[];
+        readonly verifiable: VerifiableCount;
+      }
+    | { readonly status: "proposed"; readonly direction: Direction; readonly pushback: Pushback; readonly unapplied: readonly UnappliedOp[]; readonly verifiable: VerifiableCount }
+    | { readonly status: "declined"; readonly unapplied: readonly UnappliedOp[]; readonly verifiable: VerifiableCount }
     | { readonly status: "unchanged"; readonly unapplied: readonly UnappliedOp[] };
+  /**
+   * The standing of the contract in force once the message is taken in: what the note says of the work
+   * follows it (WORK_WORDS), and on a held one the note ends with the decline.
+   */
+  readonly contract: Exclude<ContractStanding, "unread">;
   readonly impact: ChangeImpact | null;
   readonly band: CostBand | null;
   /** Whether the project was halted when the correction was read: the contract changes, the work waits for the halt to end. */
@@ -240,17 +276,19 @@ const DIRECTION_WORDS: Readonly<Record<Direction, string>> = {
   neutral: "leaves what Ashara promises as wide as it was",
 };
 
-/** What a correction read while the project is halted does meanwhile: the contract changes, the work waits for the halt's own end. */
-const PAUSED_CLOSE =
-  "Work on this project is paused, for the reason Ashara's report of the pause gives, and this message does not end the pause. " +
-  "The contract stands as this note says now, and the work it touches is planned for it once work resumes.";
+/** Why a declined correction is not made, and what would be: a restatement, never the same change confirmed or sent again. */
+const CORRECTION_DECLINED =
+  "it would leave your contract with no guarantee Ashara can verify as written, so the finished work could not be shown to hold and the project could not be accepted. " +
+  "Send the guarantees it changes again, restated so that at least one is seen through what the product shows when it is used: what it outputs, how it reports an error or the status it ends with; " +
+  "confirming this change or sending it again as it is does not make it.";
 
-/** The fixed close of a pushback: the correction is held, never refused. */
-const CONFIRM_CLOSE = "This change will be made as you sent it once you confirm; nothing else waits.";
-
-/** What the client is told of a guarantee its change proposes that Ashara cannot verify with the checks it can run. */
-function unverifiable(observation: Observation): string {
-  return verificationOf(observation) === "not-by-ashara" ? ` (${NOT_VERIFIABLE_BY_ASHARA})` : "";
+/**
+ * What the client is told of a guarantee its change proposes that Ashara cannot verify with the checks
+ * it can run, with the reason, and of one whose reading could not tell where it is observed.
+ */
+function unverifiable(observation: ClassifiedObservation): string {
+  const told = markWords(markOf(observation));
+  return told === null ? "" : ` (${told})`;
 }
 
 /** One operation in plain words, naming the record it acts on as the version in force holds it. */
@@ -333,13 +371,17 @@ function impactLines(note: CorrectionNote): string[] {
 /** The Liaison's one note on a correction message, posted in reply to it in the cycle it is read. Every sentence is from a record. */
 export function correctionReport(note: CorrectionNote): string {
   const { vision, outcome } = note;
-  const confirmed = note.confirmed.flatMap((c) => [
-    `You confirmed the change held as ${c.label}; it is now part of the contract as version ${c.version}.`,
-    ...unappliedLines(c.unapplied, vision),
-  ]);
+  const words = WORK_WORDS[note.contract];
+  const confirmed = [
+    ...note.confirmed.flatMap((c) => [
+      `You confirmed the change held as ${c.label}; it is now part of the contract as version ${c.version}. ${verifiableCountLine(c.verifiable.verifiable, c.verifiable.total)}`,
+      ...unappliedLines(c.unapplied, vision),
+    ]),
+    ...note.declinedConfirmations.map((label) => `You confirmed the change held as ${label}, but it is not made: ${CORRECTION_DECLINED}`),
+  ];
   const read =
     note.ops.length === 0
-      ? note.confirmed.length === 0
+      ? note.confirmed.length === 0 && note.declinedConfirmations.length === 0
         ? ["Your message was read as asking for no change to the contract, so nothing in it changed."]
         : []
       : [`Your change was read as:\n${note.ops.map(({ op, direction }) => `- ${opLine(op, vision)} (${DIRECTION_WORDS[direction]})`).join("\n")}`];
@@ -348,21 +390,33 @@ export function correctionReport(note: CorrectionNote): string {
       case "applied":
         return [
           ...unappliedLines(outcome.unapplied, vision),
-          `The contract is now version ${outcome.version}; this revision ${DIRECTION_WORDS[outcome.direction]}.${note.paused ? "" : " Work already planned continues meanwhile."}`,
+          `The contract is now version ${outcome.version}; this revision ${DIRECTION_WORDS[outcome.direction]}.${note.paused ? "" : words.plannedContinues}`,
+          verifiableCountLine(outcome.verifiable.verifiable, outcome.verifiable.total),
         ];
       case "proposed":
-        return [...outcome.pushback.reasons.map(pushbackLine), ...unappliedLines(outcome.unapplied, vision), CONFIRM_CLOSE];
+        return [
+          ...outcome.pushback.reasons.map(pushbackLine),
+          ...unappliedLines(outcome.unapplied, vision),
+          `As this change would leave it: ${verifiableCountLine(outcome.verifiable.verifiable, outcome.verifiable.total)}`,
+          words.confirmClose,
+        ];
+      case "declined":
+        return [
+          `This change is not made: ${CORRECTION_DECLINED}`,
+          ...unappliedLines(outcome.unapplied, vision),
+          `As this change would have left it: ${verifiableCountLine(outcome.verifiable.verifiable, outcome.verifiable.total)}`,
+        ];
       case "unchanged":
         return note.ops.length === 0 ? [] : [...unappliedLines(outcome.unapplied, vision), "Nothing in the contract changed."];
     }
   })();
-  return [...confirmed, ...read, ...impactLines(note), ...close, ...(note.paused ? [PAUSED_CLOSE] : [])].join("\n\n");
+  return [...confirmed, ...read, ...impactLines(note), ...close, ...(note.paused ? [words.correctionPaused] : []), ...(note.contract === "held" ? [NOTHING_VERIFIABLE] : [])].join("\n\n");
 }
 
 /** The prompt that reads a change message against the contract in force and the proposals awaiting confirmation. */
 export function correctionPrompt(vision: VisionVersion, body: string, proposals: readonly PendingProposal[]): string {
   const guarantees = vision.guarantees.map(
-    (g) => `- ${g.id}: ${g.statement} (observed in its ${g.observation} at ${g.interface.join(", ") || "no entry"}; refuted by: ${g.refutedBy.join("; ") || "nothing recorded"})`,
+    (g) => `- ${g.id}: ${g.statement} (observed in its ${g.verification === "undecided" ? "undecided" : g.observation} at ${g.interface.join(", ") || "no entry"}; refuted by: ${g.refutedBy.join("; ") || "nothing recorded"})`,
   );
   return [
     `You are the Liaison of a software contractor. The client sent a message changing what they want built.`,
@@ -395,7 +449,7 @@ export function correctionPrompt(vision: VisionVersion, body: string, proposals:
     `- {"op": "amend-assumption", "id", "statement", "direction"}`,
     `- {"op": "add-exclusion", "text", "direction"} or {"op": "withdraw-exclusion", "id", "direction"}`,
     `- {"op": "add-interface", "text", "direction"}, {"op": "amend-interface", "id", "text", "direction"} or {"op": "withdraw-interface", "id", "direction"}`,
-    `"observation" is where the client sees it hold or break: "output", "errors", "exit-status", "stored-data", or "undecided".`,
+    ...OBSERVATION_RULE,
     `"direction" is "widens" when the change promises more, "narrows" when it promises less, "neutral" otherwise.`,
     `"confirms" lists the labels of the changes awaiting confirmation that the message explicitly confirms; silence confirms nothing.`,
     `A message that asks for no change and confirms nothing returns empty lists.`,

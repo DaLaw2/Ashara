@@ -33,15 +33,45 @@ async function bodyOf(each: DueReceipt, work: "running" | "stopped-at-cap" = "ru
 
 describe("the receipt of a client message", () => {
   test("at work: the change is read now and answered with its impact; nothing is consumed", async () => {
-    const { body, closes } = await bodyOf(due("change", { kind: "at-work", visionWritten: true }));
+    const { body, closes } = await bodyOf(due("change", { kind: "at-work", visionWritten: true, contract: "workable" }));
     expect(body).toContain("Ashara has received your change.");
     expect(body).toContain("This project is at work.");
     expect(body).toContain("replies with what it changes, the work it touches and what that costs");
     expect(closes).toBe(false);
   });
 
+  test("on a contract Ashara declines, at work or paused: the receipt ends with the decline", async () => {
+    for (const standing of [
+      { kind: "at-work", visionWritten: true, contract: "held" },
+      { kind: "paused", visionWritten: true, contract: "held", halt: "plan_repair" },
+    ] as const) {
+      const { body } = await bodyOf(due("change", standing));
+      expect(body).toMatch(/Ashara cannot verify any guarantee of this contract as written[^]*Please restate the guarantees[^]*confirming it as written does not start it\.$/);
+    }
+    expect((await bodyOf(due("change", { kind: "at-work", visionWritten: true, contract: "workable" }))).body).not.toContain("Ashara cannot verify any guarantee");
+  });
+
+  test("on a contract Ashara declines, no receipt says work is under way, planned or resumed, whatever the message, halt or cap", async () => {
+    const standings: ProjectStanding[] = [
+      { kind: "at-work", visionWritten: true, contract: "held" },
+      ...HALT_KINDS.map((halt): ProjectStanding => ({ kind: "paused", visionWritten: true, contract: "held", halt })),
+    ];
+    const underWay = ["is at work", "planned again", "is planned for it", "work it touches", "returned to work", "Work on this project is paused", "work resumes", "work on it resumes"];
+    for (const standing of standings) {
+      for (const kind of ["tender", "answer", "change", "stop"] as const) {
+        for (const consumed of [false, true]) {
+          for (const work of ["running", "stopped-at-cap"] as const) {
+            const { body } = await bodyOf(due(kind, standing, { consumed }), work);
+            expect(body).toContain("Ashara cannot verify any guarantee of this contract as written");
+            for (const words of underWay) expect(body, `${kind} on ${standing.kind}, consumed ${consumed}, ${work}`).not.toContain(words);
+          }
+        }
+      }
+    }
+  });
+
   test("paused under a halt that reads input: read all the same, the pause not ended, its end named", async () => {
-    const { body, closes } = await bodyOf(due("change", { kind: "paused", visionWritten: true, halt: "plan_repair" }));
+    const { body, closes } = await bodyOf(due("change", { kind: "paused", visionWritten: true, contract: "workable", halt: "plan_repair" }));
     expect(body).toContain("Ashara reads it all the same");
     // The paused project's own spend limit refuses the reading's model call, which then waits for that limit.
     expect(body).toContain("unless this project has reached its own spending limit, in which case it is read once that limit is raised");
@@ -58,7 +88,7 @@ describe("the receipt of a client message", () => {
   ] as const)("paused under a halt that reads input, when %s: the receipt says it is read afresh once work resumes", async (_, path) => {
     for (const kind of ["change", "answer"] as const) {
       for (const halt of ["plan_repair", "check_dispute", "suite_review", "fault", "infrastructure"] as const) {
-        const { body } = await bodyOf(due(kind, { kind: "paused", visionWritten: true, halt }));
+        const { body } = await bodyOf(due(kind, { kind: "paused", visionWritten: true, contract: "workable", halt }));
         expect(body).toContain(path);
         expect(body).toContain(
           "If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, Ashara reads it afresh once work resumes.",
@@ -68,7 +98,7 @@ describe("the receipt of a client message", () => {
   });
 
   test("paused on a budget: read once the pause ends, since reading it is model work the budget refuses", async () => {
-    const { body } = await bodyOf(due("answer", { kind: "paused", visionWritten: true, halt: "budget_cap" }));
+    const { body } = await bodyOf(due("answer", { kind: "paused", visionWritten: true, contract: "workable", halt: "budget_cap" }));
     expect(body).toContain("Ashara reads it once the pause ends");
     expect(body).not.toContain("all the same");
   });
@@ -82,7 +112,7 @@ describe("the receipt of a client message", () => {
     ["a plan revision's provider failing", "replan_provider_failed", "what paused this project is model work failing"],
   ] as const)("paused on %s, which the reading cannot get past: it waits for the pause's end, for the halt's own reason", async (_, halt, reason) => {
     for (const kind of ["change", "answer"] as const) {
-      const { body, closes } = await bodyOf(due(kind, { kind: "paused", visionWritten: true, halt }));
+      const { body, closes } = await bodyOf(due(kind, { kind: "paused", visionWritten: true, contract: "workable", halt }));
       expect(body).toContain(reason);
       expect(body).toContain("so Ashara reads it once the pause ends");
       expect(body).not.toContain("all the same");
@@ -93,14 +123,14 @@ describe("the receipt of a client message", () => {
   });
 
   test("paused on infrastructure: the project resumes by itself", async () => {
-    const { body } = await bodyOf(due("change", { kind: "paused", visionWritten: true, halt: "infrastructure" }));
-    expect(body).toContain("resumes the project by itself");
+    const { body } = await bodyOf(due("change", { kind: "paused", visionWritten: true, contract: "workable", halt: "infrastructure" }));
+    expect(body).toContain("resumes this project by itself");
   });
 
   test.each([
-    ["at work", { kind: "at-work", visionWritten: true }],
-    ["paused on a plan repair", { kind: "paused", visionWritten: true, halt: "plan_repair" }],
-    ["paused on infrastructure", { kind: "paused", visionWritten: true, halt: "infrastructure" }],
+    ["at work", { kind: "at-work", visionWritten: true, contract: "workable" }],
+    ["paused on a plan repair", { kind: "paused", visionWritten: true, contract: "workable", halt: "plan_repair" }],
+    ["paused on infrastructure", { kind: "paused", visionWritten: true, contract: "workable", halt: "infrastructure" }],
   ] as const)("all work stopped at the deployment's cap, %s: nothing reads it until the limit is raised, and no round of work or resumption is promised", async (_, standing) => {
     const { body, closes } = await bodyOf(due("change", standing), "stopped-at-cap");
     expect(body).toContain("Ashara has stopped all work: the spending limit set for the whole deployment is reached.");
@@ -154,14 +184,14 @@ describe("the receipt of a client message", () => {
 // reading, at work, and under any halt, since the tender's reading waits for the halt's end.
 describe("the receipt of a change sent before the tender is read", () => {
   test("at work: read once the tender is read, never told it is read now", async () => {
-    const { body, closes } = await bodyOf(due("change", { kind: "at-work", visionWritten: false }));
+    const { body, closes } = await bodyOf(due("change", { kind: "at-work", visionWritten: false, contract: "workable" }));
     expect(body).toContain("Ashara reads it once it has read the tender this project began with");
     expect(body).not.toContain("in this or the next round of work");
     expect(closes).toBe(false);
   });
 
   test.each(HALT_KINDS)("paused on %s: read once the pause ends, never told it is read during it", async (halt) => {
-    const { body, closes } = await bodyOf(due("change", { kind: "paused", visionWritten: false, halt }));
+    const { body, closes } = await bodyOf(due("change", { kind: "paused", visionWritten: false, contract: "workable", halt }));
     expect(body).toContain("Ashara reads it once the pause ends.");
     expect(body).not.toContain("all the same");
     expect(body).not.toContain("Reading it takes model work");
@@ -181,7 +211,7 @@ describe("the receipt under each halt kind words the inbound-message decision", 
   const cells = HALT_KINDS.flatMap((halt) => (["tender", "answer", "change"] as const).map((kind) => [halt, kind] as const));
 
   test.each(cells)("paused on %s, a %s", async (halt, kind) => {
-    const { body, closes } = await bodyOf(due(kind, { kind: "paused", visionWritten: true, halt }));
+    const { body, closes } = await bodyOf(due(kind, { kind: "paused", visionWritten: true, contract: "workable", halt }));
     expect(closes).toBe(false);
     const waits = WAIT_WORDS[halt];
     if (kind === "tender") {

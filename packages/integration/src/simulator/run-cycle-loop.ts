@@ -56,6 +56,10 @@ const SETTLE_CYCLES = Math.floor(REPORT_RETRY_MS / IDLE_INTERVAL_MS) + 1;
 const STOP_BODY = "Please stop the work.";
 const CHANGE_BODY = "Use French, please.";
 const CORRECTION_BODY = "Never colour the output.";
+/** The client of a declined contract confirming it as written, which leaves it declined. */
+const CONFIRM_AS_WRITTEN_BODY = "I confirm the contract as written.";
+/** The client of a declined contract restating its guarantees, which releases the work. */
+const RESTATE_BODY = "You can see every guarantee in what the product outputs.";
 /** A tape decision that makes a stand-in misbehave: its model answers, or its agent works, other than as asked. */
 const MISBEHAVIOUR_SITE = /^(model|agent)\./;
 
@@ -284,6 +288,10 @@ class NoInstanceComposed extends Error {
 const isCorrection = (message: { readonly kind: string; readonly body: string }): boolean =>
   message.kind === "change" && message.body === CORRECTION_BODY;
 
+/** Whether a listed message is the client's change sent with `body`. */
+const isChange = (message: { readonly kind: string; readonly body: string }, body: string): boolean =>
+  message.kind === "change" && message.body === body;
+
 /** Who a correction is posted to and by, set once the first project is tendered. */
 interface CorrectionTarget {
   readonly projectId: string;
@@ -400,6 +408,8 @@ export class CycleLoop {
   noProgress = false;
   private changed = false;
   private returned = false;
+  /** How far the client of a declined contract has answered it: not yet, confirmed it as written, restated it. */
+  private declineAnswered: "none" | "confirmed" | "restated" = "none";
   private settleLeft: number | null = null;
   private settledOn = "";
 
@@ -580,10 +590,14 @@ export class CycleLoop {
     return snapshots;
   }
 
-  /** The first project's client after a cycle: its late change, its correction, a held task returned. */
+  /**
+   * The first project's client after a cycle: its answer to a declined contract, its late change, its
+   * correction, a held task returned.
+   */
   private async clientActs(snapshot: Snapshot): Promise<void> {
     const { draws, state, provisioned, correction } = this.parts;
     const { observer, standIns } = provisioned;
+    if (draws.universe.unverifiable && this.declineAnswered !== "restated") await this.answerDecline();
     if (
       draws.lateChange &&
       !this.changed &&
@@ -601,6 +615,46 @@ export class CycleLoop {
     }
     if (draws.heldReturns && !this.returned)
       this.returned = await returnHeldTask(observer, this.projectId, snapshot, state.trace);
+  }
+
+  /**
+   * The client of the seed's unverifiable tender, once its contract is declined: first it confirms the
+   * contract as written, which must leave it declined with no work started (I6's declined-work
+   * clause judges every cycle), and once that confirmation is read it restates the guarantees so Ashara
+   * can verify them, which releases the work.
+   */
+  private async answerDecline(): Promise<void> {
+    const { server, provisioned, state } = this.parts;
+    const { client, standIns, observer } = provisioned;
+    const projectId = this.projectId;
+    const read = await observer.execute(sql`
+      SELECT EXISTS (SELECT 1 FROM client_messages WHERE project_id = ${projectId}
+               AND reports_on = 'contract-draft') AS drafted,
+             EXISTS (SELECT 1 FROM client_messages WHERE project_id = ${projectId} AND direction = 'inbound'
+               AND kind = 'change' AND body = ${CONFIRM_AS_WRITTEN_BODY}
+               AND consumed_at IS NOT NULL) AS "confirmRead"`);
+    const [standing] = z.array(z.object({ drafted: z.boolean(), confirmRead: z.boolean() })).parse(read.rows);
+    if (standing === undefined || !standing.drafted) return;
+    if (this.declineAnswered === "none") {
+      standIns.askCorrection("confirm-as-written", null);
+      await server.clientAct<null>(
+        "change",
+        (app) => client.post(app, projectId, { kind: "change", body: CONFIRM_AS_WRITTEN_BODY }),
+        (app) => onRecord(client, projectId, app, (message) => isChange(message, CONFIRM_AS_WRITTEN_BODY)),
+      );
+      this.declineAnswered = "confirmed";
+      state.trace.push(`client confirms the declined contract as written at cycle ${state.cycles}`);
+      return;
+    }
+    if (!standing.confirmRead) return;
+    standIns.askCorrection("restate-unverifiable", null);
+    await server.clientAct<null>(
+      "change",
+      (app) => client.post(app, projectId, { kind: "change", body: RESTATE_BODY }),
+      (app) => onRecord(client, projectId, app, (message) => isChange(message, RESTATE_BODY)),
+    );
+    this.declineAnswered = "restated";
+    state.trace.push(`client restates the declined contract at cycle ${state.cycles}`);
   }
 
   /** The client answers the first question it was asked with a change to an assumption. */

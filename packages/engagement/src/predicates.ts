@@ -76,6 +76,27 @@ export const noOpenStop = (projectId: AnyColumn | SQL): SQL =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages s WHERE s.project_id = ${projectId}
     AND s.direction = 'inbound' AND s.kind = 'stop' AND s.consumed_at IS NULL)`;
 
+/**
+ * The project's contract in force is declined because Ashara can verify none of its guarantees
+ * (declinesUnverifiable): it holds guarantees, and every one is marked not verifiable by Ashara or undecided. The
+ * decline lasts exactly as long as the version in force reads so: a later version that leaves the
+ * guarantees as they were (an answer, a change touching none) keeps it, and only a version holding a
+ * guarantee Ashara can verify ends it. A guarantee stored before the contract carried the mark never
+ * declines it.
+ */
+export const unverifiableContractHeld = (projectId: AnyColumn | SQL): SQL => {
+  const project = projectId instanceof SQL ? projectId : qualifiedColumn(projectId);
+  return sql`EXISTS (SELECT 1 FROM vision_documents dcv
+    WHERE dcv.project_id = ${project}
+      AND dcv.version = (SELECT MAX(dcm.version) FROM vision_documents dcm WHERE dcm.project_id = ${project})
+      AND jsonb_typeof(dcv.guarantees) = 'array' AND jsonb_array_length(dcv.guarantees) > 0
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(dcv.guarantees) dcg
+        WHERE COALESCE(dcg->>'verification', 'unmarked') NOT IN ('not-by-ashara', 'undecided')))`;
+};
+
+/** The project's contract in force is not one Ashara declines: work on it may start. */
+export const noUnverifiableContractHeld = (projectId: AnyColumn | SQL): SQL => sql`NOT ${unverifiableContractHeld(projectId)}`;
+
 /** No answer the Liaison has yet to read: one may change the vision, so the project is planned once its answers are in. */
 export const noOpenAnswer = (): SQL =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages a WHERE a.project_id = projects.id

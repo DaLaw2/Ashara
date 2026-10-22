@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deliveredInterfaceText, publicInterfaceText } from "./product.js";
-import { checkTextFacts } from "./text-facts.js";
+import { checkTextFacts, declinedWork } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
 
 // The expected wording is written here, never taken from a composer.
@@ -11,7 +11,7 @@ const none: TextFactRecords = {
   answerReplies: [],
   tenderReports: [],
   delivered: [],
-  firstPlan: { report: null, items: [], revisions: [] },
+  firstPlan: { report: null, items: [], revisions: [] }, workItems: 0,
   interfaceOnMain: { kind: "not-held" },
   intakeReading: { confirmation: "not-needed", secondStrength: null, secondQuestions: null },
 };
@@ -116,6 +116,49 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
     expect(keysOf({ visions: [vision], tenderReports: [] })).toEqual(["contract-draft"]);
     expect(keysOf({ visions: [vision], tenderReports: [draft(atRisk), { ...draft(atRisk), id: "r2" }] })).toEqual(["contract-draft"]);
     expect(keysOf({ visions: [v1], tenderReports: [draft(atRisk)] })).toEqual(["contract-draft"]);
+  });
+
+  // A contract whose every guarantee is marked not verifiable by Ashara is declined: each guarantee is
+  // listed marked so, every intake message states the decline, and none says work is under way.
+  it("holds a declined contract's draft and questions to the decline", () => {
+    const marked = { id: "G1", statement: "put waits for the lock.", source: { kind: "tender", quote: "put" }, verification: "not-by-ashara" };
+    const vision = { ...v1, inferences: [{ ...asked, underpins: ["G1"] }], guarantees: [marked] };
+    const decline =
+      "Ashara cannot verify any guarantee of this contract as written: no check Ashara can run today would show any of them holding. " +
+      "Please restate the guarantees so that at least one is seen in what the product outputs. No work starts on this contract until you do: " +
+      "confirming it as written does not start it.";
+    const draft = (opening: string, g1: string) => ({
+      id: "r1",
+      body: [
+        opening,
+        `What we guarantee, each with what it rests on:\n- G1: put waits for the lock. (basis: ${g1})`,
+        "The assumptions the guarantees rest on:\n- A1: Commands wait for the lock. (underpins G1; asked in a question)",
+      ].join("\n\n"),
+    });
+    const listed = "an assumption you have not confirmed; at risk until you confirm A1; not verifiable by Ashara: no check Ashara can run today shows it holding";
+    const question = { id: "q1", body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, the contract rests on this assumption: Commands wait for the lock.\n\nWhy this assumption: y\n\n${decline}` };
+    const declined = `This is the contract drafted from your tender, and Ashara declines it as written. ${decline}`;
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(declined, listed)] })).toEqual([]);
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(declined, "an assumption you have not confirmed; at risk until you confirm A1")] })).toEqual([
+      "contract-draft:G1",
+    ]);
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(`${declined} Work has started on this list.`, listed)] })).toEqual([
+      "declined-intake:2",
+    ]);
+    expect(keysOf({ visions: [vision], questions: [{ ...question, body: question.body.replace(decline, "") }], tenderReports: [draft(declined, listed)] })).toEqual([
+      "declined-intake:1",
+    ]);
+    const proceeds = question.body.replace("the contract rests on this assumption", "we proceed on this assumption");
+    expect(keysOf({ visions: [vision], questions: [{ ...question, body: proceeds }], tenderReports: [draft(declined, listed)] })).toEqual(["declined-intake:1"]);
+  });
+
+  it("finds work on a project whose every vision version is declined, and none once a version holds a guarantee Ashara can verify", () => {
+    const at = (version: number, verification: string) => ({ ...v1, version, guarantees: [{ id: "G1", statement: "s", source: { kind: "tender", quote: "s" }, verification }] });
+    expect(declinedWork({ ...none, visions: [at(1, "not-by-ashara"), at(2, "not-by-ashara")], workItems: 3 })).toContain("every vision version it held (v1-v2)");
+    expect(declinedWork({ ...none, visions: [at(1, "not-by-ashara")], workItems: 0 })).toBeNull();
+    expect(declinedWork({ ...none, visions: [at(1, "not-by-ashara"), at(2, "by-ashara")], workItems: 3 })).toBeNull();
+    // A guarantee stored before the mark is never read as declined.
+    expect(declinedWork({ ...none, visions: [{ ...v1, guarantees: [{ id: "G1", statement: "s", source: { kind: "tender", quote: "s" } }] }], workItems: 3 })).toBeNull();
   });
 });
 

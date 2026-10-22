@@ -4,12 +4,14 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { HaltKind } from "@ashara/delivery/predicates";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
-import { registerOf, registerParagraph } from "./early-warning.js";
+import { registerOf, registerParagraph, standingOfRegister } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
-import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
+import { guaranteeSection, tableVerdicts, unverifiedGuarantees } from "./guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 import { INBOUND_KINDS, WAITS_FOR_HALT_END, inboundDecision } from "./inbound-policy.js";
 import type { InboundKind, Told } from "./inbound-policy.js";
+import type { ContractStanding } from "./vision-language/guarantee.js";
+import { WORK_WORDS } from "./vision-language/work-promise.js";
 
 // The Liaison's reports on project halts: the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
@@ -128,6 +130,9 @@ type DueBlockReport =
     }
   /** `how` the halt ended: an owner's unblock, or the substrate probe passing after an infrastructure halt. */
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
+
+/** A recorded halt the client has not been told about. */
+type ProjectBlockedReport = Extract<DueBlockReport, { readonly subject: "project-blocked" }>;
 
 /** Engagement's persistence port for block reports; each report reissues the register of guarantees at risk. */
 export interface BlockReportStore extends RiskRecordReader {
@@ -263,8 +268,8 @@ function recordedKind(halt: ToldHalt): string {
       return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
     case "acceptance_uncovered":
       return (
-        "every check Ashara ran on the finished work passed, but a guarantee of your contract that Ashara can verify was not " +
-        "shown to hold by a check that ran, so the project cannot be accepted"
+        "every check Ashara ran on the finished work passed, but those checks do not show every guarantee of your contract " +
+        "to hold, so the project cannot be accepted; each guarantee not shown to hold, and why, is listed below"
       );
     case "work_budget":
       return halt.work?.reserveProtected === true
@@ -300,17 +305,23 @@ const READ_DURING_HALT_WORDS: Readonly<Record<Exclude<InboundKind, "stop">, stri
 /**
  * What waits on the operator during a halt of `halt`, and what of the client's input is still read
  * meanwhile, as inboundDecision decides for the halt: no more work is done, and each kind of message
- * it reads now during the halt is named; a stop is read in every state and goes unnamed.
+ * it reads now during the halt is named; a stop is read in every state and goes unnamed. What follows
+ * the halt's end is said as the contract's `standing` allows (WORK_WORDS).
  */
-function waitsOnOperator(halt: HaltKind, visionWritten: boolean): string {
+function waitsOnOperator(halt: HaltKind, visionWritten: boolean, standing: ContractStanding): string {
+  const words = WORK_WORDS[standing];
   const read = INBOUND_KINDS.flatMap((kind) =>
     kind !== "stop" && inboundDecision({ lifecycle: "active", halt, visionWritten }, kind).reading === "now" ? [READ_DURING_HALT_WORDS[kind]] : [],
   );
-  const meanwhile =
-    read.length === 0
-      ? "Until then no more work is done on this project, and what you send, other than a stop, is read once work resumes."
-      : `Until then no more work is done on this project, though Ashara still reads ${read.join(" and ")} during the pause.`;
-  return `${meanwhile} The team is waiting on its operator for this, and you will be told when work resumes.`;
+  const meanwhile = (() => {
+    if (read.length === 0) {
+      const waits = `what you send, other than a stop, is read ${words.afterPause}.`;
+      return words.noMoreWork === null ? `Until then ${waits}` : `${words.noMoreWork}, and ${waits}`;
+    }
+    const reads = `Ashara still reads ${read.join(" and ")} during the pause.`;
+    return words.noMoreWork === null ? reads : `${words.noMoreWork}, though ${reads}`;
+  })();
+  return `${meanwhile} The team is waiting on its operator for this, and ${words.toldNext}.`;
 }
 
 /** What has to be raised for a budget_cap halt to end: the limit that stopped the work, as recorded. */
@@ -325,8 +336,12 @@ function limitToRaise(limit: SpendLimit): string {
   }
 }
 
-/** What happens next after a halt: who or what ends it. The cause is stated apart, from the record. */
-function nextStep(halt: ToldHalt, waits: string): string {
+/**
+ * What happens next after a halt: who or what ends it, and the work that follows only as the
+ * contract's `standing` allows. The cause is stated apart, from the record.
+ */
+function nextStep(halt: ToldHalt, waits: string, standing: ContractStanding): string {
+  const words = WORK_WORDS[standing];
   switch (halt.kind) {
     case "budget_cap":
       return `${limitToRaise(halt.limit)} ${waits}`;
@@ -335,35 +350,39 @@ function nextStep(halt: ToldHalt, waits: string): string {
     case "fault":
       return `The team has to repair it. ${waits}`;
     case "planning_stopped":
-      return `The team has to look into it before planning is tried again. ${waits}`;
+      return `The team has to look into it${words.before("planning is tried again")}. ${waits}`;
     case "replan_stopped":
     case "replan_provider_failed":
-      return `The team has to look into it before the plan is revised again. ${waits}`;
+      return `The team has to look into it${words.before("the plan is revised again")}. ${waits}`;
     case "model_failed":
     case "provider_failed":
-      return `The team has to look into it before that step is tried again. ${waits}`;
+      return `The team has to look into it${words.before("that step is tried again")}. ${waits}`;
     case "replan_bound":
-      return `Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. ${waits}`;
+      return `Your latest change is recorded, and the operator has to look the project over${words.before("the plan is revised for it")}. ${waits}`;
     case "work_budget":
-      return `More model requests have to be granted to this project before more work is done. ${waits}`;
+      return `More model requests have to be granted to this project${words.before("more work is done")}. ${waits}`;
     case "acceptance_uncovered":
-      return `The team has to look into why each such guarantee went unchecked before the finished work is checked again. ${waits}`;
+      return (
+        `Each guarantee listed below says who can settle it. One Ashara cannot verify as written is settled only by you, ` +
+        `with a change that restates it as something Ashara can check or removes it; the team looks into any other` +
+        `${words.before("the finished work is checked again")}. ${waits}`
+      );
     case "infrastructure":
       // Not a claim about the cause, which is the record's own text above: only what ends this
       // halt (infrastructure-halts.ts, the substrate probe each cycle) and that it is not charged.
       return (
         `This pause is not charged as an attempt at the work. Ashara checks the machines it runs the work on again ` +
-        `on every round of work and resumes this project by itself as soon as they answer; you will be told when it does.`
+        `on every round of work and ${words.machinesEnd("they answer")}; you will be told when it does.`
       );
   }
   throw new HaltKindUnworded(halt);
 }
 
-/** What the client reads when a project is paused: that it is, the recorded cause, and what happens next. */
-function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: RecordedCause, visionWritten: boolean): string {
-  const opening = kind === "planning_stopped" ? "Ashara could not turn this project's vision into a plan, so work on this project has stopped." : "Work on this project is paused.";
+/** What the client reads when a project is paused: that it is, the recorded cause, and what happens next as the contract's `standing` allows. */
+function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: RecordedCause, visionWritten: boolean, standing: ContractStanding): string {
+  const opening = kind === "planning_stopped" ? "Ashara could not turn this project's vision into a plan, so work on this project has stopped." : WORK_WORDS[standing].paused;
   const halt = toldHalt(kind, cause);
-  return [opening, recordedCause(episodeId, halt, cause), nextStep(halt, waitsOnOperator(kind, visionWritten))].join("\n\n");
+  return [opening, recordedCause(episodeId, halt, cause), nextStep(halt, waitsOnOperator(kind, visionWritten, standing), standing)].join("\n\n");
 }
 
 /** A halt for which inboundDecision tells a change something other than its reading under a halt: the decision does not hold together. */
@@ -378,7 +397,6 @@ class HaltReportToldIncoherent extends Error {
 }
 
 const CHANGE_DOES_NOT_END_PAUSE = "A change you send meanwhile does not end this pause";
-const PLAN_REVISED_ON_RESUMPTION = "The plan is revised for it once work resumes.";
 
 /**
  * What a change the client sends during the halt does, as inboundDecision decides for the halt's
@@ -389,24 +407,27 @@ const PLAN_REVISED_ON_RESUMPTION = "The plan is revised for it once work resumes
  * reading. The report may be posted before either limit is reached, and either may be reached after
  * it, so it states both. A reading that fails on every attempt, or a change the record cannot take
  * while the halt lasts, waits for the halt's end, which sets its count of failed readings back to none
- * (resetOnHaltEnd), so it is read afresh once work resumes. Under a halt that holds its reading, it
+ * (resetOnHaltEnd), so it is read afresh once the halt ends. Under a halt that holds its reading, it
  * is read once the halt ends, for the reason the decision gives. Before the project's tender is read
- * it waits for that reading, which waits for the halt's end.
+ * it waits for that reading, which waits for the halt's end. What it does to the plan is said only as
+ * the contract's `standing` allows.
  */
-function changeSentDuringHalt(halt: HaltKind, visionWritten: boolean): string {
+function changeSentDuringHalt(halt: HaltKind, visionWritten: boolean, standing: ContractStanding): string {
   const told = inboundDecision({ lifecycle: "active", halt, visionWritten }, "change").told;
+  const words = WORK_WORDS[standing];
+  const plan = words.planOnResumption === null ? "" : ` ${words.planOnResumption}`;
   switch (told) {
     case "read-during-pause":
       return (
         `${CHANGE_DOES_NOT_END_PAUSE}: Ashara reads it and records it during the pause, unless a spending ` +
         "limit stops that reading (this project's own, or the one for all of Ashara's work), in which case it is read once that " +
         "limit is raised. If reading it fails on every attempt, or the project's record cannot take it while the pause lasts, " +
-        `Ashara reads it afresh once work resumes. ${PLAN_REVISED_ON_RESUMPTION}`
+        `Ashara reads it afresh ${words.afterPause}.${plan}`
       );
     case "waits-for-budget":
-      return `${CHANGE_DOES_NOT_END_PAUSE}. ${WAITS_FOR_HALT_END.budget} ${PLAN_REVISED_ON_RESUMPTION}`;
+      return `${CHANGE_DOES_NOT_END_PAUSE}. ${WAITS_FOR_HALT_END.budget}${plan}`;
     case "waits-for-model-work":
-      return `${CHANGE_DOES_NOT_END_PAUSE}. ${WAITS_FOR_HALT_END["model-work"]} ${PLAN_REVISED_ON_RESUMPTION}`;
+      return `${CHANGE_DOES_NOT_END_PAUSE}. ${WAITS_FOR_HALT_END["model-work"]}${plan}`;
     case "waits-for-pause":
       return (
         `${CHANGE_DOES_NOT_END_PAUSE}. Ashara has not yet read the tender this project began with, and reads it once the pause ends; ` +
@@ -420,25 +441,31 @@ function changeSentDuringHalt(halt: HaltKind, visionWritten: boolean): string {
   }
 }
 
+/** What ends a halt only the operator ends, and when the client hears next, as the contract's `standing` allows. */
+function operatorEndsHalt(standing: ContractStanding): string {
+  const words = WORK_WORDS[standing];
+  return `${words.untilOperator("resolves this")}; ${words.toldNext}.`;
+}
+
 /** Plain words: what stopped, why, and what ends it (a halt kind only older records hold). */
-function disputeBoundReport(dispute: BlockingDispute): string {
+function disputeBoundReport(dispute: BlockingDispute, standing: ContractStanding): string {
   return [
-    `Work on this project is paused. While building "${dispute.taskTitle}", the developer found that one of the checks ` +
+    `${WORK_WORDS[standing].paused} While building "${dispute.taskTitle}", the developer found that one of the checks ` +
       `written to confirm it ("${dispute.checkName}") cannot be passed by correct work, and the team has not been able ` +
       `to settle this after ${dispute.disputes} attempts.`,
     `The developer's last explanation: ${dispute.reason}`,
-    `Nothing more will be built until the team's operator resolves this and resumes the project; you will be told when work resumes.`,
+    operatorEndsHalt(standing),
   ].join("\n\n");
 }
 
 /** Plain words: what stopped, what the review found, and what ends it (a halt kind only older records hold). */
-function suiteReviewBoundReport(review: BlockingReview): string {
+function suiteReviewBoundReport(review: BlockingReview, standing: ContractStanding): string {
   return [
-    `Work on this project is paused. Before building starts, the team reviews all the checks written to confirm the ` +
+    `${WORK_WORDS[standing].paused} Before building starts, the team reviews all the checks written to confirm the ` +
       `work, together with what you asked for. The review keeps finding checks that cannot all be passed at once, or ` +
       `that test something you did not ask for, and the team has not been able to settle this after ${review.times} reviews.`,
     `What the last review found:\n${review.problems.map((problem) => `- ${problem}`).join("\n")}`,
-    `Nothing will be built until the team's operator resolves this and resumes the project; you will be told when work resumes.`,
+    operatorEndsHalt(standing),
   ].join("\n\n");
 }
 
@@ -496,7 +523,7 @@ function givenUpCategory(cause: StoredBlockedReason): string {
 }
 
 /** Plain words: which work the team gave up again and the recorded cause of each, and what resumes the project: the operator alone. */
-function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): string {
+function planRepairBoundReport(abandoned: readonly BlockingAbandonment[], standing: ContractStanding): string {
   return [
     `Work on this project has stopped: the team cannot deliver it as planned. The plan has already been revised around ` +
       `work it gave up as many times as the team revises it on its own, and it gave up again:`,
@@ -507,7 +534,7 @@ function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): strin
           `${givenUpCategory(task.cause)}. Ashara keeps the detail in its own record of that task, record ${task.workItemId}.`,
       )
       .join("\n"),
-    `Nothing more is built until the team's operator looks the project over and resumes it; you will be told when work resumes.`,
+    `${WORK_WORDS[standing].untilOperator("looks the project over")}; ${WORK_WORDS[standing].toldNext}.`,
   ].join("\n\n");
 }
 
@@ -515,20 +542,19 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function projectResumedReport(how: "unblocked" | "probe_passed"): string {
-  return how === "probe_passed"
-    ? "Work on this project has resumed: the machines Ashara runs the work on work again, and the work goes on from where it stopped."
-    : "Work on this project has resumed: the team cleared what paused it, and the work goes on from where it stopped.";
+/** What the client reads when a pause ends: what ended it, and what follows as the contract's `standing` allows. */
+function projectResumedReport(how: "unblocked" | "probe_passed", standing: ContractStanding): string {
+  return WORK_WORDS[standing].resumed(how === "probe_passed" ? "the machines Ashara runs the work on work again" : "the team cleared what paused it");
 }
 
-function haltBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
+function haltBody(due: ProjectBlockedReport, standing: ContractStanding): string {
   switch (due.kind) {
     case "check_dispute":
-      return disputeBoundReport(due.dispute);
+      return disputeBoundReport(due.dispute, standing);
     case "suite_review":
-      return suiteReviewBoundReport(due.review);
+      return suiteReviewBoundReport(due.review, standing);
     case "plan_repair":
-      return planRepairBoundReport(due.abandoned);
+      return planRepairBoundReport(due.abandoned, standing);
     case "budget_cap":
     case "configuration":
     case "fault":
@@ -540,15 +566,19 @@ function haltBody(due: Extract<DueBlockReport, { readonly subject: "project-bloc
     case "model_failed":
     case "provider_failed":
     case "work_budget":
+      return projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing);
     case "acceptance_uncovered":
-      return projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten);
+      return `${projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing)}\n\n${unverifiedGuarantees(due.guarantees)}`;
   }
   throw new HaltKindUnworded(due);
 }
 
-/** A halt's report: what paused the project, what a change sent during it does, then the guarantee table of its terminal sweep. */
-function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
-  return `${haltBody(due)}\n\n${changeSentDuringHalt(due.kind, due.visionWritten)}\n\n${guaranteeSection(due.guarantees)}`;
+/**
+ * A halt's report: what paused the project, what a change sent during it does, then the guarantee
+ * table of its terminal sweep; whatever it says of the work after the halt, as the contract's `standing` allows.
+ */
+function blockedBody(due: ProjectBlockedReport, standing: ContractStanding): string {
+  return `${haltBody(due, standing)}\n\n${changeSentDuringHalt(due.kind, due.visionWritten, standing)}\n\n${guaranteeSection(due.guarantees)}`;
 }
 
 export class BlockReports implements LiaisonBlockReports {
@@ -575,7 +605,7 @@ export class BlockReports implements LiaisonBlockReports {
             const kind = await this.store.postProjectReport(
               report.episodeId,
               "blocked",
-              await this.withRegister(report.projectId, blockedBody(report)),
+              await this.withRegister(report.projectId, (standing) => blockedBody(report, standing)),
               tableVerdicts(report.guarantees),
             );
             return { kind, projectId: report.projectId, subject: report.subject };
@@ -584,7 +614,7 @@ export class BlockReports implements LiaisonBlockReports {
             const kind = await this.store.postProjectReport(
               report.episodeId,
               "resumed",
-              await this.withRegister(report.projectId, projectResumedReport(report.how)),
+              await this.withRegister(report.projectId, (standing) => projectResumedReport(report.how, standing)),
               null,
             );
             return { kind, projectId: report.projectId, subject: report.subject };
@@ -594,9 +624,12 @@ export class BlockReports implements LiaisonBlockReports {
     );
   }
 
-  /** The report's body with the register of guarantees at risk as its last paragraph. */
-  private async withRegister(projectId: ProjectId, body: string): Promise<string> {
+  /**
+   * The report's body, composed for the standing of the contract the register reads, with the register
+   * of guarantees at risk as its last paragraph: the body and the register read the same records.
+   */
+  private async withRegister(projectId: ProjectId, body: (standing: ContractStanding) => string): Promise<string> {
     const register = registerOf(await this.store.riskRecords(projectId));
-    return `${body}\n\n${registerParagraph(projectId, register)}`;
+    return `${body(standingOfRegister(register))}\n\n${registerParagraph(projectId, register)}`;
   }
 }

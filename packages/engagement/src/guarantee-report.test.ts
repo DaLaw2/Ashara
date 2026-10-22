@@ -5,7 +5,7 @@ import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 import { DeliveredReports } from "./delivered-report.js";
 import type { DeliveredReportStore } from "./delivered-report.js";
-import { guaranteeSection, guaranteeTableOf, tableVerdicts } from "./guarantee-report.js";
+import { guaranteeSection, guaranteeTableOf, tableVerdicts, unverifiedGuarantees } from "./guarantee-report.js";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
 import type { GuaranteeRecords, GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
@@ -135,7 +135,7 @@ describe("the guarantee table", () => {
       [
         "The punch list, what is not shown to hold, failures first:",
         "- G3: fail, a check deciding it failed on this commit",
-        "- G2: unjudged, it is about stored data, and the faults that would show stored data surviving them are not run",
+        "- G2: unjudged, it is seen only outside what the product's interface shows, and no check Ashara runs reads stored data directly or injects the faults that would show it",
         "- G4: unjudged, a review of the checks found they may not decide it",
       ].join("\n"),
     );
@@ -367,5 +367,45 @@ describe("every terminal message carries the table", () => {
     expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("The punch list"));
     expect(verdicts).toEqual(tableVerdicts(guaranteeTableOf(SWEPT)));
     expect(body).not.toContain("second review");
+  });
+});
+
+// An acceptance_uncovered halt names each guarantee not shown to hold, why, and who can settle it: one
+// Ashara cannot verify as written only the client can, by restating or removing it; one a check could
+// decide is the team's. A contract the client confirmed as holding nothing Ashara can verify says so.
+describe("the guarantees an acceptance_uncovered halt names", () => {
+  test("a contract confirmed as holding nothing Ashara can verify names each guarantee as the client's to settle, and counts none verifiable", () => {
+    const confirmed = readVisionVersion({
+      projectId,
+      version: 3,
+      visionText: TENDER,
+      summary: "A store.",
+      scopeBoundaries: [],
+      inferences: ASSUMPTIONS,
+      openQuestions: [],
+      contractForm: "guarantees",
+      interface: [{ id: "I1", text: "put KEY VALUE, get KEY, delete KEY", source: quote("Clients put and get values.") }],
+      guarantees: [GUARANTEES[1], { ...GUARANTEES[0], observable: { interface: ["I1"], observation: "stored-data" } }].map((g) => ({ ...g, verification: "not-by-ashara" })),
+      exclusions: [],
+    });
+    const table = guaranteeTableOf(judgedBy([unjudged("G2", "not-verifiable-by-ashara"), unjudged("G1", "not-verifiable-by-ashara")], MAIN, confirmed));
+    const words = unverifiedGuarantees(table);
+    const settled = "Ashara cannot verify it as written, so only you can settle it, by restating it or removing it";
+    // Each is a stored-data guarantee marked before the reason was recorded: it reads the reason of the one rule that marked it.
+    const why =
+      "it is seen only outside what the product's interface shows, in the stored data itself or only under a fault such as a crash in the middle of a write, " +
+      "and no check Ashara can run today reads stored data directly or injects such a fault";
+    expect(words.split("\n").filter((line) => line.startsWith("- G"))).toEqual([
+      `- G2 (An acknowledged put survives a crash.): not verified, Ashara cannot verify it with the checks it can run, as your contract said when it was proposed: ${why}; ${settled}`,
+      `- G1 (A get returns the value of the last put of its key.): not verified, Ashara cannot verify it with the checks it can run, as your contract said when it was proposed: ${why}; ${settled}`,
+    ]);
+    expect(words).toContain("Ashara can verify 0 of the 2 guarantees of this contract with the checks it can run today.");
+  });
+
+  test("a guarantee a check could decide is named as the team's to look into", () => {
+    const words = unverifiedGuarantees(guaranteeTableOf(SWEPT));
+    expect(words).toContain("- G3 (A get of a missing key exits 1.): fail, a check deciding it failed on this commit; a check could decide it, so the team looks into it");
+    expect(words).toContain("- G4 (A delete removes the key.): unjudged, only a review of the checks speaks for it, and a review never makes a guarantee pass; a check could decide it, so the team looks into it");
+    expect(words).toContain("- G2 (An acknowledged put survives a crash.): unjudged, it is seen only outside what the product's interface shows, and no check Ashara runs reads stored data directly or injects the faults that would show it; Ashara cannot verify it as written");
   });
 });

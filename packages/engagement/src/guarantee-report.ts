@@ -1,6 +1,7 @@
 import type { EvidenceClass, GuaranteeVerdict, JudgedSweep, JudgedVerdicts, ReportVerdicts, UnjudgedReason, Verdict } from "@ashara/quality/published-verdicts";
 import type { VisionGuarantee } from "./vision-language/index.js";
 import type { Direction, RevisionOp } from "./vision-language/contract-op.js";
+import { OBSERVATION_UNDECIDED, verifiableByAshara, verifiableCountLine, whyNotVerifiable } from "./vision-language/guarantee.js";
 import type { GuaranteeBasis } from "./vision-language/guarantee.js";
 import type { VisionVersion } from "./vision.js";
 
@@ -220,7 +221,7 @@ const UNJUDGED_BECAUSE: Readonly<Record<UnjudgedReason, string>> = {
   "not-verifiable-by-ashara": NOT_VERIFIABLE,
   "no-executed-evidence": "no check deciding it ran and passed",
   "review-only": "only a review of the checks speaks for it, and a review never makes a guarantee pass",
-  "stored-data-unjudged": "it is about stored data, and the faults that would show stored data surviving them are not run",
+  "stored-data-unjudged": "it is seen only outside what the product's interface shows, and no check Ashara runs reads stored data directly or injects the faults that would show it",
   "not-checkable-as-written": "as written it names nothing that would show it broken, so no check can decide it",
   "lowered-by-review": "a review of the checks found they may not decide it",
   "out-of-scope-of-run": "it is outside what this run checked",
@@ -242,26 +243,71 @@ const EVIDENCE_WORDS: Readonly<Record<EvidenceClass, string>> = {
   none: "no check ran",
 };
 
-function verdictWords(verdict: Verdict): string {
+function verdictWords(verdict: Verdict, guarantee: VisionGuarantee): string {
   switch (verdict.kind) {
     case "pass":
       return "pass";
     case "fail":
       return "fail, a check deciding it failed on this commit";
     case "unjudged":
-      return unjudgedWords(verdict.reason);
+      return unjudgedWords(verdict.reason, guarantee);
   }
 }
 
-/** An unjudged verdict in the client's words: one outside what Ashara can verify reads not verified, never unjudged work. */
-function unjudgedWords(reason: UnjudgedReason): string {
-  return reason === "not-verifiable-by-ashara" ? `not verified, ${NOT_VERIFIABLE}` : `unjudged, ${UNJUDGED_BECAUSE[reason]}`;
+/**
+ * An unjudged verdict in the client's words: one outside what Ashara can verify reads not verified,
+ * never unjudged work, with the reason the contract records for it; one whose drafter could not tell
+ * where it is seen says so.
+ */
+function unjudgedWords(reason: UnjudgedReason, guarantee: VisionGuarantee): string {
+  const undecided = guarantee.verification === "undecided" ? `; ${OBSERVATION_UNDECIDED}` : "";
+  if (reason !== "not-verifiable-by-ashara") return `unjudged, ${UNJUDGED_BECAUSE[reason]}${undecided}`;
+  return guarantee.verification === "not-by-ashara" ? `not verified, ${NOT_VERIFIABLE}: ${whyNotVerifiable(guarantee.unverifiableBecause)}` : `not verified, ${NOT_VERIFIABLE}`;
+}
+
+/**
+ * Who can settle an unjudged guarantee: the client, when Ashara cannot verify it as written, since
+ * only a restatement or its removal changes that; the team, when a check could decide it and none did.
+ */
+const SETTLED_BY: Readonly<Record<UnjudgedReason, "client" | "team">> = {
+  "not-verifiable-by-ashara": "client",
+  "stored-data-unjudged": "client",
+  "not-checkable-as-written": "client",
+  "no-executed-evidence": "team",
+  "review-only": "team",
+  "lowered-by-review": "team",
+  "out-of-scope-of-run": "team",
+  "no-sweep-on-commit": "team",
+};
+
+const SETTLED_WORDS: Readonly<Record<"client" | "team", string>> = {
+  client: "Ashara cannot verify it as written, so only you can settle it, by restating it or removing it",
+  team: "a check could decide it, so the team looks into it",
+};
+
+/**
+ * Why acceptance could not rest on the table's guarantees, in the client's words: each guarantee not
+ * judged pass, with its statement, why, and who can settle it, one whose drafter could not tell where
+ * it is observed saying so, then how many of the version's guarantees Ashara can verify. A table that
+ * is no table says it names none, never that every guarantee held.
+ */
+export function unverifiedGuarantees(table: GuaranteeTable): string {
+  if (table.kind !== "table") return "Which guarantees could not be shown to hold is not on record for this pause.";
+  const lines = table.lines.flatMap((line) => {
+    if (line.verdict.kind === "pass") return [];
+    const why = line.verdict.kind === "fail" ? "fail, a check deciding it failed on this commit" : unjudgedWords(line.verdict.reason, line.guarantee);
+    const settled = SETTLED_WORDS[line.verdict.kind === "fail" ? "team" : SETTLED_BY[line.verdict.reason]];
+    return [`- ${line.guarantee.id} (${line.guarantee.statement}): ${why}; ${settled}`];
+  });
+  const count = verifiableCountLine(table.vision.guarantees.filter(verifiableByAshara).length, table.vision.guarantees.length);
+  if (lines.length === 0) return `Every guarantee of your contract (vision v${table.vision.version}) is judged pass on record. ${count}`;
+  return [`The guarantees of your contract (vision v${table.vision.version}) that Ashara could not show to hold, and why:`, ...lines, count].join("\n");
 }
 
 /** The punch list: every failure, then every unjudged guarantee, then every pass at risk; or that it is empty. */
 function punchList(lines: readonly GuaranteeLine[]): string {
   const failed = lines.filter((line) => line.verdict.kind === "fail").map((line) => `- ${line.guarantee.id}: fail, a check deciding it failed on this commit`);
-  const unjudged = lines.flatMap((line) => (line.verdict.kind === "unjudged" ? [`- ${line.guarantee.id}: ${unjudgedWords(line.verdict.reason)}`] : []));
+  const unjudged = lines.flatMap((line) => (line.verdict.kind === "unjudged" ? [`- ${line.guarantee.id}: ${unjudgedWords(line.verdict.reason, line.guarantee)}`] : []));
   const atRisk = lines
     .filter((line) => line.verdict.kind === "pass" && line.guarantee.basis === "assumed-unconfirmed")
     .map((line) => `- ${line.guarantee.id}: pass, but it rests on an assumption you have not confirmed`);
@@ -288,7 +334,7 @@ function judgedOn(table: Extract<GuaranteeTable, { readonly kind: "table" }>): s
 }
 
 function tableLine(line: GuaranteeLine): string {
-  return `- ${line.guarantee.id}: ${line.guarantee.statement} | verdict: ${verdictWords(line.verdict)} | basis: ${BASIS_WORDS[line.guarantee.basis]} | evidence: ${EVIDENCE_WORDS[line.evidenceClass]}`;
+  return `- ${line.guarantee.id}: ${line.guarantee.statement} | verdict: ${verdictWords(line.verdict, line.guarantee)} | basis: ${BASIS_WORDS[line.guarantee.basis]} | evidence: ${EVIDENCE_WORDS[line.evidenceClass]}`;
 }
 
 /** The assumptions the guarantees rest on, each with the guarantees it underpins and whether the client stated it. */

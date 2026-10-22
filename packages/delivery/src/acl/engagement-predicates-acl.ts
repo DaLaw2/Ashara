@@ -16,6 +16,7 @@ export {
   haltReported,
   noOpenAnswer,
   noOpenStop,
+  noUnverifiableContractHeld,
   planningStoppedTold,
   planRevisionTold,
   projectActive,

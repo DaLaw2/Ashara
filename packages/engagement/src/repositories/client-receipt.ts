@@ -16,7 +16,12 @@ import { LockedStanding, consumeInbound, dueReceiptMessages, inboundMessageOf, p
 // and the message's consumption are read again, so a receipt never states a state that moved.
 
 const InboundKindSchema = z.enum(INBOUND_KINDS);
-const StandingRowSchema = z.object({ lifecycle: z.enum(PROJECT_LIFECYCLES), halt: z.enum(HALT_KINDS).nullable(), visionWritten: z.boolean() });
+const StandingRowSchema = z.object({
+  lifecycle: z.enum(PROJECT_LIFECYCLES),
+  halt: z.enum(HALT_KINDS).nullable(),
+  visionWritten: z.boolean(),
+  contractHeld: z.boolean(),
+});
 const DueRowSchema = z.object({ messageId: z.string(), projectId: z.string(), kind: z.string(), consumed: z.boolean(), stoppedProject: z.boolean() });
 
 /** A stored lifecycle and halt that do not hold together: a stopped or delivered project has no open halt. */
@@ -32,16 +37,19 @@ class ProjectStandingIncoherent extends Error {
 }
 
 function standingOf(projectId: string, row: unknown): ProjectStanding {
-  const { lifecycle, halt, visionWritten: written } = StandingRowSchema.parse(row);
-  if (lifecycle === "active") return halt === null ? { kind: "at-work", visionWritten: written } : { kind: "paused", halt, visionWritten: written };
+  const { lifecycle, halt, visionWritten: written, contractHeld } = StandingRowSchema.parse(row);
+  const contract = contractHeld ? "held" : "workable";
+  if (lifecycle === "active") {
+    return halt === null ? { kind: "at-work", visionWritten: written, contract } : { kind: "paused", halt, visionWritten: written, contract };
+  }
   if (halt !== null) throw new ProjectStandingIncoherent(projectId, lifecycle, halt);
   return { kind: lifecycle === "stopped" ? "stopped" : "accepted" };
 }
 
 function sameStanding(a: ProjectStanding, b: ProjectStanding): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "paused" && b.kind === "paused") return a.halt === b.halt && a.visionWritten === b.visionWritten;
-  if (a.kind === "at-work" && b.kind === "at-work") return a.visionWritten === b.visionWritten;
+  if (a.kind === "paused" && b.kind === "paused") return a.halt === b.halt && a.visionWritten === b.visionWritten && a.contract === b.contract;
+  if (a.kind === "at-work" && b.kind === "at-work") return a.visionWritten === b.visionWritten && a.contract === b.contract;
   return true;
 }
 

@@ -209,8 +209,9 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
       return "the budget of model requests set for this project was used up, so the next step of the work was not sent";
     case "acceptance_uncovered":
       return (
-        "every check Ashara ran on the finished work passed, but a guarantee of your contract that Ashara can verify " +
-        "was not shown to hold by a check that ran, so the project cannot be accepted"
+        "every check Ashara ran on the finished work passed, but those checks do not show every guarantee of your " +
+        "contract to hold, so the project cannot be accepted; each guarantee not shown to hold, and why, is " +
+        "listed below"
       );
   }
 }

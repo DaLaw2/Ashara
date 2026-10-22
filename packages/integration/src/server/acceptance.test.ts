@@ -7,6 +7,7 @@ import { isGoalTask } from "@ashara/delivery/predicates";
 import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import {
+  BlockReports,
   ClientAnswers,
   ClientStops,
   DeliveredReports,
@@ -15,7 +16,7 @@ import {
   guaranteesInForce,
   VisionRepository,
 } from "@ashara/engagement";
-import type { DeliveredReportStore } from "@ashara/engagement";
+import type { BlockReportStore, DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
@@ -23,6 +24,7 @@ import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
+import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { projectState } from "../simulator/project-state.js";
 
@@ -520,6 +522,51 @@ describe("acceptance on main", () => {
     expect(z.array(z.object({ n: z.number() })).parse(passed.rows)[0]?.n).toBe(0);
     await expect(db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
+  });
+
+  // A contract recorded before guarantees carried the "not verifiable by Ashara" mark was never told
+  // so, and fails closed: its guarantees read unmarked and stay in coverage, so a stored-data one halts
+  // acceptance. The halt's report names each guarantee Ashara could not show to hold and why, and how
+  // many Ashara can verify, so the client is not left with a bare "cannot be accepted".
+  test("an acceptance_uncovered halt on a contract recorded before the mark names each guarantee Ashara could not verify and why", async () => {
+    const { projectId, goals } = await contractProject("with-stored-data");
+    await db.execute(sql`
+      UPDATE vision_documents SET guarantees = (
+        SELECT jsonb_agg(g - 'verification' - 'unverifiableBecause' ORDER BY i) FROM jsonb_array_elements(guarantees) WITH ORDINALITY AS t(g, i))
+      WHERE project_id = ${projectId}`);
+    expect(await guaranteesInForce(db, projectId)).toMatchObject({
+      kind: "version",
+      guarantees: [{ id: "G1", verification: "unmarked" }, { id: "G2", verification: "unmarked" }, { id: "G3", verification: "unmarked" }],
+    });
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2", "G3"]))).toBe(0);
+    expect(await haltOf(projectId)).toMatchObject({ kind: "acceptance_uncovered", reason: expect.stringContaining("G3 (unjudged, stored-data-unjudged)") });
+
+    // The halt's terminal sweep runs the same checks on main, as the core loop's terminal-sweep step records it before the report.
+    const terminals = createTerminalSweepStore(db);
+    const [due] = (await terminals.dueTerminalSweeps()).filter((each) => each.projectId === projectId);
+    if (due === undefined) throw new Error(`project ${projectId} owes no terminal sweep`);
+    const checkOutcomes = goals.map((taskId) => ({ taskId, revision: 1, checkTaskId: taskId, name: "works", command: "sh checks/run.sh", decides: ["G1", "G2", "G3"], outcome: "passed" as const }));
+    expect(
+      await terminals.recordTerminalSweep({ projectId, terminal: due.terminal, mainCommit: MAIN, environmentVersion: "v1", checkedTasks: goals, uncheckedTasks: [], checkOutcomes, details: "all suites passed" }),
+    ).toBe("recorded");
+    const store = createBlockReportStore(db);
+    const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((report) => report.projectId === projectId) };
+    expect(await new BlockReports(ours, memoryStepContainment(() => true)).runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+
+    const [body = ""] = await reportsOf(projectId);
+    expect(body).toContain(
+      "The guarantees of your contract (vision v1) that Ashara could not show to hold, and why:\n" +
+        "- G3 (A put survives a restart.): unjudged, it is seen only outside what the product's interface shows, and no check Ashara runs reads stored data directly or injects the faults that would show it; " +
+        "Ashara cannot verify it as written, so only you can settle it, by restating it or removing it\n" +
+        "Ashara can verify 2 of the 3 guarantees of this contract with the checks it can run today.",
+    );
+    expect(body).not.toMatch(/could not show to hold, and why:[^]*- G[12] \(/);
+    // The cause and the next step agree with that list: no claim that the unshown guarantee is one Ashara
+    // can verify, and the remedy for one it cannot verify as written is the client's restatement, not the team's look.
+    expect(body).toContain("those checks do not show every guarantee of your contract to hold, so the project cannot be accepted");
+    expect(body).not.toContain("a guarantee of your contract that Ashara can verify");
+    expect(body).toContain("One Ashara cannot verify as written is settled only by you, with a change that restates it as something Ashara can check or removes it");
+    expect(body).not.toContain("went unchecked");
   });
 
   // A guarantee stands on the evidence the sweep recorded: one a suite review left undecided reads

@@ -1,4 +1,6 @@
 import { TenderIntake } from "@ashara/engagement";
+import { rewriteText } from "./faults.js";
+import type { QueryPlant } from "./faults.js";
 
 /** The method a code plant replaces is gone from TenderIntake: the plant would patch nothing and prove nothing. */
 class PlantSeamMissing extends Error {
@@ -39,3 +41,13 @@ export function intakeSecondReadingDropped(): () => void {
     Object.defineProperty(TenderIntake.prototype, SECOND_READING, original);
   };
 }
+
+/**
+ * A contract Ashara declines is read as one it can verify: every query that asks whether the
+ * project's contract in force is declined (Engagement's unverifiableContractHeld) reads no, so its
+ * roster and first plan are written before the client restates it (I6's declined-work clause).
+ */
+export const declinedContractPlanned: QueryPlant = (args) =>
+  rewriteText(args, (text) =>
+    text.replaceAll("WHERE dcv.project_id = ", "WHERE FALSE AND dcv.project_id = "),
+  );

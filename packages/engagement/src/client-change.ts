@@ -13,13 +13,16 @@ import {
   correctionPrompt,
   correctionReport,
   costBandOf,
+  declinedCorrection,
   pushbackOf,
   readingProblems,
   revisionOpsOf,
+  verifiableCountOf,
 } from "./correction.js";
 import type { ChangeImpact, CheckedOp, CorrectionNote, CorrectionReading, PendingProposal } from "./correction.js";
 import { ownSpendRefusal } from "./client-spend-refusal.js";
 import { StoredRevisionOpsSchema, revisionDirection } from "./vision-language/contract-op.js";
+import { contractStandingOf } from "./vision-language/guarantee.js";
 import type { Direction, Pushback, RevisionOp, RevisionRecord } from "./vision-language/contract-op.js";
 import { Vision, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend } from "./vision.js";
@@ -28,7 +31,10 @@ import type { StoredVision, VisionAppend } from "./vision.js";
 // typed operations on the contract in force; it confirms any pending proposal it names, and its own
 // operations are applied as vision vN+1 with a revision record (author, approver, direction, cause),
 // or, when the Liaison pushes back, recorded as a proposal awaiting the client's confirmation. Either
-// way one impact note goes out in reply to it, in the same transaction. No outcome refuses a change.
+// way one impact note goes out in reply to it, in the same transaction. The one change declined is one
+// that would leave a contract with no guarantee Ashara can verify (declinedCorrection): it is not made,
+// confirming it does not make it, and its note asks for the guarantees restated. Every note posted while
+// the contract in force is declined ends with that decline.
 // A halted project's changes are read too: a halt pauses the work, never the reading of what the client
 // said, so the contract is corrected at once and the work it touches waits for the halt's own end;
 // except under a halt the reading cannot get past, which the change waits out, as inboundDecision decides.
@@ -110,13 +116,17 @@ export interface ClientChangeStore {
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
-/** What the change's own operations did: applied as a version, held for confirmation, or nothing to apply. */
+/**
+ * What the change's own operations did: applied as a version, held for confirmation, declined as
+ * leaving no guarantee Ashara can verify, or nothing to apply.
+ */
 type RevisionOutcome =
   | { readonly status: "applied"; readonly visionVersion: number; readonly direction: Direction }
   | { readonly status: "proposed"; readonly direction: Direction; readonly pushback: Pushback }
+  | { readonly status: "declined" }
   | { readonly status: "unchanged" };
 
-/** What reading one change did. There is no refusal: a change applies, is held for confirmation, or is read again. */
+/** What reading one change did: a change applies, is held for confirmation, is declined, or is read again. */
 export type ClientChangeOutcome =
   | {
       readonly kind: "recorded";
@@ -335,6 +345,7 @@ export class ClientChanges implements LiaisonClientChanges {
     let vision = context.vision;
     const confirmations: ConfirmationWrite[] = [];
     const confirmedNotes: Array<CorrectionNote["confirmed"][number]> = [];
+    const declinedConfirmations: string[] = [];
     for (const label of new Set(reading.confirms)) {
       const proposal = context.proposals.find((p) => p.label === label);
       if (proposal === undefined) continue;
@@ -346,9 +357,14 @@ export class ClientChanges implements LiaisonClientChanges {
         { messageId: source.messageId, body: source.body, usedKeys: new Set([...change.usedKeys, ...usedBy(confirmations)]), changeReason: `client change ${change.id} confirmed proposal ${proposal.id}` },
       );
       if (corrected.applied.length === 0) continue;
+      // A held change confirmed is still declined when it would leave nothing Ashara can verify: it stays held, unmade.
+      if (declinedCorrection(corrected.applied, corrected.next.current)) {
+        declinedConfirmations.push(label);
+        continue;
+      }
       const applied = revisionOpsOf(read, corrected.applied);
       confirmations.push({ proposalId: proposal.id, vision: corrected.append, ops: applied, direction: revisionDirection(applied) });
-      confirmedNotes.push({ label, version: corrected.next.current.version, unapplied: corrected.unapplied });
+      confirmedNotes.push({ label, version: corrected.next.current.version, verifiable: verifiableCountOf(corrected.next.current), unapplied: corrected.unapplied });
       vision = corrected.next;
     }
 
@@ -367,15 +383,19 @@ export class ClientChanges implements LiaisonClientChanges {
       impact = await this.deps.store.impact(change.projectId, affected);
       band = costBandOf(reading.ops, impact);
       const pushback = pushbackOf(checked, impact, band);
+      const verifiable = verifiableCountOf(corrected.next.current);
       const authorship = { author: "client", sourceMessageId: change.id } as const;
-      if (pushback !== null) {
+      if (declinedCorrection(corrected.applied, corrected.next.current)) {
+        outcome = { status: "declined" };
+        noted = { status: "declined", unapplied: corrected.unapplied, verifiable };
+      } else if (pushback !== null) {
         const [first, ...rest] = revisionOpsOf(checked, null);
         if (first !== undefined) {
           const direction = revisionDirection(checked);
           const record: RevisionRecord = { ...authorship, approver: null, direction, cause: "client-change", ops: [first, ...rest], pushback };
           revision = { status: "proposed", basedOnVersion: before.version, record };
           outcome = { status: "proposed", direction, pushback };
-          noted = { status: "proposed", direction, pushback, unapplied: corrected.unapplied };
+          noted = { status: "proposed", direction, pushback, unapplied: corrected.unapplied, verifiable };
         }
       } else {
         const [first, ...rest] = revisionOpsOf(checked, corrected.applied);
@@ -385,11 +405,23 @@ export class ClientChanges implements LiaisonClientChanges {
           const record: RevisionRecord = { ...authorship, approver: "client", direction, cause: causeOf(corrected.applied), ops, pushback: null };
           revision = { status: "applied", vision: corrected.append, record };
           outcome = { status: "applied", visionVersion: corrected.next.current.version, direction };
-          noted = { status: "applied", version: corrected.next.current.version, direction, applied: corrected.applied, unapplied: corrected.unapplied };
+          noted = { status: "applied", version: corrected.next.current.version, direction, applied: corrected.applied, unapplied: corrected.unapplied, verifiable };
         }
       }
     }
-    const note = correctionReport({ vision: before, confirmed: confirmedNotes, ops: checked, affected, outcome: noted, impact, band, paused: change.paused });
+    const inForce = revision?.status === "applied" ? corrected.next.current : vision.current;
+    const note = correctionReport({
+      vision: before,
+      confirmed: confirmedNotes,
+      declinedConfirmations,
+      ops: checked,
+      affected,
+      outcome: noted,
+      contract: contractStandingOf(inForce.guarantees),
+      impact,
+      band,
+      paused: change.paused,
+    });
     return {
       write: { changeId: change.id, projectId: change.projectId, basedOnVersion: context.vision.current.version, confirmations, revision, note, paused: change.paused },
       confirmed: confirmations.map((c) => c.proposalId),

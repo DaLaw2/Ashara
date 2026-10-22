@@ -23,7 +23,7 @@ import { lazyIntakes, readIntakeRecords } from "./intake-readings.js";
 import type { IntakeRecords, ObservedIntake } from "./intake-readings.js";
 import { MISREAD_REJECTION_MARKER } from "./product.js";
 import { projectState } from "./project-state.js";
-import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
+import { checkTextFacts, declinedWork, readTextFactRecords } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
 
 const run = promisify(execFile);
@@ -792,6 +792,10 @@ export function checkSnapshot(
     for (const found of unconfirmedAtPassedSweeps(snapshot.reports, context.reviews))
       add("I6", `unconfirmed-clean:${found.key}`, found.statement);
   }
+  // A contract Ashara can verify no guarantee of could never be accepted on evidence: no work starts on it,
+  // on every snapshot.
+  const declined = declinedWork(snapshot.textFacts);
+  if (declined !== null) add("I6", "declined-work", declined);
   if (snapshot.project.status === "accepted") {
     for (const found of uncoveredAcceptance(snapshot.reports))
       add("I6", `accepted-unjudged:${found.key}`, found.statement);

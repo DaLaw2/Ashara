@@ -78,7 +78,7 @@ export class VisionRepository {
       doc.contract === undefined
         ? { form: "scope-lines", interface: [], guarantees: [], exclusions: [] }
         : { form: "guarantees", ...doc.contract };
-    const columns = visionWritable(projectId, { visionText: doc.visionText, ...fields, contract });
+    const columns = visionWritable(projectId, { visionText: doc.visionText, ...fields, contract }, "first");
     const [row] = await this.db
       .insert(visionDocuments)
       .values({
@@ -162,7 +162,7 @@ export class VisionRepository {
       change.contract.kind === "revised"
         ? { form: "guarantees", ...change.contract.records }
         : { form: current.contractForm, interface: current.interface, guarantees: current.guarantees, exclusions: current.exclusions };
-    const columns = visionWritable(projectId, { visionText: current.visionText, ...fields, contract });
+    const columns = visionWritable(projectId, { visionText: current.visionText, ...fields, contract }, "next");
     const version = current.version + 1;
     await this.db.insert(visionDocuments).values({
       projectId,

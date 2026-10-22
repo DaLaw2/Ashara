@@ -49,16 +49,23 @@ describe("registerOf", () => {
 
     const register = registerOf(read(versionWith(assumption("Inferred")), standing));
 
-    expect(register).toEqual({ kind: "rows", rows: [{ id: "G2", statement: "Keys differing in case are distinct.", risks: [{ kind: "unconfirmed-assumption", assumptions: ["A1"] }] }] });
+    expect(register).toEqual({
+      kind: "rows",
+      rows: [{ id: "G2", statement: "Keys differing in case are distinct.", risks: [{ kind: "unconfirmed-assumption", assumptions: ["A1"] }] }],
+      verifiable: 2,
+      total: 2,
+      declined: false,
+    });
     expect(registerParagraph(projectId, register)).toBe(
       "Guarantees at risk, as Ashara's records stand now:\n" +
-        "- G2 (Keys differing in case are distinct.): it rests on assumption A1, which you have not confirmed, and work on it is not finished.",
+        "- G2 (Keys differing in case are distinct.): it rests on assumption A1, which you have not confirmed, and work on it is not finished.\n" +
+        "Ashara can verify 2 of the 2 guarantees of this contract with the checks it can run today.",
     );
   });
 
   test("lists nothing once the client has Stated the assumption", () => {
     const standing = { tasks: [{ done: false, cites: ["G2"] }], decided: [], burnZone: null };
-    expect(registerOf(read(versionWith(assumption("Stated")), standing))).toEqual({ kind: "rows", rows: [] });
+    expect(registerOf(read(versionWith(assumption("Stated")), standing))).toEqual({ kind: "rows", rows: [], verifiable: 2, total: 2, declined: false });
   });
 
   test("lists a guarantee whose work is done with no stored check deciding it, and one past the burn forecast", () => {
@@ -72,8 +79,38 @@ describe("registerOf", () => {
         { id: "G1", statement: "A stored value is read back.", risks: [{ kind: "done-unchecked" }] },
         { id: "G2", statement: "Keys differing in case are distinct.", risks: [{ kind: "burn", zone: "red" }] },
       ],
+      verifiable: 2,
+      total: 2,
+      declined: false,
     });
-    expect(registerOf(read(versionWith(assumption("Stated")), { ...standing, decided: ["G1"], burnZone: null }))).toEqual({ kind: "rows", rows: [] });
+    expect(registerOf(read(versionWith(assumption("Stated")), { ...standing, decided: ["G1"], burnZone: null }))).toEqual({ kind: "rows", rows: [], verifiable: 2, total: 2, declined: false });
+  });
+
+  test("names a guarantee its drafter could not place apart from one about stored data, and counts the guarantees Ashara can verify", () => {
+    const base = versionWith(assumption("Stated"));
+    const [g1, g2] = base.guarantees;
+    if (g1 === undefined || g2 === undefined) throw new Error("versionWith holds two guarantees");
+    const version = {
+      ...base,
+      guarantees: [
+        { ...g1, observation: "unclassified", verification: "undecided" },
+        { ...g2, observation: "stored-data", verification: "not-by-ashara", unverifiableBecause: "outside-interface" },
+      ],
+    } as const;
+
+    const register = registerOf(read(version, { tasks: [], decided: [], burnZone: null }));
+
+    expect(register).toMatchObject({ verifiable: 0, total: 2, declined: true });
+    const paragraph = registerParagraph(projectId, register);
+    // A version Ashara declines: the register, which every report posted while it is in force ends with, says so.
+    expect(paragraph).toMatch(/Ashara cannot verify any guarantee of this contract as written[^]*confirming it as written does not start it\.$/);
+    expect(registerParagraph(projectId, registerOf(read(versionWith(assumption("Stated")), { tasks: [], decided: [], burnZone: null })))).not.toContain(
+      "Ashara cannot verify any guarantee",
+    );
+    expect(paragraph).toContain("- G1 (A stored value is read back.): Ashara could not tell where you would see it hold or break");
+    expect(paragraph).toContain("- G2 (Keys differing in case are distinct.): it is seen only outside what the product's interface shows");
+    expect(paragraph).not.toContain("- G1 (A stored value is read back.): it is seen only outside");
+    expect(paragraph).toContain("Ashara can verify 0 of the 2 guarantees of this contract with the checks it can run today.");
   });
 
   test("never reads a missing or unreadable record as no risk", () => {

@@ -110,6 +110,8 @@ export function guaranteesInForce(
         checkable:
           observation !== undefined &&
           observation !== "unclassified" &&
+          // A guarantee whose drafter could not tell where it is seen is classified as nothing, so no check decides it.
+          observation !== "undecided" &&
           /* eslint-disable-next-line no-restricted-syntax -- policy default: a guarantee that records nothing
              refuting it is not checkable, the fail-closed reading */
           (g.refutedBy ?? []).length > 0,

@@ -1,10 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { HALT_KINDS } from "@ashara/delivery/predicates";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
+import type { RiskRecords } from "./early-warning.js";
 import type { GuaranteeTable } from "./guarantee-report.js";
 import { inboundDecision } from "./inbound-policy.js";
 
@@ -24,7 +25,10 @@ function withTable(each: Spelled): Due {
   return each.subject === "project-resumed" ? each : { visionWritten: true, ...each, guarantees: TABLE };
 }
 
-function reportsFor(listed: readonly Spelled[]) {
+/** The register's records of a project with no guarantee: a contract none of whose guarantees is held. */
+const OPEN_RECORDS: RiskRecords = { kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } };
+
+function reportsFor(listed: readonly Spelled[], records: RiskRecords = OPEN_RECORDS) {
   const due = listed.map(withTable);
   const posted: Array<{ key: string; body: string }> = [];
   const store: BlockReportStore = {
@@ -33,7 +37,7 @@ function reportsFor(listed: readonly Spelled[]) {
       posted.push({ key: `${episodeId}:${on}`, body });
       return "posted";
     },
-    riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
+    riskRecords: async () => records,
   };
   return { reports: new BlockReports(store, memoryStepContainment(() => true)), posted };
 }
@@ -376,5 +380,79 @@ describe("each operator-awaited halt's report says what is still read during it,
         : `Until then no more work is done on this project, though Ashara still reads ${read.map((message) => WORDS[message]).join(" and ")} during the pause.`;
     expect(body).toContain(`${meanwhile} The team is waiting on its operator for this, and you will be told when work resumes.`);
     expect(body).not.toContain("nothing more is done");
+  });
+});
+
+// A contract Ashara declines holds the project before work: no report on a halt of it, or on that
+// halt's end, may tell the client that work resumes, goes on or is planned, whatever the halt. The
+// standing the reports are composed for is the one the register they end with reads.
+describe("no halt or resumption report on a held contract promises that work resumes", () => {
+  const held = {
+    id: "G1",
+    statement: "Entries are kept.",
+    interface: ["I1"],
+    observation: "stored-data",
+    refutedBy: ["an entry is missing"],
+    source: { kind: "tender", quote: "Entries are kept." },
+    basis: "client-stated",
+    verification: "not-by-ashara",
+    unverifiableBecause: "outside-interface",
+  } as const;
+  const HELD: RiskRecords = { kind: "read", version: { guarantees: [held], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } };
+  const UNREAD: RiskRecords = { kind: "unreadable", detail: "vision v1 does not parse" };
+  const PROMISES = [
+    "work resumes",
+    "Work on this project is paused",
+    "has resumed",
+    "goes on",
+    "resumes the project",
+    "resumes this project",
+    "revised for it",
+    "planned for it",
+    "tried again",
+    "revised again",
+    "more work is done",
+    "checked again",
+    "Nothing more is built",
+    "no more work is done",
+  ];
+  const cause = { errorClass: "SomethingFailed", reason: "the cause as recorded", spend: null, work: null };
+  const halts: readonly Spelled[] = [
+    ...(["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed", "model_failed", "provider_failed", "work_budget", "acceptance_uncovered"] as const).map(
+      (kind) => ({ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }) as const,
+    ),
+    { subject: "project-blocked", episodeId: "e1", projectId, kind: "plan_repair", abandoned: [{ workItemId: "w1", title: "Port", attempts: 2, cause: { source: "api", reason: "r" } }] },
+    { subject: "project-blocked", episodeId: "e1", projectId, kind: "check_dispute", dispute: { taskTitle: "Port", checkName: "imports", reason: "r", disputes: 3 } },
+    { subject: "project-blocked", episodeId: "e1", projectId, kind: "suite_review", review: { times: 3, problems: ["p"] } },
+  ];
+  const reports: ReadonlyArray<readonly [string, Spelled]> = [
+    ...halts.flatMap((halt) => [true, false].map((visionWritten) => [`${halt.subject === "project-blocked" ? halt.kind : ""}, vision written ${visionWritten}`, { ...halt, visionWritten }] as const)),
+    ...(["unblocked", "probe_passed"] as const).map((how) => [`resumed (${how})`, { subject: "project-resumed", episodeId: "e1", projectId, how }] as const),
+  ];
+
+  test("the halts enumerated are every halt kind", () => {
+    expect(halts.flatMap((halt) => (halt.subject === "project-blocked" ? [halt.kind] : [])).sort()).toEqual([...HALT_KINDS].sort());
+  });
+
+  test.each(reports)("%s: held, no promise; the contract the register reads is the one declined", async (_name, report) => {
+    const { reports: held, posted } = reportsFor([report], HELD);
+    await held.runPending();
+    const [{ body }] = posted;
+    for (const promise of PROMISES) expect(body).not.toContain(promise);
+    expect(body).toContain("Ashara cannot verify any guarantee of this contract as written");
+  });
+
+  test.each(reports)("%s: unread, no promise either way", async (_name, report) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { reports: unread, posted } = reportsFor([report], UNREAD);
+    await unread.runPending();
+    for (const promise of PROMISES) expect(posted[0].body).not.toContain(promise);
+    warn.mockRestore();
+  });
+
+  test.each(reports)("%s: on a contract Ashara can verify, the report says what follows the pause", async (_name, report) => {
+    const { reports: open, posted } = reportsFor([report]);
+    await open.runPending();
+    expect(PROMISES.some((promise) => posted[0].body.includes(promise))).toBe(true);
   });
 });

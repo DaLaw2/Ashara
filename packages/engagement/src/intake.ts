@@ -13,8 +13,19 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
-import { AssumptionKeySchema, ContractDraftSchema, GuaranteeKeySchema, NOT_VERIFIABLE_BY_ASHARA, basisOf, verificationOf } from "./vision-language/guarantee.js";
-import type { GuaranteeBasis } from "./vision-language/guarantee.js";
+import {
+  AssumptionKeySchema,
+  ContractDraftSchema,
+  GuaranteeKeySchema,
+  NOTHING_VERIFIABLE,
+  OBSERVATION_RULE,
+  basisOf,
+  contractStandingOf,
+  markOf,
+  markWords,
+  verifiableCountLine,
+} from "./vision-language/guarantee.js";
+import type { ContractStanding, GuaranteeBasis } from "./vision-language/guarantee.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { VisionWriteRefused, visionWritable } from "./vision.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
@@ -26,6 +37,11 @@ import type { FirstVision, InferredAssumption } from "./vision.js";
 // record of it, in the same intake. A later answer or correction is a change request, not a rewrite.
 // Every Inferred assumption intake writes is one the client was asked about or told of in the draft.
 // A tender is never refused: one Ashara cannot read blocks its project, and the tender is kept.
+// A contract in which Ashara can verify no guarantee is the one exception to proceeding on silence:
+// it is declined. Every message intake posts for it tells the client plainly that Ashara cannot verify
+// any guarantee as written and asks them to restate the guarantees; no work starts on it, and their
+// confirming it as written does not start work, since only a version holding a guarantee Ashara can
+// verify ends the decline (declinesUnverifiable).
 // A reading that asks the client nothing is a claim that the tender leaves nothing open worth asking,
 // as a clean suite review is a claim about its checks:
 // it is put to a second reading at the strongest independence the catalog offers. The questions a
@@ -45,8 +61,11 @@ const MAX_INTAKE_ATTEMPTS = 3;
 /** What the client reads before a question's assumption; the statement itself never carries it. */
 const ASSUMPTION_LABEL = "Until you answer, we proceed on this assumption:";
 
-// The label's lead-in, alone or with the rest of the label, at the start of a statement.
-const LABEL_LEAD_IN = /^\s*until you answer\b\s*,?\s*(?:we proceed on this assumption\b\s*:?\s*)?/i;
+/** The label on a contract Ashara declines: no work proceeds on it, so the assumption is only what the contract rests on. */
+const HELD_ASSUMPTION_LABEL = "Until you answer, the contract rests on this assumption:";
+
+// Either label's lead-in, alone or with the rest of the label, at the start of a statement.
+const LABEL_LEAD_IN = /^\s*until you answer\b\s*,?\s*(?:(?:we proceed on|the contract rests on) this assumption\b\s*:?\s*)?/i;
 
 /**
  * The assumption statement without a lead-in that repeats the label shown before
@@ -380,11 +399,9 @@ function buildIntakePrompt(tender: string): string {
     `- "guarantees": every promise a delivery of this tender is judged against, keyed "G1", "G2",`,
     `  and so on, together covering everything the tender asks to be built. Each has: "statement",`,
     `  the promise in one sentence; "observable", with "interface", the keys of the interface entries`,
-    `  where it is seen (at least one), and "observation", where a client sees it hold or break:`,
-    `  "output" (what the product outputs), "errors" (how it reports an error), "exit-status" (the`,
-    `  status it ends with), "stored-data" (the data the client stores with it), or "undecided" when`,
-    `  you cannot tell; "refutedBy", at least one concrete observation at the interface that would`,
-    `  show the promise broken; and "source".`,
+    `  where it is seen (at least one), and "observation", as the rule below decides; "refutedBy", at`,
+    `  least one concrete observation at the interface that would show the promise broken; and "source".`,
+    ...OBSERVATION_RULE,
     `- "exclusions": what the tender leaves out, keyed "X1", "X2", and so on, each with "text" and`,
     `  "source", so the absence of a guarantee is never read as a promise; an empty list when it`,
     `  leaves nothing out.`,
@@ -488,15 +505,23 @@ function intakeReask(ctx: { readonly errors: readonly string[] }): string {
   );
 }
 
-/** What the client reads: the question, why it matters, and what Ashara does if they stay silent. */
-function questionBody(question: QuestionText): string {
+/**
+ * What the client reads: the question, why it matters, and what Ashara does if they stay silent; on a
+ * held contract, then the decline, so no message of the intake reads as work under way.
+ */
+function questionBody(question: QuestionText, standing: DraftStanding): string {
+  const held = standing === "held";
   return [
     question.text,
     `Why it matters: ${question.whyItMatters}`,
-    `${ASSUMPTION_LABEL} ${question.assumption.statement}`,
+    `${held ? HELD_ASSUMPTION_LABEL : ASSUMPTION_LABEL} ${question.assumption.statement}`,
     `Why this assumption: ${question.assumption.rationale}`,
+    ...(held ? [NOTHING_VERIFIABLE] : []),
   ].join("\n\n");
 }
+
+/** The standing of the contract a reading of the tender drafts: it is read whole, so never unread. */
+type DraftStanding = Exclude<ContractStanding, "unread">;
 
 /** The assumptions vision v1 records and the questions the client is sent, each with its assumption's key. */
 interface IntakeRecords {
@@ -545,7 +570,7 @@ function contractRefusal(tender: OpenTender, first: IntakeResponse, inferences: 
       inferences,
       openQuestions: [],
       contract: { form: "guarantees", interface: first.interface, guarantees: first.guarantees, exclusions: first.exclusions },
-    });
+    }, "first");
     return null;
   } catch (err) {
     if (!(err instanceof VisionWriteRefused)) throw err;
@@ -579,19 +604,24 @@ const BASIS_WORDS: Readonly<Record<GuaranteeBasis, string>> = {
 /**
  * The contract draft the client reads with vision v1: the interface as Ashara reads it, the first
  * thing they may correct; every guarantee with its basis, one resting on an assumption they have
- * not confirmed marked at risk until they confirm it, and one Ashara cannot verify with the checks it
- * can run marked not verifiable by Ashara, as the contract records it; the assumptions they could observe, each
- * with the guarantees it underpins; the exclusions, so silence is never read as a promise; and the
- * team's own design choices, which acceptance does not depend on. Nothing waits on a reply.
+ * not confirmed marked at risk until they confirm it, one Ashara cannot verify with the checks it
+ * can run marked not verifiable by Ashara with the reason, as the contract records it, and one whose
+ * drafter could not tell where it is observed put to the client; how many Ashara can verify; the
+ * assumptions they could observe, each with the guarantees it underpins; the exclusions, so silence is
+ * never read as a promise; and the team's own design choices, which acceptance does not depend on.
+ * Nothing waits on a reply, unless the contract is held: then the draft opens with the decline and
+ * never says work has started or that nothing waits.
  */
-function contractDraftReport(first: IntakeResponse, inferences: readonly InferredAssumption[]): string {
+function contractDraftReport(first: IntakeResponse, inferences: readonly InferredAssumption[], standing: DraftStanding): string {
+  const held = standing === "held";
   const footing = inferences.map((a) => ({ id: a.key, status: a.status, underpins: a.underpins }));
   const guarantees = first.guarantees.map((g) => {
     const resting = inferences.filter((a) => a.underpins.includes(g.id) || (g.source.kind === "assumption" && g.source.id === a.key)).map((a) => a.key);
     const risk = resting.length === 0 ? "" : `; at risk until you confirm ${resting.join(", ")}`;
-    const unverifiable = verificationOf(g.observable.observation) === "not-by-ashara" ? `; ${NOT_VERIFIABLE_BY_ASHARA}` : "";
-    return `- ${g.id}: ${g.statement} (basis: ${BASIS_WORDS[basisOf(g, footing)]}${risk}${unverifiable})`;
+    const told = markWords(markOf(g.observable.observation));
+    return `- ${g.id}: ${g.statement} (basis: ${BASIS_WORDS[basisOf(g, footing)]}${risk}${told === null ? "" : `; ${told}`})`;
   });
+  const verifiable = first.guarantees.filter((g) => markOf(g.observable.observation).verification === "by-ashara").length;
   const excludedBy = (key: string): string[] => first.exclusions.filter((x) => x.source.kind === "assumption" && x.source.id === key).map((x) => x.id);
   const visible = inferences.flatMap((a) => {
     if (a.kind === "internal-design") return [];
@@ -604,17 +634,23 @@ function contractDraftReport(first: IntakeResponse, inferences: readonly Inferre
   });
   const design = inferences.filter((a) => a.kind === "internal-design").map((a) => `- ${a.key}: ${a.statement}`);
   return [
-    `This is the contract we are working to, drafted from your tender.`,
+    held ? `This is the contract drafted from your tender, and Ashara declines it as written. ${NOTHING_VERIFIABLE}` : `This is the contract we are working to, drafted from your tender.`,
     `The interface, as we read it; it is the first thing you may correct:\n${first.interface.map((entry) => `- ${entry.id}: ${entry.text}`).join("\n")}`,
     `What we guarantee, each with what it rests on:\n${guarantees.join("\n")}`,
+    verifiableCountLine(verifiable, first.guarantees.length),
     ...(visible.length === 0 ? [] : [`The assumptions the guarantees rest on:\n${visible.join("\n")}`]),
     first.exclusions.length === 0
       ? `What is left out: nothing is excluded on record.`
       : `What is left out, so that silence is never read as a promise:\n${first.exclusions.map((x) => `- ${x.id}: ${x.text}`).join("\n")}`,
     ...(design.length === 0 ? [] : [`Basis of Design, our own design choices, which your acceptance does not depend on:\n${design.join("\n")}`]),
-    `Work has started on this list; correct any line at any time; nothing waits for your reply.`,
+    held
+      ? `Correct any line at any time. ${RESTATE_TO_START}`
+      : `Work has started on this list; correct any line at any time; nothing waits for your reply.`,
   ].join("\n\n");
 }
+
+/** How a declined contract's draft closes: what starts work on it. */
+const RESTATE_TO_START = "Work starts once you restate the guarantees so that Ashara can verify at least one of them.";
 
 /** Who gave a second reading, in the client's words: a weaker strength says what it shares with the first. */
 const READ_BY: Readonly<Record<SecondOpinionStrength, string>> = {
@@ -627,12 +663,32 @@ const READ_BY: Readonly<Record<SecondOpinionStrength, string>> = {
  * What the client reads when the first reading of their tender asked them nothing: that a second
  * reading, of the strength named, found nothing to ask either, or raised the questions they are sent;
  * or that none could be had, so the reading is unconfirmed and work proceeds on it. Null when the first
- * reading asked questions: those are what the client reads.
+ * reading asked questions: those are what the client reads. When the contract is held no work
+ * proceeds on anything, so the report says what the reading found and then the decline, never that
+ * work proceeds or does not wait.
  */
-function readingReport(confirmation: ReadingConfirmation): string | null {
+function readingReport(confirmation: ReadingConfirmation, standing: DraftStanding): string | null {
+  if (confirmation.kind === "not-needed") return null;
+  if (standing === "held") {
+    const found = (() => {
+      switch (confirmation.kind) {
+        case "confirmed":
+          return `We read your tender and found nothing in it we need to ask you. A second reading of it, by ${READ_BY[confirmation.second.strength]}, found nothing to ask either.`;
+        case "questions-raised":
+          return (
+            `Our first reading of your tender found nothing to ask you. A second reading of it, by ${READ_BY[confirmation.second.strength]}, ` +
+            `found the ${confirmation.second.questions.length === 1 ? "question" : `${confirmation.second.questions.length} questions`} we have sent you.`
+          );
+        case "unconfirmed":
+          return (
+            `We read your tender and found nothing in it we need to ask you, but no second reading of it could be had to confirm that, ` +
+            `so that reading is unconfirmed.`
+          );
+      }
+    })();
+    return [found, NOTHING_VERIFIABLE].join("\n\n");
+  }
   switch (confirmation.kind) {
-    case "not-needed":
-      return null;
     case "confirmed":
       return [
         `We read your tender and found nothing in it we need to ask you before work proceeds. A second reading of it, by ` +
@@ -827,11 +883,13 @@ export class TenderIntake implements LiaisonIntake {
   private toWrite(tender: OpenTender, first: FirstReading, confirmation: ReadingConfirmation): IntakeWrite {
     const { response } = first;
     const { inferences, asked } = recordsOf(response, confirmation.kind === "questions-raised" ? confirmation.second.questions : []);
+    // Held as vision v1 will record it: each guarantee marked as markOf decides for the observation it was drafted with.
+    const standing = contractStandingOf(response.guarantees.map((g) => markOf(g.observable.observation)));
     return {
       tender,
-      questions: asked.map((a) => questionBody(a.question)),
-      contractDraft: contractDraftReport(response, inferences),
-      readingReport: readingReport(confirmation),
+      questions: asked.map((a) => questionBody(a.question, standing)),
+      contractDraft: contractDraftReport(response, inferences, standing),
+      readingReport: readingReport(confirmation, standing),
       reading: { first: first.model, firstQuestions: response.questions.length, confirmation },
       vision: (questionMessageIds) => ({
         visionText: tender.body,

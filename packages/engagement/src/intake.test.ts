@@ -8,6 +8,7 @@ import { memoryStepContainment, notExercised } from "@ashara/shared/testing";
 import { TenderIntake } from "./intake.js";
 import { visionWritable } from "./vision.js";
 import type { IntakeStore } from "./intake.js";
+import { OBSERVATION_RULE } from "./vision-language/guarantee.js";
 import { ASSUMPTION_KIND_RULE } from "./vision-language/vision-assumption.js";
 
 type Tender = Awaited<ReturnType<IntakeStore["openTenders"]>>[number];
@@ -71,6 +72,11 @@ function answering(reply: (call: number) => unknown, prompts: string[] = []): Co
 }
 
 const RATIONALE = "The tender implies it.";
+
+/** How every message posted for a contract Ashara declines begins its decline. */
+const DECLINE = "Ashara cannot verify any guarantee of this contract as written";
+/** What no message posted while a contract is declined may say: each claims work under way or not waiting. */
+const UNDER_WAY = ["Work does not wait", "work proceeds", "Work proceeds", "Work has started", "nothing waits"];
 
 /** An assumption as a first reading drafts it. */
 function drafted(id: string, statement: string, kind: string, underpins: readonly string[] = ["G1"]) {
@@ -410,11 +416,15 @@ describe("TenderIntake contract draft", () => {
   test("the contract draft lists every guarantee with its basis, at risk until the assumption it rests on is confirmed", async () => {
     const draft = (await intakeOf(reply)).contractDraft;
     expect(draft).toContain("- G1: get prints the value put stored. (basis: an assumption you have not confirmed; at risk until you confirm A3)");
-    // Its undecided observation is recorded as stored-data, which no check Ashara runs can show holding: the client is told before work starts.
+    // Its undecided observation is kept undecided, never stored-data and never marked not verifiable: the client is told
+    // before work starts that Ashara does not count it, and asked where they would see it.
     expect(draft).toContain(
-      "- G2: list prints the keys sorted. (basis: an assumption you have not confirmed; at risk until you confirm A2; not verifiable by Ashara: " +
-        "no check Ashara can run today shows it holding, so Ashara's reports list it as not verified, never as passed, and the project is accepted without it)",
+      "- G2: list prints the keys sorted. (basis: an assumption you have not confirmed; at risk until you confirm A2; " +
+        "Ashara could not tell where you would see it hold or break, so it does not count it as one it can verify and it cannot be shown to hold; " +
+        "tell us where you would see it and Ashara can check it)",
     );
+    expect(draft).not.toMatch(/- G2: [^\n]*not verifiable by Ashara/);
+    expect(draft).toContain("Ashara can verify 2 of the 3 guarantees of this contract with the checks it can run today.");
     expect(draft).not.toMatch(/- G[13]: [^\n]*not verifiable by Ashara/);
     expect(draft).toContain("- G3: A value may hold spaces. (basis: an assumption you have not confirmed; at risk until you confirm A1)");
     for (const g of reply.guarantees) expect(draft).toContain(`- ${g.id}: ${g.statement} (basis: `);
@@ -424,6 +434,20 @@ describe("TenderIntake contract draft", () => {
     expect(draft).toContain("- X1: Any network service.\n- X2: Case-insensitive keys.");
     expect(draft).toContain("Basis of Design, our own design choices, which your acceptance does not depend on:\n- A4: The log file is wal.log.");
     expect(draft).toContain("Work has started on this list; correct any line at any time; nothing waits for your reply.");
+    expect(draft).not.toContain("Ashara cannot verify any guarantee");
+  });
+
+  test("a contract Ashara can verify no guarantee of is declined: the draft and every question say so, and none reads as work under way", async () => {
+    const unverifiable = { ...reply, guarantees: reply.guarantees.map((g) => ({ ...g, observable: { ...g.observable, observation: g.id === "G1" ? "stored-data" : "undecided" } })) };
+    const write = await intakeOf(unverifiable);
+    expect(write.contractDraft).toMatch(/^This is the contract drafted from your tender, and Ashara declines it as written\. Ashara cannot verify any guarantee of this contract as written/);
+    expect(write.contractDraft).toContain("Ashara can verify 0 of the 3 guarantees of this contract with the checks it can run today.");
+    expect(write.contractDraft).toContain("confirming it as written does not start it.");
+    expect(write.questions).toHaveLength(1);
+    for (const message of [write.contractDraft, ...write.questions]) {
+      expect(message).toContain(DECLINE);
+      for (const proceeds of UNDER_WAY) expect(message).not.toContain(proceeds);
+    }
   });
 
   test("a guarantee resting on no assumption reads as what the tender states", async () => {
@@ -432,18 +456,19 @@ describe("TenderIntake contract draft", () => {
     expect(draft).toContain("What is left out: nothing is excluded on record.");
   });
 
-  test("vision v1 records the contract as drafted, an undecided observation as stored-data, and every assumption under its own key", async () => {
+  test("vision v1 records the contract as drafted, an undecided observation kept as given and marked undecided, never stored-data, and every assumption under its own key", async () => {
     const vision = (await intakeOf(reply)).vision(["q0"]);
-    const written = visionWritable("p", { visionText: vision.visionText, scopeBoundaries: [], inferences: vision.inferences, openQuestions: [], contract: { form: "guarantees", ...vision.contract } });
-    expect(written.guarantees.map((g) => [g.id, g.verification])).toEqual([
-      ["G1", "by-ashara"],
-      ["G2", "not-by-ashara"],
-      ["G3", "by-ashara"],
+    const written = visionWritable("p", { visionText: vision.visionText, scopeBoundaries: [], inferences: vision.inferences, openQuestions: [], contract: { form: "guarantees", ...vision.contract } }, "first");
+    expect(written.guarantees.map((g) => [g.id, g.observable.observation, g.verification])).toEqual([
+      ["G1", "output", "by-ashara"],
+      ["G2", "undecided", "undecided"],
+      ["G3", "output", "by-ashara"],
     ]);
     expect(vision.contract.interface.map((entry) => entry.id)).toEqual(["I1", "I2"]);
+    // The drafter's classification reaches the writer as given; the writer records the doubt.
     expect(vision.contract.guarantees.map((g) => [g.id, g.observable.observation])).toEqual([
       ["G1", "output"],
-      ["G2", "stored-data"],
+      ["G2", "undecided"],
       ["G3", "output"],
     ]);
     expect(vision.contract.exclusions.map((x) => x.id)).toEqual(["X1", "X2"]);
@@ -625,6 +650,14 @@ describe("TenderIntake assumption kinds fail safe", () => {
     expect(prompt).toContain("is not internal design even when another assumption states something close to it");
     expect(prompt).not.toContain("through another assumption");
   });
+
+  // What reading back through the interface shows, after a restart or an environment setting included,
+  // is the observable class; "stored-data" is what nothing read through the interface shows.
+  test("the intake prompt classifies a guarantee's observation by what the interface shows, never stored-data for what reading back shows", async () => {
+    const { prompt } = await intakeOf({ replay: "client-visible", format: "internal-design" });
+    expect(prompt).toContain(OBSERVATION_RULE.join("\n"));
+    expect(prompt).not.toContain("the data the client stores with it), or");
+  });
 });
 
 // A reading that asks the client nothing is a claim that the
@@ -764,6 +797,33 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
       ["same-model", "failed"],
     ]);
     expect(write?.readingReport).toContain("no second reading of it could be had to confirm that, so that reading is unconfirmed. Work proceeds on it.");
+  });
+
+  // A declined contract's reading report says what the reading found and then the decline, whatever the
+  // second reading did: no message posted while the contract is declined says work proceeds.
+  test.each([
+    ["confirmed", () => ({ data: { questions: [] }, provider: "openai", model: "gpt" })],
+    ["questions-raised", () => ({ data: { questions: [QUESTION] }, provider: "openai", model: "gpt" })],
+    [
+      "unconfirmed",
+      (request: Request) => {
+        if (request.secondOpinion.strength === "other-family") return unavailable(request);
+        throw new SchemaValidationError(["scripted failure"], null);
+      },
+    ],
+  ] as const)("on a contract Ashara declines, a reading %s is reported with the decline, never as work under way", async (kind, second) => {
+    const declined = { ...lazy, guarantees: lazy.guarantees.map((g) => ({ ...g, observable: { ...g.observable, observation: "stored-data" } })) };
+    const { outcome, write } = await intakeWith(declined, second);
+    expect(outcome).toMatchObject({ kind: "recorded", confirmation: kind });
+    const messages = [write?.readingReport ?? "", write?.contractDraft ?? "", ...(write?.questions ?? [])];
+    expect(messages[0]).not.toBe("");
+    for (const message of messages) {
+      expect(message).toContain(DECLINE);
+      for (const proceeds of UNDER_WAY) expect(message).not.toContain(proceeds);
+    }
+    // The same reading on a contract Ashara can verify reads as work under way: the decline alone changes the report.
+    const kept = await intakeWith(lazy, second);
+    expect(kept.write?.readingReport).not.toContain(DECLINE);
   });
 
   test("a second reading answered by a model of another strength confirms nothing: the intake faults on Ashara's side, uncounted", async () => {

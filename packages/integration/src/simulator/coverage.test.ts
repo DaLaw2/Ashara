@@ -26,7 +26,7 @@ function snapshotWith(transitions: Snapshot["transitions"]): Snapshot {
       answerReplies: [],
       tenderReports: [],
       delivered: [],
-      firstPlan: { report: null, items: [], revisions: [] },
+      firstPlan: { report: null, items: [], revisions: [] }, workItems: 0,
       interfaceOnMain: { kind: "not-held" },
       intakeReading: null,
     },

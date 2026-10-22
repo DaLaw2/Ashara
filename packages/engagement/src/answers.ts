@@ -8,7 +8,10 @@ import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@a
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { ownSpendRefusal } from "./client-spend-refusal.js";
 import type { RevisionRecord } from "./vision-language/contract-op.js";
+import { contractStandingOf } from "./vision-language/guarantee.js";
+import type { ContractStanding } from "./vision-language/guarantee.js";
 import { ASSUMPTION_KIND_RULE, ClassifiedAssumptionKindSchema } from "./vision-language/vision-assumption.js";
+import { WORK_WORDS } from "./vision-language/work-promise.js";
 import { Vision, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 
@@ -235,19 +238,17 @@ function answerReask(ctx: { readonly errors: readonly string[] }): string {
   );
 }
 
-/** Plain words: what the answer changed, that the plan already under way relied on it, and what happens now. */
-function replanReport(context: AnswerContext, statement: string): string {
+/**
+ * Plain words: what the answer changed, that the plan already under way relied on it, and what happens
+ * now, as the `standing` of the contract the answer is recorded in allows.
+ */
+function replanReport(context: AnswerContext, statement: string, standing: ContractStanding): string {
+  const words = WORK_WORDS[standing];
   return [
     `Your answer to "${context.question.text}" changes an assumption the current plan was built on.`,
     `The plan assumed: ${context.assumption.statement}`,
-    `Work now proceeds on: ${statement}`,
-    context.answer.paused
-      ? `The plan has to be revised for this change. Work on this project is paused, for the reason Ashara's report of the ` +
-        `pause gives, and this answer does not end the pause: once work resumes, the team revises the part of the plan that ` +
-        `rests on it before that part goes on, and you will be told what changes.`
-      : `The plan has to be revised for this change. Only the work that rests on it waits: work on it already ` +
-        `running finishes first, then the team revises that part of the plan, and you will be told what changes. ` +
-        `The rest of the work goes on meanwhile.`,
+    `${words.answerRestsOn} ${statement}`,
+    words.answerReplans(context.answer.paused),
   ].join("\n\n");
 }
 
@@ -506,6 +507,6 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
     ...base,
     vision: { append, revision },
     // A confirmed assumption leaves the plan as it is; a changed one it was built on does not.
-    replanReport: answer.planned && reading.verdict === "changes" ? replanReport(context, statement) : null,
+    replanReport: answer.planned && reading.verdict === "changes" ? replanReport(context, statement, contractStandingOf(context.vision.current.guarantees)) : null,
   };
 }

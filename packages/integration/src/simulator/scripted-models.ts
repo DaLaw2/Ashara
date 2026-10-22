@@ -2,13 +2,13 @@ import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4Genera
 import { schemaRefusalsFor } from "@ashara/model-access";
 import type { LanguageModelFactory, ProviderType } from "@ashara/model-access";
 import type { ObservedReview } from "./client-reports.js";
-import type { CorrectionKind } from "./correction-draws.js";
 import type { ObservedIntake } from "./intake-readings.js";
 import { AgentStandIn } from "./stand-ins/agent.js";
 import { ClassifierStandIn } from "./stand-ins/classifier.js";
 import type { StandInContext } from "./stand-ins/context.js";
 import { IntakeStandIn } from "./stand-ins/intake.js";
 import { LiaisonStandIn } from "./stand-ins/liaison.js";
+import type { ClientAsk } from "./stand-ins/liaison.js";
 import { PlannerStandIn } from "./stand-ins/planner.js";
 import {
   StandInRefusedSchema,
@@ -60,7 +60,7 @@ export class StandIns {
   }
 
   /** The correction the client is about to post: the Liaison's reading of it asks this of the contract. */
-  askCorrection(kind: CorrectionKind, during: string | null): void {
+  askCorrection(kind: ClientAsk, during: string | null): void {
     this.liaison.askCorrection(kind, during);
   }
 

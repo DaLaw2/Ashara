@@ -123,7 +123,7 @@ const contractVersion = (inferences: unknown, contract: Contract = CONTRACT) => 
 });
 
 const writeOf = (inferences: unknown, contract: Contract = CONTRACT) =>
-  visionWritable(PROJECT, { visionText: TENDER, scopeBoundaries: [], inferences, openQuestions: [], contract: { form: "guarantees", ...contract } });
+  visionWritable(PROJECT, { visionText: TENDER, scopeBoundaries: [], inferences, openQuestions: [], contract: { form: "guarantees", ...contract } }, "first");
 
 describe("the contract records: interface, guarantees with keys, exclusions", () => {
   test("a guarantees-form version reads its interface, guarantees and exclusions, each guarantee's basis computed", () => {
@@ -138,11 +138,11 @@ describe("the contract records: interface, guarantees with keys, exclusions", ()
     expect(read.assumptions.map((a) => [a.id, a.underpins])).toEqual([["A1", ["G2"]], ["A2", []], ["A3", []]]);
   });
 
-  test("an undecided observation is written as stored-data", () => {
+  test("an undecided observation is written as given and marked undecided, never as stored-data", () => {
     const undecided = [GUARANTEES[0], { ...GUARANTEES[1], observable: { interface: ["I1"], observation: "undecided" } }];
     const written = writeOf([DURABLE, OPEN], { ...CONTRACT, guarantees: undecided });
     expect(written.contractForm).toBe("guarantees");
-    expect(written.guarantees.map((g) => g.observable.observation)).toEqual(["output", "stored-data"]);
+    expect(written.guarantees.map((g) => [g.observable.observation, g.verification])).toEqual([["output", "by-ashara"], ["undecided", "undecided"]]);
   });
 
   const [first, second] = GUARANTEES;
@@ -270,7 +270,7 @@ describe("Vision: the only way a next version is composed", () => {
         inferences: { stack: "Go" },
         openQuestions: [],
         contract: { form: "scope-lines", interface: [], guarantees: [], exclusions: [] },
-      }),
+      }, "first"),
     ).toThrow(/nothing was written/);
   });
 });

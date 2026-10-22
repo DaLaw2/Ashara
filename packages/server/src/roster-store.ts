@@ -1,7 +1,7 @@
 import { projects } from "@ashara/db";
 import type { createDb } from "@ashara/db";
 import { noPlanningOutcome, projectUnplanned } from "@ashara/delivery/predicates";
-import { noOpenStop, projectAtWork } from "@ashara/engagement/predicates";
+import { noOpenStop, noUnverifiableContractHeld, projectAtWork } from "@ashara/engagement/predicates";
 import type { RosterStore } from "@ashara/organization";
 import { listProjectsAwaitingRoster, recordFirstRoster } from "@ashara/organization/roster";
 
@@ -9,7 +9,7 @@ import { listProjectsAwaitingRoster, recordFirstRoster } from "@ashara/organizat
 export function createRosterStore(db: ReturnType<typeof createDb>): RosterStore {
   return {
     async projectsAwaitingRoster() {
-      const rows = await listProjectsAwaitingRoster(db, [projectAtWork(), noOpenStop(projects.id), projectUnplanned(projects.id), noPlanningOutcome(projects.id)]);
+      const rows = await listProjectsAwaitingRoster(db, [projectAtWork(), noOpenStop(projects.id), projectUnplanned(projects.id), noPlanningOutcome(projects.id), noUnverifiableContractHeld(projects.id)]);
       return rows.map((row) => ({
         projectId: row.projectId,
         vision: row.vision,

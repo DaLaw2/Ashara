@@ -5,6 +5,12 @@ import type { StandInContext } from "./context.js";
 import { citedItemSchema, namesBehaviour } from "./context.js";
 import { ASSUMPTIONS_HEADING, INTERFACE_HEADING, listsGuarantee, promptEntries } from "./recognised-wording.js";
 
+/**
+ * What a change message the client posts asks, as the scripted Liaison reads it: a drawn correction,
+ * or the client's answer to a declined contract, confirming it as written or restating its guarantees.
+ */
+export type ClientAsk = CorrectionKind | "confirm-as-written" | "restate-unverifiable";
+
 /** A guarantee as vision_documents.guarantees stores it: what the scripted correction restates. */
 const storedGuaranteeSchema = z.object({
   id: z.string(),
@@ -19,7 +25,7 @@ export class LiaisonStandIn {
    * What the client's correction asks, set by the run as it posts it, and the task it was posted while InProgress, if
    * any.
    */
-  private asked: { readonly kind: CorrectionKind; readonly during: string | null } = {
+  private asked: { readonly kind: ClientAsk; readonly during: string | null } = {
     kind: "rewrite-guarantee",
     during: null,
   };
@@ -27,7 +33,7 @@ export class LiaisonStandIn {
   constructor(private readonly context: StandInContext) {}
 
   /** The correction the client is about to post: the Liaison's reading of it asks this of the contract. */
-  askCorrection(kind: CorrectionKind, during: string | null): void {
+  askCorrection(kind: ClientAsk, during: string | null): void {
     this.asked = { kind, during };
   }
 
@@ -48,6 +54,8 @@ export class LiaisonStandIn {
    * - change-assumption: the first assumption restated;
    * - change-interface: the first interface entry restated;
    * - add-exclusion: one more thing left out, which no task cites and every guarantee is read as resting on.
+   * - confirm-as-written: no change, and nothing confirmed, since no change awaits confirmation;
+   * - restate-unverifiable: every guarantee restated whole, observed in what the product outputs.
    * A kind with nothing on record to act on (no target, no such guarantee, assumption or entry) adds the exclusion.
    */
   async correction(prompt: string): Promise<unknown> {
@@ -68,6 +76,19 @@ export class LiaisonStandIn {
       const [latest] = z.array(z.object({ guarantees: z.array(storedGuaranteeSchema) })).parse(vision.rows);
       if (latest === undefined || !latest.guarantees.every((g) => listsGuarantee(prompt, g.id, g.statement))) continue;
       if (kind === "add-exclusion") return exclusion;
+      if (kind === "confirm-as-written") return { correction: { ops: [], confirms: [] } };
+      if (kind === "restate-unverifiable") {
+        const ops = latest.guarantees.map((g) => ({
+          op: "amend-guarantee",
+          id: g.id,
+          statement: g.statement,
+          interface: g.observable.interface,
+          observation: "output",
+          refutedBy: g.refutedBy,
+          direction: "neutral",
+        }));
+        return { correction: { ops, confirms: [] } };
+      }
       if (kind === "withdraw-guarantee") {
         const unnamed = latest.guarantees.find((g) => !universe.behaviours.some((b) => namesBehaviour(g.statement, b)));
         return read(unnamed === undefined ? null : { op: "withdraw-guarantee", id: unnamed.id, direction: "narrows" });
