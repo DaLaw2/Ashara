@@ -196,7 +196,7 @@ async function answer(projectId: ProjectId, questionId: string, body: string): P
   pipelineModel();
   const answerStore = createAnswerStore(db);
   const answers: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
-  expect((await new ClientAnswers({ llm: gateway, store: answers, containment: memoryStepContainment(() => true) }).runPending()).map((o) => o.kind)).toEqual(["stated"]);
+  expect((await new ClientAnswers({ shutdownSignal: new AbortController().signal, llm: gateway, store: answers, containment: memoryStepContainment(() => true) }).runPending()).map((o) => o.kind)).toEqual(["stated"]);
 }
 
 const HaltSchema = z.object({ kind: z.string(), errorClass: z.string().nullable(), reason: z.string().nullable(), endKind: z.string().nullable(), resumeEvidence: z.string().nullable() });
@@ -250,13 +250,13 @@ async function readyProject(): Promise<{ readonly projectId: ProjectId; readonly
   pipelineModel();
   const intakeStore = createIntakeStore(db);
   const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
-  expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const rosterStore = createRosterStore(db);
   const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
-  expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  expect((await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   await db.execute(sql`
     INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
     VALUES (${projectId}, 'outbound', 'report', 'The plan.', 'first-plan')`);

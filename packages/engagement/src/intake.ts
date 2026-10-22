@@ -713,6 +713,8 @@ interface TenderIntakeDeps {
   /** Each tender's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  /** Aborted on shutdown: every model call this step sends is cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /**
@@ -823,6 +825,7 @@ export class TenderIntake implements LiaisonIntake {
       prompt: buildIntakePrompt(tender.body),
       schema: firstReadingSchema(tender),
       maxTokens: 4096,
+      abortSignal: this.deps.shutdownSignal,
     });
     return { response: response.data, model: { provider: response.provider, model: response.model, grade: response.grade } };
   }
@@ -852,6 +855,7 @@ export class TenderIntake implements LiaisonIntake {
           schema,
           maxTokens: 4096,
           secondOpinion,
+          abortSignal: this.deps.shutdownSignal,
         });
         const model = { provider: response.provider, model: response.model, grade: response.grade };
         if (strengthBetween(first, model) !== strength) throw new SecondReadingMisrouted(tender.id, strength, first, model);

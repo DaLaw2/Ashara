@@ -220,7 +220,7 @@ function acceptanceStore(): AcceptanceStore {
 function clientAnswers(): ClientAnswers {
   const store = createAnswerStore(db);
   const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ reading: { verdict: "confirms", amends: [] } }), model: "stub-model", provider: "stub", grade: "Strong" }) }) };
-  return new ClientAnswers({ containment: memoryStepContainment(() => true), llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
+  return new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
 }
 
 /** Where each delivered report read the product's interface file: the project's workspace at the accepted commit. */

@@ -479,13 +479,18 @@ export class CycleLoop {
       }
       state.cycles += 1;
       if (draws.stopAt !== null && state.cycles === draws.stopAt) await this.clientStops();
-      const current = state.live;
-      if (current === null) throw new NoInstanceComposed(state.cycles);
+      const waking = state.live;
+      if (waking === null) throw new NoInstanceComposed(state.cycles);
       // A lost wake skips a cycle; a duplicated one runs two back to back.
       if (draws.tape.chance("wake.lost", FAULTS[options.profile].perSeamCall * 10)) {
         state.trace.push(`cycle ${state.cycles}: wake lost`);
         continue;
       }
+      // A process a client request's fault killed or SIGTERMed starts no further cycle: its runner
+      // ended with its shutdown signal, so the supervisor's restart comes first.
+      await server.recover(waking);
+      const current = state.live;
+      if (current === null) throw new NoInstanceComposed(state.cycles);
       const repeats = draws.tape.chance("wake.duplicated", FAULTS[options.profile].perSeamCall * 10) ? 2 : 1;
       // I4's receipt clause: every message on record now is answered by the time this cycle ends.
       const owedReceipts = new Set((await unansweredMessages(observer, projectIds)).map((message) => message.id));

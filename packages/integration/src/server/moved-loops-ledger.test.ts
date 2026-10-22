@@ -190,13 +190,13 @@ async function plannedProject(): Promise<{ projectId: ProjectId; questionId: str
   const containment = memoryStepContainment(() => true);
   const intakeStore = createIntakeStore(db);
   const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
-  expect((await new TenderIntake({ containment, llm: setupGateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new TenderIntake({ shutdownSignal: new AbortController().signal, containment, llm: setupGateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const rosterStore = createRosterStore(db);
   const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
-  expect((await new RosterDerivation({ containment, llm: setupGateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment, llm: setupGateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ logger: recordingLogger(), containment, llm: setupGateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  expect((await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment, llm: setupGateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   const [question] = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
   if (question === undefined) throw new Error("intake posted no question");
   return { projectId, questionId: question.id };
@@ -344,7 +344,7 @@ describe("a plan revision whose write finds the project moved every cycle", () =
     pipelineModel({ verdict: "changes", statement: "The hill studio opens first.", kind: "client-visible", amends: [] });
     const answerStore = createAnswerStore(db);
     const narrowedAnswers: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
-    const read = await new ClientAnswers({ containment: memoryStepContainment(() => true), llm: setupGateway, store: narrowedAnswers }).runPending();
+    const read = await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: setupGateway, store: narrowedAnswers }).runPending();
     expect(read.map((o) => o.kind === "stated" && o.replanRequested)).toEqual([true]);
 
     const { spendCap, budget } = await tightLedger(projectId);
@@ -361,7 +361,7 @@ describe("a plan revision whose write finds the project moved every cycle", () =
     };
     const loop = loopWith(spendCap, {
       containment,
-      replanning: new Replanner({ logger: recordingLogger(), containment, llm: gateway(spendCap), store: alwaysMoved }),
+      replanning: new Replanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment, llm: gateway(spendCap), store: alwaysMoved }),
       liaisonAnswers: { runPending: async () => [] },
     });
 
@@ -390,7 +390,7 @@ describe("an answer whose record finds the project moved every cycle", () => {
         return { kind: "moved", detail: "the project's vision moved under the write" };
       },
     };
-    const answers: LiaisonAnswers = new ClientAnswers({ containment, llm: gateway(spendCap), store: alwaysMoved });
+    const answers: LiaisonAnswers = new ClientAnswers({ shutdownSignal: new AbortController().signal, containment, llm: gateway(spendCap), store: alwaysMoved });
     const loop = loopWith(spendCap, { containment, replanning: { runPending: async () => [] }, liaisonAnswers: answers });
 
     expect(await cyclesUntilHalted(loop, projectId)).toBeLessThanOrEqual(HEADROOM + 1);

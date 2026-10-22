@@ -66,7 +66,7 @@ const LEAVE_OUT_COLOUR = { ops: [{ op: "add-exclusion", text: "Coloured output."
 
 function liaison(wrap: (store: ClientChangeStore) => ClientChangeStore = (s) => s): ClientChanges {
   const store = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
-  return new ClientChanges({
+  return new ClientChanges({ shutdownSignal: new AbortController().signal,
     llm: gateway,
     store: wrap({ ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) }),
     containment: memoryStepContainment(() => true),

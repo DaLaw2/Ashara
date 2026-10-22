@@ -18,7 +18,7 @@ export type { WorkAtBudget } from "./errors.js";
 export { WorkBudgetSpent } from "./errors.js";
 export type { CostMeasurement } from "./cost.js";
 export { ModelAnswerUnfit, PreCallRefusal } from "./errors.js";
-export { modelCallFailureOf } from "./model-call-failure.js";
+export { modelCallAbortedOf, modelCallFailureOf } from "./model-call-failure.js";
 export type { ModelCallFailure } from "./model-call-failure.js";
 /** @testseam the integration model-catalog.test.ts prices catalog models directly; LlmCallLedger.record is its production caller */
 export { measureCost } from "./cost.js";
@@ -55,3 +55,5 @@ export { SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/model
 export { ROUTING_RULES } from "@ashara/model-access";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "@ashara/model-access";
+/** @testseam a caller's test ends a model call with it, as the shutdown does; modelCallAbortedOf is its production reader */
+export { ModelCallAborted } from "@ashara/model-access";

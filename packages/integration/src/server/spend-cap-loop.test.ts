@@ -144,7 +144,7 @@ describe("the deployment spend cap stops the loop", () => {
     const intake = vi.fn(async () => {
       await gateway
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-        .generateStructured({ capability: "Strong", prompt: "read", schema: z.object({ ok: z.boolean() }), maxTokens: 64 });
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "read", schema: z.object({ ok: z.boolean() }), maxTokens: 64 });
       return [];
     });
     const roster = vi.fn(async () => []);
@@ -421,7 +421,7 @@ describe("the deployment cap stops the cycle a first plan was written in", () =>
     const gateway = gatewayOn(new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } }), calls);
     const planStore = createFirstPlanStore(db);
     const narrowedPlans: FirstPlanStore = { ...planStore, projectsAwaitingPlan: async () => (await planStore.projectsAwaitingPlan()).filter((p) => p.projectId === projectId) };
-    const planner = new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => false), llm: gateway, store: narrowedPlans });
+    const planner = new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => false), llm: gateway, store: narrowedPlans });
     const reportStore = createPlanReportStore(db);
     // Only this suite's project: the listings over the shared database would reach other suites'.
     const narrowedReports: PlanReportStore = {

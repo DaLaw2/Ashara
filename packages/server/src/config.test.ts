@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { PodmanSubstrate, type CellResourceLimits, type ProcessRunner } from "@ashara/execution-infra";
 import { recordingLogger } from "@ashara/shared/testing";
-import { assertLanesFitCellHost, loadServerConfig, loadDatabaseUrl } from "./config.js";
+import { assertLanesFitCellHost, loadServerConfig, loadDatabaseUrl, loadShutdownDeadlineMs } from "./config.js";
 
 // This process sees four CPUs and 4 GiB, as under a systemd scope with CPUQuota=400%: a check that
 // read the process's own view instead of the cell runtime's would refuse lanes the runtime's host fits.
@@ -153,6 +153,29 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/WORKDIR_BASE is not set/);
     process.env["WORKDIR_BASE"] = "relative-work";
     expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).coreLoop.workdirBase).toBe(join(process.cwd(), "relative-work"));
+  });
+});
+
+describe("loadShutdownDeadlineMs — the one bound on a shutdown", () => {
+  const saved = process.env["ASHARA_SHUTDOWN_DEADLINE_MS"];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env["ASHARA_SHUTDOWN_DEADLINE_MS"];
+    else process.env["ASHARA_SHUTDOWN_DEADLINE_MS"] = saved;
+  });
+
+  test("unset takes its policy default; a set one within bounds is read", () => {
+    delete process.env["ASHARA_SHUTDOWN_DEADLINE_MS"];
+    expect(loadShutdownDeadlineMs()).toBe(30_000);
+    process.env["ASHARA_SHUTDOWN_DEADLINE_MS"] = "1";
+    expect(loadShutdownDeadlineMs()).toBe(1);
+    process.env["ASHARA_SHUTDOWN_DEADLINE_MS"] = "600000";
+    expect(loadShutdownDeadlineMs()).toBe(600_000);
+  });
+
+  test.each(["0", "-1", "600001", "1.5", "thirty"])("a set but unusable ASHARA_SHUTDOWN_DEADLINE_MS=%s is refused, never replaced by the default", (raw) => {
+    process.env["ASHARA_SHUTDOWN_DEADLINE_MS"] = raw;
+    expect(() => loadShutdownDeadlineMs()).toThrow(`ASHARA_SHUTDOWN_DEADLINE_MS="${raw}" is not an integer from 1 to 600000`);
   });
 });
 

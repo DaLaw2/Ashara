@@ -251,13 +251,13 @@ async function readyProject(reviewDone = true): Promise<{ readonly projectId: Pr
   pipelineModel();
   const intakeStore = createIntakeStore(db);
   const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
-  expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const rosterStore = createRosterStore(db);
   const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
-  expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+  expect((await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+  expect((await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   await db.execute(sql`
     INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
     VALUES (${projectId}, 'outbound', 'report', 'The plan.', 'first-plan')`);
@@ -280,7 +280,7 @@ async function amendG2(projectId: ProjectId, reading: Reading = AMEND_G2): Promi
   pipelineModel(reading);
   const store = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
   const narrowed: ClientChangeStore = { ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) };
-  const outcomes = await new ClientChanges({ llm: gateway, store: narrowed, containment: memoryStepContainment(() => true) }).runPending();
+  const outcomes = await new ClientChanges({ shutdownSignal: new AbortController().signal, llm: gateway, store: narrowed, containment: memoryStepContainment(() => true) }).runPending();
   expect(outcomes).toMatchObject([{ kind: "recorded", changeId: change.id, revision: { status: "applied", visionVersion: 2 } }]);
   return change.id;
 }
@@ -288,7 +288,7 @@ async function amendG2(projectId: ProjectId, reading: Reading = AMEND_G2): Promi
 function replanner(): Replanner {
   const store = createReplanStore(db, recordingLogger());
   const narrowed: ReplanStore = { ...store, projectsAwaitingReplan: ours(() => store.projectsAwaitingReplan()) };
-  return new Replanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: narrowed });
+  return new Replanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: narrowed });
 }
 
 beforeAll(async () => {

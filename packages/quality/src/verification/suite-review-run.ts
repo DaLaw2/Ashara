@@ -1,4 +1,4 @@
-import { PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
+import { PreCallRefusal, modelCallAbortedOf, modelCallFailureOf } from "@ashara/finance";
 import type { Logger } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
 import { NO_AGENT, environmentBlocked, failedBeforeAgent, thrownBlocked } from "../dispatch-result.js";
@@ -46,6 +46,20 @@ export class SuiteReviewRun {
     try {
       outcome = await this.deps.suiteReview.review(task, targetProjectPath);
     } catch (e) {
+      // The shutdown stopped the review's model call: nothing was judged, so nothing failed or is blocked.
+      const aborted = modelCallAbortedOf(e);
+      if (aborted !== null) {
+        const summary = `the review of the plan's checks for ${task.id} was interrupted by shutdown: ${aborted.message}; nothing was reviewed`;
+        this.deps.logger.info("quality.suite-review-interrupted", summary, { taskId: task.id, attempt: task.attempt });
+        return {
+          status: "interrupted",
+          detail: summary,
+          outcome: null,
+          sessionId,
+          attempt: task.attempt,
+          errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
+        };
+      }
       const refusal = preCallRefusalOf(e);
       if (refusal !== null) {
         const summary = `the review of the plan's checks for ${task.id} stopped at a refused model call: ${refusal.message}; nothing was reviewed`;

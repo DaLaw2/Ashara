@@ -110,7 +110,7 @@ describe("TenderIntake failure accounting", () => {
     const store = storeOf([tenderOf("tender-1", "A booking page.", 1)]);
     const containment = memoryStepContainment(() => false);
 
-    const [outcome] = await new TenderIntake({ containment, llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment, llm, store }).runPending();
 
     expect(outcome).toMatchObject({ kind: "step-faulted", step: "liaison-intake", subjectId: "tender-1", faults: 1, retryAfterSeconds: 60 });
     expect(containment.recorded.get("liaison-intake/tender-1")).toMatchObject({
@@ -118,7 +118,7 @@ describe("TenderIntake failure accounting", () => {
       error: expect.stringContaining('non-Error thrown: {"reason":"provider exploded","self":"[circular]"}'),
     });
     // Waiting out its backoff, the tender is not read again on the next cycle.
-    expect(await new TenderIntake({ containment, llm, store }).runPending()).toEqual([]);
+    expect(await new TenderIntake({ shutdownSignal: new AbortController().signal, containment, llm, store }).runPending()).toEqual([]);
   });
 
   test("a model that never validates is asked 2 times per tier on 2 tiers before the tender attempt fails", async () => {
@@ -134,7 +134,7 @@ describe("TenderIntake failure accounting", () => {
     };
     const store = storeOf([tenderOf("tender-ladder", "A booking page.", 4)], { recordFailedAttempt: async () => 1 });
 
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("failed");
     expect(capabilities).toEqual(["Strong", "Strong", "Frontier", "Frontier"]);
@@ -173,7 +173,7 @@ describe("TenderIntake that cannot read a tender", () => {
         return "blocked";
       },
     });
-    const intake = new TenderIntake({ containment: memoryStepContainment(() => false), llm, store });
+    const intake = new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store });
 
     const outcomes = [...(await intake.runPending()), ...(await intake.runPending()), ...(await intake.runPending())];
 
@@ -210,7 +210,7 @@ describe("TenderIntake that cannot read a tender", () => {
       }),
     };
 
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("project-blocked");
     expect(causes).toEqual([{ category: "fault", errorClass: "IntakeReadExhausted", reason: expect.stringContaining("last error: an earlier read failed") }]);
@@ -239,7 +239,7 @@ describe("TenderIntake per-project failure", () => {
       }),
     };
 
-    const outcomes = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const outcomes = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcomes.map((o) => `${o.kind === "step-faulted" ? o.subjectId : o.tenderId}:${o.kind}`)).toEqual(["tender-lying:project-blocked", "tender-next:vision-exists"]);
     expect(blocked).toEqual([
@@ -266,7 +266,7 @@ describe("TenderIntake response schema", () => {
       }),
     };
 
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-2", TENDER, 2)]) }).runPending();
+    await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-2", TENDER, 2)]) }).runPending();
 
     expect(verdicts.slice(0, 2)).toEqual([false, true]);
   });
@@ -292,7 +292,7 @@ describe("TenderIntake response schema", () => {
     const llm = answering((call) => (call === 0 ? { ...valid, ...broken(contractOf(TENDER)) } : valid), prompts);
     const { store, writes } = recordingStore(tenderOf("tender-reask", TENDER, 9));
 
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("recorded");
     expect(prompts[1]).toContain("Your previous response was REJECTED");
@@ -307,7 +307,7 @@ describe("TenderIntake response schema", () => {
     const llm = answering((call) => reply(call === 0 ? [] : ["G1"]), prompts);
     const { store, writes } = recordingStore(tenderOf("tender-underpins", TENDER, 10));
 
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(prompts[1]).toContain("client-visible assumption A1 underpins no guarantee and no exclusion cites it");
     expect(writes[0]?.vision([]).inferences.map((a) => a.underpins)).toEqual([["G1"]]);
@@ -337,7 +337,7 @@ describe("TenderIntake assumption label", () => {
     };
     const { store, writes } = recordingStore(tenderOf("tender-3", "A tool.", 3));
 
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm: answering(() => raw), store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm: answering(() => raw), store }).runPending();
 
     expect(outcome?.kind).toBe("recorded");
     const [write] = writes;
@@ -364,7 +364,7 @@ describe("TenderIntake assumption label", () => {
       }),
     };
 
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-4", "A tool.", 4)]) }).runPending();
+    await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-4", "A tool.", 4)]) }).runPending();
 
     expect(verdicts[0]).toBe(false);
   });
@@ -407,7 +407,7 @@ describe("TenderIntake contract draft", () => {
 
   async function intakeOf(response: unknown) {
     const { store, writes } = recordingStore(tenderOf("tender-r", TENDER, 5));
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm: answering(() => response), store }).runPending();
+    await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm: answering(() => response), store }).runPending();
     const [write, ...more] = writes;
     if (write === undefined || more.length > 0) throw new Error(`expected one intake write, got ${writes.length}`);
     return write;
@@ -493,7 +493,7 @@ describe("TenderIntake contract draft", () => {
         },
       }),
     };
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-k", TENDER, 5)]) }).runPending();
+    await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store: storeOf([tenderOf("tender-k", TENDER, 5)]) }).runPending();
     expect(verdicts[0]).toBe(false);
   });
 });
@@ -534,7 +534,7 @@ describe("TenderIntake failure classes", () => {
       throw new Error("unreachable: the vision callback throws first");
     }, counted, blocked);
 
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcome?.kind).toBe("project-blocked");
     expect(blocked).toEqual(["QuestionIdsMismatch"]);
@@ -565,7 +565,7 @@ describe("TenderIntake failure classes", () => {
     }, counted, []);
 
     const containment = memoryStepContainment((error) => error instanceof BudgetExceeded);
-    await expect(new TenderIntake({ containment, llm, store }).runPending()).rejects.toBe(refusal);
+    await expect(new TenderIntake({ shutdownSignal: new AbortController().signal, containment, llm, store }).runPending()).rejects.toBe(refusal);
     expect(containment.recorded.size).toBe(0);
     expect(counted).toEqual([]);
   });
@@ -588,7 +588,7 @@ describe("TenderIntake failure classes", () => {
       }, counted, []);
       const containment = memoryStepContainment(() => false);
 
-      const [outcome] = await new TenderIntake({ containment, llm, store }).runPending();
+      const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment, llm, store }).runPending();
 
       expect(outcome).toMatchObject({ kind: "step-faulted", faults: 1, retryAfterSeconds: 60, error: expect.stringContaining(error.message) });
       expect(counted).toEqual([]);
@@ -627,7 +627,7 @@ describe("TenderIntake assumption kinds fail safe", () => {
       }),
     };
     const { store, writes } = recordingStore(tenderOf("tender-kv", TENDER, 83));
-    await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
     const [write] = writes;
     if (write === undefined) throw new Error("expected one intake write");
     return { prompt: prompts[0] ?? "", kinds: write.vision([]).inferences.map((a) => [a.statement, a.kind]) };
@@ -701,7 +701,7 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
       }),
     };
     const { store, writes } = recordingStore(tenderOf("tender-s", TENDER, 84));
-    const [outcome] = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const [outcome] = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store }).runPending();
     return { outcome, asked, sent, write: writes[0] };
   }
 

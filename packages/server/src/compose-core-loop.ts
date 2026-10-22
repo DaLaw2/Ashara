@@ -98,7 +98,7 @@ export interface CoreLoopParts {
   readonly containment: StepContainment;
   readonly failureRouter: DispatchSteps["failureRouter"];
   readonly taskLanes: TaskLanes;
-  /** Aborted on shutdown, the dispatcher's own signal. */
+  /** Aborted on shutdown, the dispatcher's own signal: every model call of a step is cancelled with it. */
   readonly shutdownSignal: AbortSignal;
   /** The dispatcher, composed by composeDispatchService. */
   readonly dispatchService: DispatchSteps["dispatchService"];
@@ -159,7 +159,7 @@ export function cellPortsOf(substrate: Pick<PodmanSubstrate, "teardownAll" | "pr
  * loop call. `overrides` replace the members a test supplies itself.
  */
 export function composeCoreLoopDeps(parts: CoreLoopParts, overrides: CoreLoopOverrides = {}): CoreLoopDeps {
-  const { db, containment, llm, onAttempt, logger } = parts;
+  const { db, containment, llm, onAttempt, logger, shutdownSignal } = parts;
   // eslint-disable-next-line no-restricted-syntax -- production's one composition of the loop's deps
   return withOverrides(
     {
@@ -178,14 +178,14 @@ export function composeCoreLoopDeps(parts: CoreLoopParts, overrides: CoreLoopOve
       client: {
         clientStops: new ClientStops(createClientStopStore(db), containment),
         clientReceipts: new ClientReceipts(createClientReceiptStore(db), containment),
-        clientChanges: new ClientChanges({ llm, store: createClientChangeStore(db, parts.workBudgets), containment, onAttempt }),
-        liaisonIntake: new TenderIntake({ llm, store: createIntakeStore(db), containment, onAttempt }),
-        liaisonAnswers: new ClientAnswers({ llm, store: createAnswerStore(db), containment, onAttempt }),
+        clientChanges: new ClientChanges({ llm, store: createClientChangeStore(db, parts.workBudgets), containment, onAttempt, shutdownSignal }),
+        liaisonIntake: new TenderIntake({ llm, store: createIntakeStore(db), containment, onAttempt, shutdownSignal }),
+        liaisonAnswers: new ClientAnswers({ llm, store: createAnswerStore(db), containment, onAttempt, shutdownSignal }),
       },
       planning: {
-        rosterDerivation: new RosterDerivation({ llm, store: createRosterStore(db), containment, onAttempt }),
-        firstPlanning: new FirstPlanner({ llm, store: createFirstPlanStore(db), containment, onAttempt, logger }),
-        replanning: new Replanner({ llm, store: createReplanStore(db, logger), containment, onAttempt, logger }),
+        rosterDerivation: new RosterDerivation({ llm, store: createRosterStore(db), containment, onAttempt, shutdownSignal }),
+        firstPlanning: new FirstPlanner({ llm, store: createFirstPlanStore(db), containment, onAttempt, logger, shutdownSignal }),
+        replanning: new Replanner({ llm, store: createReplanStore(db, logger), containment, onAttempt, logger, shutdownSignal }),
       },
       dispatch: {
         dispatchService: parts.dispatchService,

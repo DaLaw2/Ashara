@@ -99,19 +99,19 @@ function reading(observations: readonly [Observation, Observation]) {
 function intake(): TenderIntake {
   const store = createIntakeStore(db);
   const ours: IntakeStore = { ...store, openTenders: async () => (await store.openTenders()).filter((t) => ourProjects.has(t.projectId)) };
-  return new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
+  return new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 function liaison(): ClientChanges {
   const store = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
   const ours: ClientChangeStore = { ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) };
-  return new ClientChanges({ llm: gateway, store: ours, containment: memoryStepContainment(() => true) });
+  return new ClientChanges({ shutdownSignal: new AbortController().signal, llm: gateway, store: ours, containment: memoryStepContainment(() => true) });
 }
 
 function answers(): ClientAnswers {
   const store = createAnswerStore(db);
   const ours: AnswerStore = { ...store, openAnswers: async () => (await store.openAnswers()).filter((a) => ourProjects.has(a.projectId)) };
-  return new ClientAnswers({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
+  return new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 async function tendered(): Promise<ProjectId> {

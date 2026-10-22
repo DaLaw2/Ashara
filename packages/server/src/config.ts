@@ -118,6 +118,21 @@ export function loadDatabaseUrl(): string {
   return process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 }
 
+/** The policy default of ASHARA_SHUTDOWN_DEADLINE_MS: what a process manager's stop timeout commonly allows. */
+const DEFAULT_SHUTDOWN_DEADLINE_MS = 30_000;
+/** A deadline above this would outlast what any process manager waits before it kills the process. */
+const MAX_SHUTDOWN_DEADLINE_MS = 600_000;
+
+/**
+ * The one bound on a shutdown, graceful or fatal (ASHARA_SHUTDOWN_DEADLINE_MS): every model call
+ * and agent session in flight is aborted at once, and past it the process exits without the rest,
+ * which the next startup reconciles. A set but unusable one is refused, never replaced.
+ */
+export function loadShutdownDeadlineMs(): number {
+  const raw = nonEmptyEnv("ASHARA_SHUTDOWN_DEADLINE_MS");
+  return raw === undefined ? DEFAULT_SHUTDOWN_DEADLINE_MS : parseIntegerSetting("ASHARA_SHUTDOWN_DEADLINE_MS", raw, 1, MAX_SHUTDOWN_DEADLINE_MS);
+}
+
 export function loadServerConfig(databaseUrl: string, apiToken: string): ServerConfig {
 
   // Policy default: unset, the web client listens on 3000 (README). A wrong port is seen at once,

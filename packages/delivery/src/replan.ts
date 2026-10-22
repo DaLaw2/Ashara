@@ -164,6 +164,8 @@ interface ReplannerDeps {
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
   readonly logger: Logger;
+  /** Aborted on shutdown: every model call this step sends is cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /**
@@ -305,6 +307,7 @@ export class Replanner implements Replanning {
       prompt: environmentPrompt(cause, current.environmentStatement, vision),
       schema: EnvironmentJudgmentSchema,
       maxTokens: 512,
+      abortSignal: this.deps.shutdownSignal,
     });
     this.deps.logger.info("delivery.environment-judged", `environment change ${response.data.environmentChange}: ${response.data.reason}`, {
       projectId: project.projectId,
@@ -341,6 +344,7 @@ export class Replanner implements Replanning {
   ): Promise<DecompositionResult> {
     const llm = createGatewayDecompositionLLM(
       this.deps.llm.forCall({ projectId: project.projectId, taskId: null, callSite: "decomposition" }),
+      this.deps.shutdownSignal,
       this.deps.onAttempt,
     );
     const northStar = [vision.northStar, causeSection(cause, vision), doneSection(completed)].join("\n\n");

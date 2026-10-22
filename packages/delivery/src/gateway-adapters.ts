@@ -27,10 +27,12 @@ function decompositionReask(ctx: { readonly errors: readonly string[] }): string
  * then `StructuredOutputExhausted`. It runs a SEMANTIC
  * `validate` (phantom `dependsOn` ref detection) inside each attempt and re-asks
  * with the failure feedback, so one malformed emission is corrected on retry
- * instead of exploding the run. Distinct `site` so its exhaustion is attributable.
+ * instead of exploding the run. Distinct `site` so its exhaustion is attributable. Every call is
+ * cancelled when `abortSignal` aborts.
  */
 export function createGatewayDecompositionLLM(
   gateway: StructuredProvider,
+  abortSignal: AbortSignal,
   onAttempt?: (event: LadderAttemptEvent) => void,
 ): DecompositionLLM {
   const laddered = withStructuredLadder(gateway, {
@@ -54,6 +56,7 @@ export function createGatewayDecompositionLLM(
         schema,
         validate,
         maxTokens: 4096,
+        abortSignal,
       });
       return response.data;
     },

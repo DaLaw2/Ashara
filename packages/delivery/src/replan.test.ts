@@ -71,7 +71,7 @@ describe("Replanner: the environment judgement asks for a judge of the environme
         },
       }),
     };
-    await new Replanner({ llm, store, containment: memoryStepContainment(() => false), logger: recordingLogger() }).runPending();
+    await new Replanner({ shutdownSignal: new AbortController().signal, llm, store, containment: memoryStepContainment(() => false), logger: recordingLogger() }).runPending();
     return sent;
   }
 

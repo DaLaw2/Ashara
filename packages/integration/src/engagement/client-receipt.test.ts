@@ -81,7 +81,7 @@ async function cycle(work: "running" | "stopped-at-cap" = "running"): Promise<vo
   await new ClientReceipts({ ...receipts, dueReceipts: async () => (await receipts.dueReceipts()).filter((r) => ourProjects.has(r.projectId)) }, containment).runPending({ kind: work });
   if (work === "stopped-at-cap") return;
   const changes = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
-  await new ClientChanges({
+  await new ClientChanges({ shutdownSignal: new AbortController().signal,
     llm: gateway,
     store: { ...changes, openChanges: async () => (await changes.openChanges()).filter((c) => ourProjects.has(c.projectId)) },
     containment,

@@ -175,6 +175,8 @@ interface RosterDerivationDeps {
   /** Each project's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  /** Aborted on shutdown: every model call this step sends is cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /**
@@ -232,6 +234,7 @@ export class RosterDerivation implements RosterDerivationStep {
         schema: DerivationResponseSchema,
         maxTokens: 2048,
         validate,
+        abortSignal: this.deps.shutdownSignal,
       });
       return response.data;
     } catch (err) {

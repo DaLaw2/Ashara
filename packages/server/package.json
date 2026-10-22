@@ -18,6 +18,7 @@
     "./compose-core-loop": "./src/compose-core-loop.ts",
     "./intake-store": "./src/intake-store.ts",
     "./plan-report-store": "./src/plan-report-store.ts",
+    "./process-lifecycle": "./src/process-lifecycle.ts",
     "./roster-store": "./src/roster-store.ts",
     "./routes": "./src/routes.ts",
     "./secrets": "./src/secrets.ts",

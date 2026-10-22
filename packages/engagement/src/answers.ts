@@ -305,6 +305,8 @@ interface ClientAnswersDeps {
   /** Each answer's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  /** Aborted on shutdown: every model call this step sends is cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /**
@@ -463,6 +465,7 @@ export class ClientAnswers implements LiaisonAnswers {
           return { ok: false, errors: [err.detail] };
         }
       },
+      abortSignal: this.deps.shutdownSignal,
     });
     return response.data.reading;
   }

@@ -71,7 +71,7 @@ import {
   toModelConfig,
 } from "@ashara/model-access";
 import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig } from "@ashara/model-access";
-import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { GuardedModelAccess, LlmCallLedger, SpendCap, modelCallAbortedOf } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import { DevSessionRepository, terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
@@ -432,15 +432,18 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
       judgements: new SuiteReviewJudgementRepository(db),
       onAttempt: ladderAttemptSink,
       logger,
+      shutdownSignal: abortController.signal,
     }),
     shutdownSignal: abortController.signal,
     clock: ports.clock,
     logger,
   });
 
-  // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
-  // spend-cap refusal escapes to the cycle, which halts at the cap (CoreLoop.step).
-  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null, logger);
+  // One subject's fault in a cycle step is contained to it and kept in step_faults; a spend-cap
+  // refusal escapes to the cycle, which halts at the cap (CoreLoop.step), and so does a model call the
+  // shutdown aborted, which is no fault of its subject's: the cycle ends on it, and the subject is
+  // read afresh after the restart.
+  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null || modelCallAbortedOf(error) !== null, logger);
   const coreLoopDeps = composeCoreLoopDeps({
     db,
     config: config.coreLoop,

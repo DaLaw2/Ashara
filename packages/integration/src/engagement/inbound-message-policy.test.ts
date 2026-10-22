@@ -412,7 +412,7 @@ describe("the opening of every halt resets no count: the decision resets one onl
     const store = createIntakeStore(db);
     const ours = { ...store, openTenders: async () => (await store.openTenders()).filter((open) => open.id === tender.id) };
 
-    const outcomes = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: ours }).runPending();
+    const outcomes = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store: ours }).runPending();
 
     expect(outcomes.map((outcome) => outcome.kind)).toEqual(["project-blocked"]);
     const open = await openHaltOf(project.id);
@@ -655,7 +655,7 @@ describe("a tender listed while its project was at work is not consumed on the v
       },
     };
 
-    const outcomes = await new TenderIntake({ containment: memoryStepContainment(() => false), llm, store: ours }).runPending();
+    const outcomes = await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => false), llm, store: ours }).runPending();
 
     expect(outcomes.map((outcome) => outcome.kind)).toEqual(["moved"]);
     expect((await new ClientMessageRepository(db).findById(message.id))?.consumedAt).toBeNull();

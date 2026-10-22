@@ -118,7 +118,7 @@ function recordingStore(intakeAttempts: number) {
 describe("a client's answer is reconciled with every record it contradicts, in one revision", () => {
   test("an answer that contradicts its question's assumption and another one amends both in one client-change revision", async () => {
     const { store, writes } = recordingStore(0);
-    const outcomes = await new ClientAnswers({ llm: model(RECORDED_READING).llm, store, containment: memoryStepContainment(() => false) }).runPending();
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, llm: model(RECORDED_READING).llm, store, containment: memoryStepContainment(() => false) }).runPending();
 
     expect(outcomes).toMatchObject([{ kind: "stated", assumptionKey: "A3", verdict: "changes", visionVersion: 5, replanRequested: true }]);
     expect(writes).toHaveLength(1);
@@ -155,6 +155,7 @@ describe("a client's answer is reconciled with every record it contradicts, in o
     };
     const { store, writes } = recordingStore(0);
     await new ClientAnswers({
+      shutdownSignal: new AbortController().signal,
       llm: model({ ...RECORDED_READING, amends: [...RECORDED_READING.amends, amendG2] }).llm,
       store,
       containment: memoryStepContainment(() => false),
@@ -175,7 +176,7 @@ describe("a client's answer is reconciled with every record it contradicts, in o
     const { amends: _omitted, ...unreconciled } = RECORDED_READING;
     const { store, writes, failures, blocked } = recordingStore(2);
     const { llm, calls } = model(unreconciled);
-    const outcomes = await new ClientAnswers({ llm, store, containment: memoryStepContainment(() => false) }).runPending();
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, llm, store, containment: memoryStepContainment(() => false) }).runPending();
 
     expect(calls()).toBeGreaterThan(1);
     expect(writes).toEqual([]);
@@ -187,7 +188,7 @@ describe("a client's answer is reconciled with every record it contradicts, in o
   test("a reconciliation naming a record the vision does not hold is retried and never applied in part", async () => {
     const { store, writes, failures } = recordingStore(0);
     const { llm, calls } = model({ ...RECORDED_READING, amends: [...RECORDED_READING.amends, { op: "amend-assumption", id: "A99", statement: "Unknown.", direction: "neutral" }] });
-    const outcomes = await new ClientAnswers({ llm, store, containment: memoryStepContainment(() => false) }).runPending();
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, llm, store, containment: memoryStepContainment(() => false) }).runPending();
 
     expect(calls()).toBeGreaterThan(1);
     expect(writes).toEqual([]);

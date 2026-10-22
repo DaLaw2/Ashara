@@ -17,6 +17,7 @@ import { judgeRelation } from "./capability-rank.js";
 import { contextOverflowOf, contextPreflight, describeProjection, projectTurnInput } from "./context-window.js";
 import {
   ContextBudgetExceeded,
+  ModelCallAborted,
   ProviderConfigurationRejected,
   ProviderError,
   SchemaValidationError,
@@ -150,6 +151,9 @@ export function providerFailureOf(error: unknown): ProviderFailure {
 
 /** The error kind of a structured call that stopped at `maxTokens` without a valid result. */
 const TRUNCATED: LlmCallOutcome = { kind: "error", errorKind: "truncated" };
+
+/** The error kind of a request its caller's abort signal cancelled in flight: neither a success nor anyone's failure. */
+const ABORTED: LlmCallOutcome = { kind: "error", errorKind: "aborted" };
 
 /** The SDK's finish reason as recorded; total over every input, so an undocumented value is kept, never folded. */
 function recordedFinishReason(sdkFinishReason: unknown): LlmFinishReason {
@@ -338,9 +342,9 @@ export class LLMGateway {
       requestBytes: utf8Bytes(request.system, JSON.stringify(request.messages), JSON.stringify(request.tools)),
       maxOutputTokens: budget.maxOutputTokens,
     };
-    const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, () => generateText(params)).catch(
+    const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, request.abortSignal, () => generateText(params)).catch(
       (error: unknown) => {
-        if (error instanceof GateThrew) throw error;
+        if (error instanceof GateThrew || error instanceof ModelCallAborted) throw error;
         const overflow = contextOverflowOf(error, this.contextOverflow);
         if (overflow !== null) {
           throw new ContextBudgetExceeded(
@@ -407,9 +411,11 @@ export class LLMGateway {
   }
 
   private async structured<T>(request: StructuredRequest<T>, scope: CallScope): Promise<StructuredResponse<T>> {
-    // A malformed answer is a ladder attempt's failure, a gate refusal the caller's, and a schema the
-    // provider refuses Ashara's defect: none is retried on another provider, where it would only be hidden.
-    const rethrown = (error: unknown): boolean => error instanceof SchemaValidationError || error instanceof GateThrew || error instanceof SchemaUnacceptable;
+    // A malformed answer is a ladder attempt's failure, a gate refusal the caller's, a schema the
+    // provider refuses Ashara's defect, and an aborted call its caller's stop: none is retried on
+    // another provider, where it would only be hidden or outlive the stop.
+    const rethrown = (error: unknown): boolean =>
+      error instanceof SchemaValidationError || error instanceof GateThrew || error instanceof SchemaUnacceptable || error instanceof ModelCallAborted;
     const execute = (req: StructuredRequest<T>, r: ResolvedProvider) => this.executeStructuredCall(req, r, scope);
     const opinion = request.secondOpinion;
     if (opinion === undefined) {
@@ -497,15 +503,18 @@ export class LLMGateway {
    * sent, which prices it. The gate admits it first, so a refused request (an
    * unpriced model, or a worst-case cost over a spend cap) never reaches the
    * network. A request that throws is settled as an error before the throw
-   * continues.
+   * continues; one that `abortSignal` cancelled is settled as `aborted` and
+   * throws ModelCallAborted. Once `abortSignal` has aborted, nothing is admitted or sent.
    */
   private async send<R>(
     scope: CallScope,
     resolved: CallTarget,
     operation: LlmCallOperation,
     size: RequestSize,
+    abortSignal: AbortSignal,
     request: () => Promise<R>,
   ): Promise<{ readonly result: R; readonly requestedAt: Date; readonly admitted: AdmittedCall }> {
+    if (abortSignal.aborted) throw new ModelCallAborted({ stage: "before-send" }, abortSignal.reason);
     const admitted: AdmittedCall = {
       gate: scope.gate,
       request: {
@@ -527,6 +536,14 @@ export class LLMGateway {
       return { result: await request(), requestedAt, admitted };
     } catch (error) {
       const usage = usageOfFailedRequest(error);
+      if (abortSignal.aborted) {
+        await this.settle(admitted, requestedAt, usage, "no-response", ABORTED, error);
+        throw new ModelCallAborted(
+          { stage: "in-flight", provider: resolved.providerName, model: resolved.modelConfig.id, callId: admitted.request.callId },
+          abortSignal.reason,
+          { cause: error },
+        );
+      }
       const failure = failureOfRequest(error);
       await this.settle(admitted, requestedAt, usage, failure.finishReason, failure.outcome, error);
       throw configurationRejectionOf(error, resolved) ?? error;
@@ -581,6 +598,7 @@ export class LLMGateway {
         maxOutputTokens: budget.maxOutputTokens,
         maxRetries: 0,
         providerOptions,
+        abortSignal: request.abortSignal,
       });
     let sent: {
       readonly result: GenerateObjectResult<T>;
@@ -588,7 +606,7 @@ export class LLMGateway {
       readonly admitted: AdmittedCall;
     };
     try {
-      sent = await this.send(scope, resolved, operation, size, call);
+      sent = await this.send(scope, resolved, operation, size, request.abortSignal, call);
     } catch (error) {
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
       throw structuredFailureOf(error, resolved, budget);
@@ -651,9 +669,10 @@ export class LLMGateway {
       maxOutputTokens: budget.maxOutputTokens,
       maxRetries: 0,
       providerOptions,
+      abortSignal: request.abortSignal,
     };
     const size: RequestSize = { requestBytes, maxOutputTokens: budget.maxOutputTokens };
-    const { result, requestedAt, admitted } = await this.send(scope, resolved, operation, size, () =>
+    const { result, requestedAt, admitted } = await this.send(scope, resolved, operation, size, request.abortSignal, () =>
       generateText(params),
     );
 

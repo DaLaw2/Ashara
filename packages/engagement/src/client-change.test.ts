@@ -91,7 +91,7 @@ function recordingStore(change: OpenChange, impact: ChangeImpact): { readonly st
 
 async function readOnce(body: string, correction: unknown, impact: ChangeImpact) {
   const { store, writes } = recordingStore({ ...CHANGE, body }, impact);
-  const outcomes = await new ClientChanges({ llm: reading(correction), store, containment: memoryStepContainment(() => false) }).runPending();
+  const outcomes = await new ClientChanges({ shutdownSignal: new AbortController().signal, llm: reading(correction), store, containment: memoryStepContainment(() => false) }).runPending();
   const [write] = writes;
   if (write === undefined) throw new Error(`nothing was written; outcomes: ${JSON.stringify(outcomes)}`);
   return { outcomes, write };

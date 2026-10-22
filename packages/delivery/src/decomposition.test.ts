@@ -651,7 +651,7 @@ describe("DecompositionEngine", () => {
                 return { data: parsed.data, model: "fake", provider: "fake", grade: "Strong" };
             },
         };
-        const result = await new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT);
+        const result = await new DecompositionEngine(createGatewayDecompositionLLM(provider, new AbortController().signal)).decompose(INPUT);
 
         expect(taskPrompts).toHaveLength(2);
         expect(taskPrompts[1]).toContain("Your previous response was REJECTED");
@@ -668,7 +668,7 @@ describe("DecompositionEngine", () => {
             },
         };
         await expect(
-            new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT),
+            new DecompositionEngine(createGatewayDecompositionLLM(provider, new AbortController().signal)).decompose(INPUT),
         ).rejects.toSatisfy((err: unknown) => modelCallFailureOf(err) === "model");
     });
 });

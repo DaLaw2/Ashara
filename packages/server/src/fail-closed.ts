@@ -1,8 +1,11 @@
 import { describeErrorChain, serializeError } from "@ashara/shared";
 import { ServerStartupRefused } from "./secrets.js";
 
-/** `main`: main() itself rejected, the same corrupted process reached through the boot's own await chain. */
-type FatalOrigin = "uncaughtException" | "unhandledRejection" | "main";
+/**
+ * `main`: main() itself rejected, the same corrupted process reached through the boot's own await chain;
+ * `shutdown`: the graceful shutdown a signal began threw.
+ */
+type FatalOrigin = "uncaughtException" | "unhandledRejection" | "main" | "shutdown";
 
 /** The error, its stack, its own fields and every `cause` beneath it, through the one serializer, for the log. */
 function fatalReport(err: unknown): string {
@@ -28,7 +31,7 @@ function isStartupRefused(err: unknown): err is ServerStartupRefused {
 
 interface FatalExit {
   /** The graceful shutdown (drain, cells, DB) a fatal error runs before the exit. */
-  setShutdown(shutdown: () => Promise<void>): void;
+  setShutdown(shutdown: () => Promise<unknown>): void;
   /** The process-level handler: a corrupted process stops, it never runs on. */
   onFatal(origin: FatalOrigin, err: unknown): void;
 }
@@ -40,7 +43,7 @@ interface FatalExit {
  * there is nothing to drain and the exit is immediate.
  */
 export function createFatalExit(deps: FatalExitDeps): FatalExit {
-  let shutdown: (() => Promise<void>) | null = null;
+  let shutdown: (() => Promise<unknown>) | null = null;
   let stopping = false;
   let exited = false;
 

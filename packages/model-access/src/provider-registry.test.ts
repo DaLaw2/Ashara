@@ -425,9 +425,9 @@ describe("ProviderRegistry.resolveJudge", () => {
       contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
     };
     const gated = new LLMGateway(config, () => new Date(), () => answered, ROUTING_RULES).gated("suite-review", { admit: async () => {}, settle: async () => {} });
-    const response = await gated.generateStructured({ judges: "Medium", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, site: "suite-review" });
+    const response = await gated.generateStructured({ judges: "Medium", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, site: "suite-review", abortSignal: new AbortController().signal });
     expect(response.model).toBe("alpha-strong");
-    await expect(gated.generateStructured({ judges: "Frontier", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10 })).rejects.toBeInstanceOf(JudgeUnavailable);
+    await expect(gated.generateStructured({ judges: "Frontier", prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, abortSignal: new AbortController().signal })).rejects.toBeInstanceOf(JudgeUnavailable);
   });
 });
 

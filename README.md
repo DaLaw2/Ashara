@@ -127,6 +127,7 @@ answers `ok` once the server is up.
 | `ASHARA_PROJECT_WORK_BUDGET_REQUESTS` | Optional. The most model requests one project may make (default 600); past it the project pauses until you grant more with `npx tsx scripts/project.ts grant`. |
 | `ASHARA_WORK_RESERVE_PERCENT` | Optional. The share of each project's request budget, a whole percent from 0 to 99 (default 25), that only verification and acceptance may draw; planning, check authoring, review and implementation pause the project when only this share is left. |
 | `ASHARA_PORT` | The web client's port (default 3000). A value that is not a port stops Ashara from starting. |
+| `ASHARA_SHUTDOWN_DEADLINE_MS` | Optional. How long a stop (SIGTERM, SIGINT or a fatal error) may take, in milliseconds, a whole number from 1 to 600000 (default 30000). Every model call and agent session in flight is cancelled at once; past the deadline the process exits anyway and the next start reconciles what it left. A value outside those bounds stops Ashara from starting. |
 | `WORKDIR_BASE` | Required. Where projects are kept. Ashara will not start without it. |
 | `DATABASE_URL` | Optional. The database to use (default `postgresql://ashara@localhost:5432/ashara`, the one `just dev` starts). |
 | `TEST_DATABASE_URL` | Optional, for contributors. The database tests use (default `postgresql://ashara@localhost:5433/ashara`, the test Postgres `just test-db-up` starts). Tests never read `DATABASE_URL`, and a URL naming the shared database is refused. |

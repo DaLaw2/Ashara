@@ -256,6 +256,11 @@ interface StructuredRequestFields<T> {
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
   /**
+   * Ends the call when it aborts: a request in flight is cancelled and settled as `aborted`, and none
+   * is sent once it has aborted (ModelCallAborted). Required, so no call outlives its caller's stop.
+   */
+  abortSignal: AbortSignal;
+  /**
    * A second opinion of one strength (SecondOpinionStrength), chosen from the catalog by tier
    * and provider: no request ever reaches a model of another strength. An other-family opinion and
    * its failover never go to the avoided provider; a same-family or same-model one is pinned to the
@@ -301,7 +306,8 @@ export type LlmCallOperation = "generateObject" | "generateText:structured-fallb
 
 /**
  * `truncated` is the error kind of a structured call that stopped at
- * `maxTokens` (finish reason `length`) without a valid result.
+ * `maxTokens` (finish reason `length`) without a valid result; `aborted` that of a request its
+ * caller's abort signal cancelled in flight.
  */
 export type LlmCallOutcome =
   | { readonly kind: "ok" }

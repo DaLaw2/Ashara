@@ -81,7 +81,7 @@ function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]
 function greet(gateway: GuardedModelAccess, projectId: ProjectId) {
   return gateway
     .forCall({ projectId, taskId: null, callSite: "decomposition" })
-    .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 64 });
+    .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 64 });
 }
 
 async function newProject(): Promise<ProjectId> {

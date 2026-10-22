@@ -1,4 +1,4 @@
-import { ProviderConfigurationRejected, ProviderError, StructuredOutputExhausted } from "@ashara/model-access";
+import { ModelCallAborted, ProviderConfigurationRejected, ProviderError, StructuredOutputExhausted } from "@ashara/model-access";
 import { LlmCallNotAdmitted, LlmCallNotRecorded, ModelAnswerUnfit, PreCallRefusal } from "./errors.js";
 
 /**
@@ -17,6 +17,17 @@ import { LlmCallNotAdmitted, LlmCallNotRecorded, ModelAnswerUnfit, PreCallRefusa
  * request threw, Ashara's own faults included.
  */
 export type ModelCallFailure = "model" | "provider" | "ashara";
+
+/**
+ * The abort `err` is, or carries as a cause; null for any other failure. An aborted call failed no
+ * one: its caller stopped it, so it is neither counted against its subject nor routed as a failure.
+ */
+export function modelCallAbortedOf(err: unknown): ModelCallAborted | null {
+  for (let current: unknown = err; current instanceof Error; current = current.cause) {
+    if (current instanceof ModelCallAborted) return current;
+  }
+  return null;
+}
 
 export function modelCallFailureOf(err: unknown): ModelCallFailure {
   let failure: ModelCallFailure = "ashara";

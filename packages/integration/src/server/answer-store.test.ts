@@ -145,25 +145,25 @@ function containment(): StepContainment {
 function answers(): ClientAnswers {
   const store = createAnswerStore(db);
   const narrowed: AnswerStore = { ...store, openAnswers: ours(() => store.openAnswers()) };
-  return new ClientAnswers({ containment: containment(), llm: gateway, store: narrowed });
+  return new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: narrowed });
 }
 
 function intake(): TenderIntake {
   const store = createIntakeStore(db);
   const narrowed: IntakeStore = { ...store, openTenders: ours(() => store.openTenders()) };
-  return new TenderIntake({ containment: containment(), llm: gateway, store: narrowed });
+  return new TenderIntake({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: narrowed });
 }
 
 function roster(): RosterDerivation {
   const store = createRosterStore(db);
   const narrowed: RosterStore = { ...store, projectsAwaitingRoster: ours(() => store.projectsAwaitingRoster()) };
-  return new RosterDerivation({ containment: containment(), llm: gateway, store: narrowed });
+  return new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: narrowed });
 }
 
 function planner(): FirstPlanner {
   const store = createFirstPlanStore(db);
   const narrowed: FirstPlanStore = { ...store, projectsAwaitingPlan: ours(() => store.projectsAwaitingPlan()) };
-  return new FirstPlanner({ logger: recordingLogger(), containment: containment(), llm: gateway, store: narrowed });
+  return new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: containment(), llm: gateway, store: narrowed });
 }
 
 /** A tender taken in: vision v1 with A1 and A2 adopted by the two questions, A3 unasked. */
@@ -478,7 +478,7 @@ describe("the client's answers", () => {
       },
     };
 
-    const outcomes = await new ClientAnswers({ containment: containment(), llm: gateway, store: racing }).runPending();
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: racing }).runPending();
 
     expect(outcomes).toEqual([
       { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 3, replanRequested: false },
@@ -649,7 +649,7 @@ describe("the client's answers", () => {
     const read = await answer(other.projectId, other.questionIds[1] ?? "", "Yes, twelve seats.");
     pipelineModel({ verdict: "confirms", amends: [] });
     const store = createAnswerStore(db);
-    const capped = new ClientAnswers({
+    const capped = new ClientAnswers({ shutdownSignal: new AbortController().signal,
       containment: containment(),
       llm: modelAccess({ deploymentUsd: 1_000_000, perProjectUsd: 5 }),
       store: { ...store, openAnswers: ours(() => store.openAnswers()) },
@@ -681,7 +681,7 @@ describe("the client's answers", () => {
       },
     };
 
-    expect(await new ClientAnswers({ containment: containment(), llm: gateway, store: racing }).runPending()).toEqual([{ kind: "not-open", answerId, projectId }]);
+    expect(await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: racing }).runPending()).toEqual([{ kind: "not-open", answerId, projectId }]);
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeNull();
     expect(await visionsOf(projectId)).toHaveLength(1);
   });
@@ -702,7 +702,7 @@ describe("the client's answers", () => {
       },
     };
 
-    const outcomes = await new ClientAnswers({ containment: containment(), llm: gateway, store: failing }).runPending();
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: failing }).runPending();
 
     expect(outcomes.map((outcome) => [outcome.kind, outcome.kind === "step-faulted" ? outcome.subjectId : outcome.answerId])).toEqual([
       ["step-faulted", brokenAnswer],
@@ -718,7 +718,7 @@ describe("the client's answers", () => {
     ]);
     expect((await new ProjectHaltRepository(db).get(broken.projectId))?.status).not.toBe("blocked");
     // Not read again until its backoff has passed.
-    expect(await new ClientAnswers({ containment: containment(), llm: gateway, store: failing }).runPending()).toEqual([]);
+    expect(await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: failing }).runPending()).toEqual([]);
   });
 
   test("a roster whose provider fails every request halts its project at the fault bound as the provider's failure, never Ashara's", async () => {

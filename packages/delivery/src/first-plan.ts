@@ -203,6 +203,8 @@ interface FirstPlannerDeps {
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
   readonly logger: Logger;
+  /** Aborted on shutdown: every model call this step sends is cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /**
@@ -297,6 +299,7 @@ export class FirstPlanner implements FirstPlanning {
   private async decompose(project: ProjectAwaitingPlan, vision: PlanningVision): Promise<DecompositionResult> {
     const llm = createGatewayDecompositionLLM(
       this.deps.llm.forCall({ projectId: project.projectId, taskId: null, callSite: "decomposition" }),
+      this.deps.shutdownSignal,
       this.deps.onAttempt,
     );
     const input: DecompositionInput = {

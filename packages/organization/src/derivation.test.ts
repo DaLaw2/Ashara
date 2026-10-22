@@ -78,7 +78,7 @@ describe("RosterDerivation", () => {
     const { llm, prompts } = scripted(VALID);
     const { store, recorded } = memoryStore();
 
-    const outcomes = await new RosterDerivation({ containment: memoryStepContainment(() => true), llm, store }).runPending();
+    const outcomes = await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes).toEqual([
       { kind: "recorded", projectId: PROJECT, revision: 1, roles: VALID.roles.map((r) => r.name) },
@@ -92,7 +92,7 @@ describe("RosterDerivation", () => {
     const { llm, prompts } = scripted(SELF_JUDGING, VALID);
     const { store, recorded } = memoryStore();
 
-    const outcomes = await new RosterDerivation({ containment: memoryStepContainment(() => true), llm, store }).runPending();
+    const outcomes = await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["recorded"]);
     expect(prompts).toHaveLength(2);
@@ -105,7 +105,7 @@ describe("RosterDerivation", () => {
     const { llm, prompts } = scripted(SELF_JUDGING);
     const { store, recorded } = memoryStore();
 
-    const outcomes = await new RosterDerivation({ containment: memoryStepContainment(() => true), llm, store }).runPending();
+    const outcomes = await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["refused"]);
     expect(prompts).toHaveLength(6);

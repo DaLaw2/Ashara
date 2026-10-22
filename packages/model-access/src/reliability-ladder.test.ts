@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { SchemaValidationError } from "./errors.js";
+import { ModelCallAborted, SchemaValidationError } from "./errors.js";
 import { StructuredOutputExhausted, withStructuredLadder } from "./reliability-ladder.js";
 import type { LadderAttemptEvent } from "./reliability-ladder.js";
 
@@ -13,7 +13,7 @@ describe("withStructuredLadder exhaustion", () => {
     );
 
     const failure = await ladder
-      .generateStructured({ capability: "Frontier", prompt: "p", schema: z.object({ a: z.string() }), maxTokens: 10 })
+      .generateStructured({ capability: "Frontier", prompt: "p", schema: z.object({ a: z.string() }), maxTokens: 10, abortSignal: new AbortController().signal })
       .then(() => null, (err: unknown) => err);
 
     expect(failure).toBeInstanceOf(StructuredOutputExhausted);
@@ -36,7 +36,7 @@ describe("withStructuredLadder exhaustion", () => {
     );
 
     const failure = await ladder
-      .generateStructured({ judges: "Strong", prompt: "p", schema: z.object({ a: z.string() }), maxTokens: 10 })
+      .generateStructured({ judges: "Strong", prompt: "p", schema: z.object({ a: z.string() }), maxTokens: 10, abortSignal: new AbortController().signal })
       .then(() => null, (err: unknown) => err);
 
     expect(failure).toBeInstanceOf(StructuredOutputExhausted);
@@ -44,5 +44,32 @@ describe("withStructuredLadder exhaustion", () => {
       { judges: "Strong", capability: undefined, site: "suite-review" },
       { judges: "Strong", capability: undefined, site: "escalation" },
     ]);
+  });
+});
+
+describe("withStructuredLadder abort", () => {
+  test("an abort between attempts ends the ladder: no further attempt and no escalation is sent, and it is not exhaustion", async () => {
+    const stop = new AbortController();
+    let sent = 0;
+    const ladder = withStructuredLadder(
+      {
+        generateStructured: () => {
+          sent += 1;
+          stop.abort(new Error("shutting down"));
+          return Promise.reject(new SchemaValidationError(["not the answer"], "m"));
+        },
+      },
+      { site: "decomposition", attempts: 2 },
+    );
+
+    const failure = await ladder
+      .generateStructured({ capability: "Light", prompt: "p", schema: z.object({ a: z.string() }), maxTokens: 10, abortSignal: stop.signal })
+      .then(() => null, (err: unknown) => err);
+
+    expect(sent).toBe(1);
+    expect(failure).toBeInstanceOf(ModelCallAborted);
+    if (!(failure instanceof ModelCallAborted)) return;
+    expect(failure.at).toEqual({ stage: "before-send" });
+    expect(failure.message).toContain("shutting down");
   });
 });

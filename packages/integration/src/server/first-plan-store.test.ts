@@ -105,7 +105,7 @@ function planner(): FirstPlanner {
     ...store,
     projectsAwaitingPlan: async () => (await store.projectsAwaitingPlan()).filter((p) => ourProjects.has(p.projectId)),
   };
-  return new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: ours });
+  return new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 function intake(): TenderIntake {
@@ -114,7 +114,7 @@ function intake(): TenderIntake {
     ...store,
     openTenders: async () => (await store.openTenders()).filter((t) => ourProjects.has(t.projectId)),
   };
-  return new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
+  return new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 /** The contract a reading of "Booking page for my two pottery studios." drafts. */
@@ -192,7 +192,7 @@ function rosterStep(): RosterDerivation {
     projectsAwaitingRoster: async () =>
       (await store.projectsAwaitingRoster()).filter((p) => ourProjects.has(p.projectId)),
   };
-  return new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: ours });
+  return new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: ours });
 }
 
 const NO_ACCOUNT = { statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred", underpins: ["G1"] };

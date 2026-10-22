@@ -121,7 +121,7 @@ describe("the judge rule", () => {
   test("the warning on a judge no stronger than the work names the rungs above it the rule asked", async () => {
     const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
     const config = configOf([["alpha", ALPHA]]);
-    const ask = { judges: "Frontier" as const, prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10 };
+    const ask = { judges: "Frontier" as const, prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, abortSignal: new AbortController().signal };
     await gatedOf(config, ROUTING_RULES).generateStructured(ask);
     await gatedOf(config, twoAbove).generateStructured(ask);
     const lines = warned.mock.calls.map((call) => String(call[0])).filter((line) => line.includes("no stronger than the work"));
@@ -151,7 +151,7 @@ describe("the second-opinion rule", () => {
 
   test("SecondOpinionUnavailable states the rule of the strength it was refused under", async () => {
     const config = configOf([["alpha", [ALPHA[2]]], ["beta", [model("beta", "beta-frontier", "Frontier", 5)]]]);
-    const ask = { judges: "Medium" as const, prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, secondOpinion: sameFamily };
+    const ask = { judges: "Medium" as const, prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, secondOpinion: sameFamily, abortSignal: new AbortController().signal };
     const refused = async (rules: RoutingRules): Promise<string> => {
       const err: unknown = await gatedOf(config, rules).generateStructured(ask).then(
         () => expect.unreachable("the second opinion was served"),
@@ -173,7 +173,7 @@ describe("the second-opinion rule", () => {
     const config = configOf([["alpha", ALPHA]]);
     const sameModel: SecondOpinion = { avoid, strength: "same-model" };
     expect(registryOf(config, ROUTING_RULES).resolveSecondOpinion({ judges: "Medium" }, sameModel)).toBeNull();
-    const ask = { judges: "Medium" as const, prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, secondOpinion: sameModel };
+    const ask = { judges: "Medium" as const, prompt: "p", schema: z.object({ ok: z.boolean() }), maxTokens: 10, secondOpinion: sameModel, abortSignal: new AbortController().signal };
     const err: unknown = await gatedOf(config, ROUTING_RULES).generateStructured(ask).then(
       () => expect.unreachable("the second opinion was served"),
       (e: unknown) => e,

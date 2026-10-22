@@ -219,6 +219,8 @@ interface ClientChangesDeps {
   /** Each change's own fault is contained to it (containEach). */
   readonly containment: StepContainment;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
+  /** Aborted on shutdown: every model call this step sends is cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 /**
@@ -320,6 +322,7 @@ export class ClientChanges implements LiaisonClientChanges {
       prompt: correctionPrompt(context.vision.current, context.change.body, context.proposals),
       schema: CorrectionResponseSchema,
       maxTokens: 2048,
+      abortSignal: this.deps.shutdownSignal,
       validate: (value) => {
         const errors = readingProblems(value.correction, context.vision.current, context.proposals);
         return errors.length === 0 ? { ok: true } : { ok: false, errors };

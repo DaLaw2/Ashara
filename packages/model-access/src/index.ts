@@ -22,6 +22,7 @@ export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-l
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
 export {
   ContextBudgetExceeded,
+  ModelCallAborted,
   NoLLMProvidersConfigured,
   ProviderConfigurationRejected,
   ProviderError,

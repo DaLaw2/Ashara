@@ -9,10 +9,13 @@ import { SuiteReviewer } from "./suite-review.js";
 import type { SuiteReviewerDeps } from "./suite-review.js";
 
 /**
- * A reviewer for a test: its records captured by a recording logger unless `deps` names a logger. A
+ * A reviewer for a test: its records captured by a recording logger unless `deps` names a logger,
+ * and a shutdown that never comes unless `deps` names a signal. A
  * dependency the reviewer gains is added here once, never at each test's construction.
  * @testseam every test builds its reviewer through it; the composition root constructs production's
  */
-export function suiteReviewerFor(deps: Omit<SuiteReviewerDeps, "logger"> & { readonly logger?: Logger }): SuiteReviewer {
-  return new SuiteReviewer({ ...deps, logger: deps.logger ?? recordingLogger() });
+export function suiteReviewerFor(
+  deps: Omit<SuiteReviewerDeps, "logger" | "shutdownSignal"> & { readonly logger?: Logger; readonly shutdownSignal?: AbortSignal },
+): SuiteReviewer {
+  return new SuiteReviewer({ ...deps, logger: deps.logger ?? recordingLogger(), shutdownSignal: deps.shutdownSignal ?? new AbortController().signal });
 }

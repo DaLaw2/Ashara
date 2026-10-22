@@ -1236,6 +1236,8 @@ export interface SuiteReviewerDeps {
   readonly judgements: SuiteReviewJudgementStore;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
   readonly logger: Logger;
+  /** Aborted on shutdown: both reviews' model calls are cancelled with it (StructuredRequest.abortSignal). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 export class SuiteReviewer implements SuiteReviewing {
@@ -1264,6 +1266,7 @@ export class SuiteReviewer implements SuiteReviewing {
         validate: (value) => verdictValidation(value, bySuite),
         maxTokens,
         secondOpinion,
+        abortSignal: this.deps.shutdownSignal,
       });
     const reviewed = { reviewed: [...bySuite.keys()], setAside };
     const first = await this.verdict(task.id, judged, () => ask(), bySuite);

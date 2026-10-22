@@ -282,7 +282,7 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
     );
 
     const failure = await ladder
-      .generateStructured({ capability: "Strong", prompt: "p", schema: z.object({ roles: z.array(z.string()) }), maxTokens: 100 })
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "p", schema: z.object({ roles: z.array(z.string()) }), maxTokens: 100 })
       .then(() => null, (err: unknown) => err);
 
     if (!(failure instanceof StructuredOutputExhausted)) return expect.unreachable(`not exhausted: ${String(failure)}`);

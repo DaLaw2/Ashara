@@ -490,7 +490,8 @@ interface RefusedResult {
 }
 
 /**
- * The process's shutdown signal cancelled the attempt mid-flight. Not a task failure and not a
+ * The process's shutdown signal cancelled the attempt mid-flight, or the model call of a review of
+ * a plan's suites. Not a task failure and not a
  * lesson: the work was stopped, not tried and found wanting. The orchestrator returns the item to
  * Pending and refunds the dispatch; the partial work is committed on the task branch, or for a
  * check task discarded, and `detail` says which. A wall-clock
@@ -499,7 +500,8 @@ interface RefusedResult {
 interface InterruptedResult {
   readonly status: "interrupted";
   readonly detail: string;
-  readonly outcome: Outcome;
+  /** null for a review of a plan's suites, whose one structured call ran without an agent. */
+  readonly outcome: Outcome | null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;

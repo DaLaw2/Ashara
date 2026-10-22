@@ -469,6 +469,30 @@ export class ProviderConfigurationRejected extends GatewayError {
   }
 }
 
+/** Where a model call stood when its abort signal ended it. */
+type AbortedAt =
+  | { readonly stage: "before-send" }
+  | { readonly stage: "in-flight"; readonly provider: string; readonly model: string; readonly callId: string };
+
+/**
+ * A model call its caller's abort signal ended (the process shutting down, an attempt's wall clock):
+ * before any request was sent, or in flight, when the request is settled through its gate as
+ * `aborted` before this is thrown. Never retried, never sent to a fallback model, and never a
+ * failure of the provider, the model or Ashara: `reason` is the signal's own.
+ */
+export class ModelCallAborted extends GatewayError {
+  readonly at: AbortedAt;
+  readonly reason: unknown;
+
+  constructor(at: AbortedAt, reason: unknown, options?: ErrorOptions) {
+    const where = at.stage === "before-send" ? "before any request was sent" : `in flight to ${at.provider}/${at.model} (call ${at.callId})`;
+    super(`the model call was aborted ${where}: ${describeErrorChain(reason)}`, options);
+    this.name = "ModelCallAborted";
+    this.at = at;
+    this.reason = reason;
+  }
+}
+
 /**
  * A tool passed to `generateTurn` carries an `execute` function. The gateway
  * sends tool schemas only and never runs a tool: Z0 executes every tool call.

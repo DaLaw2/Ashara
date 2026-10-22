@@ -194,7 +194,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
   function replanner(containment: StepContainment = memoryStepContainment(() => true)): Replanner {
     const store = createReplanStore(db, recordingLogger());
     const narrowed: ReplanStore = { ...store, projectsAwaitingReplan: ours(() => store.projectsAwaitingReplan()) };
-    return new Replanner({ logger: recordingLogger(), containment, llm: gateway, store: narrowed });
+    return new Replanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment, llm: gateway, store: narrowed });
   }
 
   function planReports(): PlanReports {
@@ -230,13 +230,13 @@ export function replanStoreSuite(stub: { model: unknown }) {
     pipelineModel({ intake: options.intake, firstTasks: options.firstTasks });
     const intakeStore = createIntakeStore(db);
     const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
-    expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+    expect((await new TenderIntake({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
     const rosterStore = createRosterStore(db);
     const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
-    expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+    expect((await new RosterDerivation({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
     const planStore = createFirstPlanStore(db);
     const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-    expect((await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
+    expect((await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
     if (options.reported) expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
     const questions = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
     const [question] = questions;
@@ -257,7 +257,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
     pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible", amends: change.amends } });
     const answerStore = createAnswerStore(db);
     const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
-    const outcomes = await new ClientAnswers({ containment: memoryStepContainment(() => true), llm: gateway, store: narrowed }).runPending();
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: narrowed }).runPending();
     expect(outcomes.map((o) => o.kind === "stated" && o.replanRequested)).toEqual([true]);
     return row.id;
   }

@@ -241,6 +241,9 @@ class LoopRecordsMissing extends Error {
 
 /**
  * W3's measure: (plan revisions, negated; review namings left; disputes left; requests left). Smaller is further along.
+ * The first plan is a revision too, though plan_revisions records only the ones after it: its check
+ * tasks arrive with every naming and dispute left, so a first plan reviewed in the cycle that wrote
+ * it is a revision paid for, never a round that grew the measure.
  */
 type Measure = readonly [number, number, number, number];
 
@@ -260,7 +263,8 @@ function measureOf(records: LoopRecords, known: ReadonlySet<string>): Measure {
     (sum, task) => sum + WORK_BOUNDS.disputesPerCheckTask.value - task.disputes,
     0,
   );
-  return [-records.revisions, reviewsLeft, disputesLeft, WORK_BOUNDS.requestsPerProject.value - records.requests];
+  const revisions = records.revisions + (records.checkTasks.length > 0 ? 1 : 0);
+  return [-revisions, reviewsLeft, disputesLeft, WORK_BOUNDS.requestsPerProject.value - records.requests];
 }
 
 /** -1 when `a` is lexicographically smaller than `b`, 1 when greater, 0 when equal. */

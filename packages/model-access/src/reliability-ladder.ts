@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "./capability-level.js";
-import { GatewayError, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
+import { GatewayError, ModelCallAborted, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK, nextCapability, tierOf } from "./capability-rank.js";
 import type { KnownLLMSite, SecondOpinion, TierAsk } from "./types.js";
 
@@ -300,6 +300,8 @@ type StructuredProviderRequest<T> = TierAsk & {
   readonly site?: KnownLLMSite;
   /** A second opinion of one strength: every attempt, the escalated one included, goes only to a model of that strength (StructuredRequest.secondOpinion). */
   readonly secondOpinion?: SecondOpinion;
+  /** Ends the call (StructuredRequest.abortSignal): no attempt starts once it has aborted. */
+  readonly abortSignal: AbortSignal;
   /**
    * Optional semantic check run on the PARSED value inside each ladder attempt.
    * A `false` verdict is a retryable validation failure (feedback fed back via
@@ -383,6 +385,8 @@ export function withStructuredLadder(
           attempts,
           onAttempt: options.onAttempt,
           attempt: async (tier, attemptNo) => {
+            // An aborted call ends the ladder: neither a further attempt nor the escalation is sent.
+            if (request.abortSignal.aborted) throw new ModelCallAborted({ stage: "before-send" }, request.abortSignal.reason);
             const prompt =
               attemptNo > 1 && options.reask
                 ? request.prompt + options.reask({ errors: lastErrors })

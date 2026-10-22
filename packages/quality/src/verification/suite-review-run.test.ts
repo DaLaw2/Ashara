@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PreCallRefusal } from "@ashara/finance";
+import { ModelCallAborted, PreCallRefusal } from "@ashara/finance";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { recordingLogger } from "@ashara/shared/testing";
 import type { SuiteReviewing } from "../suite-review.js";
@@ -47,6 +47,16 @@ describe("SuiteReviewRun", () => {
     const result = await job.reviewSuites(task, "s1", "/srv/target");
     expect(result.status).toBe("refused");
     expect(result.detail).toContain("spend cap reached");
+  });
+
+  test("a model call the shutdown aborted interrupts the review: nothing was judged, so it neither fails nor blocks", async () => {
+    const { job, events } = run(async () => {
+      throw new ModelCallAborted({ stage: "in-flight", provider: "p", model: "m", callId: "call-1" }, new Error("SIGTERM"));
+    });
+    const result = await job.reviewSuites(task, "s1", "/srv/target");
+    expect(result.status).toBe("interrupted");
+    expect(result.detail).toContain("interrupted by shutdown");
+    expect(events).toEqual([]);
   });
 
   test("Ashara's own failure blocks the review, never passes it", async () => {

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable, SpendCap, UnpricedModel } from "@ashara/finance";
-import { SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
+import { ModelCallAborted, SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
 import { recordingLogger } from "@ashara/shared/testing";
 import type { Logger } from "@ashara/shared";
@@ -173,7 +173,7 @@ describe("one llm_calls row per provider call", () => {
 
     const result = await gateway("anthropic", priced)
       .forCall({ projectId, taskId: null, callSite: "roster" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     expect(result.data).toEqual({ greeting: "hi" });
     const rows = await rowsOfThisProject();
@@ -203,7 +203,7 @@ describe("one llm_calls row per provider call", () => {
     await logger.scope({ taskId: "task-x", attempt: 2, trace: "new" }, () =>
       gateway("anthropic", model({ id: "priced-model" }), () => PEAK, undefined, logger)
         .forCall({ projectId, taskId: null, callSite: "roster" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     );
 
     const rows = z.array(z.object({ id: z.string(), traceId: z.string().nullable() })).parse(
@@ -245,7 +245,7 @@ describe("one llm_calls row per provider call", () => {
       });
       await gateway("deepseek", deepseek, () => instant)
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
       const [row] = await rowsOfThisProject();
       return row?.costUsd ?? null;
     };
@@ -282,7 +282,7 @@ describe("one llm_calls row per provider call", () => {
     const straddling = gateway("deepseek", deepseek, clock);
     await straddling
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const peakCost = (600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000;
     const [row] = await rowsOfThisProject();
@@ -303,7 +303,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("deepseek", model({ id: "no-cache-rate", cacheReadCostPer1M: null, cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(700);
@@ -326,7 +326,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("deepseek", model({ id: "deepseek-priced", cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(700);
@@ -346,7 +346,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("openai", model({ id: "openai-priced", inputCostPer1M: 2, outputCostPer1M: 8, cacheReadCostPer1M: 0.5, cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(600);
@@ -361,7 +361,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("openai", model({ id: "openai-unreported", cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBeNull();
@@ -382,7 +382,7 @@ describe("one llm_calls row per provider call", () => {
     await expect(
       gateway("anthropic", model({}))
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toThrow(/stub provider unavailable/);
 
     const rows = await rowsOfThisProject();
@@ -405,7 +405,7 @@ describe("one llm_calls row per provider call", () => {
       });
       const err: unknown = await gateway("anthropic", model({}))
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
         .then(() => null, (e: unknown) => e);
       if (!(err instanceof ProviderError)) return expect.unreachable(`not a ProviderError: ${String(err)}`);
       return err.failure;
@@ -460,7 +460,7 @@ describe("one llm_calls row per provider call", () => {
         },
       })
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
         .then(() => null, (e: unknown) => e);
       if (!(err instanceof ProviderError)) return expect.unreachable(`not a ProviderError: ${String(err)}`);
       return err.failure;
@@ -472,6 +472,41 @@ describe("one llm_calls row per provider call", () => {
     expect(await failureOf(413, 503)).toBe("ashara");
   });
 
+  test("a request its caller aborts in flight is settled as aborted and never sent to a fallback provider", async () => {
+    await clearRows();
+    const stop = new AbortController();
+    let fallbackAsked = 0;
+    const err: unknown = await twoProviders({
+      anthropic: () =>
+        new Promise((_, reject) => {
+          stop.signal.addEventListener("abort", () => reject(stop.signal.reason), { once: true });
+          stop.abort(new Error("shutting down"));
+        }),
+      deepseek: async () => {
+        fallbackAsked += 1;
+        return textResult('{"greeting":"hi"}', { input: 10, output: 5 });
+      },
+    })
+      .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
+      .generateStructured({ abortSignal: stop.signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
+      .then(() => null, (e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ModelCallAborted);
+    expect(fallbackAsked).toBe(0);
+    const rows = await rowsOfThisProject();
+    expect(rows.map((r) => ({ provider: r.provider, outcome: r.outcome, errorKind: r.errorKind, finishReason: r.finishReason }))).toEqual([
+      { provider: "anthropic", outcome: "error", errorKind: "aborted", finishReason: "no-response" },
+    ]);
+
+    // Once aborted, nothing more is admitted or sent: no row.
+    const after: unknown = await twoProviders({ anthropic: async () => textResult('{"greeting":"hi"}', { input: 10, output: 5 }), deepseek: async () => textResult('{"greeting":"hi"}', { input: 10, output: 5 }) })
+      .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
+      .generateStructured({ abortSignal: stop.signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
+      .then(() => null, (e: unknown) => e);
+    expect(after).toBeInstanceOf(ModelCallAborted);
+    expect(await rowsOfThisProject()).toHaveLength(1);
+  });
+
   // Each strength of second opinion goes only to a model of that strength.
   test("a second opinion of each strength goes to the model the catalog offers for it, and a strength it does not offer is refused unsent", async () => {
     await clearRows();
@@ -480,7 +515,7 @@ describe("one llm_calls row per provider call", () => {
     const ask = (llm: GuardedModelAccess, strength: Strength, avoid = { provider: "anthropic", model: "only-strong" }) =>
       llm
         .forCall({ projectId, taskId: null, callSite: "suite-review" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, secondOpinion: { avoid, strength } })
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512, secondOpinion: { avoid, strength } })
         .then((response) => `${response.provider}/${response.model}`, (e: unknown) => e);
 
     const across = await ask(twoProviders({ anthropic: answer, deepseek: answer }), "other-family", { provider: "anthropic", model: "anthropic-strong" });
@@ -529,7 +564,7 @@ describe("one llm_calls row per provider call", () => {
     });
     const err: unknown = await llm
       .forCall({ projectId, taskId: null, callSite: "suite-review" })
-      .generateStructured({
+      .generateStructured({ abortSignal: new AbortController().signal,
         capability: "Strong",
         prompt: "greet",
         schema: GreetingSchema,
@@ -553,7 +588,7 @@ describe("one llm_calls row per provider call", () => {
     const PairSchema = z.strictObject({ pair: z.tuple([z.string(), z.string()]) });
     const err: unknown = await twoProviders({ anthropic: answer, deepseek: answer })
       .forCall({ projectId, taskId: null, callSite: "suite-review" })
-      .generateStructured({ capability: "Strong", prompt: "pair", schema: PairSchema, maxTokens: 512 })
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "pair", schema: PairSchema, maxTokens: 512 })
       .then(() => null, (e: unknown) => e);
     if (!(err instanceof SchemaUnacceptable)) return expect.unreachable(`not SchemaUnacceptable: ${String(err)}`);
     expect(err.message).toContain('call site "suite-review": the structured output schema is one provider type "anthropic" refuses (provider anthropic, model anthropic-strong)');
@@ -568,7 +603,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("anthropic", model({}))
       .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.outcome).toBe("ok");
@@ -586,7 +621,7 @@ describe("refusals", () => {
 
     const call = gateway("anthropic", model({ id: "free-model", inputCostPer1M: 0, outputCostPer1M: 0 }))
       .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     await expect(call).rejects.toBeInstanceOf(UnpricedModel);
     await expect(call).rejects.toThrow(/free-model.*unpriced.*model_configs/s);
@@ -822,7 +857,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
 
   test("a deepseek-type request carries thinking disabled by default and enabled where the policy says; others carry none", async () => {
     const ask = (gw: GuardedModelAccess, callSite: "decomposition" | "liaison-intake") =>
-      gw.forCall({ projectId, taskId: null, callSite }).generateStructured({
+      gw.forCall({ projectId, taskId: null, callSite }).generateStructured({ abortSignal: new AbortController().signal,
         capability: "Strong",
         prompt: "greet",
         schema: GreetingSchema,
@@ -872,7 +907,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
         new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
       ), recordingLogger())
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const mock = stubModel({ doGenerate: result('{"greeting":"hi"}', "stop", 10, DEEPSEEK_RAW) });
     await expect(underCap("on")).rejects.toThrow(BudgetExceeded);
@@ -890,7 +925,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     await expect(
       gateway("deepseek", model({ id: "ds-truncated", cacheWriteCostPer1M: null }))
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
     ).rejects.toMatchObject({
       name: "StructuredOutputTruncated",
       maxTokens: 4096,
@@ -919,7 +954,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
 
     const failure = await gateway("deepseek", model({ id: "ds-truncated-on", cacheWriteCostPer1M: null }), () => PEAK, thinkingOn)
       .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 })
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 })
       .then(
         () => expect.unreachable("a truncated call must not succeed"),
         (error: unknown) => error,
@@ -939,7 +974,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
 
     await expect(
       gw.forCall({ projectId, taskId: null, callSite: "decomposition" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
     ).rejects.toMatchObject({ name: "StructuredOutputTruncated" });
 
     const rows = await rowsOfThisProject();
@@ -962,7 +997,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     });
 
     await expect(
-      laddered.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+      laddered.generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toThrow(/Structured output exhausted/);
 
     expect(attempts).toHaveLength(4);
@@ -988,7 +1023,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     });
 
     await expect(
-      laddered.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+      laddered.generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toThrow(/Structured output exhausted.*output truncated/);
 
     expect(attempts.map((a) => `${a.capability}:${a.outcome}`)).toEqual([
@@ -1011,7 +1046,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     await expect(
       gateway("anthropic", model({ id: "sonnet-cut" }))
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+        .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toMatchObject({ name: "StructuredOutputTruncated" });
 
     const rows = await rowsOfThisProject();
@@ -1025,7 +1060,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
 
     const response = await gateway("deepseek", model({ id: "ds-fenced", cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+      .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     expect(response.data).toEqual({ greeting: "hi" });
     const rows = await rowsOfThisProject();

@@ -145,7 +145,11 @@ export class ContinuousRunner implements CycleRunner {
 
         await this.waitForWakeOrTimeout(waitMs, mergedSignal);
       } catch (e) {
-        // eslint-disable-next-line ashara/catch-continue -- best effort: the supervisor loop: a failed cycle is counted in consecutiveErrors, backs off, and the next cycle re-reads every item from the store
+        if (mergedSignal.aborted) {
+          this.logger.warn("delivery.cycle-interrupted", "the cycle ended unfinished: the process is shutting down, and the next process reads every item from the store", {}, e);
+          return null;
+        }
+        // The supervisor loop: a failed cycle is counted in consecutiveErrors, backs off, and the next cycle re-reads every item from the store.
         consecutiveErrors += 1;
         this.logger.error("delivery.cycle-error", `Cycle error (consecutive: ${consecutiveErrors})`, { consecutiveErrors }, e);
         await this.backOff(consecutiveErrors, mergedSignal);

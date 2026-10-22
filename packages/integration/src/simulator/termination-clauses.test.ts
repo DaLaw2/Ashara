@@ -16,6 +16,12 @@ describe("W2 and W3 on loop records", () => {
     expect(checkLoops(2, after, before, new Map())).toEqual([]);
   });
 
+  it("passes a first plan whose review named its checks in the cycle that wrote it", () => {
+    const before = records({ checkTasks: [], revisions: 0, requests: 4 });
+    const after = records({ checkTasks: [task({ namings: 1, reviewReopens: 1, status: "Pending" })], revisions: 0, requests: 9 });
+    expect(checkLoops(2, after, before, new Map())).toEqual([]);
+  });
+
   it("names a count that fell between two snapshots, as across a restart", () => {
     expect(keys(checkLoops(3, records({ checkTasks: [task({ disputes: 1 })] }), null, new Map([["ct1:disputes", 2]])))).toEqual(["W2:count-fell:checks:disputes"]);
   });

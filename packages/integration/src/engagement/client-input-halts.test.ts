@@ -79,7 +79,7 @@ function ourChangeStore(): ClientChangeStore {
 }
 
 function changes(store: ClientChangeStore = ourChangeStore(), llm: GuardedModelAccess = gateway): ClientChanges {
-  return new ClientChanges({ llm, store, containment: memoryStepContainment(() => true) });
+  return new ClientChanges({ shutdownSignal: new AbortController().signal, llm, store, containment: memoryStepContainment(() => true) });
 }
 
 /** A project at work with vision v1 in the guarantees form, its tender consumed. */

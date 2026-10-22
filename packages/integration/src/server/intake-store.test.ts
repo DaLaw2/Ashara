@@ -122,7 +122,7 @@ function containment(): StepContainment {
 }
 
 function intake(): TenderIntake {
-  return new TenderIntake({ containment: containment(), llm: gateway, store: ourStore() });
+  return new TenderIntake({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: ourStore() });
 }
 
 /** A gateway recording through Finance's real ledger, with the spend cap's ledger port and caps given. */
@@ -453,7 +453,7 @@ describe("Liaison tender intake", () => {
         return store.recordIntake(write);
       },
     };
-    const liaison = new TenderIntake({ containment: containment(), llm: gateway, store: failing });
+    const liaison = new TenderIntake({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: failing });
 
     const outcomes = await liaison.runPending();
 
@@ -482,7 +482,7 @@ describe("Liaison tender intake", () => {
       caps: { deploymentUsd: 1_000_000, perProjectUsd: 0.000001 },
     });
 
-    await expect(new TenderIntake({ containment: containment(), llm: capped, store: ourStore() }).runPending()).rejects.toMatchObject({
+    await expect(new TenderIntake({ shutdownSignal: new AbortController().signal, containment: containment(), llm: capped, store: ourStore() }).runPending()).rejects.toMatchObject({
       name: "BudgetExceeded",
       scope: { kind: "project", projectId },
     });
@@ -511,7 +511,7 @@ describe("Liaison tender intake", () => {
       },
       caps: TEST_SPEND_CAPS,
     });
-    const liaison = new TenderIntake({ containment: containment(), llm: broken, store: ourStore() });
+    const liaison = new TenderIntake({ shutdownSignal: new AbortController().signal, containment: containment(), llm: broken, store: ourStore() });
 
     for (let i = 1; i <= 3; i++) {
       expect(await liaison.runPending()).toEqual([

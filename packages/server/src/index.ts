@@ -3,17 +3,38 @@ import { createPgPool } from "@ashara/db";
 import { execFileGitRunner, spawnProcess } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured, sdkLanguageModels } from "@ashara/model-access";
 import { concurrentTaskLanes } from "@ashara/delivery";
-import { stdoutSink, systemClock } from "@ashara/shared";
+import { describeErrorChain, stdoutSink, systemClock } from "@ashara/shared";
 import { composeAshara } from "./compose.js";
 import type { AsharaInstance } from "./compose.js";
-import { loadDatabaseUrl } from "./config.js";
+import { loadDatabaseUrl, loadShutdownDeadlineMs } from "./config.js";
 import { loadServerMasterKey } from "./secrets.js";
 import { createFatalExit } from "./fail-closed.js";
 import { serveAshara } from "./process-lifecycle.js";
+import type { ServedProcess } from "./process-lifecycle.js";
 
-// Policy: how long a fatal error waits for the graceful shutdown (cancelled attempts,
-// cell removal, pool close) before the process exits without it.
-const FATAL_SHUTDOWN_DEADLINE_MS = 30_000;
+// The one bound on every shutdown, a signal's and a fatal error's, read before anything else: an
+// unusable setting refuses the start rather than leaving a shutdown unbounded.
+function shutdownDeadlineMs(): number {
+  try {
+    return loadShutdownDeadlineMs();
+  } catch (err) {
+    console.error(`FATAL: server refused to start. ${describeErrorChain(err)}`);
+    return process.exit(1);
+  }
+}
+const SHUTDOWN_DEADLINE_MS = shutdownDeadlineMs();
+
+/**
+ * The shutdown, then the exit: zero once every step of it is done, non-zero when its deadline
+ * passed first, since a hung call or cell may still hold the event loop. A shutdown that throws is
+ * a fatal error like any other.
+ */
+function stopAndExit(served: ServedProcess): void {
+  served.shutdown().then(
+    (outcome) => process.exit(outcome === "stopped" ? 0 : 1),
+    (err: unknown) => fatalExit.onFatal("shutdown", err),
+  );
+}
 
 async function main(): Promise<void> {
   // Phase 1: the master key, before anything else — without it no credential
@@ -47,18 +68,18 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  const served = await serveAshara(ashara, () => serve({ fetch: ashara.app.fetch, port: ashara.port }));
+  const served = await serveAshara(ashara, () => serve({ fetch: ashara.app.fetch, port: ashara.port }), SHUTDOWN_DEADLINE_MS);
   fatalExit.setShutdown(served.shutdown);
-  process.on("SIGTERM", () => void served.shutdown());
-  process.on("SIGINT", () => void served.shutdown());
+  process.on("SIGTERM", () => stopAndExit(served));
+  process.on("SIGINT", () => stopAndExit(served));
 
   // The runner returns only once the shutdown signal aborted it.
   await served.runnerDone;
-  await served.shutdown();
+  stopAndExit(served);
 }
 
 const fatalExit = createFatalExit({
-  deadlineMs: FATAL_SHUTDOWN_DEADLINE_MS,
+  deadlineMs: SHUTDOWN_DEADLINE_MS,
   exit: (code) => process.exit(code),
   log: (line) => console.error(line),
 });

@@ -161,3 +161,26 @@ describe("ContinuousRunner cycle scope", () => {
     }
   });
 });
+
+describe("ContinuousRunner shutdown", () => {
+  test("a cycle that throws once the shutdown began ends the runner at once, with no backoff and no cycle error", async () => {
+    const abort = new AbortController();
+    const logger = recordingLogger();
+    let cycles = 0;
+    const loop: CycleRunner = {
+      runCycle: async () => {
+        cycles += 1;
+        abort.abort();
+        throw new Error("the cycle's model call was aborted");
+      },
+      runHaltedCycle: async () => {},
+    };
+    const runner = new ContinuousRunner(loop, logger, { databaseUrl: null, maxConsecutiveErrors: 1 });
+
+    expect(await runner.run(abort.signal, noHalt)).toBeNull();
+
+    expect(cycles).toBe(1);
+    expect(logger.records.some((r) => r.event === "delivery.cycle-error" || r.event === "delivery.backing-off")).toBe(false);
+    expect(logger.records.find((r) => r.event === "delivery.cycle-interrupted")?.level).toBe("warn");
+  });
+});

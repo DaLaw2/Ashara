@@ -69,7 +69,7 @@ describe("FirstPlanner per-project failure", () => {
     const stopped: ProjectId[] = [];
     const store = storeWith([awaiting(lying, null), awaiting(capped, "Error: decomposition failed")], blocked, stopped);
 
-    const outcomes = await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => `${o.projectId}:${o.kind}`)).toEqual([`${lying}:project-blocked`, `${capped}:stopped`]);
     expect(blocked).toEqual([
@@ -84,7 +84,7 @@ describe("FirstPlanner per-project failure", () => {
     const blocked: Blocked = [];
     const store = storeWith([awaiting(projectId, null, 0, twoImplementers)], blocked);
 
-    const outcomes = await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
     expect(blocked[0]?.cause.errorClass).toBe("RosterUnreadable");
@@ -107,7 +107,7 @@ describe("FirstPlanner decomposition ladder", () => {
     const store: FirstPlanStore = { ...storeWith([awaiting(projectId, null, 0)], []), recordFailedAttempt: async () => 1 };
 
     const logger = recordingLogger();
-    const outcomes = await new FirstPlanner({ logger, containment: memoryStepContainment(() => true), llm: failing, store }).runPending();
+    const outcomes = await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger, containment: memoryStepContainment(() => true), llm: failing, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["failed"]);
     expect(logger.records.map((r) => [r.level, r.event, r.fields?.["attempt"]])).toEqual([["warn", "delivery.plan-attempt-failed", 1]]);
@@ -193,7 +193,7 @@ describe("the vision items a plan traces to", () => {
     ]);
     const store: FirstPlanStore = { ...storeWith([], blocked), projectsAwaitingPlan: async () => [unreadable] };
 
-    const outcomes = await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => true), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
     expect(blocked[0]?.cause).toMatchObject({ category: "fault", errorClass: "VisionUnreadable" });
@@ -209,7 +209,7 @@ describe("the vision items a plan traces to", () => {
       },
     };
 
-    const outcomes = await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => false), llm, store }).runPending();
+    const outcomes = await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment: memoryStepContainment(() => false), llm, store }).runPending();
 
     expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
     expect(blocked[0]?.cause).toMatchObject({ category: "fault", errorClass: "VisionItemsMissing" });
@@ -232,7 +232,7 @@ describe("the vision items a plan traces to", () => {
     };
     const containment = memoryStepContainment(() => false);
 
-    const outcomes = await new FirstPlanner({ logger: recordingLogger(), containment, llm: broken, store }).runPending();
+    const outcomes = await new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment, llm: broken, store }).runPending();
 
     expect(outcomes).toEqual([expect.objectContaining({ kind: "step-faulted", step: "first-plan", subjectId: projectId, error: expect.stringContaining("Cannot read properties") })]);
     expect(containment.recorded.get(`first-plan/${projectId}`)).toMatchObject({ faults: 1 });
@@ -264,7 +264,7 @@ describe("the vision items a plan traces to", () => {
     };
     const containment = memoryStepContainment((error) => error instanceof BudgetExceeded);
 
-    await expect(new FirstPlanner({ logger: recordingLogger(), containment, llm: refusing, store }).runPending()).rejects.toBe(refusal);
+    await expect(new FirstPlanner({ shutdownSignal: new AbortController().signal, logger: recordingLogger(), containment, llm: refusing, store }).runPending()).rejects.toBe(refusal);
     expect(containment.recorded.size).toBe(0);
   });
 });

@@ -61,7 +61,7 @@ function serverProcess(perProjectUsd: number): { readonly gateway: GuardedModelA
 function greet(gateway: GuardedModelAccess, projectId: Awaited<ReturnType<ProjectRepository["create"]>>["id"]) {
   return gateway
     .forCall({ projectId, taskId: null, callSite: "decomposition" })
-    .generateStructured({ capability: "Strong", prompt: "greet", schema: z.object({ greeting: z.string() }), maxTokens: 64 });
+    .generateStructured({ abortSignal: new AbortController().signal, capability: "Strong", prompt: "greet", schema: z.object({ greeting: z.string() }), maxTokens: 64 });
 }
 
 const RowSchema = z.object({ state: z.string(), costUsd: z.number().nullable(), estimatedCostUsd: z.number(), outcome: z.string().nullable() });
