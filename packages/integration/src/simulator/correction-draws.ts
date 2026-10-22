@@ -12,7 +12,7 @@ type CorrectionArrival = (typeof CORRECTION_ARRIVALS)[number];
 
 /**
  * What the client's correction asks of the contract, as the scripted Liaison reads it
- * (scripted-models.ts correction), the first the benign draw:
+ * (stand-ins/liaison.ts correction), the first the benign draw:
  * - rewrite-guarantee: a guarantee a goal task not yet started cites, restated whole and widened;
  * - add-exclusion: one more thing left out;
  * - add-guarantee: a new guarantee naming a behaviour, observed where an existing one is;

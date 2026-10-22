@@ -3,7 +3,7 @@ import type { Logger, ProjectId } from "@ashara/shared";
 import type { AnswerOutcome, ClientChangeOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";
-import type { ReplanOutcome } from "./replan.js";
+import type { ReplanOutcome } from "./replan-port.js";
 import type { WorkItem } from "./domain/index.js";
 import { PlanningService } from "./domain/index.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from "./types.js";

@@ -1,365 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
-import { LlmCallRepository } from "@ashara/finance";
-import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
 import { TaskCheckRepository } from "@ashara/quality";
-import {
-  BlockReports,
-  ClientAnswers,
-  PlanReports,
-  TenderIntake,
-  ClientMessageRepository,
-  createProjectWithTender,
-} from "@ashara/engagement";
-import type { AnswerStore, BlockReportStore, IntakeStore, PlanReportStore } from "@ashara/engagement";
-import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
-import type { ModelConfig } from "@ashara/model-access";
-import { releaseClearedBlocks, FirstPlanner, PlanningService, Replanner, failWorkItem, giveUpWorkItem, recoverFailedItem, startWorkItem, createReplanStore, createAgentStaffing, adaptWorkItemRepo, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import { RosterDerivation } from "@ashara/organization";
-import type { RosterStore } from "@ashara/organization";
-import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
-import { memoryStepContainment, parseWorkItemId, recordingLogger, type DomainEvent, type ProjectId, type StepContainment } from "@ashara/shared";
-import { createAnswerStore } from "@ashara/server/answer-store";
-import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { createIntakeStore } from "@ashara/server/intake-store";
-import { createRosterStore } from "@ashara/server/roster-store";
-import { createPlanReportStore } from "@ashara/server/plan-report-store";
-import { projectState } from "../simulator/project-state.js";
-import { citingItemsToCheck } from "../simulator/scripted-models.js";
-import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { createReplanStore, ProjectHaltRepository } from "@ashara/delivery";
+import { memoryStepContainment, recordingLogger, type ProjectId } from "@ashara/shared";
+import { replanStoreSuite } from "./replan-store-suite.js";
 
-// A late client change is planned. Every row here belongs to a project
-// this suite creates under a unique name, and afterAll deletes exactly those rows. Each store
-// is narrowed to this suite's projects. No real LLM call is made: the provider factory returns
-// a MockLanguageModelV4 that answers each call by what its prompt asks.
+// A late client change is planned. The rows, stores and scripted model are the shared plan
+// revision fixture's (replan-store-suite.ts); no real LLM call is made.
 
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
-const DATABASE_URL = resolveTestDatabaseUrl(process.env);
-const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
-const NAME_PREFIX = `replan-test-${randomUUID().slice(0, 8)}`;
-const MERGE_COMMIT = "a".repeat(40);
-
-let db: ReturnType<typeof createDb>;
-let gateway: GuardedModelAccess;
-let clientId: string;
-const ourProjects = new Set<string>();
-
-function model(id: string, capabilityLevel: ModelConfig["capabilityLevel"]): ModelConfig {
-  return {
-    id,
-    apiModelId: `${id}-api`,
-    provider: "deepseek",
-    capabilityLevel,
-    thinkingOffCapabilityLevel: capabilityLevel,
-    inputCostPer1M: 1,
-    outputCostPer1M: 2,
-    maxContextTokens: 100_000,
-    cacheReadCostPer1M: null,
-    cacheWriteCostPer1M: null,
-    priceWindows: [], priceTiers: [], datedPrices: [],
-  };
-}
-
-function jsonResult(value: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    usage: {
-      inputTokens: { total: 500, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 200, text: 200, reasoning: undefined },
-    },
-    finishReason: { unified: "stop" as const, raw: "stop" },
-    warnings: [],
-  };
-}
-
-const INTAKE = {
-  summary: "A booking page for the client's two pottery studios.",
-  interface: [{ id: "I1", text: "The booking page.", source: { kind: "tender", quote: "Booking page" } }],
-  guarantees: [
-    {
-      id: "G1",
-      statement: "A client books a class at either studio.",
-      observable: { interface: ["I1"], observation: "output" },
-      refutedBy: ["A booking at either studio is refused."],
-      source: { kind: "tender", quote: "Booking page for my two pottery studios." },
-    },
-  ],
-  assumptions: [{ id: "A2", statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible", underpins: ["G1"] }],
-  questions: [
-    {
-      text: "Which studio opens first?",
-      whyItMatters: "It orders the work.",
-      assumption: { id: "A1", statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible", underpins: ["G1"] },
-    },
-  ],
-  exclusions: [],
-};
-
-const ROSTER = {
-  roles: [
-    { name: "Liaison", responsibility: "Talks to the studio owner.", capabilities: ["client-comms"] },
-    { name: "Platform", responsibility: "Defines how the page is built and tested.", capabilities: ["write-environment"] },
-    { name: "Implementer", responsibility: "Builds the booking page.", capabilities: ["write-source"] },
-    { name: "Check author", responsibility: "Writes the checks the page must pass.", capabilities: ["author-checks"] },
-  ],
-};
-
-const FIRST_TASKS = {
-  tasks: [
-    {
-      ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [], goal: "",
-      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1", "A1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
-      capability: "Medium", capabilityReason: "graded for the test",
-    },
-  ],
-};
-const REVISED_TASKS = {
-  tasks: [
-    {
-      ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [], goal: "",
-      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["G1"] }],
-      capability: "Light", capabilityReason: "graded for the test",
-    },
-  ],
-};
-
-const REPAIRED_TASKS = {
-  tasks: [
-    {
-      ref: "t1", title: "Book a harbour class by its date", description: "Harbour bookings, smaller.", dependsOn: [], goal: "",
-      endState: "A harbour class can be booked by its date", scope: "harbour bookings by date", deliverables: [{ text: "harbour booking", sources: ["G1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["G1"] }],
-      capability: "Medium", capabilityReason: "graded for the test",
-    },
-  ],
-};
-
-/** The intake of INTAKE with a second question, whose assumption a second answer can change. */
-const TWO_QUESTION_INTAKE = {
-  ...INTAKE,
-  questions: [
-    ...INTAKE.questions,
-    {
-      text: "Do classes need a teacher named?",
-      whyItMatters: "It decides what a booking shows.",
-      assumption: { id: "A3", statement: "A class shows no teacher.", rationale: "The tender names none.", kind: "client-visible", underpins: ["G1"] },
-    },
-  ],
-};
-
-/** One model for every call, answering each by what its prompt asks. */
-function pipelineModel(
-  options: { readonly reading?: unknown; readonly environmentChange?: boolean; readonly intake?: unknown; readonly revision?: unknown } = {},
-): MockLanguageModelV4 {
-  const mock = new MockLanguageModelV4({
-    doGenerate: async (call) => {
-      const prompt = JSON.stringify(call.prompt);
-      if (prompt.includes("Read their answer and say what it does")) return jsonResult({ reading: options.reading ?? { verdict: "confirms" } });
-      if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(options.intake ?? INTAKE);
-      if (prompt.includes("client-comms")) return jsonResult(ROSTER);
-      if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {
-        return jsonResult({ environmentChange: options.environmentChange ?? false, reason: "Only what is booked changes." });
-      }
-      if (prompt.includes("changed what is built after work began")) return jsonResult(options.revision ?? citingItemsToCheck(REVISED_TASKS, prompt));
-      if (prompt.includes("Plan the work still to do again")) return jsonResult(citingItemsToCheck(REPAIRED_TASKS, prompt));
-      return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
-    },
-  });
-  stub.model = mock;
-  return mock;
-}
-
-function ours<T extends { readonly projectId: string }>(list: () => Promise<readonly T[]>): () => Promise<T[]> {
-  return async () => (await list()).filter((row) => ourProjects.has(row.projectId));
-}
-
-function replanner(containment: StepContainment = memoryStepContainment(() => true)): Replanner {
-  const store = createReplanStore(db, recordingLogger());
-  const narrowed: ReplanStore = { ...store, projectsAwaitingReplan: ours(() => store.projectsAwaitingReplan()) };
-  return new Replanner({ logger: recordingLogger(), containment, llm: gateway, store: narrowed });
-}
-
-function planReports(): PlanReports {
-  const store = createPlanReportStore(db);
-  const narrowed: PlanReportStore = {
-    ...store,
-    dueReports: ours(() => store.dueReports()),
-    dueRevisionReports: ours(() => store.dueRevisionReports()),
-  };
-  return new PlanReports(narrowed, memoryStepContainment(() => true));
-}
-
-/** The Liaison's block reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
-function blockReports(): BlockReports {
-  const store = createBlockReportStore(db);
-  const narrowed: BlockReportStore = {
-    ...store,
-    dueReports: ours(async () => {
-      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
-      return store.dueReports();
-    }),
-  };
-  return new BlockReports(narrowed, memoryStepContainment(() => true));
-}
-
-/** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */
-async function plannedProject(
-  options: { readonly reported: boolean; readonly intake?: unknown } = { reported: true },
-): Promise<{ projectId: ProjectId; questionId: string; questionIds: string[] }> {
-  const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
-  const projectId = created.project.id;
-  ourProjects.add(projectId);
-  pipelineModel({ intake: options.intake });
-  const intakeStore = createIntakeStore(db);
-  const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
-  expect((await new TenderIntake({ containment: memoryStepContainment(() => true), llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
-  const rosterStore = createRosterStore(db);
-  const roster: RosterStore = { ...rosterStore, projectsAwaitingRoster: ours(() => rosterStore.projectsAwaitingRoster()) };
-  expect((await new RosterDerivation({ containment: memoryStepContainment(() => true), llm: gateway, store: roster }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
-  const planStore = createFirstPlanStore(db);
-  const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
-  expect((await new FirstPlanner({ logger: recordingLogger(), containment: memoryStepContainment(() => true), llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
-  if (options.reported) expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
-  const questions = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
-  const [question] = questions;
-  if (question === undefined) throw new Error("intake posted no question");
-  return { projectId, questionId: question.id, questionIds: questions.map((q) => q.id) };
-}
-
-const HILL_FIRST = { body: "No, the hill studio opens first.", statement: "The hill studio opens first." };
-
-/** The client's answer changing the plan's assumption, read by the Liaison: the project awaits a revision for it. */
-async function contradict(projectId: ProjectId, questionId: string, change: { readonly body: string; readonly statement: string } = HILL_FIRST): Promise<string> {
-  const row = await new ClientMessageRepository(db).insertInbound({
-    projectId,
-    kind: "answer",
-    body: change.body,
-    inReplyTo: questionId,
-  });
-  pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible" } });
-  const answerStore = createAnswerStore(db);
-  const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
-  const outcomes = await new ClientAnswers({ containment: memoryStepContainment(() => true), llm: gateway, store: narrowed }).runPending();
-  expect(outcomes.map((o) => o.kind === "stated" && o.replanRequested)).toEqual([true]);
-  return row.id;
-}
-
-const ItemRowSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  level: z.string(),
-  status: z.string(),
-  origin: z.string().nullable(),
-  reason: z.unknown(),
-});
-
-async function itemsOf(projectId: ProjectId) {
-  const result = await db.execute(sql`
-    SELECT id, title, level, status, task_spec->>'origin' AS origin, blocked_reason AS reason
-    FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`);
-  return z.array(ItemRowSchema).parse(result.rows);
-}
-
-/** Starts a task as dispatch does: the task and every Pending ancestor, its Epic, go InProgress. */
-async function startTask(id: string): Promise<void> {
-  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
-  const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
-  if (task === null) throw new Error(`task ${id} not found`);
-  startWorkItem(task);
-  await PlanningService.saveWorkItem(repo, task, "Pending");
-  await PlanningService.activateAncestors(repo, task.parentId);
-}
-
-/** Completes a started task as its routed success does, settling its Epic when every child is done. */
-async function completeTask(id: string): Promise<void> {
-  await PlanningService.route(adaptWorkItemRepo(new WorkItemRowRepository(db)), parseWorkItemId(id, "test"), "passed");
-}
-
-async function dependenciesOf(id: string): Promise<string[]> {
-  const result = await db.execute(sql`SELECT to_id AS "to" FROM dependencies WHERE from_id = ${id}`);
-  return z.array(z.object({ to: z.string() })).parse(result.rows).map((row) => row.to);
-}
-
-/** The project's status and category, and the client messages whose correction's revision it awaits (correction_holds), oldest first. */
-async function projectRow(projectId: ProjectId) {
-  const result = await db.execute(sql`
-    SELECT ${projectState} AS status, blocked_category AS "category",
-      COALESCE((SELECT json_agg(ch.requested_by ORDER BY ch.created_at) FROM correction_holds ch
-        WHERE ch.project_id = projects.id AND ch.plan_revision_id IS NULL), '[]'::json) AS "awaiting"
-    FROM projects WHERE id = ${projectId}`);
-  const [row] = z
-    .array(z.object({ status: z.string(), awaiting: z.array(z.string()), category: z.string().nullable() }))
-    .parse(result.rows);
-  if (row === undefined) throw new Error(`project ${projectId} not found`);
-  return row;
-}
-
-async function reportsOf(projectId: ProjectId) {
-  return (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report");
-}
-
-beforeAll(async () => {
-  db = createDb(DATABASE_URL);
-  clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
-  gateway = new GuardedModelAccess(buildGateway({
-    models: sdkLanguageModels,
-    config: {
-      providers: [
-        {
-          name: "deepseek",
-          providerType: "deepseek",
-          apiKey: "test-key",
-          baseUrl: "https://stub.invalid/v1",
-          models: [model("replan-strong", "Strong"), model("replan-frontier", "Frontier")],
-          enabled: true,
-        },
-      ],
-      defaultProvider: "deepseek",
-      contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
-    },
-    checkedSources: ["test"],
-    clock: () => new Date(),
-  }), new LlmCallLedger(
-    new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
-  ), recordingLogger());
-});
-
-beforeEach(() => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  ourProjects.clear();
-});
-
-afterAll(async () => {
-  const pattern = `${NAME_PREFIX}%`;
-  const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
-  await db.execute(sql`DELETE FROM correction_holds WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM plan_revisions WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM task_checks WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (SELECT id FROM work_items WHERE project_id IN (${projects}))`);
-  await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${projects})`);
-  // Replies before what they reply to: a report replies to an answer, which replies to a question.
-  await db.execute(sql`DELETE FROM client_messages WHERE direction = 'outbound' AND kind = 'report' AND project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM client_messages WHERE kind = 'answer' AND project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM client_messages WHERE in_reply_to IS NOT NULL AND project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
-  await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
-  await db.$client.end();
-});
+const suite = replanStoreSuite(stub);
+const { pipelineModel, replanner, planReports, blockReports, plannedProject, contradict, itemsOf, startTask, completeTask, dependenciesOf, projectRow, reportsOf, MERGE_COMMIT, TWO_QUESTION_INTAKE } = suite;
 
 // Answers read after the first plan was written and before it was reported.
 describe("the client is told one plan, and never what the team will now do on a halted project", () => {
@@ -388,7 +45,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     expect(plan.body).toContain(`Because you said "No, the hill studio opens first.", work proceeds on: The hill studio opens first.`);
     expect(reports.some((m) => m.body.includes("The team will now do") || m.body.includes("set aside"))).toBe(false);
     // The revision is recorded as told by that one report, so it is never told again on its own.
-    const revisions = await db.execute(sql`SELECT r.requested_by AS "requestedBy", t.report_id AS "reportId" FROM plan_revisions r
+    const revisions = await suite.db.execute(sql`SELECT r.requested_by AS "requestedBy", t.report_id AS "reportId" FROM plan_revisions r
         LEFT JOIN told_reports t ON t.subject_kind = 'plan-revision' AND t.subject_id = r.id WHERE r.project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ requestedBy: answerId, reportId: plan.id }]);
   });
@@ -407,7 +64,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes("in 2 messages") && p.includes("Each class shows its teacher.") && p.includes("The hill studio opens first."))).toBe(true);
     expect((await projectRow(projectId)).awaiting).toEqual([]);
-    const taken = await db.execute(sql`
+    const taken = await suite.db.execute(sql`
       SELECT ch.requested_by AS "answerId" FROM correction_holds ch JOIN plan_revisions r ON r.id = ch.plan_revision_id
       WHERE r.project_id = ${projectId} AND r.revision = 2 ORDER BY ch.created_at`);
     expect(taken.rows).toEqual([{ answerId: first }, { answerId: second }]);
@@ -428,7 +85,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     pipelineModel({ environmentChange: false });
     expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
     // A record in the form a COALESCE update leaves: the summary names one change of the two taken in.
-    await db.execute(sql`
+    await suite.db.execute(sql`
       UPDATE plan_revisions SET summary = jsonb_set(summary, '{changes}', (summary->'changes') - 1) WHERE project_id = ${projectId}`);
 
     const outcomes = await planReports().runPending();
@@ -442,7 +99,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     await contradict(projectId, questionId);
     pipelineModel({ environmentChange: false });
     expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
-    const projects = new ProjectHaltRepository(db);
+    const projects = new ProjectHaltRepository(suite.db);
     await projects.block(projectId, { category: "fault", errorClass: "TestFault", reason: "TestFault: a halt written by the test" });
 
     expect(await planReports().runPending()).toEqual([]);
@@ -476,7 +133,7 @@ describe("a late client change is planned", () => {
     if (epic === undefined) throw new Error("the first plan has no Epic");
     await startTask(sprint0.id);
     await completeTask(sprint0.id);
-    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
+    await suite.db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
     // The check task is in flight when the client's change arrives; its Epic is InProgress
     // from the first started task and stays so while any child is open.
     await startTask(check.id);
@@ -542,15 +199,15 @@ describe("a late client change is planned", () => {
     const newCheck = added.find((i) => i.origin === "check");
     const newTask = added.find((i) => i.origin === "decomposition");
     if (newCheck === undefined || newTask === undefined) throw new Error("the revision planned no check task or no task");
-    const checksFor = await db.execute(sql`SELECT task_spec->>'checksFor' AS "checksFor" FROM work_items WHERE id = ${newCheck.id}`);
+    const checksFor = await suite.db.execute(sql`SELECT task_spec->>'checksFor' AS "checksFor" FROM work_items WHERE id = ${newCheck.id}`);
     expect(checksFor.rows).toEqual([{ checksFor: newTask.id }]);
     expect(await dependenciesOf(newTask.id)).toContain(newCheck.id);
-    expect(await new TaskCheckRepository(db).checkedTasksOf(newCheck.id)).toEqual([newTask.id]);
+    expect(await new TaskCheckRepository(suite.db).checkedTasksOf(newCheck.id)).toEqual([newTask.id]);
 
-    const revisions = await db.execute(sql`SELECT revision, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
+    const revisions = await suite.db.execute(sql`SELECT revision, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ revision: 2, requestedBy: answerId }]);
     expect((await projectRow(projectId)).awaiting).toEqual([]);
-    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
+    expect(await new ProjectHaltRepository(suite.db).listActiveIds()).toContain(projectId);
 
     const reportsBefore = (await reportsOf(projectId)).length;
     expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
@@ -584,7 +241,7 @@ describe("a late client change is planned", () => {
       await startTask(id);
       await completeTask(id);
       // Completion times fixed apart: the order the merges landed on main.
-      await db.execute(sql`
+      await suite.db.execute(sql`
         UPDATE work_items SET merge_commit = ${commit}, updated_at = now() - make_interval(mins => ${minutesAgo}) WHERE id = ${id}`);
     }
     await contradict(projectId, questionId);
@@ -598,11 +255,11 @@ describe("a late client change is planned", () => {
     if (newCheck === undefined || review === undefined) throw new Error("the revision planned no check or review task");
     expect(await dependenciesOf(newCheck.id)).toEqual([harbour.id]);
     expect(await dependenciesOf(review.id)).toContain(harbour.id);
-    const checks = new TaskCheckRepository(db);
+    const checks = new TaskCheckRepository(suite.db);
     expect(await checks.foundationOf(newCheck.id)).toEqual({ kind: "found", taskId: harbour.id, commit: "3".repeat(40) });
 
     // A check task whose only foundation merged before the product scaffold has no foundation: fail closed.
-    await db.execute(sql`UPDATE dependencies SET to_id = ${sprint0.id} WHERE from_id = ${newCheck.id}`);
+    await suite.db.execute(sql`UPDATE dependencies SET to_id = ${sprint0.id} WHERE from_id = ${newCheck.id}`);
     const before = await checks.foundationOf(newCheck.id);
     expect(before.kind).toBe("none");
     if (before.kind === "none") expect(before.reason).toContain("not after the project's product scaffold");
@@ -619,14 +276,14 @@ describe("a late client change is planned", () => {
     const check = first.find((i) => i.origin === "check");
     const harbour = first.find((i) => i.origin === "decomposition");
     if (check === undefined || harbour === undefined) throw new Error("the first plan has no check task or task");
-    const spec = await db.execute(sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${check.id}`);
+    const spec = await suite.db.execute(sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${check.id}`);
     const cited = z.array(z.object({ sources: z.array(z.object({ id: z.string(), text: z.string() })) })).parse(spec.rows)[0]?.sources ?? [];
     expect(cited.length).toBeGreaterThan(0);
     await startTask(harbour.id);
     await completeTask(harbour.id);
     if (decides !== undefined) {
       const recorded = decides === null ? null : JSON.stringify(cited.map((item) => item.id));
-      await db.execute(sql`
+      await suite.db.execute(sql`
         INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
         VALUES (${projectId}, ${harbour.id}, ${check.id}, 1, 'holds', 'true', '[]'::jsonb, ${"e".repeat(64)}, ${recorded}::jsonb)`);
     }
@@ -673,12 +330,12 @@ describe("a late client change is planned", () => {
     if (sprint0 === undefined) throw new Error("the first plan has no Sprint 0");
     await startTask(sprint0.id);
     await completeTask(sprint0.id);
-    await db.execute(sql`
+    await suite.db.execute(sql`
       INSERT INTO dev_sessions (id, task_id, phase, attempt_prompt_digest, attempt_terminal, attempt_turns, attempt_provider, attempt_model, attempt_cell)
       VALUES (${randomUUID()}, ${sprint0.id}, 'Completed', ${"a".repeat(64)}, 'finished:done', 3, 'deepseek', 'deepseek-flash', 'base-cell')`);
     await contradict(projectId, questionId);
 
-    const store = createReplanStore(db, recordingLogger());
+    const store = createReplanStore(suite.db, recordingLogger());
     const project = (await store.projectsAwaitingReplan()).find((p) => p.projectId === projectId);
     if (project === undefined || !("items" in project)) throw new Error("the project does not await a revision");
     const gradeOf = (id: string) => project.items.find(({ item }) => item.id === id)?.attemptGrade;
@@ -694,7 +351,7 @@ describe("a late client change is planned", () => {
     const healthy = await plannedProject();
     await contradict(unreadable.projectId, unreadable.questionId);
     await contradict(healthy.projectId, healthy.questionId);
-    await db.execute(sql`UPDATE work_items SET success_criteria = '{"not": "criteria"}'::jsonb WHERE project_id = ${unreadable.projectId} AND level = 'Task'`);
+    await suite.db.execute(sql`UPDATE work_items SET success_criteria = '{"not": "criteria"}'::jsonb WHERE project_id = ${unreadable.projectId} AND level = 'Task'`);
     pipelineModel();
 
     const containment = memoryStepContainment(() => false);
@@ -712,10 +369,10 @@ describe("a late client change is planned", () => {
     const answerId = await contradict(projectId, questionId);
     // Three earlier revisions, each already reported: only the block is due.
     for (const revision of [2, 3, 4]) {
-      const report = await db.execute(sql`INSERT INTO client_messages (project_id, direction, kind, body)
+      const report = await suite.db.execute(sql`INSERT INTO client_messages (project_id, direction, kind, body)
         VALUES (${projectId}, 'outbound', 'report', 'earlier revision') RETURNING id`);
       const [row] = z.array(z.object({ id: z.string() })).parse(report.rows);
-      await db.execute(sql`WITH revision AS (
+      await suite.db.execute(sql`WITH revision AS (
           INSERT INTO plan_revisions (project_id, revision, vision_version, requested_by, summary)
           VALUES (${projectId}, ${revision}, 1, ${answerId}, '{}'::jsonb) RETURNING id)
         INSERT INTO told_reports (subject_kind, subject_id, project_id, report_id)
@@ -767,10 +424,10 @@ describe("a late client change is planned", () => {
     await contradict(counted.projectId, counted.questionId);
     const legacy = await plannedProject();
     await contradict(legacy.projectId, legacy.questionId);
-    const store = createReplanStore(db, recordingLogger());
+    const store = createReplanStore(suite.db, recordingLogger());
     for (let attempt = 0; attempt < 3; attempt += 1) await store.recordFailedAttempt(counted.projectId, "stub provider unavailable", "provider");
     // A row counted before failures named their party names no party.
-    await db.execute(sql`UPDATE projects SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed' WHERE id = ${legacy.projectId}`);
+    await suite.db.execute(sql`UPDATE projects SET replan_attempts = 3, replan_last_error = 'an earlier attempt failed' WHERE id = ${legacy.projectId}`);
     const mock = pipelineModel({ revision: { notTasks: "never asked" } });
 
     const outcomes = await replanner().runPending();
@@ -781,7 +438,7 @@ describe("a late client change is planned", () => {
     expect(await projectRow(legacy.projectId)).toMatchObject({ status: "blocked", category: "fault" });
   });
 
-  // The gateway wraps every failure with no fallback left in ProviderError: one the provider's HTTP
+  // The suite.gateway wraps every failure with no fallback left in ProviderError: one the provider's HTTP
   // error or silence caused is not the model's, and one Ashara's own code threw is Ashara's, never
   // counted toward the revision's bound.
   test("a revision whose provider fails every request halts as replan_provider_failed; a fault in Ashara's code is contained, never counted", async () => {
@@ -812,7 +469,7 @@ describe("a late client change is planned", () => {
     // Waiting out its backoff, the project is not replanned again, and nothing was counted against it.
     expect(await replanner(containment).runPending()).toEqual([]);
     expect(await projectRow(broken)).toMatchObject({ category: null });
-    const attempts = await db.execute(sql`SELECT replan_attempts AS "attempts" FROM projects WHERE id = ${broken}`);
+    const attempts = await suite.db.execute(sql`SELECT replan_attempts AS "attempts" FROM projects WHERE id = ${broken}`);
     expect(z.array(z.object({ attempts: z.number() })).parse(attempts.rows)).toEqual([{ attempts: 0 }]);
 
     expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
@@ -821,221 +478,5 @@ describe("a late client change is planned", () => {
       "Ashara recorded the cause as this: every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read.",
     );
     expect(body).not.toContain("gave no usable answer");
-  });
-});
-
-/** Starts, fails and gives up a task as a dispatch's failure and the failure router's abandonment do. */
-async function giveUp(id: string, attempts: number): Promise<void> {
-  await startTask(id);
-  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
-  const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
-  if (task === null) throw new Error(`task ${id} not found`);
-  failWorkItem(task, { source: "task_failed", reason: "the check author's red run kept failing" }, { kind: "retryable", ground: "work" });
-  await PlanningService.saveWorkItem(repo, task, "InProgress");
-  const failure = { detail: "red run on the foundation: REJECTED, the set: no check of the set fails on the foundation", raw: {} };
-  const decision = await recoverFailedItem(
-    {
-      logger: recordingLogger(),
-      workItemRepo: repo,
-      eventPublisher: { publish: async () => {} },
-      failureRouter: { route: () => ({ action: "abandon", reason: `the task failed ${attempts} time(s)`, attempts, failure }) },
-    },
-    task,
-    failure,
-    { kind: "retryable", ground: "work" },
-  );
-  expect(decision).toBe("abandon");
-}
-
-/** Pending tasks of our projects only, gated as the core loop gates them. */
-async function gateOurs(): Promise<void> {
-  const projects = new ProjectHaltRepository(db);
-  await PlanningService.gate(
-    adaptWorkItemRepo(new WorkItemRowRepository(db)),
-    { listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)), block: (id, cause) => projects.block(id, cause) },
-    { publish: async () => {} },
-    memoryStepContainment(() => true),
-    recordingLogger(),
-  );
-}
-
-// A task the failure router gave up would park every task depending on it as
-// dependency_unsatisfiable, each for the operator. The project is held and its plan repaired instead.
-describe("a task the team gives up is planned around", () => {
-  test("the project is held, no dependent is parked, and a repair supersedes the open work around the given-up task and is reported once", async () => {
-    const { projectId } = await plannedProject();
-    const first = await itemsOf(projectId);
-    const sprint0 = first.find((i) => i.origin === "sprint0");
-    const check = first.find((i) => i.origin === "check");
-    const harbour = first.find((i) => i.origin === "decomposition");
-    if (sprint0 === undefined || check === undefined || harbour === undefined) throw new Error("the first plan is not Sprint 0, a check task and a task");
-    await startTask(sprint0.id);
-    await completeTask(sprint0.id);
-    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
-
-    await giveUp(check.id, 3);
-
-    expect(await new ProjectHaltRepository(db).listActiveIds()).not.toContain(projectId);
-    await gateOurs();
-    const held = await itemsOf(projectId);
-    expect(held.find((i) => i.id === harbour.id)?.status).toBe("Pending");
-    expect(held.filter((i) => z.object({ source: z.literal("dependency_unsatisfiable") }).safeParse(i.reason).success)).toEqual([]);
-
-    const mock = pipelineModel();
-    const outcomes = await replanner().runPending();
-
-    expect(outcomes).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair", newEnvironment: false }]);
-    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
-    expect(prompts.some((p) => p.includes(`after 3 attempt(s)`) && p.includes("no check of the set fails on the foundation"))).toBe(true);
-    const after = await itemsOf(projectId);
-    expect(after.find((i) => i.id === check.id)).toMatchObject({ status: "Abandoned", reason: { source: "failure_given_up" } });
-    expect(after.find((i) => i.id === harbour.id)).toMatchObject({
-      status: "Abandoned",
-      reason: { source: "superseded", planRevision: 2, requestedBy: null, repairOf: [check.id] },
-    });
-    expect(after.some((i) => i.title === "Book a harbour class by its date" && i.status === "Pending")).toBe(true);
-    const revisions = await db.execute(sql`SELECT revision, kind, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
-    expect(revisions.rows).toEqual([{ revision: 2, kind: "repair", requestedBy: null }]);
-    const repairs = await db.execute(sql`SELECT work_item_id AS "id", plan_revision_id IS NOT NULL AS "answered" FROM plan_repairs WHERE project_id = ${projectId}`);
-    expect(repairs.rows).toEqual([{ id: check.id, answered: true }]);
-    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
-
-    expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
-    expect(await planReports().runPending()).toEqual([]);
-    const reports = await reportsOf(projectId);
-    const report = reports[reports.length - 1];
-    expect(report?.inReplyTo).toBeNull();
-    expect(report?.body).toContain(`- ${check.title}`);
-    expect(report?.body).toContain("what you asked for has not changed");
-    expect(await replanner().runPending()).toEqual([]);
-  });
-
-  // A check task given up for a cause the
-  // failure router never saw (here a dispute past its bound) is repaired, never left for a person.
-  test("a check task given up past its dispute bound is repaired like any give-up, with the dispute as its evidence", async () => {
-    const { projectId } = await plannedProject();
-    const first = await itemsOf(projectId);
-    const sprint0 = first.find((i) => i.origin === "sprint0");
-    const check = first.find((i) => i.origin === "check");
-    if (sprint0 === undefined || check === undefined) throw new Error("the first plan is not Sprint 0 and a check task");
-    await startTask(sprint0.id);
-    await completeTask(sprint0.id);
-    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
-
-    await startTask(check.id);
-    const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
-    const task = await PlanningService.findWorkItem(repo, parseWorkItemId(check.id, "test"));
-    if (task === null) throw new Error(`task ${check.id} not found`);
-    giveUpWorkItem(task, { source: "check_disputed", checkTaskId: check.id, checkName: "books", reason: "disputed 3 time(s), past the bound of 2: the check reads a file no task writes" });
-    await PlanningService.saveWorkItem(repo, task, "InProgress");
-
-    expect(await new ProjectHaltRepository(db).listActiveIds()).not.toContain(projectId);
-    const mock = pipelineModel();
-    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
-    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
-    expect(prompts.some((p) => p.includes("the check reads a file no task writes"))).toBe(true);
-    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
-  });
-
-  test("past the bound of repairs the next abandonment blocks the project with one report naming the task given up", async () => {
-    const { projectId } = await plannedProject();
-    const sprint0 = (await itemsOf(projectId)).find((i) => i.origin === "sprint0");
-    if (sprint0 === undefined) throw new Error("the first plan has no Sprint 0");
-    await startTask(sprint0.id);
-    await completeTask(sprint0.id);
-
-    const givenUp: string[] = [];
-    for (const round of [1, 2, 3]) {
-      const open = (await itemsOf(projectId)).find((i) => i.origin === "check" && i.status === "Pending");
-      if (open === undefined) throw new Error(`round ${round}: no open check task to give up`);
-      givenUp.push(open.title);
-      await giveUp(open.id, 3);
-      pipelineModel();
-      const outcomes = await replanner().runPending();
-      if (round < 3) {
-        expect(outcomes, `round ${round}`).toMatchObject([{ kind: "revised", cause: "repair", revision: round + 1 }]);
-        expect(await planReports().runPending()).toMatchObject([{ kind: "posted" }]);
-      } else {
-        expect(outcomes).toMatchObject([{ kind: "project-blocked", projectId, cause: { category: "plan_repair", errorClass: "PlanRepairBoundReached" } }]);
-      }
-    }
-
-    expect(await projectRow(projectId)).toMatchObject({ status: "blocked", category: "plan_repair" });
-    await gateOurs();
-    const items = await itemsOf(projectId);
-    expect(items.filter((i) => z.object({ source: z.literal("dependency_unsatisfiable") }).safeParse(i.reason).success)).toEqual([]);
-    const before = (await reportsOf(projectId)).length;
-    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
-    expect(await blockReports().runPending()).toEqual([]);
-    const reports = await reportsOf(projectId);
-    expect(reports).toHaveLength(before + 1);
-    const body = reports[reports.length - 1]?.body ?? "";
-    expect(body).toContain(`"${givenUp[2] ?? ""}", after`);
-    expect(body).toContain("Ashara recorded why it was given up as this: ");
-    expect(body).not.toContain(givenUp[0] ?? "");
-  });
-});
-
-// A task no roster role can work is never parked at Blocked until a
-// newer roster revision, which no production path writes (recordFirstRoster refuses any revision
-// but 1). It is given up instead, and the repair staffs its new tasks.
-describe("a task no roster role can work is planned around, never left waiting", () => {
-  test("staffing finds no owner; the sweep gives the Blocked task up; the repair re-plans it with an owner the staffing resolves", async () => {
-    const { projectId } = await plannedProject();
-    const first = await itemsOf(projectId);
-    const sprint0 = first.find((i) => i.origin === "sprint0");
-    const harbour = first.find((i) => i.origin === "decomposition");
-    if (sprint0 === undefined || harbour === undefined) throw new Error("the first plan is not Sprint 0 and a task");
-    await startTask(sprint0.id);
-    await completeTask(sprint0.id);
-    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
-    // A task planned before owners were assigned: no work kind and no owner.
-    await db.execute(sql`UPDATE work_items SET owner_role_id = NULL, work_kind = NULL WHERE id = ${harbour.id}`);
-
-    const workItems = new WorkItemRowRepository(db);
-    const staffing = createAgentStaffing({
-      async ownerOf(taskId) {
-        const row = await workItems.findById(taskId);
-        return row === null ? { kind: "absent" } : { kind: "found", ownerRoleId: row.ownerRoleId };
-      },
-      latestRosterRows: (id) => latestRosterRoles(db, id),
-      latestRosterRevision: (id) => latestRosterRevision(db, id),
-      resolveWiderModel: () => null,
-      resolveModel: () => gateway.resolveModel("Strong", "agent-runner"),
-    });
-    const staffOf = (id: string) =>
-      staffing.staff({ id: parseWorkItemId(id, "test"), projectId, title: "t", epicId: null, overflowedWindowTokens: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] });
-    const unresolved = await staffOf(harbour.id);
-    if (unresolved.kind !== "owner-unresolved") throw new Error(`expected owner-unresolved, got ${unresolved.kind}`);
-
-    // A Blocked owner_unresolved row, as a stored row from an earlier dispatch holds it.
-    await startTask(harbour.id);
-    const reason = { source: "owner_unresolved", ownerRoleId: unresolved.ownerRoleId, rosterRevision: unresolved.rosterRevision, reason: unresolved.reason };
-    await db.execute(sql`UPDATE work_items SET status = 'Blocked', blocked_reason = ${JSON.stringify(reason)}::jsonb WHERE id = ${harbour.id}`);
-    expect(await latestRosterRevision(db, projectId)).toBe(1);
-
-    const published: DomainEvent[] = [];
-    const left = await releaseClearedBlocks({
-      logger: recordingLogger(),
-      workItemRepo: adaptWorkItemRepo(workItems),
-      eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
-      projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectHaltRepository(db).get(id) },
-      workdirBase: tmpdir(),
-      containment: memoryStepContainment(() => true),
-    });
-
-    expect(left).toBe(1);
-    expect(published.map((e) => e.eventType)).toEqual(["work_item.given_up"]);
-    const givenUp = await PlanningService.findWorkItem(adaptWorkItemRepo(workItems), parseWorkItemId(harbour.id, "test"));
-    expect(givenUp).toMatchObject({ status: "Abandoned", blockedReason: reason });
-
-    const mock = pipelineModel();
-    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
-    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
-    expect(prompts.some((p) => p.includes("No role of the team's roster could be assigned it"))).toBe(true);
-    const repaired = (await itemsOf(projectId)).find((i) => i.title === "Book a harbour class by its date" && i.status === "Pending");
-    if (repaired === undefined) throw new Error("the repair planned no new task");
-    expect((await staffOf(repaired.id)).kind).toBe("staffed");
-    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
   });
 });

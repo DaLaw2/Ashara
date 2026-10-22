@@ -12,7 +12,7 @@ import { lastCompletedAttempts } from "../acl/workplace-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 import { holdForCorrection, takeEvents } from "../domain/index.js";
 import { pendingCorrection, pendingRepair } from "../predicates.js";
-import type { AttemptGrade } from "../replan.js";
+import type { AttemptGrade } from "../replan-port.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { IDLE_OPEN_WORK_ITEM_STATUSES } from "../work-item-language/work-item-status.js";

@@ -33,7 +33,7 @@ import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createRoutes } from "@ashara/server/routes";
 import { DevSessionRepository } from "@ashara/workplace";
-import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 
 // A client's correction holds and replaces only the work citing a guarantee it changes: with two
 // tasks citing G1 and G2, a correction amending G2 lets the G1 task dispatch before the revision,

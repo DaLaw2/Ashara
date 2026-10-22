@@ -4,7 +4,7 @@ import type { ProjectBlockCause } from "./project-halt.js";
 import type { WorkItemRepository, PlanningService } from "./domain/index.js";
 import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
 import type { FirstPlanning } from "./first-plan.js";
-import type { Replanning } from "./replan.js";
+import type { Replanning } from "./replan-port.js";
 import type { FailedApproachRepository } from "./acl/knowledge-acl.js";
 import type { AcceptanceSweeper, TerminalSweeper } from "./acl/quality-acl.js";
 import type { DispatchService } from "./dispatch/dispatch-service.js";

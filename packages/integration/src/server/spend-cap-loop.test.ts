@@ -31,7 +31,7 @@ import { createRosterStore } from "@ashara/server/roster-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
-import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 import { composedDispatchService } from "../dispatch-verification.js";
 

@@ -255,7 +255,7 @@ names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchema
 # is not followed; tests written from observed behaviour are not checked at all. schemaRefusalsFor is
 # the providers' refusal of the schema a request carries, which a stand-in applies as the transport it
 # stands in for: it judges what Ashara sends, never the stand-in's answer.
-stand-ins = ["src/simulator/scripted-models.ts"]
+stand-ins = ["src/simulator/scripted-models.ts", "src/simulator/stand-ins/*.ts"]
 stand-in-names.model-access = ["LanguageModelFactory", "ProviderType", "schemaRefusalsFor"]
 # The termination invariants judge work against an oracle-owned bounds table. A
 # bounds table imports nothing at all, no other package's symbol (a production bound such as the work

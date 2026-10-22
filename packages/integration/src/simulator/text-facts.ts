@@ -1221,18 +1221,22 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
     reason: "the planner's prompt",
   },
   {
-    source: `${DELIVERY}/replan.ts#causeSection`,
+    source: `${DELIVERY}/replan-prompts.ts#causeSection`,
     kind: "not-kept",
     reason: "part of a plan revision's planner prompt",
   },
   {
-    source: `${DELIVERY}/replan.ts#abandonmentSection`,
+    source: `${DELIVERY}/replan-prompts.ts#abandonmentSection`,
     kind: "not-kept",
     reason: "part of a plan revision's planner and environment prompts",
   },
-  { source: `${DELIVERY}/replan.ts#doneSection`, kind: "not-kept", reason: "part of a plan revision's planner prompt" },
   {
-    source: `${DELIVERY}/replan.ts#environmentPrompt`,
+    source: `${DELIVERY}/replan-prompts.ts#doneSection`,
+    kind: "not-kept",
+    reason: "part of a plan revision's planner prompt",
+  },
+  {
+    source: `${DELIVERY}/replan-prompts.ts#environmentPrompt`,
     kind: "not-kept",
     reason: "the prompt asking whether a plan revision needs the environment changed",
   },

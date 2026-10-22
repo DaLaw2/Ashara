@@ -22,7 +22,7 @@ import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 // assumption the plan was built on is a correction, taking the path a change message's does: it
 // holds only the tasks citing that assumption (Delivery's hold), the rest of the plan goes on, and it
 // is reported to the client once. Delivery replaces the held work once none of it is in progress
-// (planning replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
+// (delivery replan.ts), taking in every such correction recorded, and the Liaison reports the revision, naming each.
 // A halted project's answers are read too: a halt pauses the work, never the reading of what the client said,
 // and the work an answer touches waits for the halt's own end; except under a halt the reading cannot get
 // past, which the answer waits out, as inboundDecision decides.

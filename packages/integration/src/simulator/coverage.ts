@@ -13,6 +13,7 @@ import type { FaultRecord } from "./faults.js";
 import { haltCauseOf, sourceOf } from "./invariants.js";
 import type { Snapshot } from "./invariants.js";
 import { MUTATIONS } from "./plants.js";
+import { CONFLICT_HEADING } from "./stand-ins/recognised-wording.js";
 
 /**
  * What a run reached, against the code's own iterable lifecycle lists: every
@@ -243,8 +244,6 @@ export function modelPathOf(row: CallRow): ModelPath | null {
 
 const terminalRows = z.array(z.object({ terminal: z.string() }));
 const countRow = z.tuple([z.object({ n: z.number().int() })]);
-/** The heading an attempt's brief opens its conflict with main with (Quality's merge.ts formatConflictForBrief). */
-const CONFLICT_BRIEF_HEADING = "## Merge with main in progress";
 
 /**
  * What the run's records show of attempts and model misbehaviour: read once, at the run's end, from its projects' rows.
@@ -269,7 +268,7 @@ export async function sampleModelPaths(
     }
     const conflicts = await observer.execute(sql`
       SELECT count(*)::int AS n FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
-      WHERE w.project_id = ${projectId} AND strpos(s.brief::text, ${CONFLICT_BRIEF_HEADING}) > 0`);
+      WHERE w.project_id = ${projectId} AND strpos(s.brief::text, ${CONFLICT_HEADING}) > 0`);
     if (countRow.parse(conflicts.rows)[0].n > 0) coverage.models.add("merge:conflict-presented");
   }
 }

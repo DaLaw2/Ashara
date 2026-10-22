@@ -3,7 +3,7 @@ import { parseWorkItemId, readEach, type Logger, type ProjectId } from "@ashara/
 import { latestRosterRoles } from "../acl/organization-roster-acl.js";
 import { createBulkPlan } from "../bulk-plan.js";
 import { PlanningService } from "../domain/index.js";
-import type { AttemptGrade, ReplanStore } from "../replan.js";
+import type { AttemptGrade, ReplanStore } from "../replan-port.js";
 import { completedAttemptGrades, decidedByLatestChecks, listProjectsAwaitingReplan, recordReplanFailure, withPlanRevisionTransaction } from "../repositories/replan.js";
 import { ProjectHaltRepository } from "../repositories/project-halt.js";
 import { adaptWorkItemRepo, rowToWorkItem } from "../repositories/work-item-adapter.js";

@@ -536,7 +536,7 @@ function undecidedAtSweep(
 }
 
 /**
- * One suite review a stand-in answered with a whole answer (scripted-models.ts): the review task,
+ * One suite review a stand-in answered with a whole answer (stand-ins/suite-review.ts): the review task,
  * the check revisions it read (`<task id>@<revision>`), the provider it answered as, whether its
  * prompt asked it to start from what each check cannot observe, and its problems as sent.
  */

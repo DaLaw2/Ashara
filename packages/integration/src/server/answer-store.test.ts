@@ -21,7 +21,7 @@ import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientReceiptStore } from "@ashara/server/client-receipt-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
-import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 
 // Every row here belongs to a project this suite creates under a unique name, and
 // afterAll deletes exactly those rows. Each store is narrowed to this suite's

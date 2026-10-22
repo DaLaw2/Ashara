@@ -20,7 +20,7 @@ import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
-import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.

@@ -35,7 +35,7 @@ import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { projectState } from "../simulator/project-state.js";
-import { citingItemsToCheck } from "../simulator/scripted-models.js";
+import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // The "moved" loops have no counter of their own: a plan revision whose write finds the project

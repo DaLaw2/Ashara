@@ -463,8 +463,8 @@ const Z0_CELL_ROLES: ReadonlyMap<string, (workKind: string | null) => boolean> =
 
 /**
  * I3's review clause: a suite review's rejection of a correct check whose missing clause its cited
- * item states (the stand-ins' misread, scripted-models.ts) is never recorded, so never routed to the
- * check's author.
+ * item states (the suite-review stand-in's misread, stand-ins/suite-review.ts) is never recorded, so
+ * never routed to the check's author.
  *
  * @testseam the clause is judged alone; checkSnapshot is its production caller
  */

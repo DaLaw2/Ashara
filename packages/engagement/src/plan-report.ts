@@ -148,7 +148,7 @@ class PlanReportUnfounded extends Error {
   }
 }
 
-// What a revision did, as Delivery records it on plan_revisions.summary (planning replan.ts).
+// What a revision did, as Delivery records it on plan_revisions.summary (delivery replan-port.ts).
 const revisionWorkFields = {
   // Empty when a correction left nothing to plan again (a withdrawn guarantee, an assumption no check rests on).
   newTasks: z.array(z.string().min(1)),
