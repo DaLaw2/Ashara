@@ -13,6 +13,7 @@
  */
 export const PODMAN_TEST_FILES = [
   "packages/*/src/**/*.podman.test.ts",
+  "packages/integration/src/delivery/dispatch-service.test.ts",
   "packages/integration/src/server/dispatch-loops-ledger.test.ts",
   "packages/integration/src/server/environment-build.test.ts",
   "packages/integration/src/server/environment-change-loop.test.ts",

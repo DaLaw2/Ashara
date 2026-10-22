@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ContextualLlm } from "@ashara/finance";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { RosterDerivation } from "./derivation.js";
 import type { RosterStore } from "./derivation.js";
 import type { Roster } from "./roster.js";

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { CheckoutLease } from "@ashara/execution-infra";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { VerifiedDispatch } from "../dispatch-result.js";
 import { VerificationInfrastructureFault } from "../fault-class.js";
 import type { TaskChecks } from "../task-checks.js";
@@ -15,21 +16,15 @@ const dispatch: VerifiedDispatch = {
   environment: { kind: "base-cell", image: "base", digest: "sha256:0" },
 };
 
-function unreachable(what: string): () => never {
-  return () => {
-    throw new Error(`${what} must not be reached`);
-  };
-}
-
-const lease: Pick<CheckoutLease, "extend"> = { extend: unreachable("a lease extension") };
+const lease: Pick<CheckoutLease, "extend"> = { extend: notExercised("a lease extension") };
 const stored: TaskChecks = { checkTaskId: "c1", revision: 2, environmentVersion: "v1", baselineCommit: "b".repeat(40), checks: [{ name: "a", command: "true", decides: ["G1"] }], files: [] };
 
 function checks(): PostMergeChecks {
   return new PostMergeChecks({
-    dispatchCells: { environmentScope: unreachable("an environment scope"), checkCells: unreachable("a check cell"), checkoutDir: unreachable("a checkout") },
+    dispatchCells: { environmentScope: notExercised("an environment scope"), checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
     attemptPolicy: { perCommandTimeoutSeconds: 30 },
-    environment: { images: { build: unreachable("an image build") }, statements: { record: unreachable("a statement") } },
-    checks: { completedOf: unreachable("the stored checks") },
+    environment: { images: { build: notExercised("an image build") }, statements: { record: notExercised("a statement") } },
+    checks: { completedOf: notExercised("the stored checks") },
     logger: recordingLogger(),
   });
 }

@@ -1,11 +1,13 @@
 import { describe, test, expect } from "vitest";
 import type { DomainEvent, ProjectId, WorkItemId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import { GateKeeper } from "./gate.js";
 import type { EventPublisher } from "../lifecycle/ports.js";
+import { inertWorkItemRepo } from "../testing.js";
 
 const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000002", "test");
 const OTHER_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000003", "test");
@@ -15,7 +17,7 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
   const store = new Map(items.map((i) => [i.id as string, i]));
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus }> = [];
   const projectOf = (id: string) => store.get(id)?.projectId;
-  const repo: WorkItemRepository = {
+  const repo: WorkItemRepository = inertWorkItemRepo({
     findById: async (id) => store.get(id) ?? null,
     findChildren: async () => [],
     save: async (item, prev) => {
@@ -33,16 +35,13 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     recordInfrastructureFault: async () => 1,
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    saveOrphanExit: async () => {
-      throw new Error("saveOrphanExit is not exercised by this test");
-    },
     recordMergeCommit: async () => {},
     addDependency: async () => {},
     getDependencies: async () => [],
     listDependenciesByProject: async (projectId) => edges.filter((e) => projectOf(e.fromId) === projectId),
     listCorrectionHeld: async () => [],
     withTransaction: async (fn) => fn(repo),
-  };
+  });
   return { repo, store, saves };
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { DEFAULT_WORK_BUDGETS } from "@ashara/finance";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { BlockReports } from "./block-report.js";
 import { BurnWarnings } from "./burn-warning.js";
 import { registerOf, registerParagraph } from "./early-warning.js";

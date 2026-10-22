@@ -3,6 +3,8 @@ import type {
   CellTeardown,
   CheckHarvest,
   CheckPorts,
+  CheckRecorder,
+  CitedItemIds,
   DeliveredOnMain,
   FoundationGate,
   OwnershipGate,
@@ -27,4 +29,6 @@ export interface DispatchVerification {
   readonly ownershipGate: Pick<OwnershipGate, "ownershipGate">;
   readonly substrateGate: Pick<SubstrateGate, "substrateGate">;
   readonly postMerge: Pick<PostMergeChecks, "postMergeEnvironmentTest" | "postMergeScaffold" | "postMergeStoredChecks">;
+  /** A check task's record of its attempt's definitions, a fresh one per attempt. */
+  readonly checkRecorder: { readonly forAttempt: (cited: CitedItemIds) => CheckRecorder };
 }

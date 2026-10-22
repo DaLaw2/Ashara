@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { HALT_KINDS } from "@ashara/delivery/predicates";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { ClientReceipts } from "./client-receipt.js";
 import type { ClientReceiptStore, DueReceipt, ProjectStanding } from "./client-receipt.js";
 

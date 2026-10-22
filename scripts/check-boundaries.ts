@@ -2,7 +2,8 @@
  * The boundary gate of `just check`: runs every lint of scripts/lints/ over the tree, each a module
  * whose `run` returns its violations, against the rules in boundary-rules.toml (scripts/lints/rules.ts
  * states their shapes). The import lints hold each package to its section: the cross-package import
- * matrix, named-only, stand-in and bounds-table files, internal modules and subpath entries. The others
+ * matrix, named-only, stand-in and bounds-table files, internal modules, subpath entries, test-only
+ * subpaths and the classes of another context a package may import. The others
  * are no import rule, run here so each needs no gate of its own: price-column defaults, unsupplied
  * optional dependencies, stack literals, table ownership, the simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
@@ -16,6 +17,7 @@
 
 import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
+import { run as classImports } from "./lints/class-imports.js";
 import { run as fileSizes } from "./lints/file-sizes.js";
 import { run as internalModules } from "./lints/internal-modules.js";
 import { loadLintContext } from "./lints/lint.js";
@@ -30,6 +32,7 @@ import { run as simulatorRunBudget } from "./lints/simulator-run-budget.js";
 import { run as stackLiterals } from "./lints/stack-literals.js";
 import { run as subpathEntries } from "./lints/subpath-entries.js";
 import { run as tableOwnership } from "./lints/table-ownership.js";
+import { run as testOnlySubpaths } from "./lints/test-only-subpaths.js";
 import { run as verificationSplit } from "./lints/verification-split.js";
 
 const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
@@ -41,6 +44,8 @@ const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   tableOwnership,
   subpathEntries,
   scriptSubpaths,
+  testOnlySubpaths,
+  classImports,
   simulatorRunBudget,
   predicateCopies,
   verificationSplit,

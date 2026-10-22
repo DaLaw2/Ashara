@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { commitPartialWork, createWorkdir, ensureTargetGitInit, getChangedFiles } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { commitMerge, tentativeMerge } from "./merge.js";
 
 const run = promisify(execFile);

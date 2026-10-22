@@ -7,11 +7,12 @@ import { salvagedReason } from "./salvaged-result.js";
 import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
 import { LifecycleRouter } from "./router.js";
+import { inertWorkItemRepo } from "../testing.js";
 
 // Minimal in-memory repo for testing cascade-completion through deliveredItsWork.
 function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
   const store = new Map(items.map((i) => [i.id as string, i]));
-  return {
+  return inertWorkItemRepo({
     findById: async (id: WorkItemId) => store.get(id) ?? null,
     findChildren: async (parentId: WorkItemId) =>
       [...store.values()].filter((i) => i.parentId === parentId),
@@ -28,9 +29,6 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     recordInfrastructureFault: async () => 1,
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    saveOrphanExit: async () => {
-      throw new Error("saveOrphanExit is not exercised by this test");
-    },
     saveRefunded: async () => 0,
     recordMergeCommit: async () => {},
     addDependency: async () => {},
@@ -39,7 +37,7 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     listCorrectionHeld: async () => [],
     withTransaction: async <T>(fn: (repo: WorkItemRepository) => Promise<T>) =>
       fn(buildInMemoryRepo([...store.values()])),
-  };
+  });
 }
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");

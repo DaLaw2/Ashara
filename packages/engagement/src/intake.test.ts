@@ -3,7 +3,8 @@ import { z } from "zod";
 import { BudgetExceeded, PreCallRefusal, ProviderError } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm } from "@ashara/finance";
 import { SchemaValidationError, SecondOpinionUnavailable } from "@ashara/finance";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, notExercised } from "@ashara/shared/testing";
 import { TenderIntake } from "./intake.js";
 import { visionWritable } from "./vision.js";
 import type { IntakeStore } from "./intake.js";
@@ -26,16 +27,13 @@ function tenderOf(id: string, body: string, project: number, attempts = 0, lastE
 
 /** A store over `tenders` whose every write throws unless the test gives it. */
 function storeOf(tenders: readonly Tender[], given: Partial<IntakeStore> = {}): IntakeStore {
-  const unreached = (name: string) => async (): Promise<never> => {
-    throw new Error(`${name} must not be reached`);
-  };
   return {
     openTenders: async () => tenders,
     currentVisionVersion: async () => null,
-    recordIntake: unreached("recordIntake"),
-    consumeTender: unreached("consumeTender"),
-    recordFailedAttempt: unreached("recordFailedAttempt"),
-    blockProject: unreached("blockProject"),
+    recordIntake: notExercised("recordIntake"),
+    consumeTender: notExercised("consumeTender"),
+    recordFailedAttempt: notExercised("recordFailedAttempt"),
+    blockProject: notExercised("blockProject"),
     ...given,
   };
 }

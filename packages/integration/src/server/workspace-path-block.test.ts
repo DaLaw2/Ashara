@@ -5,16 +5,17 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
-import { FailedApproachRepository } from "@ashara/knowledge";
-import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { CoreLoop, DEFAULT_CONFIG, FailureRouter, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
+import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { testCellInstance } from "../test-cells.js";
-import { composedDispatchService } from "../dispatch-verification.js";
 
 // A project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other
@@ -28,12 +29,6 @@ const NAME = `workspace-path-block-test-${randomUUID().slice(0, 8)}`;
 type Db = ReturnType<typeof createDb>;
 let db: Db;
 let root = "";
-
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
 
 beforeAll(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -117,7 +112,7 @@ describe("a project whose workspace path is refused", () => {
       clock: () => new Date(),
     }), new LlmCallLedger(calls, spendCap), recordingLogger());
     const workdirBase = join(root, "work");
-    const dispatchService = composedDispatchService({
+    const dispatchService = composeDispatchService({
       logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: { insert: notExercised("insert"), complete: notExercised("complete"), fail: notExercised("fail") },
@@ -142,52 +137,34 @@ describe("a project whose workspace path is refused", () => {
     });
 
     const workItems = new WorkItemRowRepository(db);
-    const loop = new CoreLoop({
-      config: { ...DEFAULT_CONFIG, workdirBase },
-      cycleLog: { emit: () => {} },
-      logger: recordingLogger(),
-      containment: memoryStepContainment(() => true),
-      workItemRepo: adaptWorkItemRepo(workItems),
-      eventStore: new EventStoreRepository(db),
-      failedApproachRepo: new FailedApproachRepository(db),
-      projectRepo: {
-        get: (id) => projects.get(id),
-        recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
-        listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
-        listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
-        block: (id, cause) => projects.block(id, cause),
-        listInfrastructureHalted: async () => [],
-        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-        blockAllActive: async () => [],
-      },
-      dispatchService,
-      failureRouter: new FailureRouter(),
-      spendCap,
-      clientStops: { runPending: async () => [], reportPending: async () => [] },
-      clientReceipts: { runPending: async () => [] },
-      clientChanges: { runPending: async () => [] },
-      stackChoices: { runPending: async () => [] },
-      liaisonIntake: { runPending: async () => [] },
-      liaisonAnswers: { runPending: async () => [] },
-      rosterDerivation: { runPending: async () => [] },
-      firstPlanning: { runPending: async () => [] },
-      replanning: { runPending: async () => [] },
-      planReports: { runPending: async () => [] },
-      checkDisputes: { record: notExercised("checkDisputes") },
-      suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-      checkSetFreeze: { freezeFor: async () => [] },
-      blockReports: { runPending: async () => [] },
-      burnWarnings: { runPending: async () => [] },
-      infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-      heldCells: { release: async () => {} },
-      environmentOwner: notExercised("environmentOwner"),
-      taskLanes: concurrentTaskLanes,
-      acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-      terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
-      terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
-      acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
-      deliveredReports: { runPending: async () => [] },
-    });
+    const loop = new CoreLoop(
+      composedLoopOverTestDb(
+        {
+          db,
+          config: { ...DEFAULT_CONFIG, workdirBase },
+          logger: recordingLogger(),
+          llm: gateway,
+          spendCap,
+          containment: memoryStepContainment(() => true),
+          failureRouter: new FailureRouter(),
+          dispatchService,
+        },
+        {
+          loop: {
+            projectRepo: {
+              get: (id) => projects.get(id),
+              recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
+              listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
+              listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
+              block: (id, cause) => projects.block(id, cause),
+              listInfrastructureHalted: async () => [],
+              resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+              blockAllActive: async () => [],
+            },
+          },
+        },
+      ),
+    );
 
     const cycle = await loop.runCycle();
 

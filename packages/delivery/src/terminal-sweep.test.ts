@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { runTerminalSweeps } from "./terminal-sweep.js";
 import type { TerminalSweepStore } from "./terminal-sweep.js";
 

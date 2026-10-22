@@ -5,9 +5,10 @@ import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
-import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, TaskCheckRepository, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
+import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, TaskCheckRepository, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
+import { suiteReviewerFor } from "@ashara/quality/testing";
 import type { SuiteReviewSource } from "@ashara/quality";
-import { parseProjectId, parseWorkItemId, recordingLogger } from "@ashara/shared";
+import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 
 // A suite review's judgements on the outside-vision rejections it routed or released
@@ -103,7 +104,7 @@ describe("suite review judgements", () => {
         },
       }),
     };
-    const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
+    const reviewer = suiteReviewerFor({ llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
 
     const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: ["Monthly totals", "Malformed rows are refused"] } }, "/unused");
 
@@ -207,7 +208,7 @@ describe("witnessed findings and the check set freeze", () => {
         },
       }),
     };
-    const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
+    const reviewer = suiteReviewerFor({ llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
     const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: [cited.text] } }, "/unused");
     const kept = await db.execute(sql`SELECT item_id AS "itemId", item_text AS "itemText", check_task_id AS "checkTaskId" FROM undecided_items WHERE review_task_id = ${reviewTask}`);
     const judged = (await suiteReviewJudgementsOf(db, projectId)).filter((judgement) => judgement.reviewTaskId === reviewTask);
@@ -296,7 +297,7 @@ describe("witnessed findings and the check set freeze", () => {
         },
       }),
     };
-    const reviewer = new SuiteReviewer({ logger: recordingLogger(), llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
+    const reviewer = suiteReviewerFor({ llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
     const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: cited.map((item) => item.text) } }, "/unused");
     const kept = await db.execute(sql`
       SELECT u.item_id AS "itemId", u.judgement_id AS "judgementId", c.basis FROM undecided_items u JOIN suite_review_claims c ON c.id = u.claim_id

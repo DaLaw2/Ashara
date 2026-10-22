@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { BudgetExceeded, SchemaValidationError } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";

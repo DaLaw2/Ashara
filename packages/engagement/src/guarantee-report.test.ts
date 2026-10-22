@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 import { DeliveredReports } from "./delivered-report.js";

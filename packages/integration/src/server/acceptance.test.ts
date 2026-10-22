@@ -19,7 +19,7 @@ import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";

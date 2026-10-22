@@ -24,12 +24,13 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { testCellInstance } from "../test-cells.js";
-import { composedDispatchService } from "../dispatch-verification.js";
 
 // Sprint 0 end to end on real podman, real git and the real recorded gateway, with a scripted
 // model: no real LLM call and no skip. The environment role writes a minimal environment, calls
@@ -232,7 +233,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRowRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const service = composedDispatchService({
+  const service = composeDispatchService({
     logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: sessions,

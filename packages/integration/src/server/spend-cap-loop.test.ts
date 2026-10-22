@@ -8,19 +8,19 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
-import { FailedApproachRepository } from "@ashara/knowledge";
-import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, FirstPlanner, adaptWorkItemRepo, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import type { FirstPlanStore } from "@ashara/delivery";
+import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, FailureRouter, FirstPlanner, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository, withOverrides } from "@ashara/delivery";
+import { idleProjectRepo, inertWorkItemRepo } from "@ashara/delivery/testing";
+import type { FirstPlanStore, CoreLoopDeps, CoreLoopOverrides, LoopCore } from "@ashara/delivery";
 import { BlockReports, ClientStops, ClientMessageRepository, DeliveredReports, PlanReports, VisionRepository } from "@ashara/engagement";
 import type { BlockReportStore, ClientStopStore, DeliveredReportStore, PlanReportStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import type { CoreLoopDeps } from "@ashara/delivery";
-import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger, systemClock, UnreadSubject } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, systemClock, UnreadSubject } from "@ashara/shared";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createTerminalSweepStore } from "@ashara/server/acceptance-store";
@@ -29,11 +29,12 @@ import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
+import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
-import { composedDispatchService } from "../dispatch-verification.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.
@@ -60,12 +61,6 @@ type Db = ReturnType<typeof createDb>;
 let db: Db;
 let root = "";
 
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
-
 function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): GuardedModelAccess {
   return new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
@@ -82,79 +77,28 @@ function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): GuardedModelAc
 }
 
 /**
- * Every dep the loop takes, fully typed: a dep CoreLoopDeps gains and this omits is a compile
- * error here, never a TypeError the runner retries forever (a missing stackChoices did that).
+ * The loop as production composes it over the test database (composedLoopOverTestDb), its spend cap
+ * the test's, whose refusals are what escape each step, under `overrides`; no work item or project
+ * read but those `overrides` supply.
  */
-function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">): CoreLoopDeps {
-  return {
-    config: { ...DEFAULT_CONFIG, workdirBase: join(root, "unused") },
-    cycleLog: { emit: () => {} },
-    logger: recordingLogger(),
-    containment: memoryStepContainment((error) => parts.spendCap.refusalOf(error) !== null),
-    workItemRepo: {
-      create: notExercised("create"),
-      findById: notExercised("findById"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
-      save: notExercised("save"),
-      incrementDispatchCount: notExercised("incrementDispatchCount"),
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      saveRefundedOverflow: async () => 0,
-      recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
+function loopDeps(overrides: CoreLoopOverrides & { readonly loop: Pick<LoopCore, "spendCap"> }): CoreLoopDeps {
+  const { spendCap } = overrides.loop;
+  const composed = composedLoopOverTestDb(
+    {
+      db,
+      config: { ...DEFAULT_CONFIG, workdirBase: join(root, "unused") },
+      logger: recordingLogger(),
+      spendCap,
+      containment: memoryStepContainment((error) => spendCap.refusalOf(error) !== null),
+    },
+    {
+      loop: {
+        workItemRepo: inertWorkItemRepo({ saveRefundedOverflow: async () => 0, recordCrashOrphan: async () => 1 }),
+        projectRepo: idleProjectRepo({ listActiveIds: notExercised("listActiveIds") }),
       },
-      saveRefunded: notExercised("saveRefunded"),
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      addDependency: notExercised("addDependency"),
-      getDependencies: notExercised("getDependencies"),
-      findChildren: notExercised("findChildren"),
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
     },
-    eventStore: { publish: notExercised("publish") },
-    failedApproachRepo: { record: notExercised("record") },
-    projectRepo: {
-      get: notExercised("get"),
-      recordWorkspacePath: notExercised("recordWorkspacePath"),
-      listActiveIds: notExercised("listActiveIds"),
-      block: notExercised("block"),
-      listInfrastructureHalted: async () => [],
-      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-      blockAllActive: async () => [],
-      listWithWorkspace: async () => [],
-    },
-    dispatchService: { execute: notExercised("execute") },
-    failureRouter: { route: notExercised("route") },
-    clientStops: { runPending: async () => [], reportPending: async () => [] },
-    clientReceipts: { runPending: async () => [] },
-    clientChanges: { runPending: async () => [] },
-    stackChoices: { runPending: async () => [] },
-    liaisonIntake: { runPending: async () => [] },
-    liaisonAnswers: { runPending: async () => [] },
-    rosterDerivation: { runPending: async () => [] },
-    firstPlanning: { runPending: async () => [] },
-    replanning: { runPending: async () => [] },
-    planReports: { runPending: async () => [] },
-    checkDisputes: { record: notExercised("checkDisputes") },
-    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    checkSetFreeze: { freezeFor: async () => [] },
-    blockReports: { runPending: async () => [] },
-    burnWarnings: { runPending: async () => [] },
-    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-    heldCells: { release: async () => {} },
-    environmentOwner: notExercised("environmentOwner"),
-    taskLanes: concurrentTaskLanes,
-    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
-    terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
-    acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
-    deliveredReports: { runPending: async () => [] },
-    ...parts,
-  };
+  );
+  return withOverrides(composed, overrides);
 }
 
 beforeAll(async () => {
@@ -205,21 +149,14 @@ describe("the deployment spend cap stops the loop", () => {
     });
     const roster = vi.fn(async () => []);
     // Only the steps this cycle reaches are real; anything else fails loudly.
-    const deps = loopDeps({
-      liaisonIntake: { runPending: intake },
-      rosterDerivation: { runPending: roster },
-      firstPlanning: { runPending: notExercised("firstPlanning") },
-      replanning: { runPending: notExercised("replanning") },
-      planReports: { runPending: notExercised("planReports") },
-      spendCap: {
+    const deps = loopDeps({ client: { liaisonIntake: { runPending: intake } }, planning: { rosterDerivation: { runPending: roster }, firstPlanning: { runPending: notExercised("firstPlanning") }, replanning: { runPending: notExercised("replanning") } }, reporting: { planReports: { runPending: notExercised("planReports") } }, loop: { spendCap: {
         deploymentStop: async () => {
           const stop = await spendCap.deploymentStop();
           // The first check, before intake, must let the step run so its refusal is what stops the loop.
           return intake.mock.calls.length === 0 ? null : stop;
         },
         refusalOf: (error: unknown) => spendCap.refusalOf(error),
-      },
-    });
+      } } });
 
     // The halt ends the work; the test then ends the halted runner, as SIGTERM does.
     const abort = new AbortController();
@@ -247,15 +184,13 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
     };
     const clientStops = new ClientStops(narrowed, memoryStepContainment(() => true));
     const abort = new AbortController();
-    const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
+    const base = loopDeps({ loop: { spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } } });
     const capReason = "budget_cap: the deployment has spent $1.000000 (llm_calls) of its $1.000000 cap";
-    const deps = loopDeps({
-      // Only this suite's project is halted: blockAllActive over the shared database would halt other suites' projects.
+    const deps = loopDeps({ loop: { // Only this suite's project is halted: blockAllActive over the shared database would halt other suites' projects.
       projectRepo: {
-        ...base.projectRepo,
+        ...base.loop.projectRepo,
         blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
-      },
-      clientStops: {
+      }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } }, client: { clientStops: {
         runPending: () => clientStops.runPending(),
         reportPending: async () => {
           // The halted cycle's terminal sweep, over this suite's project only.
@@ -265,9 +200,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
           if (answered.some((outcome) => outcome.kind === "posted")) abort.abort();
           return answered;
         },
-      },
-      spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null },
-    });
+      } } });
     let stopId = "";
 
     const ended = await new ContinuousRunner(new CoreLoop(deps), recordingLogger(), { databaseUrl: null, idleIntervalMs: 60_000 }).run(abort.signal, async () => {
@@ -324,26 +257,21 @@ describe("the deployment cap halts two projects", () => {
     };
     const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
     const spend = { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null };
-    const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
+    const base = loopDeps({ loop: { spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } } });
     const loop = new CoreLoop(
-      loopDeps({
-        projectRepo: {
-          ...base.projectRepo,
+      loopDeps({ loop: { projectRepo: {
+          ...base.loop.projectRepo,
           blockAllActive: async (cause) => {
             const halted: ProjectId[] = [];
             for (const id of ours) if ((await projects.block(id, cause)) === "blocked") halted.push(id);
             return halted;
           },
-        },
-        blockReports: new BlockReports(narrowed, memoryStepContainment(() => false)),
-        // The halt's terminal sweep comes before its report; neither project has a workspace, so the
+        }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend }), refusalOf: () => null } }, reporting: { blockReports: new BlockReports(narrowed, memoryStepContainment(() => false)) }, sweeps: { // The halt's terminal sweep comes before its report; neither project has a workspace, so the
         // sweep records that it ran on no commit and the sweeper is never called.
         terminalSweeps: {
           dueTerminalSweeps: async () => (await sweeps.dueTerminalSweeps()).filter((due) => ours.has(due.projectId)),
           recordTerminalSweep: (sweep) => sweeps.recordTerminalSweep(sweep),
-        },
-        spendCap: { deploymentStop: async () => ({ reason: capReason, spend }), refusalOf: () => null },
-      }),
+        } } }),
     );
     const blockedReports = async (projectId: ProjectId) =>
       (await messages.listByProject(projectId)).filter((m) => m.direction === "outbound" && m.body.includes("The spending limit for all of Ashara's work has to be raised"));
@@ -422,10 +350,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
     };
     const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
     const loop = new CoreLoop(
-      loopDeps({
-        deliveredReports: new DeliveredReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }),
-        spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null },
-      }),
+      loopDeps({ reporting: { deliveredReports: new DeliveredReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }) }, loop: { spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } } }),
     );
 
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -506,27 +431,22 @@ describe("the deployment cap stops the cycle a first plan was written in", () =>
     };
     let planned = false;
     const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
-    const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
+    const base = loopDeps({ loop: { spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } } });
     const loop = new CoreLoop(
-      loopDeps({
-        projectRepo: {
-          ...base.projectRepo,
+      loopDeps({ loop: { projectRepo: {
+          ...base.loop.projectRepo,
           blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
-        },
-        firstPlanning: {
+        }, // The plan's model call is what reaches the cap: the check after the first-plan step stops the loop.
+        spendCap: {
+          deploymentStop: async () => (planned ? { reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } } : null),
+          refusalOf: () => null,
+        } }, planning: { firstPlanning: {
           runPending: async () => {
             const outcomes = await planner.runPending();
             planned = true;
             return outcomes;
           },
-        },
-        planReports: new PlanReports(narrowedReports, memoryStepContainment(() => false)),
-        // The plan's model call is what reaches the cap: the check after the first-plan step stops the loop.
-        spendCap: {
-          deploymentStop: async () => (planned ? { reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } } : null),
-          refusalOf: () => null,
-        },
-      }),
+        } }, reporting: { planReports: new PlanReports(narrowedReports, memoryStepContainment(() => false)) } }),
     );
     const planReports = async () => (await messages.listByProject(projectId)).filter((m) => m.direction === "outbound" && m.body.includes("Ashara has made the first plan"));
 
@@ -619,7 +539,7 @@ describe("a turn refused at the project's spend cap", () => {
     stub.model = mock;
     const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 0.2 } });
     const gateway = gatewayOn(spendCap, calls);
-    const dispatchService = composedDispatchService({
+    const dispatchService = composeDispatchService({
       logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
@@ -652,26 +572,33 @@ describe("a turn refused at the project's spend cap", () => {
     });
 
     const workItems = new WorkItemRowRepository(db);
-    const deps = loopDeps({
-      config: { ...DEFAULT_CONFIG, workdirBase },
-      workItemRepo: adaptWorkItemRepo(workItems),
-      eventStore: new EventStoreRepository(db),
-      failedApproachRepo: new FailedApproachRepository(db),
-      // The gate sees this suite's project only, and only while the project is active.
-      projectRepo: {
-        get: (id) => projects.get(id),
-        recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
-        listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
-        listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
-        block: (id, cause) => projects.block(id, cause),
-        listInfrastructureHalted: async () => [],
-        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-        blockAllActive: async () => [],
+    const deps = composedLoopOverTestDb(
+      {
+        db,
+        config: { ...DEFAULT_CONFIG, workdirBase },
+        logger: recordingLogger(),
+        llm: gateway,
+        spendCap,
+        containment: memoryStepContainment((error) => spendCap.refusalOf(error) !== null),
+        failureRouter: new FailureRouter(),
+        dispatchService,
       },
-      dispatchService,
-      failureRouter: new FailureRouter(),
-      spendCap,
-    });
+      {
+        loop: {
+          // The gate sees this suite's project only, and only while the project is active.
+          projectRepo: {
+            get: (id) => projects.get(id),
+            recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
+            listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
+            listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
+            block: (id, cause) => projects.block(id, cause),
+            listInfrastructureHalted: async () => [],
+            resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+            blockAllActive: async () => [],
+          },
+        },
+      },
+    );
     const loop = new CoreLoop(deps);
 
     const cycle = await loop.runCycle();

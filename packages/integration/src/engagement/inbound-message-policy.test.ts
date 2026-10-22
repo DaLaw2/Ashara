@@ -23,7 +23,8 @@ import {
 } from "@ashara/engagement";
 import type { BlockReportStore, InboundKind, InboundState } from "@ashara/engagement";
 import { createIntakeStore } from "@ashara/server/intake-store";
-import { memoryStepContainment, parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { UNREAD_HALT_KINDS } from "../simulator/invariants.js";
 
 // Every cell of Engagement's inbound-message decision (project state by message kind) against what the

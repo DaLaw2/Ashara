@@ -12,7 +12,7 @@
 
 import path from "node:path";
 import type { LintContext, Violation } from "./lint.js";
-import { ENTRY_MODULE } from "./rules.js";
+import { ENTRY_MODULE } from "./module-rules.js";
 import type { PackageRule } from "./rules.js";
 import { RELATIVE_LITERAL_RE, lineAt, matchesAnyGlob, resolveRelative } from "./source-files.js";
 

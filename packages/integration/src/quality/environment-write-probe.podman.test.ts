@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { probeEnvironmentWrite } from "@ashara/quality";
 import { PodmanSubstrate } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { testCellInstance } from "../test-cells.js";
 import { TEST_IMAGES } from "../test-images.js";
 

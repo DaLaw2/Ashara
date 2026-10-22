@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { targetRepo } from "@ashara/execution-infra";
 import type { Cell } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { CheckRun } from "@ashara/workplace";
 import {

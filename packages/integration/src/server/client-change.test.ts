@@ -10,7 +10,7 @@ import type { ClientChangeStore } from "@ashara/engagement";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { createClientChangeStore } from "@ashara/server/client-change-store";
 

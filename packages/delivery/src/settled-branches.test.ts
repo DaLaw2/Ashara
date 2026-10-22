@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 

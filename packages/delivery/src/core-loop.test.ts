@@ -4,16 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning } from "./first-plan.js";
-import type { WorkItem, WorkItemRepository } from "./domain/index.js";
-import { DEFAULT_CONFIG } from "./types.js";
+import type { WorkItem } from "./domain/index.js";
+import { DEFAULT_CONFIG, withOverrides } from "./types.js";
 import type { CoreLoopDeps, LoopStop, TaskResult } from "./types.js";
-import { CoreLoop, concurrentTaskLanes } from "./core-loop.js";
+import { CoreLoop } from "./core-loop.js";
+import { inertCoreLoopDeps, inertWorkItemRepo } from "./testing.js";
 
-type SpendCapPort = CoreLoopDeps["spendCap"];
+type SpendCapPort = CoreLoopDeps["loop"]["spendCap"];
 
 // ---------------------------------------------------------------------------
 // Mock heavy orchestrator modules that CoreLoop.runCycle exercises. We replace
@@ -77,10 +79,6 @@ function twoTasks(): WorkItem[] {
   return [pendingTask(TASK_IDS[0], "task-alpha"), pendingTask(TASK_IDS[1], "task-beta")];
 }
 
-function notExercised(label: string): () => never {
-  return () => { throw new Error(`${label}: not exercised`); };
-}
-
 function buildDeps(
   liaisonIntake: LiaisonIntake = { runPending: async () => [] },
   firstPlanning: FirstPlanning = { runPending: async () => [] },
@@ -90,86 +88,37 @@ function buildDeps(
   stackChoices: LiaisonStackChoices = { runPending: async () => [] },
   spendCap: SpendCapPort = { deploymentStop: async () => null, refusalOf: () => null },
 ): CoreLoopDeps {
-  const workItemRepo: WorkItemRepository = {
-    findById: async () => null,
-    save: async () => {},
-    create: notExercised("create"),
-    listByProject: notExercised("listByProject"),
-    findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-    projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-    listIdsByStatus: async () => [],
-    incrementDispatchCount: async () => 1,
-    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    saveRefundedOverflow: async () => 0,
-    recordCrashOrphan: async () => 1,
-    saveOrphanExit: async () => {
-      throw new Error("saveOrphanExit is not exercised by this test");
+  return inertCoreLoopDeps({
+    loop: {
+      config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
+      cycleLog: { emit: (tally) => cycleTallies.push(tally) },
+      containment: memoryStepContainment(() => true),
+      workItemRepo: inertWorkItemRepo({
+        findById: async () => null,
+        save: async () => {},
+        listIdsByStatus: async () => [],
+        incrementDispatchCount: async () => 1,
+        saveRefundedOverflow: async () => 0,
+        recordCrashOrphan: async () => 1,
+        getDependencies: async () => [],
+        findChildren: async () => [],
+      }),
+      eventStore: { publish: async () => {} },
+      projectRepo: { ...inertCoreLoopDeps().loop.projectRepo, get: async () => null },
+      spendCap,
     },
-    saveRefunded: notExercised("saveRefunded"),
-    recordMergeCommit: notExercised("recordMergeCommit"),
-    addDependency: notExercised("addDependency"),
-    getDependencies: async () => [],
-    findChildren: async () => [],
-    listDependenciesByProject: notExercised("listDependenciesByProject"),
-    listCorrectionHeld: notExercised("listCorrectionHeld"),
-    withTransaction: notExercised("withTransaction"),
-  };
-
-  // Fully typed: a dep CoreLoopDeps gains and this omits is a compile error here, never a
-  // runtime TypeError the runner retries forever.
-  return {
-    config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
-    cycleLog: { emit: (tally) => cycleTallies.push(tally) },
-    logger: recordingLogger(),
-    containment: memoryStepContainment(() => true),
-    workItemRepo,
-    eventStore: { publish: async () => {} },
-    failedApproachRepo: { record: async () => {} },
-    projectRepo: {
-      get: async () => null,
-      recordWorkspacePath: notExercised("recordWorkspacePath"),
-      listActiveIds: async () => [],
-      block: notExercised("block"),
-      listInfrastructureHalted: async () => [],
-      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-      blockAllActive: async () => [],
-      listWithWorkspace: async () => [],
-    },
-    dispatchService: { execute: notExercised("execute") },
-    spendCap,
-    failureRouter: { route: notExercised("route") },
-    clientStops,
-    clientReceipts: { runPending: async () => [] },
-    clientChanges: { runPending: async () => [] },
-    liaisonIntake,
-    liaisonAnswers: { runPending: async () => [] },
-    rosterDerivation,
-    firstPlanning,
-    replanning: { runPending: async () => [] },
-    planReports,
-    stackChoices,
-    checkDisputes: { record: notExercised("checkDisputes") },
-    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    checkSetFreeze: { freezeFor: async () => [] },
-    blockReports: { runPending: async () => [] },
-    burnWarnings: { runPending: async () => [] },
-    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-    heldCells: { release: async () => {} },
-    environmentOwner: notExercised("environmentOwner"),
-    taskLanes: concurrentTaskLanes,
-    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
-    terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
-    acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
-    deliveredReports: { runPending: async () => [] },
-  };
+    client: { clientStops, liaisonIntake },
+    planning: { rosterDerivation, firstPlanning },
+    reporting: { planReports, stackChoices },
+    dispatch: { failedApproachRepo: { record: async () => {} } },
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-const cycleTallies: Array<Parameters<CoreLoopDeps["cycleLog"]["emit"]>[0]> = [];
+const cycleTallies: Array<Parameters<CoreLoopDeps["loop"]["cycleLog"]["emit"]>[0]> = [];
 
 beforeEach(() => {
   cycleTallies.length = 0;
@@ -264,12 +213,7 @@ describe("CoreLoop settled branches", () => {
       });
       const deps = buildDeps();
 
-      await new CoreLoop({
-        ...deps,
-        config: { ...deps.config, workdirBase: base },
-        workItemRepo: { ...deps.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [abandoned] : []) },
-        projectRepo: { ...deps.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] },
-      }).runCycle();
+      await new CoreLoop(withOverrides(deps, { loop: { config: { ...deps.loop.config, workdirBase: base }, workItemRepo: { ...deps.loop.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [abandoned] : []) }, projectRepo: { ...deps.loop.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] } } })).runCycle();
 
       expect(branchAtDispatch).toEqual(["", ""]);
     } finally {
@@ -291,13 +235,7 @@ describe("CoreLoop settled branches", () => {
       const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => true));
       const release = vi.fn(async () => {});
 
-      const result = await new CoreLoop({
-        ...deps,
-        heldCells: { release },
-        config: { ...deps.config, workdirBase: base },
-        workItemRepo: { ...deps.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Completed") ? [completed] : []) },
-        projectRepo: { ...deps.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] },
-      }).runCycle();
+      const result = await new CoreLoop(withOverrides(deps, { dispatch: { heldCells: { release } }, loop: { config: { ...deps.loop.config, workdirBase: base }, workItemRepo: { ...deps.loop.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Completed") ? [completed] : []) }, projectRepo: { ...deps.loop.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] } } })).runCycle();
 
       expect(result.stop).not.toBeNull();
       expect(release).toHaveBeenCalledTimes(1);
@@ -321,13 +259,7 @@ describe("CoreLoop settled branches", () => {
       const deps = buildDeps();
       const release = vi.fn(async () => {});
 
-      await new CoreLoop({
-        ...deps,
-        heldCells: { release },
-        config: { ...deps.config, workdirBase: base },
-        workItemRepo: { ...deps.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [abandoned] : []) },
-        projectRepo: { ...deps.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] },
-      }).runHaltedCycle();
+      await new CoreLoop(withOverrides(deps, { dispatch: { heldCells: { release } }, loop: { config: { ...deps.loop.config, workdirBase: base }, workItemRepo: { ...deps.loop.workItemRepo, listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [abandoned] : []) }, projectRepo: { ...deps.loop.projectRepo, listWithWorkspace: async () => [{ id: TEST_PROJECT_ID, workspacePath: target }] } } })).runHaltedCycle();
 
       expect(release).toHaveBeenCalledTimes(1);
       expect(git("branch", "--list", `task/${abandoned}`)).toBe("");
@@ -387,7 +319,7 @@ describe("CoreLoop first plan", () => {
       { runPending: step("stop"), reportPending: step("stop-report") },
       { runPending: step("roster") },
     );
-    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") } }).runCycle();
+    await new CoreLoop(withOverrides(deps, { client: { clientChanges: { runPending: step("change") } } })).runCycle();
 
     expect(order).toEqual(["stop", "stop-report", "intake", "change", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
@@ -401,7 +333,7 @@ describe("CoreLoop first plan", () => {
       });
     const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop"), reportPending: step("stop-report") });
 
-    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } }).runHaltedCycle();
+    await new CoreLoop(withOverrides(deps, { client: { clientChanges: { runPending: step("change") } }, reporting: { blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } } })).runHaltedCycle();
 
     expect(order).toEqual(["stop", "stop-report", "block-report", "delivered-report", "report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
@@ -421,7 +353,7 @@ describe("CoreLoop first plan", () => {
         return [];
       });
     const deps = buildDeps({ runPending: step("intake") }, undefined, undefined, { runPending: step("stop"), reportPending: step("stop-report") });
-    const loop = new CoreLoop({ ...deps, clientReceipts: { runPending: step("receipt") }, clientChanges: { runPending: step("change") } });
+    const loop = new CoreLoop(withOverrides(deps, { client: { clientReceipts: { runPending: step("receipt") }, clientChanges: { runPending: step("change") } } }));
 
     await loop.runCycle();
     expect(order).toEqual(["stop", "receipt", "stop-report", "intake", "change", "dispatch", "dispatch", "receipt"]);
@@ -439,7 +371,7 @@ describe("CoreLoop first plan", () => {
     const receipts = { runPending: vi.fn(async (work: unknown) => (asked.push(work), [])) };
     let atCap = false;
     const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => atCap));
-    const loop = new CoreLoop({ ...deps, clientReceipts: receipts });
+    const loop = new CoreLoop(withOverrides(deps, { client: { clientReceipts: receipts } }));
 
     await loop.runCycle();
     expect(asked).toEqual([{ kind: "running" }, { kind: "running" }]);
@@ -494,7 +426,7 @@ describe("CoreLoop first plan", () => {
       });
     const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, undefined, undefined, { runPending: step("roster") });
 
-    await new CoreLoop({ ...deps, liaisonAnswers: { runPending: step("answers") }, replanning: { runPending: step("replan") } }).runCycle();
+    await new CoreLoop(withOverrides(deps, { client: { liaisonAnswers: { runPending: step("answers") } }, planning: { replanning: { runPending: step("replan") } } })).runCycle();
 
     expect(order).toEqual(["intake", "answers", "roster", "answers", "plan", "answers", "replan", "dispatch", "dispatch"]);
   });
@@ -573,23 +505,19 @@ describe("CoreLoop spend cap", () => {
     const order: string[] = [];
     const halted: unknown[] = [];
     const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => true));
-    const result = await new CoreLoop({
-      ...deps,
-      projectRepo: {
-        ...deps.projectRepo,
+    const result = await new CoreLoop(withOverrides(deps, { loop: { projectRepo: {
+        ...deps.loop.projectRepo,
         blockAllActive: async (cause) => {
           order.push("halt");
           halted.push(cause);
           return [TEST_PROJECT_ID];
         },
-      },
-      blockReports: {
+      } }, reporting: { blockReports: {
         runPending: async () => {
           order.push("reports");
           return [];
         },
-      },
-    }).runCycle();
+      } } })).runCycle();
 
     expect(order).toEqual(["reports", "halt", "reports"]);
     expect(halted).toEqual([{ category: "budget_cap", errorClass: "DeploymentSpendCapReached", reason: "budget_cap: stub deployment cap", spend: STUB_SPEND }]);
@@ -618,16 +546,13 @@ describe("CoreLoop spend cap", () => {
       stubSpendCap(() => false),
     );
 
-    const result = await new CoreLoop({
-      ...deps,
-      projectRepo: {
-        ...deps.projectRepo,
+    const result = await new CoreLoop(withOverrides(deps, { loop: { projectRepo: {
+        ...deps.loop.projectRepo,
         block: async (projectId, cause) => {
           halted.push({ projectId, cause });
           return "blocked";
         },
-      },
-    }).runCycle();
+      } } })).runCycle();
 
     // Finance refuses; the halt is Delivery's.
     expect(halted).toEqual([
@@ -655,17 +580,13 @@ describe("CoreLoop spend cap", () => {
       stubSpendCap(() => false),
     );
     let blockTrace: string | null = null;
-    await new CoreLoop({
-      ...deps,
-      logger,
-      projectRepo: {
-        ...deps.projectRepo,
+    await new CoreLoop(withOverrides(deps, { loop: { logger, projectRepo: {
+        ...deps.loop.projectRepo,
         block: async () => {
           blockTrace = logger.trace();
           return "blocked";
         },
-      },
-    }).runCycle();
+      } } })).runCycle();
 
     const blocked = logger.records.filter((r) => r.event === "delivery.project-blocked");
     expect(blocked).toHaveLength(1);
@@ -687,16 +608,13 @@ describe("CoreLoop spend cap", () => {
       ],
     });
 
-    await new CoreLoop({
-      ...deps,
-      projectRepo: {
-        ...deps.projectRepo,
+    await new CoreLoop(withOverrides(deps, { loop: { projectRepo: {
+        ...deps.loop.projectRepo,
         block: async (projectId, cause) => {
           halted.push({ projectId, cause });
           return "blocked";
         },
-      },
-    }).runCycle();
+      } } })).runCycle();
 
     expect(halted).toEqual([
       { projectId: TEST_PROJECT_ID, cause: { category: "fault", errorClass: "VisionUnreadable", reason: expect.stringContaining("no valid roster") } },

@@ -1,11 +1,13 @@
 import { describe, expect, test } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { requeueWorkItem, startWorkItem, takeEvents } from "../domain/index.js";
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import type { ItemWrite, ReopenPlan, ReopenRoute } from "./reopen.js";
 import { reopen } from "./reopen.js";
+import { inertWorkItemRepo } from "../testing.js";
 
 const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 
@@ -31,12 +33,6 @@ function inProgressItem(id: WorkItemId = createWorkItemId()): WorkItem {
   return item;
 }
 
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
-
 /** Every step the protocol takes, in order, as the fakes see it. */
 interface Recorder {
   readonly steps: string[];
@@ -53,36 +49,21 @@ function recorder(item: WorkItem | null, writeThrows: unknown = null): Recorder 
     if (count === null) return 0;
     return count;
   };
-  const repo: WorkItemRepository = {
-    create: notExercised("create"),
+  const repo: WorkItemRepository = inertWorkItemRepo({
     findById: async () => {
       steps.push("find");
       return item;
     },
-    listByProject: notExercised("listByProject"),
-    findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-    projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-    listIdsByStatus: notExercised("listIdsByStatus"),
     save: async () => {
       await write("save", null)();
     },
-    incrementDispatchCount: notExercised("incrementDispatchCount"),
     saveRefunded: write("saveRefunded", 0),
-    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    recordCrashOrphan: notExercised("recordCrashOrphan"),
     saveRefundedOverflow: write("saveRefundedOverflow", 0),
-    saveOrphanExit: notExercised("saveOrphanExit"),
-    recordMergeCommit: notExercised("recordMergeCommit"),
-    addDependency: notExercised("addDependency"),
-    getDependencies: notExercised("getDependencies"),
-    findChildren: notExercised("findChildren"),
-    listDependenciesByProject: notExercised("listDependenciesByProject"),
-    listCorrectionHeld: notExercised("listCorrectionHeld"),
     withTransaction: async (fn) => {
       steps.push("transaction");
       return fn(repo);
     },
-  };
+  });
   const eventStore = {
     publish: async (): Promise<void> => {
       if (steps.at(-1) !== "publish") steps.push("publish");

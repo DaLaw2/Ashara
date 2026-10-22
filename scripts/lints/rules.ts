@@ -24,24 +24,23 @@
  *                                   An item `<module>:<glob>` allows only those files of <module> to <name>
  *   module-entry.<name> = [glob, ...] the only files of <name> another module may import
  *   subpath-importers.<subpath> = [...] the only packages that may import `@ashara/<this>/<subpath>`
+ *   test-only-subpaths = [...]      subpaths of this package that only a *.test.ts file may import,
+ *                                   from any package or scripts/ by its `@ashara/` name, or from
+ *                                   inside the package by a relative path to its entry file
+ *   classes.<pkg>    = [...]        the only classes <pkg> exports (`export class`, and each name an
+ *                                   `export { A as B }` gives one) that this package's files, tests
+ *                                   included, may import by value; an `import type` names none, and
+ *                                   a namespace, default or dynamic import of <pkg>, or a relative path
+ *                                   into it, is refused, since the classes it reaches cannot be read
  *
  * The [stack-literals] and [tables] sections are no package's: the lints that read them parse them.
  */
 
 import { STACK_LITERALS_SECTION } from "../stack-literals.js";
 import { TABLES_SECTION } from "../table-ownership.js";
+import { MODULE_RULE_RE, checkModuleRules, parseModuleRule } from "./module-rules.js";
+import { BoundaryRulesParseError } from "./rules-parse-error.js";
 
-class BoundaryRulesParseError extends Error {
-  constructor(
-    readonly rulesPath: string,
-    readonly lineNumber: number,
-    readonly lineText: string,
-    readonly reason: string,
-  ) {
-    super(`${rulesPath}:${lineNumber}: ${reason} — ${JSON.stringify(lineText)}`);
-    this.name = "BoundaryRulesParseError";
-  }
-}
 
 export interface PackageRule {
   readonly allow: readonly string[];
@@ -71,10 +70,11 @@ export interface PackageRule {
   readonly moduleEntry: ReadonlyMap<string, readonly string[]>;
   /** subpath of this package -> the only packages that may import it; empty when the section states none. */
   readonly subpathImporters: ReadonlyMap<string, readonly string[]>;
+  /** Subpaths of this package that only a test file may import; empty when the section states none. */
+  readonly testOnlySubpaths: readonly string[];
+  /** importedPkg -> the only classes of it this package may import; absent: the package's classes are not held. */
+  readonly classImports: ReadonlyMap<string, readonly string[]>;
 }
-
-/** The module that may import every other module and that none may import: the package's barrel. */
-export const ENTRY_MODULE = "entry";
 
 export type BoundaryRules = ReadonlyMap<string, PackageRule>;
 
@@ -102,6 +102,8 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       moduleAllowFiles: Map<string, Map<string, string[]>>;
       moduleEntry: Map<string, string[]>;
       subpathImporters: Map<string, string[]>;
+      testOnlySubpaths: string[];
+      classImports: Map<string, string[]>;
     }
   >();
   let currentSection: string | null = null;
@@ -122,7 +124,7 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), entries: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), subpathImporters: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), entries: new Map(), importers: null, namedOnly: [], names: new Map(), standIns: [], standInNames: new Map(), boundsTables: [], modules: new Map(), moduleAllow: new Map(), moduleAllowFiles: new Map(), moduleEntry: new Map(), subpathImporters: new Map(), testOnlySubpaths: [], classImports: new Map() });
       }
       continue;
     }
@@ -220,36 +222,9 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
-    const moduleMatch = /^(module|module-allow|module-entry)\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    const moduleMatch = MODULE_RULE_RE.exec(line);
     if (moduleMatch) {
-      const [, key, name, inner] = moduleMatch;
-      const list = parseList(inner);
-      const target = key === "module" ? rule.modules : key === "module-allow" ? rule.moduleAllow : rule.moduleEntry;
-      if (list.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `${key} list is empty${key === "module-allow" ? " (omit it: a module with none imports no other module)" : ""}`);
-      }
-      if (target.has(name)) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `${key}.${name} is stated twice`);
-      if (key !== "module-allow") {
-        target.set(name, list);
-        continue;
-      }
-      const whole = new Set<string>();
-      const narrowed = new Map<string, string[]>();
-      for (const item of list) {
-        const colon = item.indexOf(":");
-        if (colon === -1) {
-          if (whole.has(item) || narrowed.has(item)) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `lists "${item}" twice, or both whole and by its files`);
-          whole.add(item);
-          continue;
-        }
-        const [imported, glob] = [item.slice(0, colon), item.slice(colon + 1)];
-        if (whole.has(imported) || glob === "") throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `"${item}" names no file, or "${imported}" is also listed whole`);
-        const globs = narrowed.get(imported);
-        if (globs === undefined) narrowed.set(imported, [glob]);
-        else globs.push(glob);
-      }
-      target.set(name, [...new Set(list.map((item) => item.split(":")[0]))]);
-      rule.moduleAllowFiles.set(name, narrowed);
+      parseModuleRule(moduleMatch[1], moduleMatch[2], parseList(moduleMatch[3]), rule, { rulesPath, lineNumber, line });
       continue;
     }
 
@@ -259,6 +234,20 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       if (importers.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "subpath-importers list is empty (drop the subpath from the exports instead)");
       if (rule.subpathImporters.has(subpathMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `subpath-importers.${subpathMatch[1]} is stated twice`);
       rule.subpathImporters.set(subpathMatch[1], importers);
+      continue;
+    }
+
+    const testOnlyMatch = /^test-only-subpaths\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (testOnlyMatch) {
+      rule.testOnlySubpaths = parseList(testOnlyMatch[1]);
+      if (rule.testOnlySubpaths.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "test-only-subpaths list is empty");
+      continue;
+    }
+
+    const classesMatch = /^classes\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (classesMatch) {
+      if (rule.classImports.has(classesMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `classes.${classesMatch[1]} is stated twice`);
+      rule.classImports.set(classesMatch[1], parseList(classesMatch[2]));
       continue;
     }
 
@@ -316,6 +305,11 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
       }
     }
+    for (const held of rule.classImports.keys()) {
+      if (!isWildcard && !rule.allow.includes(held)) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] classes.${held}`, `holds the classes of "${held}", which is not in its allow list`);
+      }
+    }
     for (const [subpath, importers] of rule.subpathImporters) {
       for (const importer of importers) {
         if (!rules.has(importer)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] subpath-importers.${subpath}`, `names "${importer}", which has no section`);
@@ -337,45 +331,10 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       moduleAllowFiles: rule.moduleAllowFiles,
       moduleEntry: rule.moduleEntry,
       subpathImporters: rule.subpathImporters,
+      testOnlySubpaths: rule.testOnlySubpaths,
+      classImports: rule.classImports,
     });
   }
 
   return result;
-}
-
-/** A module rule naming no declared module, naming the entry where it cannot, or a module-allow cycle. */
-function checkModuleRules(
-  rulesPath: string,
-  pkg: string,
-  modules: ReadonlyMap<string, readonly string[]>,
-  moduleAllow: ReadonlyMap<string, readonly string[]>,
-  moduleEntry: ReadonlyMap<string, readonly string[]>,
-): void {
-  const refuse = (key: string, reason: string): never => {
-    throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] ${key}`, reason);
-  };
-  for (const [name, targets] of moduleAllow) {
-    if (!modules.has(name)) refuse(`module-allow.${name}`, `"${name}" is no module of the section`);
-    if (name === ENTRY_MODULE) refuse(`module-allow.${name}`, `the ${ENTRY_MODULE} module may import every module; it takes no module-allow`);
-    for (const target of targets) {
-      if (!modules.has(target)) refuse(`module-allow.${name}`, `lists "${target}", which is no module of the section`);
-      if (target === ENTRY_MODULE) refuse(`module-allow.${name}`, `lists the ${ENTRY_MODULE} module, which no module may import`);
-      if (target === name) refuse(`module-allow.${name}`, "lists the module itself");
-    }
-  }
-  for (const name of moduleEntry.keys()) {
-    if (!modules.has(name)) refuse(`module-entry.${name}`, `"${name}" is no module of the section`);
-    if (name === ENTRY_MODULE) refuse(`module-entry.${name}`, `no module may import the ${ENTRY_MODULE} module, so it has no entry files`);
-  }
-  // Depth-first search over module-allow: a back edge is a cycle, which fails closed here so it cannot return.
-  const state = new Map<string, "open" | "done">();
-  const visit = (name: string, trail: readonly string[]): void => {
-    if (state.get(name) === "done") return;
-    if (state.get(name) === "open") refuse("module-allow", `a cycle between modules: ${[...trail.slice(trail.indexOf(name)), name].join(" -> ")}`);
-    state.set(name, "open");
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a module with no module-allow imports no other module (header)
-    for (const target of moduleAllow.get(name) ?? []) visit(target, [...trail, name]);
-    state.set(name, "done");
-  };
-  for (const name of moduleAllow.keys()) visit(name, []);
 }

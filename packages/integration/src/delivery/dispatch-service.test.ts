@@ -7,54 +7,21 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { EnvironmentBuildFailed, PodmanSubstrate, ensureTargetGitInit, environmentVersion } from "@ashara/execution-infra";
+import type { DispatchService, TaskDescriptor } from "@ashara/delivery";
 import { ContextBudgetExceeded, PreCallRefusal } from "@ashara/finance";
 import type { CostedTurnResult } from "@ashara/finance";
 import type { AgentBrief } from "@ashara/workplace";
-import { createWorkItemId, parseProjectId, recordingLogger, wrapError, systemClock } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { createAgentBrief } from "@ashara/workplace";
 import {
-  BaselineRevalidation,
-  CellTeardown,
-  CheckHarvest,
-  CheckPorts,
-  DeliveredOnMain,
-  DispatchCells,
-  FoundationGate,
-  OwnershipGate,
-  PostMergeChecks,
-  SubstrateGate,
-  SuiteReviewRun,
   checkBranchName,
   taskBranchName,
 } from "@ashara/quality";
-import type { ExecutionResult, SuiteReviewing, TaskCheckStore, TaskChecks } from "@ashara/quality";
+import type { ExecutionResult, TaskCheckStore, TaskChecks } from "@ashara/quality";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { CHECK_MISSING_EXIT, attemptSummary, withSessionLifecycle } from "@ashara/workplace";
 import type { AssignmentStaff, SessionStore } from "@ashara/workplace";
-import { DispatchService } from "./dispatch-service.js";
-import type { TaskDescriptor } from "./dispatch-types.js";
-
-/** A DispatchService with Quality's verification jobs built as the composition root builds them. */
-function composedDispatchService(deps: Omit<ConstructorParameters<typeof DispatchService>[0], "verifiers"> & { readonly suiteReview: SuiteReviewing }): DispatchService {
-  const { suiteReview, ...dispatch } = deps;
-  const verified = { ...(deps.eventSink === undefined ? {} : { eventSink: deps.eventSink }), logger: deps.logger };
-  const teardown = new CellTeardown(verified);
-  const dispatchCells = new DispatchCells({ config: deps.config, cells: deps.cells, attemptPolicy: deps.attemptPolicy, images: deps.environment.images, teardown });
-  return new DispatchService({
-    ...dispatch,
-    verifiers: {
-      suiteReview: new SuiteReviewRun({ suiteReview, ...verified }),
-      teardown,
-      revalidation: new BaselineRevalidation({ dispatchCells, attemptPolicy: deps.attemptPolicy, ...verified }),
-      delivered: new DeliveredOnMain({ dispatchCells, checks: deps.checks, ...verified }),
-      foundationGate: new FoundationGate({ dispatchCells, attemptPolicy: deps.attemptPolicy, ...verified }),
-      checkPorts: new CheckPorts({ dispatchCells, ...verified }),
-      harvest: new CheckHarvest({ dispatchCells, checks: deps.checks, ...verified }),
-      ownershipGate: new OwnershipGate({ checks: deps.checks, ...verified }),
-      substrateGate: new SubstrateGate({ dispatchCells, attemptPolicy: deps.attemptPolicy, statements: deps.environment.statements, ...verified }),
-      postMerge: new PostMergeChecks({ dispatchCells, attemptPolicy: deps.attemptPolicy, environment: deps.environment, checks: deps.checks, ...verified }),
-    },
-  });
-}
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.
@@ -446,7 +413,7 @@ function serviceOn(
   };
   const events: Array<Record<string, unknown>> = [];
   const logger = recordingLogger();
-  const service = composedDispatchService({
+  const service = composeDispatchService({
     logger,
     config: { workdirBase },
     sessionStore: probe.sessions,

@@ -4,13 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { DomainEvent } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { BLOCKED_REASON_SOURCES, blockedExitOf } from "./work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
+import { inertWorkItemRepo } from "./testing.js";
 
 const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 
@@ -33,12 +35,6 @@ function blocked(reason: StoredBlockedReason | undefined): WorkItem {
   };
 }
 
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
-
 function run(
   items: WorkItem[],
   saveRefused = false,
@@ -47,33 +43,16 @@ function run(
 ) {
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
   const published: Array<Pick<DomainEvent, "eventType">> = [];
-  const workItemRepo: WorkItemRepository = {
-    create: notExercised("create"),
-    findById: notExercised("findById"),
-    listByProject: notExercised("listByProject"),
+  const workItemRepo: WorkItemRepository = inertWorkItemRepo({
     findByProjectAndStatus: async (_projectId, status) => items.filter((i) => i.status === status).map((i) => ({ ...i, events: [] })),
-    projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-    listIdsByStatus: notExercised("listIdsByStatus"),
     save: async (item, prev) => {
       if (saveRefused) throw new InvalidStatusTransition(item.id, "Abandoned", item.status);
       saves.push({ id: item.id, prev, status: item.status, reason: item.blockedReason });
     },
-    incrementDispatchCount: notExercised("incrementDispatchCount"),
-    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    saveOrphanExit: async () => {
-      throw new Error("saveOrphanExit is not exercised by this test");
-    },
-    saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit,
-    addDependency: notExercised("addDependency"),
-    getDependencies: notExercised("getDependencies"),
-    findChildren: notExercised("findChildren"),
-    listDependenciesByProject: notExercised("listDependenciesByProject"),
-    listCorrectionHeld: notExercised("listCorrectionHeld"),
-    withTransaction: notExercised("withTransaction"),
-  };
+  });
   const released = releaseClearedBlocks({
     workItemRepo,
     eventStore: { publish: async (event) => void published.push(event) },

@@ -9,7 +9,9 @@
  * file), one manifest-name literal in production source for the
  * [stack-literals] denylist, a write and a raw SQL read of another context's table for the [tables]
  * owner map, an import of another context's table object for db's subpath-importers (by its
- * subpath, by a relative path, from scripts/, and re-exported by db's root entry), plus one permitted import
+ * subpath, by a relative path, from scripts/, and re-exported by db's root entry), an import of a
+ * test-only subpath from a file that is no test, an import of a Quality class Delivery does not list
+ * (by name and through a namespace), plus one permitted import
  * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
  * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
@@ -426,6 +428,71 @@ const DELIVERY_TABLES = declaredTables(fs.readFileSync(path.join(import.meta.dir
   .map((table) => `${table.name} ("${TABLE_OWNERS.get(table.name)}")`)
   .join(", ");
 const UNEXPORTED_SUBPATH_RULE = 'subpath-importers.schema/nowhere = ["server"]';
+// The test builders of a test-only subpath, imported by production source (by its @ashara/ name, and
+// by a relative path inside its package) and by a test, the test harness and another test-only entry,
+// which may; and a Quality class Delivery's classes.quality does not list, by name and through a
+// namespace, and a type-only import of one.
+const TEST_ONLY = (specifier: string): string => `only a test file (*.test.ts), the test harness or another test-only entry may import "${specifier}" (test-only-subpaths)`;
+const UNLISTED_CLASS = (name: string): string => `classes.quality: "${name}" is a class of "quality" it does not list; receive it as a port the composition root builds`;
+const TEST_SUPPORT_PROBES: PlannedProbe[] = [
+  {
+    name: "production source imports no inert loop builder",
+    file: "packages/server/src/__boundary_probe__/test-only-delivery.ts",
+    content: 'import { inertCoreLoopDeps } from "@ashara/delivery/testing";\n',
+    violation: `packages/server/src/__boundary_probe__/test-only-delivery.ts:1  server -> "@ashara/delivery/testing"  (${TEST_ONLY("@ashara/delivery/testing")})`,
+  },
+  {
+    name: "production source imports no shared test double",
+    file: "packages/delivery/src/__boundary_probe__/test-only-shared.ts",
+    content: 'import { notExercised } from "@ashara/shared/testing";\n',
+    violation: `packages/delivery/src/__boundary_probe__/test-only-shared.ts:1  delivery -> "@ashara/shared/testing"  (${TEST_ONLY("@ashara/shared/testing")})`,
+  },
+  {
+    name: "the test harness imports the test builders",
+    file: "packages/integration/src/__boundary_probe__/test-only-harness.ts",
+    content: 'import { inertCoreLoopDeps } from "@ashara/delivery/testing";\nimport { notExercised } from "@ashara/shared/testing";\n',
+    violation: null,
+  },
+  {
+    name: "production source imports no SuiteReviewer test builder",
+    file: "packages/server/src/__boundary_probe__/test-only-quality.ts",
+    content: 'import { suiteReviewerFor } from "@ashara/quality/testing";\n',
+    violation: `packages/server/src/__boundary_probe__/test-only-quality.ts:1  server -> "@ashara/quality/testing"  (${TEST_ONLY("@ashara/quality/testing")})`,
+  },
+  {
+    name: "production source of the package reaches no test builder by a relative path",
+    file: "packages/delivery/src/__boundary_probe__/test-only-relative.ts",
+    content: 'import { inertCoreLoopDeps } from "../testing.js";\n',
+    violation: `packages/delivery/src/__boundary_probe__/test-only-relative.ts:1  delivery -> "../testing.js"  (${TEST_ONLY("@ashara/delivery/testing")})`,
+  },
+  {
+    name: "a test imports the test builders",
+    file: "packages/integration/src/__boundary_probe__/test-only.test.ts",
+    content: 'import { inertCoreLoopDeps } from "@ashara/delivery/testing";\nimport { suiteReviewerFor } from "@ashara/quality/testing";\n',
+    violation: null,
+  },
+  {
+    name: "Delivery constructs none of Quality's verification jobs",
+    file: "packages/delivery/src/dispatch/__boundary_probe_class__.ts",
+    content: 'import { DispatchCells } from "@ashara/quality";\n',
+    violation: `packages/delivery/src/dispatch/__boundary_probe_class__.ts:1  delivery -> "@ashara/quality"  (${UNLISTED_CLASS("DispatchCells")})`,
+  },
+  {
+    name: "Delivery reaches no Quality class through a namespace import",
+    file: "packages/delivery/src/dispatch/__boundary_probe_namespace__.ts",
+    content: 'import * as quality from "@ashara/quality";\n',
+    violation:
+      'packages/delivery/src/dispatch/__boundary_probe_namespace__.ts:1  delivery -> "@ashara/quality"  ' +
+      "(classes.quality: a namespace or default import names no symbol, so a class could be reached through it; import the names in braces)",
+  },
+  {
+    name: "Delivery may name a Quality class as a type",
+    file: "packages/delivery/src/dispatch/__boundary_probe_type__.ts",
+    content: 'import type { DispatchCells } from "@ashara/quality";\nimport { type SubstrateGate } from "@ashara/quality";\n',
+    violation: null,
+  },
+];
+
 const SUBPATH_PROBES: PlannedProbe[] = [
   {
     name: "a context importing another context's table object by its subpath is refused",
@@ -612,6 +679,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
   probes.push(...SUBPATH_PROBES);
   probes.push(...STAND_IN_PROBES);
   probes.push(...BOUNDS_TABLE_PROBES);
+  probes.push(...TEST_SUPPORT_PROBES);
   for (const pkg of Object.keys(MODULES)) probes.push(...moduleProbes(pkg));
   return probes;
 }

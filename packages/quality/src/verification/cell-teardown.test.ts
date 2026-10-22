@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { Cell } from "@ashara/execution-infra";
 import { CellTeardownFailed } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { CellTeardown } from "./cell-teardown.js";
 
 function cellFailing(error: Error | null): Cell {

@@ -24,63 +24,29 @@ import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
 import {
   CoreLoop,
   ContinuousRunner,
-  DispatchService,
   FailureRouter,
-  FirstPlanner,
   ProjectHaltRepository,
-  Replanner,
   WorkItemRowRepository,
   adaptWorkItemRepo,
   assignmentIntentOf,
   createAgentStaffing,
-  createFirstPlanStore,
-  createReplanStore,
   gradedCapability,
   reconcileWorkItemsOnStartup,
   stepContainment,
 } from "@ashara/delivery";
-import type { AgentStaffing, CoreLoopDeps, CycleRunner, TaskLanes, WorkItemRepository } from "@ashara/delivery";
+import type { AgentStaffing, CycleRunner, TaskLanes, WorkItemRepository } from "@ashara/delivery";
 import {
-  BlockReports,
-  BurnWarnings,
-  ClientAnswers,
-  ClientChanges,
-  ClientReceipts,
-  ClientStops,
-  PlanReports,
-  StackChoiceReports,
-  TenderIntake,
   VisionRepository,
   ClientMessageRepository,
   createProjectWithTender,
-  listProjectBurns,
-  postBurnWarning,
-  readRiskRecords,
 } from "@ashara/engagement";
-import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import {
-  AcceptanceSweeper,
-  BaselineRevalidation,
-  CellTeardown,
-  CheckDisputeRepository,
-  CheckHarvest,
-  CheckPorts,
-  CheckSetFreezeRepository,
-  DeliveredOnMain,
-  DispatchCells,
-  FoundationGate,
-  OwnershipGate,
-  PostMergeChecks,
-  SubstrateGate,
-  SuiteReviewFindingRepository,
   SuiteReviewJudgementRepository,
-  SuiteReviewRun,
   SuiteReviewer,
-  TerminalSweeper,
   gitPublicInterface,
   readEnvironmentDefinition,
 } from "@ashara/quality";
-import type { EnvironmentStatementStore, ExecutionEventSink, MainSweepDeps } from "@ashara/quality";
+import type { EnvironmentStatementStore, ExecutionEventSink } from "@ashara/quality";
 import {
   ENVIRONMENT_BUILD_TIMEOUT_MS,
   PodmanSubstrate,
@@ -91,9 +57,6 @@ import {
   pruneEnvironmentImages,
   pruneStaleEnvironmentImages,
   reconcileCellsAtStartup,
-  releaseHeldCells,
-  substrateProbe,
-  sweepOrphanedWorktrees,
   teardownCellsAtShutdown,
   withGitRunner,
 } from "@ashara/execution-infra";
@@ -117,7 +80,7 @@ import type { Clock, LogSink, Logger, ProjectId } from "@ashara/shared";
 import { contendedWait, createLogger, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
-import { keptWorktreeTaskIds } from "./kept-worktrees.js";
+import { sweepWorktreesAtStartup } from "./kept-worktrees.js";
 import type { AppDeps } from "./routes.js";
 import {
   ServerStartupRefused,
@@ -125,19 +88,10 @@ import {
   resolveProviderCredentials,
 } from "./secrets.js";
 import { loadWebClientAssets } from "./web-client.js";
-import { createAnswerStore } from "./answer-store.js";
-import { createClientChangeStore } from "./client-change-store.js";
-import { createClientReceiptStore } from "./client-receipt-store.js";
-import { createClientStopStore } from "./client-stop-store.js";
-import { createIntakeStore } from "./intake-store.js";
-import { createPlanReportStore } from "./plan-report-store.js";
-import { createStackChoiceStore } from "./stack-choice-store.js";
-import { createAcceptanceStore, createDeliveredReportStore, createDeliveredReports, createTerminalSweepStore } from "./acceptance-store.js";
-import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
-import { createRosterStore } from "./roster-store.js";
 import { createEventLog } from "./event-log.js";
+import { cellPortsOf, composeCoreLoopDeps, composeDispatchService, composeSweepers } from "./compose-core-loop.js";
 
 // Policy defaults for the web client's sessions. A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -442,29 +396,19 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
   };
   const taskChecks = createTaskCheckStore(db);
-  // Quality's verification, one job per stage: the dispatcher calls each as a port, and the core
-  // loop runs the sweeps of main, which no dispatch holds.
-  const teardown = new CellTeardown({ eventSink: devEventSink, logger });
-  const dispatchCells = new DispatchCells({
-    config: { workdirBase: config.coreLoop.workdirBase },
-    cells: verificationCells,
-    attemptPolicy: ATTEMPT_POLICY,
-    images: environmentImages,
-    teardown,
-  });
-  const mainSweep: MainSweepDeps = {
+  // The sweeps of main are the core loop's, which no dispatch holds; the dispatcher calls each of
+  // Quality's verification jobs, composed from its own deps, as a port.
+  const sweepers = composeSweepers({
     config: { workdirBase: config.coreLoop.workdirBase },
     cells: verificationCells,
     attemptPolicy: ATTEMPT_POLICY,
     environment: { images: environmentImages, statements: environmentStatements },
     checks: taskChecks,
-    teardown,
     eventSink: devEventSink,
-  };
-  const acceptanceSweeper = new AcceptanceSweeper(mainSweep);
-  const terminalSweeper = new TerminalSweeper(mainSweep);
+    logger,
+  });
 
-  const dispatchService = new DispatchService({
+  const dispatchService = composeDispatchService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
     },
@@ -479,36 +423,14 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     attemptPolicy: ATTEMPT_POLICY,
     environment: { images: environmentImages, statements: environmentStatements },
     checks: taskChecks,
-    verifiers: {
-      suiteReview: new SuiteReviewRun({
-        suiteReview: new SuiteReviewer({
-          llm: modelCalls,
-          source: createSuiteReviewSource(db),
-          publicInterface: gitPublicInterface,
-          judgements: new SuiteReviewJudgementRepository(db),
-          onAttempt: ladderAttemptSink,
-          logger,
-        }),
-        eventSink: devEventSink,
-        logger,
-      }),
-      teardown,
-      revalidation: new BaselineRevalidation({ dispatchCells, attemptPolicy: ATTEMPT_POLICY, eventSink: devEventSink, logger }),
-      delivered: new DeliveredOnMain({ dispatchCells, checks: taskChecks, eventSink: devEventSink, logger }),
-      foundationGate: new FoundationGate({ dispatchCells, attemptPolicy: ATTEMPT_POLICY, eventSink: devEventSink, logger }),
-      checkPorts: new CheckPorts({ dispatchCells, eventSink: devEventSink, logger }),
-      harvest: new CheckHarvest({ dispatchCells, checks: taskChecks, eventSink: devEventSink, logger }),
-      ownershipGate: new OwnershipGate({ checks: taskChecks, eventSink: devEventSink, logger }),
-      substrateGate: new SubstrateGate({ dispatchCells, attemptPolicy: ATTEMPT_POLICY, statements: environmentStatements, eventSink: devEventSink, logger }),
-      postMerge: new PostMergeChecks({
-        dispatchCells,
-        attemptPolicy: ATTEMPT_POLICY,
-        environment: { images: environmentImages, statements: environmentStatements },
-        checks: taskChecks,
-        eventSink: devEventSink,
-        logger,
-      }),
-    },
+    suiteReview: new SuiteReviewer({
+      llm: modelCalls,
+      source: createSuiteReviewSource(db),
+      publicInterface: gitPublicInterface,
+      judgements: new SuiteReviewJudgementRepository(db),
+      onAttempt: ladderAttemptSink,
+      logger,
+    }),
     shutdownSignal: abortController.signal,
     clock: ports.clock,
     logger,
@@ -517,94 +439,22 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
   // One subject's fault in a cycle step is contained to it and kept in step_faults; only a
   // spend-cap refusal escapes to the cycle, which halts at the cap (CoreLoop.step).
   const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null, logger);
-  // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
-  const blockReports = new BlockReports(createBlockReportStore(db), containment);
-  const coreLoopDeps: CoreLoopDeps = {
+  const coreLoopDeps = composeCoreLoopDeps({
+    db,
     config: config.coreLoop,
-    cycleLog: eventLog,
+    workBudgets: config.workBudgets,
     logger,
-    workItemRepo,
-    eventStore,
-    failedApproachRepo,
-    projectRepo,
-    dispatchService,
-    acceptanceSweeper,
-    acceptance: createAcceptanceStore(db),
-    terminalSweeper,
-    terminalSweeps: createTerminalSweepStore(db),
-    deliveredReports: createDeliveredReports(createDeliveredReportStore(db)),
-    failureRouter,
+    cycleLog: eventLog,
+    llm: modelCalls,
+    onAttempt: ladderAttemptSink,
     spendCap,
     containment,
-    clientStops: new ClientStops(createClientStopStore(db), containment),
-    clientReceipts: new ClientReceipts(createClientReceiptStore(db), containment),
-    clientChanges: new ClientChanges({
-      llm: modelCalls,
-      store: createClientChangeStore(db, config.workBudgets),
-      containment,
-      onAttempt: ladderAttemptSink,
-    }),
-    liaisonIntake: new TenderIntake({
-      llm: modelCalls,
-      store: createIntakeStore(db),
-      containment,
-      onAttempt: ladderAttemptSink,
-    }),
-    liaisonAnswers: new ClientAnswers({
-      llm: modelCalls,
-      store: createAnswerStore(db),
-      containment,
-      onAttempt: ladderAttemptSink,
-    }),
-    rosterDerivation: new RosterDerivation({
-      llm: modelCalls,
-      store: createRosterStore(db),
-      containment,
-      onAttempt: ladderAttemptSink,
-    }),
-    firstPlanning: new FirstPlanner({
-      llm: modelCalls,
-      store: createFirstPlanStore(db),
-      containment,
-      onAttempt: ladderAttemptSink,
-      logger,
-    }),
-    replanning: new Replanner({
-      llm: modelCalls,
-      store: createReplanStore(db, logger),
-      containment,
-      onAttempt: ladderAttemptSink,
-      logger,
-    }),
-    planReports: new PlanReports(createPlanReportStore(db), containment),
-    stackChoices: new StackChoiceReports(createStackChoiceStore(db), containment),
-    checkDisputes: new CheckDisputeRepository(db),
-    blockReports,
-    burnWarnings: new BurnWarnings(
-      {
-        projectBurns: () => listProjectBurns(db),
-        postWarning: (warning) => postBurnWarning(db, warning),
-        riskRecords: (projectId) => readRiskRecords(db, projectId),
-      },
-      config.workBudgets,
-      containment,
-    ),
-    suiteReviewFindings: new SuiteReviewFindingRepository(db),
-    checkSetFreeze: new CheckSetFreezeRepository(db),
-    infrastructureProbe: substrateProbe(cellSubstrate),
-    heldCells: { release: () => releaseHeldCells(cellSubstrate) },
+    failureRouter,
     taskLanes: ports.taskLanes,
-    // The environment task an implementation needs is owned by the role doing environment work.
-    async environmentOwner(projectId) {
-      const roster = parseStoredRoster(projectId, await latestRosterRoles(db, projectId));
-      try {
-        return { kind: "role", roleId: ownerOf(roster, "environment").id };
-      } catch (e) {
-        if (!(e instanceof WorkKindOwnerUnresolved)) throw e;
-        return { kind: "none", why: e.message };
-      }
-    },
-  };
+    dispatchService,
+    sweepers,
+    cells: cellPortsOf(cellSubstrate),
+  });
 
   const coreLoop = new CoreLoop(coreLoopDeps);
 
@@ -697,7 +547,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
       // never finished. Execution Infrastructure's task worktrees after both, kept for every task
       // still open once its orphans are settled. Neither refuses the start; each logs its result.
       await terminalizeOrphanedSessions(devSessionRepo, inProgressAtStart);
-      await sweepOrphanedWorktrees(config.coreLoop.workdirBase, keptWorktreeTaskIds(workItemRepo));
+      await sweepWorktreesAtStartup(config.coreLoop.workdirBase, workItemRepo);
 
       // Cells a previous process of this instance leaked, removed before any dispatch.
       await reconcileCellsAtStartup(cellSubstrate, cellInstance);

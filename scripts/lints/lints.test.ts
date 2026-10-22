@@ -10,7 +10,7 @@ const LINTS_DIR = import.meta.dirname;
 const RUNNER = path.join(REPO, "scripts", "check-boundaries.ts");
 
 /** Lint modules hold one lint each; these are the shared readers and helpers the lints build on. */
-const HELPERS = new Set(["lint.ts", "rules.ts", "source-files.ts", "stand-ins.ts"]);
+const HELPERS = new Set(["lint.ts", "module-rules.ts", "rules.ts", "rules-parse-error.ts", "source-files.ts", "stand-ins.ts"]);
 
 const SIMULATOR = "packages/integration/src/simulator";
 const WORDING = `export const CONFLICT_HEADING = "## Merge with main in progress";\n`;

@@ -17,8 +17,6 @@ export type { StepContainment, StepFaultLedger, StepFaultStanding, StepFaulted }
 export { UnreadSubject, containEach, faultBackoffSeconds, readEach, uncontainedSteps } from "./contained-step.js";
 /** @testseam the simulator may not import it, so a cross-package test holds the simulator's report retry wait equal to it */
 export { FIRST_FAULT_BACKOFF_SECONDS } from "./contained-step.js";
-/** @testseam unit tests of the cycle's steps contain their subjects with it; the composition root supplies db's ledger */
-export { memoryStepContainment } from "./contained-step.js";
 
 export type { DomainEvent } from "./types.js";
 export { createDomainEvent } from "./types.js";
@@ -30,5 +28,5 @@ export { cutText, headBudget, joinElided, keepEnds, renderElided, shownText, unc
 
 export type { LogRecord, LogSink, Logger } from "./log.js";
 export { createLogger, stdoutSink } from "./log.js";
-/** @testseam tests capture records, exact lines and redacted values through these, and parse each line back with the schema */
-export { Secret, jsonLineSink, logRecordSchema, recordingLogger } from "./log.js";
+/** @testseam tests capture exact lines and redacted values through these, and parse each line back with the schema */
+export { Secret, jsonLineSink, logRecordSchema } from "./log.js";

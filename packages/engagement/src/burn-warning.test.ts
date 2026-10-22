@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_WORK_BUDGETS } from "@ashara/finance";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { BurnWarnings } from "./burn-warning.js";
 import type { BurnWarning, BurnWarningStore, ProjectBurn } from "./burn-warning.js";
 

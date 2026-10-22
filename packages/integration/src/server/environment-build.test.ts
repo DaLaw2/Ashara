@@ -18,7 +18,7 @@ import {
 } from "@ashara/execution-infra";
 import { readEnvironmentDefinition } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { testCellInstance } from "../test-cells.js";
 
 // Real git, real podman, real Postgres: the build path from a committed build context to a row and a

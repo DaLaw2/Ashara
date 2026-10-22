@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./published-reads": "./src/published-reads.ts",
     "./published-verdicts": "./src/published-verdicts.ts",
-    "./stored-checks": "./src/stored-checks.ts"
+    "./stored-checks": "./src/stored-checks.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@ashara/db": "*",

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { PreCallRefusal } from "@ashara/finance";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { SuiteReviewing } from "../suite-review.js";
 import { SuiteReviewRun } from "./suite-review-run.js";
 

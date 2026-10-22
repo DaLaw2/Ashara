@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { memoryStepContainment, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";

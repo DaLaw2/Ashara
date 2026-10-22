@@ -4,7 +4,8 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
 import { releaseClearedBlocks, PlanningService, failWorkItem, giveUpWorkItem, recoverFailedItem, createAgentStaffing, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import { memoryStepContainment, parseWorkItemId, recordingLogger, type DomainEvent } from "@ashara/shared";
+import { parseWorkItemId, type DomainEvent } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { replanStoreSuite } from "./replan-store-suite.js";
 
 // A task given up is planned around. The rows, stores and scripted model are the shared plan

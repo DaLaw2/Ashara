@@ -3,9 +3,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
-import { FailedApproachRepository } from "@ashara/knowledge";
 import { BlockReports, ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, BlockReportStore, IntakeStore, LiaisonAnswers } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, SpendCap, WORK_BUDGET_ERROR_CLASS } from "@ashara/finance";
@@ -19,21 +18,19 @@ import {
   FirstPlanner,
   Replanner,
   ProjectHaltRepository,
-  WorkItemRowRepository,
-  adaptWorkItemRepo,
-  concurrentTaskLanes,
   createFirstPlanStore,
   createReplanStore,
 } from "@ashara/delivery";
-import type { CoreLoopDeps, FirstPlanStore, ReplanStore } from "@ashara/delivery";
+import type { CoreLoopDeps, FirstPlanStore, LoopCore, ReplanStore } from "@ashara/delivery";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
@@ -211,19 +208,13 @@ async function answer(projectId: ProjectId, questionId: string): Promise<string>
   return row.id;
 }
 
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
-
 /**
  * The loop over the suite's projects, with `budgets` as its work ledger: the step under test and
  * the block reports run for real, every other step finds nothing, and no task is dispatched.
  */
 function loopWith(
   spendCap: SpendCap,
-  steps: Pick<CoreLoopDeps, "replanning" | "liaisonAnswers"> & { readonly containment: CoreLoopDeps["containment"] },
+  steps: Pick<CoreLoopDeps["client"], "liaisonAnswers"> & Pick<CoreLoopDeps["planning"], "replanning"> & Pick<LoopCore, "containment">,
 ): CoreLoop {
   const projects = new ProjectHaltRepository(db);
   const blockReportStore = createBlockReportStore(db);
@@ -235,54 +226,38 @@ function loopWith(
       return blockReportStore.dueReports();
     }),
   };
-  const deps: CoreLoopDeps = {
-    config: { ...DEFAULT_CONFIG, workdirBase: "/nonexistent-moved-loops" },
-    cycleLog: { emit: () => {} },
-    logger: recordingLogger(),
-    containment: steps.containment,
-    workItemRepo: adaptWorkItemRepo(new WorkItemRowRepository(db)),
-    eventStore: new EventStoreRepository(db),
-    failedApproachRepo: new FailedApproachRepository(db),
-    projectRepo: {
-      get: (id) => projects.get(id),
-      recordWorkspacePath: notExercised("recordWorkspacePath"),
-      listActiveIds: async () => [],
-      listWithWorkspace: async () => [],
-      block: (id, cause) => projects.block(id, cause),
-      listInfrastructureHalted: async () => [],
-      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-      blockAllActive: async () => [],
+  const deps = composedLoopOverTestDb(
+    {
+      db,
+      config: { ...DEFAULT_CONFIG, workdirBase: "/nonexistent-moved-loops" },
+      logger: recordingLogger(),
+      llm: setupGateway,
+      spendCap,
+      containment: steps.containment,
+      failureRouter: new FailureRouter(),
+      dispatchService: { execute: notExercised("execute") },
     },
-    dispatchService: { execute: notExercised("execute") },
-    failureRouter: new FailureRouter(),
-    clientStops: { runPending: async () => [], reportPending: async () => [] },
-    clientReceipts: { runPending: async () => [] },
-    clientChanges: { runPending: async () => [] },
-    stackChoices: { runPending: async () => [] },
-    liaisonIntake: { runPending: async () => [] },
-    liaisonAnswers: steps.liaisonAnswers,
-    rosterDerivation: { runPending: async () => [] },
-    firstPlanning: { runPending: async () => [] },
-    replanning: steps.replanning,
-    planReports: { runPending: async () => [] },
-    checkDisputes: { record: notExercised("checkDisputes") },
-    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    checkSetFreeze: { freezeFor: async () => [] },
-    burnWarnings: { runPending: async () => [] },
-    blockReports: new BlockReports(reports, memoryStepContainment(() => false)),
-    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-    heldCells: { release: async () => {} },
-    environmentOwner: notExercised("environmentOwner"),
-    taskLanes: concurrentTaskLanes,
-    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
-    terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
-    acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
-    deliveredReports: { runPending: async () => [] },
-    spendCap,
-  };
+    {
+      loop: {
+        projectRepo: {
+          get: (id) => projects.get(id),
+          recordWorkspacePath: notExercised("recordWorkspacePath"),
+          listActiveIds: async () => [],
+          listWithWorkspace: async () => [],
+          block: (id, cause) => projects.block(id, cause),
+          listInfrastructureHalted: async () => [],
+          resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+          blockAllActive: async () => [],
+        },
+      },
+      client: { liaisonAnswers: steps.liaisonAnswers },
+      planning: { replanning: steps.replanning },
+      reporting: { blockReports: new BlockReports(reports, memoryStepContainment(() => false)) },
+    },
+  );
   return new CoreLoop(deps);
 }
+
 
 /** A work ledger holding HEADROOM requests more than the project has drawn so far. */
 async function tightLedger(projectId: ProjectId): Promise<{ readonly spendCap: SpendCap; readonly budget: number }> {

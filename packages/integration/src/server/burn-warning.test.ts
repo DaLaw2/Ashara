@@ -7,7 +7,8 @@ import { LlmCallRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { BurnWarnings, listProjectBurns, postBurnWarning, readRiskRecords } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment } from "@ashara/shared";
+import { createWorkItemId } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { checkReports, readReportRecords } from "../simulator/client-reports.js";
 
 // The work ledger's yellow and red zones are each told

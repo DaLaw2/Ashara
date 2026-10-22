@@ -2,7 +2,7 @@ import type { Logger } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { WorkItem } from "../domain/index.js";
 import type { FaultClass } from "../acl/quality-acl.js";
-import type { CoreLoopDeps, TaskRefusal } from "../types.js";
+import type { LoopCore, TaskRefusal } from "../types.js";
 import { modelCallBlockCategory, projectBlockCause, projectCapCause, projectWorkCause } from "../project-halt.js";
 
 /**
@@ -27,7 +27,7 @@ export interface InfrastructureFault {
 
 /** Where a halt is written and reported. */
 interface HaltDeps {
-  readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
+  readonly projects: Pick<LoopCore["projectRepo"], "block">;
   readonly logger: Logger;
 }
 
@@ -147,7 +147,7 @@ export async function haltOnRefusal(deps: HaltDeps, task: WorkItem, refusal: Tas
  * A project's refusal that surfaced as a throw, not as a refused result, still halts the project:
  * at its spend cap, or on its spent work budget, wherever the refusal surfaces.
  */
-export async function haltOnProjectRefusal(deps: Pick<CoreLoopDeps, "spendCap" | "projectRepo" | "logger">, task: WorkItem, error: unknown): Promise<void> {
+export async function haltOnProjectRefusal(deps: Pick<LoopCore, "spendCap" | "projectRepo" | "logger">, task: WorkItem, error: unknown): Promise<void> {
   const refusal = deps.spendCap.refusalOf(error);
   if (refusal?.kind === "project" || refusal?.kind === "project_work") {
     await haltOnRefusal({ projects: deps.projectRepo, logger: deps.logger }, task, refusal);

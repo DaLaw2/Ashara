@@ -3,46 +3,28 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { FailureRouter } from "./failure-router.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
+import { inertWorkItemRepo } from "./testing.js";
 
 type StartupReconcilerDeps = Parameters<typeof reconcileWorkItemsOnStartup>[0];
 
 /** A repository with no work items; each test overrides what it exercises. */
-function emptyWorkItemRepo(): WorkItemRepository {
-  const unused = (method: string) => (): never => {
-    throw new Error(`WorkItemRepository.${method} is not exercised by this test`);
-  };
-  return {
-    create: unused("create"),
-    findById: unused("findById"),
-    listByProject: unused("listByProject"),
-    findByProjectAndStatus: unused("findByProjectAndStatus"),
+function emptyWorkItemRepo(overrides: Partial<WorkItemRepository> = {}): WorkItemRepository {
+  return inertWorkItemRepo({
     projectIdsWithStatus: async () => [],
     listIdsByStatus: async () => [],
-    save: unused("save"),
-    incrementDispatchCount: unused("incrementDispatchCount"),
-    recordInfrastructureFault: unused("recordInfrastructureFault"),
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    saveOrphanExit: unused("saveOrphanExit"),
-    saveRefunded: unused("saveRefunded"),
-    recordMergeCommit: unused("recordMergeCommit"),
-    addDependency: unused("addDependency"),
-    getDependencies: unused("getDependencies"),
-    findChildren: unused("findChildren"),
-    listDependenciesByProject: unused("listDependenciesByProject"),
-    listCorrectionHeld: unused("listCorrectionHeld"),
-    withTransaction: unused("withTransaction"),
-  };
+    ...overrides,
+  });
 }
 
-async function unusedBlock(): Promise<never> {
-  throw new Error("ProjectRepository.block is not exercised by this test");
-}
+const unusedBlock = notExercised("ProjectRepository.block");
 
 function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): { deps: StartupReconcilerDeps } {
   const deps: StartupReconcilerDeps = {
@@ -54,14 +36,10 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): { deps: Star
     // satisfy it; the throwing stub is what makes the "never invoked" claim
     // testable rather than assumed.
     failureRouter: {
-      route: () => {
-        throw new Error("FailureRouter.route is not exercised by this test");
-      },
+      route: notExercised("FailureRouter.route"),
     } as unknown as FailureRouter,
     devSessionStore: {
-      dispatchEvidence: async () => {
-        throw new Error("dispatchEvidence is not exercised: no item is InProgress");
-      },
+      dispatchEvidence: notExercised("dispatchEvidence (no item is InProgress)"),
     },
     // Every target here is made under the temporary directory.
     workdirBase: tmpdir(),
@@ -95,19 +73,17 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
       events: [],
     };
     const evidenceAsked: string[] = [];
-    const repo: WorkItemRepository = {
-      ...emptyWorkItemRepo(),
+    const repo: WorkItemRepository = emptyWorkItemRepo({
       projectIdsWithStatus: async (status) => (status === "InProgress" && row.status === "InProgress" ? [PROJECT_ID] : []),
       findByProjectAndStatus: async () => [{ ...row, events: [] }],
       save: async (item) => {
         row = { ...item, dispatchCount: row.dispatchCount, events: [] };
       },
-      recordInfrastructureFault: async () => { throw new Error("recordInfrastructureFault: not exercised"); },
       recordCrashOrphan: async () => 1,
       saveOrphanExit: async (item, _expected, refund) => {
         row = { ...item, dispatchCount: refund === "refund" ? row.dispatchCount - 1 : row.dispatchCount, events: [] };
       },
-    };
+    });
     const logger = recordingLogger();
     const { deps } = buildDeps({
       workItemRepo: repo,
@@ -215,8 +191,7 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     };
     const records: Array<{ readonly commit: string; readonly kind: unknown }> = [];
     const projectBlocks: ProjectBlockCause[] = [];
-    const repo: WorkItemRepository = {
-      ...emptyWorkItemRepo(),
+    const repo: WorkItemRepository = emptyWorkItemRepo({
       projectIdsWithStatus: async (status) => (status === "InProgress" && row.status === "InProgress" ? [PROJECT_ID] : []),
       findByProjectAndStatus: async () => [{ ...row, events: [] }],
       findById: async () => ({ ...row, events: [] }),
@@ -229,7 +204,7 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
         row = { ...item, events: [] };
       },
       recordMergeCommit: async (_id, commit, kind) => void records.push({ commit, kind }),
-    };
+    });
     const { deps } = buildDeps({
       workItemRepo: repo,
       projects: {
@@ -408,8 +383,7 @@ describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its 
       events: [],
     };
     const projectBlocks: ProjectBlockCause[] = [];
-    const repo: WorkItemRepository = {
-      ...emptyWorkItemRepo(),
+    const repo: WorkItemRepository = emptyWorkItemRepo({
       projectIdsWithStatus: async (status) => (status === row.status ? [PROJECT_ID] : []),
       findByProjectAndStatus: async () => [{ ...row, events: [] }],
       findById: async () => ({ ...row, events: [] }),
@@ -417,7 +391,7 @@ describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its 
         if (row.status !== expected) throw new Error(`save expected ${expected}, the row is ${row.status}`);
         row = { ...item, events: [] };
       },
-    };
+    });
     const { deps } = buildDeps({
       workItemRepo: repo,
       failureRouter: new FailureRouter(2),
@@ -479,7 +453,7 @@ describe("reconcileWorkItemsOnStartup — the branches of settled tasks", () => 
     const held = heldCheckout(target.path, taskId);
     try {
       const { deps } = buildDeps({
-        workItemRepo: { ...emptyWorkItemRepo(), listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [taskId] : []) },
+        workItemRepo: emptyWorkItemRepo({ listIdsByStatus: async (statuses) => (statuses.includes("Abandoned") ? [taskId] : []) }),
         projects: {
           block: unusedBlock,
           get: async () => ({ workspacePath: target.path }),

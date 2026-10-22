@@ -8,7 +8,7 @@ import { BlockReports, VisionRepository, postPlanReport } from "@ashara/engageme
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment } from "@ashara/shared";
+import { memoryStepContainment } from "@ashara/shared/testing";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { projectState } from "../simulator/project-state.js";

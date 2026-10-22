@@ -20,12 +20,13 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, recordingLogger, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { WorkKind } from "@ashara/organization";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { testCellInstance } from "../test-cells.js";
-import { composedDispatchService } from "../dispatch-verification.js";
 
 // Independent verification end to end on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
@@ -172,7 +173,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   ), recordingLogger());
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const service = composedDispatchService({
+  const service = composeDispatchService({
     logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },

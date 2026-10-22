@@ -2,9 +2,13 @@ export { DELIVERY_MODEL_SCHEMAS } from "./model-schemas.js";
 export type {
   CoreLoopConfig,
   CoreLoopDeps,
+  CoreLoopOverrides,
+  DispatchSteps,
+  LoopCore,
+  SweepSteps,
   TaskLanes,
 } from "./types.js";
-export { DEFAULT_CONFIG } from "./types.js";
+export { DEFAULT_CONFIG, withOverrides } from "./types.js";
 export type { AcceptanceStore } from "./acceptance.js";
 /** @testseam the integration acceptance.test.ts drives the sweep's records against Postgres through it; CoreLoop.runCycle is its production caller */
 export { runAcceptanceSweeps } from "./acceptance.js";
@@ -20,7 +24,8 @@ export { ContinuousRunner } from "./runner.js";
 export type { CycleRunner } from "./runner.js";
 
 export { DispatchService } from "./dispatch/dispatch-service.js";
-export type { AgentStaffing } from "./dispatch/dispatch-types.js";
+export type { AgentStaffing, DispatchServiceDeps } from "./dispatch/dispatch-types.js";
+export type { DispatchVerification } from "./dispatch/verification-ports.js";
 /** @testseam the integration execution tests dispatch a task descriptor against real cells; the core loop builds it in production */
 export type { TaskDescriptor } from "./dispatch/dispatch-types.js";
 export { createAgentStaffing, gradedCapability } from "./staffing.js";

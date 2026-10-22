@@ -146,12 +146,12 @@ export class CoreLoop {
     // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
     // so before the spend-cap check.
-    const choices = await this.step("stack-choice", () => deps.stackChoices.runPending());
+    const choices = await this.step("stack-choice", () => deps.reporting.stackChoices.runPending());
     if (choices.kind === "stop") return this.haltAtCap(choices.stop);
     for (const choice of choices.kind === "ran" ? choices.value : []) {
       if (choice.kind !== "project-blocked" && choice.kind !== "step-faulted") {
         const version = choice.kind === "recorded" ? ` as vision v${choice.visionVersion}` : "";
-        deps.logger.info("delivery.stack-choice", `${choice.kind}${version}`, { projectId: choice.projectId, outcome: choice.kind });
+        deps.loop.logger.info("delivery.stack-choice", `${choice.kind}${version}`, { projectId: choice.projectId, outcome: choice.kind });
       }
     }
 
@@ -159,7 +159,7 @@ export class CoreLoop {
     // probe per cycle while any is halted, no LLM call), before the reports, so its resumption is
     // told this cycle. Only a halt already told is resumed: one written late in the previous cycle
     // is reported below first, and resumes from the next cycle on.
-    const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe, deps.containment, deps.logger));
+    const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.loop.projectRepo, deps.dispatch.infrastructureProbe, deps.loop.containment, deps.loop.logger));
     if (resumed.kind === "stop") return this.haltAtCap(resumed.stop);
 
     // Each stop and halt episode still owed one gets its terminal sweep on main (no LLM call), before
@@ -178,11 +178,11 @@ export class CoreLoop {
     // A project whose model requests run ahead of its finished work is warned once per zone and plan
     // revision, from the ledger's rows (no LLM call), so the warning reaches the client and the
     // operator before the budget halts the project.
-    const warnings = await this.step("burn-warning", () => deps.burnWarnings.runPending());
+    const warnings = await this.step("burn-warning", () => deps.reporting.burnWarnings.runPending());
     if (warnings.kind === "stop") return this.haltAtCap(warnings.stop);
     for (const warning of warnings.kind === "ran" ? warnings.value : []) {
       if (warning.kind !== "step-faulted") {
-        deps.logger.info("delivery.burn-warning", `${warning.zone} warning ${warning.kind}`, { projectId: warning.projectId, zone: warning.zone, outcome: warning.kind });
+        deps.loop.logger.info("delivery.burn-warning", `${warning.zone} warning ${warning.kind}`, { projectId: warning.projectId, zone: warning.zone, outcome: warning.kind });
       }
     }
     // An acceptance recorded before a restart, or before the cap stopped the loop, is told here.
@@ -191,15 +191,15 @@ export class CoreLoop {
 
     // Every step below makes LLM calls, each admitted by Finance's spend cap. A cycle at the cap
     // releases what the previous cycle's attempts held inside haltAtCap.
-    const atCap = await deps.spendCap.deploymentStop();
+    const atCap = await deps.loop.spendCap.deploymentStop();
     if (atCap) return this.haltAtCap(atCap);
     const held = await this.releaseHeld();
     if (held.kind === "stop") return this.haltAtCap(held.stop);
 
     // Tenders first: a project's intake comes before any work on it.
-    const intake = await this.stepThenCap("liaison-intake", () => deps.liaisonIntake.runPending());
+    const intake = await this.stepThenCap("liaison-intake", () => deps.client.liaisonIntake.runPending());
     if (intake.kind === "stop") return this.haltAtCap(intake.stop);
-    for (const outcome of intake.outcomes) logIntake(deps.logger, outcome);
+    for (const outcome of intake.outcomes) logIntake(deps.loop.logger, outcome);
 
     // Then the client's answers, before planning: one read now appends the vision version
     // the first plan is made from. One that changes an assumption an existing plan was
@@ -212,20 +212,20 @@ export class CoreLoop {
     // answered with its impact note this cycle: applied as the next vision version, holding the tasks
     // citing a key it affects as answers do, or held for the client's confirmation when the Liaison
     // pushes back.
-    const changes = await this.stepThenCap("client-change", () => deps.clientChanges.runPending());
+    const changes = await this.stepThenCap("client-change", () => deps.client.clientChanges.runPending());
     if (changes.kind === "stop") return this.haltAtCap(changes.stop);
-    for (const outcome of changes.outcomes) logChange(deps.logger, outcome);
+    for (const outcome of changes.outcomes) logChange(deps.loop.logger, outcome);
 
     // Then a roster for each project with vision v1 and none: first planning
     // requires one, since every planned task gets its owning role.
-    const rosters = await this.stepThenCap("roster", () => deps.rosterDerivation.runPending());
+    const rosters = await this.stepThenCap("roster", () => deps.planning.rosterDerivation.runPending());
     if (rosters.kind === "stop") return this.haltAtCap(rosters.stop);
     for (const outcome of rosters.outcomes) {
       // Organization refuses a roster it cannot derive; the project's halt is Delivery's,
       // blamed by the refusal's cause chain: a ladder run out is the model's failure, an unreadable
       // vision Ashara's own.
       if (outcome.kind === "refused") await this.halt(outcome.projectId, projectBlockCause(outcome.refusal.error), "roster");
-      logRoster(deps.logger, outcome);
+      logRoster(deps.loop.logger, outcome);
     }
 
     // Answers posted while the roster was derived are read before the first plan, so it is made
@@ -239,9 +239,9 @@ export class CoreLoop {
     // faulted is not dispatched until a retry posts it (ProjectRepository.listActiveIds).
     // A project whose own record is bad is blocked inside each step, logged at
     // warn there, and skipped; any other failure of one project is contained to it (containEach).
-    const plans = await this.stepThenCap("first-plan", () => deps.firstPlanning.runPending());
+    const plans = await this.stepThenCap("first-plan", () => deps.planning.firstPlanning.runPending());
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
-    for (const outcome of plans.outcomes) logFirstPlan(deps.logger, outcome);
+    for (const outcome of plans.outcomes) logFirstPlan(deps.loop.logger, outcome);
     // Answers posted while the first plan was being written are read before any of its tasks is
     // dispatched: one that changes an assumption the plan relied on holds the tasks citing it, the
     // revision below replaces them in this cycle, and the gate never dispatches the work it replaces.
@@ -254,44 +254,44 @@ export class CoreLoop {
     // dispatched, so in-flight work has finished before its plan is revised. Only Tasks count: the
     // plan's Epic stays InProgress while any child is open, and the revision supersedes it with the
     // open tasks it held. The Liaison's report on the revision follows with the other planning reports.
-    const replans = await this.stepThenCap("replan", () => deps.replanning.runPending());
+    const replans = await this.stepThenCap("replan", () => deps.planning.replanning.runPending());
     if (replans.kind === "stop") return this.haltAtCap(replans.stop);
-    for (const outcome of replans.outcomes) logReplan(deps.logger, outcome);
+    for (const outcome of replans.outcomes) logReplan(deps.loop.logger, outcome);
     const planReports = await this.postPlanReports();
     if (planReports !== null) return this.haltAtCap(planReports);
 
     // Every Blocked task takes its exit (Completed, Pending or given up) before the gate reads them.
     const released = await this.step("parked-exits", () =>
       releaseClearedBlocks({
-        workItemRepo: deps.workItemRepo,
-        eventStore: deps.eventStore,
-        projects: deps.projectRepo,
-        workdirBase: deps.config.workdirBase,
-        containment: deps.containment,
-        logger: deps.logger,
+        workItemRepo: deps.loop.workItemRepo,
+        eventStore: deps.loop.eventStore,
+        projects: deps.loop.projectRepo,
+        workdirBase: deps.loop.config.workdirBase,
+        containment: deps.loop.containment,
+        logger: deps.loop.logger,
       }),
     );
     if (released.kind === "stop") return this.haltAtCap(released.stop);
 
     // A project with every task settled and a goal task done is swept on main (no LLM call): Accepted
     // and told so, or a defect whose repair the next cycle's replanning plans.
-    const swept = await this.step("acceptance", () => runAcceptanceSweeps(deps));
+    const swept = await this.step("acceptance", () => runAcceptanceSweeps({ ...deps.sweeps, projectRepo: deps.loop.projectRepo, eventStore: deps.loop.eventStore, containment: deps.loop.containment, logger: deps.loop.logger }));
     if (swept.kind === "stop") return this.haltAtCap(swept.stop);
     const deliveredAfterSweep = await this.postDeliveredReports();
     if (deliveredAfterSweep !== null) return this.haltAtCap(deliveredAfterSweep);
 
-    const gated = await this.step("gate", () => PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore, deps.containment, deps.logger));
+    const gated = await this.step("gate", () => PlanningService.gate(deps.loop.workItemRepo, deps.loop.projectRepo, deps.loop.eventStore, deps.loop.containment, deps.loop.logger));
     if (gated.kind === "stop") return this.haltAtCap(gated.stop);
     if (gated.kind === "refused" || gated.value.available.length === 0) return { tasksProcessed: 0, results: [], stop: null };
 
-    const batch = PlanningService.select(gated.value.available, deps.config.maxBatchSize, gated.value.unlockWeights);
+    const batch = PlanningService.select(gated.value.available, deps.loop.config.maxBatchSize, gated.value.unlockWeights);
 
     // Each task gets its own worktree (execution-infra's worktree.ts creates per-task branches),
     // so concurrent execution is safe at the process boundary. Every LLM call a
     // task makes is admitted by the spend cap; a refused call ends that task's
     // attempt and returns the item to Pending: a project refusal has already
     // blocked the project, and a deployment refusal stops the loop here.
-    const settled = await deps.taskLanes(batch, (task) => processTask(deps, task));
+    const settled = await deps.loop.taskLanes(batch, (task) => processTask(deps, task));
     const results: TaskResult[] = [];
     let refusedAtDeployment: LoopStop | null = null;
     for (const [i, s] of settled.entries()) {
@@ -307,9 +307,9 @@ export class CoreLoop {
     const failed = results.filter((r) => r.status === "failed").length;
     const refused = results.filter((r) => r.status === "refused").length;
     const interrupted = results.filter((r) => r.status === "interrupted").length;
-    deps.cycleLog.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed, refused, interrupted });
+    deps.loop.cycleLog.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed, refused, interrupted });
 
-    const stop = refusedAtDeployment ?? (await deps.spendCap.deploymentStop());
+    const stop = refusedAtDeployment ?? (await deps.loop.spendCap.deploymentStop());
     if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: batch.length, results };
     return { tasksProcessed: batch.length, results, stop: null };
   }
@@ -347,23 +347,23 @@ export class CoreLoop {
    * branch release is a cycle step like any other: a stop it returns is the caller's to act on.
    */
   private async releaseHeld(): Promise<StepEnd<unknown>> {
-    await this.deps.heldCells.release();
+    await this.deps.dispatch.heldCells.release();
     return this.step("settled-branches", () =>
       releaseBranchesOfSettledTasks({
-        workItemRepo: this.deps.workItemRepo,
-        projects: this.deps.projectRepo,
-        workdirBase: this.deps.config.workdirBase,
-        logger: this.deps.logger,
+        workItemRepo: this.deps.loop.workItemRepo,
+        projects: this.deps.loop.projectRepo,
+        workdirBase: this.deps.loop.config.workdirBase,
+        logger: this.deps.loop.logger,
       }),
     );
   }
 
   /** The client's stops, each taken once; the deployment cap's stop when a refusal named it, else null. */
   private async takeClientStops(): Promise<LoopStop | null> {
-    const stops = await this.step("client-stop", () => this.deps.clientStops.runPending());
+    const stops = await this.step("client-stop", () => this.deps.client.clientStops.runPending());
     if (stops.kind === "stop") return stops.stop;
     for (const stop of stops.kind === "ran" ? stops.value : []) {
-      if (stop.kind !== "step-faulted") this.deps.logger.info("delivery.client-stop", `stop ${stop.stopId}: ${stop.kind}`, { projectId: stop.projectId, stopId: stop.stopId, outcome: stop.kind });
+      if (stop.kind !== "step-faulted") this.deps.loop.logger.info("delivery.client-stop", `stop ${stop.stopId}: ${stop.kind}`, { projectId: stop.projectId, stopId: stop.stopId, outcome: stop.kind });
     }
     return null;
   }
@@ -374,12 +374,12 @@ export class CoreLoop {
    * full cycle not when recorded spend is already at the cap, since that cycle stops before any reading.
    */
   private async postReceipts(work: "stopped-at-cap" | "read-cap"): Promise<LoopStop | null> {
-    const stoppedAtCap = work === "stopped-at-cap" || (await this.deps.spendCap.deploymentStop()) !== null;
-    const receipts = await this.step("client-receipt", () => this.deps.clientReceipts.runPending({ kind: stoppedAtCap ? "stopped-at-cap" : "running" }));
+    const stoppedAtCap = work === "stopped-at-cap" || (await this.deps.loop.spendCap.deploymentStop()) !== null;
+    const receipts = await this.step("client-receipt", () => this.deps.client.clientReceipts.runPending({ kind: stoppedAtCap ? "stopped-at-cap" : "running" }));
     if (receipts.kind === "stop") return receipts.stop;
     for (const receipt of receipts.kind === "ran" ? receipts.value : []) {
       if (receipt.kind !== "step-faulted") {
-        this.deps.logger.info("delivery.client-receipt", `receipt for message ${receipt.messageId}: ${receipt.kind}`, { projectId: receipt.projectId, messageId: receipt.messageId, outcome: receipt.kind });
+        this.deps.loop.logger.info("delivery.client-receipt", `receipt for message ${receipt.messageId}: ${receipt.kind}`, { projectId: receipt.projectId, messageId: receipt.messageId, outcome: receipt.kind });
       }
     }
     return null;
@@ -387,10 +387,10 @@ export class CoreLoop {
 
   /** The stop reports due, each posted once; the deployment cap's stop when a refusal named it, else null. */
   private async postStopReports(): Promise<LoopStop | null> {
-    const reports = await this.step("client-stop-report", () => this.deps.clientStops.reportPending());
+    const reports = await this.step("client-stop-report", () => this.deps.client.clientStops.reportPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
-      if (report.kind !== "step-faulted") this.deps.logger.info("delivery.client-stop", `stop ${report.stopId}: ${report.kind}`, { projectId: report.projectId, stopId: report.stopId, outcome: report.kind });
+      if (report.kind !== "step-faulted") this.deps.loop.logger.info("delivery.client-stop", `stop ${report.stopId}: ${report.kind}`, { projectId: report.projectId, stopId: report.stopId, outcome: report.kind });
     }
     return null;
   }
@@ -402,16 +402,16 @@ export class CoreLoop {
   private async sweepTerminals(): Promise<LoopStop | null> {
     const { deps } = this;
     const swept = await this.step("terminal-sweep", () =>
-      runTerminalSweeps({ terminalSweeps: deps.terminalSweeps, terminalSweeper: deps.terminalSweeper, containment: deps.containment, logger: deps.logger }),
+      runTerminalSweeps({ terminalSweeps: deps.sweeps.terminalSweeps, terminalSweeper: deps.sweeps.terminalSweeper, containment: deps.loop.containment, logger: deps.loop.logger }),
     );
     return swept.kind === "stop" ? swept.stop : null;
   }
 
   /** The client's answers not yet read, each read once; the spend cap's stop when a call was refused, else null. */
   private async readAnswers(): Promise<LoopStop | null> {
-    const answers = await this.stepThenCap("liaison-answers", () => this.deps.liaisonAnswers.runPending());
+    const answers = await this.stepThenCap("liaison-answers", () => this.deps.client.liaisonAnswers.runPending());
     if (answers.kind === "stop") return answers.stop;
-    for (const outcome of answers.outcomes) logAnswer(this.deps.logger, outcome);
+    for (const outcome of answers.outcomes) logAnswer(this.deps.loop.logger, outcome);
     return null;
   }
 
@@ -420,10 +420,10 @@ export class CoreLoop {
    * the cycle goes on. The deployment cap's stop when a refusal named it, else null.
    */
   private async postDeliveredReports(): Promise<LoopStop | null> {
-    const reports = await this.step("delivered-report", () => this.deps.deliveredReports.runPending());
+    const reports = await this.step("delivered-report", () => this.deps.reporting.deliveredReports.runPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
-      if (report.kind !== "failed") this.deps.logger.info("delivery.delivered-report", `delivered report ${report.kind}`, { projectId: report.projectId, outcome: report.kind });
+      if (report.kind !== "failed") this.deps.loop.logger.info("delivery.delivered-report", `delivered report ${report.kind}`, { projectId: report.projectId, outcome: report.kind });
     }
     return null;
   }
@@ -433,11 +433,11 @@ export class CoreLoop {
    * blocked by the Liaison. The deployment cap's stop when a refusal named it, else null.
    */
   private async postPlanReports(): Promise<LoopStop | null> {
-    const reports = await this.step("plan-report", () => this.deps.planReports.runPending());
+    const reports = await this.step("plan-report", () => this.deps.reporting.planReports.runPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
       if (report.kind !== "project-blocked" && report.kind !== "step-faulted") {
-        this.deps.logger.info("delivery.plan-report", `${report.subject} report ${report.kind}`, { projectId: report.projectId, subject: report.subject, outcome: report.kind });
+        this.deps.loop.logger.info("delivery.plan-report", `${report.subject} report ${report.kind}`, { projectId: report.projectId, subject: report.subject, outcome: report.kind });
       }
     }
     return null;
@@ -445,11 +445,11 @@ export class CoreLoop {
 
   /** The block reports due, each posted once; the deployment cap's stop when a refusal named it, else null. */
   private async postBlockReports(): Promise<LoopStop | null> {
-    const reports = await this.step("block-report", () => this.deps.blockReports.runPending());
+    const reports = await this.step("block-report", () => this.deps.reporting.blockReports.runPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
       if (report.kind !== "step-faulted") {
-        this.deps.logger.info("delivery.block-report", `${report.subject} report ${report.kind}`, { projectId: report.projectId, subject: report.subject, outcome: report.kind });
+        this.deps.loop.logger.info("delivery.block-report", `${report.subject} report ${report.kind}`, { projectId: report.projectId, subject: report.subject, outcome: report.kind });
       }
     }
     return null;
@@ -465,9 +465,9 @@ export class CoreLoop {
     // The runner runs no full cycle after this one, so a task settled in it is released here; the
     // loop stops on `stop`, so a stop the release returns is the cap's too.
     await this.releaseHeld();
-    const halted = await this.deps.projectRepo.blockAllActive(deploymentCapCause(stop));
+    const halted = await this.deps.loop.projectRepo.blockAllActive(deploymentCapCause(stop));
     if (halted.length > 0) {
-      this.deps.logger.info("delivery.deployment-cap-halt", `${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`, { projects: halted });
+      this.deps.loop.logger.info("delivery.deployment-cap-halt", `${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`, { projects: halted });
     }
     // The loop stops here on `stop`: a stop the sweeps' or the reports' step returns is the cap's too.
     await this.sweepTerminals();
@@ -482,9 +482,9 @@ export class CoreLoop {
    * in a trace of its own carrying the project, a child of whatever trace reached the halt.
    */
   private halt(projectId: ProjectId, cause: ProjectBlockCause, step: string): Promise<void> {
-    return this.deps.logger.scope({ projectId, trace: "new" }, async () => {
-      const result = await this.deps.projectRepo.block(projectId, cause);
-      this.deps.logger.info("delivery.project-blocked", `project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`, {
+    return this.deps.loop.logger.scope({ projectId, trace: "new" }, async () => {
+      const result = await this.deps.loop.projectRepo.block(projectId, cause);
+      this.deps.loop.logger.info("delivery.project-blocked", `project ${projectId} ${result}: ${cause.errorClass}: ${cause.reason}`, {
         projectId,
         step,
         category: cause.category,
@@ -506,7 +506,7 @@ export class CoreLoop {
     try {
       return { kind: "ran", value: await run() };
     } catch (err) {
-      const refusal = this.deps.spendCap.refusalOf(err);
+      const refusal = this.deps.loop.spendCap.refusalOf(err);
       // A step's calls serve no task (only a dispatch's do), so a task's spent budget reaching a
       // step is no refusal a step can route: it throws out of the cycle like any other error.
       if (refusal === null || refusal.kind === "task_work") throw err;
@@ -514,11 +514,11 @@ export class CoreLoop {
       const projectId = parseProjectId(refusal.projectId, "spend refusal projectId");
       if (refusal.kind === "project_work") {
         await this.halt(projectId, projectWorkCause(refusal), `work_budget ${name}`);
-        this.deps.logger.info("delivery.step-refused", `${name}: the step's other projects run next cycle`, { step: name, projectId, category: "work_budget" });
+        this.deps.loop.logger.info("delivery.step-refused", `${name}: the step's other projects run next cycle`, { step: name, projectId, category: "work_budget" });
         return { kind: "refused" };
       }
       await this.halt(projectId, projectCapCause(refusal), `budget_cap ${name}`);
-      this.deps.logger.info("delivery.step-refused", `${name}: the step's other projects run next cycle`, { step: name, projectId, category: "budget_cap" });
+      this.deps.loop.logger.info("delivery.step-refused", `${name}: the step's other projects run next cycle`, { step: name, projectId, category: "budget_cap" });
       return { kind: "refused" };
     }
   }
@@ -527,7 +527,7 @@ export class CoreLoop {
   private async stepThenCap<T>(name: string, run: () => Promise<readonly T[]>): Promise<StepRun<T>> {
     const ended = await this.step(name, run);
     if (ended.kind === "stop") return ended;
-    const stop = await this.deps.spendCap.deploymentStop();
+    const stop = await this.deps.loop.spendCap.deploymentStop();
     if (stop) return { kind: "stop", stop };
     return { kind: "ran", outcomes: ended.kind === "ran" ? ended.value : [] };
   }

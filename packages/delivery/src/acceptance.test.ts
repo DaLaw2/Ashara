@@ -1,10 +1,12 @@
 import { describe, expect, test } from "vitest";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import type { AcceptanceStore } from "./acceptance.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
+import { inertWorkItemRepo } from "./testing.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 const MAIN = "f".repeat(40);
@@ -17,15 +19,9 @@ type AcceptanceDeps = Parameters<typeof runAcceptanceSweeps>[0];
 
 type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
 
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
-
 /** A planning repository that keeps the defect's writes: its insert, then its saves. */
 function defectRepo(writes: Array<{ op: string; status: string; source?: string }>, created: WorkItem[] = []): WorkItemRepository {
-  return {
+  return inertWorkItemRepo({
     create: async (item: WorkItem) => {
       writes.push({ op: "create", status: item.status });
       created.push(item);
@@ -34,27 +30,9 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
     save: async (item: WorkItem) => {
       writes.push({ op: "save", status: item.status, source: item.blockedReason?.source });
     },
-    findById: notExercised("findById"),
-    listByProject: notExercised("listByProject"),
-    findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-    projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-    listIdsByStatus: notExercised("listIdsByStatus"),
-    incrementDispatchCount: notExercised("incrementDispatchCount"),
-    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    saveOrphanExit: async () => {
-      throw new Error("saveOrphanExit is not exercised by this test");
-    },
-    saveRefunded: notExercised("saveRefunded"),
-    recordMergeCommit: notExercised("recordMergeCommit"),
-    addDependency: notExercised("addDependency"),
-    getDependencies: notExercised("getDependencies"),
-    findChildren: notExercised("findChildren"),
-    listDependenciesByProject: notExercised("listDependenciesByProject"),
-    listCorrectionHeld: notExercised("listCorrectionHeld"),
-    withTransaction: notExercised("withTransaction"),
-  };
+  });
 }
 
 /**

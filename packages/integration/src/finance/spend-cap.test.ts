@@ -8,7 +8,7 @@ import { LlmCallRepository } from "@ashara/finance";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap, worstCaseCostUsd } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { projectState } from "../simulator/project-state.js";
 
 // Against Postgres: every row belongs to a project this suite creates under a

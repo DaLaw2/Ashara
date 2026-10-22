@@ -8,23 +8,24 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { EnvironmentBuildRepository } from "@ashara/execution-infra";
 import { LlmCallRepository } from "@ashara/finance";
 import { DevSessionRepository } from "@ashara/workplace";
 import { TaskCheckRepository } from "@ashara/quality";
-import { FailedApproachRepository } from "@ashara/knowledge";
-import { CoreLoop, DEFAULT_CONFIG, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { CoreLoop, DEFAULT_CONFIG, FailureRouter, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, memoryStepContainment, recordingLogger, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
+import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { testCellInstance } from "../test-cells.js";
-import { composedDispatchService } from "../dispatch-verification.js";
 
 // The environment change loop, end to end through the real contractor loop, the real
 // DispatchService, real podman and git, and the recorded gateway with scripted models: an
@@ -66,12 +67,6 @@ function toolCallTurn(toolName: string, input: unknown) {
 }
 
 type Turn = ReturnType<typeof toolCallTurn>;
-
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
 
 const STATEMENT = "A shell-only environment on the pinned Debian base.";
 const SPRINT0_GOAL = "Define and commit the project environment";
@@ -150,7 +145,7 @@ async function harness(name: string): Promise<Harness> {
   const workItems = new WorkItemRowRepository(db);
   const sessions = new DevSessionRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const dispatchService = composedDispatchService({
+  const dispatchService = composeDispatchService({
     logger: recordingLogger(),
     config: { workdirBase },
     sessionStore: {
@@ -190,66 +185,51 @@ async function harness(name: string): Promise<Harness> {
     clock: systemClock,
   });
 
-  const loop = new CoreLoop({
-    config: { ...DEFAULT_CONFIG, workdirBase },
-    cycleLog: { emit: () => {} },
-    logger: recordingLogger(),
-    containment: memoryStepContainment(() => true),
-    workItemRepo: adaptWorkItemRepo(workItems),
-    eventStore: new EventStoreRepository(db),
-    failedApproachRepo: new FailedApproachRepository(db),
-    projectRepo: {
-      get: (id) => projects.get(id),
-      recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
-      listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
-      listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
-      block: (id, cause) => projects.block(id, cause),
-      listInfrastructureHalted: async () => [],
-      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-      blockAllActive: async () => [],
-    },
-    dispatchService,
-    // The production bound (packages/server/src/compose.ts).
-    failureRouter: new FailureRouter(3),
-    spendCap,
-    clientStops: { runPending: async () => [], reportPending: async () => [] },
-    clientReceipts: { runPending: async () => [] },
-    clientChanges: { runPending: async () => [] },
-    stackChoices: { runPending: async () => [] },
-    liaisonIntake: { runPending: async () => [] },
-    liaisonAnswers: { runPending: async () => [] },
-    rosterDerivation: { runPending: async () => [] },
-    firstPlanning: { runPending: async () => [] },
-    replanning: { runPending: async () => [] },
-    planReports: { runPending: async () => [] },
-    checkDisputes: { record: notExercised("checkDisputes") },
-    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    checkSetFreeze: { freezeFor: async () => [] },
-    blockReports: { runPending: async () => [] },
-    burnWarnings: { runPending: async () => [] },
-    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-    heldCells: { release: async () => {} },
-    environmentOwner: async () => ({ kind: "role", roleId: platformRoleId }),
-    // One task after another, in the batch's order: the cells and merges of a cycle never interleave.
-    taskLanes: async (items, runOne) => {
-      const settled: Array<PromiseSettledResult<Awaited<ReturnType<typeof runOne>>>> = [];
-      for (const item of items) {
-        try {
-          settled.push({ status: "fulfilled", value: await runOne(item) });
-        } catch (reason) {
-          settled.push({ status: "rejected", reason });
-        }
-      }
-      return settled;
-    },
-    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
-    terminalSweeps: { dueTerminalSweeps: async () => [], recordTerminalSweep: notExercised("recordTerminalSweep") },
-    acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
-    deliveredReports: { runPending: async () => [] },
-  });
+  const loop = new CoreLoop(
+    composedLoopOverTestDb(
+      {
+        db,
+        config: { ...DEFAULT_CONFIG, workdirBase },
+        logger: recordingLogger(),
+        llm: gateway,
+        spendCap,
+        containment: memoryStepContainment(() => true),
+        // The production bound (packages/server/src/compose.ts).
+        failureRouter: new FailureRouter(3),
+        dispatchService,
+      },
+      {
+        loop: {
+          projectRepo: {
+            get: (id) => projects.get(id),
+            recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
+            listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
+            listWithWorkspace: async () => (await projects.listWithWorkspace()).filter((p) => p.id === projectId),
+            block: (id, cause) => projects.block(id, cause),
+            listInfrastructureHalted: async () => [],
+            resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+            blockAllActive: async () => [],
+          },
+          // One task after another, in the batch's order: the cells and merges of a cycle never interleave.
+          taskLanes: async (items, runOne) => {
+            const settled: Array<PromiseSettledResult<Awaited<ReturnType<typeof runOne>>>> = [];
+            for (const item of items) {
+              try {
+                settled.push({ status: "fulfilled", value: await runOne(item) });
+              } catch (reason) {
+                settled.push({ status: "rejected", reason });
+              }
+            }
+            return settled;
+          },
+        },
+        dispatch: { environmentOwner: async () => ({ kind: "role", roleId: platformRoleId }) },
+      },
+    ),
+  );
   return { projectId, target, platformRoleId, events, scripts, loop };
 }
+
 
 /** Sprint 0 as a first plan writes it: Pending environment work. */
 async function sprint0(h: Harness): Promise<void> {

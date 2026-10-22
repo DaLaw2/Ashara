@@ -15,6 +15,7 @@
     "./client-receipt-store": "./src/client-receipt-store.ts",
     "./client-stop-store": "./src/client-stop-store.ts",
     "./compose": "./src/compose.ts",
+    "./compose-core-loop": "./src/compose-core-loop.ts",
     "./intake-store": "./src/intake-store.ts",
     "./middleware": "./src/middleware.ts",
     "./plan-report-store": "./src/plan-report-store.ts",

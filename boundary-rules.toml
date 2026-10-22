@@ -26,6 +26,12 @@
 # subpath-importers.<subpath> = [...] the only packages that may import @ashara/<this>/<subpath>; once a
 #                               section states any, each subpath its package.json exports needs one, a
 #                               relative path into the package is refused, and scripts/ may import none
+# test-only-subpaths = [...]    subpaths of this package that only a *.test.ts file, the test harness
+#                               (packages/integration) or another test-only entry file may import, by
+#                               its @ashara/ name or by a relative path to its entry file
+# classes.<pkg>  = [...]        the only classes <pkg> exports that this package may import, tests
+#                               included; a namespace, default or dynamic import of <pkg>, or a
+#                               relative path into it, is refused, since it names no symbol
 #
 # [stack-literals] is no package's section: it holds the stack-literal denylist (see its comment).
 
@@ -34,6 +40,9 @@
 [shared]
 # The shared kernel: identifiers and the vocabulary every context conforms to. Imports nothing.
 allow = []
+# Its test doubles (an inert member, a recording logger, a containment in memory): no production
+# path is built on one.
+test-only-subpaths = ["testing"]
 
 [db]
 # Generic persistence: connection, listener, migrations, event store and the schema per context.
@@ -181,7 +190,7 @@ restrict.engagement = ["src/acl/*.ts"]
 module.verification   = ["src/verification/*.ts", "src/merge.ts", "src/gates/*.ts", "src/settled-branches.ts", "src/host-git.test.ts", "src/merge-queue.test.ts", "src/workspace-*.test.ts"]
 module.verdict        = ["src/dispatch-result.ts", "src/fault-class.ts", "src/task-verdict.ts"]
 module.checks         = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/stored-checks.ts", "src/repositories/task-check.ts", "src/repositories/check-set-freeze.ts", "src/repositories/check-dispute.ts"]
-module.suite-review   = ["src/suite-review.ts", "src/repositories/suite-review.ts"]
+module.suite-review   = ["src/suite-review.ts", "src/repositories/suite-review.ts", "src/testing.ts"]
 module.environment    = ["src/environment-check.ts", "src/environment-verdict.ts", "src/environment-definition.ts"]
 module.acceptance     = ["src/repositories/acceptance.ts"]
 module.reviewer-record = ["src/repositories/reviewer-outcome.ts"]
@@ -197,6 +206,8 @@ module-allow.acceptance   = ["verification", "reviewer-record", "guarantee-verdi
 module-allow.guarantee-verdict = ["acl"]
 module-allow.published    = ["guarantee-verdict", "acl"]
 module-entry.checks       = ["src/task-checks.ts", "src/check-verdict.ts", "src/public-interface.ts", "src/repositories/*.ts"]
+# Its SuiteReviewer test builder: only a test or the test harness imports it; production constructs its reviewer.
+test-only-subpaths = ["testing"]
 
 [delivery]
 # Delivery: the board, decomposition, routing and the contractor loop (its process manager).
@@ -215,6 +226,13 @@ restrict.quality = ["src/acl/*.ts", "src/dispatch/*.ts"]
 restrict.knowledge = ["src/acl/*.ts", "src/dispatch/*.ts"]
 restrict.execution-infra = ["src/acl/*.ts", "src/dispatch/*.ts"]
 restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
+# Quality's verification jobs and sweepers reach the dispatcher only as ports the composition root
+# builds (server's compose-core-loop.ts), a check task's record of its definitions among them:
+# Delivery imports no class of Quality but these, the typed errors of a verification fault and an
+# unprepared conflict retry it raises and reads.
+classes.quality = ["ConflictRetryUnprepared", "VerificationInfrastructureFault"]
+# Its inert test builders: only a test or the test harness imports them, so no production loop is built on one.
+test-only-subpaths = ["testing"]
 
 # --- Infrastructure and the test harness ------------------------------------------------------
 

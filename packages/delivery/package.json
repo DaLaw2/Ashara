@@ -10,7 +10,8 @@
     "./project-halt": "./src/project-halt.ts",
     "./predicates": "./src/predicates.ts",
     "./reads": "./src/published-reads.ts",
-    "./work-item": "./src/work-item-language/index.ts"
+    "./work-item": "./src/work-item-language/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@ashara/db": "*",

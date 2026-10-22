@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { Outcome } from "@ashara/workplace";
 import type { CheckAuthoring, VerifiedDispatch } from "../dispatch-result.js";
 import { CheckRecorder } from "../task-checks.js";
@@ -27,17 +28,11 @@ const blocked: Outcome = {
   detail: "finished blocked",
 };
 
-function unreachable(what: string): () => never {
-  return () => {
-    throw new Error(`${what} must not be reached`);
-  };
-}
-
 describe("DeliveredOnMain", () => {
   test("a check author's word that its task is delivered is not taken when the task has no stored checks", async () => {
     const job = new DeliveredOnMain({
-      dispatchCells: { checkCells: unreachable("a check cell"), checkoutDir: unreachable("a checkout") },
-      checks: { completedOf: unreachable("the stored checks") },
+      dispatchCells: { checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
+      checks: { completedOf: notExercised("the stored checks") },
       logger: recordingLogger(),
     });
     const work: CheckAuthoring = {

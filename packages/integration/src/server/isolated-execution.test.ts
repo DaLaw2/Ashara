@@ -18,10 +18,11 @@ import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentI
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, recordingLogger, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
+import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { testCellInstance } from "../test-cells.js";
-import { composedDispatchService } from "../dispatch-verification.js";
 
 // Real podman cells from the BaseCell image, the real recorded gateway writing llm_calls, a mock
 // model: no real LLM call, and no skip (CI rejects skipped tests).
@@ -182,7 +183,7 @@ describe("a task runs on cells end to end", () => {
     const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();
-    const service = composedDispatchService({
+    const service = composeDispatchService({
       logger: recordingLogger(),
       config: { workdirBase },
       sessionStore: sessions,

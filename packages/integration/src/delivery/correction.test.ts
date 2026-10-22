@@ -27,7 +27,8 @@ import {
   startWorkItem,
 } from "@ashara/delivery";
 import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
-import { memoryStepContainment, parseWorkItemId, recordingLogger, type ProjectId } from "@ashara/shared";
+import { parseWorkItemId, type ProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { createClientChangeStore } from "@ashara/server/client-change-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";

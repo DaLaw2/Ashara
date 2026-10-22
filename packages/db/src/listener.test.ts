@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from "vitest";
 import pg from "pg";
 import { z } from "zod";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { listenForEvents } from "./listener.js";
 import type { PgListener } from "./listener.js";

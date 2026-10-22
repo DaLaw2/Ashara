@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { parseProjectId, recordingLogger } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { pruneEnvironmentImages } from "./environment-build.js";
 import { PodmanSubstrate } from "./podman.js";
 

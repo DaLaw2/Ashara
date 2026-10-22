@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { CapabilityLevel, ContextualLlm } from "./acl/finance-acl.js";
 import { createPendingWorkItem } from "./domain/work-item.js";
 import type { WorkItem } from "./domain/work-item.js";

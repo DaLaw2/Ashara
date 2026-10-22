@@ -336,7 +336,7 @@ export const stdoutSink: LogSink = jsonLineSink((line) => {
   process.stdout.write(line);
 });
 
-/** @testseam a unit test hands it where a Logger is injected and asserts on the records' `event` and `fields` */
+/** A unit test, or a test builder, hands it where a Logger is injected; a test asserts on the records' `event` and `fields`. */
 export function recordingLogger(): Logger & { readonly records: readonly LogRecord[] } {
   const records: LogRecord[] = [];
   const logger = createLogger({ sink: { write: (record) => records.push(record) }, clock: systemClock, minLevel: "debug" });

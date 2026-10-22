@@ -13,7 +13,7 @@ import {
   ensureTargetGitInit,
   WorktreeCommitFailed,
 } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { thrownFaultOf } from "./fault-class.js";
 import { mainMergedForRetry } from "./merge.js";
 

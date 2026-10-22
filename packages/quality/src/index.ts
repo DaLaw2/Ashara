@@ -80,7 +80,7 @@ export {
   formatProjectChecksForCheckAuthor,
   headCommit,
 } from "./task-checks.js";
-export type { TaskCheckStore, TaskChecks } from "./task-checks.js";
+export type { CitedItemIds, TaskCheckStore, TaskChecks } from "./task-checks.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
 export { CheckSetFreezeRepository } from "./repositories/check-set-freeze.js";

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, memoryStepContainment, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
@@ -14,8 +15,9 @@ import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { ContextBudgetExceeded } from "../acl/finance-acl.js";
 import { toRecordedOutcome } from "../acl/workplace-acl.js";
 import type { Outcome } from "../acl/workplace-acl.js";
-import { DEFAULT_CONFIG } from "../types.js";
-import type { CoreLoopDeps } from "../types.js";
+import { DEFAULT_CONFIG, withOverrides } from "../types.js";
+import type { CoreLoopDeps, CoreLoopOverrides, DispatchSteps, LoopCore } from "../types.js";
+import { inertCoreLoopDeps, inertWorkItemRepo } from "../testing.js";
 import { handleProcessingError, processTask } from "./dispatch-run.js";
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
@@ -99,63 +101,35 @@ function freshAbandonedItem(opts?: { omitBlockedReason?: boolean }): WorkItem {
   return item;
 }
 
-function notExercised(label: string): () => never {
-  return () => { throw new Error(`${label}: not exercised`); };
-}
-
 /**
- * Every dep processTask is handed, fully typed: a dep CoreLoopDeps gains and this omits is a
- * compile error here, never a runtime TypeError. The loop's steps are never run by processTask.
+ * processTask's deps: an idle loop's (inertCoreLoopDeps), every target under the temporary directory
+ * and its main holding no merge; `overrides` supply the work items, the dispatch and each other
+ * member a test exercises. The loop's steps are never run by processTask.
  */
 function coreLoopDeps(
-  parts: Pick<CoreLoopDeps, "workItemRepo" | "dispatchService"> & Partial<CoreLoopDeps>,
+  overrides: CoreLoopOverrides & { readonly loop: Pick<LoopCore, "workItemRepo">; readonly dispatch: Pick<DispatchSteps, "dispatchService"> },
 ): CoreLoopDeps {
-  return {
-    // Every target here is made under the temporary directory.
-    config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
-    cycleLog: { emit: () => {} },
-    logger: recordingLogger(),
-    containment: memoryStepContainment(() => true),
-    eventStore: { publish: async () => {} },
-    failedApproachRepo: { record: async () => {} },
-    projectRepo: {
-      get: async () => ({ workspacePath: UNMERGED_TARGET }),
-      recordWorkspacePath: notExercised("recordWorkspacePath"),
-      listActiveIds: notExercised("listActiveIds"),
-      block: notExercised("block"),
-      listInfrastructureHalted: notExercised("listInfrastructureHalted"),
-      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-      blockAllActive: notExercised("blockAllActive"),
-      listWithWorkspace: async () => [],
+  const processing = inertCoreLoopDeps({
+    loop: {
+      config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
+      containment: memoryStepContainment(() => true),
+      eventStore: { publish: async () => {} },
+      projectRepo: {
+        get: async () => ({ workspacePath: UNMERGED_TARGET }),
+        recordWorkspacePath: notExercised("recordWorkspacePath"),
+        listActiveIds: notExercised("listActiveIds"),
+        block: notExercised("block"),
+        listInfrastructureHalted: notExercised("listInfrastructureHalted"),
+        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+        blockAllActive: notExercised("blockAllActive"),
+        listWithWorkspace: async () => [],
+      },
+      spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
+      taskLanes: notExercised("taskLanes"),
     },
-    failureRouter: { route: notExercised("route") },
-    spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
-    clientStops: { runPending: notExercised("clientStops"), reportPending: notExercised("clientStops") },
-    clientReceipts: { runPending: notExercised("clientReceipts") },
-    clientChanges: { runPending: notExercised("clientChanges") },
-    liaisonIntake: { runPending: notExercised("liaisonIntake") },
-    liaisonAnswers: { runPending: notExercised("liaisonAnswers") },
-    rosterDerivation: { runPending: notExercised("rosterDerivation") },
-    firstPlanning: { runPending: notExercised("firstPlanning") },
-    replanning: { runPending: notExercised("replanning") },
-    planReports: { runPending: notExercised("planReports") },
-    stackChoices: { runPending: notExercised("stackChoices") },
-    checkDisputes: { record: notExercised("checkDisputes") },
-    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    checkSetFreeze: { freezeFor: async () => [] },
-    blockReports: { runPending: notExercised("blockReports") },
-    burnWarnings: { runPending: notExercised("burnWarnings") },
-    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-    heldCells: { release: async () => {} },
-    environmentOwner: notExercised("environmentOwner"),
-    taskLanes: notExercised("taskLanes"),
-    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-    terminalSweeper: { sweepForTerminal: notExercised("sweepForTerminal") },
-    terminalSweeps: { dueTerminalSweeps: notExercised("dueTerminalSweeps"), recordTerminalSweep: notExercised("recordTerminalSweep") },
-    acceptance: { readyForAcceptance: notExercised("readyForAcceptance"), recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
-    deliveredReports: { runPending: notExercised("deliveredReports") },
-    ...parts,
-  };
+    dispatch: { failedApproachRepo: { record: async () => {} } },
+  });
+  return withOverrides(processing, overrides);
 }
 
 /**
@@ -183,7 +157,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   const mergeRecords: Array<{ id: WorkItemId; commit: string }> = [];
 
   let findByIdCalls = 0;
-  const workItemRepo: WorkItemRepository = {
+  const workItemRepo: WorkItemRepository = inertWorkItemRepo({
     findById: async (_id: WorkItemId) => {
       findByIdCalls++;
       if (findByIdCalls === 1) return freshPendingItem();
@@ -193,34 +167,17 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
       // Capture the blockedReason written by the salvage path
       if (item.blockedReason) savedBlockedReasons.push(item.blockedReason);
     },
-    create: notExercised("create"),
-    listByProject: notExercised("listByProject"),
-    findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-    projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-    listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
-    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    saveOrphanExit: async () => {
-      throw new Error("saveOrphanExit is not exercised by this test");
-    },
-    saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit: async (id, commit) => {
       mergeRecords.push({ id, commit });
     },
-    addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
-    listDependenciesByProject: notExercised("listDependenciesByProject"),
-    listCorrectionHeld: notExercised("listCorrectionHeld"),
-    withTransaction: notExercised("withTransaction"),
-  };
+  });
 
-  const deps = coreLoopDeps({
-    workItemRepo,
-    logger,
-    dispatchService: {
+  const deps = coreLoopDeps({ loop: { workItemRepo, logger }, dispatch: { dispatchService: {
       execute: async () =>
         agentOutcome === "completed"
           ? {
@@ -239,8 +196,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
               sessionId: "test-session",
               attempt: 1,
             },
-    },
-  });
+    } } });
 
   return { deps, logger, savedBlockedReasons, mergeRecords };
 }
@@ -253,16 +209,12 @@ describe("processTask attempt scope", () => {
   test("the dispatched attempt runs in a new trace, its parent the cycle's, every record of it carrying its task and attempt", async () => {
     const { deps: base } = buildPreemptionDeps();
     const logger = recordingLogger();
-    const deps: CoreLoopDeps = {
-      ...base,
-      logger,
-      dispatchService: {
+    const deps: CoreLoopDeps = withOverrides(base, { loop: { logger }, dispatch: { dispatchService: {
         execute: async (...args) => {
           logger.warn("test.in-dispatch", "a record of the attempt");
-          return base.dispatchService.execute(...args);
+          return base.dispatch.dispatchService.execute(...args);
         },
-      },
-    };
+      } } });
 
     const cycleTrace = await logger.scope({ cycle: 4, trace: "new" }, async () => {
       await processTask(deps, freshPendingItem());
@@ -359,7 +311,7 @@ describe("processTask post-agent status ladder", () => {
 
     // Override findById to return null after the first call
     let calls = 0;
-    deps.workItemRepo.findById = async () => {
+    deps.loop.workItemRepo.findById = async () => {
       calls++;
       if (calls === 1) return freshPendingItem();
       return null;
@@ -377,7 +329,7 @@ describe("processTask post-agent status ladder", () => {
 });
 
 describe("an environment-blocked dispatch: an infrastructure fault requeues uncharged, other environment outcomes park", () => {
-  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatchService"]["execute"]>>;
+  type ExecutionResult = Awaited<ReturnType<DispatchSteps["dispatchService"]["execute"]>>;
 
   const probeBlocked: ExecutionResult = {
     status: "environment_blocked",
@@ -411,7 +363,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     const halts: ProjectBlockCause[] = [];
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
 
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async () => copy(row),
       save: async (item: WorkItem, expectedPreviousStatus) => {
         if (row.status !== expectedPreviousStatus) {
@@ -420,46 +372,27 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         statusesWritten.push(item.status);
         row = copy(item);
       },
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: async () => ++faults,
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         refunded++;
         return 0;
       },
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
-    };
+    });
 
-    const base = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => execResult } });
-    const deps = coreLoopDeps({
-      workItemRepo,
-      dispatchService: { execute: async () => execResult },
-      failedApproachRepo: { record: async () => { approaches++; } },
-      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-      projectRepo: {
-        ...base.projectRepo,
+    const base = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
+    const deps = coreLoopDeps({ loop: { workItemRepo, projectRepo: {
+        ...base.loop.projectRepo,
         block: async (_projectId, cause) => {
           halts.push(cause);
           return "blocked";
         },
-      },
-    });
+      } }, dispatch: { dispatchService: { execute: async () => execResult }, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
 
     return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, refunds: () => refunded, halts };
   }
@@ -499,7 +432,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         contextExceeded({ provider: "p", modelId: "wide-model", windowTokens: 200_000 }),
       );
       const recorded: number[] = [];
-      const repo = deps.workItemRepo;
+      const repo = deps.loop.workItemRepo;
       repo.saveRefundedOverflow = async (item, expectedPreviousStatus, windowTokens) => {
         recorded.push(windowTokens);
         return repo.saveRefunded(item, expectedPreviousStatus);
@@ -517,22 +450,19 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       expect(failedApproaches()).toBe(0);
 
       const dispatched: Array<number | null> = [];
-      const again: CoreLoopDeps = {
-        ...deps,
-        dispatchService: {
+      const again: CoreLoopDeps = withOverrides(deps, { dispatch: { dispatchService: {
           execute: async (task) => {
             dispatched.push(task.overflowedWindowTokens);
             return contextExceeded(null);
           },
-        },
-      };
+        } } });
       await processTask(again, { ...stored(), overflowedWindowTokens: 32_000 });
       expect(dispatched).toEqual([32_000]);
     });
 
     test("with none larger: given up naming the model, the window and the estimate; never Failed, no lesson, no failure router", async () => {
       const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps(contextExceeded(null));
-      deps.workItemRepo.saveRefundedOverflow = async () => {
+      deps.loop.workItemRepo.saveRefundedOverflow = async () => {
         throw new Error("no window is recorded when nothing larger exists");
       };
 
@@ -567,7 +497,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       };
       const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts } = buildEnvironmentBlockedDeps(noWider);
       let faultsCounted = 0;
-      deps.workItemRepo.recordInfrastructureFault = async () => ++faultsCounted;
+      deps.loop.workItemRepo.recordInfrastructureFault = async () => ++faultsCounted;
 
       const result = await processTask(deps, { ...freshPendingItem(), overflowedWindowTokens: 32_000 });
 
@@ -604,7 +534,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     // The routing in executeTask and processTask's retry of it both fault: only the cycle's recovery is left to write it.
     let refundFaults = 2;
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async () => copy(row),
       save: async (item: WorkItem, expectedPreviousStatus) => {
         if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
@@ -617,30 +547,17 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       recordInfrastructureFault: async () => 1,
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
         // The one transaction rolled back: neither the requeue nor the refund was written.
         if (refundFaults-- > 0) throw new Error("Failed query: update \"work_items\" set \"dispatch_count\" = \"work_items\".\"dispatch_count\" - 1");
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
         return row.dispatchCount;
       },
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
-    };
-    const deps = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => probeBlocked } });
+    });
+    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => probeBlocked } } });
     const task = freshPendingItem();
 
     // The cycle's own path: a rejected processTask is recovered by handleProcessingError (core-loop.ts).
@@ -657,9 +574,9 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     const { deps, stored, statusesWritten, refunds } = buildEnvironmentBlockedDeps();
     const main = targetWithMain([`merge: task ${ITEM_ID}`]);
     const left = heldCheckout(main.path, ITEM_ID);
-    deps.projectRepo.get = async () => ({ workspacePath: main.path });
+    deps.loop.projectRepo.get = async () => ({ workspacePath: main.path });
     const records: string[] = [];
-    deps.workItemRepo.recordMergeCommit = async (_id, commit, kind) => void records.push(`${commit}:${kind ?? "null"}`);
+    deps.loop.workItemRepo.recordMergeCommit = async (_id, commit, kind) => void records.push(`${commit}:${kind ?? "null"}`);
 
     await processTask(deps, freshPendingItem());
 
@@ -674,10 +591,10 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     const { deps, stored } = buildEnvironmentBlockedDeps();
     const main = targetWithMain([`merge: task ${ITEM_ID}`]);
     const left = heldCheckout(main.path, ITEM_ID);
-    deps.projectRepo.get = async () => ({ workspacePath: main.path });
-    deps.workItemRepo.recordMergeCommit = async () => undefined;
-    const save = deps.workItemRepo.save.bind(deps.workItemRepo);
-    deps.workItemRepo.save = async (item, previous) => {
+    deps.loop.projectRepo.get = async () => ({ workspacePath: main.path });
+    deps.loop.workItemRepo.recordMergeCommit = async () => undefined;
+    const save = deps.loop.workItemRepo.save.bind(deps.loop.workItemRepo);
+    deps.loop.workItemRepo.save = async (item, previous) => {
       if (item.status === "Completed") throw new InvalidStatusTransition(item.id, "Abandoned", "Completed");
       return save(item, previous);
     };
@@ -692,7 +609,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     const { deps, stored, refunds, halts } = buildEnvironmentBlockedDeps();
     const parent = mkdtempSync(join(tmpdir(), "ashara-execution-"));
     targets.push(parent);
-    deps.projectRepo.get = async () => ({ workspacePath: join(parent, "never-created") });
+    deps.loop.projectRepo.get = async () => ({ workspacePath: join(parent, "never-created") });
 
     await processTask(deps, freshPendingItem());
 
@@ -706,7 +623,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     const unreadable = mkdtempSync(join(tmpdir(), "ashara-execution-"));
     targets.push(unreadable);
     mkdirSync(join(unreadable, ".git"));
-    deps.projectRepo.get = async () => ({ workspacePath: unreadable });
+    deps.loop.projectRepo.get = async () => ({ workspacePath: unreadable });
 
     await processTask(deps, freshPendingItem());
 
@@ -756,11 +673,11 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   test("a throw before the dispatch seam: Ashara's fault, back to Pending uncounted, no failure router, no lesson", async () => {
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps();
     let counted = 0;
-    deps.workItemRepo.incrementDispatchCount = async () => {
+    deps.loop.workItemRepo.incrementDispatchCount = async () => {
       counted++;
       return 1;
     };
-    deps.projectRepo.get = async () => {
+    deps.loop.projectRepo.get = async () => {
       throw new Error("connection terminated unexpectedly");
     };
 
@@ -780,11 +697,11 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   test("the dispatch freezes the check set of the reviews the task depends on before it is counted; a freeze that fails stops it uncounted", async () => {
     const { deps } = buildEnvironmentBlockedDeps();
     const order: string[] = [];
-    deps.workItemRepo.incrementDispatchCount = async () => {
+    deps.loop.workItemRepo.incrementDispatchCount = async () => {
       order.push("counted");
       return 1;
     };
-    deps.checkSetFreeze.freezeFor = async (taskId) => {
+    deps.dispatch.checkSetFreeze.freezeFor = async (taskId) => {
       order.push(`freeze ${taskId}`);
       return [];
     };
@@ -793,11 +710,11 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
     const failing = buildEnvironmentBlockedDeps();
     let counted = 0;
-    failing.deps.workItemRepo.incrementDispatchCount = async () => {
+    failing.deps.loop.workItemRepo.incrementDispatchCount = async () => {
       counted++;
       return 1;
     };
-    failing.deps.checkSetFreeze.freezeFor = async () => {
+    failing.deps.dispatch.checkSetFreeze.freezeFor = async () => {
       throw new Error("check_set_freezes insert failed");
     };
     const result = await processTask(failing.deps, freshPendingItem());
@@ -809,7 +726,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
   test("a throw out of the dispatch past the seam: Ashara's fault, back to Pending with the dispatch refunded, no lesson", async () => {
     const { deps, stored, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps();
-    deps.dispatchService.execute = async () => {
+    deps.dispatch.dispatchService.execute = async () => {
       throw new Error("dev_sessions insert failed");
     };
 
@@ -965,7 +882,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
       return row;
     };
 
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async (id) => {
         const row = rows.get(id);
         return row === undefined ? null : copy(row);
@@ -982,36 +899,19 @@ describe("stored checks stale: the check task is reopened and the item waits on 
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
         rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
-      addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
-    };
+    });
 
-    const deps = coreLoopDeps({
-      workItemRepo,
-      eventStore: { publish: async (event) => void events.push(event.eventType) },
-      dispatchService: {
+    const deps = coreLoopDeps({ loop: { workItemRepo, eventStore: { publish: async (event) => void events.push(event.eventType) } }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "checks_stale",
           checkTaskId: CHECK_ID,
@@ -1026,10 +926,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
             chain: { boundary: "development", operation: "revalidateTaskChecks", message: detail, timestamp: new Date().toISOString() },
           },
         }),
-      },
-      failedApproachRepo: { record: async () => { approaches++; } },
-      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-    });
+      }, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
     return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), written, events, routed: () => routed, approaches: () => approaches };
   }
 
@@ -1122,7 +1019,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       if (row === undefined) throw new Error(`no row ${id}`);
       return row;
     };
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async (id) => {
         const row = rows.get(id);
         return row === undefined ? null : copy(row);
@@ -1137,37 +1034,22 @@ describe("a disputed check: the check task is reopened with the dispute and the 
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
         rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
       addDependency: async (from, to) => {
         edges.push({ from, to });
       },
       // The item's own check task is the edge the plan wrote; a merged task's check task is not on it.
       getDependencies: async (id) => (id === ITEM_ID && whose === "own" ? [CHECK_ID] : []),
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
-    };
-    const deps = coreLoopDeps({
-      workItemRepo,
-      dispatchService: {
+    });
+    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "disputed",
           checksOf: whose === "own" ? ITEM_ID : mergedTaskId,
@@ -1186,16 +1068,12 @@ describe("a disputed check: the check task is reopened with the dispute and the 
             chain: { boundary: "development", operation: "agentAttempt", message: reason, timestamp: new Date().toISOString() },
           },
         }),
-      },
-      checkDisputes: {
+      }, checkDisputes: {
         record: async (dispute) => {
           disputes.push(dispute);
           return priorDisputes + disputes.filter((entry) => entry.checkTaskId === dispute.checkTaskId).length;
         },
-      },
-      failedApproachRepo: { record: async () => { approaches++; } },
-      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-    });
+      }, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
     return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, edges, routed: () => routed, approaches: () => approaches };
   }
 
@@ -1264,7 +1142,7 @@ describe("an environment change requested: an environment task is opened and the
 
   function buildEnvironmentChangeDeps(
     priorChanges: number,
-    owner: Awaited<ReturnType<CoreLoopDeps["environmentOwner"]>>,
+    owner: Awaited<ReturnType<DispatchSteps["environmentOwner"]>>,
     requester: Pick<WorkItem, "taskSpec"> = GRADED,
     completed: readonly WorkItem[] = [],
   ) {
@@ -1291,7 +1169,7 @@ describe("an environment change requested: an environment task is opened and the
       if (row === undefined) throw new Error(`no row ${id}`);
       return row;
     };
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async (id) => {
         const row = rows.get(id);
         return row === undefined ? null : copy(row);
@@ -1310,34 +1188,22 @@ describe("an environment change requested: an environment task is opened and the
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
         rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      listByProject: notExercised("listByProject"),
       findByProjectAndStatus: async (projectId, status) =>
         [...rows.values()].filter((row) => row.projectId === projectId && row.status === status).map(copy),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
       addDependency: async (from, to) => void edges.push({ from, to }),
       getDependencies: async (id) => edges.filter((edge) => edge.from === id).map((edge) => edge.to as WorkItemId),
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: async (fn) => fn(workItemRepo),
-    };
-    const deps = coreLoopDeps({
-      workItemRepo,
-      dispatchService: {
+    });
+    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "environment_change_requested",
           paths: ["environment/Containerfile"],
@@ -1353,11 +1219,7 @@ describe("an environment change requested: an environment task is opened and the
             chain: { boundary: "development", operation: "ownershipGate", message: detail, timestamp: new Date().toISOString() },
           },
         }),
-      },
-      environmentOwner: async () => owner,
-      failedApproachRepo: { record: async () => { approaches++; } },
-      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-    });
+      }, environmentOwner: async () => owner, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
     const opened = () => [...rows.values()].filter((row) => row.id !== ITEM_ID && row.status === "Pending");
     return { deps, item: () => rowOf(ITEM_ID), opened, edges, routed: () => routed, approaches: () => approaches };
   }
@@ -1432,13 +1294,10 @@ describe("an environment change requested: an environment task is opened and the
     const built = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID });
     const { item, opened, routed, approaches } = built;
     let faults = 0;
-    built.deps.workItemRepo.recordInfrastructureFault = async () => ++faults;
-    const deps: CoreLoopDeps = {
-      ...built.deps,
-      environmentOwner: async () => {
+    built.deps.loop.workItemRepo.recordInfrastructureFault = async () => ++faults;
+    const deps: CoreLoopDeps = withOverrides(built.deps, { dispatch: { environmentOwner: async () => {
         throw new Error("roster query failed");
-      },
-    };
+      } } });
 
     await processTask(deps, freshPendingItem());
 
@@ -1494,7 +1353,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
       chain: { boundary: "development", operation: "agentAttempt", message: refusal.message, timestamp: new Date().toISOString() },
     };
 
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async () => copy(row),
       save: async (item: WorkItem, expectedPreviousStatus) => {
         if (row.status !== expectedPreviousStatus) {
@@ -1508,44 +1367,18 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         row = { ...row, dispatchCount: row.dispatchCount + 1 };
         return row.dispatchCount;
       },
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
         return row.dispatchCount;
       },
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
-      addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
-    };
+    });
 
-    const deps = coreLoopDeps({
-      workItemRepo,
-      dispatchService: {
-        execute: async (task) => {
-          attempts.push(task.attempt);
-          return scope === "shutdown"
-            ? { status: "interrupted", detail: "attempt interrupted by shutdown after 2 turn(s)", outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "cancelled", reason: new Error("shutdown") }, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope }
-            : { status: "refused", refusal, detail: `attempt stopped after 2 turn(s): ${refusal.message}`, outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "refused", error: refusal }, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope };
-        },
-      },
-      failedApproachRepo: { record: async () => { approaches++; } },
-      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-      projectRepo: {
+    const deps = coreLoopDeps({ loop: { workItemRepo, projectRepo: {
         get: async () => ({ workspacePath: UNMERGED_TARGET }),
         recordWorkspacePath: notExercised("recordWorkspacePath"),
         listActiveIds: notExercised("listActiveIds"),
@@ -1557,8 +1390,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
         blockAllActive: notExercised("blockAllActive"),
         listWithWorkspace: async () => [],
-      },
-      spendCap: {
+      }, spendCap: {
         deploymentStop: notExercised("deploymentStop"),
         refusalOf: (error) =>
           error instanceof StubCapRefusal
@@ -1566,8 +1398,14 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
               ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message, spend: { capUsd: 5, spentUsd: 4.5, inFlightUsd: 0.25, nextCallUsd: 0.5 } }
               : { kind: "deployment", reason: error.message, spend: { capUsd: 5, spentUsd: 4.5, inFlightUsd: 0.25, nextCallUsd: 0.5 } }
             : null,
-      },
-    });
+      } }, dispatch: { dispatchService: {
+        execute: async (task) => {
+          attempts.push(task.attempt);
+          return scope === "shutdown"
+            ? { status: "interrupted", detail: "attempt interrupted by shutdown after 2 turn(s)", outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "cancelled", reason: new Error("shutdown") }, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope }
+            : { status: "refused", refusal, detail: `attempt stopped after 2 turn(s): ${refusal.message}`, outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "refused", error: refusal }, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope };
+        },
+      }, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
     return { deps, stored: () => row, statusesWritten, attempts, failureRoutes: () => routed, failedApproaches: () => approaches, blocks };
   }
 
@@ -1625,7 +1463,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
 // What the client is told was merged comes from the work item's
 // merge record, written before the task is completed.
 describe("a completed dispatch records its merge before the task is Completed", () => {
-  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatchService"]["execute"]>>;
+  type ExecutionResult = Awaited<ReturnType<DispatchSteps["dispatchService"]["execute"]>>;
 
   function buildMergeDeps(execResult: ExecutionResult, mergeWrite: (commit: string) => Promise<void>): {
     deps: CoreLoopDeps;
@@ -1635,7 +1473,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
     let row = freshPendingItem();
     const writes: string[] = [];
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async () => copy(row),
       save: async (item: WorkItem, expectedPreviousStatus) => {
         if (row.status !== expectedPreviousStatus) {
@@ -1648,27 +1486,13 @@ describe("a completed dispatch records its merge before the task is Completed", 
         await mergeWrite(commit);
         writes.push(`merge ${commit}`);
       },
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
-      saveRefunded: notExercised("saveRefunded"),
-      addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
-    };
-    const deps = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => execResult } });
+    });
+    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
     return { deps, stored: () => row, writes };
   }
 
@@ -1687,15 +1511,11 @@ describe("a completed dispatch records its merge before the task is Completed", 
     const built = buildMergeDeps(merged, async () => {});
     const { stored, writes } = built;
     let approaches = 0;
-    const deps: CoreLoopDeps = {
-      ...built.deps,
-      failedApproachRepo: { record: async () => { approaches++; } },
-      eventStore: {
+    const deps: CoreLoopDeps = withOverrides(built.deps, { dispatch: { failedApproachRepo: { record: async () => { approaches++; } } }, loop: { eventStore: {
         publish: async () => {
           throw new Error("domain_events insert failed");
         },
-      },
-    };
+      } } });
 
     const result = await processTask(deps, freshPendingItem());
 
@@ -1759,10 +1579,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
   function failingCompletion(failures: number) {
     const built = buildMergeDeps(merged, async () => {});
     let failed = 0;
-    const repo = built.deps.workItemRepo;
-    const deps: CoreLoopDeps = {
-      ...built.deps,
-      workItemRepo: {
+    const repo = built.deps.loop.workItemRepo;
+    const deps: CoreLoopDeps = withOverrides(built.deps, { loop: { workItemRepo: {
         ...repo,
         save: async (item, previous) => {
           if (item.status === "Completed" && failed < failures) {
@@ -1771,8 +1589,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
           }
           await repo.save(item, previous);
         },
-      },
-    };
+      } } });
     return { ...built, deps };
   }
 
@@ -1870,7 +1687,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
       if (row === undefined) throw new Error(`no row ${id}`);
       return row;
     };
-    const workItemRepo: WorkItemRepository = {
+    const workItemRepo: WorkItemRepository = inertWorkItemRepo({
       findById: async (id) => {
         const row = rows.get(id);
         return row === undefined ? null : copy(row);
@@ -1885,34 +1702,19 @@ describe("a review of the plan's suites with problems: the named check tasks are
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
-      saveOrphanExit: async () => {
-        throw new Error("saveOrphanExit is not exercised by this test");
-      },
       async saveRefunded(item, expectedPreviousStatus) {
-        await this.save(item, expectedPreviousStatus);
+        await workItemRepo.save(item, expectedPreviousStatus);
         const row = rowOf(item.id);
         rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      create: notExercised("create"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
-      addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
       withTransaction: async (fn) => fn(workItemRepo),
-    };
-    const deps = coreLoopDeps({
-      workItemRepo,
-      dispatchService: {
+    });
+    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "suite_review_problems",
           problems,
@@ -1926,18 +1728,14 @@ describe("a review of the plan's suites with problems: the named check tasks are
             chain: { boundary: "development", operation: "reviewSuites", message: "problems", timestamp: new Date().toISOString() },
           },
         }),
-      },
-      suiteReviewFindings: {
+      }, suiteReviewFindings: {
         record: async (findings) => {
           recorded.push(findings);
           const ids = [...new Set(findings.problems.flatMap((p) => p.checkTaskIds))];
           for (const id of ids) named.set(id, (named.get(id) ?? priorReviews) + 1);
           return { timesNamed: new Map(ids.map((id) => [id, named.get(id) ?? 0])) };
         },
-      },
-      failedApproachRepo: { record: async () => { approaches++; } },
-      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-    });
+      }, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
     return { deps, rowOf, recorded, routed: () => routed, approaches: () => approaches };
   }
 

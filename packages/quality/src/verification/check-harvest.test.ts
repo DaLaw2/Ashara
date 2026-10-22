@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 import { ensureTargetGitInit } from "@ashara/execution-infra";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { Outcome } from "@ashara/workplace";
 import type { CheckAuthoring, VerifiedDispatch } from "../dispatch-result.js";
 import { CheckRecorder } from "../task-checks.js";
@@ -27,12 +28,6 @@ const done: Outcome = {
   promptDigest: "0".repeat(64),
   detail: "finished done",
 };
-
-function unreachable(what: string): () => never {
-  return () => {
-    throw new Error(`${what} must not be reached`);
-  };
-}
 
 async function authoring(recorder: CheckRecorder): Promise<{ readonly d: VerifiedDispatch; readonly work: CheckAuthoring }> {
   const root = await mkdtemp(join(tmpdir(), "ashara-check-harvest-"));
@@ -71,8 +66,8 @@ async function authoring(recorder: CheckRecorder): Promise<{ readonly d: Verifie
 
 function harvest(events: Array<Record<string, unknown>>): CheckHarvest {
   return new CheckHarvest({
-    dispatchCells: { checkCells: unreachable("a check cell"), checkoutDir: unreachable("a checkout") },
-    checks: { append: unreachable("a stored revision") },
+    dispatchCells: { checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
+    checks: { append: notExercised("a stored revision") },
     eventSink: { emit: (event) => void events.push(event) },
     logger: recordingLogger(),
   });

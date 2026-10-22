@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { CycleResult } from "./types.js";
 import { ContinuousRunner } from "./runner.js";
 import type { CycleRunner } from "./runner.js";

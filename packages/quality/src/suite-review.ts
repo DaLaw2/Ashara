@@ -1076,7 +1076,7 @@ class JudgeBelowWork extends Error {
   }
 }
 
-interface SuiteReviewerDeps {
+export interface SuiteReviewerDeps {
   readonly llm: ContextualLlm;
   readonly source: SuiteReviewSource;
   readonly publicInterface: PublicInterfaceReader;

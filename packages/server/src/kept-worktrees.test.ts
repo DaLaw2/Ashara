@@ -3,12 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { WORK_ITEM_STATUSES, type WorkItemStatus } from "@ashara/delivery/work-item";
-import { sweepOrphanedWorktrees } from "@ashara/execution-infra";
 import { createWorkItemId, type WorkItemId } from "@ashara/shared";
-import { keptWorktreeTaskIds } from "./kept-worktrees.js";
-
-const COMPOSE_FILE = path.join(import.meta.dirname, "compose.ts");
-const COMMENT = /\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm;
+import { sweepWorktreesAtStartup } from "./kept-worktrees.js";
 
 let base: string | null = null;
 
@@ -17,8 +13,8 @@ afterEach(() => {
   base = null;
 });
 
-describe("keptWorktreeTaskIds", () => {
-  test("the startup sweep keeps the worktree of every open task, a Failed one included, and removes a settled task's", async () => {
+describe("sweepWorktreesAtStartup", () => {
+  test("keeps the worktree of every open task Delivery's work items hold, a Failed one included, and removes a settled task's", async () => {
     const workdirBase = fs.mkdtempSync(path.join(os.tmpdir(), "kept-worktrees-"));
     base = workdirBase;
     const statusOf = new Map<WorkItemId, WorkItemStatus>(WORK_ITEM_STATUSES.map((status) => [createWorkItemId(), status]));
@@ -29,19 +25,10 @@ describe("keptWorktreeTaskIds", () => {
       },
     };
 
-    await sweepOrphanedWorktrees(workdirBase, keptWorktreeTaskIds(repo));
+    await sweepWorktreesAtStartup(workdirBase, repo);
 
     const kept = new Set(fs.readdirSync(workdirBase));
     const keptStatuses = [...statusOf].filter(([id]) => kept.has(`task-${id}`)).map(([, status]) => status);
     expect(keptStatuses.sort()).toEqual(["Blocked", "Failed", "InProgress", "Pending"]);
-  });
-});
-
-describe("the startup sweep in composeAshara", () => {
-  test("is the one sweep at boot, and keeps the worktrees keptWorktreeTaskIds reads from Delivery's work-item repository, not a list of its own", () => {
-    const code = fs.readFileSync(COMPOSE_FILE, "utf-8").replace(COMMENT, "").replace(/\s+/g, " ");
-    const sweeps = [...code.matchAll(/\bsweepOrphanedWorktrees\s*\(([^;]*?)\);/g)].map((match) => (match[1] ?? "").trim());
-    expect(sweeps).toEqual(["config.coreLoop.workdirBase, keptWorktreeTaskIds(workItemRepo)"]);
-    expect(code).toMatch(/\bconst workItemRepo: WorkItemRepository = adaptWorkItemRepo\(dbWorkItemRepo\);/);
   });
 });

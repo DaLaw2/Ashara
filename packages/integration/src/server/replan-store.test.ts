@@ -6,7 +6,8 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { TaskCheckRepository } from "@ashara/quality";
 import { createReplanStore, ProjectHaltRepository } from "@ashara/delivery";
-import { memoryStepContainment, recordingLogger, type ProjectId } from "@ashara/shared";
+import { type ProjectId } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { replanStoreSuite } from "./replan-store-suite.js";
 
 // A late client change is planned. The rows, stores and scripted model are the shared plan

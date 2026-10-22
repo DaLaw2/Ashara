@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it } from "vitest";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { ServedComposition } from "./process-lifecycle.js";
 import { serveAshara } from "./process-lifecycle.js";
 

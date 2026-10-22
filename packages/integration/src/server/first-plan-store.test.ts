@@ -15,7 +15,7 @@ import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, ProjectHaltRepository, createFirstPlanStore } from "@ashara/delivery";
 import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";

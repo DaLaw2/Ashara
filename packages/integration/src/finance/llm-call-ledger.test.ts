@@ -9,7 +9,7 @@ import { LlmCallRepository } from "@ashara/finance";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable, SpendCap, UnpricedModel } from "@ashara/finance";
 import { SchemaUnacceptable, buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { Logger } from "@ashara/shared";
 
 // Against the shared dev database: every row here belongs to a project this

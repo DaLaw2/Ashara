@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { resolveTargetProjectPath } from "@ashara/delivery";
-import { parseProjectId, recordingLogger } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 
 // Against the shared dev database: every row here is created under a unique name
 // and deleted in afterAll.

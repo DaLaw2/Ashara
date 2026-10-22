@@ -19,6 +19,9 @@ const LOG_EVENT_NOT_LITERAL = "Log event name is not a literal";
 const LOG_EVENT_MALFORMED = "Log event name `";
 const DELIVERY_FILE = join(REPO, "packages", "delivery", "src", "planted.ts");
 const FIXED_WAIT = "Fixed wait";
+const HAND_BUILT_DEPS = "Hand-built CoreLoopDeps";
+const COMPOSE_SOURCE = "Reading a compose module's source text";
+const INTEGRATION_TEST_FILE = join(REPO, "packages", "integration", "src", "server", "planted.test.ts");
 
 /** The guard each finding of `code`, linted as the file at `filePath` with the repo's config, belongs to. */
 async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<string[]> {
@@ -26,7 +29,7 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
   expect(results).toHaveLength(1);
   return results.flatMap((result) => result.messages).map((message) => {
     if (message.ruleId === ASSERTION) return ASSERTION;
-    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT].find((prefix) => message.message.startsWith(prefix));
+    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT, HAND_BUILT_DEPS, COMPOSE_SOURCE].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
 }
@@ -199,5 +202,33 @@ describe("eslint guards fire on planted instances", () => {
 
   test("leaves an event name of the file's own package in kebab case", async () => {
     expect(await guardsOf(plantedLogging('logger.info("delivery.planted-2", "planted");'), DELIVERY_FILE)).toEqual([]);
+  });
+
+  test.each([
+    "const deps: CoreLoopDeps = { loop, client, planning, dispatch, sweeps, reporting };",
+    "const deps = { loop, client, planning, dispatch, sweeps, reporting } satisfies CoreLoopDeps;",
+    "function loopDeps(): CoreLoopDeps { return { loop, client, planning, dispatch, sweeps, reporting }; }",
+    "const loopDeps = (): CoreLoopDeps => ({ loop, client, planning, dispatch, sweeps, reporting });",
+    "const deps = withOverrides({ loop, client, planning, dispatch, sweeps, reporting }, {});",
+    "const loop = new CoreLoop({ loop, client, planning, dispatch, sweeps, reporting });",
+  ])("a hand-built CoreLoopDeps, in a test as in production: %s", async (line) => {
+    expect(await guardsOf(line, INTEGRATION_TEST_FILE)).toEqual([HAND_BUILT_DEPS]);
+    expect(await guardsOf(line, DELIVERY_FILE)).toEqual([HAND_BUILT_DEPS]);
+  });
+
+  test.each([
+    "const deps: CoreLoopDeps = composeCoreLoopDeps(parts, { loop: { spendCap } });",
+    "const deps: CoreLoopDeps = withOverrides(inertCoreLoopDeps(), { loop: { logger } });",
+    "const loop = new CoreLoop(composedLoopOverTestDb(parts));",
+  ])("leaves deps built by a builder: %s", async (line) => {
+    expect(await guardsOf(line, INTEGRATION_TEST_FILE)).toEqual([]);
+  });
+
+  test.each([
+    'const compose = readFileSync(join(import.meta.dirname, "compose.ts"), "utf-8");',
+    'const compose = fs.readFileSync(`${dir}/compose-core-loop.ts`, "utf-8");',
+    'const compose = await readFile(join(dir, "compose.ts"), "utf-8");',
+  ])("a test reading a compose module's source text: %s", async (line) => {
+    expect(await guardsOf(line, TEST_FILE)).toEqual([COMPOSE_SOURCE]);
   });
 });

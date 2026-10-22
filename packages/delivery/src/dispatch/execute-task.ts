@@ -13,7 +13,6 @@ import {
 import { buildKnowledgeQueryText, storeFailureKnowledge } from "@ashara/knowledge";
 import type { KnowledgeScope } from "@ashara/knowledge";
 import {
-  CheckRecorder,
   ConflictRetryUnprepared,
   NO_AGENT,
   branchExists,
@@ -366,7 +365,7 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
       await dropCheckBranch(targetProjectPath, branch);
       workdir = await createWorkdir(base, targetProjectPath, branch);
       try {
-        work = { ...plan, branch, startCommit: await headCommit(workdir.repo, task.id), recorder: new CheckRecorder(plan.citedItems) };
+        work = { ...plan, branch, startCommit: await headCommit(workdir.repo, task.id), recorder: verification.checkRecorder.forAttempt(plan.citedItems) };
       } catch (e) {
         await discardCheckWorkdir(workdir.workDir, targetProjectPath, branch, deps.logger);
         throw e;

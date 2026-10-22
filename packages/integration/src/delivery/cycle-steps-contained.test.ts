@@ -24,20 +24,20 @@ const runPending = (file: string, ownLedger?: { readonly marker: string; readonl
 
 /** Every call CoreLoop makes into a dependency or an imported function. */
 const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
-  "deps.clientStops.runPending": runPending("packages/engagement/src/client-stop.ts"),
-  "deps.clientStops.reportPending": { kind: "step", file: "packages/engagement/src/client-stop.ts", declaration: "async reportPending(" },
-  "deps.clientChanges.runPending": runPending("packages/engagement/src/client-change.ts"),
-  "deps.clientReceipts.runPending": runPending("packages/engagement/src/client-receipt.ts"),
-  "deps.stackChoices.runPending": runPending("packages/engagement/src/stack-choice.ts"),
-  "deps.liaisonIntake.runPending": runPending("packages/engagement/src/intake.ts"),
-  "deps.liaisonAnswers.runPending": runPending("packages/engagement/src/answers.ts"),
-  "deps.rosterDerivation.runPending": runPending("packages/organization/src/derivation.ts"),
-  "deps.firstPlanning.runPending": runPending("packages/delivery/src/first-plan.ts"),
-  "deps.replanning.runPending": runPending("packages/delivery/src/replan.ts"),
-  "deps.planReports.runPending": runPending("packages/engagement/src/plan-report.ts"),
-  "deps.blockReports.runPending": runPending("packages/engagement/src/block-report.ts"),
-  "deps.burnWarnings.runPending": runPending("packages/engagement/src/burn-warning.ts"),
-  "deps.deliveredReports.runPending": runPending(
+  "deps.client.clientStops.runPending": runPending("packages/engagement/src/client-stop.ts"),
+  "deps.client.clientStops.reportPending": { kind: "step", file: "packages/engagement/src/client-stop.ts", declaration: "async reportPending(" },
+  "deps.client.clientChanges.runPending": runPending("packages/engagement/src/client-change.ts"),
+  "deps.client.clientReceipts.runPending": runPending("packages/engagement/src/client-receipt.ts"),
+  "deps.reporting.stackChoices.runPending": runPending("packages/engagement/src/stack-choice.ts"),
+  "deps.client.liaisonIntake.runPending": runPending("packages/engagement/src/intake.ts"),
+  "deps.client.liaisonAnswers.runPending": runPending("packages/engagement/src/answers.ts"),
+  "deps.planning.rosterDerivation.runPending": runPending("packages/organization/src/derivation.ts"),
+  "deps.planning.firstPlanning.runPending": runPending("packages/delivery/src/first-plan.ts"),
+  "deps.planning.replanning.runPending": runPending("packages/delivery/src/replan.ts"),
+  "deps.reporting.planReports.runPending": runPending("packages/engagement/src/plan-report.ts"),
+  "deps.reporting.blockReports.runPending": runPending("packages/engagement/src/block-report.ts"),
+  "deps.reporting.burnWarnings.runPending": runPending("packages/engagement/src/burn-warning.ts"),
+  "deps.reporting.deliveredReports.runPending": runPending(
     "packages/engagement/src/delivered-report.ts",
     {
       marker: "this.contained(",
@@ -59,17 +59,17 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   runTerminalSweeps: { kind: "step", file: "packages/delivery/src/terminal-sweep.ts", declaration: "export async function runTerminalSweeps(" },
   "PlanningService.gate": { kind: "step", file: "packages/delivery/src/domain/gate.ts", declaration: "static async filterAvailable(" },
   "PlanningService.select": { kind: "not-per-project", reason: "a pure choice over the tasks already gated; reads nothing" },
-  "deps.taskLanes": { kind: "not-per-project", reason: "each task runs in its own lane and settles on its own (Promise.allSettled); a rejection goes to handleProcessingError" },
+  "deps.loop.taskLanes": { kind: "not-per-project", reason: "each task runs in its own lane and settles on its own (Promise.allSettled); a rejection goes to handleProcessingError" },
   processTask: { kind: "not-per-project", reason: "runs inside a task's lane, whose rejection is settled per task" },
   handleProcessingError: { kind: "not-per-project", reason: "one task's recovery; it catches its own recovery failure and returns the task interrupted" },
-  "deps.heldCells.release": { kind: "not-per-project", reason: "the deployment's cells a failed teardown left, one substrate call for every project; it logs its own failure at warn and never throws" },
-  "deps.spendCap.deploymentStop": { kind: "not-per-project", reason: "the deployment's cap, one read for every project" },
-  "deps.spendCap.refusalOf": { kind: "not-per-project", reason: "a pure reading of an error" },
-  "deps.projectRepo.blockAllActive": { kind: "not-per-project", reason: "the deployment's halt at its cap, one write for every project" },
-  "deps.projectRepo.block": { kind: "not-per-project", reason: "the halt of one project, which is how a step's own failure is contained" },
-  "deps.cycleLog.emit": { kind: "not-per-project", reason: "the cycle's own log line" },
-  "deps.logger.info": { kind: "not-per-project", reason: "a log record; the Logger never throws and never stops the path that logs" },
-  "deps.logger.scope": { kind: "not-per-project", reason: "runs a project's halt in a trace of its own; it adds no step, and passes the halt's result or failure through unchanged" },
+  "deps.dispatch.heldCells.release": { kind: "not-per-project", reason: "the deployment's cells a failed teardown left, one substrate call for every project; it logs its own failure at warn and never throws" },
+  "deps.loop.spendCap.deploymentStop": { kind: "not-per-project", reason: "the deployment's cap, one read for every project" },
+  "deps.loop.spendCap.refusalOf": { kind: "not-per-project", reason: "a pure reading of an error" },
+  "deps.loop.projectRepo.blockAllActive": { kind: "not-per-project", reason: "the deployment's halt at its cap, one write for every project" },
+  "deps.loop.projectRepo.block": { kind: "not-per-project", reason: "the halt of one project, which is how a step's own failure is contained" },
+  "deps.loop.cycleLog.emit": { kind: "not-per-project", reason: "the cycle's own log line" },
+  "deps.loop.logger.info": { kind: "not-per-project", reason: "a log record; the Logger never throws and never stops the path that logs" },
+  "deps.loop.logger.scope": { kind: "not-per-project", reason: "runs a project's halt in a trace of its own; it adds no step, and passes the halt's result or failure through unchanged" },
   parseProjectId: { kind: "not-per-project", reason: "a pure parse" },
   projectCapCause: { kind: "not-per-project", reason: "a pure constructor" },
   projectWorkCause: { kind: "not-per-project", reason: "a pure constructor" },
@@ -198,6 +198,7 @@ function callsOfTheCycle(): Set<string> {
   expect(start, `${CORE_LOOP} no longer declares the CoreLoop class`).toBeGreaterThanOrEqual(0);
   const body = bodyFrom(text, start);
   const calls = new Set<string>();
+  for (const match of body.matchAll(/\bdeps\.(\w+)\.(\w+)\.(\w+)\(/g)) calls.add(`deps.${match[1]}.${match[2]}.${match[3]}`);
   for (const match of body.matchAll(/\bdeps\.(\w+)\.(\w+)\(/g)) calls.add(`deps.${match[1]}.${match[2]}`);
   for (const match of body.matchAll(/\bdeps\.(\w+)\(/g)) calls.add(`deps.${match[1]}`);
   for (const match of body.matchAll(/\bPlanningService\.(\w+)\(/g)) calls.add(`PlanningService.${match[1]}`);

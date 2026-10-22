@@ -251,7 +251,7 @@ async function containSubject<T, O>(
 
 /**
  * A ledger held in memory, for a step under test.
- * @testseam unit tests of the cycle's steps contain their subjects with it; the composition root supplies db's ledger
+ * Unit tests of the cycle's steps, and the inert loop they build, contain their subjects with it; the composition root supplies db's ledger
  */
 export function memoryStepContainment(escapes: (error: unknown) => boolean): StepContainment & {
   readonly recorded: ReadonlyMap<string, { readonly faults: number; readonly error: string; readonly retryAt: number; readonly parked: boolean }>;

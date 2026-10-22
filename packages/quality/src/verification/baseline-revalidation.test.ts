@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { VerifiedDispatch } from "../dispatch-result.js";
 import type { TaskChecks } from "../task-checks.js";
 import { BaselineRevalidation } from "./baseline-revalidation.js";
@@ -22,17 +23,11 @@ const dispatch: VerifiedDispatch = {
   },
 };
 
-function unreachable(what: string): () => never {
-  return () => {
-    throw new Error(`${what} must not be reached`);
-  };
-}
-
 describe("BaselineRevalidation", () => {
   test("checks red-run in the dispatch's own environment version are trusted as they are: nothing runs", async () => {
     const events: unknown[] = [];
     const job = new BaselineRevalidation({
-      dispatchCells: { environmentScope: unreachable("an environment scope"), checkCells: unreachable("a check cell"), checkoutDir: unreachable("a checkout") },
+      dispatchCells: { environmentScope: notExercised("an environment scope"), checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
       attemptPolicy: { perCommandTimeoutSeconds: 30 },
       eventSink: { emit: (event) => void events.push(event) },
       logger: recordingLogger(),

@@ -14,7 +14,8 @@ import { FirstPlanner, PlanningService, Replanner, startWorkItem, createReplanSt
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
-import { memoryStepContainment, parseWorkItemId, recordingLogger, type ProjectId, type StepContainment } from "@ashara/shared";
+import { parseWorkItemId, type ProjectId, type StepContainment } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";

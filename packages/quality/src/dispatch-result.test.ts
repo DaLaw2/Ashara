@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, test } from "vitest";
-import { createWorkItemId, recordingLogger, wrapError } from "@ashara/shared";
+import { createWorkItemId, wrapError } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { EXECUTION_STATUSES, NO_AGENT, environmentBlocked } from "./dispatch-result.js";
 import type { ExecutionResult } from "./dispatch-result.js";
 

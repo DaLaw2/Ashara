@@ -20,7 +20,7 @@ function composesEveryContext(rule: PackageRule | undefined): boolean {
   return rule !== undefined && ((rule.allow.length === 1 && rule.allow[0] === "*") || (rule.importers !== null && rule.importers.length === 0));
 }
 
-const PackageExportsSchema = z.object({ exports: z.record(z.string(), z.string()) });
+export const PackageExportsSchema = z.object({ exports: z.record(z.string(), z.string()) });
 
 /** The package-relative files a relative `export ... from` statement of `file` re-exports from. */
 const RELATIVE_REEXPORT_RE = /\bexport\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*["'](\.{1,2}\/[^"']*)["']/g;

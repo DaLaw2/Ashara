@@ -10,6 +10,7 @@ import {
   MEASURED_P95_MS,
   PODMAN_HOOK_TIMEOUT_MS,
   PODMAN_MAX_WORKERS,
+  PODMAN_TEST_FILES,
   PODMAN_TEST_TIMEOUT_MS,
   TIMEOUT_MULTIPLE,
   killedAtTimeout,
@@ -65,6 +66,11 @@ describe("the podman project", () => {
         `project ${name} also runs podman files`,
       ).toEqual([]);
     }
+  });
+
+  test("names no file that does not exist: an entry that matches nothing holds no test", () => {
+    const unmatched = PODMAN_TEST_FILES.filter((entry) => git(["ls-files", "--", `:(glob)${entry}`]).length === 0);
+    expect(unmatched).toEqual([]);
   });
 
   test("runs at most PODMAN_MAX_WORKERS files at once under the lane's --maxWorkers, in a group of its own", () => {

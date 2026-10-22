@@ -8,7 +8,7 @@ import { LlmCallRepository } from "@ashara/finance";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 
 // An admitted call's estimate is durable: a process that dies between a call's
 // admission and its record leaves a row the next process still counts. Against Postgres; no real

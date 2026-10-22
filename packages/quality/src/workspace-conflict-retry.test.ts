@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupWorkdir, commitAllChanges, commitPartialWork, createWorkdir, createWorkdirForRetry, ensureTargetGitInit } from "@ashara/execution-infra";
 import type { WorkdirInfo } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { ConflictRetryUnprepared, conflictWithMain, mainMergedForRetry, stagedConflictMarkers, taskBranchName, tentativeMerge } from "./merge.js";
 import type { MainConflict } from "./merge.js";
 

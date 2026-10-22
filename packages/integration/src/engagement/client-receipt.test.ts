@@ -10,7 +10,7 @@ import { ClientChanges, ClientMessageRepository, ClientReceipts, ClientStops, Vi
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { createClientChangeStore } from "@ashara/server/client-change-store";
 import { createClientReceiptStore } from "@ashara/server/client-receipt-store";

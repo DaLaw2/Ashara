@@ -134,7 +134,11 @@ interface CycleComplete {
   readonly interrupted: number;
 }
 
-export interface CoreLoopDeps {
+/**
+ * The loop's own runtime and the board every step group reads: its config, logs, work items, events,
+ * projects, the spend cap and the containment of each step's faults.
+ */
+export interface LoopCore {
   readonly config: CoreLoopConfig;
   /** Where each cycle's tally is written: the server log's event writer. */
   readonly cycleLog: { emit(event: CycleComplete): void };
@@ -142,7 +146,6 @@ export interface CoreLoopDeps {
   readonly logger: Logger;
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
-  readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;
   /**
    * Holds each project's target workspace path and its status:
    * the gate admits only active projects' tasks and blocks a project with a bad
@@ -151,18 +154,6 @@ export interface CoreLoopDeps {
    * ProjectHaltRepository satisfies it.
    */
   readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts & SettledTargets;
-  readonly dispatchService: Pick<DispatchService, "execute">;
-  /** Z0's acceptance sweep of a project on main HEAD (Quality; no model is called). */
-  readonly acceptanceSweeper: Pick<AcceptanceSweeper, "sweepForAcceptance">;
-  /** The acceptance sweeps recorded on main: which projects are ready, and their verdicts. */
-  readonly acceptance: AcceptanceStore;
-  /** Z0's terminal sweep of a stopped or halted project on main HEAD (Quality; no model is called). */
-  readonly terminalSweeper: Pick<TerminalSweeper, "sweepForTerminal">;
-  /** The terminal sweeps recorded: which stops and halt episodes are owed one, and each one's record. */
-  readonly terminalSweeps: TerminalSweepStore;
-  /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */
-  readonly deliveredReports: LiaisonDeliveredReports;
-  readonly failureRouter: FailureRecoveryDeps["failureRouter"];
   /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */
   readonly spendCap: SpendCapPort;
   /**
@@ -170,6 +161,12 @@ export interface CoreLoopDeps {
    * escape to the cycle instead: a spend-cap refusal, which halts at the cap.
    */
   readonly containment: StepContainment;
+  /** How a cycle's batch runs: production's concurrentTaskLanes runs every task at once. */
+  readonly taskLanes: TaskLanes;
+}
+
+/** Engagement's Liaison reading the client's inbound messages: stops, receipts, changes, the tender and answers. */
+interface ClientIntakeSteps {
   /**
    * The Liaison's handling of the client's stops, run first in every cycle,
    * before the spend-cap check: a stopped project is never intaken, planned or gated.
@@ -194,6 +191,10 @@ export interface CoreLoopDeps {
    * an answer read before the first plan is planned on.
    */
   readonly liaisonAnswers: LiaisonAnswers;
+}
+
+/** Organization's roster and Delivery's plans: the first plan of each project and each revision. */
+interface PlanningSteps {
   /** Organization's roster for each project with vision v1 and none, run after intake. */
   readonly rosterDerivation: RosterDerivationStep;
   /** Delivery's first plan of each project awaiting one (and holding a roster), run after the roster step. */
@@ -203,13 +204,13 @@ export interface CoreLoopDeps {
    * tasks is in progress; run after the first plans, before the planning reports.
    */
   readonly replanning: Replanning;
-  /** The Liaison's reports on recorded planning outcomes and plan revisions, run after planning. */
-  readonly planReports: LiaisonPlanReports;
-  /**
-   * The stack each merged Sprint 0 task chose, made an Inferred assumption in a new vision
-   * version and reported to the client once; run every cycle, at the budget cap too (no LLM call).
-   */
-  readonly stackChoices: LiaisonStackChoices;
+}
+
+/** A task's dispatch, the routing of its result, and the cells and substrate its attempts run on. */
+export interface DispatchSteps {
+  readonly dispatchService: Pick<DispatchService, "execute">;
+  readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;
+  readonly failureRouter: FailureRecoveryDeps["failureRouter"];
   /** Quality's durable record of check disputes: their count per check task bounds the reopens. */
   readonly checkDisputes: CheckDisputeRecord;
   /**
@@ -224,31 +225,83 @@ export interface CoreLoopDeps {
    */
   readonly checkSetFreeze: CheckSetFreeze;
   /**
-   * The Liaison's one report per project halt and per resumption; run every cycle, at the budget
-   * cap too (no LLM call), and once more when the deployment cap stops the loop.
-   */
-  readonly blockReports: LiaisonBlockReports;
-  /**
-   * The Liaison's early warning on each project's work ledger: one
-   * report per zone and plan revision, the red zone's to the operator too; run every cycle after the
-   * block reports, before the spend-cap check (no LLM call).
-   */
-  readonly burnWarnings: LiaisonBurnWarnings;
-  /** The substrate probe an infrastructure halt waits on; run each cycle while a project is so halted. */
-  readonly infrastructureProbe: InfrastructureProbe;
-  /**
-   * Removes every cell this process still holds, run each cycle before anything is dispatched: no
-   * attempt is in flight then, so each one held is a cell whose teardown failed. Never throws.
-   */
-  readonly heldCells: { release(): Promise<void> };
-  /**
    * The roster role doing a project's environment work, from its latest roster: the owner of the
    * environment task an implementation's request opens. `none`, with
    * why, when the roster names no such role; a roster that cannot be read throws.
    */
   readonly environmentOwner: (projectId: ProjectId) => Promise<EnvironmentOwner>;
-  /** How a cycle's batch runs: production's concurrentTaskLanes runs every task at once. */
-  readonly taskLanes: TaskLanes;
+  /**
+   * Removes every cell this process still holds, run each cycle before anything is dispatched: no
+   * attempt is in flight then, so each one held is a cell whose teardown failed. Never throws.
+   */
+  readonly heldCells: { release(): Promise<void> };
+  /** The substrate probe an infrastructure halt waits on; run each cycle while a project is so halted. */
+  readonly infrastructureProbe: InfrastructureProbe;
+}
+
+/** Quality's sweeps of main (no model is called) and the records of each. */
+export interface SweepSteps {
+  /** Z0's acceptance sweep of a project on main HEAD. */
+  readonly acceptanceSweeper: Pick<AcceptanceSweeper, "sweepForAcceptance">;
+  /** The acceptance sweeps recorded on main: which projects are ready, and their verdicts. */
+  readonly acceptance: AcceptanceStore;
+  /** Z0's terminal sweep of a stopped or halted project on main HEAD. */
+  readonly terminalSweeper: Pick<TerminalSweeper, "sweepForTerminal">;
+  /** The terminal sweeps recorded: which stops and halt episodes are owed one, and each one's record. */
+  readonly terminalSweeps: TerminalSweepStore;
+}
+
+/** Engagement's Liaison reporting to the client; none makes an LLM call. */
+interface ReportingSteps {
+  /** The Liaison's one delivered report per accepted project; run every cycle. */
+  readonly deliveredReports: LiaisonDeliveredReports;
+  /** The Liaison's reports on recorded planning outcomes and plan revisions, run after planning. */
+  readonly planReports: LiaisonPlanReports;
+  /**
+   * The stack each merged Sprint 0 task chose, made an Inferred assumption in a new vision
+   * version and reported to the client once; run every cycle, at the budget cap too.
+   */
+  readonly stackChoices: LiaisonStackChoices;
+  /**
+   * The Liaison's one report per project halt and per resumption; run every cycle, at the budget
+   * cap too, and once more when the deployment cap stops the loop.
+   */
+  readonly blockReports: LiaisonBlockReports;
+  /**
+   * The Liaison's early warning on each project's work ledger: one
+   * report per zone and plan revision, the red zone's to the operator too; run every cycle after the
+   * block reports, before the spend-cap check.
+   */
+  readonly burnWarnings: LiaisonBurnWarnings;
+}
+
+/** What the core loop runs on, one port per step group; each group's owner context implements it. */
+export interface CoreLoopDeps {
+  readonly loop: LoopCore;
+  readonly client: ClientIntakeSteps;
+  readonly planning: PlanningSteps;
+  readonly dispatch: DispatchSteps;
+  readonly sweeps: SweepSteps;
+  readonly reporting: ReportingSteps;
+}
+
+/** What one task's dispatch and the routing of its result run on: the loop's own board and the dispatch steps. */
+export type DispatchRunDeps = Pick<CoreLoopDeps, "loop" | "dispatch">;
+
+/** The members of each step group a caller supplies in place of what a builder of CoreLoopDeps makes. */
+export type CoreLoopOverrides = { readonly [Group in keyof CoreLoopDeps]?: Partial<CoreLoopDeps[Group]> };
+
+/** `base` with each group's overridden members replaced: the one merge every builder of CoreLoopDeps applies. */
+export function withOverrides(base: CoreLoopDeps, overrides: CoreLoopOverrides): CoreLoopDeps {
+  // eslint-disable-next-line no-restricted-syntax -- the merge both builders apply, every group read from `base`
+  return {
+    loop: { ...base.loop, ...overrides.loop },
+    client: { ...base.client, ...overrides.client },
+    planning: { ...base.planning, ...overrides.planning },
+    dispatch: { ...base.dispatch, ...overrides.dispatch },
+    sweeps: { ...base.sweeps, ...overrides.sweeps },
+    reporting: { ...base.reporting, ...overrides.reporting },
+  };
 }
 
 /**

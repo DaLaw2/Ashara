@@ -3,14 +3,16 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { CoreLoop, DEFAULT_CONFIG, ProjectHaltRepository, concurrentTaskLanes, runAcceptanceSweeps } from "@ashara/delivery";
+import { CoreLoop, DEFAULT_CONFIG, ProjectHaltRepository, runAcceptanceSweeps } from "@ashara/delivery";
+import { idleProjectRepo, inertWorkItemRepo } from "@ashara/delivery/testing";
 import type { CoreLoopDeps } from "@ashara/delivery";
 import { ClientMessageRepository, ClientStops, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AcceptanceSweep } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
-import { memoryStepContainment, recordingLogger } from "@ashara/shared";
+import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { createAcceptanceStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 
 // Every sweep of main records the outcome of each stored check it ran and one evidence row per
 // guarantee of the vision version in force, a guarantee no check decides included with no check; and
@@ -132,89 +134,31 @@ async function evidenceOf(sweepId: string): Promise<Array<z.infer<typeof evidenc
   return z.array(evidenceRow).parse(result.rows);
 }
 
-function notExercised(label: string): () => never {
-  return () => {
-    throw new Error(`${label}: not exercised`);
-  };
-}
-
-/** The loop with every step inert but the client's stops and the terminal sweeps, both over Postgres and this suite's projects. */
+/** The loop as production composes it over the test database, every step idle but the client's stops and the terminal sweeps, both over Postgres and this suite's projects. */
 function loopDeps(sweep: (projectId: ProjectId) => AcceptanceSweep): CoreLoopDeps {
   const containment = memoryStepContainment(() => false);
   const stops = createClientStopStore(db);
   const terminal = createTerminalSweepStore(db);
-  return {
-    config: { ...DEFAULT_CONFIG, workdirBase: `/tmp/${NAME_PREFIX}-unused` },
-    cycleLog: { emit: () => {} },
-    logger: recordingLogger(),
-    containment,
-    workItemRepo: {
-      create: notExercised("create"),
-      findById: notExercised("findById"),
-      listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
-      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
-      listIdsByStatus: notExercised("listIdsByStatus"),
-      save: notExercised("save"),
-      incrementDispatchCount: notExercised("incrementDispatchCount"),
-      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      saveRefundedOverflow: notExercised("saveRefundedOverflow"),
-      recordCrashOrphan: notExercised("recordCrashOrphan"),
-      saveOrphanExit: notExercised("saveOrphanExit"),
-      saveRefunded: notExercised("saveRefunded"),
-      recordMergeCommit: notExercised("recordMergeCommit"),
-      addDependency: notExercised("addDependency"),
-      getDependencies: notExercised("getDependencies"),
-      findChildren: notExercised("findChildren"),
-      listDependenciesByProject: notExercised("listDependenciesByProject"),
-      listCorrectionHeld: notExercised("listCorrectionHeld"),
-      withTransaction: notExercised("withTransaction"),
+  return composedLoopOverTestDb(
+    {
+      db,
+      config: { ...DEFAULT_CONFIG, workdirBase: `/tmp/${NAME_PREFIX}-unused` },
+      logger: recordingLogger(),
+      spendCap: { deploymentStop: async () => null, refusalOf: () => null },
+      containment,
     },
-    eventStore: { publish: notExercised("publish") },
-    failedApproachRepo: { record: notExercised("record") },
-    projectRepo: {
-      get: notExercised("get"),
-      recordWorkspacePath: notExercised("recordWorkspacePath"),
-      listActiveIds: async () => [],
-      block: notExercised("block"),
-      listInfrastructureHalted: async () => [],
-      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-      blockAllActive: async () => [],
-      listWithWorkspace: async () => [],
+    {
+      // The loop's board is idle: only this suite's stops and terminal sweeps are read.
+      loop: { workItemRepo: inertWorkItemRepo(), projectRepo: idleProjectRepo() },
+      client: {
+        clientStops: new ClientStops({ ...stops, openStops: async () => (await stops.openStops()).filter((stop) => ourProjects.has(stop.projectId)) }, containment),
+      },
+      sweeps: {
+        terminalSweeper: { sweepForTerminal: async (projectId) => sweep(projectId) },
+        terminalSweeps: { ...terminal, dueTerminalSweeps: async () => (await terminal.dueTerminalSweeps()).filter((due) => ourProjects.has(due.projectId)) },
+      },
     },
-    dispatchService: { execute: notExercised("execute") },
-    failureRouter: { route: notExercised("route") },
-    spendCap: { deploymentStop: async () => null, refusalOf: () => null },
-    clientStops: new ClientStops({ ...stops, openStops: async () => (await stops.openStops()).filter((stop) => ourProjects.has(stop.projectId)) }, containment),
-    clientReceipts: { runPending: async () => [] },
-    clientChanges: { runPending: async () => [] },
-    stackChoices: { runPending: async () => [] },
-    liaisonIntake: { runPending: async () => [] },
-    liaisonAnswers: { runPending: async () => [] },
-    rosterDerivation: { runPending: async () => [] },
-    firstPlanning: { runPending: async () => [] },
-    replanning: { runPending: async () => [] },
-    planReports: { runPending: async () => [] },
-    checkDisputes: { record: notExercised("checkDisputes") },
-    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    checkSetFreeze: { freezeFor: async () => [] },
-    blockReports: { runPending: async () => [] },
-    burnWarnings: { runPending: async () => [] },
-    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
-    heldCells: { release: async () => {} },
-    environmentOwner: notExercised("environmentOwner"),
-    taskLanes: concurrentTaskLanes,
-    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
-    acceptance: {
-      readyForAcceptance: async () => [],
-      recordAccepted: notExercised("recordAccepted"),
-      recordSweepFault: notExercised("recordSweepFault"),
-      recordDefect: notExercised("recordDefect"),
-    },
-    terminalSweeper: { sweepForTerminal: async (projectId) => sweep(projectId) },
-    terminalSweeps: { ...terminal, dueTerminalSweeps: async () => (await terminal.dueTerminalSweeps()).filter((due) => ourProjects.has(due.projectId)) },
-    deliveredReports: { runPending: async () => [] },
-  };
+  );
 }
 
 beforeAll(async () => {

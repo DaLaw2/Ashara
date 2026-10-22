@@ -52,6 +52,34 @@ const BASE_SYNTAX = [
     message:
       "Swallowed promise rejection (Discipline C). A rejection handler that takes no parameter, or returns nothing but a constant, drops the cause unseen: log it at warn or above with its cause, or let it propagate. To wait for a promise to settle whatever its outcome, while the rejection reaches its caller by another reference, use Promise.allSettled.",
   },
+  {
+    // The core loop's deps have two builders, production's composition (server's composeCoreLoopDeps)
+    // and the unit tests' inert builder (@ashara/delivery/testing), each one argued disable; a hand
+    // literal elsewhere is a copy of the wiring that drifts from production's.
+    // Blind spots: a literal built under another type name (an alias of CoreLoopDeps, or a group
+    // type spread into one), a literal passed straight to a function whose parameter is CoreLoopDeps
+    // other than the ones named here, and a return of a literal from a function whose return type is
+    // inferred.
+    selector: [
+      "VariableDeclarator[id.typeAnnotation.typeAnnotation.typeName.name='CoreLoopDeps'] > ObjectExpression",
+      ":matches(TSAsExpression, TSSatisfiesExpression)[typeAnnotation.typeName.name='CoreLoopDeps'] > ObjectExpression",
+      ":function[returnType.typeAnnotation.typeName.name='CoreLoopDeps'] > BlockStatement > ReturnStatement > ObjectExpression",
+      "ArrowFunctionExpression[returnType.typeAnnotation.typeName.name='CoreLoopDeps'] > ObjectExpression",
+      "CallExpression[callee.name='withOverrides'][arguments.0.type='ObjectExpression']",
+      "NewExpression[callee.name='CoreLoop'][arguments.0.type='ObjectExpression']",
+    ].join(", "),
+    message:
+      "Hand-built CoreLoopDeps. Compose it with composeCoreLoopDeps (@ashara/server/compose-core-loop) and its overrides, or in a unit test with inertCoreLoopDeps (@ashara/delivery/testing) and its overrides.",
+  },
+  {
+    // A test of the composition reads the composed object, never the composition's source text.
+    // Blind spot: a path assembled from parts none of which names a compose module, and a read
+    // through another API (a stream, a child process).
+    selector:
+      "CallExpression:matches([callee.name=/^readFileSync$|^readFile$/], [callee.property.name=/^readFileSync$|^readFile$/]) :matches(Literal[value=/compose[\\w.-]*\\.ts/], TemplateElement[value.raw=/compose[\\w.-]*\\.ts/])",
+    message:
+      "Reading a compose module's source text. Test the object it composes (composeCoreLoopDeps, composeVerifiers) instead of matching its text.",
+  },
 ];
 
 const PRODUCTION_SYNTAX = [

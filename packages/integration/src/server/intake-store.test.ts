@@ -12,7 +12,8 @@ import type { IntakeStore } from "@ashara/engagement";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { recordingLogger, systemClock, type ProjectId } from "@ashara/shared";
+import { systemClock, type ProjectId } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import type { StepContainment } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 

@@ -1,17 +1,12 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { SubstrateUnavailable } from "@ashara/execution-infra";
 import { parseProjectId } from "@ashara/shared";
+import { notExercised } from "@ashara/shared/testing";
 import { AcceptanceSweeper, observeAcceptanceSweeps } from "./acceptance-sweep.js";
 import type { AcceptanceSweep, MainSweepDeps } from "./acceptance-sweep.js";
 import { TerminalSweeper } from "./terminal-sweep.js";
 
 const projectId = parseProjectId("22222222-2222-4222-8222-222222222222", "test");
-
-function unreachable(what: string): () => never {
-  return () => {
-    throw new Error(`${what} must not be reached`);
-  };
-}
 
 /** Deps whose substrate probe throws `probeError`, and nothing past the probe may be reached. */
 function probeFailing(probeError: Error): MainSweepDeps {
@@ -22,14 +17,14 @@ function probeFailing(probeError: Error): MainSweepDeps {
         probeSubstrate: async () => {
           throw probeError;
         },
-        createCell: unreachable("a cell"),
+        createCell: notExercised("a cell"),
       },
       instance: "instance-1",
     },
     attemptPolicy: { perCommandTimeoutSeconds: 30 },
-    environment: { images: { build: unreachable("an image build"), prune: unreachable("an image prune") }, statements: { record: unreachable("a statement"), forVersion: unreachable("a statement") } },
-    checks: { completedOf: unreachable("the stored checks") },
-    teardown: { teardownCell: unreachable("a teardown") },
+    environment: { images: { build: notExercised("an image build"), prune: notExercised("an image prune") }, statements: { record: notExercised("a statement"), forVersion: notExercised("a statement") } },
+    checks: { completedOf: notExercised("the stored checks") },
+    teardown: { teardownCell: notExercised("a teardown") },
   };
 }
 

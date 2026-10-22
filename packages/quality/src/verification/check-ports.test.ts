@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { createWorkItemId, parseProjectId, recordingLogger } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { CheckAuthoring, VerifiedDispatch } from "../dispatch-result.js";
 import { CheckRecorder } from "../task-checks.js";
 import type { CompletedTaskChecks, TaskChecks } from "../task-checks.js";
@@ -14,15 +15,9 @@ const dispatch: VerifiedDispatch = {
   environment: { kind: "base-cell", image: "base", digest: "sha256:0" },
 };
 
-function unreachable(what: string): () => never {
-  return () => {
-    throw new Error(`${what} must not be reached`);
-  };
-}
-
 function ports(events: Array<Record<string, unknown>> = []): CheckPorts {
   return new CheckPorts({
-    dispatchCells: { environmentScope: unreachable("an environment scope"), checkCells: unreachable("a check cell"), checkoutDir: unreachable("a checkout") },
+    dispatchCells: { environmentScope: notExercised("an environment scope"), checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
     eventSink: { emit: (event) => void events.push(event) },
     logger: recordingLogger(),
   });

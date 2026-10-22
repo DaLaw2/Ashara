@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
 import { ensureTargetGitInit } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared";
+import { recordingLogger } from "@ashara/shared/testing";
 import { commitMerge, deleteSettledTaskBranch, releaseMergedTaskCheckout, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
 
 // ---------------------------------------------------------------------------

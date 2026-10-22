@@ -7,7 +7,7 @@ import { projectBlockCause } from "../project-halt.js";
 import type { WorkItem } from "../domain/index.js";
 import { PlanningService, failWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
-import type { CoreLoopDeps, TaskRefusal, TaskResult } from "../types.js";
+import type { DispatchSteps, TaskRefusal, TaskResult } from "../types.js";
 import { blockedResult, completedResult, failedResult } from "../types.js";
 import { mergeOnMainOf, OrphanUnreconciled, releaseMergedTask } from "../orphan-merge.js";
 import { publishBestEffort } from "./audit-events.js";
@@ -28,7 +28,7 @@ import {
 import type { ExecutionRoutingDeps } from "./routing-deps.js";
 
 /** What a dispatch returned. */
-type DispatchResult = Awaited<ReturnType<CoreLoopDeps["dispatchService"]["execute"]>>;
+type DispatchResult = Awaited<ReturnType<DispatchSteps["dispatchService"]["execute"]>>;
 
 /** A dispatch's result once routed. */
 export interface RoutedExecution {
