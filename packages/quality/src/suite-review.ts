@@ -52,17 +52,21 @@ import type { TaskChecks } from "./task-checks.js";
 // so a grounded contradiction still needs agreement. An undecided item, a claim that no check decides an item,
 // overrules the stored record that some check decides it, and no run can witness an
 // absence. Either acts only when the second review reaches the same finding; otherwise it is kept
-// as advisory, and an undecided item stays undecided (undecided_items) and is reported unverified,
-// never covered.
+// as advisory, and an undecided item stays undecided on its check task (undecided_items) and is
+// reported unverified, never covered. It speaks of that check task's checks alone: it lowers their
+// evidence on the item and no other check task's.
 // A review that routes nothing is a claim about the checks too:
 // that they decide the items their tasks cite. An empty problem list is the identity element of a
 // verdict and no evidence of one, so the second review is asked on every review, clean or not, and
 // a covered item reads as verified only when that second review answered and named nothing about
 // it. An item it named, or every covered item when it failed, is stored undecided and reported
 // unverified, with why; nothing reopens on the second review's own findings, which no first finding
-// raised.
+// raised. An outside-vision rejection names no item: a check that asks more than the vision and
+// passes proves more, never less, so it is kept as advisory for the check's author. An item the
+// second review confirms clears what an earlier review left undecided on the same check task.
 // Two ratchets bound the rounds: a check task the review already reopened once
-// is not reopened for an undecided item again (the item stays undecided), and once the check set is
+// is not reopened for an undecided item again (the item stays undecided until a later review's
+// second opinion confirms it on that check task), and once the check set is
 // frozen, at the first implementation dispatched on it, no finding acts. Every judgement, and the
 // claim of a review that routes nothing, is recorded whole (suite_review_judgements,
 // suite_review_claims) before anything is routed, released or kept on it.
@@ -314,6 +318,8 @@ interface ReviewClaim {
   readonly secondFailure: string | null;
   /** The covered items it leaves undecided: reported unverified, never covered. */
   readonly unconfirmed: readonly UndecidedItem[];
+  /** The covered items the second review confirmed: an earlier review's undecided item on the same check task is cleared by them. */
+  readonly confirmed: readonly UndecidedItem[];
   readonly tiers: JudgeTiers;
 }
 
@@ -943,7 +949,7 @@ function undecidedItemOf(reviewTaskId: WorkItemId, finding: UndecidedItemFinding
 /**
  * Why a finding cannot act whatever a second review says, or null when the second review decides:
  * nothing acts on a frozen check set, and an undecided item does not reopen a check task this review
- * already reopened once.
+ * already reopened once. Either keeps the item undecided until a later review confirms it.
  */
 function ratchetOf(finding: ReviewFinding, frozen: boolean, suite: ReviewedSuite): Extract<JudgementBasis, "frozen" | "reopened-once"> | null {
   if (frozen) return "frozen";
@@ -985,8 +991,10 @@ type SecondVerdict =
  * those its findings already left undecided; an item no check claims is reported as decided by none.
  * A covered item reads as verified only when the second review answered and named nothing about it,
  * at the strength the claim records; the second review's findings act on nothing, the first having
- * raised none of them, and only leave the items they name unverified. A second review that failed at
- * every strength confirms no item: every covered one is unverified (fail closed).
+ * raised none of them, and only leave the items they name unverified, but for an outside-vision
+ * rejection, which names no item unverified. A second review that failed at every strength confirms
+ * no item: every covered one is unverified (fail closed). The items it confirms clear what an
+ * earlier review left undecided on the same check task.
  */
 function claimOf(
   suites: ReadonlyMap<string, ReviewedSuite>,
@@ -1013,14 +1021,44 @@ function claimOf(
       second: [],
       secondFailure: second.reason,
       unconfirmed: coveredItems,
+      confirmed: [],
       tiers: tiersOf(judged, firstModel, null),
     };
   }
   const found = second.data.problems;
-  const named = new Set(found.flatMap((finding) => itemsNamedBy(finding, suites)));
+  // A check that asks more than the vision and passes proves more of its items, never less: an
+  // outside-vision finding is the check author's to act on and leaves no item unverified.
+  const named = new Set(found.filter((finding) => !isOutsideVision(finding)).flatMap((finding) => itemsNamedBy(finding, suites)));
   const unconfirmed = coveredItems.filter((item) => named.has(itemKey(item.checkTaskId, item.itemId)));
+  const confirmed = coveredItems.filter((item) => !named.has(itemKey(item.checkTaskId, item.itemId)));
   const basis = unconfirmed.length === 0 ? "second-opinion-clean" : "second-opinion-found";
-  return { basis, covered, firstModel, secondReview: second.review, passedOver, second: found, secondFailure: null, unconfirmed, tiers: tiersOf(judged, firstModel, second.review) };
+  return {
+    basis,
+    covered,
+    firstModel,
+    secondReview: second.review,
+    passedOver,
+    second: found,
+    secondFailure: null,
+    unconfirmed,
+    confirmed,
+    tiers: tiersOf(judged, firstModel, second.review),
+  };
+}
+
+/**
+ * The outside-vision rejections the second review of a clean review made: none was raised by the
+ * first, so none reopens a check task, and none leaves an item unverified; each is kept as advisory
+ * for its check task's author.
+ */
+function secondOutsideVision(second: SecondVerdict): AdvisoryFinding[] {
+  if (second.kind === "failed") return [];
+  return second.data.problems.filter(isOutsideVision).map((finding) => ({
+    checkTaskIds: namedBy(finding),
+    kind: finding.kind,
+    finding: findingLine(finding),
+    why: `only the second review, ${secondReviewText(second.review)}, raised it; a check that asks more than the vision proves more, never less, so it leaves no item unverified`,
+  }));
 }
 
 /** The claim as the dispatch reports it: why, at what strength, with why the second review failed cut to its advisory length. */
@@ -1184,7 +1222,7 @@ export class SuiteReviewer implements SuiteReviewing {
     } catch (err) {
       throw new SuiteJudgementsUnrecorded(task.id, judgements.length, { cause: err });
     }
-    if (claim !== null) return { kind: "clean", ...reviewed, released, advisory, undecided, claim: claimOutcome(claim) };
+    if (claim !== null) return { kind: "clean", ...reviewed, released, advisory: [...advisory, ...secondOutsideVision(secondAsked)], undecided, claim: claimOutcome(claim) };
     return { kind: "problems", ...reviewed, released, advisory, undecided, problems: routed };
   }
 

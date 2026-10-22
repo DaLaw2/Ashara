@@ -8,7 +8,9 @@ const FAULT_SETS = ["available", "deferred"] as const;
 
 type Check = Evidence["checks"][number];
 
-const SINGLE: readonly Check[] = OUTCOMES.flatMap((outcome) => CLASSES.map((cls, i) => ({ checkId: `c-${outcome}-${i}`, outcome, class: cls })));
+const SINGLE: readonly Check[] = OUTCOMES.flatMap((outcome) =>
+  CLASSES.flatMap((cls, i) => [false, true].map((lowered) => ({ checkId: `c-${outcome}-${i}-${String(lowered)}`, outcome, class: cls, lowered }))),
+);
 
 /** Every check set of up to two checks over every outcome and class, the empty set first. */
 const CHECK_SETS: readonly (readonly Check[])[] = [
@@ -34,18 +36,17 @@ interface Case {
 
 const CASES: readonly Case[] = Object.entries(GUARANTEES).flatMap(([name, guarantee]) =>
   FAULT_SETS.flatMap((faultSet) =>
-    [false, true].flatMap((reviewLowers) =>
-      CHECK_SETS.map((checks) => ({
-        label: `${name} ${faultSet} reviewLowers=${String(reviewLowers)} [${checks.map((c) => `${c.class}:${c.outcome}`).join(", ")}]`,
-        guarantee,
-        evidence: { checks: [...checks], reviewLowers },
-        faultSet,
-      })),
-    ),
+    CHECK_SETS.map((checks) => ({
+      label: `${name} ${faultSet} [${checks.map((c) => `${c.class}:${c.outcome}${c.lowered ? ":lowered" : ""}`).join(", ")}]`,
+      guarantee,
+      evidence: { checks: [...checks] },
+      faultSet,
+    })),
   ),
 );
 
 const executedPassed = (e: Evidence): boolean => e.checks.some((c) => (c.class === "witness" || c.class === "implementer-visible") && c.outcome === "passed");
+const standingPassed = (e: Evidence): boolean => e.checks.some((c) => (c.class === "witness" || c.class === "implementer-visible") && c.outcome === "passed" && !c.lowered);
 const executedFailed = (e: Evidence): boolean => e.checks.some((c) => (c.class === "witness" || c.class === "implementer-visible") && c.outcome === "failed");
 
 function mismatches(predicate: (c: Case, v: Verdict) => boolean): string[] {
@@ -55,18 +56,18 @@ function mismatches(predicate: (c: Case, v: Verdict) => boolean): string[] {
   });
 }
 
-describe("verdictOf over every combination of outcomes, classes, reviewLowers and fault sets", () => {
+describe("verdictOf over every combination of outcomes, classes, lowerings and fault sets", () => {
   test("the table covers every case it claims to", () => {
-    expect(CHECK_SETS).toHaveLength(1 + 12 + 144);
-    expect(CASES).toHaveLength(5 * 2 * 2 * 157);
+    expect(CHECK_SETS).toHaveLength(1 + 24 + 576);
+    expect(CASES).toHaveLength(5 * 2 * 601);
   });
 
   test("every verdict parses as a Verdict", () => {
     expect(mismatches((_, v) => VerdictSchema.safeParse(v).success)).toEqual([]);
   });
 
-  test("pass only when some executed check passed and none failed", () => {
-    expect(mismatches((c, v) => v.kind !== "pass" || (executedPassed(c.evidence) && !executedFailed(c.evidence)))).toEqual([]);
+  test("pass only when some executed check passed that no review lowers, and none failed", () => {
+    expect(mismatches((c, v) => v.kind !== "pass" || (standingPassed(c.evidence) && !executedFailed(c.evidence)))).toEqual([]);
   });
 
   test("any executed check that failed is fail, whatever reviews or the guarantee say", () => {
@@ -82,8 +83,8 @@ describe("verdictOf over every combination of outcomes, classes, reviewLowers an
     expect(mismatches((c, v) => !unexecuted(c) || v.kind === "unjudged")).toEqual([]);
   });
 
-  test("a review that lowers a guarantee with passing executed checks makes it unjudged, never pass", () => {
-    expect(mismatches((c, v) => !c.evidence.reviewLowers || v.kind !== "pass")).toEqual([]);
+  test("a guarantee every passing executed check of which a review lowers is unjudged, never pass", () => {
+    expect(mismatches((c, v) => !executedPassed(c.evidence) || standingPassed(c.evidence) || v.kind !== "pass")).toEqual([]);
   });
 
   test("a stored-data guarantee is never pass while the fault set is deferred", () => {
@@ -101,15 +102,14 @@ describe("verdictOf over every combination of outcomes, classes, reviewLowers an
     expect(mismatches((c, v) => c.guarantee.refutedBy.length > 0 || v.kind !== "pass")).toEqual([]);
   });
 
-  test("a checkable guarantee with passing executed checks, no failure and no lowering review is pass", () => {
+  test("a checkable guarantee with a passing executed check no review lowers, no failure and no failed review reading is pass", () => {
     const deserves = (c: Case) =>
       c.guarantee.refutedBy.length > 0 &&
       c.guarantee.observation !== "unclassified" &&
       c.guarantee.verification !== "not-by-ashara" &&
       !(c.guarantee.observation === "stored-data" && c.faultSet === "deferred") &&
-      executedPassed(c.evidence) &&
+      standingPassed(c.evidence) &&
       !executedFailed(c.evidence) &&
-      !c.evidence.reviewLowers &&
       !c.evidence.checks.some((k) => k.class === "review-only" && k.outcome === "failed");
     expect(mismatches((c, v) => !deserves(c) || v.kind === "pass")).toEqual([]);
   });
@@ -117,40 +117,57 @@ describe("verdictOf over every combination of outcomes, classes, reviewLowers an
 
 describe("verdictOf names why a guarantee is unjudged", () => {
   const output = GUARANTEES.output;
-  const passing: Check = { checkId: "c1", outcome: "passed", class: "implementer-visible" };
-  const witnessed: Check = { checkId: "c2", outcome: "passed", class: "witness" };
-  const reviewClaim: Check = { checkId: "r1", outcome: "passed", class: "review-only" };
+  const passing: Check = { checkId: "c1", outcome: "passed", class: "implementer-visible", lowered: false };
+  const witnessed: Check = { checkId: "c2", outcome: "passed", class: "witness", lowered: false };
+  const reviewClaim: Check = { checkId: "r1", outcome: "passed", class: "review-only", lowered: false };
+  const lowered: Check = { checkId: "c3", outcome: "passed", class: "implementer-visible", lowered: true };
 
   test("an empty evidence set has no executed evidence", () => {
-    expect(verdictOf(output, { checks: [], reviewLowers: false }, "available")).toEqual({ kind: "unjudged", reason: "no-executed-evidence" });
+    expect(verdictOf(output, { checks: [] }, "available")).toEqual({ kind: "unjudged", reason: "no-executed-evidence" });
   });
 
   test("a review claim alone, however clean, is review-only", () => {
-    expect(verdictOf(output, { checks: [reviewClaim], reviewLowers: false }, "available")).toEqual({ kind: "unjudged", reason: "review-only" });
+    expect(verdictOf(output, { checks: [reviewClaim] }, "available")).toEqual({ kind: "unjudged", reason: "review-only" });
   });
 
   test("a stored-data guarantee with passing checks is stored-data-unjudged while deferred, pass once available", () => {
-    const evidence = { checks: [passing], reviewLowers: false };
+    const evidence = { checks: [passing] };
     expect(verdictOf(GUARANTEES.storedData, evidence, "deferred")).toEqual({ kind: "unjudged", reason: "stored-data-unjudged" });
     expect(verdictOf(GUARANTEES.storedData, evidence, "available")).toEqual({ kind: "pass", evidence: "implementer-visible" });
   });
 
   test("a guarantee marked not verifiable by Ashara is not verified, even with passing checks and every fault set", () => {
-    const evidence = { checks: [passing, witnessed], reviewLowers: false };
+    const evidence = { checks: [passing, witnessed] };
     for (const faultSet of FAULT_SETS) expect(verdictOf(GUARANTEES.notVerifiable, evidence, faultSet)).toEqual({ kind: "unjudged", reason: "not-verifiable-by-ashara" });
   });
 
   test("a legacy guarantee is not checkable as written", () => {
-    expect(verdictOf(GUARANTEES.legacy, { checks: [passing], reviewLowers: false }, "available")).toEqual({ kind: "unjudged", reason: "not-checkable-as-written" });
+    expect(verdictOf(GUARANTEES.legacy, { checks: [passing] }, "available")).toEqual({ kind: "unjudged", reason: "not-checkable-as-written" });
   });
 
-  test("a lowering review turns a pass into lowered-by-review", () => {
-    expect(verdictOf(output, { checks: [passing], reviewLowers: true }, "available")).toEqual({ kind: "unjudged", reason: "lowered-by-review" });
+  test("a finding that lowers every passing executed check turns a pass into lowered-by-review", () => {
+    expect(verdictOf(output, { checks: [lowered] }, "available")).toEqual({ kind: "unjudged", reason: "lowered-by-review" });
+    expect(verdictOf(output, { checks: [lowered, { ...witnessed, lowered: true }] }, "available")).toEqual({ kind: "unjudged", reason: "lowered-by-review" });
+  });
+
+  test("a finding lowers only the check it speaks of: another passing executed check no finding stands against still passes the guarantee", () => {
+    expect(verdictOf(output, { checks: [lowered, passing] }, "available")).toEqual({ kind: "pass", evidence: "implementer-visible" });
+    expect(verdictOf(output, { checks: [lowered, witnessed] }, "available")).toEqual({ kind: "pass", evidence: "witness" });
+  });
+
+  test("with no passing executed check a guarantee stays unjudged, lowered or not", () => {
+    const notRun: Check = { checkId: "c4", outcome: "not-run", class: "implementer-visible", lowered: false };
+    expect(verdictOf(output, { checks: [notRun] }, "available")).toEqual({ kind: "unjudged", reason: "no-executed-evidence" });
+    expect(verdictOf(output, { checks: [{ ...notRun, lowered: true }, reviewClaim] }, "available")).toEqual({ kind: "unjudged", reason: "review-only" });
+  });
+
+  test("a lowered check that failed still fails the guarantee", () => {
+    expect(verdictOf(output, { checks: [{ ...lowered, outcome: "failed" }, passing] }, "available")).toEqual({ kind: "fail" });
   });
 
   test("a pass carries the weakest executed evidence class it rests on", () => {
-    expect(verdictOf(output, { checks: [witnessed], reviewLowers: false }, "available")).toEqual({ kind: "pass", evidence: "witness" });
-    expect(verdictOf(output, { checks: [witnessed, passing], reviewLowers: false }, "available")).toEqual({ kind: "pass", evidence: "implementer-visible" });
+    expect(verdictOf(output, { checks: [witnessed] }, "available")).toEqual({ kind: "pass", evidence: "witness" });
+    expect(verdictOf(output, { checks: [witnessed, passing] }, "available")).toEqual({ kind: "pass", evidence: "implementer-visible" });
   });
 });
 
@@ -161,17 +178,18 @@ describe("the vocabulary's schemas", () => {
     expect(VerdictSchema.safeParse({ kind: "pass", evidence: "review-only" }).success).toBe(false);
   });
 
-  test("evidence needs its review flag, and a check its outcome and class", () => {
-    expect(EvidenceSchema.safeParse({ checks: [] }).success).toBe(false);
-    expect(EvidenceSchema.safeParse({ checks: [{ checkId: "c1", outcome: "passed" }], reviewLowers: false }).success).toBe(false);
+  test("a check needs its outcome, class and lowering: a missing lowering is never read as unlowered", () => {
+    expect(EvidenceSchema.safeParse({ checks: [] }).success).toBe(true);
+    expect(EvidenceSchema.safeParse({ checks: [{ checkId: "c1", outcome: "passed", class: "witness" }] }).success).toBe(false);
+    expect(EvidenceSchema.safeParse({ checks: [{ checkId: "c1", outcome: "passed", lowered: false }] }).success).toBe(false);
   });
 });
 
 describe("judgeGuarantees: every guarantee of the version once, in its order", () => {
   const MAIN = "d".repeat(40);
   const SWEEP = { id: "sweep-1", mainCommit: MAIN };
-  const NONE: Evidence = { checks: [], reviewLowers: false };
-  const passed = (cls: "witness" | "implementer-visible" | "review-only", id = "c1") => ({ checkId: id, outcome: "passed" as const, class: cls });
+  const NONE: Evidence = { checks: [] };
+  const passed = (cls: "witness" | "implementer-visible" | "review-only", id = "c1") => ({ checkId: id, outcome: "passed" as const, class: cls, lowered: false });
   const IN_FORCE: readonly JudgedGuarantee[] = [
     { id: "G1", observation: "output", refutedBy: ["a get returns another value"], verification: "by-ashara" },
     { id: "G2", observation: "stored-data", refutedBy: ["a get misses an acknowledged put after a kill"], verification: "unmarked" },
@@ -183,10 +201,10 @@ describe("judgeGuarantees: every guarantee of the version once, in its order", (
 
   test("each verdict follows the evidence, with the class of evidence it names", () => {
     const verdicts = judgeGuarantees(IN_FORCE, 2, SWEEP, recorded({
-      G1: { checks: [passed("implementer-visible")], reviewLowers: false },
-      G2: { checks: [passed("implementer-visible", "c2")], reviewLowers: false },
-      G3: { checks: [{ checkId: "c3", outcome: "failed", class: "implementer-visible" }], reviewLowers: false },
-      G4: { checks: [passed("review-only", "r4")], reviewLowers: false },
+      G1: { checks: [passed("implementer-visible")] },
+      G2: { checks: [passed("implementer-visible", "c2")] },
+      G3: { checks: [{ checkId: "c3", outcome: "failed", class: "implementer-visible", lowered: false }] },
+      G4: { checks: [passed("review-only", "r4")] },
     }));
     expect(verdicts).toEqual([
       { guaranteeId: "G1", verdict: { kind: "pass", evidence: "implementer-visible" }, evidenceClass: "implementer-visible" },

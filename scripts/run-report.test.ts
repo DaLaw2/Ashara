@@ -373,6 +373,7 @@ describe("runReport, the body run-report prints", () => {
         second: [],
         secondFailure: "no second opinion answered",
         unconfirmed: [{ checkTaskId: check, itemId: "S9", itemText: "put survives a power loss" }],
+        confirmed: [],
         tiers: { judgeTier: "Strong", judgedTier: "Strong", relation: "equal" },
       },
     });

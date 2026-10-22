@@ -323,8 +323,8 @@ describe("a client's stop", () => {
     await sweepTerminalsOf(db, (id) => id === projectId);
     // Evidence naming a vision version the project does not hold: the sweep's records cannot be read as a table.
     await db.execute(sql`
-      INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks, review_lowers)
-      SELECT ${projectId}, s.id, 7, 'G1', NULL, '[]'::jsonb, false FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id}`);
+      INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks)
+      SELECT ${projectId}, s.id, 7, 'G1', NULL, '[]'::jsonb FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id}`);
 
     expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
     expect(await reports.reportPending()).toEqual([]);

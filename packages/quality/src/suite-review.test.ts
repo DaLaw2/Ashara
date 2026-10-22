@@ -312,9 +312,49 @@ describe("SuiteReviewer", () => {
             second: [],
             secondFailure: null,
             unconfirmed: [],
+            confirmed: [ITEM_A, ITEM_B],
             tiers: ABOVE_STRONG,
           },
         },
+      ]);
+    });
+
+    // A check that asks more than the vision and passes proves more of its items, never less.
+    test("an outside-vision rejection only the second review makes leaves no item unverified and is kept advisory for the check's author", async () => {
+      const recorded: Recorded[] = [];
+      const asksMore = {
+        checkTasks: [CHECK_B],
+        kind: "outside-vision",
+        check: "stdout-empty",
+        judgedItems: [REFUSAL.id],
+        missingClause: "an empty standard output",
+        problem: "stdout-empty requires an empty standard output, which no cited item asks for",
+        evidence: "sh checks/empty.sh",
+      };
+      const reviewer = reviewerWith({ llm: scripted([{ problems: [] }, { problems: [asksMore] }], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) });
+      const outcome = await reviewer.review(TASK, PROJECT_PATH);
+      expect(outcome).toMatchObject({ kind: "clean", undecided: [], claim: { basis: "second-opinion-clean", unconfirmed: [] } });
+      expect(outcome.advisory).toEqual([
+        {
+          checkTaskIds: [CHECK_B],
+          kind: "outside-vision",
+          finding: `check "stdout-empty" is outside the vision, requiring "an empty standard output": ${asksMore.problem}`,
+          why: expect.stringContaining("a check that asks more than the vision proves more, never less, so it leaves no item unverified"),
+        },
+      ]);
+      expect(recorded[0]?.claim).toMatchObject({ basis: "second-opinion-clean", second: [asksMore], unconfirmed: [], confirmed: [ITEM_A, ITEM_B] });
+    });
+
+    // A clean item still needs the second review's agreement: what it names or fails to confirm is never confirmed.
+    test("only the items the second review confirmed are confirmed: none when it names them or fails", async () => {
+      const recorded: Recorded[] = [];
+      const doubt = { checkTasks: [CHECK_B], kind: "undecided-item", item: REFUSAL.id, problem: "stdout-empty never feeds a malformed row", evidence: "sh checks/empty.sh" };
+      const failed = new SecondOpinionUnanswered({ avoid: STUB, strength: "other-family" }, OTHER_FAMILY, { cause: new Error("503 overloaded") });
+      await reviewerWith({ llm: scripted([{ problems: [] }, { problems: [doubt] }], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) }).review(TASK, PROJECT_PATH);
+      await reviewerWith({ llm: scripted([{ problems: [] }, failed], [], TWO_FAMILIES), source: source(), judgements: keep(recorded) }).review(TASK, PROJECT_PATH);
+      expect(recorded.map((each) => [each.claim?.unconfirmed, each.claim?.confirmed])).toEqual([
+        [[ITEM_B], [ITEM_A]],
+        [[ITEM_A, ITEM_B], []],
       ]);
     });
 

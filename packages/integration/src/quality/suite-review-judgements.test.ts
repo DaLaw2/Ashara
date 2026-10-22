@@ -428,6 +428,7 @@ describe("witnessed findings and the check set freeze", () => {
         second: [found],
         secondFailure: null,
         unconfirmed: [item],
+        confirmed: [],
         tiers: ABOVE_STRONG,
       },
     });
@@ -436,7 +437,7 @@ describe("witnessed findings and the check set freeze", () => {
       projectId,
       reviewTaskId: later,
       judgements: [],
-      claim: { basis: "second-review-failed", covered: [check], firstModel: FIRST, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item], tiers: ABOVE_STRONG },
+      claim: { basis: "second-review-failed", covered: [check], firstModel: FIRST, secondReview: null, passedOver: [], second: [], secondFailure: "no second opinion answered", unconfirmed: [item], confirmed: [], tiers: ABOVE_STRONG },
     });
 
     const kept = await db.execute(sql`SELECT review_task_id AS "reviewTaskId" FROM undecided_items WHERE check_task_id = ${check}`);

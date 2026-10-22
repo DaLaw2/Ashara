@@ -44,8 +44,8 @@ async function failureOf(run: () => Promise<unknown>): Promise<string> {
 
 async function insertEvidence(guaranteeId: string): Promise<void> {
   await db.execute(sql`
-    INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks, review_lowers)
-    VALUES (${projectId}, ${sweepId}, 1, ${guaranteeId}, ${MAIN}, '[]'::jsonb, false)`);
+    INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks)
+    VALUES (${projectId}, ${sweepId}, 1, ${guaranteeId}, ${MAIN}, '[]'::jsonb)`);
 }
 
 async function rowsOf(guaranteeId: string): Promise<number> {

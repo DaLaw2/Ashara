@@ -1,4 +1,4 @@
-import { pgTable, uuid, boolean, text, jsonb, integer, primaryKey, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, boolean, text, jsonb, integer, primaryKey, unique, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { timestamptz } from "./columns.js";
 import { projectBlocks, workItems } from "./delivery.js";
@@ -183,10 +183,14 @@ export const suiteReviewClaims = pgTable("suite_review_claims", {
 
 // ---------------------------------------------------------------------------
 // undecided_items (Quality): one row per cited item a suite review left
-// undecided: a finding on it that did not act (judgement_id), or a claim covering it that no second
-// review confirmed (claim_id), exactly one: the source that kept the row first. Every claim that
-// leaves the item undecided, that first one included, is tied to it in undecided_item_claims, which
-// the readers go through; the item is reported unverified. Append-only, one row per check task and item.
+// undecided on one check task: a finding on it that did not act (judgement_id), or a claim covering
+// it that no second review confirmed (claim_id), exactly one: the source that kept the row first.
+// Every claim that leaves the item undecided, that first one included, is tied to it in
+// undecided_item_claims, which the readers go through; the item is reported unverified and lowers
+// only the checks that check task wrote. A later review whose second opinion confirms the item on
+// that check task clears the row (cleared_by_claim_id, cleared_at), once; nothing else of a row ever
+// changes. At most one row per check task and item stands uncleared; a review that leaves a cleared
+// item undecided again writes a new row.
 // ---------------------------------------------------------------------------
 
 export const undecidedItems = pgTable(
@@ -207,9 +211,12 @@ export const undecidedItems = pgTable(
     judgementId: uuid("judgement_id").references(() => suiteReviewJudgements.id, { onDelete: "cascade" }),
     claimId: uuid("claim_id").references(() => suiteReviewClaims.id, { onDelete: "cascade" }),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
+    /** The claim of the later review whose second opinion confirmed the item on this check task; null while the row stands. */
+    clearedByClaimId: uuid("cleared_by_claim_id").references(() => suiteReviewClaims.id, { onDelete: "cascade" }),
+    clearedAt: timestamptz("cleared_at"),
   },
   (t) => ({
-    onePerCheckTask: unique("undecided_items_one_per_check_task").on(t.checkTaskId, t.itemId),
+    standingPerCheckTask: uniqueIndex("undecided_items_one_standing_per_check_task").on(t.checkTaskId, t.itemId).where(sql`cleared_by_claim_id IS NULL`),
   }),
 );
 
@@ -288,8 +295,9 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
 
 // ---------------------------------------------------------------------------
 // guarantee_evidence (Quality): one row per guarantee of the vision version in
-// force per sweep, each stored check deciding it with its outcome and evidence
-// class, an empty list when no check decides it. Append-only.
+// force per sweep, each stored check deciding it with its outcome, evidence
+// class and whether a standing review finding lowers it, an empty list when no
+// check decides it. Append-only.
 // ---------------------------------------------------------------------------
 
 export const guaranteeEvidence = pgTable(
@@ -306,9 +314,8 @@ export const guaranteeEvidence = pgTable(
     guaranteeId: text("guarantee_id").notNull(),
     /** The sweep's main commit; null when the sweep ran on no commit, which then holds no check. */
     mainCommit: text("main_commit"),
-    /** [{taskCheckId, outcome, class}], parsed by the repository. */
+    /** [{taskCheckId, outcome, class, lowered}], parsed by the repository. */
     checks: jsonb().notNull(),
-    reviewLowers: boolean("review_lowers").notNull(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (t) => ({

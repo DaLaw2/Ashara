@@ -105,7 +105,6 @@ const evidenceRow = z.object({
   guaranteeId: z.string(),
   visionVersion: z.number(),
   checks: z.unknown(),
-  reviewLowers: z.boolean(),
 });
 /** One verdict stored beside the message that carries it. */
 const verdictRow = z.object({
@@ -159,10 +158,15 @@ const UNDECIDED_CLAIMS_SQL =
           LEFT JOIN suite_review_claims c ON c.id = l.claim_id`);
 
 /**
- * A cited item a suite review left undecided (undecided_items): its id, the
- * text its check task cited it with, and why.
+ * A cited item a suite review left undecided (undecided_items): the check task it was left
+ * undecided on, its id, the text its check task cited it with, and why.
  */
-const undecidedRow = z.object({ id: z.string(), text: z.string(), reason: z.enum(UNDECIDED_REASONS) });
+const undecidedRow = z.object({
+  checkTaskId: z.string(),
+  id: z.string(),
+  text: z.string(),
+  reason: z.enum(UNDECIDED_REASONS),
+});
 const sweptUndecidedRow = undecidedRow.extend({ sweepId: z.string() });
 /** One stored check, with the check task that wrote it and what it says it decides. */
 const storedCheckRow = z.object({
@@ -205,7 +209,10 @@ export interface ReportRecords {
   readonly passedSweeps: ReadonlyArray<
     z.infer<typeof passedSweepRow> & {
       readonly storedChecks: readonly RanCheck[];
-      /** The items a suite review left undecided, before the sweep, on a check task whose checks it ran. */
+      /**
+       * The items a suite review left undecided before the sweep, and no later review cleared by
+       * then, on a check task whose checks it ran.
+       */
       readonly undecided: ReadonlyArray<z.infer<typeof undecidedRow>>;
       /** The verdicts stored beside the sweep's delivered report; none before it is posted. */
       readonly reportVerdicts: ReadonlyArray<Omit<z.infer<typeof sweptVerdictRow>, "sweepId">>;
@@ -292,8 +299,7 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ).map((row) => row.id),
     evidence: await rows(
       evidenceRow,
-      sql`SELECT sweep_id AS "sweepId", guarantee_id AS "guaranteeId", vision_version AS "visionVersion", checks,
-             review_lowers AS "reviewLowers"
+      sql`SELECT sweep_id AS "sweepId", guarantee_id AS "guaranteeId", vision_version AS "visionVersion", checks
           FROM guarantee_evidence WHERE project_id = ${projectId} ORDER BY sweep_id, guarantee_id`,
     ),
     verdicts: await rows(
@@ -343,11 +349,13 @@ async function passedSweepsOf(
   );
   const undecided = await rows(
     sweptUndecidedRow,
-    sql`SELECT s.id AS "sweepId", u.item_id AS id, u.item_text AS text, ${UNDECIDED_REASON_SQL} AS reason
+    sql`SELECT s.id AS "sweepId", u.check_task_id AS "checkTaskId", u.item_id AS id, u.item_text AS text,
+           ${UNDECIDED_REASON_SQL} AS reason
         FROM acceptance_sweeps s
         CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
         JOIN work_items a ON a.task_spec->>'checksFor' = t.task_id
         JOIN undecided_items u ON u.check_task_id = a.id AND u.created_at <= s.created_at
+          AND (u.cleared_at IS NULL OR u.cleared_at > s.created_at)
         LEFT JOIN suite_review_judgements j ON j.id = u.judgement_id
         ${UNDECIDED_CLAIMS_SQL}
         WHERE s.project_id = ${projectId} AND s.passed
@@ -366,7 +374,7 @@ async function passedSweepsOf(
     storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ sweepId: _sweep, ...check }) => check),
     undecided: undecided
       .filter((item) => item.sweepId === sweep.id)
-      .map(({ id, text, reason }) => ({ id, text, reason })),
+      .map(({ checkTaskId, id, text, reason }) => ({ checkTaskId, id, text, reason })),
     reportVerdicts: verdicts
       .filter((verdict) => verdict.sweepId === sweep.id)
       .map(({ guaranteeId, verdict }) => ({ guaranteeId, verdict })),
@@ -509,9 +517,10 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
 }
 
 /**
- * A guarantee of the version in force that a suite review left undecided never reads pass in the
- * table of the sweep's delivered report, whatever a stored check records it decides: a review's doubt
- * holds a guarantee back and never lets it pass. TableVerdict per guarantee, keyed by its id.
+ * A guarantee of the version in force that a suite review left undecided reads pass in the table of
+ * the sweep's delivered report only when a stored check the sweep ran decides it from a check task
+ * no review left it undecided on: a review's doubt holds back the checks of the check task it was
+ * raised on and never lets them make the guarantee pass. TableVerdict per guarantee, keyed by its id.
  */
 function undecidedAtSweep(
   sweep: ReportRecords["passedSweeps"][number],
@@ -520,8 +529,15 @@ function undecidedAtSweep(
 ): UncheckedFinding[] {
   if (sweep.reportBody === null) return [];
   const asked = new Set(inForce.map((g) => g.id));
+  const held = new Set(sweep.undecided.map((item) => JSON.stringify([item.checkTaskId, item.id])));
+  const decidedUnheld = (id: string): boolean =>
+    sweep.storedChecks.some((check) => {
+      const decides = z.array(z.string()).safeParse(check.decides);
+      return decides.success && decides.data.includes(id) && !held.has(JSON.stringify([check.checkTaskId, id]));
+    });
   return sweep.undecided.flatMap((item) =>
     asked.has(item.id) &&
+    !decidedUnheld(item.id) &&
     sweep.reportVerdicts.some((verdict) => verdict.guaranteeId === item.id && verdict.verdict === "pass")
       ? [
           {
@@ -559,17 +575,18 @@ const observedProblem = z.looseObject({
 });
 
 /**
- * Whether a review's problem says anything about item `itemId` of check task `checkTaskId`: an
- * undecided item naming it, an outside-vision rejection on that check task judged against it, or a
- * contradiction one of whose sides is of that check task. A problem of no shape this reads names it.
+ * Whether a review's problem doubts that item `itemId` of check task `checkTaskId` is decided: an
+ * undecided item naming it, or a contradiction one of whose sides is of that check task. An
+ * outside-vision rejection says a check asks more than its items, which a passing check proves more
+ * of, never less: it doubts no item. A problem of no shape this reads names it.
  */
 function namesItem(problem: unknown, checkTaskId: string, itemId: string): boolean {
   const parsed = observedProblem.safeParse(problem);
   if (!parsed.success) return true;
-  const { kind, checkTasks, item, judgedItems, conflict } = parsed.data;
+  const { kind, checkTasks, item, conflict } = parsed.data;
   const onTask = checkTasks?.includes(checkTaskId) === true;
   if (kind === "undecided-item") return onTask && item === itemId;
-  if (kind === "outside-vision") return onTask && judgedItems?.includes(itemId) === true;
+  if (kind === "outside-vision") return false;
   if (kind === "contradiction")
     return onTask || conflict?.first.checkTask === checkTaskId || conflict?.second.checkTask === checkTaskId;
   return true;
@@ -577,7 +594,8 @@ function namesItem(problem: unknown, checkTaskId: string, itemId: string): boole
 
 /**
  * TableVerdict from the stand-ins' own answers, never production's claim record: an asked-for item a passed sweep's
- * checks decide and no undecided row names, so that its delivered report's table may read it pass, whose suite a
+ * check decides and no undecided row standing on that check's check task names, so that its delivered report's
+ * table may read it pass on that check, whose suite a
  * review read at the revision the sweep ran was confirmed by a second opinion. Some review round of
  * that revision holds a second opinion that says nothing about the item: an answer from a provider
  * other than the round's first answer's, or one asked to start from what each check cannot observe,
@@ -591,7 +609,7 @@ export function unconfirmedAtPassedSweeps(
   const found = new Map<string, string>();
   for (const [n, sweep] of records.passedSweeps.entries()) {
     if (sweep.reportBody === null) continue;
-    const left = new Set(sweep.undecided.map((item) => JSON.stringify([item.id, item.text])));
+    const left = new Set(sweep.undecided.map((item) => JSON.stringify([item.checkTaskId, item.id])));
     for (const check of sweep.storedChecks) {
       const decides = z.array(z.string()).safeParse(check.decides);
       const sources = parseStoredTaskSpec(check.taskSpec)?.sources;
@@ -602,7 +620,7 @@ export function unconfirmedAtPassedSweeps(
       if (rounds.length === 0) continue;
       for (const id of decides.data) {
         const source = sources.find((each) => each.id === id);
-        if (source === undefined || found.has(id) || left.has(JSON.stringify([source.id, source.text]))) continue;
+        if (source === undefined || found.has(id) || left.has(JSON.stringify([check.checkTaskId, source.id]))) continue;
         if (!askedFor(source)) continue;
         const confirmed = rounds.some((round) => {
           const first = round[0]?.provider;

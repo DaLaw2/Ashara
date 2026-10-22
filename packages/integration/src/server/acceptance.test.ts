@@ -275,15 +275,16 @@ function sweepDeps(
  * accepts none now, while the records of one accepted then are still reported on. The sweep row holds
  * every checked task's stored check ("works", as storeCheck writes it) as run and passed, each
  * guarantee in force its evidence as Quality records it (each such check deciding it by `decides`, and
- * whether a review left it undecided), and the project moves to accepted, which the passed row admits.
+ * whether a review left it undecided on that check's check task), and the project moves to accepted,
+ * which the passed row admits.
  */
 async function acceptedBeforeCoverage(
   projectId: ProjectId,
   ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] },
   decides: readonly string[] = [],
 ): Promise<void> {
-  const stored = ran.checked.length === 0 ? [] : z.array(z.object({ id: z.string(), taskId: z.string() })).parse(
-    (await db.execute(sql`SELECT id, task_id AS "taskId" FROM task_checks WHERE project_id = ${projectId} AND revision = 1 AND name = 'works'`)).rows,
+  const stored = ran.checked.length === 0 ? [] : z.array(z.object({ id: z.string(), taskId: z.string(), checkTaskId: z.string() })).parse(
+    (await db.execute(sql`SELECT id, task_id AS "taskId", check_task_id AS "checkTaskId" FROM task_checks WHERE project_id = ${projectId} AND revision = 1 AND name = 'works'`)).rows,
   ).sort((a, b) => ran.checked.indexOf(a.taskId) - ran.checked.indexOf(b.taskId)).filter((check) => ran.checked.includes(check.taskId));
   const outcomes = stored.map((check) => ({ taskCheckId: check.id, taskId: check.taskId, name: "works", command: "sh checks/run.sh", outcome: "passed" }));
   const inserted = await db.execute(sql`
@@ -296,13 +297,18 @@ async function acceptedBeforeCoverage(
   const inForce = await guaranteesInForce(db, projectId);
   if (inForce.kind === "version") {
     const undecided = new Set(
-      z.array(z.object({ itemId: z.string() })).parse((await db.execute(sql`SELECT DISTINCT item_id AS "itemId" FROM undecided_items WHERE project_id = ${projectId}`)).rows).map((row) => row.itemId),
+      z
+        .array(z.object({ checkTaskId: z.string(), itemId: z.string() }))
+        .parse((await db.execute(sql`SELECT check_task_id AS "checkTaskId", item_id AS "itemId" FROM undecided_items WHERE project_id = ${projectId} AND cleared_by_claim_id IS NULL`)).rows)
+        .map((row) => JSON.stringify([row.checkTaskId, row.itemId])),
     );
     for (const { id } of inForce.guarantees) {
-      const checks = decides.includes(id) ? stored.map((check) => ({ taskCheckId: check.id, outcome: "passed", class: "implementer-visible" })) : [];
+      const checks = decides.includes(id)
+        ? stored.map((check) => ({ taskCheckId: check.id, outcome: "passed", class: "implementer-visible", lowered: undecided.has(JSON.stringify([check.checkTaskId, id])) }))
+        : [];
       await db.execute(sql`
-        INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks, review_lowers)
-        VALUES (${projectId}, ${sweep.id}, ${inForce.version}, ${id}, ${MAIN}, ${JSON.stringify(checks)}::jsonb, ${undecided.has(id)})`);
+        INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks)
+        VALUES (${projectId}, ${sweep.id}, ${inForce.version}, ${id}, ${MAIN}, ${JSON.stringify(checks)}::jsonb)`);
     }
   }
   await db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`);

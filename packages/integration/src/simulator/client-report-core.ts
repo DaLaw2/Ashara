@@ -146,8 +146,11 @@ export function guaranteesInForce(
   ];
 }
 
-/** A check's evidence on a guarantee as guarantee_evidence records it: how it ended and what kind of evidence it is. */
-const checkEvidence = z.array(z.looseObject({ outcome: z.string(), class: z.string() }));
+/**
+ * A check's evidence on a guarantee as guarantee_evidence records it: how it ended, what kind of
+ * evidence it is, and whether a review finding standing on its own check task lowers it.
+ */
+const checkEvidence = z.array(z.looseObject({ outcome: z.string(), class: z.string(), lowered: z.boolean() }));
 
 /** A verdict as the oracle judges it: unjudged with why, else no reason. */
 interface TableVerdict {
@@ -165,11 +168,12 @@ const NOT_VERIFIABLE = "not-verifiable-by-ashara";
  * promises the client: nothing is judged off a commit; an executed check that failed fails it; one
  * its contract marks not verifiable by Ashara is never verified; one that names nothing refuting it,
  * or is about stored data (no fault set is run), no check decides; it passes only on an executed
- * check that passed, and any review's doubt holds it back.
+ * check that passed and that no review's doubt holds back, a doubt holding back only the checks of
+ * the check task it was raised on.
  */
 function judged(
   guarantee: GuaranteeInForce,
-  evidence: { readonly checks: z.infer<typeof checkEvidence>; readonly reviewLowers: boolean },
+  evidence: { readonly checks: z.infer<typeof checkEvidence> },
   onCommit: boolean,
 ): TableVerdict {
   if (!onCommit) return unjudged("no-sweep-on-commit");
@@ -181,9 +185,9 @@ function judged(
   if (!guarantee.checkable) return unjudged("not-checkable-as-written");
   if (guarantee.storedData) return unjudged("stored-data-unjudged");
   const reviews = evidence.checks.filter((check) => check.class === "review-only");
-  if (!executed.some((check) => check.outcome === "passed"))
-    return unjudged(reviews.length > 0 ? "review-only" : "no-executed-evidence");
-  if (evidence.reviewLowers || reviews.some((check) => check.outcome === "failed"))
+  const passed = executed.filter((check) => check.outcome === "passed");
+  if (passed.length === 0) return unjudged(reviews.length > 0 ? "review-only" : "no-executed-evidence");
+  if (passed.every((check) => check.lowered) || reviews.some((check) => check.outcome === "failed"))
     return unjudged("lowered-by-review");
   return { verdict: "pass", reason: null };
 }
@@ -295,9 +299,9 @@ export function tableProblems(
     const seen = evidence.find((each) => each.guaranteeId === guarantee.id);
     // A sweep recorded before evidence per guarantee, or no sweep, judges every guarantee on none, as
     // its table says; a sweep that records some and misses this one is named above.
-    if (seen === undefined) return { guarantee, ...judged(guarantee, { checks: [], reviewLowers: false }, onCommit) };
+    if (seen === undefined) return { guarantee, ...judged(guarantee, { checks: [] }, onCommit) };
     const checks = checkEvidence.safeParse(seen.checks);
-    const read = { checks: checks.success ? checks.data : [], reviewLowers: seen.reviewLowers };
+    const read = { checks: checks.success ? checks.data : [] };
     return { guarantee, ...judged(guarantee, read, onCommit) };
   });
 
@@ -424,7 +428,7 @@ export function uncoveredAcceptance(
         found.set(guarantee.id, `${guarantee.named} has no readable evidence on ${at}`);
         continue;
       }
-      const verdict = judged(guarantee, { checks: checks.data, reviewLowers: seen.reviewLowers }, onCommit);
+      const verdict = judged(guarantee, { checks: checks.data }, onCommit);
       const why = verdict.reason === null ? "" : ` (${verdict.reason})`;
       if (verdict.verdict !== "pass")
         found.set(guarantee.id, `${guarantee.named} reads ${verdict.verdict}${why} on ${at}`);

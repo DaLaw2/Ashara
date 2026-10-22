@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecidedItemClaims, undecidedItems } from "@ashara/db/schema/quality";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
@@ -317,8 +317,29 @@ export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore
       })
       .returning({ id: suiteReviewClaims.id });
     if (row === undefined) throw new SuiteReviewClaimUnreturned(reviewTaskId);
+    await clearConfirmed(tx, projectId, row.id, claim.confirmed);
     return claim.unconfirmed.map((item) => ({ ...item, judgementId: null, claimId: row.id }));
   }
+}
+
+/**
+ * Clears the standing undecided row of each item the claim's second review confirmed on its check
+ * task: a later review that confirms an item there is the clearing path every lowering has. A
+ * cleared row stays on record with the claim that cleared it.
+ */
+async function clearConfirmed(tx: DbTransaction, projectId: string, claimId: string, confirmed: ReadonlyArray<{ readonly checkTaskId: string; readonly itemId: string }>): Promise<void> {
+  if (confirmed.length === 0) return;
+  const pairs = confirmed.map(({ checkTaskId, itemId }) => sql`(${checkTaskId}::uuid, ${itemId}::text)`);
+  await tx
+    .update(undecidedItems)
+    .set({ clearedByClaimId: claimId, clearedAt: sql`now()` })
+    .where(
+      and(
+        eq(undecidedItems.projectId, projectId),
+        isNull(undecidedItems.clearedByClaimId),
+        sql`(${undecidedItems.checkTaskId}, ${undecidedItems.itemId}) IN (${sql.join(pairs, sql`, `)})`,
+      ),
+    );
 }
 
 /** One cited item to keep undecided, with the judgement or the claim that left it so. */
@@ -331,17 +352,18 @@ interface UndecidedRow {
 }
 
 /**
- * Keeps each item undecided and ties it to every claim that leaves it so. One
+ * Keeps each item undecided and ties it to every claim that leaves it so. One standing
  * undecided_items row per check task and item: an item an earlier round, or this round's judgement,
- * kept is not written again, but a claim leaving it undecided is still tied to it, so the item reads
- * back under every claim that keeps it, never under the first alone.
+ * kept and no review cleared is not written again, but a claim leaving it undecided is still tied to
+ * it, so the item reads back under every claim that keeps it, never under the first alone. An item
+ * a review cleared and this one leaves undecided again gets a new row.
  */
 async function keepUndecided(tx: DbTransaction, projectId: string, reviewTaskId: string, rows: readonly UndecidedRow[]): Promise<void> {
   if (rows.length === 0) return;
   await tx
     .insert(undecidedItems)
     .values(rows.map((item) => ({ projectId, reviewTaskId, ...item })))
-    .onConflictDoNothing({ target: [undecidedItems.checkTaskId, undecidedItems.itemId] });
+    .onConflictDoNothing({ target: [undecidedItems.checkTaskId, undecidedItems.itemId], where: sql`cleared_by_claim_id IS NULL` });
   const claimed = rows.flatMap(({ claimId, checkTaskId, itemId }) => (claimId === null ? [] : [{ claimId, checkTaskId, itemId }]));
   if (claimed.length === 0) return;
   // A claim that names one item twice is tied to it once.
@@ -510,12 +532,18 @@ export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Prom
     .orderBy(asc(suiteReviewClaims.createdAt), asc(suiteReviewClaims.id));
   if (rows.length === 0) return [];
   // Through every claim's tie, not undecided_items.claim_id, which names only the first claim that kept the item.
+  // An item cleared and left undecided again has a row per time; its tie reads its text once.
   const items = await db
-    .select({ claimId: undecidedItemClaims.claimId, checkTaskId: undecidedItemClaims.checkTaskId, itemId: undecidedItemClaims.itemId, itemText: undecidedItems.itemText })
+    .selectDistinctOn([undecidedItemClaims.claimId, undecidedItemClaims.checkTaskId, undecidedItemClaims.itemId], {
+      claimId: undecidedItemClaims.claimId,
+      checkTaskId: undecidedItemClaims.checkTaskId,
+      itemId: undecidedItemClaims.itemId,
+      itemText: undecidedItems.itemText,
+    })
     .from(undecidedItemClaims)
     .leftJoin(undecidedItems, and(eq(undecidedItems.checkTaskId, undecidedItemClaims.checkTaskId), eq(undecidedItems.itemId, undecidedItemClaims.itemId)))
     .where(inArray(undecidedItemClaims.claimId, rows.map((row) => row.id)))
-    .orderBy(asc(undecidedItemClaims.checkTaskId), asc(undecidedItemClaims.itemId));
+    .orderBy(asc(undecidedItemClaims.claimId), asc(undecidedItemClaims.checkTaskId), asc(undecidedItemClaims.itemId), desc(undecidedItems.createdAt));
   return rows.map(({ id, ...row }) =>
     storedClaimOf(id, {
       ...row,

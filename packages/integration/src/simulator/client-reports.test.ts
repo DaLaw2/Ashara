@@ -209,11 +209,11 @@ describe("checkReports, a delivered report", () => {
       { id: "G3", statement: "Names are kept as given.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a name is changed"] },
     ];
     const vision = { version: 1, contractForm: "guarantees", guarantees, inferences: [], scopeBoundaries: [] };
-    const ran = (outcome: string, cls = "implementer-visible") => [{ taskCheckId: "k1", outcome, class: cls }];
+    const ran = (outcome: string, cls = "implementer-visible", lowered = false) => [{ taskCheckId: "k1", outcome, class: cls, lowered }];
     const evidence = [
-      { sweepId: "s1", guaranteeId: "G1", visionVersion: 1, checks: ran("passed"), reviewLowers: false },
-      { sweepId: "s1", guaranteeId: "G2", visionVersion: 1, checks: ran("passed"), reviewLowers: false },
-      { sweepId: "s1", guaranteeId: "G3", visionVersion: 1, checks: ran("passed"), reviewLowers: true },
+      { sweepId: "s1", guaranteeId: "G1", visionVersion: 1, checks: ran("passed") },
+      { sweepId: "s1", guaranteeId: "G2", visionVersion: 1, checks: ran("passed") },
+      { sweepId: "s1", guaranteeId: "G3", visionVersion: 1, checks: ran("passed", "implementer-visible", true) },
     ];
     const row = (guaranteeId: string, verdict: string, reason: string | null) => ({ reportId: "r1", sweepId: "s1", visionVersion: 1, guaranteeId, verdict, reason, basis: "client-stated" });
     const verdicts = [row("G1", "pass", null), row("G2", "unjudged", "stored-data-unjudged"), row("G3", "unjudged", "lowered-by-review")];
@@ -393,17 +393,32 @@ describe("uncheckedAtPassedSweeps", () => {
     expect(keysOf(sweep([visible], [S1]), { ...sweep([visible], [S1]), id: "sweep-2" })).toEqual(["A1"]);
   });
 
-  // An item a suite review left undecided reaches I6 as held back, never as passing.
+  // An item a suite review left undecided reaches I6 as held back on its check task, never as passing on it.
   it("names an item a review left undecided that the sweep's delivered report stores as pass", () => {
     const left = (verdict: string) => ({
       ...sweep([visible], [S1, A1]),
       reportBody: "Delivered.",
-      undecided: [{ id: "S1", text: greets.text, reason: "unsettled" as const }],
+      undecided: [{ checkTaskId: "c1", id: "S1", text: greets.text, reason: "unsettled" as const }],
       reportVerdicts: [{ guaranteeId: "S1", verdict }],
     });
     expect(keysOf(left("unjudged"))).toEqual([]);
     expect(keysOf(left("pass"))).toEqual(["undecided-passed:S1"]);
     expect(keysOf({ ...left("pass"), reportBody: null })).toEqual([]);
+  });
+
+  // A review's doubt speaks of the checks of the check task it was raised on, never of another's.
+  it("passes an item left undecided on one check task that another check task's swept check decides", () => {
+    const base = sweep([visible], [S1, A1]);
+    const other = { checkTaskId: "c2", taskSpec: spec([S1]), name: "greets-too", decides: ["S1"], taskId: "t2", revision: 1 };
+    const left = {
+      ...base,
+      storedChecks: [...base.storedChecks, other],
+      reportBody: "Delivered.",
+      undecided: [{ checkTaskId: "c1", id: "S1", text: greets.text, reason: "unsettled" as const }],
+      reportVerdicts: [{ guaranteeId: "S1", verdict: "pass" }],
+    };
+    expect(keysOf(left)).toEqual([]);
+    expect(keysOf({ ...left, undecided: [...left.undecided, { checkTaskId: "c2", id: "S1", text: greets.text, reason: "unsettled" as const }] })).toEqual(["undecided-passed:S1"]);
   });
 
   it("fails closed when the vision or the trace cannot be read", () => {
@@ -446,9 +461,15 @@ describe("uncheckedAtPassedSweeps", () => {
       expect(unconfirmed([review("deepseek"), review("anthropic", [conflict])])).toEqual(["S1", "A1"]);
     });
 
+    // A check that asks more than the vision and passes proves more of its items, never less.
+    it("passes an item the other family's review judged a check against as asking more than the vision", () => {
+      const asksMore = { kind: "outside-vision", checkTasks: ["c1"], check: "greets", judgedItems: ["A1"], missingClause: "a bow", problem: "p", evidence: "e" };
+      expect(unconfirmed([review("deepseek"), review("anthropic", [asksMore])])).toEqual([]);
+    });
+
     it("judges only the revision the sweep ran, and never an item reported unverified, a report not posted, or a suite no review read", () => {
       expect(unconfirmed([review("deepseek"), review("anthropic", [], ["t1@2"]), review("deepseek", [], ["t1@2"])])).toEqual(["S1", "A1"]);
-      expect(unconfirmed([review("deepseek")], { ...delivered, undecided: [{ id: "S1", text: greets.text, reason: "clean-unconfirmed" }] })).toEqual(["A1"]);
+      expect(unconfirmed([review("deepseek")], { ...delivered, undecided: [{ checkTaskId: "c1", id: "S1", text: greets.text, reason: "clean-unconfirmed" }] })).toEqual(["A1"]);
       expect(unconfirmed([review("deepseek")], { ...delivered, reportBody: null })).toEqual([]);
       expect(unconfirmed([])).toEqual([]);
     });
@@ -513,15 +534,16 @@ describe("uncoveredAcceptance", () => {
     { id: "G2", statement: "Names are kept as given.", observable: { interface: ["I1"], observation: "output" }, refutedBy: ["a name is changed"] },
   ];
   const vision = { version: 1, contractForm: "guarantees", guarantees, inferences: [], scopeBoundaries: [] };
-  const passedCheck = [{ taskCheckId: "k1", outcome: "passed", class: "implementer-visible" }];
+  const passedCheck = [{ taskCheckId: "k1", outcome: "passed", class: "implementer-visible", lowered: false }];
+  const loweredCheck = [{ taskCheckId: "k2", outcome: "passed", class: "implementer-visible", lowered: true }];
   const accepted = (g2Checks: readonly unknown[], extra: Partial<ReportRecords> = {}): ReportRecords => ({
     ...noRecords,
     sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: null, reportFailures: 0 }],
     tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: 1 }],
     visions: [vision],
     evidence: [
-      { sweepId: "s1", guaranteeId: "G1", visionVersion: 1, checks: passedCheck, reviewLowers: false },
-      { sweepId: "s1", guaranteeId: "G2", visionVersion: 1, checks: g2Checks, reviewLowers: false },
+      { sweepId: "s1", guaranteeId: "G1", visionVersion: 1, checks: passedCheck },
+      { sweepId: "s1", guaranteeId: "G2", visionVersion: 1, checks: g2Checks },
     ],
     ...extra,
   });
@@ -533,9 +555,12 @@ describe("uncoveredAcceptance", () => {
 
   it("flags a guarantee with no executed evidence, one only a review speaks for, and one a review lowers", () => {
     expect(uncoveredAcceptance(accepted([]))).toEqual([{ key: "G2", statement: expect.stringContaining("reads unjudged (no-executed-evidence) on passed sweep s1, yet the project is accepted") }]);
-    expect(keys(accepted([{ taskCheckId: "r1", outcome: "passed", class: "review-only" }]))).toEqual(["G2"]);
-    const lowered = accepted(passedCheck);
-    expect(keys({ ...lowered, evidence: lowered.evidence.map((each) => ({ ...each, reviewLowers: each.guaranteeId === "G2" })) })).toEqual(["G2"]);
+    expect(keys(accepted([{ taskCheckId: "r1", outcome: "passed", class: "review-only", lowered: false }]))).toEqual(["G2"]);
+    expect(keys(accepted(loweredCheck))).toEqual(["G2"]);
+  });
+
+  it("finds nothing when a review lowers one passing check of a guarantee and another passing check no review lowers decides it", () => {
+    expect(keys(accepted([...loweredCheck, ...passedCheck]))).toEqual([]);
   });
 
   it("flags acceptance with no passed sweep, no evidence, or a guarantee missing from the evidence", () => {

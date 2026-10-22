@@ -117,7 +117,6 @@ const evidenceRow = z.object({
   visionVersion: z.number(),
   mainCommit: z.string().nullable(),
   checks: z.unknown(),
-  reviewLowers: z.boolean(),
 });
 
 async function sweepsOf(projectId: ProjectId): Promise<Array<z.infer<typeof sweepRow>>> {
@@ -129,7 +128,7 @@ async function sweepsOf(projectId: ProjectId): Promise<Array<z.infer<typeof swee
 
 async function evidenceOf(sweepId: string): Promise<Array<z.infer<typeof evidenceRow>>> {
   const result = await db.execute(sql`
-    SELECT guarantee_id AS "guaranteeId", vision_version AS "visionVersion", main_commit AS "mainCommit", checks, review_lowers AS "reviewLowers"
+    SELECT guarantee_id AS "guaranteeId", vision_version AS "visionVersion", main_commit AS "mainCommit", checks
     FROM guarantee_evidence WHERE sweep_id = ${sweepId} ORDER BY guarantee_id`);
   return z.array(evidenceRow).parse(result.rows);
 }
@@ -208,10 +207,9 @@ describe("every sweep records each check's outcome and one evidence row per guar
         guaranteeId: "G1",
         visionVersion: 1,
         mainCommit: MAIN,
-        checks: [{ taskCheckId: planned.taskCheckId, outcome: "failed", class: "implementer-visible" }],
-        reviewLowers: false,
+        checks: [{ taskCheckId: planned.taskCheckId, outcome: "failed", class: "implementer-visible", lowered: false }],
       },
-      { guaranteeId: "G2", visionVersion: 1, mainCommit: MAIN, checks: [], reviewLowers: false },
+      { guaranteeId: "G2", visionVersion: 1, mainCommit: MAIN, checks: [] },
     ]);
   });
 
@@ -242,10 +240,9 @@ describe("every sweep records each check's outcome and one evidence row per guar
         guaranteeId: "G1",
         visionVersion: 1,
         mainCommit: MAIN,
-        checks: [{ taskCheckId: planned.taskCheckId, outcome: "passed", class: "implementer-visible" }],
-        reviewLowers: false,
+        checks: [{ taskCheckId: planned.taskCheckId, outcome: "passed", class: "implementer-visible", lowered: false }],
       },
-      { guaranteeId: "G2", visionVersion: 1, mainCommit: MAIN, checks: [], reviewLowers: false },
+      { guaranteeId: "G2", visionVersion: 1, mainCommit: MAIN, checks: [] },
     ]);
 
     // One terminal sweep per stop: the next cycle owes none.

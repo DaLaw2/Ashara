@@ -20,23 +20,27 @@ export type EvidenceClass = z.infer<typeof EvidenceClassSchema>;
 
 type ExecutedClass = Extract<EvidenceClass, "witness" | "implementer-visible">;
 
+/**
+ * One check's evidence on a guarantee. `lowered` is set when a suite review's finding still stands
+ * that this check, as its own check task wrote it, may not decide the guarantee: the finding speaks
+ * of that check task's checks alone, never of another's.
+ */
 export const CheckEvidenceSchema = z.strictObject({
   checkId: z.string().min(1),
   outcome: z.enum(["passed", "failed", "not-run"]),
   class: EvidenceClassSchema,
+  lowered: z.boolean(),
 });
 
 type CheckEvidence = z.infer<typeof CheckEvidenceSchema>;
 
 /**
  * Everything seen about one guarantee on one commit. An empty check list is a recorded absence of
- * evidence, and it reads unjudged, never pass. `reviewLowers` is set when a review finding or an
- * undecided item names the guarantee.
+ * evidence, and it reads unjudged, never pass.
  * @testseam guarantee-verdict.test.ts judges every evidence combination through it; production builds Evidence from stored rows instead
  */
 export const EvidenceSchema = z.strictObject({
   checks: z.array(CheckEvidenceSchema),
-  reviewLowers: z.boolean(),
 });
 
 export type Evidence = z.infer<typeof EvidenceSchema>;
@@ -99,8 +103,11 @@ function isExecuted(check: CheckEvidence): check is CheckEvidence & { readonly c
  * The verdict on one guarantee from the evidence seen on the commit, by the first rule that applies:
  * an executed check failed; the contract marks it not verifiable by Ashara; the guarantee names
  * nothing that would refute it; its stored data cannot be exercised; no executed check passed; a
- * review lowers it; otherwise pass. Reviews are read only by the two rules that end unjudged, so no
- * review evidence ever yields pass, and a guarantee marked not verifiable never passes either.
+ * review lowers every executed check that passed, or a review-only reading failed; otherwise pass,
+ * resting on the passing checks no finding stands against. A finding lowers only the checks it
+ * speaks of, so another passing check it does not speak of still decides the guarantee. Reviews are
+ * read only by the rules that end unjudged, so no review evidence ever yields pass, and a guarantee
+ * marked not verifiable never passes either.
  * @testseam guarantee-verdict.test.ts judges every evidence combination and fault set through it; production judges through judgeGuarantees
  */
 export function verdictOf(guarantee: Pick<JudgedGuarantee, "observation" | "refutedBy" | "verification">, evidence: Evidence, faultSet: FaultSet): Verdict {
@@ -114,8 +121,9 @@ export function verdictOf(guarantee: Pick<JudgedGuarantee, "observation" | "refu
   const passed = executed.filter((c) => c.outcome === "passed");
   const reviews = evidence.checks.filter((c) => c.class === "review-only");
   if (passed.length === 0) return { kind: "unjudged", reason: reviews.length > 0 ? "review-only" : "no-executed-evidence" };
-  if (evidence.reviewLowers || reviews.some((c) => c.outcome === "failed")) return { kind: "unjudged", reason: "lowered-by-review" };
-  return { kind: "pass", evidence: passed.every((c) => c.class === "witness") ? "witness" : "implementer-visible" };
+  const standing = passed.filter((c) => !c.lowered);
+  if (standing.length === 0 || reviews.some((c) => c.outcome === "failed")) return { kind: "unjudged", reason: "lowered-by-review" };
+  return { kind: "pass", evidence: standing.every((c) => c.class === "witness") ? "witness" : "implementer-visible" };
 }
 
 /**
@@ -157,7 +165,7 @@ export class GuaranteeEvidenceMismatch extends Error {
   }
 }
 
-const NO_EVIDENCE: Evidence = { checks: [], reviewLowers: false };
+const NO_EVIDENCE: Evidence = { checks: [] };
 
 const CLASS_RANK: readonly EvidenceClass[] = ["witness", "implementer-visible", "review-only"];
 

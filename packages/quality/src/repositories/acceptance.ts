@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { projects, qualifiedColumn } from "@ashara/db";
 import { acceptanceSweepFaults, acceptanceSweeps, guaranteeEvidence, taskChecks, undecidedItems } from "@ashara/db/schema/quality";
@@ -126,22 +126,25 @@ class AcceptanceSweepUnrecorded extends Error {
   }
 }
 
+/** A swept check with the task_checks row it ran, and the check task that row records wrote it. */
+type StoredSweptCheck = SweptCheck & { readonly taskCheckId: string; readonly writtenBy: string };
+
 /** Each swept check with the task_checks row it ran, in the order swept. */
-async function storedRowsOf(tx: DbHandle, projectId: ProjectId, swept: readonly SweptCheck[]): Promise<Array<SweptCheck & { readonly taskCheckId: string }>> {
+async function storedRowsOf(tx: DbHandle, projectId: ProjectId, swept: readonly SweptCheck[]): Promise<StoredSweptCheck[]> {
   const taskIds = [...new Set(swept.map((check) => check.taskId))];
   const rows =
     taskIds.length === 0
       ? []
       : await tx
-          .select({ id: taskChecks.id, taskId: taskChecks.taskId, revision: taskChecks.revision, name: taskChecks.name })
+          .select({ id: taskChecks.id, taskId: taskChecks.taskId, revision: taskChecks.revision, name: taskChecks.name, checkTaskId: taskChecks.checkTaskId })
           .from(taskChecks)
           .where(inArray(taskChecks.taskId, taskIds));
   const key = (check: { readonly taskId: string; readonly revision: number; readonly name: string }): string => JSON.stringify([check.taskId, check.revision, check.name]);
-  const ids = new Map(rows.map((row) => [key(row), row.id]));
+  const stored = new Map(rows.map((row) => [key(row), row]));
   return swept.map((check) => {
-    const taskCheckId = ids.get(key(check));
-    if (taskCheckId === undefined) throw new SweptCheckUnrecorded(projectId, check);
-    return { ...check, taskCheckId };
+    const row = stored.get(key(check));
+    if (row === undefined) throw new SweptCheckUnrecorded(projectId, check);
+    return { ...check, taskCheckId: row.id, writtenBy: row.checkTaskId };
   });
 }
 
@@ -150,33 +153,44 @@ type SweepRow = typeof acceptanceSweeps.$inferInsert;
 
 /** What a sweep is recorded with: each swept check with its stored row, and each guarantee in force with its evidence. */
 interface SweepEvidenceRecord {
-  readonly swept: ReadonlyArray<SweptCheck & { readonly taskCheckId: string }>;
+  readonly swept: readonly StoredSweptCheck[];
   readonly guarantees: GuaranteesInForce;
   readonly byGuarantee: ReadonlyMap<string, Evidence>;
 }
 
+/** A cited item of one check task, as a key: a review's finding on an item speaks of that check task's checks alone. */
+function itemOfCheckTask(checkTaskId: string, itemId: string): string {
+  return JSON.stringify([checkTaskId, itemId]);
+}
+
 /**
  * The evidence of every guarantee in force on the sweep: every stored check deciding it with its
- * outcome and class, an empty list when none does, and whether a review left it undecided.
+ * outcome and class, an empty list when none does. A check is lowered when a suite review left the
+ * guarantee undecided on the check task its stored row records wrote it, and no later review of that
+ * check task cleared it; a finding on one check task never lowers another's checks.
  */
 async function sweepEvidenceOf(tx: DbHandle, sweep: AcceptanceSweepRecord, readGuarantees: ReadGuarantees): Promise<SweepEvidenceRecord> {
   const swept = await storedRowsOf(tx, sweep.projectId, sweep.checkOutcomes);
   const guarantees = await readGuarantees(tx, sweep.projectId);
   const ids = guarantees.kind === "none" ? [] : guarantees.guarantees.map((guarantee) => guarantee.id);
   if (ids.length === 0) return { swept, guarantees, byGuarantee: new Map() };
-  const undecided = await tx
-    .selectDistinct({ itemId: undecidedItems.itemId })
+  const standing = await tx
+    .select({ checkTaskId: undecidedItems.checkTaskId, itemId: undecidedItems.itemId })
     .from(undecidedItems)
-    .where(and(eq(undecidedItems.projectId, sweep.projectId), inArray(undecidedItems.itemId, ids)));
-  const lowered = new Set(undecided.map((item) => item.itemId));
+    .where(and(eq(undecidedItems.projectId, sweep.projectId), inArray(undecidedItems.itemId, ids), isNull(undecidedItems.clearedByClaimId)));
+  const lowered = new Set(standing.map((row) => itemOfCheckTask(row.checkTaskId, row.itemId)));
   const byGuarantee = new Map(
     ids.map((guaranteeId): [string, Evidence] => [
       guaranteeId,
       {
         checks: swept
           .filter((check) => check.decides?.includes(guaranteeId) === true)
-          .map((check) => ({ checkId: check.taskCheckId, outcome: check.outcome, class: STORED_CHECK_CLASS })),
-        reviewLowers: lowered.has(guaranteeId),
+          .map((check) => ({
+            checkId: check.taskCheckId,
+            outcome: check.outcome,
+            class: STORED_CHECK_CLASS,
+            lowered: lowered.has(itemOfCheckTask(check.writtenBy, guaranteeId)),
+          })),
       },
     ]),
   );
@@ -234,8 +248,7 @@ async function insertSweepWithEvidence(
         visionVersion: guarantees.version,
         guaranteeId,
         mainCommit: sweep.mainCommit,
-        checks: seen.checks.map((check) => ({ taskCheckId: check.checkId, outcome: check.outcome, class: check.class })),
-        reviewLowers: seen.reviewLowers,
+        checks: seen.checks.map((check) => ({ taskCheckId: check.checkId, outcome: check.outcome, class: check.class, lowered: check.lowered })),
       };
     }),
   );

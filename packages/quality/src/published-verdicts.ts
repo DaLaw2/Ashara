@@ -17,9 +17,14 @@ import type { Evidence, GuaranteeVerdict, JudgedGuarantee, JudgedSweep } from ".
 export type { EvidenceClass, GuaranteeVerdict, JudgedSweep, UnjudgedReason, Verdict } from "./guarantee-verdict.js";
 export { GuaranteeEvidenceMismatch, verificationOf } from "./guarantee-verdict.js";
 
-/** guarantee_evidence.checks as stored: each stored check deciding the guarantee, its outcome and class. */
+/** guarantee_evidence.checks as stored: each stored check deciding the guarantee, its outcome and class, and whether a standing review finding lowers it. */
 const StoredChecksSchema = z.array(
-  z.strictObject({ taskCheckId: z.string().min(1), outcome: CheckEvidenceSchema.shape.outcome, class: CheckEvidenceSchema.shape.class }),
+  z.strictObject({
+    taskCheckId: z.string().min(1),
+    outcome: CheckEvidenceSchema.shape.outcome,
+    class: CheckEvidenceSchema.shape.class,
+    lowered: CheckEvidenceSchema.shape.lowered,
+  }),
 );
 
 /** A sweep's recorded evidence does not read as the evidence of one vision version; a retry reads the same. */
@@ -35,7 +40,7 @@ export class GuaranteeEvidenceUnreadable extends Error {
 
 async function evidenceRows(db: DbHandle, sweepId: string) {
   return db
-    .select({ guaranteeId: guaranteeEvidence.guaranteeId, visionVersion: guaranteeEvidence.visionVersion, checks: guaranteeEvidence.checks, reviewLowers: guaranteeEvidence.reviewLowers })
+    .select({ guaranteeId: guaranteeEvidence.guaranteeId, visionVersion: guaranteeEvidence.visionVersion, checks: guaranteeEvidence.checks })
     .from(guaranteeEvidence)
     .where(eq(guaranteeEvidence.sweepId, sweepId));
 }
@@ -84,8 +89,7 @@ export async function guaranteeVerdictsOf(db: DbHandle, source: VerdictSource, v
     const checks = StoredChecksSchema.safeParse(row.checks);
     if (!checks.success) throw new GuaranteeEvidenceUnreadable(sweep.id, `the evidence of ${row.guaranteeId} does not parse: ${z.prettifyError(checks.error)}`);
     byGuarantee.set(row.guaranteeId, {
-      checks: checks.data.map((check) => ({ checkId: check.taskCheckId, outcome: check.outcome, class: check.class })),
-      reviewLowers: row.reviewLowers,
+      checks: checks.data.map((check) => ({ checkId: check.taskCheckId, outcome: check.outcome, class: check.class, lowered: check.lowered })),
     });
   }
   return { evidence: "recorded", verdicts: judgeGuarantees(guarantees, visionVersion, sweep, { kind: "recorded", byGuarantee }) };

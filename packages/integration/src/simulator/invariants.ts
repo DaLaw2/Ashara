@@ -778,9 +778,10 @@ export function checkSnapshot(
   // version in force (on a version written before guarantees, an in-scope line or an assumption not
   // recorded as internal design) is decided by a stored check that sweep ran, as its recorded decides
   // names it, while an assumption of a guarantees-form version is never held to a check; every such
-  // guarantee a suite review left undecided is named unverified in the sweep's delivered report, never
-  // covered, and every asked-for item the report calls decided had its suite's
-  // review found clean on it by a second model family, as the stand-ins answered it.
+  // guarantee a suite review left undecided on every check task whose checks decide it is named
+  // unverified in the sweep's delivered report, never covered, and every asked-for item the report
+  // calls decided had its suite's review found clean on it by a second opinion, as the stand-ins
+  // answered it.
   // Judged on every passed sweep once the run ends, whatever the project's status then. An accepted
   // project rests on a passed sweep whose evidence judges every guarantee in force pass, as the
   // oracle's own reading of the table's rules judges it (uncoveredAcceptance): accepted with a
