@@ -652,8 +652,82 @@ describe("SuiteReviewer", () => {
     });
   });
 
+  describe("a check that requires what a cited item rules out", () => {
+    const MONTHLY: VisionSource = {
+      type: "guarantee",
+      id: "G1",
+      text: "Each month's total sums only that month's rows",
+      observation: "output",
+      interface: ["I1"],
+      refutedBy: ["A month's total includes a row dated in another month"],
+    };
+    const contract: SuiteReviewSource = {
+      ...source(),
+      checkTasksUnderReview: async () => [
+        { id: CHECK_A, status: "Completed", checksFor: IMPL_A, visionItems: [MONTHLY.text, REFUSAL.text], sources: [MONTHLY, REFUSAL], checkedTitle: "Sum by month", reviewReopens: 0, ...STRONG_WORK },
+      ],
+    };
+    const contractTask = { ...TASK, taskSpec: { ...TASK.taskSpec, visionItems: [MONTHLY.text, REFUSAL.text], sources: [MONTHLY, REFUSAL] } };
+    const breach = {
+      checkTasks: [CHECK_A],
+      kind: "breaks-contract",
+      check: "prints-count",
+      item: MONTHLY.id,
+      clause: "includes a row dated in another month",
+      problem: "prints-count requires January's total to count a February row",
+      evidence: "sh checks/count.sh",
+    };
+
+    test("the prompt shows what each cited guarantee is refuted by and what each cited assumption states, and asks for the kind", async () => {
+      const prompts: string[] = [];
+      const reviewer = reviewerWith({ llm: scripted([{ problems: [] }], prompts, TWO_FAMILIES), source: contract });
+
+      await reviewer.review(contractTask, PROJECT_PATH);
+
+      expect(prompts[0]).toContain(`- G1: "A month's total includes a row dated in another month"`);
+      expect(prompts[0]).toContain(`- A3: "Malformed rows are refused with their line number"`);
+      expect(prompts[0]).toContain(`"breaks-contract": a check that requires what an item its own task cites rules out`);
+    });
+
+    test("a breach another model family agrees on is routed to its check task as a breach of the contract", async () => {
+      const reviewer = reviewerWith({ llm: scripted([{ problems: [breach] }, { problems: [breach] }], [], TWO_FAMILIES), source: contract });
+
+      const outcome = await reviewer.review(contractTask, PROJECT_PATH);
+      expect(outcome).toMatchObject({ kind: "problems", undecided: [], problems: [{ checkTaskIds: [CHECK_A], kind: "breaks-contract", evidence: breach.evidence }] });
+      if (outcome.kind !== "problems") return expect.unreachable("an agreed breach is routed");
+      expect(outcome.problems[0]?.problem).toContain(`Check "prints-count" requires what cited item G1 rules out, "includes a row dated in another month"`);
+    });
+
+    test("a breach quoting a clause no item its check task cites rules out is re-asked, never acted on", async () => {
+      const prompts: string[] = [];
+      const invented = { ...breach, clause: "a February row is left out of January" };
+      const reviewer = reviewerWith({ llm: scripted([{ problems: [invented] }, { problems: [] }, { problems: [] }], prompts, TWO_FAMILIES), source: contract });
+
+      expect(await reviewer.review(contractTask, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [] });
+      expect(prompts[1]).toContain(`problem 1 gives "a February row is left out of January" as what G1 rules out, but G1 rules out only "A month's total includes a row dated in another month"`);
+    });
+
+    test("a breach of an item its check task does not cite is re-asked", async () => {
+      const prompts: string[] = [];
+      const uncited = { ...breach, item: SCOPE.id, clause: "monthly totals" };
+      const reviewer = reviewerWith({ llm: scripted([{ problems: [uncited] }, { problems: [] }, { problems: [] }], prompts, TWO_FAMILIES), source: contract });
+
+      await reviewer.review(contractTask, PROJECT_PATH);
+      expect(prompts[1]).toContain(`problem 1 names item "S1" as broken, but check task ${CHECK_A} does not cite it`);
+    });
+
+    test("a breach the second review does not reach reopens nothing and is kept advisory", async () => {
+      const reviewer = reviewerWith({ llm: scripted([{ problems: [breach] }, { problems: [] }], [], TWO_FAMILIES), source: contract });
+
+      expect(await reviewer.review(contractTask, PROJECT_PATH)).toMatchObject({
+        kind: "clean",
+        advisory: [{ kind: "breaks-contract", why: expect.stringContaining("the second review did not reach it") }],
+      });
+    });
+  });
+
   // A check's stored decides is its author's claim; the reviewer judges whether any check really decides the item.
-  const undecided = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
+  const undecided ={ checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
 
   test("an undecided item another model family agrees on is routed to its check task; one its task does not cite is re-asked", async () => {
     const prompts: string[] = [];

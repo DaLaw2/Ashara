@@ -61,6 +61,10 @@ const storedTaskSpecSchema = z.object({
   // `sources` it serves: the task's traced items are exactly the union of those. Absent on
   // rows written before it.
   acceptance: z.array(TracedLineSchema).optional(),
+  // A decomposed task's: the behaviour its plan adds beyond what the contract states that its lines
+  // cite, each by the key the contract records it under as an assumption. Absent on rows written
+  // before plans recorded it.
+  addedAssumptions: z.array(z.strictObject({ key: z.string().min(1), statement: z.string().min(1) })).optional(),
   // An environment-change task's: whether the project's product scaffold had completed when Z0
   // opened it. "absent" means its merge lands on a main with no product, so its
   // post-merge check runs the probe only; the product's build and test run on the scaffold's own

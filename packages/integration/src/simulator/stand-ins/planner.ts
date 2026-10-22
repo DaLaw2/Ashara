@@ -15,7 +15,12 @@ type ScriptedLine = { readonly text: string; readonly sources: readonly string[]
 
 type ScriptedTask = Record<string, unknown> & { readonly acceptance: readonly ScriptedLine[] };
 
+/** Behaviour a scripted plan adds beyond what the vision states, as the planner proposes it. */
+type ScriptedAssumption = { readonly ref: string; readonly statement: string; readonly underpins: readonly string[] };
+
 interface ScriptedPlan {
+  /** Absent on a scripted plan that adds nothing beyond the vision. */
+  readonly assumptions?: readonly ScriptedAssumption[];
   readonly tasks: readonly ScriptedTask[];
 }
 
@@ -75,7 +80,10 @@ function citingPerLine<T extends { readonly acceptance: readonly ScriptedLine[] 
  * planner does
  */
 export function citingItemsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
-  return { tasks: citingPerLine(plan.tasks, itemsToCheck(prompt)) };
+  return {
+    assumptions: plan.assumptions === undefined ? [] : plan.assumptions,
+    tasks: citingPerLine(plan.tasks, itemsToCheck(prompt)),
+  };
 }
 
 /** Delivery's planner, first plan and revision alike, as the stand-in answers it. */
@@ -108,6 +116,8 @@ export class PlannerStandIn {
       interfaceTask.length === 0 ? corrected : corrected.filter((task) => !listsDoneTask(prompt, taskTitle(task)));
     const planned = this.reverses() ? [...todo].reverse() : todo;
     return {
+      // The honest planner's lines ask only for what the guarantees they cite state: it adds nothing.
+      assumptions: [],
       tasks: citingPerLine(
         [
           ...planned.map((task, i) => ({

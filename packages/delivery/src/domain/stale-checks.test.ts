@@ -126,6 +126,21 @@ describe("exitSuiteReview: the plan review reopens the check tasks it names", ()
     expect(brief).not.toContain("no vision item the task cites asks for");
   });
 
+  test("a check that requires what a cited item rules out reopens its check task, briefed to keep the promise whatever the task's own lines say", () => {
+    const review = reviewTask();
+    const a = checkTaskFor("impl-a");
+    const exit = exitSuiteReview(review, new Map([[a.id, a]]), {
+      problems: [{ checkTaskIds: [a.id], kind: "breaks-contract", problem: `Check "returned-late" requires what cited item G16 rules out`, evidence: "php overdue_report.php returned_late" }],
+      timesNamed: new Map([[a.id, 1]]),
+    });
+
+    expect(exit.kind).toBe("reopened");
+    expect(a.status).toBe("Pending");
+    const brief = a.blockedReason?.source === "replan" ? a.blockedReason.replanContext.detail : "";
+    expect(brief).toContain(`Problem 1 (a check that requires what a cited item rules out): Check "returned-late" requires what cited item G16 rules out`);
+    expect(brief).toContain("so that a product keeping the promise passes it");
+  });
+
   // A check task is reopened by its review at most once, counted from the durable record.
   test("a check task named a second time is past the bound: the review is given up and no check task is reopened", () => {
     const review = reviewTask();

@@ -130,7 +130,7 @@ describe("every progress report reissues the register", () => {
     const tasks = { decomposition: 1, sprint0: 1, scaffolds: 1, checks: 1, reviews: 1, unrecorded: 0, started: 0 };
     const reports = new PlanReports(
       {
-        dueReports: async () => [{ subject: "first-plan", projectId, epicTitles: ["Store"], tasks, droppedOrderingHints: { kind: "recorded", count: 0 }, revisions: [] }],
+        dueReports: async () => [{ subject: "first-plan", projectId, epicTitles: ["Store"], tasks, droppedOrderingHints: { kind: "recorded", count: 0 }, revisions: [], assumptions: [] }],
         postReport: async (_projectId, _subject, body) => {
           posted.push(body);
           return "posted";

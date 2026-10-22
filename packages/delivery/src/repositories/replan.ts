@@ -418,7 +418,7 @@ interface PlanRevisionRecord {
 export async function withPlanRevisionTransaction(
   db: Database,
   record: PlanRevisionRecord,
-  fn: (workItemRepo: WorkItemRowRepository) => Promise<void>,
+  fn: (workItemRepo: WorkItemRowRepository, tx: DbHandle) => Promise<void>,
   logger: Logger,
 ): Promise<"written" | "moved"> {
   const { projectId } = record;
@@ -467,7 +467,7 @@ export async function withPlanRevisionTransaction(
       if (running) throw new RevisionReadMoved(projectId, `task ${running.id} is in progress`);
       // An Epic is not an attempt: it is superseded with its open tasks (supersedeWorkItem).
 
-      await fn(new WorkItemRowRepository(tx));
+      await fn(new WorkItemRowRepository(tx), tx);
 
       const unowned = await tasksWithoutRosterOwnerAmongOpen(tx, projectId);
       if (unowned.length > 0) throw new RevisionTaskUnowned(projectId, unowned);

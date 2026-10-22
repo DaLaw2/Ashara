@@ -5,7 +5,7 @@ import type { StoredVision } from "./acl/engagement-acl.js";
 import { checkDecides } from "./acl/engagement-vision-acl.js";
 import { SchemaValidationError, modelCallFailureOf } from "./acl/finance-acl.js";
 import type { StructuredProvider, StructuredValidation } from "./acl/finance-acl.js";
-import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UncitedVisionItemsError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
+import { DEFAULT_DECOMPOSITION_CONFIG, PlannedBehaviourInvalid, TaskCapExceededError, UncitedVisionItemsError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput, VisionItem } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 import type { DecompositionLLM } from "./decomposition.js";
@@ -31,6 +31,7 @@ const INPUT: DecompositionInput = {
     layout: { kind: "new" },
     checkedItems: [A1],
     interface: [],
+    assumptionKeys: (count) => Array.from({ length: count }, (_, i) => `A${3 + i}`),
     visionItems: [
         { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio", side: "in" },
         A1,
@@ -113,7 +114,7 @@ describe("DecompositionEngine", () => {
     });
 
     test("a vision naming no stack decomposes with no stack in the prompt", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual([
@@ -126,7 +127,7 @@ describe("DecompositionEngine", () => {
     });
 
     test("a plan has exactly one Sprint 0 task, checked by the substrate, that every other task depends on; no task carries checks", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         const sprint0 = result.tasks.filter((t) => t.taskSpec.origin === "sprint0");
@@ -143,7 +144,7 @@ describe("DecompositionEngine", () => {
     // The product's layout is set by an implementer before any check names it.
     test("a first plan sets up the product's layout after Sprint 0 and before every check, traced to the items it enables", async () => {
         const llm = scriptedLlm(
-            { tasks: [task("t1", {}, ["S1"]), task("t2", { dependsOn: ["t1"] }, ["A1"])] },
+            { assumptions: [], tasks: [task("t1", {}, ["S1"]), task("t2", { dependsOn: ["t1"] }, ["A1"])] },
             seen,
         );
         const result = await new DecompositionEngine(llm).decompose(INPUT);
@@ -172,7 +173,7 @@ describe("DecompositionEngine", () => {
         // A revision builds on the layout already merged: no second scaffold.
         resetIdCounter();
         const revision = await new DecompositionEngine(
-            scriptedLlm({ tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
+            scriptedLlm({ assumptions: [], tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
         ).decompose({ ...INPUT, environment: { kind: "existing", taskId: "env-done" }, layout: { kind: "existing", taskId: "layout-done" } });
         expect(revision.tasks.filter((t) => t.taskSpec.origin === "product-scaffold")).toEqual([]);
     });
@@ -180,7 +181,7 @@ describe("DecompositionEngine", () => {
     test("a revision on a merged layout red-runs on that layout's latest merge, never on the environment task merged before it", async () => {
         const decompose = (environment: DecompositionInput["environment"]) =>
             new DecompositionEngine(
-                scriptedLlm({ tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
+                scriptedLlm({ assumptions: [], tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
             ).decompose({ ...INPUT, environment, layout: { kind: "existing", taskId: "layout-latest" } });
 
         const onExisting = await decompose({ kind: "existing", taskId: "env-done" });
@@ -201,7 +202,7 @@ describe("DecompositionEngine", () => {
     });
 
     test("every decomposed task gets one check task, after the product scaffold, naming it by checksFor; its text names no stack", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         const sprint0Id = result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id;
@@ -241,7 +242,7 @@ describe("DecompositionEngine", () => {
     ])("in %s every implementation task depends on every check task of the plan", async (_label, environment) => {
         const layout = environment.kind === "new" ? ({ kind: "new" } as const) : ({ kind: "existing", taskId: "layout-done" } as const);
         const llm = scriptedLlm(
-            { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] }), task("t3")] },
+            { assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t1"] }), task("t3")] },
             seen,
         );
         const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
@@ -266,7 +267,7 @@ describe("DecompositionEngine", () => {
     });
 
     test("the task prompt names no stack and demands no file path or command", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1")] }, seen);
         await new DecompositionEngine(llm).decompose(INPUT);
 
         const prompt = seen.prompts[0] ?? "";
@@ -283,9 +284,9 @@ describe("DecompositionEngine", () => {
     test("an edge the re-ask drops is recorded on the plan, and a ref it then fixes is not", async () => {
         const answers = [
             // Rejected: "ghost" and "t9" name no task.
-            { tasks: [task("t1", { dependsOn: ["ghost"] }), task("t2", { dependsOn: ["t9"] })] },
+            { assumptions: [], tasks: [task("t1", { dependsOn: ["ghost"] }), task("t2", { dependsOn: ["t9"] })] },
             // Accepted: "ghost" dropped; "t9" fixed by emitting a task with that ref.
-            { tasks: [task("t1"), task("t2", { dependsOn: ["t9"] }), task("t9")] },
+            { assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t9"] }), task("t9")] },
         ];
         const llm: DecompositionLLM = {
             async generateStructured<T>(
@@ -315,7 +316,7 @@ describe("DecompositionEngine", () => {
     test("states the per-epic cap and rejects an over-cap response instead of truncating it", async () => {
         const cap = DEFAULT_DECOMPOSITION_CONFIG.maxTasksPerEpic;
         const tasks = Array.from({ length: cap + 1 }, (_, i) => task(`t${i}`));
-        const llm = scriptedLlm({ tasks }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks }, seen);
 
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(TaskCapExceededError);
         expect(seen.prompts[0]).toContain(`Emit at most ${cap} tasks`);
@@ -323,7 +324,7 @@ describe("DecompositionEngine", () => {
     });
 
     test.each(["endState", "scope", "deliverables", "acceptance"])("a task missing %s is rejected, not inferred", async (field) => {
-        const llm = scriptedLlm({ tasks: [task("t1", { [field]: undefined })] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1", { [field]: undefined })] }, seen);
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toThrow(field);
     });
     // A task must not ask for what the tender never asked for:
@@ -333,7 +334,7 @@ describe("DecompositionEngine", () => {
         ["a deliverable that names no source", { deliverables: [{ text: "sorted listing", sources: [] }] }, "names no vision item it serves"],
         ["a line naming an item the vision does not hold", { acceptance: [{ text: "keys come back sorted", sources: ["S9"] }] }, '"S9", which is no vision item'],
     ])("a plan with %s is rejected through the ladder, never written", async (_label, broken, message) => {
-        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", broken)] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", broken)] }, seen);
 
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
         expect(seen.verdicts).toHaveLength(1);
@@ -351,14 +352,98 @@ describe("DecompositionEngine", () => {
         ]) {
             resetIdCounter();
             const verdicts: StructuredValidation[] = [];
-            const llm = scriptedLlm({ tasks: [task("t1", broken)] }, { prompts: [], verdicts });
+            const llm = scriptedLlm({ assumptions: [], tasks: [task("t1", broken)] }, { prompts: [], verdicts });
             await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
             expect(verdicts[0]?.ok === false ? verdicts[0].errors.join("\n") : "").toContain("names A2, an internal-design assumption");
         }
     });
 
+    describe("behaviour a plan adds beyond what the vision states", () => {
+        const G1: VisionItem = {
+            type: "guarantee",
+            id: "G1",
+            text: "Overdue loans are listed in the report",
+            observation: "output",
+            interface: ["I1"],
+            refutedBy: ["The report includes a loan that is not overdue"],
+        };
+        const WITH_GUARANTEE: DecompositionInput = { ...INPUT, visionItems: [...INPUT.visionItems, G1], checkedItems: [A1] };
+        const ADDED = "A loan returned after its due date stays listed with its fine";
+
+        test("a line citing a proposal rests on the assumption the contract records it under, and its check task and the review read it", async () => {
+            const llm = scriptedLlm(
+                {
+                    assumptions: [{ ref: "n1", statement: ADDED, underpins: ["G1"] }],
+                    tasks: [
+                        task("t1", {
+                            deliverables: [{ text: "the report lists overdue loans", sources: ["G1", "S1"] }],
+                            acceptance: [{ text: "a loan returned late is listed with its fine", sources: ["G1", "n1"] }],
+                        }),
+                    ],
+                },
+                seen,
+            );
+            const result = await new DecompositionEngine(llm).decompose(WITH_GUARANTEE);
+
+            expect(seen.verdicts).toEqual([{ ok: true }]);
+            expect(result.assumptions).toEqual([{ key: "A3", statement: ADDED, underpins: ["G1"] }]);
+            const decomposed = result.tasks.find((t) => t.taskSpec.origin === "decomposition");
+            const added: VisionItem = { type: "assumption", id: "A3", text: ADDED, status: "Inferred", standing: "reported", kind: "client-visible" };
+            expect(decomposed?.taskSpec).toMatchObject({
+                acceptance: [{ line: "a loan returned late is listed with its fine", sources: ["G1", "A3"] }],
+                sources: [{ id: "S1" }, G1, added],
+                addedAssumptions: [{ key: "A3", statement: ADDED }],
+            });
+            const check = result.tasks.find((t) => t.taskSpec.origin === "check");
+            expect(check?.description).toContain(`A3 (assumption; client-visible behaviour): ${ADDED}`);
+            expect(check?.description).not.toContain("n1");
+            const review = result.tasks.find((t) => t.taskSpec.origin === "review");
+            expect(review?.taskSpec).toMatchObject({ sources: [...WITH_GUARANTEE.visionItems, added] });
+        });
+
+        test("a plan that adds nothing records no assumption", async () => {
+            const llm = scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1", "S1"])] }, seen);
+            const result = await new DecompositionEngine(llm).decompose(WITH_GUARANTEE);
+
+            expect(result.assumptions).toEqual([]);
+            expect(result.tasks.find((t) => t.taskSpec.origin === "decomposition")?.taskSpec).toMatchObject({ addedAssumptions: [] });
+        });
+
+        test("the prompt asks for unstated behaviour as a proposal, never a silent line", async () => {
+            const llm = scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1", "S1"])] }, seen);
+            await new DecompositionEngine(llm).decompose(WITH_GUARANTEE);
+
+            expect(seen.prompts[0]).toContain("never write it silently: propose it in \"assumptions\"");
+            expect(seen.prompts[0]).toContain('"assumptions": [{"ref": "n1"');
+        });
+
+        test.each([
+            ["names no guarantee", { ref: "n1", statement: ADDED, underpins: [] }, "n1 names no guarantee"],
+            ["names an assumption as what it underpins", { ref: "n1", statement: ADDED, underpins: ["A1"] }, 'n1 names "A1" in "underpins", which is no guarantee'],
+            ["reuses a vision item's id", { ref: "S1", statement: ADDED, underpins: ["G1"] }, 'ref "S1" is already a vision item'],
+        ])("a proposal that %s is rejected through the ladder, never written", async (_label, proposal, message) => {
+            const llm = scriptedLlm(
+                {
+                    assumptions: [proposal],
+                    tasks: [task("t1", { acceptance: [{ text: "a loan returned late is listed", sources: ["G1", proposal.ref] }] }, ["G1", "S1"])],
+                },
+                seen,
+            );
+
+            await expect(new DecompositionEngine(llm).decompose(WITH_GUARANTEE)).rejects.toBeInstanceOf(PlannedBehaviourInvalid);
+            expect(seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "").toContain(message);
+        });
+
+        test("a proposal no line cites is rejected", async () => {
+            const llm = scriptedLlm({ assumptions: [{ ref: "n1", statement: ADDED, underpins: ["G1"] }], tasks: [task("t1", {}, ["G1", "S1"])] }, seen);
+
+            await expect(new DecompositionEngine(llm).decompose(WITH_GUARANTEE)).rejects.toBeInstanceOf(PlannedBehaviourInvalid);
+            expect(seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "").toContain("n1 is cited by no line");
+        });
+    });
+
     test("the task prompt lists every vision item by id with its kind and asks each line to name its sources", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1")] }, seen);
         await new DecompositionEngine(llm).decompose(INPUT);
 
         const prompt = seen.prompts[0] ?? "";
@@ -371,7 +456,7 @@ describe("DecompositionEngine", () => {
 
     // An assumption is decided through what rests on it; the plan must cite only what a check decides.
     test("a plan in which no task cites a client-visible assumption is accepted; only what a check decides must be cited", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1")] }, seen);
 
         await new DecompositionEngine(llm).decompose({ ...INPUT, checkedItems: [] });
         expect(seen.verdicts).toEqual([{ ok: true }]);
@@ -380,20 +465,20 @@ describe("DecompositionEngine", () => {
 
     // Citing gives the item a task whose check set must decide it; no line's text is read as checking it.
     test("a deliverable or an acceptance line citing the assumption, by id or exact text, gives it a task", async () => {
-        const deliverableOnly = scriptedLlm({ tasks: [task("t1", { deliverables: [{ text: "twenty seats", sources: ["S1", "A1"] }] })] }, seen);
+        const deliverableOnly = scriptedLlm({ assumptions: [], tasks: [task("t1", { deliverables: [{ text: "twenty seats", sources: ["S1", "A1"] }] })] }, seen);
         await new DecompositionEngine(deliverableOnly).decompose({ ...INPUT, checkedItems: [] });
         expect(seen.verdicts).toEqual([{ ok: true }]);
         for (const source of ["A1", "A class holds at most twenty members"]) {
             resetIdCounter();
             const verdicts: StructuredValidation[] = [];
-            const llm = scriptedLlm({ tasks: [task("t1"), task("t2", {}, ["S1", source])] }, { prompts: [], verdicts });
+            const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", {}, ["S1", source])] }, { prompts: [], verdicts });
             await new DecompositionEngine(llm).decompose({ ...INPUT, checkedItems: [] });
             expect(verdicts).toEqual([{ ok: true }]);
         }
     });
 
     test("work already done checks an item only as the vision states it now", async () => {
-        const noneCite = { tasks: [task("t1", {}, ["A1"])] };
+        const noneCite = { assumptions: [], tasks: [task("t1", {}, ["A1"])] };
         const S1: VisionItem = { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio", side: "in" };
         await new DecompositionEngine(scriptedLlm(noneCite, seen)).decompose({ ...INPUT, checkedItems: [S1] });
         expect(seen.verdicts).toEqual([{ ok: true }]);
@@ -413,14 +498,14 @@ describe("DecompositionEngine", () => {
             { type: "scope", id: "S4", text: "Out: payments", side: "out" },
         ];
         const input = { ...INPUT, visionItems: items };
-        await expect(new DecompositionEngine(scriptedLlm({ tasks: [task("t1")] }, seen)).decompose(input)).rejects.toBeInstanceOf(UncitedVisionItemsError);
+        await expect(new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1")] }, seen)).decompose(input)).rejects.toBeInstanceOf(UncitedVisionItemsError);
         expect(seen.prompts[0]).toContain("a plan that leaves one uncited is rejected: S1, S2, S3.");
         const errors = seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "";
         expect(errors).toContain('No task cites S2 ("In: cancelling a booking"), S3 ("Members see their bookings")');
         expect(errors).not.toContain("S4");
         resetIdCounter();
         const verdicts: StructuredValidation[] = [];
-        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1"), task("t2", {}, ["S2", "S3"])] }, { prompts: [], verdicts })).decompose(input);
+        await new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", {}, ["S2", "S3"])] }, { prompts: [], verdicts })).decompose(input);
         expect(verdicts).toEqual([{ ok: true }]);
     });
 
@@ -428,16 +513,16 @@ describe("DecompositionEngine", () => {
     test("an unclassified assumption is citable like a client-visible one", async () => {
         const unclassified: VisionItem = { type: "assumption", id: "A3", text: "Empty names are refused", status: "Inferred", standing: "unrecorded", kind: "unclassified" };
         const input = { ...INPUT, visionItems: [...INPUT.visionItems, unclassified] };
-        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1")] }, seen)).decompose(input);
+        await new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1")] }, seen)).decompose(input);
         expect(seen.prompts[0]).toContain("- A3 (assumption; Inferred; whether the client was shown it is not on record; not classified): Empty names are refused");
         resetIdCounter();
         const verdicts: StructuredValidation[] = [];
-        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["S1", "A3"])] }, { prompts: [], verdicts })).decompose(input);
+        await new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["S1", "A3"])] }, { prompts: [], verdicts })).decompose(input);
         expect(verdicts).toEqual([{ ok: true }]);
     });
 
     test("a vision with no item, or with assumptions and no guarantee, is refused before any model call", async () => {
-        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1")] }, seen);
         await expect(new DecompositionEngine(llm).decompose({ ...INPUT, visionItems: [] })).rejects.toBeInstanceOf(VisionItemsMissing);
         await expect(new DecompositionEngine(llm).decompose({ ...INPUT, visionItems: INPUT.visionItems.filter((item) => item.type === "assumption") })).rejects.toBeInstanceOf(VisionItemsMissing);
         expect(seen.prompts).toEqual([]);
@@ -447,6 +532,7 @@ describe("DecompositionEngine", () => {
     test("a task's traced items are exactly the union of its lines' sources, by id or exact text; its check task carries them", async () => {
         const llm = scriptedLlm(
             {
+                assumptions: [],
                 tasks: [
                     task("t1", {
                         deliverables: [{ text: "a member can book", sources: ["In: booking a seat in a class of either studio"] }],
@@ -487,7 +573,7 @@ describe("DecompositionEngine", () => {
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
     ])("in %s one review task waits on every check task and every implementation waits on it", async (_label, environment) => {
         const layout = environment.kind === "new" ? ({ kind: "new" } as const) : ({ kind: "existing", taskId: "layout-done" } as const);
-        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ assumptions: [], tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
 
         const reviews = result.tasks.filter((t) => t.taskSpec.origin === "review");
@@ -510,6 +596,7 @@ describe("DecompositionEngine", () => {
     test("each decomposed task keeps its grade and reason; checks never fall below Strong; the plan's own tasks are Strong", async () => {
         const llm = scriptedLlm(
             {
+                assumptions: [],
                 tasks: [
                     task("t1", { capability: "Light", capabilityReason: "a fully specified one-part change" }),
                     task("t2", { capability: "Frontier", capabilityReason: "a novel design cutting across the product" }),
@@ -535,7 +622,7 @@ describe("DecompositionEngine", () => {
         ["a grade that is no level", { capability: "Expert" }],
         ["no reason", { capabilityReason: "" }],
     ])("a task with %s is re-asked through the ladder with the schema's complaint", async (_label, broken) => {
-        const answers = [{ tasks: [task("t1", broken)] }, { tasks: [task("t1", { capability: "Strong" })] }];
+        const answers = [{ assumptions: [], tasks: [task("t1", broken)] }, { assumptions: [], tasks: [task("t1", { capability: "Strong" })] }];
         const taskPrompts: string[] = [];
         const provider: StructuredProvider = {
             async generateStructured(request) {
@@ -558,7 +645,7 @@ describe("DecompositionEngine", () => {
     test("a grade the model never gives exhausts the ladder: no plan is written on an assumed level", async () => {
         const provider: StructuredProvider = {
             async generateStructured(request) {
-                const parsed = request.schema.safeParse({ tasks: [task("t1", { capability: undefined })] });
+                const parsed = request.schema.safeParse({ assumptions: [], tasks: [task("t1", { capability: undefined })] });
                 if (parsed.success) throw new Error("the schema accepted a task without a grade");
                 throw new SchemaValidationError(parsed.error.issues.map((i) => i.message), "fake");
             },
@@ -626,7 +713,7 @@ describe("a plan against a vision stated as guarantees", () => {
         ]);
         expect(input.epicNorthStar).toContain("Guarantees:\n- G1: A get prints the value of the last put of its key.\n- G2: A get of a deleted key finds nothing.");
         const seen: Seen = { prompts: [], verdicts: [] };
-        const result = await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["G1", "A1"]), task("t2", {}, ["G2"])] }, seen)).decompose(input);
+        const result = await new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1", "A1"]), task("t2", {}, ["G2"])] }, seen)).decompose(input);
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[0]).toContain("- G2 (guarantee; observed in its exit-status at I2): A get of a deleted key finds nothing. Refuted by: a get of a deleted key exits 0");
         const cited = result.tasks.flatMap((t) => (t.taskSpec.origin === "decomposition" ? [t.taskSpec.sources.map((s) => s.id)] : []));
@@ -638,7 +725,7 @@ describe("a plan against a vision stated as guarantees", () => {
 
     test("a plan leaving a guarantee uncited is refused with UncitedVisionItemsError naming that guarantee", async () => {
         const seen: Seen = { prompts: [], verdicts: [] };
-        const refused: unknown = await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["G1", "A1"])] }, seen))
+        const refused: unknown = await new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1", "A1"])] }, seen))
             .decompose(contractInput())
             .catch((err: unknown) => err);
         expect(refused).toBeInstanceOf(UncitedVisionItemsError);
@@ -651,13 +738,13 @@ describe("a plan against a vision stated as guarantees", () => {
         expect(checkDecides({ type: "assumption", kind: "unclassified" })).toBe(false);
         expect(checkDecides({ type: "guarantee" })).toBe(true);
         const seen: Seen = { prompts: [], verdicts: [] };
-        await new DecompositionEngine(scriptedLlm({ tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, seen)).decompose(contractInput());
+        await new DecompositionEngine(scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, seen)).decompose(contractInput());
         expect(seen.verdicts).toEqual([{ ok: true }]);
     });
 
     test("the scaffold's brief carries every interface entry verbatim and its success criterion names each", async () => {
         const result = await new DecompositionEngine(
-            scriptedLlm({ tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, { prompts: [], verdicts: [] }),
+            scriptedLlm({ assumptions: [], tasks: [task("t1", {}, ["G1"]), task("t2", {}, ["G2"])] }, { prompts: [], verdicts: [] }),
         ).decompose(contractInput());
         const scaffold = result.tasks.find((t) => t.taskSpec.origin === "product-scaffold");
         for (const entry of ["put KEY VALUE stores VALUE under KEY and exits 0", "get KEY prints the value stored under KEY, or exits 1 when none is"]) {

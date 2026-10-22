@@ -47,6 +47,8 @@ export {
 export { PlanningService } from "./domain/index.js";
 /** @testseam the integration replan-store.test.ts gives a task up against Postgres; the dispatch path is its production caller */
 export { giveUpWorkItem } from "./domain/index.js";
+/** @testseam the integration suite-review-reopen.test.ts reopens check tasks on a real review's findings against Postgres; routeAsSuiteReview is its production caller */
+export { exitSuiteReview } from "./domain/index.js";
 
 export { FailureRouter } from "./failure-router.js";
 /** @testseam the integration tests route a failed task against Postgres through it; the core loop is its production caller */

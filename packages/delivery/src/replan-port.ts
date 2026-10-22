@@ -2,7 +2,7 @@ import type { DomainEvent, ProjectId, StepFaulted, UnreadSubject } from "@ashara
 import type { CapabilityLevel, ModelCallFailure } from "./acl/finance-acl.js";
 import type { StoredVision } from "./acl/engagement-acl.js";
 import type { BulkPlanEdge } from "./bulk-plan.js";
-import type { VisionItem } from "./decomposition-types.js";
+import type { AddedAssumption, VisionItem } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import type { FirstPlanWrite } from "./first-plan.js";
 import type { ProjectBlockCause } from "./project-halt.js";
@@ -97,6 +97,12 @@ export interface PlanRevisionWork {
   /** Superseded tasks that are not goal tasks (isGoalTask): check, review and setup tasks, and any whose origin was never recorded. */
   readonly supersededOther: number;
   readonly keptCompleted: number;
+  /**
+   * The behaviour the revision adds beyond what the contract states, each recorded on the contract
+   * under its key with the revision; its report tells the client, and the project's dispatch waits
+   * for that report while any is listed.
+   */
+  readonly assumptions: readonly AddedAssumption[];
 }
 
 /** One change a revision took in: the client's words and what work now proceeds on. */

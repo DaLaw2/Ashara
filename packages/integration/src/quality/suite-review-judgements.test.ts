@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProviderError, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
-import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, TaskCheckRepository, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
+import { CheckSetFreezeRepository, SuiteReviewFindingRepository, SuiteReviewJudgementRepository, TaskCheckRepository, blockingReview, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
 import { suiteReviewerFor } from "@ashara/quality/testing";
 import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId } from "@ashara/shared";
@@ -144,6 +144,53 @@ describe("suite review judgements", () => {
     ]);
 
     await expect(db.execute(sql`UPDATE suite_review_judgements SET outcome = 'released' WHERE review_task_id = ${reviewTask}`)).rejects.toThrow();
+  });
+
+  test("a breach of the contract both reviews reach is recorded, read back through its schema, and its findings read back as the block report reads them", async () => {
+    const reviewTask = parseWorkItemId(await workItem("Review a breach of the contract"), "test review task");
+    const impl = await workItem("Report overdue loans");
+    const check = await workItem("Checks of Report overdue loans");
+    const guarantee = {
+      type: "guarantee" as const,
+      id: "G16",
+      text: "The overdue report lists every loan past its due date",
+      observation: "output" as const,
+      interface: ["I3"],
+      refutedBy: ["The report includes a non-overdue loan"],
+    };
+    const source: SuiteReviewSource = {
+      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: [guarantee.text], sources: [guarantee], checkedTitle: "Report overdue loans", reviewReopens: 0, grade: "Strong", attemptModels: [] }],
+      latest: async () => ({ checkTaskId: check, revision: 1, environmentVersion: "v1", baselineCommit: null, checks: [{ name: "returned-late", command: "php overdue_report.php returned_late", decides: ["G16"] }], files: [] }),
+      frozen: async () => false,
+    };
+    const breach = {
+      checkTasks: [check],
+      kind: "breaks-contract",
+      check: "returned-late",
+      item: "G16",
+      clause: "includes a non-overdue loan",
+      problem: "returned-late requires a loan returned before the report runs to be listed",
+      evidence: "php overdue_report.php returned_late",
+    };
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => ({
+          data: request.schema.parse({ problems: [breach] }),
+          ...secondBy(request, { "other-family": { provider: "second", model: "strong-b", grade: "Frontier" as const } }),
+        }),
+      }),
+    };
+    const reviewer = suiteReviewerFor({ llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
+
+    const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: [guarantee.text], sources: [guarantee] } }, "/unused");
+
+    expect(outcome).toMatchObject({ kind: "problems", problems: [{ checkTaskIds: [check], kind: "breaks-contract" }] });
+    const recorded = (await suiteReviewJudgementsOf(db, projectId)).filter((judgement) => judgement.reviewTaskId === reviewTask);
+    expect(recorded).toMatchObject([{ checkTaskId: check, checkName: null, outcome: "routed", basis: "second-opinion-agreed", firstFinding: breach, secondFindings: [breach] }]);
+    if (outcome.kind !== "problems") return expect.unreachable("an agreed breach is routed");
+    await new SuiteReviewFindingRepository(db).record({ projectId, reviewTaskId: reviewTask, problems: outcome.problems });
+    expect(await blockingReview(db, projectId, new Date(Date.now() + 60_000))).toMatchObject({ problems: [outcome.problems[0]?.problem] });
+    await db.execute(sql`DELETE FROM suite_review_findings WHERE review_task_id = ${reviewTask}`);
   });
 
   test("a stored judgement that does not parse is refused by name, never read as a judgement", async () => {

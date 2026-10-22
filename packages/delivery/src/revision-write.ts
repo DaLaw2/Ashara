@@ -73,7 +73,9 @@ export function setAsideWork(tasks: readonly WorkItem[]): { readonly supersededT
 export function composeRevision({ project, cause, vision, planned, owners, completed, scope }: RevisionComposition): PlanRevisionWrite {
   const { replaced } = scope;
   const plan: FirstPlanWrite =
-    planned === null ? { projectId: project.projectId, items: [], edges: [], owners: [], droppedDependencies: [] } : toWrite(project.projectId, planned.decomposition, owners);
+    planned === null
+      ? { projectId: project.projectId, items: [], edges: [], owners: [], droppedDependencies: [], assumptions: [] }
+      : toWrite(project.projectId, planned.decomposition, owners);
   const tempIds = new Set(plan.items.map((item) => item.tempId));
   // A kept task moved off a superseded review waits on the revision's own, which reads its checks' suites too.
   const review = planned?.decomposition.tasks.find((task) => task.taskSpec.origin === "review");
@@ -130,6 +132,7 @@ export function composeRevision({ project, cause, vision, planned, owners, compl
     newEnvironmentTask: planned !== null && planned.environment.kind === "new",
     ...setAside,
     keptCompleted: completed.length,
+    assumptions: plan.assumptions.map(({ key, statement }) => ({ key, statement })),
   };
   return {
     projectId: project.projectId,

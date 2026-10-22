@@ -61,10 +61,18 @@ type DuePlanReport =
        * they left standing, never the work they replaced.
        */
       readonly revisions: readonly RevisionBeforeReport[];
+      /** The behaviour the plan that stands adds beyond what the contract states, each recorded as an assumption under its key. */
+      readonly assumptions: readonly PlannedAssumption[];
     }
   | { readonly subject: typeof REPORT_SUBJECT.planningStopped; readonly projectId: ProjectId; readonly attempts: number }
   /** A first plan the store could not read back (a work item that does not parse). */
   | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+
+/** Behaviour a plan adds that no item of the contract states, as the assumption the contract records it under. */
+interface PlannedAssumption {
+  readonly key: string;
+  readonly statement: string;
+}
 
 /** A revision of the plan the client has not been told about; `summary` as Delivery recorded it, parsed here. */
 interface DuePlanRevisionReport {
@@ -159,6 +167,8 @@ const revisionWorkFields = {
   supersededTasks: z.array(z.string().min(1)),
   supersededOther: z.number().int().min(0),
   keptCompleted: z.number().int().min(0),
+  // Absent on a summary written before plans recorded the behaviour they add.
+  assumptions: z.array(z.object({ key: z.string().min(1), statement: z.string().min(1) })).optional(),
 };
 
 // A revision for the client's changes carries every change it took in, each with their words and
@@ -250,6 +260,7 @@ function firstPlanReport(
   checkTasks: number,
   droppedHints: number,
   changes: readonly RevisionChange[],
+  assumptions: readonly PlannedAssumption[],
 ): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
@@ -271,6 +282,7 @@ function firstPlanReport(
     `Before any of those tasks starts, team members who do not do them write the checks that decide whether each ` +
       `is done (${plural(checkTasks, "check task")}). A task counts as done only when its checks pass.`,
     REVIEW_SENTENCE,
+    ...plannedParagraph(assumptions),
   ];
   if (droppedHints > 0) {
     paragraphs.push(
@@ -280,6 +292,20 @@ function firstPlanReport(
   }
   paragraphs.push(`When the plan was made, none of its tasks had been started.`);
   return paragraphs.join("\n\n");
+}
+
+/**
+ * The behaviour the plan adds that the client did not state, each as the assumption the contract now
+ * records it under: the client reads it before any task resting on it starts, and can change it.
+ */
+function plannedParagraph(assumptions: readonly PlannedAssumption[]): string[] {
+  if (assumptions.length === 0) return [];
+  return [
+    `The plan also builds behaviour your request does not state. The team has recorded ${assumptions.length === 1 ? "it as an assumption" : "each as an assumption"} ` +
+      `of your contract, and no task resting on ${assumptions.length === 1 ? "it" : "them"} starts before this message:\n` +
+      assumptions.map((assumption) => `- ${assumption.key}: ${assumption.statement}`).join("\n") +
+      `\nIf ${assumptions.length === 1 ? "it is" : "any of them is"} not what you want, send a change saying what should be different.`,
+  ];
 }
 
 /** One change in plain words: what the client said, and what work proceeds on because of it. */
@@ -314,6 +340,8 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
             `and has given ${summary.repaired.length === 1 ? "it" : "them"} up:\n${quotedList(summary.repaired)}\n` +
             `So the team has revised the plan for the work still to do; what you asked for has not changed.`,
         ];
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a summary written before plans recorded the behaviour they add records none it adds
+  paragraphs.push(...plannedParagraph(summary.assumptions ?? []));
   if (summary.newEnvironmentTask) {
     paragraphs.push(
       "changes" in summary
@@ -461,6 +489,6 @@ export class PlanReports implements LiaisonPlanReports {
       if (!("changes" in summary)) throw new RepairBeforeFirstPlanReport(due.projectId, revision.revisionId, revision.revision);
       return summary.changes;
     });
-    return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count, changes);
+    return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count, changes, due.assumptions);
   }
 }

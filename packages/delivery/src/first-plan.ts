@@ -5,7 +5,7 @@ import type { WorkItemLevel } from "./work-item-language/work-item-status.js";
 import type { WorkKind } from "./acl/organization-acl.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
-import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
+import { VisionChangeRefused, VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
 import { modelCallFailureOf } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "./acl/organization-acl.js";
@@ -16,6 +16,7 @@ import type {
   DecompositionInput,
   DecompositionResult,
   DroppedDependency,
+  PlannedAssumption,
   TaskSpec,
   WorkItemSpec,
 } from "./decomposition-types.js";
@@ -57,6 +58,11 @@ export interface FirstPlanWrite {
   readonly owners: readonly TaskOwnership[];
   /** Ordering hints the decomposition dropped, recorded with the plan so its report states them. */
   readonly droppedDependencies: readonly DroppedDependency[];
+  /**
+   * The behaviour the plan adds beyond what the contract states, recorded on the contract in the
+   * plan's own transaction under the keys its tasks cite (recordPlannedBehaviour); empty when none.
+   */
+  readonly assumptions: readonly PlannedAssumption[];
 }
 
 type FirstPlanCommit =
@@ -186,6 +192,7 @@ export function toWrite(projectId: ProjectId, result: DecompositionResult, owner
     edges,
     owners: taskOwners,
     droppedDependencies: result.droppedDependencies,
+    assumptions: result.assumptions,
   };
 }
 
@@ -226,6 +233,7 @@ export class FirstPlanner implements FirstPlanning {
           err instanceof RosterUnreadable ||
           err instanceof WorkKindOwnerUnresolved ||
           err instanceof VisionUnreadable ||
+          err instanceof VisionChangeRefused ||
           err instanceof VisionItemsMissing;
         if (!projectRecord) throw err;
         return this.block(project.projectId, projectBlockCause(err));
@@ -300,6 +308,7 @@ export class FirstPlanner implements FirstPlanning {
       visionItems: vision.items,
       interface: vision.interface,
       checkedItems: [],
+      assumptionKeys: vision.assumptionKeys,
     };
     return new DecompositionEngine(llm).decompose(input);
   }

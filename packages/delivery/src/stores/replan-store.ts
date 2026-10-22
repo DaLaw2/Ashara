@@ -8,6 +8,7 @@ import { completedAttemptGrades, decidedByLatestChecks, listProjectsAwaitingRepl
 import { ProjectHaltRepository } from "../repositories/project-halt.js";
 import { adaptWorkItemRepo, rowToWorkItem } from "../repositories/work-item-adapter.js";
 import { WorkItemRowRepository } from "../repositories/work-item.js";
+import { recordPlannedAssumptions } from "./planned-behaviour.js";
 
 /** An owner or an edge names a temp id the revision did not write. */
 class RevisionItemNotPlanned extends Error {
@@ -82,7 +83,8 @@ export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logge
           summary: write.summary,
           events: write.events,
         },
-        async (workItemRepo) => {
+        async (workItemRepo, tx) => {
+          await recordPlannedAssumptions(tx, write.projectId, write.revision, write.plan.assumptions);
           const domainRepo = adaptWorkItemRepo(workItemRepo);
           for (const { item, previousStatus } of write.superseded) {
             await PlanningService.saveWorkItem(domainRepo, item, previousStatus);

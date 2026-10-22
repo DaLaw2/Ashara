@@ -79,6 +79,8 @@ type DuePlanReportRow =
       readonly droppedOrderingHints: DroppedOrderingHints;
       /** Revisions written before this report, oldest first: the report describes the plan they left. */
       readonly revisions: readonly RevisionBeforeReport[];
+      /** The behaviour the standing plan's tasks add beyond what the contract states, once each, in the order the tasks cite it. */
+      readonly assumptions: ReadonlyArray<{ readonly key: string; readonly statement: string }>;
     }
   | { readonly subject: typeof REPORT_SUBJECT.planningStopped; readonly projectId: ProjectId; readonly attempts: number }
   /**
@@ -139,13 +141,26 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
       .where(eq(workItems.projectId, row.id))
       .orderBy(asc(workItems.createdAt), asc(workItems.id));
     const projectId = parseProjectId(row.id, "projects.id");
-    let standing: Array<{ readonly level: string; readonly title: string; readonly origin: string | undefined; readonly dispatchCount: number }>;
+    let standing: Array<{
+      readonly level: string;
+      readonly title: string;
+      readonly origin: string | undefined;
+      readonly dispatchCount: number;
+      readonly added: ReadonlyArray<{ readonly key: string; readonly statement: string }>;
+    }>;
     let dropped: DroppedOrderingHints;
     try {
       standing = items
         .map((i) => ({ item: i, parsed: parseWorkItemJsonb(i) }))
         .filter(({ item, parsed }) => !isSupersededItem({ status: item.status, blockedReason: parsed.blockedReason }))
-        .map(({ item, parsed }) => ({ level: item.level, title: item.title, origin: parsed.taskSpec?.origin, dispatchCount: item.dispatchCount }));
+        .map(({ item, parsed }) => ({
+          level: item.level,
+          title: item.title,
+          origin: parsed.taskSpec?.origin,
+          dispatchCount: item.dispatchCount,
+          // eslint-disable-next-line no-restricted-syntax -- policy default: a task written before plans recorded the behaviour they add cites none it adds
+          added: parsed.taskSpec?.addedAssumptions ?? [],
+        }));
       dropped = droppedOrderingHints(projectId, row.droppedDependencies);
     } catch (err) {
       if (!(err instanceof WorkItemRowCorrupt) && !(err instanceof PlanDroppedDependenciesCorrupt)) throw err;
@@ -170,6 +185,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
       projectId,
       epicTitles: standing.filter((i) => i.level === "Epic").map((i) => i.title),
       revisions,
+      assumptions: [...new Map(tasks.flatMap((i) => i.added).map((added) => [added.key, added] as const)).values()],
       tasks: {
         decomposition: origins.filter((o) => o === "decomposition").length,
         sprint0: origins.filter((o) => o === "sprint0").length,

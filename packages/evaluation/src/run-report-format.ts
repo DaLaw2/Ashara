@@ -723,6 +723,8 @@ function findingLine(finding: StoredJudgement["secondFindings"][number]): string
       return `missing "${finding.missingClause}": ${finding.problem}`;
     case "undecided-item":
       return `undecided ${finding.item}: ${finding.problem}`;
+    case "breaks-contract":
+      return `"${finding.check}" breaks ${finding.item} ("${finding.clause}"): ${finding.problem}`;
     case "contradiction":
       return `contradiction${finding.conflict === undefined ? "" : ` (${[finding.conflict.first, finding.conflict.second].map((side) => `"${side.check}" of ${side.checkTask} requires "${side.requires}"`).join("; ")})`}: ${finding.problem}`;
   }

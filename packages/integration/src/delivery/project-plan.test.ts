@@ -131,6 +131,7 @@ describe("Delivery's planning record", () => {
       edges: [],
       owners: [{ tempId: "task-1", workKind: "implementation" as const, ownerRoleId: roleId }],
       droppedDependencies: [{ dependentTaskTitle: "Task", unresolvedRef: "ghost" }],
+      assumptions: [],
     };
     expect(await store.writeFirstPlan(write)).toEqual({ kind: "written", created: 2 });
     expect(await planRecordOf(projectId)).toMatchObject({ planned: true, stopped: false, planAttempts: 0 });
@@ -173,11 +174,11 @@ describe("Delivery's planning record", () => {
       corrections: null,
       repaired: [repaired],
       superseded: [],
-      plan: { projectId, items: [], edges: [], owners: [], droppedDependencies: [] },
+      plan: { projectId, items: [], edges: [], owners: [], droppedDependencies: [], assumptions: [] },
       existingEdges: [],
       regated: [],
       events: [],
-      summary: { newTasks: [], newCheckTasks: 0, newReviewTasks: 0, newEnvironmentTask: false, supersededTasks: [], supersededOther: 0, keptCompleted: 0, repaired: ["Given up"] },
+      summary: { newTasks: [], newCheckTasks: 0, newReviewTasks: 0, newEnvironmentTask: false, supersededTasks: [], supersededOther: 0, keptCompleted: 0, assumptions: [], repaired: ["Given up"] },
     });
     expect(written).toBe("written");
     expect(await planRecordOf(projectId)).toMatchObject({ replanAttempts: 0, replanLastError: null, replanLastFailure: null, planned: true });

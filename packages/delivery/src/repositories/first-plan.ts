@@ -122,7 +122,7 @@ export async function withFirstPlanTransaction<T>(
   db: Database,
   projectId: ProjectId,
   droppedDependencies: readonly DroppedPlanDependency[],
-  fn: (workItemRepo: WorkItemRowRepository) => Promise<T>,
+  fn: (workItemRepo: WorkItemRowRepository, tx: DbHandle) => Promise<T>,
 ): Promise<FirstPlanTransaction<T>> {
   return db.transaction(async (tx) => {
     const [locked] = await tx
@@ -138,7 +138,7 @@ export async function withFirstPlanTransaction<T>(
       .where(and(eq(projects.id, projectId), awaitingPlan()));
     if (!stillAwaiting) return { kind: "already-planned" };
 
-    const value = await fn(new WorkItemRowRepository(tx));
+    const value = await fn(new WorkItemRowRepository(tx), tx);
 
     const [anyItem] = await tx.select({ id: workItems.id }).from(workItems).where(eq(workItems.projectId, projectId)).limit(1);
     if (!anyItem) throw new ProjectNotAwaitingPlan(projectId, "stamp a first plan that wrote no work items");

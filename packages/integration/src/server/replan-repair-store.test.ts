@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
 import { releaseClearedBlocks, PlanningService, failWorkItem, giveUpWorkItem, recoverFailedItem, createAgentStaffing, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { VisionRepository, readVisionVersion } from "@ashara/engagement";
 import { parseWorkItemId, type DomainEvent } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { replanStoreSuite } from "./replan-store-suite.js";
@@ -166,6 +167,52 @@ describe("a task the team gives up is planned around", () => {
     expect(body).toContain(`"${givenUp[2] ?? ""}", after`);
     expect(body).toContain("Ashara recorded why it was given up as this: ");
     expect(body).not.toContain(givenUp[0] ?? "");
+  });
+
+  test("a repair that adds behaviour no vision item states records it on the contract as a client-visible assumption, and no task starts before the client is told", async () => {
+    const { projectId } = await plannedProject();
+    const first = await itemsOf(projectId);
+    const sprint0 = first.find((i) => i.origin === "sprint0");
+    const check = first.find((i) => i.origin === "check");
+    if (sprint0 === undefined || check === undefined) throw new Error("the first plan is not Sprint 0 and a check task");
+    await startTask(sprint0.id);
+    await completeTask(sprint0.id);
+    await suite.db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
+    await giveUp(check.id, 3);
+
+    const added = "A booking can be cancelled up to a day before the class.";
+    pipelineModel({
+      repaired: {
+        assumptions: [{ ref: "n1", statement: added, underpins: ["G1"] }],
+        tasks: [
+          {
+            ref: "t1", title: "Book and cancel a harbour class", description: "Harbour bookings with cancelling.", dependsOn: [], goal: "",
+            endState: "A harbour class can be booked and cancelled", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["G1"] }],
+            acceptance: [{ text: "a client cancels a harbour booking a day ahead", sources: ["G1", "n1"] }],
+            capability: "Medium", capabilityReason: "graded for the test",
+          },
+        ],
+      },
+    });
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
+
+    const current = await new VisionRepository(suite.db).getCurrent(projectId);
+    if (current === null) throw new Error("the project has no vision");
+    expect(readVisionVersion(current).assumptions.find((a) => a.id === "A3")).toMatchObject({
+      statement: added, status: "Inferred", kind: "client-visible", standing: "reported", underpins: ["G1"],
+    });
+    const revisions = await suite.db.execute(sql`SELECT author, cause, direction FROM vision_revisions WHERE project_id = ${projectId} AND version = ${current.version}`);
+    expect(revisions.rows).toEqual([{ author: "ashara", cause: "ashara-decision", direction: "neutral" }]);
+    const planned = (await itemsOf(projectId)).find((i) => i.title === "Book and cancel a harbour class");
+    if (planned === undefined) throw new Error("the repair planned no task");
+    const spec = await suite.db.execute(sql`SELECT task_spec->'addedAssumptions' AS "added" FROM work_items WHERE id = ${planned.id}`);
+    expect(spec.rows).toEqual([{ added: [{ key: "A3", statement: added }] }]);
+
+    expect(await new ProjectHaltRepository(suite.db).listActiveIds()).not.toContain(projectId);
+    expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
+    const reports = await reportsOf(projectId);
+    expect(reports[reports.length - 1]?.body).toContain(`- A3: ${added}`);
+    expect(await new ProjectHaltRepository(suite.db).listActiveIds()).toContain(projectId);
   });
 });
 

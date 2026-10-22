@@ -159,7 +159,13 @@ export function replanStoreSuite(stub: { model: unknown }) {
 
   /** One model for every call, answering each by what its prompt asks. */
   function pipelineModel(
-    options: { readonly reading?: unknown; readonly environmentChange?: boolean; readonly intake?: unknown; readonly revision?: unknown } = {},
+    options: {
+      readonly reading?: unknown;
+      readonly environmentChange?: boolean;
+      readonly intake?: unknown;
+      readonly revision?: unknown;
+      readonly repaired?: Parameters<typeof citingItemsToCheck>[0];
+    } = {},
   ): MockLanguageModelV4 {
     const mock = new MockLanguageModelV4({
       doGenerate: async (call) => {
@@ -172,7 +178,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
           return jsonResult({ environmentChange: options.environmentChange ?? false, reason: "Only what is booked changes." });
         }
         if (prompt.includes("changed what is built after work began")) return jsonResult(options.revision ?? citingItemsToCheck(REVISED_TASKS, prompt));
-        if (prompt.includes("Plan the work still to do again")) return jsonResult(citingItemsToCheck(REPAIRED_TASKS, prompt));
+        if (prompt.includes("Plan the work still to do again")) return jsonResult(citingItemsToCheck(options.repaired ?? REPAIRED_TASKS, prompt));
         return jsonResult(citingItemsToCheck(FIRST_TASKS, prompt));
       },
     });

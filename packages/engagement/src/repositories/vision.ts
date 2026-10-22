@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import { readVisionVersion, visionWritable } from "../vision.js";
+import { Vision, readVisionVersion, visionWritable } from "../vision.js";
 import type { Direction, RevisionOp, RevisionRecord } from "../vision-language/contract-op.js";
 import type { ContractDraft, VisionGuarantee } from "../vision-language/guarantee.js";
 import type { VisionAppend } from "../vision.js";
@@ -191,4 +191,77 @@ export async function guaranteesInForce(
   if (current === null) return { kind: "none" };
   const vision = readVisionVersion(current);
   return { kind: "version", version: vision.version, guarantees: vision.guarantees };
+}
+
+/** One behaviour a plan adds that no item of the contract states, under the key the plan's tasks cite it by. */
+interface PlannedAssumption {
+  readonly key: string;
+  readonly statement: string;
+  /** The guarantees whose lines cite it. */
+  readonly underpins: readonly [string, ...string[]];
+}
+
+/** The behaviour a plan adds could not be recorded on the contract as the plan cites it; nothing of the plan is written. */
+class PlannedBehaviourUnrecorded extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly planRevision: number,
+    readonly detail: string,
+  ) {
+    super(`plan revision ${planRevision} of project ${projectId}: the behaviour it adds cannot be recorded as assumptions of the contract: ${detail}`);
+    this.name = "PlannedBehaviourUnrecorded";
+  }
+}
+
+/**
+ * Records the behaviour a plan adds beyond what the contract states as Inferred client-visible
+ * assumptions of the next vision version, written by Ashara and applied unapproved, inside the
+ * plan's own transaction (the caller holds the project row locked), so no task resting on one is
+ * written without it. Each takes the key the plan's tasks already cite (plannedBehaviourKeys on the
+ * version planned from); a version that moved since gives other keys, and the plan is not written.
+ * The direction is neutral: an Inferred assumption changes no guarantee's terms, and the plan's
+ * report tells the client of each before any task resting on it is dispatched.
+ */
+export async function recordPlannedBehaviour(
+  tx: DbHandle,
+  write: { readonly projectId: ProjectId; readonly planRevision: number; readonly planned: readonly [PlannedAssumption, ...PlannedAssumption[]] },
+): Promise<void> {
+  const { projectId, planRevision, planned } = write;
+  const repository = new VisionRepository(tx);
+  const current = await repository.getCurrent(projectId);
+  if (current === null) throw new PlannedBehaviourUnrecorded(projectId, planRevision, "the project has no vision");
+  const [first, ...rest] = planned;
+  const rationale = `The team's plan (revision ${planRevision}) adds this behaviour, which no item of the contract states; the client has not confirmed it.`;
+  const behaviour = (assumption: PlannedAssumption) => ({ statement: assumption.statement, underpins: assumption.underpins, rationale });
+  const change = Vision.read(current).appendPlanned(
+    [behaviour(first), ...rest.map(behaviour)],
+    (keys) => `plan revision ${planRevision} adds behaviour no item of the contract states, recorded as Inferred assumption(s) ${keys.join(", ")}`,
+  );
+  const cited = planned.map((assumption) => assumption.key);
+  if (change.keys.join(",") !== cited.join(",")) {
+    throw new PlannedBehaviourUnrecorded(projectId, planRevision, `its tasks cite ${cited.join(", ")}, but vision v${current.version} gives ${change.keys.join(", ")}`);
+  }
+  const op = (assumption: PlannedAssumption): RevisionOp => ({
+    target: "assumption",
+    action: "add",
+    key: assumption.key,
+    direction: "neutral",
+    labelled: null,
+    read: null,
+    statement: assumption.statement,
+  });
+  const revision: RevisionRecord = {
+    author: "ashara",
+    sourceMessageId: null,
+    approver: null,
+    direction: "neutral",
+    cause: "ashara-decision",
+    ops: [op(first), ...rest.map(op)],
+    pushback: null,
+  };
+  const appended = await repository.append(projectId, change, revision);
+  if (appended.kind === "moved") {
+    const now = appended.current === null ? "none" : `v${appended.current}`;
+    throw new PlannedBehaviourUnrecorded(projectId, planRevision, `planned on vision v${change.basedOnVersion}, current is ${now}`);
+  }
 }

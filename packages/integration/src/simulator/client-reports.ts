@@ -576,16 +576,17 @@ const observedProblem = z.looseObject({
 
 /**
  * Whether a review's problem doubts that item `itemId` of check task `checkTaskId` is decided: an
- * undecided item naming it, or a contradiction one of whose sides is of that check task. An
- * outside-vision rejection says a check asks more than its items, which a passing check proves more
- * of, never less: it doubts no item. A problem of no shape this reads names it.
+ * undecided item or a breach of the contract naming it, or a contradiction one of whose sides is of
+ * that check task. An outside-vision rejection says a check asks more than its items, which a
+ * passing check proves more of, never less: it doubts no item. A problem of no shape this reads
+ * names it.
  */
 function namesItem(problem: unknown, checkTaskId: string, itemId: string): boolean {
   const parsed = observedProblem.safeParse(problem);
   if (!parsed.success) return true;
   const { kind, checkTasks, item, conflict } = parsed.data;
   const onTask = checkTasks?.includes(checkTaskId) === true;
-  if (kind === "undecided-item") return onTask && item === itemId;
+  if (kind === "undecided-item" || kind === "breaks-contract") return onTask && item === itemId;
   if (kind === "outside-vision") return false;
   if (kind === "contradiction")
     return onTask || conflict?.first.checkTask === checkTaskId || conflict?.second.checkTask === checkTaskId;

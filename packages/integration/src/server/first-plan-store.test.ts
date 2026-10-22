@@ -493,6 +493,7 @@ describe("first plan", () => {
       edges: [],
       owners: [],
       droppedDependencies: [],
+      assumptions: [],
     });
 
     await expect(write).rejects.toMatchObject({ name: "FirstPlanTaskUnowned" });
@@ -554,6 +555,7 @@ describe("first plan", () => {
       edges: [{ from: "task-1", to: "ghost" }],
       owners: [],
       droppedDependencies: [],
+      assumptions: [],
     });
 
     await expect(write).rejects.toMatchObject({ name: "BulkReferenceError", reference: "ghost" });

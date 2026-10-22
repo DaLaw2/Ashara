@@ -27,6 +27,7 @@ function reportsFor(
   droppedOrderingHints: Dropped = { kind: "recorded", count: 0 },
   revisions: readonly Revision[] = [],
   dueRevisions: readonly Revision[] = [],
+  assumptions: ReadonlyArray<{ readonly key: string; readonly statement: string }> = [],
 ) {
   const posted: string[] = [];
   const folded: string[][] = [];
@@ -34,7 +35,7 @@ function reportsFor(
   const blocked: ProjectBlockCause[] = [];
   const store: PlanReportStore = {
     dueReports: async () => [
-      { subject: "first-plan", projectId, epicTitles: ["Studio sign-up merge"], tasks, droppedOrderingHints, revisions },
+      { subject: "first-plan", projectId, epicTitles: ["Studio sign-up merge"], tasks, droppedOrderingHints, revisions, assumptions },
     ],
     postReport: async (_projectId, _subject, body, revisionIds) => {
       posted.push(body);
@@ -70,6 +71,26 @@ describe("first-plan report", () => {
     expect(posted[0]).toContain("Before any of those tasks starts, team members who do not do them write the checks that decide whether each is done (6 check tasks)");
     expect(posted[0]).toContain("Then a team member who wrote none of those checks reads them all together with what you asked for");
     expect(posted[0]).not.toMatch(/7 tasks|12 tasks|13 tasks|ordering hint/);
+  });
+
+  test("names each behaviour the plan adds beyond the contract by the assumption it is recorded as, and says none of its tasks starts first", async () => {
+    const { reports, posted } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [], [], [
+      { key: "A12", statement: "A loan returned after its due date stays listed with its fine." },
+    ]);
+
+    await reports.runPending();
+
+    expect(posted[0]).toContain("The plan also builds behaviour your request does not state.");
+    expect(posted[0]).toContain("- A12: A loan returned after its due date stays listed with its fine.");
+    expect(posted[0]).toContain("no task resting on it starts before this message");
+  });
+
+  test("a plan that adds nothing beyond the contract names no assumption of its own", async () => {
+    const { reports, posted } = reportsFor(FOUNDED);
+
+    await reports.runPending();
+
+    expect(posted[0]).not.toContain("your request does not state");
   });
 
   test("states the ordering hints the plan dropped", async () => {
@@ -234,6 +255,28 @@ describe("plan revision report", () => {
     // Recorded before review tasks were counted: the review is told as not on record, never asserted.
     expect(body).toContain("The record of this revision does not say whether a team member who wrote none of those checks reviews them");
     expect(body).not.toContain("reads them all together");
+  });
+
+  test("a repair that adds behaviour beyond the contract names each assumption it recorded", async () => {
+    const { reports, posted } = revisionReports(
+      {
+        repaired: ["Report overdue loans"],
+        newTasks: ["Report overdue and late-returned loans"],
+        newCheckTasks: 1,
+        newReviewTasks: 1,
+        newEnvironmentTask: false,
+        supersededTasks: [],
+        supersededOther: 0,
+        keptCompleted: 2,
+        assumptions: [{ key: "A12", statement: "A loan returned after its due date stays listed with its fine." }],
+      },
+      0,
+    );
+
+    expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
+    const body = posted[0]?.body ?? "";
+    expect(body).toContain("The plan also builds behaviour your request does not state.");
+    expect(body).toContain("- A12: A loan returned after its due date stays listed with its fine.");
   });
 
   test("a correction that left nothing to plan again is reported with no new task", async () => {

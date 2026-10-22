@@ -4,7 +4,7 @@ import { higherCapability, withStructuredLadder } from "./acl/finance-acl.js";
 import type { CapabilityLevel, LadderAttemptEvent } from "./acl/finance-acl.js";
 import { projectBlockCause, recordedFailureOf } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
-import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
+import { VisionChangeRefused, VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
 import { modelCallFailureOf } from "./acl/finance-acl.js";
 import type { ContextualLlm, ModelCallFailure } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved } from "./acl/organization-acl.js";
@@ -193,6 +193,7 @@ export class Replanner implements Replanning {
           err instanceof RosterUnreadable ||
           err instanceof WorkKindOwnerUnresolved ||
           err instanceof VisionUnreadable ||
+          err instanceof VisionChangeRefused ||
           err instanceof VisionItemsMissing;
         if (!projectRecord) throw err;
         return this.block(project.projectId, projectBlockCause(err));
@@ -366,6 +367,7 @@ export class Replanner implements Replanning {
       visionItems: planned,
       interface: vision.interface,
       checkedItems: checkedByDone(completed, cause),
+      assumptionKeys: vision.assumptionKeys,
     };
     return new DecompositionEngine(llm).decompose(input);
   }

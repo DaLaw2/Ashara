@@ -60,7 +60,24 @@ export type DecomposedTaskSpec = TaskSpecCore &
         readonly origin: "decomposition";
         readonly capabilityReason: string;
         readonly acceptance: TracedLine[];
+        /** The behaviour its plan adds beyond what the contract states that its lines cite, each by the key the contract records it under. */
+        readonly addedAssumptions: AddedAssumption[];
     };
+
+/** Behaviour a plan adds that no item of the contract states, as the assumption the contract records it under. */
+export interface AddedAssumption {
+    readonly key: string;
+    readonly statement: string;
+}
+
+/**
+ * Behaviour a plan adds that no item of the contract states: recorded on the contract as an Inferred
+ * client-visible assumption under `key`, underpinning the guarantees whose lines cite it, in the
+ * transaction that writes the plan, and told to the client before any task citing it is dispatched.
+ */
+export interface PlannedAssumption extends AddedAssumption {
+    readonly underpins: readonly [string, ...string[]];
+}
 
 /**
  * A planned task's specification. It carries no checks: the decomposer does not
@@ -156,6 +173,11 @@ export interface DecompositionInput {
      * cite it. Never read from what a task cites. Empty for a first plan.
      */
     readonly checkedItems: readonly VisionItem[];
+    /**
+     * The keys behaviour the plan adds would take on the contract, in order, for `count` of them
+     * (Engagement's plannedBehaviourKeys on the version planned from).
+     */
+    readonly assumptionKeys: (count: number) => readonly string[];
 }
 
 export interface PriorEpicResult {
@@ -172,6 +194,8 @@ export interface DecompositionResult {
     readonly dependencyEdges: Array<{ readonly from: string; readonly to: string }>;
     /** Every ordering hint the re-ask dropped; empty when none was. */
     readonly droppedDependencies: readonly DroppedDependency[];
+    /** The behaviour the plan adds beyond what the contract states, in key order; empty when it adds none. */
+    readonly assumptions: readonly PlannedAssumption[];
 }
 
 export interface DecompositionConfig {
@@ -214,7 +238,22 @@ const TracedLineOutputSchema = z.object({
     sources: z.array(z.string().trim().min(1)),
 });
 
+/**
+ * Behaviour the plan adds that no vision item states, proposed rather than written silently: a
+ * plan-local `ref` its lines name in `sources`, the behaviour as one statement the client can confirm
+ * or correct, and the guarantees whose work rests on it. Every field is required, `underpins` may be
+ * empty here: a proposal that names no guarantee is the decomposer's semantic rejection, whose message
+ * names it.
+ */
+const PlannedAssumptionOutputSchema = z.object({
+    ref: z.string().trim().min(1),
+    statement: z.string().trim().min(1),
+    underpins: z.array(z.string().trim().min(1)),
+});
+
 export const TaskOutputSchema = z.object({
+    // Required, empty when the plan adds nothing: a provider decoding strictly against the schema takes no optional property.
+    assumptions: z.array(PlannedAssumptionOutputSchema),
     tasks: z.array(z.object({
         /**
          * Stable, decomposer-local handle for this task. `dependsOn`
@@ -320,6 +359,35 @@ export class UncitedVisionItemsError extends Error {
                 `checks decide it (decomposition of ${parentId})`,
         );
         this.name = "UncitedVisionItemsError";
+    }
+}
+
+/**
+ * The behaviour a plan proposes beyond what the vision states cannot be recorded on the contract as
+ * written: a ref used twice or shadowing a vision item, a proposal that names no guarantee its work
+ * rests on or names something that is no guarantee of the vision, or one no line cites. Checked
+ * mechanically, with no model call: inside the ladder its message is a re-ask; past it the plan is
+ * rejected, never written.
+ */
+export class PlannedBehaviourInvalid extends Error {
+    constructor(
+        readonly parentId: string,
+        readonly problems: readonly string[],
+    ) {
+        super(`The proposed assumptions cannot be recorded: ${problems.join("; ")} (decomposition of ${parentId})`);
+        this.name = "PlannedBehaviourInvalid";
+    }
+}
+
+/** The contract offered a number of keys for the behaviour a plan adds other than the number it adds. */
+export class PlannedBehaviourKeysMismatch extends Error {
+    constructor(
+        readonly parentId: string,
+        readonly planned: number,
+        readonly keys: readonly string[],
+    ) {
+        super(`decomposition of ${parentId} adds ${planned} behaviour(s) beyond the vision, but the contract gave key(s) [${keys.join(", ")}] for them`);
+        this.name = "PlannedBehaviourKeysMismatch";
     }
 }
 

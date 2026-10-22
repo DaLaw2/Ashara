@@ -5,7 +5,7 @@ import { projectBlocks } from "@ashara/db/schema/delivery";
 import type { DbHandle, ProjectRow } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { restartClientReadings } from "../acl/engagement-acl.js";
-import { firstPlanUnreported, haltReported, noOpenStop, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
+import { firstPlanUnreported, haltReported, noOpenStop, planRevisionTold, projectActive, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import { HALT_KINDS, pendingRepair, projectHalted, type HaltKind } from "../predicates.js";
 import type { ProjectBlockCause } from "../project-halt.js";
@@ -18,6 +18,16 @@ import { resetOnUnblock } from "./project-plan.js";
 // so does the client's stop, through endHaltOnStop, which Engagement's stop calls in its own
 // transaction. Engagement's lifecycle column is never written here, and whether a halt was told is
 // Engagement's told record, read through its published haltReported.
+
+/**
+ * A revision of the project's plan adds behaviour beyond what the contract states (its summary lists
+ * the assumptions it recorded) and its report is not yet posted: its tasks rest on assumptions the
+ * client has not read, so none of the project's tasks is dispatched until that report tells them.
+ * A first plan's are held by firstPlanUnreported, whose report names them.
+ */
+const plannedBehaviourUntold = (): SQL =>
+  sql`EXISTS (SELECT 1 FROM plan_revisions pb WHERE pb.project_id = ${projects.id}
+    AND jsonb_array_length(pb.summary -> 'assumptions') > 0 AND NOT ${planRevisionTold(sql`pb.id`)})`;
 
 /**
  * The project's planning outcomes are reported to the client: it is at work, or its halt is the
@@ -156,8 +166,9 @@ export class ProjectHaltRepository extends ProjectRepository {
 
   /**
    * The projects whose work may be dispatched: at work (active, not halted), no stop
-   * awaiting the Liaison, no plan repair awaited and no first-plan report awaited
-   * (firstPlanUnreported), oldest first. A client's correction awaiting its revision holds only the
+   * awaiting the Liaison, no plan repair awaited, no first-plan report awaited
+   * (firstPlanUnreported) and no report awaited of a revision that adds behaviour beyond the contract
+   * (plannedBehaviourUntold), oldest first. A client's correction awaiting its revision holds only the
    * tasks citing a key it affects, each parked on its own row, so it does not hold the project.
    * This read is the dispatch decision: a stop committed after it is ordered
    * after the dispatch it gated.
@@ -166,7 +177,15 @@ export class ProjectHaltRepository extends ProjectRepository {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(and(projectAtWork(), noOpenStop(projects.id), sql`NOT ${pendingRepair(projects.id)}`, sql`NOT ${firstPlanUnreported()}`))
+      .where(
+        and(
+          projectAtWork(),
+          noOpenStop(projects.id),
+          sql`NOT ${pendingRepair(projects.id)}`,
+          sql`NOT ${firstPlanUnreported()}`,
+          sql`NOT ${plannedBehaviourUntold()}`,
+        ),
+      )
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }

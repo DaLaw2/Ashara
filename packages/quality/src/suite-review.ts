@@ -49,7 +49,10 @@ import type { TaskChecks } from "./task-checks.js";
 // A contradiction must quote, from the stored check files, what each of its two checks requires; Z0
 // holds each quote to the check it names. Whether two shell commands can pass together is not
 // decidable from their text without reading them as some stack's language, which Ashara never does,
-// so a grounded contradiction still needs agreement. An undecided item, a claim that no check decides an item,
+// so a grounded contradiction still needs agreement. A breach of the contract, a check that requires
+// what a cited guarantee names as refuting it or what contradicts a cited assumption, must quote that
+// clause from the item it names, and Z0 holds the quote to that item's own text; whether the check
+// requires it is a reading of the check, so it too needs agreement. An undecided item, a claim that no check decides an item,
 // overrules the stored record that some check decides it, and no run can witness an
 // absence. Either acts only when the second review reaches the same finding; otherwise it is kept
 // as advisory, and an undecided item stays undecided on its check task (undecided_items) and is
@@ -140,7 +143,7 @@ export const gitPublicInterface: PublicInterfaceReader = {
 /** One problem the review routes, with the check tasks whose checks it involves. */
 interface SuiteReviewProblem {
   readonly checkTaskIds: readonly string[];
-  readonly kind: "contradiction" | "outside-vision" | "undecided-item";
+  readonly kind: ReviewFinding["kind"];
   readonly problem: string;
   readonly evidence: string;
 }
@@ -433,7 +436,9 @@ const ConflictSchema = z.strictObject({ first: ConflictSideSchema, second: Confl
  * A finding is acted on only with what makes its claim checkable: an outside-vision finding names
  * the one check task and the one check it judged, the cited items it judged the check against and,
  * quoted, the clause it says none of them states; a contradiction names its two checks, each with
- * what it requires quoted from the stored checks; a finding without them is not a verdict.
+ * what it requires quoted from the stored checks; a breach of the contract names the one check, the
+ * cited item it breaks and, quoted from what that item rules out, the clause the check requires; a
+ * finding without them is not a verdict.
  */
 const ReviewResponseSchema = z.strictObject({
   problems: z.array(
@@ -458,6 +463,15 @@ const ReviewResponseSchema = z.strictObject({
         kind: z.literal("undecided-item"),
         checkTasks: z.array(NonEmpty).length(1),
         item: NonEmpty,
+        problem: NonEmpty,
+        evidence: NonEmpty,
+      }),
+      z.strictObject({
+        kind: z.literal("breaks-contract"),
+        checkTasks: z.array(NonEmpty).length(1),
+        check: NonEmpty,
+        item: NonEmpty,
+        clause: NonEmpty,
         problem: NonEmpty,
         evidence: NonEmpty,
       }),
@@ -486,6 +500,12 @@ interface CitedItem {
   readonly id: string;
   readonly text: string;
   readonly line: string;
+  /**
+   * What a check of its task must never require, each clause as the vision states it: a guarantee's
+   * refuting observations, or an assumption's own statement, whose opposite a check must not
+   * require; none for a scope line or a row that records no ids.
+   */
+  readonly rulesOut: readonly string[];
 }
 
 /** One suite as the review reads it: its task's cited items, each with its id and status when the row records them. */
@@ -526,8 +546,31 @@ function itemLines(sources: readonly VisionSource[] | null | undefined, texts: r
  */
 function citedItems(sources: readonly VisionSource[] | null | undefined, texts: readonly string[]): CitedItem[] {
   return sources === null || sources === undefined || sources.length === 0
-    ? texts.map((text, i) => ({ id: `item ${i + 1}`, text, line: `item ${i + 1}: ${text} (its id, status and kind are not recorded)` }))
-    : sources.map((source) => ({ id: source.id, text: source.text, line: visionSourceCitation(source) }));
+    ? texts.map((text, i) => ({ id: `item ${i + 1}`, text, line: `item ${i + 1}: ${text} (its id, status and kind are not recorded)`, rulesOut: [] }))
+    : sources.map((source) => ({ id: source.id, text: source.text, line: visionSourceCitation(source), rulesOut: rulesOutOf(source) }));
+}
+
+/** The clauses a check citing `source` must never require: what refutes a guarantee, or an assumption's statement. */
+function rulesOutOf(source: VisionSource): readonly string[] {
+  switch (source.type) {
+    case "guarantee":
+      return source.refutedBy;
+    case "assumption":
+      return [source.text];
+    case "scope":
+      return [];
+  }
+}
+
+/** What the contract rules out for a suite's cited items, as the review reads it beside them. */
+function rulesOutLines(cited: readonly CitedItem[]): string[] {
+  const lines = cited.flatMap((item) => item.rulesOut.map((clause) => `- ${item.id}: ${JSON.stringify(clause)}`));
+  if (lines.length === 0) return [];
+  return [
+    `What these items rule out, each clause exactly as the vision states it: a guarantee is refuted by what it lists, ` +
+      `and an assumption is broken by requiring its opposite:`,
+    ...lines,
+  ];
 }
 
 function suiteSection(suite: ReviewedSuite): string {
@@ -538,6 +581,7 @@ function suiteSection(suite: ReviewedSuite): string {
       `files below may carry; it is not a check task id: a finding on these checks names check task ${suite.checkTaskId}), ` +
       `which cites these vision items:`,
     ...suite.cited.map((item) => `- ${item.line}`),
+    ...rulesOutLines(suite.cited),
     `Checks (revision ${suite.checks.revision}${suite.checks.baselineCommit === null ? "" : `, written against commit ${suite.checks.baselineCommit}`}):`,
     ...suite.checks.checks.map(
       (check) =>
@@ -583,7 +627,7 @@ function angleSection(angle: ReviewAngle): string[] {
     `Read the checks from this angle first. For each check, work out what it cannot observe: the ways a product could`,
     `break what its task's cited items ask for while that check still passes (an input it never gives, an output it never`,
     `compares, a state it never reopens, a failure it never forces). A cited item that every check of its task would let`,
-    `break unseen is an "undecided-item". Then name every problem of the three kinds below, judged as written there.`,
+    `break unseen is an "undecided-item". Then name every problem of the four kinds below, judged as written there.`,
   ];
 }
 
@@ -608,7 +652,7 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     ``,
     `# What to return`,
     ...angleSection(angle),
-    `Name every problem of these three kinds, and nothing else:`,
+    `Name every problem of these four kinds, and nothing else:`,
     `- "contradiction": two checks, of one check task or of two, that no single product could both pass (one requires`,
     `  an output, a format, a file or an exit status that the other forbids). Name every check task whose checks are`,
     `  involved, and give "conflict": the two checks, as "first" and "second", each as its check task id, its name exactly as written above, and`,
@@ -623,12 +667,17 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `- "undecided-item": an item a check task's own task cites that none of its checks decides: no check of it would`,
     `  fail on a product that breaks what the item asks for, whatever items its checks say they decide. Name the one`,
     `  check task.`,
+    `- "breaks-contract": a check that requires what an item its own task cites rules out: an observation listed as`,
+    `  refuting a guarantee, or the opposite of an assumption. A product that keeps the promise fails such a check, so`,
+    `  the check is wrong whatever its task's own deliverables and acceptance lines say. Name the one check task.`,
     `For each: "checkTasks" lists those check task ids exactly as written above; "problem" says which checks and what`,
     `cannot hold, in one or two sentences; "evidence" quotes, copied exactly, the commands or file lines of those checks that show it. An "outside-vision"`,
     `finding is about one check: it also gives "check", that check's name exactly as written above, "judgedItems", the`,
     `ids of the cited items you judged the check against, exactly as written above, and "missingClause", the behaviour`,
     `the check requires, in a few words, that you say none of them states. An "undecided-item" finding also gives "item",`,
-    `the id of the cited item exactly as written above.`,
+    `the id of the cited item exactly as written above. A "breaks-contract" finding also gives "check", that check's name`,
+    `exactly as written above, "item", the id of the cited item it breaks, and "clause", the clause of what that item`,
+    `rules out that the check requires, copied exactly from the list above.`,
     `Do not report style, behaviour no cited item asks for that no check tests, or checks you would have written`,
     `differently. When there is no problem, return {"problems": []}.`,
     ``,
@@ -636,7 +685,8 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `Use exactly this format: {"problems": [{"kind": "contradiction", "checkTasks": ["<check task id>", "<check task id>"], ` +
       `"conflict": {"first": {"checkTask": "<check task id>", "check": "<check name>", "requires": "<copied text>"}, "second": {"checkTask": "<check task id>", "check": "<check name>", "requires": "<copied text>"}}, "problem": "...", "evidence": "..."}, ` +
       `{"kind": "outside-vision", "checkTasks": ["<check task id>"], "check": "<check name>", "judgedItems": ["<cited item id>"], "missingClause": "...", "problem": "...", "evidence": "..."}, ` +
-      `{"kind": "undecided-item", "checkTasks": ["<check task id>"], "item": "<cited item id>", "problem": "...", "evidence": "..."}]}`,
+      `{"kind": "undecided-item", "checkTasks": ["<check task id>"], "item": "<cited item id>", "problem": "...", "evidence": "..."}, ` +
+      `{"kind": "breaks-contract", "checkTasks": ["<check task id>"], "check": "<check name>", "item": "<cited item id>", "clause": "<copied clause>", "problem": "...", "evidence": "..."}]}`,
   ].join("\n");
 }
 
@@ -645,7 +695,8 @@ function reviewReask(ctx: { readonly errors: readonly string[] }): string {
     `\n\nYour previous response was REJECTED for these reasons:\n` +
     ctx.errors.map((e) => `- ${e}`).join("\n") +
     `\nRe-send corrected JSON only. In "checkTasks" use ONLY the check task ids written above, in "check" ONLY a ` +
-    `check of that check task, in "judgedItems" ONLY the ids of the items that check task cites, in "requires" ONLY ` +
+    `check of that check task, in "judgedItems" and "item" ONLY the ids of the items that check task cites, in "clause" ` +
+    `ONLY a clause the item it names rules out, copied exactly, in "requires" ONLY ` +
     `text copied exactly from that check's command or its check task's files, in "evidence" a command or whole file lines ` +
     `copied exactly from the checks the problem judges. No markdown, no prose.`
   );
@@ -687,6 +738,7 @@ function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, Rev
       const stored = [...suite.checks.checks.map((check) => check.command), ...files];
       return [...uncitedItem, ...evidenceErrors(problem.evidence, i, stored, `any command or file of check task ${checkTaskId}`)];
     }
+    if (problem.kind === "breaks-contract") return breachErrors(problem, i, suite);
     const checkNames = suite.checks.checks.map((check) => check.name);
     const judged = suite.checks.checks.find((check) => check.name === problem.check);
     const checkErrors = judged !== undefined
@@ -708,6 +760,35 @@ function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, Rev
       ),
     ];
   });
+}
+
+/**
+ * Z0's part of a breach of the contract: the check is one its check task wrote, the item is one that
+ * check task cites, the clause is words of what that item rules out, and the evidence quotes the
+ * check's command or its check task's files. Whether the check requires the clause is the reviewers'
+ * reading, never Z0's.
+ */
+function breachErrors(problem: ContractBreachFinding, i: number, suite: ReviewedSuite): string[] {
+  const checkTaskId = suite.checkTaskId;
+  const judged = suite.checks.checks.find((check) => check.name === problem.check);
+  const files = suite.checks.files.map((file) => file.content);
+  const checkErrors =
+    judged === undefined
+      ? [`problem ${i + 1} judged check ${JSON.stringify(problem.check)}, which check task ${checkTaskId} did not write (it wrote [${suite.checks.checks.map((check) => check.name).join(", ")}])`]
+      : evidenceErrors(problem.evidence, i, [judged.command, ...files], `the command of check ${JSON.stringify(problem.check)} or any file of check task ${checkTaskId}`);
+  const item = suite.cited.find((each) => each.id === problem.item);
+  if (item === undefined) {
+    return [...checkErrors, `problem ${i + 1} names item ${JSON.stringify(problem.item)} as broken, but check task ${checkTaskId} does not cite it (it cites [${suite.cited.map((each) => each.id).join(", ")}])`];
+  }
+  const clause = normalized(problem.clause);
+  const ruled = item.rulesOut.some((each) => clause !== "" && ` ${normalized(each)} `.includes(` ${clause} `));
+  if (ruled) return checkErrors;
+  return [
+    ...checkErrors,
+    item.rulesOut.length === 0
+      ? `problem ${i + 1} says check ${JSON.stringify(problem.check)} breaks ${item.id}, but ${item.id} rules nothing out: only a guarantee's refuting observations or an assumption can be broken`
+      : `problem ${i + 1} gives ${JSON.stringify(problem.clause)} as what ${item.id} rules out, but ${item.id} rules out only ${item.rulesOut.map((each) => JSON.stringify(each)).join("; ")}: copy the clause exactly`,
+  ];
 }
 
 /** Text as a quote is matched against a stored check: every run of whitespace one space. */
@@ -824,6 +905,7 @@ type ReviewFinding = ReviewResponse["problems"][number];
 type OutsideVisionFinding = Extract<ReviewFinding, { readonly kind: "outside-vision" }>;
 type ContradictionFinding = Extract<ReviewFinding, { readonly kind: "contradiction" }>;
 type UndecidedItemFinding = Extract<ReviewFinding, { readonly kind: "undecided-item" }>;
+type ContractBreachFinding = Extract<ReviewFinding, { readonly kind: "breaks-contract" }>;
 
 function isOutsideVision(finding: ReviewFinding): finding is OutsideVisionFinding {
   return finding.kind === "outside-vision";
@@ -847,6 +929,8 @@ function findingLine(finding: ReviewFinding): string {
       return `cited item ${finding.item} is decided by no check: ${finding.problem}`;
     case "outside-vision":
       return `check ${JSON.stringify(finding.check)} is outside the vision, requiring ${JSON.stringify(finding.missingClause)}: ${finding.problem}`;
+    case "breaks-contract":
+      return `check ${JSON.stringify(finding.check)} requires what cited item ${finding.item} rules out, ${JSON.stringify(finding.clause)}: ${finding.problem}`;
   }
 }
 
@@ -869,6 +953,10 @@ function agreeingWith(finding: ReviewFinding, second: readonly ReviewFinding[]):
       return second.find((other) => other.kind === "contradiction" && conflictKey(other) === conflictKey(finding));
     case "undecided-item":
       return second.find((other) => other.kind === "undecided-item" && other.checkTasks[0] === finding.checkTasks[0] && other.item === finding.item);
+    case "breaks-contract":
+      return second.find(
+        (other) => other.kind === "breaks-contract" && other.checkTasks[0] === finding.checkTasks[0] && other.check === finding.check && other.item === finding.item,
+      );
   }
 }
 
@@ -890,6 +978,30 @@ function agreedUndecided(first: UndecidedItemFinding, review: SecondReview): Sui
     problem: `Cited item ${first.item} is decided by none of the checks: ${first.problem} ${agreedBy(review)} each found it so.`,
     evidence: first.evidence,
   };
+}
+
+/** A breach of the contract both reviews reached, as the reopened check author reads it: the check, the item and the clause it requires. */
+function agreedBreach(first: ContractBreachFinding, review: SecondReview): SuiteReviewProblem {
+  return {
+    checkTaskIds: namedBy(first),
+    kind: "breaks-contract",
+    problem:
+      `Check ${JSON.stringify(first.check)} requires what cited item ${first.item} rules out, ${JSON.stringify(first.clause)}: ` +
+      `${first.problem} ${agreedBy(review)} each found it so.`,
+    evidence: first.evidence,
+  };
+}
+
+/** A finding no witness settles, as Delivery routes it once both reviews reached it. */
+function agreedProblem(finding: Exclude<ReviewFinding, OutsideVisionFinding>, review: SecondReview): SuiteReviewProblem {
+  switch (finding.kind) {
+    case "contradiction":
+      return agreedContradiction(finding, review);
+    case "undecided-item":
+      return agreedUndecided(finding, review);
+    case "breaks-contract":
+      return agreedBreach(finding, review);
+  }
 }
 
 /** Who agreed on a finding, with the strength of the second: a weaker one says what it shares with the first. */
@@ -970,6 +1082,7 @@ function itemKey(checkTaskId: string, itemId: string): string {
 function itemsNamedBy(finding: ReviewFinding, suites: ReadonlyMap<string, ReviewedSuite>): string[] {
   switch (finding.kind) {
     case "undecided-item":
+    case "breaks-contract":
       return finding.checkTasks.map((checkTaskId) => itemKey(checkTaskId, finding.item));
     case "outside-vision":
       return finding.checkTasks.flatMap((checkTaskId) => finding.judgedItems.map((itemId) => itemKey(checkTaskId, itemId)));
@@ -1211,7 +1324,7 @@ export class SuiteReviewer implements SuiteReviewing {
         continue;
       }
       judgements.push({ ...base, check: null, outcome: "routed", basis: "second-opinion-agreed", undecided: null });
-      routed.push(finding.kind === "contradiction" ? agreedContradiction(finding, review) : agreedUndecided(finding, review));
+      routed.push(agreedProblem(finding, review));
     }
     const undecided = judgements.flatMap((judgement) => (judgement.undecided === null ? [] : [judgement.undecided]));
     // A review that routes something is followed by another on the reopened checks, whose claim is the one judged.

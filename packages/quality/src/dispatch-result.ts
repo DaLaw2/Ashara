@@ -654,7 +654,7 @@ interface SuiteReviewProblemsResult {
   readonly status: "suite_review_problems";
   readonly problems: ReadonlyArray<{
     readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision" | "undecided-item";
+    readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
     readonly problem: string;
     readonly evidence: string;
   }>;

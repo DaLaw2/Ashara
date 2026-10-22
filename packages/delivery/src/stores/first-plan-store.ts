@@ -8,6 +8,7 @@ import type { FirstPlanStore } from "../first-plan.js";
 import { listProjectsAwaitingFirstPlan, recordFirstPlanFailure, stopFirstPlanning, withFirstPlanTransaction } from "../repositories/first-plan.js";
 import { ProjectHaltRepository } from "../repositories/project-halt.js";
 import { adaptWorkItemRepo } from "../repositories/work-item-adapter.js";
+import { recordPlannedAssumptions } from "./planned-behaviour.js";
 
 /** An owner was named for a temp id the plan did not write. */
 class OwnedTaskNotPlanned extends Error {
@@ -47,7 +48,9 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
         db,
         write.projectId,
         write.droppedDependencies,
-        async (workItemRepo) => {
+        async (workItemRepo, tx) => {
+          // The first plan is revision 1.
+          await recordPlannedAssumptions(tx, write.projectId, 1, write.assumptions);
           const plan = await createBulkPlan(
             {
               workItemRepo: adaptWorkItemRepo(workItemRepo),

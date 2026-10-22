@@ -258,7 +258,7 @@ const SUITE_REVIEW_BOUND = 1;
 interface SuiteReviewProblem {
   readonly checkTaskIds: readonly string[];
   /** Checks no product can pass together, a check of behaviour no vision item asks for, or a cited item no check decides. */
-  readonly kind: "contradiction" | "outside-vision" | "undecided-item";
+  readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
   readonly problem: string;
   readonly evidence: string;
 }
@@ -324,6 +324,12 @@ const PROBLEM_KINDS: Readonly<Record<SuiteReviewProblem["kind"], { readonly labe
   "undecided-item": {
     label: "a cited item no check decides",
     fix: "add a check that decides a cited item no check decides: a product that does not do what the item states fails it",
+  },
+  "breaks-contract": {
+    label: "a check that requires what a cited item rules out",
+    fix:
+      "change a check that requires what a cited guarantee lists as refuting it, or the opposite of a cited assumption, " +
+      "so that a product keeping the promise passes it, whatever the task's own lines say",
   },
 };
 

@@ -10,7 +10,7 @@ import type { SuiteReviewJudgementStore } from "../suite-review.js";
 // that found problems is one row per check task it named.
 
 const ReviewProblemSchema = z.strictObject({
-  kind: z.enum(["contradiction", "outside-vision", "undecided-item"]),
+  kind: z.enum(["contradiction", "outside-vision", "undecided-item", "breaks-contract"]),
   problem: z.string().min(1),
   evidence: z.string().min(1),
 });
@@ -124,6 +124,15 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
     kind: z.literal("undecided-item"),
     checkTasks: z.array(z.string().min(1)).length(1),
     item: z.string().min(1),
+    problem: z.string().min(1),
+    evidence: z.string().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal("breaks-contract"),
+    checkTasks: z.array(z.string().min(1)).length(1),
+    check: z.string().min(1),
+    item: z.string().min(1),
+    clause: z.string().min(1),
     problem: z.string().min(1),
     evidence: z.string().min(1),
   }),

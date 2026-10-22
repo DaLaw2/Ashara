@@ -29,9 +29,9 @@ export {
   parseClientMessage,
   replyTargetProblem,
 } from "./client-message.js";
-export { VisionUnreadable, readVisionVersion } from "./vision.js";
+export { VisionChangeRefused, VisionUnreadable, plannedBehaviourKeys, readVisionVersion } from "./vision.js";
 export type { StoredVision, VisionVersion } from "./vision.js";
-export { VisionRepository, guaranteesInForce } from "./repositories/vision.js";
+export { VisionRepository, guaranteesInForce, recordPlannedBehaviour } from "./repositories/vision.js";
 export { ClientMessageRepository, createProjectWithTender, restartClientReadings } from "./repositories/client-message.js";
 /** @testseam the integration client-message.test.ts asserts the typed rejection of a consumption that finds no open message */
 export { ClientMessageNotConsumable } from "./repositories/client-message.js";

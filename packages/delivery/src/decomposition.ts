@@ -4,12 +4,14 @@ import type { StructuredValidation } from "./acl/finance-acl.js";
 import { visionSourceCitation, visionSourceLine } from "./acl/engagement-vision-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./acl/quality-acl.js";
 import type {
+    AddedAssumption,
     DecomposedTaskSpec,
     DecompositionConfig,
     DecompositionInput,
     EnvironmentPlanning,
     DecompositionResult,
     DroppedDependency,
+    PlannedAssumption,
     PriorEpicResult,
     TaskSpec,
     TracedLine,
@@ -21,6 +23,8 @@ import {
     citable,
     DEFAULT_DECOMPOSITION_CONFIG,
     itemsToCheck,
+    PlannedBehaviourInvalid,
+    PlannedBehaviourKeysMismatch,
     TaskCapExceededError,
     TaskOutputSchema,
     UncitedVisionItemsError,
@@ -45,6 +49,13 @@ export interface DecompositionLLM {
 }
 
 type RawTask = z.infer<typeof TaskOutputSchema>["tasks"][number];
+type RawPlanned = z.infer<typeof TaskOutputSchema>["assumptions"][number];
+
+/** A proposed assumption under the ref the plan's lines name it by, as the vision item a line citing it cites. */
+interface PlannedLookup {
+    readonly ref: string;
+    readonly item: VisionItem;
+}
 
 export class DecompositionEngine {
     private readonly llm: DecompositionLLM;
@@ -76,7 +87,7 @@ export class DecompositionEngine {
         const allTasks: Array<WorkItemSpec & { taskSpec: TaskSpec }> = [];
         const dependencyEdges: Array<{ from: string; to: string }> = [];
 
-        const { tasks, droppedDependencies } = await this.decomposeEpicIntoTasks(epic, input);
+        const { tasks, droppedDependencies, assumptions } = await this.decomposeEpicIntoTasks(epic, input);
         for (const task of tasks) {
             allTasks.push(task);
             for (const dep of task.dependsOn) {
@@ -107,7 +118,7 @@ export class DecompositionEngine {
             foundationId,
             addCheckTasks(epic.id, foundationId, allTasks, dependencyEdges),
             dependencyEdges,
-            input.visionItems,
+            [...input.visionItems, ...assumptions.map((assumption) => plannedItem(assumption.key, assumption.statement))],
         );
 
         return {
@@ -115,6 +126,7 @@ export class DecompositionEngine {
             tasks: plannedTasks,
             dependencyEdges,
             droppedDependencies,
+            assumptions,
         };
     }
 
@@ -181,6 +193,7 @@ export class DecompositionEngine {
      */
     private validateTasks(
         rawTasks: readonly RawTask[],
+        rawPlanned: readonly RawPlanned[],
         cap: number,
         parentId: string,
         visionItems: readonly VisionItem[],
@@ -191,19 +204,47 @@ export class DecompositionEngine {
         }
         const availableRefs = rawTasks.flatMap((t) => (t.ref ? [t.ref] : []));
         const availableTitles = rawTasks.map((t) => t.title);
+        // Traced under their own refs: the contract's keys are given once the plan validates.
+        const provisional = rawPlanned.map((planned) => ({ ref: planned.ref, item: plannedItem(planned.ref, planned.statement) }));
+        const planned = plannedProblems(rawPlanned, rawTasks, visionItems);
         const errors = [
             ...unresolvedDependencies(rawTasks).map(
                 (unresolved) =>
                     new UnresolvableDependencyError({ ...unresolved, availableRefs, availableTitles, parentId }).message,
             ),
             ...rawTasks.flatMap((raw) => {
-                const traced = traceToVision(raw, visionItems, parentId);
+                const traced = traceToVision(raw, visionItems, provisional, parentId);
                 return traced.kind === "untraceable" ? [traced.error.message] : [];
             }),
+            ...(planned.length === 0 ? [] : [new PlannedBehaviourInvalid(parentId, planned).message]),
         ];
         const uncited = uncitedItems(rawTasks, visionItems, checkedItems, parentId);
         if (uncited !== null) errors.push(uncited.message);
         return errors.length === 0 ? { ok: true } : { ok: false, errors };
+    }
+
+    /**
+     * The behaviour the plan proposes beyond the vision, each under the next key the contract gives
+     * it, in the order proposed. Fails closed, as resolveTasks does, for a proposal the ladder's
+     * validation would have refused.
+     */
+    private plannedAssumptions(
+        rawPlanned: readonly RawPlanned[],
+        rawTasks: readonly RawTask[],
+        input: DecompositionInput,
+        parentId: string,
+    ): Array<PlannedAssumption & { readonly ref: string; readonly item: VisionItem }> {
+        const problems = plannedProblems(rawPlanned, rawTasks, input.visionItems);
+        if (problems.length > 0) throw new PlannedBehaviourInvalid(parentId, problems);
+        const keys = input.assumptionKeys(rawPlanned.length);
+        if (keys.length !== rawPlanned.length) throw new PlannedBehaviourKeysMismatch(parentId, rawPlanned.length, keys);
+        return rawPlanned.map((planned, i) => {
+            const key = keys[i];
+            const [first, ...rest] = planned.underpins;
+            if (key === undefined) throw new PlannedBehaviourKeysMismatch(parentId, rawPlanned.length, keys);
+            if (first === undefined) throw new PlannedBehaviourInvalid(parentId, [`${planned.ref} names no guarantee its work rests on`]);
+            return { ref: planned.ref, key, statement: planned.statement, underpins: [first, ...rest], item: plannedItem(key, planned.statement) };
+        });
     }
 
     /**
@@ -218,6 +259,7 @@ export class DecompositionEngine {
      */
     private resolveTasks(
         rawTasks: readonly RawTask[],
+        planned: readonly PlannedLookup[],
         cap: number,
         parentId: string,
         visionItems: readonly VisionItem[],
@@ -232,7 +274,7 @@ export class DecompositionEngine {
         const refToId = new Map<string, string>();
         const titleToId = new Map<string, string>();
         const assigned = rawTasks.map((raw) => {
-            const traced = traceToVision(raw, visionItems, parentId);
+            const traced = traceToVision(raw, visionItems, planned, parentId);
             if (traced.kind === "untraceable") throw traced.error;
             const id = generateId("task");
             if (raw.ref) refToId.set(raw.ref, id);
@@ -261,6 +303,7 @@ export class DecompositionEngine {
                 visionItems: traced.sources.map((item) => item.text),
                 sources: traced.sources,
                 acceptance: traced.acceptance,
+                addedAssumptions: traced.added,
             },
         }));
     }
@@ -296,6 +339,7 @@ export class DecompositionEngine {
     ): Promise<{
         readonly tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>;
         readonly droppedDependencies: readonly DroppedDependency[];
+        readonly assumptions: readonly PlannedAssumption[];
     }> {
         const taskCap = this.config.maxTasksPerEpic;
         const priorContext = this.buildPriorContext(input.priorEpicResults);
@@ -322,7 +366,7 @@ export class DecompositionEngine {
                 for (const unresolved of unresolvedDependencies(value.tasks)) {
                     unresolvedSeen.set(JSON.stringify([unresolved.dependentTaskTitle, unresolved.unresolvedRef]), unresolved);
                 }
-                return this.validateTasks(value.tasks, taskCap, epic.id, input.visionItems, input.checkedItems);
+                return this.validateTasks(value.tasks, value.assumptions, taskCap, epic.id, input.visionItems, input.checkedItems);
             },
         );
         // A ref that now resolves on the same task is kept, not dropped. An edge
@@ -332,7 +376,12 @@ export class DecompositionEngine {
             (seen) =>
                 !parsed.tasks.some((t) => t.title === seen.dependentTaskTitle && t.dependsOn.includes(seen.unresolvedRef)),
         );
-        return { tasks: this.resolveTasks(parsed.tasks, taskCap, epic.id, input.visionItems, input.checkedItems), droppedDependencies };
+        const planned = this.plannedAssumptions(parsed.assumptions, parsed.tasks, input, epic.id);
+        return {
+            tasks: this.resolveTasks(parsed.tasks, planned, taskCap, epic.id, input.visionItems, input.checkedItems),
+            droppedDependencies,
+            assumptions: planned.map(({ key, statement, underpins }) => ({ key, statement, underpins })),
+        };
     }
 
     private buildPriorContext(priorResults?: PriorEpicResult[]): string {
@@ -366,7 +415,7 @@ export class DecompositionEngine {
         visionItems: readonly VisionItem[],
         checkedItems: readonly VisionItem[],
     ): string {
-        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["G1"]}], "acceptance": [{"text": "...", "sources": ["G1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
+        const jsonFormat = '{"assumptions": [{"ref": "n1", "statement": "...", "underpins": ["G1"]}], "tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["G1"]}], "acceptance": [{"text": "...", "sources": ["G1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
 
         const lines = [
             `${instruction}.`,
@@ -404,7 +453,8 @@ export class DecompositionEngine {
         lines.push(
             ``,
             `Task Quality Requirements:`,
-            `- Every deliverable and every acceptance line names in "sources" the ids of the citable vision items above it serves, at least one each. A line that names no item, names an id not listed above, or names an internal-design assumption is rejected. Plan no behavior that no citable item asks for, and write no line that uses an assumption it does not name: the items a task delivers are exactly those its lines name.`,
+            `- Every deliverable and every acceptance line names in "sources" the ids of the citable vision items above it serves, at least one each. A line that names no item, names an id not listed above, or names an internal-design assumption is rejected. Write no line that uses an assumption it does not name: the items a task delivers are exactly those its lines name.`,
+            `- A line asks only for behaviour the items it names state. Where the work needs behaviour none of them states (a case their words leave open, a choice between readings of them), never write it silently: propose it in "assumptions" with a short "ref" of its own (e.g. "n1"), the behaviour as one plain statement the client can confirm or correct, and in "underpins" the ids of the guarantees whose work rests on it; then name that ref in "sources" of every line that asks for it. The client is told of each proposal before any task resting on it starts. Never propose behaviour that an item rules out (what a guarantee lists as refuting it, or the opposite of an assumption): plan the item as it is stated. Propose nothing when the items state everything the lines ask for: "assumptions" is then [].`,
             `- "acceptance" lines decide the task done: each is an observable outcome a user of the product could confirm (e.g., ${examples.successExample}), and the task's checks test each line against the items it names.`,
             `- Emit at most ${taskCap} tasks. A response with more is rejected, not truncated: merge related work instead.`,
             `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
@@ -699,13 +749,13 @@ function reviewTaskFor(
     const description = [
         `Read every check this plan's check tasks wrote, all together and with the vision, before any of the plan's ` +
             `work starts. Name every set of checks that no product could pass together, and every check that tests ` +
-            `behaviour none of the vision items its own task cites asks for, and every item a task cites that none of ` +
-            `its checks decides.`,
+            `behaviour none of the vision items its own task cites asks for, every item a task cites that none of ` +
+            `its checks decides, and every check that requires what an item its own task cites rules out.`,
         `Vision items:\n${bulleted(visionItems.map(visionSourceCitation))}`,
     ].join("\n\n");
     const successCriteria = [
         "every stored check of the plan was read with the vision",
-        "every contradiction, every check outside the vision and every cited item no check decides is named with the check task that wrote it",
+        "every contradiction, every check outside the vision, every cited item no check decides and every check that requires what a cited item rules out is named with the check task that wrote it",
     ];
     return {
         id: generateId("task"),
@@ -757,9 +807,11 @@ function isDecomposed(task: PlannedTask): task is DecomposedTask {
 type VisionTrace =
     | {
           readonly kind: "traced";
-          /** The union of every line's sources, in the vision's order. */
+          /** The union of every line's sources, in the vision's order, then the behaviour the plan adds in the order proposed. */
           readonly sources: VisionItem[];
           readonly acceptance: TracedLine[];
+          /** The behaviour the plan adds that its lines cite. */
+          readonly added: AddedAssumption[];
       }
     | { readonly kind: "untraceable"; readonly error: UntraceableTaskError };
 
@@ -801,8 +853,9 @@ function uncitedItems(
  * the vision, or cites an item no line may cite: an internal-design assumption. The task's
  * traced items are then exactly the union of what its lines cite.
  */
-function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentId: string): VisionTrace {
-    const lookup = (entry: string) => visionItems.find((item) => item.id === entry || item.text === entry);
+function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], planned: readonly PlannedLookup[], parentId: string): VisionTrace {
+    const lookup = (entry: string) =>
+        visionItems.find((item) => item.id === entry || item.text === entry) ?? planned.find((each) => each.ref === entry)?.item;
     const problems: UntracedLine[] = [];
     const cited = new Set<string>();
     const lineIds = (field: "deliverable" | "acceptance", line: { readonly text: string; readonly sources: readonly string[] }) => {
@@ -826,12 +879,53 @@ function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentI
             error: new UntraceableTaskError({
                 taskTitle: raw.title,
                 lines: problems,
-                citableIds: visionItems.filter(citable).map((item) => item.id),
+                citableIds: [...visionItems.filter(citable).map((item) => item.id), ...planned.map((each) => each.ref)],
                 parentId,
             }),
         };
     }
-    return { kind: "traced", sources: visionItems.filter((item) => cited.has(item.id)), acceptance };
+    const added = planned.filter((each) => cited.has(each.item.id));
+    return {
+        kind: "traced",
+        sources: [...visionItems.filter((item) => cited.has(item.id)), ...added.map((each) => each.item)],
+        acceptance,
+        added: added.map((each) => ({ key: each.item.id, statement: each.item.text })),
+    };
+}
+
+/**
+ * Behaviour the plan adds, as a line citing it cites it: an Inferred client-visible assumption under
+ * `id` (its ref while the plan is validated, its contract key once given), recorded on the contract
+ * with the plan and reported to the client before any task resting on it is dispatched.
+ */
+function plannedItem(id: string, statement: string): VisionItem {
+    return { type: "assumption", id, text: statement, status: "Inferred", standing: "reported", kind: "client-visible" };
+}
+
+/**
+ * What keeps the proposed behaviour from being recorded on the contract as written: a ref proposed
+ * twice, or one that is an id or the text of a vision item a line could mean instead; a proposal that
+ * names no guarantee its work rests on, or names anything but a guarantee of the vision (a
+ * client-visible assumption must underpin one); and one no line cites, which nothing rests on.
+ */
+function plannedProblems(rawPlanned: readonly RawPlanned[], rawTasks: readonly RawTask[], visionItems: readonly VisionItem[]): string[] {
+    const guarantees = new Set(visionItems.filter((item) => item.type === "guarantee").map((item) => item.id));
+    const named = new Set(rawTasks.flatMap((raw) => [...raw.deliverables, ...raw.acceptance].flatMap((line) => line.sources.map((entry) => entry.trim()))));
+    const seen = new Set<string>();
+    return rawPlanned.flatMap((planned) => {
+        const problems: string[] = [];
+        if (seen.has(planned.ref)) problems.push(`ref ${JSON.stringify(planned.ref)} is proposed twice`);
+        seen.add(planned.ref);
+        if (visionItems.some((item) => item.id === planned.ref || item.text === planned.ref)) {
+            problems.push(`ref ${JSON.stringify(planned.ref)} is already a vision item: give the proposal a ref of its own`);
+        }
+        if (planned.underpins.length === 0) problems.push(`${planned.ref} names no guarantee in "underpins" whose work rests on it`);
+        for (const id of planned.underpins.filter((each) => !guarantees.has(each))) {
+            problems.push(`${planned.ref} names ${JSON.stringify(id)} in "underpins", which is no guarantee of [${[...guarantees].join(", ")}]`);
+        }
+        if (!named.has(planned.ref)) problems.push(`${planned.ref} is cited by no line: drop it, or name it in the sources of the lines that use it`);
+        return problems;
+    });
 }
 
 /** Every planned task depends on the environment task already done; returns its id. */

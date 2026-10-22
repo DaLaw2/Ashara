@@ -344,6 +344,17 @@ export interface VisionAppend {
   readonly changeReason: string;
 }
 
+/**
+ * Behaviour a plan adds that no item of the contract states, as the vision records it: what the
+ * product does, the guarantees whose work rests on it, and why the team adopted it.
+ */
+export interface PlannedBehaviour {
+  readonly statement: string;
+  /** The keys of the guarantees its lines cite; each must be one the version holds. */
+  readonly underpins: readonly [string, ...string[]];
+  readonly rationale: string;
+}
+
 /** One operation of a correction applied, with the key it acted on, and whether it restored the tender's own words. */
 export interface AppliedOp {
   readonly op: ContractOp;
@@ -498,12 +509,7 @@ export class Vision {
     readonly changeReason: (key: string) => string;
   }): VisionAppend & { readonly key: string } {
     const records = this.keyedRecords();
-    let highest = records.length;
-    for (const record of records) {
-      const match = record.key === undefined ? null : ASSUMPTION_KEY.exec(record.key);
-      if (match?.[1] !== undefined) highest = Math.max(highest, Number(match[1]));
-    }
-    const key = `A${highest + 1}`;
+    const [key] = this.freeKeys(1);
     const appended: AssumptionRecord = {
       key,
       statement: assumption.statement,
@@ -520,6 +526,60 @@ export class Vision {
       openQuestions: this.questions,
       contract: { kind: "unchanged" },
       changeReason: assumption.changeReason(key),
+    };
+  }
+
+  /**
+   * The next `count` free assumption keys, in the order an append gives them: A<n> after every key,
+   * and every place, already in the vision.
+   */
+  freeKeys(count: number): readonly [string, ...string[]] {
+    const highest = this.highestKey();
+    const rest = Array.from({ length: Math.max(0, count - 1) }, (_, i) => `A${highest + 2 + i}`);
+    return [`A${highest + 1}`, ...rest];
+  }
+
+  private highestKey(): number {
+    const records = this.keyedRecords();
+    let highest = records.length;
+    for (const record of records) {
+      const match = record.key === undefined ? null : ASSUMPTION_KEY.exec(record.key);
+      if (match?.[1] !== undefined) highest = Math.max(highest, Number(match[1]));
+    }
+    return highest;
+  }
+
+  /**
+   * The next version with every behaviour a plan adds beyond what the contract states appended, in
+   * order, as Inferred client-visible assumptions under the next free keys, each underpinning the
+   * guarantees its lines cite. The client is told of them in the plan's report, before any task
+   * resting on one is dispatched.
+   */
+  appendPlanned(
+    planned: readonly [PlannedBehaviour, ...PlannedBehaviour[]],
+    changeReason: (keys: readonly string[]) => string,
+  ): VisionAppend & { readonly keys: readonly string[] } {
+    const records = this.keyedRecords();
+    const highest = this.highestKey();
+    const appended = planned.map(
+      (behaviour, i): AssumptionRecord & { readonly key: string } => ({
+        key: `A${highest + 1 + i}`,
+        statement: behaviour.statement,
+        rationale: behaviour.rationale,
+        status: "Inferred",
+        kind: "client-visible",
+        disclosed: "reported",
+        underpins: [...behaviour.underpins],
+      }),
+    );
+    const keys = appended.map((record) => record.key);
+    return {
+      keys,
+      basedOnVersion: this.current.version,
+      inferences: this.composed([...records, ...appended]),
+      openQuestions: this.questions,
+      contract: { kind: "unchanged" },
+      changeReason: changeReason(keys),
     };
   }
 
@@ -820,6 +880,15 @@ export function visionWritable(
 /** Engagement's published reader: one stored version, read whole; throws VisionUnreadable. */
 export function readVisionVersion(stored: StoredVision): VisionVersion {
   return Vision.read(stored).current;
+}
+
+/**
+ * The keys behaviour a plan adds would take on the contract, in order, when recorded on the version
+ * the plan is decomposed from (recordPlannedBehaviour checks the version it records on gives the same).
+ * Throws VisionUnreadable, and VisionChangeRefused for a version whose assumptions are not keyed.
+ */
+export function plannedBehaviourKeys(stored: StoredVision, count: number): readonly string[] {
+  return count === 0 ? [] : Vision.read(stored).freeKeys(count);
 }
 
 /** Vision v1 as intake writes it: the interface, the guarantees and the exclusions drafted from the tender, with its assumptions. */

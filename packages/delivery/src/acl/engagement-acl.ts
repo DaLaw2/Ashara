@@ -1,4 +1,4 @@
-import { VisionUnreadable, readVisionVersion, restartClientReadings } from "@ashara/engagement";
+import { VisionChangeRefused, VisionUnreadable, plannedBehaviourKeys, readVisionVersion, recordPlannedBehaviour, restartClientReadings } from "@ashara/engagement";
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
 import type { AgentBrief } from "@ashara/workplace";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
@@ -39,7 +39,9 @@ export type {
   LiaisonStackChoices,
 } from "@ashara/engagement";
 
-export { VisionUnreadable, restartClientReadings };
+// The behaviour a plan adds beyond what the contract states is recorded on it, in the plan's own
+// transaction, as Engagement's Inferred assumptions under the keys plannedBehaviourKeys gave the plan.
+export { VisionChangeRefused, VisionUnreadable, recordPlannedBehaviour, restartClientReadings };
 export type { StoredVision };
 
 /** The stored vision read as planning input, before any counted attempt. */
@@ -51,6 +53,11 @@ export interface PlanningVision {
   readonly items: VisionItem[];
   /** The product's public interface as the vision states it, each entry by its key; empty on a version that recorded none. */
   readonly interface: ReadonlyArray<{ readonly id: string; readonly text: string }>;
+  /**
+   * The keys behaviour a plan adds would take on the contract when recorded on this version, in
+   * order; throws VisionChangeRefused for a version whose assumptions are not keyed.
+   */
+  readonly assumptionKeys: (count: number) => readonly string[];
 }
 
 /**
@@ -121,6 +128,7 @@ export function planningVisionOf(stored: StoredVision): PlanningVision {
     northStar: northStarOf(vision),
     items: visionItemsOf(vision),
     interface: vision.interface.map((entry: InterfaceEntry) => ({ id: entry.id, text: entry.text })),
+    assumptionKeys: (count) => plannedBehaviourKeys(stored, count),
   };
 }
 
