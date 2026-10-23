@@ -175,6 +175,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
       storedOfProject: notExercised("storedOfProject"),
       append: notExercised("append"),
       latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), baselineCommit: at.baselineCommit, checks: [{ name: "noop", command: "true", decides: ["S1"] }], files: [] }),
+      holdEvidenceOf: async () => ({ kind: "untested" as const, why: "this test records no correction" }),
     },
     suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
     shutdownSignal: new AbortController().signal,

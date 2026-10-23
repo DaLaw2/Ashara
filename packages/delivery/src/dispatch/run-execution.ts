@@ -85,7 +85,9 @@ export async function runExecution({ context, dispatch: d, slot }: CellRun): Pro
   // checks red-run on another environment version are trusted only once they hold the
   // red-run rule on their baseline in this dispatch's image; then work already on main is closed as
   // delivered, whoever delivered it. In that order: a set that cannot tell the task's work from its
-  // absence would pass on main whatever main holds, and close the task on nothing.
+  // absence would pass on main whatever main holds, and close the task on nothing. The one such set
+  // the rule trusts is a held one, whose items held before the correction that put them in scope:
+  // this sweep is what closes its task as held.
   if (d.work.kind === "stored-checks") {
     const stale = await verification.revalidation.revalidateOnBaseline(d, d.work.stored);
     if (stale !== null) return stale;

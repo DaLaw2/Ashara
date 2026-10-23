@@ -46,6 +46,24 @@ describe("lifecycle simulator, directed: a client's correction", () => {
     expect(clean.outcome.kind, statements(clean)).toBe("accepted");
   }, 90_000);
 
+  // The same answer, where the messages guarantee already holds on main as the amended assumption
+  // states it: its check passes on the revision's foundation. The guarantee held before the
+  // correction (the merged first task's checks decide it), so the set is kept as evidence it still
+  // holds and the delivered sweep closes its task as already delivered, before any implementer:
+  // the correction ends in one revision, never a rejected check set planned again.
+  it("closes as held a guarantee an amended assumption reaches that already holds on main", async (ctx) => {
+    const clean = await directed(ctx, [draw("client.late-change", 1), draw("agent.check.restate-holds", "every")]);
+    expect(keys(clean), statements(clean)).toEqual([]);
+    expect(clean.trace.some((line) => line.startsWith("client answer changes an assumption")), clean.trace.join("\n")).toBe(true);
+    const held = clean.records.filter((r) => r.event === "quality.checks-held");
+    expect(held, clean.trace.join("\n")).toHaveLength(1);
+    const restateTask = held[0]?.fields?.["checkedTaskId"];
+    expect(clean.records.some((r) => r.event === "quality.already-delivered" && r.fields?.["taskId"] === restateTask), clean.trace.join("\n")).toBe(true);
+    const revisions = clean.records.filter((r) => r.event === "delivery.revision-written");
+    expect(revisions.map((r) => r.fields?.["cause"]), clean.trace.join("\n")).toEqual(["client-change"]);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+  }, 90_000);
+
   // The revision for the correction fails twice (its environment judgment is unreadable at each of an
   // attempt's four calls), so the correction awaits it across a cycle, and the task it holds comes
   // back to Pending meanwhile: the gate holds it again, and the project is still accepted. A hold that

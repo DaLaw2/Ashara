@@ -1,5 +1,6 @@
 import type { EnvironmentCheckScope } from "@ashara/execution-infra";
 import { buildContextPaths } from "@ashara/execution-infra";
+import { parseWorkItemId } from "@ashara/shared";
 import type { Logger } from "@ashara/shared";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, FoundationProbe, TaskCheckRunPort } from "@ashara/workplace";
 import { checkPassed, checkRunVerdict, describeProductChange } from "../check-verdict.js";
@@ -8,12 +9,13 @@ import { cellImageOf } from "../dispatch-result.js";
 import type { CheckAuthoring, ExecutionEventSink, VerifiedDispatch } from "../dispatch-result.js";
 import { environmentErrorOf, VerificationInfrastructureFault } from "../fault-class.js";
 import { checkAreaOf, foundationProbeOf, previewCheckFiles, redRunPreview, runChecksOnCheckout, worktreeSnapshotCommit } from "../task-checks.js";
-import type { CompletedTaskChecks, TaskChecks } from "../task-checks.js";
+import type { CompletedTaskChecks, TaskCheckStore, TaskChecks } from "../task-checks.js";
 import { RED_RUN_ROLE } from "./dispatch-cells.js";
 import type { DispatchCells } from "./dispatch-cells.js";
 
 export interface CheckPortsDeps {
   readonly dispatchCells: Pick<DispatchCells, "environmentScope" | "checkCells" | "checkoutDir">;
+  readonly checks: Pick<TaskCheckStore, "holdEvidenceOf">;
   readonly eventSink?: ExecutionEventSink;
   readonly logger: Logger;
 }
@@ -148,7 +150,9 @@ export class CheckPorts {
         const recording = work.recorder.record(check);
         if (recording.kind === "refused") return recording;
         const { report, dir, discarded } = await onFoundation(check, timeoutSeconds, "define-check");
-        const redRun: CheckRedRunPreview = redRunPreview(report, timeoutSeconds, dir);
+        const redRun: CheckRedRunPreview = await redRunPreview(report, timeoutSeconds, dir, () =>
+          this.deps.checks.holdEvidenceOf(parseWorkItemId(work.checkedTaskId, "CheckAuthoring.checkedTaskId")),
+        );
         this.deps.eventSink?.emit({
           event: "check_defined",
           taskId: d.task.id,

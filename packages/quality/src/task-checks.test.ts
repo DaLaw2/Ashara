@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import { targetRepo } from "@ashara/execution-infra";
 import type { Cell } from "@ashara/execution-infra";
-import { recordingLogger } from "@ashara/shared/testing";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { CheckRun } from "@ashara/workplace";
 import {
@@ -19,10 +19,10 @@ import {
   productChangeOf,
   redRunPreview,
   redRunProblem,
-  redRunSetProblem,
+  redRunSetVerdict,
   runSuitesOnCheckout,
 } from "./task-checks.js";
-import type { CheckCells, TaskChecks } from "./task-checks.js";
+import type { CheckCells, HoldEvidence, TaskChecks } from "./task-checks.js";
 
 const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "c", command: "make check", exitCode, timedOut, output: "x" });
 
@@ -50,13 +50,31 @@ describe("the red-run rule", () => {
     expect(redRunProblem(run(exitCode, timedOut))).toContain("timed out on the foundation");
   });
 
-  test("the set holds only with at least one decisive failure on the foundation", () => {
-    expect(redRunSetProblem([run(0, false), run(CHECK_MISSING_EXIT, false)])).toBeNull();
-    expect(redRunSetProblem([run(0, false), run(0, false)])).toContain("no check of the set fails on the foundation");
-    expect(redRunSetProblem([run(0, false), run(127, false)])).toContain("no check of the set fails on the foundation");
-    // A build that fails on the foundation is not the task's work missing.
-    expect(redRunSetProblem([run(0, false), run(1, false)])).toContain("no check of the set fails on the foundation");
-    expect(redRunSetProblem([run(CHECK_MISSING_EXIT, true)])).toContain("no check of the set fails on the foundation");
+  const UNTESTED: HoldEvidence = { kind: "untested", why: "no correction put S1 in scope" };
+  const STILL_HOLDS: HoldEvidence = { kind: "still-holds", items: ["G3"] };
+
+  test("the set is decisive only with at least one decisive failure on the foundation", () => {
+    for (const evidence of [UNTESTED, STILL_HOLDS]) {
+      expect(redRunSetVerdict([run(0, false), run(CHECK_MISSING_EXIT, false)], evidence)).toEqual({ kind: "decisive" });
+      expect(redRunSetVerdict([run(0, false), run(127, false)], evidence)).toMatchObject({ kind: "rejected", problem: expect.stringContaining("no check of the set fails on the foundation") });
+      // A build that fails on the foundation is not the task's work missing.
+      expect(redRunSetVerdict([run(0, false), run(1, false)], evidence)).toMatchObject({ kind: "rejected", problem: expect.stringContaining("no check of the set fails on the foundation") });
+      expect(redRunSetVerdict([run(CHECK_MISSING_EXIT, true)], evidence)).toMatchObject({ kind: "rejected", problem: expect.stringContaining("no check of the set fails on the foundation") });
+      expect(redRunSetVerdict([], evidence)).toMatchObject({ kind: "rejected" });
+    }
+  });
+
+  // A first plan's set that holds before any work does not test what the task adds: still rejected.
+  test("a set holding whole on the foundation with nothing on record showing its items held is rejected", () => {
+    expect(redRunSetVerdict([run(0, false), run(0, false)], UNTESTED)).toEqual({
+      kind: "rejected",
+      problem: expect.stringContaining("every check passes there, and no correction put S1 in scope"),
+    });
+  });
+
+  // A correction put the items in scope and they held before it: the set shows they still hold.
+  test("a set holding whole on the foundation for items a correction put in scope that held before it is held", () => {
+    expect(redRunSetVerdict([run(0, false), run(0, false)], STILL_HOLDS)).toEqual({ kind: "held", items: ["G3"] });
   });
 });
 
@@ -90,23 +108,29 @@ describe("define_check's record", () => {
     expect(recorder.undecided()).toEqual(["S3"]);
   });
 
-  test("the red run's preview carries the run and the red-run rule's verdict on it", () => {
+  test("the red run's preview carries the run and the red-run rule's verdict on it", async () => {
     const syntax = { ...run(2, false), output: 'sh: 1: Syntax error: "(" unexpected' };
-    expect(redRunPreview({ kind: "ran", runs: [syntax] }, 30, "/d")).toEqual({
+    // Hold evidence is read only for a check that passes.
+    const unread = notExercised("hold evidence");
+    expect(await redRunPreview({ kind: "ran", runs: [syntax] }, 30, "/d", unread)).toEqual({
       kind: "ran",
       run: syntax,
       timeoutSeconds: 30,
       // A check broken by its own syntax never reached its verdict: the author is told so at once.
       rejection: expect.stringContaining(`it exited 2 on the foundation, not ${CHECK_MISSING_EXIT}`),
-      holdsAlready: false,
+      holdsAlready: null,
     });
-    expect(redRunPreview({ kind: "ran", runs: [run(CHECK_MISSING_EXIT, false)] }, 30, "/d")).toMatchObject({ rejection: null, holdsAlready: false });
-    expect(redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d")).toMatchObject({ rejection: null, holdsAlready: true });
-    expect(redRunPreview({ kind: "ran", runs: [run(1, true)] }, 30, "/d")).toMatchObject({ rejection: expect.stringContaining("timed out"), holdsAlready: false });
-    expect(redRunPreview({ kind: "files_refused", detail: "link" }, 30, "/d")).toEqual({
+    expect(await redRunPreview({ kind: "ran", runs: [run(CHECK_MISSING_EXIT, false)] }, 30, "/d", unread)).toMatchObject({ rejection: null, holdsAlready: null });
+    expect(await redRunPreview({ kind: "ran", runs: [run(1, true)] }, 30, "/d", unread)).toMatchObject({ rejection: expect.stringContaining("timed out"), holdsAlready: null });
+    expect(await redRunPreview({ kind: "files_refused", detail: "link" }, 30, "/d", unread)).toEqual({
       kind: "files_refused",
       detail: "the check files cannot be placed on the foundation: link",
     });
+    // A passing check carries the records' reading of a set that holds whole: the set rule the task is held to.
+    const UNTESTED: HoldEvidence = { kind: "untested", why: "no correction put S1 in scope" };
+    const STILL_HOLDS: HoldEvidence = { kind: "still-holds", items: ["G3"] };
+    expect(await redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d", async () => UNTESTED)).toMatchObject({ rejection: null, holdsAlready: UNTESTED });
+    expect(await redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d", async () => STILL_HOLDS)).toMatchObject({ rejection: null, holdsAlready: STILL_HOLDS });
   });
 });
 
@@ -251,7 +275,7 @@ describe("a check run that changes a tracked file of the checkout", () => {
     const error = productChangeOf("task-1", runs);
     expect(error?.name).toBe("CheckRunChangedProduct");
     expect(error?.message).toContain('the author\'s checks: check "replaces the product" changed files the project tracks: src/main.src');
-    expect(redRunPreview(runs[0]?.report ?? { kind: "ran", runs: [] }, 30, "/d")).toMatchObject({ kind: "product_changed", detail: expect.stringContaining("src/main.src") });
+    expect(await redRunPreview(runs[0]?.report ?? { kind: "ran", runs: [] }, 30, "/d", async () => ({ kind: "untested", why: "unread" }))).toMatchObject({ kind: "product_changed", detail: expect.stringContaining("src/main.src") });
   });
 
   test("check files that would replace a tracked product file are unrunnable before any check runs", async () => {

@@ -29,6 +29,7 @@ describe("BaselineRevalidation", () => {
     const job = new BaselineRevalidation({
       dispatchCells: { environmentScope: notExercised("an environment scope"), checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
       attemptPolicy: { perCommandTimeoutSeconds: 30 },
+      checks: { holdEvidenceOf: notExercised("the hold evidence") },
       eventSink: { emit: (event) => void events.push(event) },
       logger: recordingLogger(),
     });

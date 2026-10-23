@@ -18,6 +18,7 @@ const dispatch: VerifiedDispatch = {
 function ports(events: Array<Record<string, unknown>> = []): CheckPorts {
   return new CheckPorts({
     dispatchCells: { environmentScope: notExercised("an environment scope"), checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
+    checks: { holdEvidenceOf: notExercised("hold evidence") },
     eventSink: { emit: (event) => void events.push(event) },
     logger: recordingLogger(),
   });

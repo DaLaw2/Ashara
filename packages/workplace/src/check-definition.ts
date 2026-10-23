@@ -44,6 +44,17 @@ export const CHECK_VERDICT =
   `verdict's failure to ${CHECK_MISSING_EXIT}, for example \`<build step> && { <test of the behaviour> || exit ${CHECK_MISSING_EXIT}; }\`.`;
 
 /**
+ * What the red run at finish makes of a set whose every check passes on the foundation, as the
+ * records decide it. `still-holds`: the items it decides held before the correction that put them
+ * in scope, so the set shows they still hold and the task closes as held with no work owed.
+ * `untested`: the set is rejected, since it does not test what the task adds; at least one check
+ * must fail on the foundation for the reason the task's work is missing.
+ */
+type SetHoldReading =
+  | { readonly kind: "still-holds"; readonly items: readonly [string, ...string[]] }
+  | { readonly kind: "untested"; readonly why: string };
+
+/**
  * Z0's immediate red run of one defined check on the plan's foundation, with the files the attempt
  * has changed so far written over it: what the check author is shown so a broken check is fixed
  * before finishing.
@@ -57,10 +68,11 @@ export type CheckRedRunPreview =
       /** Why the red run at finish would reject this check as it ran here; null when it would keep it. */
       readonly rejection: string | null;
       /**
-       * It passes on the foundation and the red run at finish keeps it, as a guard of behaviour
-       * that already holds there: the set is kept only if another of its checks fails there.
+       * Null unless it passes on the foundation and the red run at finish keeps it, as a guard of
+       * behaviour that already holds there; then what a set whose every check passes there shows,
+       * as the records decide it.
        */
-      readonly holdsAlready: boolean;
+      readonly holdsAlready: SetHoldReading | null;
     }
   /** The attempt's files could not be kept or placed on the foundation, so the check could not run. */
   | { readonly kind: "files_refused"; readonly detail: string }

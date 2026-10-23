@@ -381,7 +381,7 @@ export class ClientChanges implements LiaisonClientChanges {
     let impact: ChangeImpact | null = null;
     let band: CorrectionNote["band"] = null;
     // The keys the hold will park work on once the operations apply, so the note names every one held.
-    const affected = affectedKeys(revisionOpsOf(checked, corrected.applied), before, corrected.next.current);
+    const affected = affectedKeys(revisionOpsOf(checked, corrected.applied), vision, corrected.next);
     if (checked.length > 0) {
       impact = await this.deps.store.impact(change.projectId, affected);
       band = costBandOf(reading.ops, impact);

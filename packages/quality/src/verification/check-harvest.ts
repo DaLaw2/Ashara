@@ -1,13 +1,13 @@
 import { buildContextPaths } from "@ashara/execution-infra";
 import type { Logger } from "@ashara/shared";
-import { wrapError } from "@ashara/shared";
+import { parseWorkItemId, wrapError } from "@ashara/shared";
 import { outcomeRecord } from "@ashara/workplace";
 import type { Outcome } from "@ashara/workplace";
 import { describeProductChange, formatCheckRuns } from "../check-verdict.js";
 import type { CheckRunReport } from "../check-verdict.js";
 import { mainRunBlocked } from "../dispatch-result.js";
 import type { CheckAuthoring, ExecutionEventSink, ExecutionResult, VerifiedDispatch } from "../dispatch-result.js";
-import { checkAreaOf, discardCheckWorkdir, harvestCheckFiles, redRunProblem, redRunSetProblem, redRunVerdict, runChecksOnCheckout } from "../task-checks.js";
+import { checkAreaOf, discardCheckWorkdir, harvestCheckFiles, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout } from "../task-checks.js";
 import type { TaskCheckStore } from "../task-checks.js";
 import { WORK_FAILED } from "../task-verdict.js";
 import { RED_RUN_ROLE } from "./dispatch-cells.js";
@@ -15,7 +15,7 @@ import type { DispatchCells } from "./dispatch-cells.js";
 
 export interface CheckHarvestDeps {
   readonly dispatchCells: Pick<DispatchCells, "checkCells" | "checkoutDir">;
-  readonly checks: Pick<TaskCheckStore, "append">;
+  readonly checks: Pick<TaskCheckStore, "append" | "holdEvidenceOf">;
   readonly eventSink?: ExecutionEventSink;
   readonly logger: Logger;
 }
@@ -60,10 +60,13 @@ export class CheckHarvest {
    * image, whatever authoring this is: the first, or one after a dispute,
    * a review or staleness. A check that times out or whose command cannot run rejects the whole
    * set; a check that passes there is kept as a guard of behaviour that already holds; the set is
-   * kept only when at least one of its checks fails there decisively, and only when every vision item
-   * the check task cites is decided by at least one of its checks. The kept revision is appended
-   * to Quality's task_checks for the implementation task with the foundation as its baseline; the
-   * throwaway branch is discarded either way.
+   * kept only when every vision item the check task cites is decided by at least one of its checks,
+   * and when at least one of its checks fails there decisively or, every one passing there, the
+   * records show what it decides held before the correction that put it in scope (redRunSetVerdict's
+   * held arm): the checks then join that task's check set, and its delivered sweep closes it on main
+   * before any implementer is dispatched. The kept revision is appended to Quality's task_checks for
+   * the implementation task with the foundation as its baseline; the throwaway branch is discarded
+   * either way.
    */
   async keepChecks(d: VerifiedDispatch, work: CheckAuthoring, outcome: Outcome): Promise<ExecutionResult> {
     const { eventSink, dispatchCells } = this.deps;
@@ -130,8 +133,9 @@ export class CheckHarvest {
       }
       const runsReport = formatCheckRuns(redRun.runs, redRunVerdict);
       const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
-      const setProblem = redRunSetProblem(redRun.runs);
-      const report = setProblem === null ? runsReport : `${runsReport}\nREJECTED, the set: ${setProblem}`;
+      const set = redRunSetVerdict(redRun.runs, await this.deps.checks.holdEvidenceOf(parseWorkItemId(work.checkedTaskId, "CheckAuthoring.checkedTaskId")));
+      const setLine = redRunSetLine(set);
+      const report = setLine === null ? runsReport : `${runsReport}\n${setLine}`;
       eventSink?.emit({
         event: "check_red_run",
         taskId: task.id,
@@ -140,10 +144,11 @@ export class CheckHarvest {
         foundationTaskId: foundation.taskId,
         rejected: problems.map((run) => run.name),
         holdsAlready: redRun.runs.filter((run) => run.exitCode === 0 && redRunProblem(run) === null).map((run) => run.name),
-        setRejected: setProblem !== null,
+        setRejected: set.kind === "rejected",
+        setHeld: set.kind === "held",
         report,
       });
-      if (problems.length > 0 || setProblem !== null) {
+      if (problems.length > 0 || set.kind === "rejected") {
         return this.checksRejected(d, outcome, `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`, atFoundation);
       }
 
@@ -165,14 +170,23 @@ export class CheckHarvest {
         baselineCommit: foundation.commit,
         checks: defined.map((check) => check.name),
         files: harvest.files.map((file) => file.path),
+        held: set.kind === "held" ? set.items : [],
       });
+      if (set.kind === "held") {
+        this.deps.logger.info(
+          "quality.checks-held",
+          `every check of revision ${revision} for task ${work.checkedTaskId} passes on the foundation, and ` +
+            `${set.items.join(", ")} held before the correction that put them in scope: its delivered sweep closes it on main`,
+          { taskId: task.id, attempt: task.attempt, checkedTaskId: work.checkedTaskId, revision, items: set.items },
+        );
+      }
       eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
       return {
         status: "completed",
         delivered: { kind: "checks-recorded", revision },
         detail:
           `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}, red-run on the ` +
-          `foundation ${foundation.commit}`,
+          `foundation ${foundation.commit}${set.kind === "held" ? `, where every one passes: ${set.items.join(", ")} still hold` : ""}`,
         outcome,
         sessionId,
         attempt: task.attempt,

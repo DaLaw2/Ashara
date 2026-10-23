@@ -8,6 +8,7 @@ import { attemptsWithModel } from "@ashara/workplace";
 import {
   checkTasksOfReview,
   completedImplementationTaskIds,
+  correctedTaskOf,
   foundationCandidates,
   implementationTasksCheckedBy,
   isProductScaffoldOrigin,
@@ -16,6 +17,7 @@ import {
   workItemSummaries,
 } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
+import type { HoldEvidence } from "../task-checks.js";
 import { inLatestCheckRevision, latestCheckRevision, StoredDecidesSchema } from "../stored-checks.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
@@ -173,6 +175,34 @@ export class TaskCheckRepository {
    */
   async checkedTasksOf(checkTaskId: string): Promise<string[]> {
     return implementationTasksCheckedBy(this.db, checkTaskId);
+  }
+
+  /**
+   * What a check set of implementation task `taskId` that holds whole on its foundation is evidence
+   * of (HoldEvidence): still-holds only when every item it cites is a key a client correction
+   * affects, taken in by a plan revision written at or before it, and decided by the latest checks
+   * of another Completed implementation task. Throws CheckedTaskMissing when no such task exists.
+   */
+  async holdEvidenceOf(taskId: string): Promise<HoldEvidence> {
+    const task = await correctedTaskOf(this.db, taskId);
+    if (task === null) throw new CheckedTaskMissing(taskId);
+    const sources = parseWorkItemJsonb(task).taskSpec?.sources;
+    const [first, ...rest] = sources === undefined ? [] : [...new Set(sources.map((source) => source.id))];
+    if (first === undefined) return { kind: "untested", why: `task ${taskId} records no vision item it cites (task_spec.sources)` };
+    const cited: readonly [string, ...string[]] = [first, ...rest];
+    const corrected = new Set(task.corrected);
+    const uncorrected = cited.filter((id) => !corrected.has(id));
+    if (uncorrected.length > 0) {
+      return { kind: "untested", why: `no client correction a plan revision took in before task ${taskId} was planned affects ${uncorrected.join(", ")}` };
+    }
+    const completed = await this.completedOf(task.projectId, taskId);
+    // A check stored before decides was recorded decides nothing on record.
+    const decided = new Set(completed.checked.flatMap((record) => record.checks.flatMap((check) => (check.decides === null ? [] : check.decides))));
+    const undelivered = cited.filter((id) => !decided.has(id));
+    if (undelivered.length > 0) {
+      return { kind: "untested", why: `no Completed implementation task's checks decide ${undelivered.join(", ")}, so nothing shows it held before the correction` };
+    }
+    return { kind: "still-holds", items: cited };
   }
 
   /**

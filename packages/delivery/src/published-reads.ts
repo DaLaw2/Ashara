@@ -292,6 +292,35 @@ export async function foundationCandidates(db: DbHandle, checkTaskId: string): P
   return z.array(FoundationRowSchema).parse(result.rows);
 }
 
+const CorrectedTaskRowSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  taskSpec: z.unknown(),
+  successCriteria: z.unknown(),
+  blockedReason: z.unknown(),
+  corrected: z.array(z.string().min(1)),
+});
+
+/** A task as stored, with the keys the client corrections taken in by a plan revision written at or before it affect. */
+export type CorrectedTask = z.infer<typeof CorrectedTaskRowSchema>;
+
+/**
+ * The task `taskId` names, its jsonb unread, with every key a client correction affects
+ * (correction_holds.affected) whose plan revision was written at or before the task was: the keys
+ * a revision put in scope when the task was planned. null when no such task exists.
+ */
+export async function correctedTaskOf(db: DbHandle, taskId: string): Promise<CorrectedTask | null> {
+  const result = await db.execute(sql`
+    SELECT w.id, w.project_id AS "projectId", w.task_spec AS "taskSpec", w.success_criteria AS "successCriteria",
+           w.blocked_reason AS "blockedReason",
+           COALESCE((SELECT json_agg(DISTINCT k.key ORDER BY k.key)
+             FROM correction_holds ch JOIN plan_revisions r ON r.id = ch.plan_revision_id, unnest(ch.affected) k(key)
+             WHERE ch.project_id = w.project_id AND r.created_at <= w.created_at), '[]'::json) AS corrected
+    FROM work_items w WHERE w.id = ${taskId}`);
+  const [row] = z.array(CorrectedTaskRowSchema).parse(result.rows);
+  return row ?? null;
+}
+
 /** A check task a review task depends on, as stored, with the title of the task its checks decide (null when task_spec.checksFor names no work item). */
 export interface ReviewedCheckTask {
   readonly id: string;

@@ -281,9 +281,9 @@ export class CoreLoop {
 
     // Then the client's answers, before planning: one read now appends the vision version
     // the first plan is made from. One that changes an assumption an existing plan was
-    // built on is a correction: it holds the tasks citing that assumption (correction_holds), which the
-    // gate below never dispatches, while the project's other tasks go on, until the replanning step
-    // replaces them.
+    // built on is a correction: it holds the tasks citing that assumption or a guarantee resting on it
+    // (correction_holds), which the gate below never dispatches, while the project's other tasks go on,
+    // until the replanning step replaces them.
     const answers = await this.readAnswers();
     if (answers !== null) return this.haltAtCap(answers);
     // Then the client's changes of direction, each read into operations on the contract in force and
@@ -321,7 +321,8 @@ export class CoreLoop {
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(deps.loop.logger, outcome);
     // Answers posted while the first plan was being written are read before any of its tasks is
-    // dispatched: one that changes an assumption the plan relied on holds the tasks citing it, the
+    // dispatched: one that changes an assumption the plan relied on holds the tasks citing it or a
+    // guarantee resting on it, the
     // revision below replaces them in this cycle, and the gate never dispatches the work it replaces.
     const afterPlan = await this.readAnswers();
     if (afterPlan !== null) return this.haltAtCap(afterPlan);

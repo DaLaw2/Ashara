@@ -68,7 +68,7 @@ async function authoring(recorder: CheckRecorder): Promise<{ readonly d: Verifie
 function harvest(events: Array<Record<string, unknown>>): CheckHarvest {
   return new CheckHarvest({
     dispatchCells: { checkCells: notExercised("a check cell"), checkoutDir: notExercised("a checkout") },
-    checks: { append: notExercised("a stored revision") },
+    checks: { append: notExercised("a stored revision"), holdEvidenceOf: notExercised("the hold evidence") },
     eventSink: { emit: (event) => void events.push(event) },
     logger: recordingLogger(),
   });

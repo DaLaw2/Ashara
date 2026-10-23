@@ -118,8 +118,8 @@ const findingRow = z.object({ checkTaskId: z.string(), problem: z.string() });
 /**
  * A client correction recorded as holding work: the vision version it wrote, the keys it affects, the
  * tasks citing one of them that were started after it was recorded and before its revision, and the
- * guarantees an affected assumption underpins, in the version it was applied to or the one it wrote,
- * that it does not affect.
+ * guarantees resting on an affected assumption (each it underpins, and each citing it as its source),
+ * in the version it was applied to or the one it wrote, that it does not affect.
  */
 const correctionRow = z.object({
   visionVersion: z.number(),
@@ -259,13 +259,21 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
                    AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r
                      WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
                  '[]'::json) AS "startedWhileHeld",
-               COALESCE((SELECT json_agg(DISTINCT u.key ORDER BY u.key) FROM vision_documents d,
-                 jsonb_array_elements(CASE WHEN jsonb_typeof(d.inferences) = 'array'
-                   THEN d.inferences ELSE '[]'::jsonb END) i,
-                 jsonb_array_elements_text(CASE WHEN jsonb_typeof(i->'underpins') = 'array'
-                   THEN i->'underpins' ELSE '[]'::jsonb END) u(key)
-                 WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
-                   AND i->>'key' = ANY(ch.affected) AND NOT u.key = ANY(ch.affected)),
+               COALESCE((SELECT json_agg(DISTINCT u.key ORDER BY u.key) FROM (
+                   SELECT u.key FROM vision_documents d,
+                     jsonb_array_elements(CASE WHEN jsonb_typeof(d.inferences) = 'array'
+                       THEN d.inferences ELSE '[]'::jsonb END) i,
+                     jsonb_array_elements_text(CASE WHEN jsonb_typeof(i->'underpins') = 'array'
+                       THEN i->'underpins' ELSE '[]'::jsonb END) u(key)
+                     WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
+                       AND i->>'key' = ANY(ch.affected)
+                   UNION
+                   SELECT g->>'id' FROM vision_documents d,
+                     jsonb_array_elements(CASE WHEN jsonb_typeof(d.guarantees) = 'array'
+                       THEN d.guarantees ELSE '[]'::jsonb END) g
+                     WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
+                       AND g->'source'->>'kind' = 'assumption' AND g->'source'->>'id' = ANY(ch.affected)
+                 ) u(key) WHERE NOT u.key = ANY(ch.affected)),
                  '[]'::json) AS "unreached"
         FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
     ).rows,
@@ -750,7 +758,7 @@ export function checkSnapshot(
         "I2",
         `unreached:${guarantee}`,
         `the correction of vision v${correction.visionVersion} affects ${correction.affected.join(", ")}, ` +
-          `leaving out ${guarantee}, which an assumption among them underpins`,
+          `leaving out ${guarantee}, which rests on an assumption among them`,
       );
     }
   }

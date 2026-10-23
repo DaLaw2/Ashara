@@ -446,11 +446,16 @@ function formatDefinedCheck(name: string, defined: Extract<CheckDefinitionResult
     `  output: ${run.output === "" ? "(empty)" : run.output}`,
     redRun.rejection !== null
       ? `WOULD BE REJECTED at finish: ${redRun.rejection}. Fix it and define it again under the same name.`
-      : redRun.holdsAlready
-        ? `It passes on the foundation: it is kept as a guard of behaviour that already holds there. At finish at ` +
-          `least one check of the set must fail on the foundation for the reason the task's work is missing.`
-        : `It fails on the foundation. Make sure it fails for the reason the task's work is missing, not because of a ` +
-          `syntax error or a file that does not exist: such a check can never pass.`,
+      : redRun.holdsAlready?.kind === "still-holds"
+        ? `It passes on the foundation: it is kept as a guard of behaviour that already holds there. The records show ` +
+          `${redRun.holdsAlready.items.join(", ")} held before the correction that put them in scope: if every check of the ` +
+          `set passes on the foundation at finish, the task closes as held with no work owed.`
+        : redRun.holdsAlready?.kind === "untested"
+          ? `It passes on the foundation: it is kept as a guard of behaviour that already holds there. At finish at ` +
+            `least one check of the set must fail on the foundation for the reason the task's work is missing, since ` +
+            `${redRun.holdsAlready.why}.`
+          : `It fails on the foundation. Make sure it fails for the reason the task's work is missing, not because of a ` +
+            `syntax error or a file that does not exist: such a check can never pass.`,
   ];
   return result(lines.join("\n"), redRun.rejection !== null);
 }

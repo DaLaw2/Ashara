@@ -56,7 +56,12 @@ export class CheckAuthorStandIn {
     }
     if (isRestateTaskTitle(checkedTitle)) {
       const path = `checks/${checksFor}/restated.json`;
-      const spec: CheckSpec = { kind: "correct", requires: [restatedBehaviour(checksFor)], forbids: [], harness: [] };
+      // What the corrected contract states either asks for behaviour of its own, which the product on
+      // the foundation lacks, or already holds there as the delivered product stands, so the check
+      // requires nothing that product lacks.
+      const holds = tape.chance("agent.check.restate-holds", 0.5, "checks");
+      const requires = holds ? [] : [restatedBehaviour(checksFor)];
+      const spec: CheckSpec = { kind: "correct", requires, forbids: [], harness: [] };
       return [
         ["write_file", { path, content: `${JSON.stringify(spec)}\n` }],
         ["define_check", { name: "restated", command: `sim check ${path}`, decides: cited }],

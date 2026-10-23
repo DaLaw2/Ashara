@@ -13,6 +13,7 @@ export function createTaskCheckStore(db: ReturnType<typeof createDb>): TaskCheck
     storedOfProject: (projectId, exceptTaskId) => repo.storedOfProject(projectId, exceptTaskId),
     append: (write) => repo.append(write),
     latest: (taskId) => repo.latest(taskId),
+    holdEvidenceOf: (taskId) => repo.holdEvidenceOf(taskId),
   };
 }
 

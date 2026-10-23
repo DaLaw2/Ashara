@@ -22,6 +22,7 @@ export {
   completedGoalTaskExists,
   completedImplementationTaskIds,
   completedScaffolds,
+  correctedTaskOf,
   foundationCandidates,
   implementationTasksCheckedBy,
   lockTask,

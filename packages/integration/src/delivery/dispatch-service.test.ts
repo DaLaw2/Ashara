@@ -412,6 +412,7 @@ function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] =
       throw new Error("no checks may be appended");
     },
     latest: async () => stored,
+    holdEvidenceOf: async () => ({ kind: "untested" as const, why: "this test records no correction" }),
   };
 }
 

@@ -124,10 +124,10 @@ export function composeVerifiers(deps: DispatchComposition): DispatchVerificatio
   return {
     suiteReview: new SuiteReviewRun({ suiteReview: deps.suiteReview, eventSink, logger }),
     teardown,
-    revalidation: new BaselineRevalidation({ dispatchCells, attemptPolicy, eventSink, logger }),
+    revalidation: new BaselineRevalidation({ dispatchCells, attemptPolicy, checks, eventSink, logger }),
     delivered: new DeliveredOnMain({ dispatchCells, checks, eventSink, logger }),
     foundationGate: new FoundationGate({ dispatchCells, attemptPolicy, eventSink, logger }),
-    checkPorts: new CheckPorts({ dispatchCells, eventSink, logger }),
+    checkPorts: new CheckPorts({ dispatchCells, checks, eventSink, logger }),
     harvest: new CheckHarvest({ dispatchCells, checks, eventSink, logger }),
     ownershipGate: new OwnershipGate({ checks, eventSink, logger }),
     substrateGate: new SubstrateGate({ dispatchCells, attemptPolicy, statements: deps.environment.statements, eventSink, logger }),

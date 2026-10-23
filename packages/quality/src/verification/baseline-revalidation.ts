@@ -8,14 +8,15 @@ import { NO_AGENT, cellImageOf, mainRunBlocked, sessionEnvironmentVersion } from
 import type { ExecutionEventSink, ExecutionResult, VerifiedDispatch } from "../dispatch-result.js";
 import { runFoundationBuild } from "../environment-check.js";
 import { environmentBuildPassed } from "../environment-verdict.js";
-import { StoredChecksStale, describeFoundationBuild, redRunProblem, redRunSetProblem, redRunVerdict, runChecksOnCheckout } from "../task-checks.js";
-import type { TaskChecks } from "../task-checks.js";
+import { StoredChecksStale, describeFoundationBuild, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout } from "../task-checks.js";
+import type { TaskCheckStore, TaskChecks } from "../task-checks.js";
 import { RED_RUN_ROLE } from "./dispatch-cells.js";
 import type { DispatchCells } from "./dispatch-cells.js";
 
 export interface BaselineRevalidationDeps {
   readonly dispatchCells: Pick<DispatchCells, "environmentScope" | "checkCells" | "checkoutDir">;
   readonly attemptPolicy: { readonly perCommandTimeoutSeconds: number };
+  readonly checks: Pick<TaskCheckStore, "holdEvidenceOf">;
   readonly eventSink?: ExecutionEventSink;
   readonly logger: Logger;
 }
@@ -31,8 +32,10 @@ export class BaselineRevalidation {
   /**
    * Stored checks were red-run on their baseline in their check task's environment version. On a
    * dispatch from another version they are red-run again on that baseline in a CI cell from this
-   * dispatch's image, by the same set rule: every check runs to a verdict
-   * and at least one fails decisively. Holding: trusted, null. Not holding, or no baseline on record
+   * dispatch's image, by the same set rule (redRunSetVerdict): every check runs to a verdict, and at
+   * least one fails decisively, or every one passes and the records show what they decide held
+   * before the correction that put it in scope. Holding: trusted, null, and the delivered sweep
+   * decides the task next. Not holding, or no baseline on record
    * (a revision stored before baselines were recorded): checks_stale before the model is called, naming both
    * versions and the check task, since such a set cannot tell the task's work from its absence and
    * the implementer could not answer for it. A red run that could not run at all is environment-blocked.
@@ -92,10 +95,11 @@ export class BaselineRevalidation {
       } else if (redRun.kind === "product_changed") {
         problem = `on the baseline, ${describeProductChange(redRun)}`;
       } else {
-        const setProblem = redRunSetProblem(redRun.runs);
+        const set = redRunSetVerdict(redRun.runs, await this.deps.checks.holdEvidenceOf(task.id));
+        const setLine = redRunSetLine(set);
         problem =
-          redRun.runs.some((run) => redRunProblem(run) !== null) || setProblem !== null
-            ? `${formatCheckRuns(redRun.runs, redRunVerdict)}${setProblem === null ? "" : `\nREJECTED, the set: ${setProblem}`}`
+          redRun.runs.some((run) => redRunProblem(run) !== null) || set.kind === "rejected"
+            ? `${formatCheckRuns(redRun.runs, redRunVerdict)}${setLine === null ? "" : `\n${setLine}`}`
             : null;
       }
     }

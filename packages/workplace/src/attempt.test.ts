@@ -646,7 +646,7 @@ describe("define_check", () => {
     run: { name: check.name, command: check.command, exitCode: 1, timedOut: false, output: "no greeting" },
     timeoutSeconds: 60,
     rejection: null,
-    holdsAlready: false,
+    holdsAlready: null,
   }), discarded: readonly string[] = []) {
     const defined: DefinedCheck[] = [];
     const timeouts: number[] = [];
@@ -726,14 +726,14 @@ describe("define_check", () => {
             run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: 'sh: 1: Syntax error: "(" unexpected' },
             timeoutSeconds: 60,
             rejection: null,
-            holdsAlready: false,
+            holdsAlready: null,
           }
         : {
             kind: "ran",
             run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: "grep: greet.txt: No such file or directory" },
             timeoutSeconds: 60,
             rejection: null,
-            holdsAlready: false,
+            holdsAlready: null,
           },
     );
 
@@ -777,7 +777,7 @@ describe("define_check", () => {
             run: { name: check.name, command: check.command, exitCode: 127, timedOut: false, output: "sh: missing: not found" },
             timeoutSeconds: 60,
             rejection: "its command cannot be run in the project environment (exit 127)",
-            holdsAlready: false,
+            holdsAlready: null,
           }
         : { kind: "files_refused", detail: "check files overlap the environment's owned paths [environment]: environment/x" },
     );
@@ -791,6 +791,33 @@ describe("define_check", () => {
     expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({
       type: "error-text",
       value: expect.stringContaining("It could not be red-run: check files overlap"),
+    });
+  });
+
+  // A passing check is told the set rule its own task is held to, as the records decide it: a
+  // revision-scoped item that held before closes as held, anything else still needs a failing check.
+  it("tells the author of a passing check whether a set that holds whole closes the task as held or is rejected", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "define_check", input: { name: "held", command: "true", decides: ["S1"] } }]),
+      () => turn([{ name: "define_check", input: { name: "untested", command: "true", decides: ["S1"] } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Two checks." } }]),
+    ]);
+    const { checks } = recorder((check) => ({
+      kind: "ran",
+      run: { name: check.name, command: check.command, exitCode: 0, timedOut: false, output: "" },
+      timeoutSeconds: 60,
+      rejection: null,
+      holdsAlready: check.name === "held" ? { kind: "still-holds", items: ["S1"] } : { kind: "untested", why: "no correction affects S1" },
+    }));
+
+    await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
+
+    const held = toolResultsOf(requests[1]?.messages.at(-1))[0];
+    expect(held).toMatchObject({ value: expect.stringContaining("S1 held before the correction that put them in scope") });
+    expect(held).toMatchObject({ value: expect.stringContaining("the task closes as held with no work owed") });
+    expect(held).not.toMatchObject({ value: expect.stringContaining("must fail on the foundation") });
+    expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({
+      value: expect.stringContaining("least one check of the set must fail on the foundation for the reason the task's work is missing, since no correction affects S1."),
     });
   });
 

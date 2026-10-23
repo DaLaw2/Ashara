@@ -135,6 +135,7 @@ describe("a task runs on cells end to end", () => {
         checks: [{ name: "hello", command: check, decides: ["S1"] }],
         files: [],
       }),
+      holdEvidenceOf: async () => ({ kind: "untested" as const, why: "this test records no correction" }),
     };
     const script = [
       toolCallTurn("write_file", { path: "hello.txt", content: "hello from the cell\n" }),

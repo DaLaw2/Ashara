@@ -11,7 +11,7 @@ import { MAX_CHANGE_ATTEMPTS } from "../client-change.js";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
 import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
-import { readVisionVersion } from "../vision.js";
+import { Vision } from "../vision.js";
 import type { RevisionOp } from "../vision-language/contract-op.js";
 import { ClientMessageRepository, LockedStanding, consumeInbound, openChangeMessages, recordReadingFailure } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
@@ -46,7 +46,7 @@ export async function affectedKeysOf(db: DbHandle, projectId: ProjectId, version
   const appliedTo = rows.find((row) => row.version === version - 1);
   const written = rows.find((row) => row.version === version);
   if (appliedTo === undefined || written === undefined) throw new CorrectionVersionMissing(projectId, version);
-  return affectedKeys(ops, readVisionVersion(appliedTo), readVisionVersion(written));
+  return affectedKeys(ops, Vision.read(appliedTo), Vision.read(written));
 }
 
 /**
