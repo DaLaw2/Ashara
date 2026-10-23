@@ -35,3 +35,23 @@ describe("spawnProcess output cap", () => {
     expect(result.stdoutCut).toEqual({ at: 13, chars: units - 13 - 30 });
   });
 });
+
+describe("spawnProcess abort", () => {
+  const idle = ["-e", "setTimeout(() => {}, 60_000)"];
+
+  it("kills the child once its signal aborts, long before the host backstop", async () => {
+    const abort = new AbortController();
+    const started = Date.now();
+    const running = spawnProcess({ file: process.execPath, args: idle, env: {}, maxOutputBytes: 100, killAfterMs: 60_000, signal: abort.signal });
+    setTimeout(() => abort.abort(new Error("SIGTERM")), 50);
+    expect(await running).toMatchObject({ exitCode: null, signal: "SIGKILL", killedByHost: false });
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("kills at once a child whose signal had already aborted", async () => {
+    const abort = new AbortController();
+    abort.abort(new Error("SIGTERM"));
+    const result = await spawnProcess({ file: process.execPath, args: idle, env: {}, maxOutputBytes: 100, killAfterMs: 60_000, signal: abort.signal });
+    expect(result).toMatchObject({ exitCode: null, signal: "SIGKILL" });
+  });
+});

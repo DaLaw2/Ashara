@@ -250,6 +250,13 @@ async function readSuiteVerdict(path: string, problems: string[]): Promise<Suite
   }
 }
 
+class SuiteRunInterrupted extends Error {
+  constructor(readonly signalName: NodeJS.Signals) {
+    super(`the suite run was interrupted by ${signalName}`);
+    this.name = "SuiteRunInterrupted";
+  }
+}
+
 /** The cells' logger: their exec records are debug, below what it writes; their label is `trace`. */
 function cellLogger(trace: string): ReturnType<typeof createLogger> {
   return { ...createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }), trace: () => trace };
@@ -258,6 +265,12 @@ function cellLogger(trace: string): ReturnType<typeof createLogger> {
 async function runInCell(args: RunnerArgs, manifest: SuiteManifest, build: string, stage: string): Promise<{ outcome: SuiteOutcome; runs: Record<string, RunRecord> }> {
   const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: stage, logger: cellLogger(args.instance) });
   const workspace = join(stage, "ws");
+  // An operator's interrupt ends the command in flight: its exec is killed, and the cell removed below.
+  const interrupt = new AbortController();
+  const onInterrupt = (name: NodeJS.Signals): void => interrupt.abort(new SuiteRunInterrupted(name));
+  process.once("SIGINT", onInterrupt);
+  process.once("SIGTERM", onInterrupt);
+  const { signal } = interrupt;
   let cell: Cell | null = null;
   try {
     cell = await substrate.createCell({
@@ -269,7 +282,7 @@ async function runInCell(args: RunnerArgs, manifest: SuiteManifest, build: strin
       mount: { hostPath: workspace },
     });
     const runs: Record<string, RunRecord> = {};
-    const built = await cell.exec(["sh", "-c", build], { timeoutSeconds: args.timeoutSeconds, cwd: PRODUCT_DIR });
+    const built = await cell.exec(["sh", "-c", build], { timeoutSeconds: args.timeoutSeconds, cwd: PRODUCT_DIR, signal });
     runs["build"] = recordOf(built);
     const buildProblem = runProblem(`the product's build command ${JSON.stringify(build)}`, built, args.timeoutSeconds);
     if (buildProblem !== null) return { outcome: { problems: [buildProblem], verdict: null }, runs };
@@ -282,7 +295,7 @@ async function runInCell(args: RunnerArgs, manifest: SuiteManifest, build: strin
       "--out",
       `${WORKSPACE_ROOT}/${OUT_DIR}/${SUITE_VERDICT_FILE}`,
     ];
-    const suite = await cell.exec(argv, { timeoutSeconds: args.timeoutSeconds, cwd: OUT_DIR });
+    const suite = await cell.exec(argv, { timeoutSeconds: args.timeoutSeconds, cwd: OUT_DIR, signal });
     runs["suite"] = recordOf(suite);
     const problems: string[] = [];
     const suiteProblem = runProblem(`the suite (${manifest.tender})`, suite, args.timeoutSeconds);
@@ -291,6 +304,8 @@ async function runInCell(args: RunnerArgs, manifest: SuiteManifest, build: strin
     const verdict = await readSuiteVerdict(join(workspace, OUT_DIR, SUITE_VERDICT_FILE), problems);
     return { outcome: { problems, verdict }, runs };
   } finally {
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onInterrupt);
     // The cell first, then whatever this substrate still holds; a failure here is the run's error.
     try {
       if (cell !== null) await cell.teardown();

@@ -2,9 +2,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
+import { CellExecFailed, CellExecInterrupted, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
-import { ContextBudgetExceeded, PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
+import { ContextBudgetExceeded, ModelCallAborted, PreCallRefusal, modelCallFailureOf } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult, CostMeasurement } from "@ashara/finance";
 import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
@@ -540,6 +540,47 @@ describe("runAttempt", () => {
 
     expect(outcome).toMatchObject({ kind: "cancelled", turnsUsed: 1 });
     expect(outcome.detail).toContain("owner cancelled the task");
+  });
+
+  it("ends as cancelled when the signal interrupts a command in the cell: no tool result, and its turns stay measured", async () => {
+    const controller = new AbortController();
+    const shutdown = new Error("SIGTERM");
+    const { llm, requests } = scriptedLlm([() => turn([{ name: "run_command", input: { command: "sleep 3600" } }])]);
+    const { cell } = fakeCell({
+      run: async (command) => {
+        controller.abort(shutdown);
+        throw new CellExecInterrupted("cell-1", ["sh", "-c", command], "while it ran", shutdown);
+      },
+    });
+    const run = deps(llm, cell, { signal: controller.signal });
+
+    const outcome = await runAttempt(assignment(), run.deps);
+
+    expect(outcome).toMatchObject({ kind: "cancelled", reason: shutdown, turnsUsed: 1 });
+    expect(outcome.cost).toEqual({ measured: true, totalUsd: MEASURED.totalCost, turns: 1 });
+    expect(run.records.map((r) => r.kind)).toEqual(["attempt_started", "turn", "outcome"]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("counts a turn aborted before it was sent as no cost, and one aborted in flight as unmeasured", async () => {
+    const shutdown = new Error("SIGTERM");
+    const beforeSend = scriptedLlm([
+      () => turn([{ name: "list_directory", input: {} }]),
+      () => {
+        throw new ModelCallAborted({ stage: "before-send" }, shutdown);
+      },
+    ]);
+    const unsent = await runAttempt(assignment(), deps(beforeSend.llm, fakeCell().cell).deps);
+    expect(unsent.cost).toEqual({ measured: true, totalUsd: MEASURED.totalCost, turns: 1 });
+
+    const inFlight = scriptedLlm([
+      () => turn([{ name: "list_directory", input: {} }]),
+      () => {
+        throw new ModelCallAborted({ stage: "in-flight", provider: "fake", model: "fake-model", callId: "call-1" }, shutdown);
+      },
+    ]);
+    const sent = await runAttempt(assignment(), deps(inFlight.llm, fakeCell().cell).deps);
+    expect(sent.cost).toMatchObject({ measured: false, measuredUsd: MEASURED.totalCost, unmeasuredTurns: [{ turn: 2 }] });
   });
 
   it("rejects invalid limits before any call", async () => {

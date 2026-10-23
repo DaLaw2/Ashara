@@ -1,4 +1,4 @@
-import { parseProjectId } from "@ashara/shared";
+import { describeErrorChain, parseProjectId } from "@ashara/shared";
 import type { Logger, ProjectId } from "@ashara/shared";
 import { TERMINAL_KINDS } from "./acl/engagement-acl.js";
 import type { AnswerOutcome, ClientChangeOutcome, IntakeOutcome, TerminalKind } from "./acl/engagement-acl.js";
@@ -746,6 +746,10 @@ export class CoreLoop {
    * reaches here is a failure of the step as a whole, such as recording a fault.
    */
   private async step<T>(name: CoreLoopStep, run: () => Promise<T>): Promise<StepEnd<T>> {
+    // Every step boundary reads the shutdown, not only a lane's refill: the cycle ends before the
+    // next step starts, and the runner, seeing its signal aborted, ends with it.
+    const { shutdownSignal } = this.deps.loop;
+    if (shutdownSignal.aborted) throw new CycleShutDown(name, shutdownSignal.reason);
     try {
       return { kind: "ran", value: await run() };
     } catch (err) {
@@ -828,6 +832,17 @@ async function askedFor<I>(next: () => Promise<I | null>): Promise<{ readonly ki
     return { kind: "answered", item: await next() };
   } catch (error) {
     return { kind: "failed", error };
+  }
+}
+
+/** The shutdown signal had aborted when step `step` was due: the cycle ends there, the step not run. */
+class CycleShutDown extends Error {
+  constructor(
+    readonly step: string,
+    readonly reason: unknown,
+  ) {
+    super(`the cycle ended before step ${step}: the process is shutting down (${describeErrorChain(reason)})`);
+    this.name = "CycleShutDown";
   }
 }
 

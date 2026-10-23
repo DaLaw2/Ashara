@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace, elidedOutput } from "@ashara/execution-infra";
-import type { CellBackend, ExecResult } from "@ashara/execution-infra";
+import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace, cellExecInterruptedOf, elidedOutput } from "@ashara/execution-infra";
+import type { CellBackend, CellExecInterrupted, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/finance";
 import { joinElided, uncutText, wholeText } from "@ashara/shared";
 import type { ElidedText } from "@ashara/shared";
@@ -345,7 +345,8 @@ type ToolExecution =
   | { readonly kind: "result"; readonly output: string; readonly isError: boolean }
   | { readonly kind: "finish"; readonly args: FinishArgs }
   | { readonly kind: "dispute"; readonly checkName: string; readonly ofTask: string | null; readonly reason: string }
-  | { readonly kind: "environment_failure"; readonly error: unknown; readonly toolName: string };
+  | { readonly kind: "environment_failure"; readonly error: unknown; readonly toolName: string }
+  | { readonly kind: "interrupted"; readonly error: CellExecInterrupted; readonly toolName: string };
 
 interface ToolContext {
   readonly cell: CellBackend;
@@ -390,10 +391,14 @@ function argsError(toolName: string, error: z.ZodError): RanTool {
  * it. That stops the attempt and blames no one: the dispatch blames the substrate only for an error
  * whose class names it (environmentErrorOf), and every other error, an unknown one included, as
  * Ashara's own (fail-closed). Handing an unknown error to the model as the tool's own error instead
- * would let the attempt go on as if the command had answered.
+ * would let the attempt go on as if the command had answered. A command the attempt's signal
+ * interrupted, directly or under a port's own error, is `interrupted`: it has no outcome, neither
+ * the model's to see nor a failure.
  * @testseam exported for the integration fault-classifiers.test.ts; executeTool is its production caller
  */
 export function classifyCellError(toolName: string, error: unknown): RanTool {
+  const interrupted = cellExecInterruptedOf(error);
+  if (interrupted !== null) return { kind: "interrupted", error: interrupted, toolName };
   if (error instanceof PathOutsideWorkspace || error instanceof InvalidCellRequest) return toolError(error.message);
   if (error instanceof CellToolFailed && error.exitCode !== null) {
     return toolError(`${toolName} failed (exit ${error.exitCode}${error.timedOut ? ", timed out" : ""}): ${error.stderr.trim() || "(no stderr)"}`);

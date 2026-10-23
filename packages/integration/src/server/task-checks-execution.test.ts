@@ -180,7 +180,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", assumptions: [], interfaceEntries: [] }) },
-    cells: { substrate, baseCell: base, instance: testCellInstance() },
+    cells: { substrate, baseCell: base, instance: testCellInstance(), shutdownSignal: new AbortController().signal },
     llm: gateway,
     staffing: {
       widerModel: () => null,

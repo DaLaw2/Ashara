@@ -517,11 +517,20 @@ export class SimulatedProcess {
     }
   }
 
-  /** A process that died or was SIGTERMed is restarted before anything else is asked of it. */
+  /**
+   * A process that died or was SIGTERMed is restarted before anything else is asked of it, and so is
+   * each restarted one that died in its own startup: a supervisor restarts until a process is up,
+   * and a dead process runs no cycle. The run's fault budget bounds the restarts.
+   */
   async recover(current: Live): Promise<void> {
-    if (current.handle.fatal !== null) this.parts.state.trace.push(`fatal exit: ${current.handle.fatal.split(":")[0]}`);
-    if (current.handle.dead) await this.restart(current, current.handle.fatal === null ? "a crash" : "a fatal exit");
-    else if (current.handle.sigtermed) await this.restart(current, "a SIGTERM");
+    const state = this.parts.state;
+    const ended = (live: Live | null): live is Live => live !== null && (live.handle.dead || live.handle.sigtermed);
+    for (let live: Live | null = current; ended(live); live = state.live) {
+      const { handle } = live;
+      if (handle.fatal !== null) state.trace.push(`fatal exit: ${handle.fatal.split(":")[0]}`);
+      if (handle.dead) await this.restart(live, handle.fatal === null ? "a crash" : "a fatal exit");
+      else await this.restart(live, "a SIGTERM");
+    }
   }
 
   /**

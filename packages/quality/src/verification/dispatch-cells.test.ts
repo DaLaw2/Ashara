@@ -29,6 +29,7 @@ function cells(created: CellSpec[], tornDown: EventSubject[]): DispatchCells {
         },
       },
       instance: "instance-7",
+      shutdownSignal: new AbortController().signal,
     },
     attemptPolicy: { perCommandTimeoutSeconds: 42 },
     images: {

@@ -377,6 +377,7 @@ async function realSweepDeps(
     cells: {
       substrate: { probeSubstrate: async () => ({ version: "5", rootless: true }), createCell: async (spec) => hostCell(spec.mount.hostPath) },
       instance: "test",
+      shutdownSignal: new AbortController().signal,
     },
     attemptPolicy: { perCommandTimeoutSeconds: 30 },
     environment: {

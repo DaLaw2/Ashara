@@ -169,7 +169,10 @@ export class ContinuousRunner implements CycleRunner {
         if (this.wakePending) continue;
         await this.waitForWakeOrTimeout(this.config.idleIntervalMs, signal);
       } catch (e) {
-        // eslint-disable-next-line ashara/catch-continue -- best effort: the supervisor loop: a failed halted cycle is counted in consecutiveErrors, backs off, and the next one re-reads the client's stops
+        if (signal.aborted) {
+          this.logger.warn("delivery.halted-cycle-interrupted", "the halted cycle ended unfinished: the process is shutting down, and the next process reads the client's stops again", {}, e);
+          return;
+        }
         consecutiveErrors += 1;
         this.logger.error(
           "delivery.halted-cycle-error",

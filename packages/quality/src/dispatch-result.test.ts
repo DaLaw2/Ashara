@@ -1,7 +1,9 @@
 import { describe, expect, expectTypeOf, test } from "vitest";
+import { CellExecInterrupted } from "@ashara/execution-infra";
 import { createWorkItemId, wrapError } from "@ashara/shared";
 import { recordingLogger } from "@ashara/shared/testing";
-import { EXECUTION_STATUSES, NO_AGENT, environmentBlocked } from "./dispatch-result.js";
+import { EXECUTION_STATUSES, NO_AGENT, asharaBlocked, environmentBlocked, mainRunBlocked, thrownBlocked } from "./dispatch-result.js";
+import { VerificationInfrastructureFault } from "./fault-class.js";
 import type { ExecutionResult } from "./dispatch-result.js";
 
 describe("EXECUTION_STATUSES", () => {
@@ -41,5 +43,22 @@ describe("environmentBlocked", () => {
         expect.objectContaining({ message: expect.stringContaining("cannot connect to the socket") }),
       ],
     });
+  });
+});
+
+describe("a stage the shutdown interrupted in a cell", () => {
+  const interrupted = new CellExecInterrupted("cell-1", ["sh", "-c", "make test"], "while it ran", new Error("SIGTERM"));
+
+  test("is interrupted, never blocked or failed, however the stage's catch reports the throw", () => {
+    const task = { id: createWorkItemId(), attempt: 2 };
+    const logger = recordingLogger();
+    const results = [
+      thrownBlocked(task, "s1", "substrateGate", interrupted, { step: "substrate gate run", cell: "CI cell" }, NO_AGENT, undefined, logger),
+      mainRunBlocked(task, "s1", interrupted, NO_AGENT, undefined, logger, "checkRedRun", "red run on the baseline"),
+      asharaBlocked(task, "s1", "postMergeCheckRun", new VerificationInfrastructureFault(task.id, "run_checks", { cause: interrupted }), NO_AGENT, undefined, logger),
+    ];
+    expect(results.map((result) => result.status)).toEqual(["interrupted", "interrupted", "interrupted"]);
+    expect(results.every((result) => result.attempt === 2 && result.detail.includes("interrupted by shutdown"))).toBe(true);
+    expect(logger.records.filter((r) => r.event === "quality.task-blocked")).toEqual([]);
   });
 });

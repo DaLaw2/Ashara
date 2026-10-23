@@ -139,9 +139,9 @@ describe("environment image build", () => {
       instance: testCellInstance(),
       mount: { hostPath: workspace },
     });
-    const recipe = await cell.exec(["cat", "/opt/ctx/environment/recipe.txt"], { timeoutSeconds: 30 });
+    const recipe = await cell.exec(["cat", "/opt/ctx/environment/recipe.txt"], { signal: new AbortController().signal, timeoutSeconds: 30 });
     expect(recipe).toMatchObject({ exitCode: 0, stdout: "recipe content\n" });
-    const listing = await cell.exec(["find", "/opt/ctx", "-type", "f"], { timeoutSeconds: 30 });
+    const listing = await cell.exec(["find", "/opt/ctx", "-type", "f"], { signal: new AbortController().signal, timeoutSeconds: 30 });
     expect(listing.stdout.split("\n").filter((line) => line !== "").sort()).toEqual([
       "/opt/ctx/environment/Containerfile",
       "/opt/ctx/environment/environment.toml",

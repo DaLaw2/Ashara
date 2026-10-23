@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { Cell, CellSpec, CurrentEnvironment, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
-import { WorktreeCommitFailed } from "@ashara/execution-infra";
+import type { Cell, CellExecInterrupted, CellSpec, CurrentEnvironment, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
+import { WorktreeCommitFailed, cellExecInterruptedOf } from "@ashara/execution-infra";
 import type { PreCallRefusal } from "@ashara/finance";
 import type { ErrorLayer, Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/workplace";
@@ -165,6 +165,39 @@ export function environmentBlocked(block: EnvironmentBlock, eventSink: Execution
   };
 }
 
+/**
+ * A stage the shutdown stopped by interrupting a command in a cell: no verdict was reached, so the
+ * dispatch is neither failed nor blocked but interrupted (InterruptedResult), its item requeued
+ * with its dispatch refunded.
+ */
+function interruptedInCell(
+  task: DispatchRef,
+  sessionId: string,
+  stage: EnvironmentStage,
+  interrupted: CellExecInterrupted,
+  agent: AgentPart,
+  eventSink: ExecutionEventSink | undefined,
+  logger: Logger,
+): ExecutionResult {
+  const turns = agent.outcome === null ? 0 : agent.outcome.turnsUsed;
+  const summary = `stage ${stage} of task ${task.id} interrupted by shutdown in a cell: ${interrupted.message}; ${describeAgentWork(agent.agentWork)}`;
+  logger.info("quality.stage-interrupted", summary, { taskId: task.id, attempt: task.attempt, stage, cellId: interrupted.cellId });
+  eventSink?.emit({ event: "task_interrupted", taskId: task.id, attempt: task.attempt, turns });
+  return {
+    status: "interrupted",
+    detail: summary,
+    outcome: agent.outcome,
+    sessionId,
+    attempt: task.attempt,
+    errorEnvelope: {
+      outcome: "blocked",
+      summary,
+      chain: wrapError("development", stage, interrupted, { taskId: task.id, cellId: interrupted.cellId }),
+      ...(agent.outcome !== null ? { agentOutput: outcomeRecord(agent.outcome) } : {}),
+    },
+  };
+}
+
 /** An environment block for a typed substrate error raised at `stage`. */
 export function substrateBlocked(
   task: DispatchRef,
@@ -213,6 +246,8 @@ export function asharaBlocked(
   logger: Logger,
   chain?: ErrorLayer,
 ): ExecutionResult {
+  const interrupted = cellExecInterruptedOf(fault);
+  if (interrupted !== null) return interruptedInCell(task, sessionId, stage, interrupted, agent, eventSink, logger);
   const unavailable = asharaUnavailableOf(fault);
   return environmentBlocked(
     {
@@ -246,6 +281,8 @@ export function thrownBlocked(
   eventSink: ExecutionEventSink | undefined,
   logger: Logger,
 ): ExecutionResult {
+  const interrupted = cellExecInterruptedOf(e);
+  if (interrupted !== null) return interruptedInCell(task, sessionId, stage, interrupted, agent, eventSink, logger);
   const fault = thrownFaultOf(e);
   if (fault.class === "substrate") return substrateBlocked(task, sessionId, stage, fault.error, where.cell, agent, eventSink, logger);
   const asharaFault =
@@ -272,6 +309,8 @@ export function mainRunBlocked(
   stage: Extract<EnvironmentStage, "checkRedRun" | "deliveredCheckRun">,
   step: string,
 ): ExecutionResult {
+  const interrupted = cellExecInterruptedOf(e);
+  if (interrupted !== null) return interruptedInCell(task, sessionId, stage, interrupted, agent, eventSink, logger);
   const environmentFailure = environmentErrorOf(e);
   if (environmentFailure !== null) return substrateBlocked(task, sessionId, stage, environmentFailure, "CI cell", agent, eventSink, logger);
   return asharaBlocked(task, sessionId, stage, new VerificationInfrastructureFault(task.id, step, { cause: e }), agent, eventSink, logger);
@@ -418,6 +457,8 @@ export interface VerificationCells {
   readonly substrate: CellSubstrate;
   /** The ashara.instance label of every cell this process creates; reconcileOrphans selects on it. */
   readonly instance: string;
+  /** The process's shutdown: every command run in one of these cells is interrupted by it (CellExecInterrupted). */
+  readonly shutdownSignal: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------

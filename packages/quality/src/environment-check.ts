@@ -193,7 +193,7 @@ export function runFoundationBuild(
   definition: EnvironmentDefinition,
   timeoutSeconds: number,
 ): Promise<EnvironmentTestRun> {
-  return withCheckoutCell(scope, "foundation-build", role, imageRef, commit, (cell) => runEnvironmentCommand(cell, definition.build, timeoutSeconds));
+  return withCheckoutCell(scope, "foundation-build", role, imageRef, commit, (cell) => runEnvironmentCommand(cell, definition.build, timeoutSeconds, scope.signal));
 }
 
 /**
@@ -211,9 +211,9 @@ export function runPostMergeEnvironmentCommands(
   timeoutSeconds: number,
 ): Promise<EnvironmentCommandsRun> {
   return withCheckoutCell(scope, "verify", role, tested.imageRef, commit, async (cell, repo): Promise<EnvironmentCommandsRun> => {
-    const build = await runEnvironmentCommand(cell, tested.definition.build, timeoutSeconds);
+    const build = await runEnvironmentCommand(cell, tested.definition.build, timeoutSeconds, scope.signal);
     if (!environmentBuildPassed(build)) return { kind: "build_failed", build };
-    const test = await runEnvironmentCommand(cell, tested.definition.test, timeoutSeconds);
+    const test = await runEnvironmentCommand(cell, tested.definition.test, timeoutSeconds, scope.signal);
     return { kind: "ran", build, test, leftOver: await leftOverPaths(repo) };
   });
 }

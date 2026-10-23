@@ -159,6 +159,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
       substrate: scriptedSubstrate(root),
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
       instance: testCellInstance(),
+      shutdownSignal: new AbortController().signal,
     },
     llm: gateway,
     staffing: { widerModel: () => null, staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },

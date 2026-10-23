@@ -149,7 +149,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A shared notes file", assumptions: [], interfaceEntries: [] }) },
-    cells: { substrate, baseCell: base, instance: testCellInstance() },
+    cells: { substrate, baseCell: base, instance: testCellInstance(), shutdownSignal: new AbortController().signal },
     llm: gateway,
     staffing: {
       widerModel: () => null,

@@ -49,6 +49,7 @@ describe("FoundationGate", () => {
       repo: d.repo,
       targetProjectPath: target,
       checkoutDir: (purpose) => join(root, "checkouts", purpose),
+      signal: new AbortController().signal,
       images: {
         build: async () => {
           throw new Error("no image build here");

@@ -49,23 +49,28 @@ export interface CellBackend {
   listDirectory(path: string, depth: number): Promise<ElidedText>;
   /** Extended regular expression, recursive under `path`; lines are "<path>:<line>:<text>". */
   search(pattern: string, path: string): Promise<ElidedText>;
-  /** `sh -c <command>` under `timeout`; the result is the command's, whatever its exit code. */
+  /**
+   * `sh -c <command>` under `timeout`; the result is the command's, whatever its exit code. The
+   * backend's signal aborting interrupts it, and it throws CellExecInterrupted with no result.
+   */
   run(command: string, timeoutSeconds: number): Promise<ExecResult>;
 }
 
 interface CellBackendOptions {
   /** Timeout for the file tools (read, write, list, search). */
   readonly toolTimeoutSeconds: number;
+  /** Every exec of the backend takes it: its abort interrupts the tool (CellExecInterrupted). */
+  readonly signal: AbortSignal;
 }
 
 // `"$1"` is the path argument, never interpolated into the script.
 const WRITE_SCRIPT = 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"';
 
 export function createCellBackend(cell: Pick<Cell, "exec">, options: CellBackendOptions): CellBackend {
-  const timeoutSeconds = options.toolTimeoutSeconds;
+  const { signal, toolTimeoutSeconds: timeoutSeconds } = options;
 
   async function tool(name: string, argv: readonly string[], okExitCodes: readonly number[], stdin?: string): Promise<ExecResult> {
-    const result = await cell.exec(argv, { timeoutSeconds, ...(stdin === undefined ? {} : { stdin }) });
+    const result = await cell.exec(argv, { timeoutSeconds, signal, ...(stdin === undefined ? {} : { stdin }) });
     if (result.timedOut || result.exitCode === null || !okExitCodes.includes(result.exitCode)) {
       throw new CellToolFailed(name, argv, result.exitCode, result.stderr, result.timedOut);
     }
@@ -107,7 +112,7 @@ export function createCellBackend(cell: Pick<Cell, "exec">, options: CellBackend
       if (command.trim() === "") throw new InvalidCellRequest("run", ["command must not be empty"]);
       // No setsid: it would move the command out of timeout's process group, and timeout's
       // group kill is what reaches background children when the time runs out.
-      return cell.exec(["sh", "-c", command], { timeoutSeconds: runTimeoutSeconds });
+      return cell.exec(["sh", "-c", command], { timeoutSeconds: runTimeoutSeconds, signal });
     },
   };
 }

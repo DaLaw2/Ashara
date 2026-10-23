@@ -1,6 +1,6 @@
 import type { ModelMessage, ToolResultPart } from "ai";
 import type { CellBackend } from "@ashara/execution-infra";
-import { ContextBudgetExceeded, PreCallRefusal } from "@ashara/finance";
+import { ContextBudgetExceeded, PreCallRefusal, modelCallAbortedOf } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult } from "@ashara/finance";
 import { describeErrorChain, serializeError } from "@ashara/shared";
 import type { Clock } from "@ashara/shared";
@@ -208,8 +208,10 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     } catch (error) {
       const refusal = preCallRefusalOf(error);
       const overflow = contextBudgetBreachOf(error);
-      // A refused request, or one the window guard stopped, was never sent, so it cost nothing: it is not an unmeasured turn.
-      const unsent = refusal !== null || overflow?.context.breach.source === "preflight";
+      // A refused request, one the window guard stopped, or one aborted before it was sent (no
+      // llm_calls row exists) cost nothing: it is not an unmeasured turn. One aborted in flight was
+      // sent, and its row with no usage is counted at its estimate, so it stays unmeasured here.
+      const unsent = refusal !== null || overflow?.context.breach.source === "preflight" || modelCallAbortedOf(error)?.at.stage === "before-send";
       const serialized = serializeError(error);
       if (!unsent) costs.addUnknown(turn, `the call failed before returning a cost (${serialized.name})`);
       const failed = await record({ kind: "turn_failed", at: clock.now(), turn, error: serialized });
@@ -337,6 +339,21 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
           detail:
             `turn ${turn}: the model disputed check ${JSON.stringify(execution.checkName)}` +
             `${execution.ofTask === null ? "" : ` of merged task ${execution.ofTask}`}: ${execution.reason}`,
+        });
+      }
+      // The shutdown during a tool call ends the attempt as cancelled, whatever the call returned: an
+      // interrupted command has no outcome, and none is recorded for it or shown to the model.
+      if (execution.kind === "interrupted" || signal.aborted) {
+        const stopped = interruption();
+        if (stopped !== null) return conclude(stopped);
+      }
+      if (execution.kind === "interrupted") {
+        // Interrupted by a signal other than the attempt's: nothing the model can act on, and no outcome.
+        return conclude({
+          kind: "environment_failure",
+          source: "cell",
+          error: execution.error,
+          detail: `turn ${turn}: ${execution.toolName} was interrupted in the cell, not by this attempt's signal: ${execution.error.message}`,
         });
       }
       if (execution.kind === "environment_failure") {

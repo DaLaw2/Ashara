@@ -52,6 +52,7 @@ import {
   PodmanSubstrate,
   buildEnvironmentImage,
   canonicalizeAllowingMissing,
+  cellExecInterruptedOf,
   cellInstanceFor,
   loadBaseCell,
   pruneEnvironmentImages,
@@ -392,7 +393,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     prune: (projectId, keepVersion) => pruneEnvironmentImages(cellSubstrate, projectId, keepVersion),
   };
 
-  const verificationCells = { substrate: cellSubstrate, instance: cellInstance };
+  const verificationCells = { substrate: cellSubstrate, instance: cellInstance, shutdownSignal: abortController.signal };
   const environmentStatements: EnvironmentStatementStore = {
     record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
     forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
@@ -419,7 +420,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     knowledgeSource,
     eventSink: devEventSink,
     intentSource,
-    cells: { substrate: cellSubstrate, baseCell, instance: cellInstance },
+    cells: { ...verificationCells, baseCell },
     llm: modelCalls,
     staffing,
     attemptPolicy: ATTEMPT_POLICY,
@@ -440,10 +441,10 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
   });
 
   // One subject's fault in a cycle step is contained to it and kept in step_faults; a spend-cap
-  // refusal escapes to the cycle, which halts at the cap (CoreLoop.step), and so does a model call the
-  // shutdown aborted, which is no fault of its subject's: the cycle ends on it, and the subject is
-  // read afresh after the restart.
-  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null || modelCallAbortedOf(error) !== null, logger);
+  // refusal escapes to the cycle, which halts at the cap (CoreLoop.step), and so do a model call the
+  // shutdown aborted and a command in a cell it interrupted, neither a fault of its subject's: the
+  // cycle ends on it, and the subject is read afresh after the restart.
+  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null || modelCallAbortedOf(error) !== null || cellExecInterruptedOf(error) !== null, logger);
   const coreLoopDeps = composeCoreLoopDeps({
     db,
     config: config.coreLoop,

@@ -35,8 +35,8 @@ export function summarizeProbes(verdicts: readonly ProbeVerdict[]): { readonly e
 const PROBE_TIMEOUT_SECONDS = 30;
 
 /** Shell builtins only, so any image with a POSIX sh can be probed. */
-async function inCell(cell: Cell, script: string, args: readonly string[] = [], stdin?: string): Promise<ExecResult> {
-  return cell.exec(["sh", "-c", script, "ashara-probe", ...args], { timeoutSeconds: PROBE_TIMEOUT_SECONDS, stdin });
+async function inCell(cell: Cell, signal: AbortSignal, script: string, args: readonly string[] = [], stdin?: string): Promise<ExecResult> {
+  return cell.exec(["sh", "-c", script, "ashara-probe", ...args], { timeoutSeconds: PROBE_TIMEOUT_SECONDS, signal, stdin });
 }
 
 function unobserved(probe: string, result: ExecResult): ProbeVerdict {
@@ -60,9 +60,9 @@ const CGROUP_SCRIPT = [
  * its cgroup.controllers does not list, shows nothing either way, so with no mismatch among those
  * observed the probe is unverifiable, never held and never breached for a cause it did not see.
  */
-export async function probeResourceCaps(cell: Cell, limits: CellResourceLimits): Promise<ProbeVerdict> {
+export async function probeResourceCaps(cell: Cell, limits: CellResourceLimits, signal: AbortSignal): Promise<ProbeVerdict> {
   const probe = "resource caps";
-  const result = await inCell(cell, CGROUP_SCRIPT);
+  const result = await inCell(cell, signal, CGROUP_SCRIPT);
   if (result.exitCode !== 0) return unobserved(probe, result);
   const seen = new Map(
     result.stdout
@@ -133,7 +133,7 @@ const CREDENTIAL_SCRIPT = [
 ].join("\n");
 
 /** No credential path is readable in the cell, and no credential value appears in its files or environments. */
-export async function probeCredentialRead(cell: Cell, canaries: CredentialCanaries): Promise<ProbeVerdict> {
+export async function probeCredentialRead(cell: Cell, canaries: CredentialCanaries, signal: AbortSignal): Promise<ProbeVerdict> {
   const probe = "credential read";
   const unsendable = canaries.paths.filter((path) => path === "" || /[\r\n]/.test(path));
   const problems = [
@@ -143,7 +143,7 @@ export async function probeCredentialRead(cell: Cell, canaries: CredentialCanari
     ...(canaries.paths.length === 0 && canaries.values.length === 0 ? ["no path and no value to probe"] : []),
   ];
   if (problems.length > 0) throw new InvalidCellRequest(probe, problems);
-  const result = await inCell(cell, CREDENTIAL_SCRIPT, [], canaries.paths.map((path) => `${path}\n`).join(""));
+  const result = await inCell(cell, signal, CREDENTIAL_SCRIPT, [], canaries.paths.map((path) => `${path}\n`).join(""));
   if (result.exitCode !== 0) return unobserved(probe, result);
   // The script's own report lines name the probed paths, which a value may contain: they are not searched.
   const headers = new Set(canaries.paths.flatMap((path) => ["readable", "present", "absent"].map((state) => `path ${path} ${state}`)));
@@ -209,9 +209,9 @@ const ROUTES_LINE = /^routes: (\d+)$/;
  * connected, with loopback the only interface and no route as supporting evidence. An image with no
  * mechanism, or a cell whose interfaces or routes could not be read, is unverifiable.
  */
-export async function probeOutboundHost(cell: Cell, host: string): Promise<ProbeVerdict> {
+export async function probeOutboundHost(cell: Cell, host: string, signal: AbortSignal): Promise<ProbeVerdict> {
   const probe = "outbound host";
-  const result = await inCell(cell, OUTBOUND_SCRIPT, [host, String(OUTBOUND_PORT), String(CONNECT_TIMEOUT_SECONDS)]);
+  const result = await inCell(cell, signal, OUTBOUND_SCRIPT, [host, String(OUTBOUND_PORT), String(CONNECT_TIMEOUT_SECONDS)]);
   if (result.exitCode !== 0) return unobserved(probe, result);
   const lines = result.stdout.split("\n");
   const line = (prefix: string): string | null => lines.find((entry) => entry.startsWith(prefix)) ?? null;

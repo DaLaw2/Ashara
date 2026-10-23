@@ -7,6 +7,7 @@ import type { Logger } from "@ashara/shared";
 import { cellLimitsSchema, readCellLimits, runLimitArgs, type CellResourceLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
+  CellExecInterrupted,
   CellStartFailed,
   CellTeardownFailed,
   HostCapacityUnreadable,
@@ -275,6 +276,11 @@ export interface CellSpec {
 interface ExecOptions {
   readonly stdin?: string | Buffer;
   readonly timeoutSeconds: number;
+  /**
+   * Required, so no exec outlives the shutdown: its abort kills the podman exec (and any sweep that
+   * follows it) and the exec throws CellExecInterrupted, never a result.
+   */
+  readonly signal: AbortSignal;
   /** Workspace-relative working directory; policy default is the workspace root. */
   readonly cwd?: string;
 }
@@ -456,6 +462,8 @@ function buildRunArgs(
 class PodmanCell implements Cell {
   private tornDown = false;
   private containerRemoved = false;
+  /** An exec its signal interrupted: what it started may still run, and only teardown ends it. */
+  private interrupted: CellExecInterrupted | null = null;
   private lane: Promise<void> = Promise.resolve();
 
   constructor(
@@ -475,6 +483,7 @@ class PodmanCell implements Cell {
       issues.push(`timeoutSeconds must be a positive integer, got ${options.timeoutSeconds}`);
     }
     if (issues.length > 0) throw new InvalidCellRequest("exec", issues);
+    if (options.signal.aborted) throw new CellExecInterrupted(this.id, argv, "before it started", options.signal.reason);
     // One exec at a time: each one's sweep kills every process in the cell outside the init's
     // session, which would include a concurrent exec's. The lane only orders; each caller gets its
     // own exec's outcome from `run`.
@@ -515,6 +524,18 @@ class PodmanCell implements Cell {
 
   private async execUnlogged(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
     if (this.tornDown || this.containerRemoved) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
+    // Queued behind an exec the shutdown ended: this one never starts either.
+    if (options.signal.aborted) throw new CellExecInterrupted(this.id, argv, "before it started", options.signal.reason);
+    if (this.interrupted !== null) {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        null,
+        "",
+        // Named, not chained: this exec was not interrupted, so it must not read as an interruption.
+        `an earlier exec in this cell was interrupted (${this.interrupted.message}) and what it started may still run; only the cell's teardown ends it`,
+      );
+    }
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
     const argvEnvironment = [`${ARGC_VARIABLE}=${argv.length}`, ...argv.map((arg, i) => `${ARG_VARIABLE_PREFIX}${i}=${arg}`)];
@@ -531,16 +552,21 @@ class PodmanCell implements Cell {
         stdin: options.stdin,
         killAfterMs: execKillAfterMs(options.timeoutSeconds),
         statusChannel: true,
+        signal: options.signal,
       });
     } catch (err) {
+      this.throwIfInterrupted(argv, options.signal);
       throw new CellExecFailed(this.id, argv, null, "", "the substrate could not run podman exec", { cause: err });
     }
+    // Read from the signal, not the result: an abort that lands as the command ends still leaves
+    // no outcome this exec may report.
+    this.throwIfInterrupted(argv, options.signal);
     const elapsedMs = Date.now() - startedAt;
 
     if (result.killedByHost) {
       // The podman client hung past every in-cell bound, so the wrapper may never have swept:
       // the cell is swept from a fresh exec before the timeout is reported.
-      await this.sweep(argv, "the host backstop ended the exec");
+      await this.sweep(argv, "the host backstop ended the exec", options.signal);
       return { ...streams(result), exitCode: null, timedOut: true, statusLost: false };
     }
     if (result.exitCode === null) {
@@ -570,8 +596,9 @@ class PodmanCell implements Cell {
         );
       }
       try {
-        await this.sweep(argv, unreported);
+        await this.sweep(argv, unreported, options.signal);
       } catch (probe) {
+        if (probe instanceof CellExecInterrupted) throw probe;
         throw new CellExecFailed(
           this.id,
           argv,
@@ -631,18 +658,27 @@ class PodmanCell implements Cell {
     return { ...streams(result), exitCode, timedOut: false, statusLost: false };
   }
 
+  /** Throws CellExecInterrupted, and marks the cell interrupted, once `signal` has aborted. */
+  private throwIfInterrupted(argv: readonly string[], signal: AbortSignal): void {
+    if (!signal.aborted) return;
+    this.interrupted = new CellExecInterrupted(this.id, argv, "while it ran", signal.reason);
+    throw this.interrupted;
+  }
+
   /**
    * Kills every process outside the init's session from an exec of its own; throws unless none is
    * left. It is the cell's health probe too: it passes only in a cell that answers an exec. `why`
-   * names what led to the sweep, for the error.
+   * names what led to the sweep, for the error. The exec's signal ends the sweep as it ends the exec.
    */
-  private async sweep(argv: readonly string[], why: string): Promise<void> {
+  private async sweep(argv: readonly string[], why: string, signal: AbortSignal): Promise<void> {
     let result: ProcessResult;
     try {
-      result = await this.substrate.run(["exec", this.id, "sh", "-c", SWEEP_SCRIPT, "ashara-sweep"]);
+      result = await this.substrate.run(["exec", this.id, "sh", "-c", SWEEP_SCRIPT, "ashara-sweep"], { killAfterMs: PODMAN_ADMIN_TIMEOUT_MS, signal });
     } catch (err) {
+      this.throwIfInterrupted(argv, signal);
       throw new CellExecFailed(this.id, argv, null, "", `${why}, and the cell could not be swept`, { cause: err });
     }
+    this.throwIfInterrupted(argv, signal);
     if (result.exitCode !== 0) {
       throw new CellExecFailed(
         this.id,
@@ -757,7 +793,7 @@ export class PodmanSubstrate {
    */
   async run(
     args: readonly string[],
-    extra: Pick<ProcessRequest, "stdin" | "killAfterMs" | "statusChannel"> = { killAfterMs: PODMAN_ADMIN_TIMEOUT_MS },
+    extra: Pick<ProcessRequest, "stdin" | "killAfterMs" | "statusChannel" | "signal"> = { killAfterMs: PODMAN_ADMIN_TIMEOUT_MS },
   ): Promise<ProcessResult> {
     try {
       return await this.runner({

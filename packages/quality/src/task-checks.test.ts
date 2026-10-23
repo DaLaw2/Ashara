@@ -254,6 +254,7 @@ describe("a check run that changes a tracked file of the checkout", () => {
       createCell: async (spec) => hostCell(spec.hostPath),
       teardownCell: async () => {},
       timeoutSeconds: 30,
+      signal: new AbortController().signal,
     };
     return { root, commit, cells };
   }

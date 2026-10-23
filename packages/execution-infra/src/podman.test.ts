@@ -9,6 +9,7 @@ import { createCellBackend } from "./cell-backend.js";
 import { readCellLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
+  CellExecInterrupted,
   CellLimitsInvalid,
   CellStartFailed,
   CellTeardownFailed,
@@ -19,6 +20,7 @@ import {
   ProcessSpawnFailed,
   SubstrateUnavailable,
   TeardownIncomplete,
+  cellExecInterruptedOf,
 } from "./errors.js";
 import { PodmanSubstrate, sweepOver, type CellSpec } from "./podman.js";
 import type { ProcessRequest, ProcessResult } from "./process-runner.js";
@@ -297,7 +299,7 @@ describe("PodmanSubstrate argv", () => {
   it("execs argv under timeout and the status wrapper in the workspace", async () => {
     const { requests, substrate } = recorder([ok(ID), ran("out"), ran("", 124)]);
     const cell = await substrate.createCell(spec);
-    const result = await cell.exec(["cat", "--", "./a"], { timeoutSeconds: 30, stdin: "in", cwd: "src" });
+    const result = await cell.exec(["cat", "--", "./a"], { signal: new AbortController().signal, timeoutSeconds: 30, stdin: "in", cwd: "src" });
     const args = requests[1]?.args ?? [];
     // argv travels in the wrapper's environment, never on its command line.
     expect(args.slice(0, 14)).toEqual([
@@ -314,7 +316,7 @@ describe("PodmanSubstrate argv", () => {
     expect(result).toMatchObject({ exitCode: 0, stdout: "out", timedOut: false });
 
     // 124 the command reported itself is its own exit code, not a timeout.
-    const early = await cell.exec(["sh", "-c", "exit 124"], { timeoutSeconds: 30 });
+    const early = await cell.exec(["sh", "-c", "exit 124"], { signal: new AbortController().signal, timeoutSeconds: 30 });
     expect(early).toMatchObject({ exitCode: 124, timedOut: false });
   });
 
@@ -325,8 +327,8 @@ describe("PodmanSubstrate argv", () => {
     const cell = await substrate.createCell(spec);
 
     await logger.scope({ taskId: "task-1", attempt: 2, trace: "new" }, async () => {
-      await cell.exec(["deploy", "--token=argv-secret"], { timeoutSeconds: 30 });
-      await cell.exec(["deploy", "--token=argv-secret"], { timeoutSeconds: 30 }).catch((e: unknown) => e);
+      await cell.exec(["deploy", "--token=argv-secret"], { signal: new AbortController().signal, timeoutSeconds: 30 });
+      await cell.exec(["deploy", "--token=argv-secret"], { signal: new AbortController().signal, timeoutSeconds: 30 }).catch((e: unknown) => e);
     });
 
     const execs = logger.records.filter((r) => r.event === "execution-infra.cell-exec");
@@ -351,9 +353,9 @@ describe("PodmanSubstrate argv", () => {
       { ...ok("", 0), statusReport: "zero\n" },
     ]);
     const cell = await substrate.createCell(spec);
-    expect(await cell.exec(["sh", "-c", "exit 125"], { timeoutSeconds: 1 })).toMatchObject({ exitCode: 125, timedOut: false });
+    expect(await cell.exec(["sh", "-c", "exit 125"], { signal: new AbortController().signal, timeoutSeconds: 1 })).toMatchObject({ exitCode: 125, timedOut: false });
 
-    const cellLost = await cell.exec(["true"], { timeoutSeconds: 1 }).catch((e: unknown) => e);
+    const cellLost = await cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 }).catch((e: unknown) => e);
     expect(cellLost).toBeInstanceOf(CellExecFailed);
     if (!(cellLost instanceof CellExecFailed)) return;
     expect(cellLost).toMatchObject({ exitCode: 137, stderr: "partial err", argv: ["true"] });
@@ -361,8 +363,8 @@ describe("PodmanSubstrate argv", () => {
     expect(requests[3]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
     expect(requests[3]?.args[4]).toContain("ashara_sweep");
 
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/exited 3 in the cell but podman exec exited 125/);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/exited 3 in the cell but podman exec exited 125/);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
   });
 
   it("podman exec failing before the wrapper ran (125-127) is the substrate's failure even in a cell that would pass its probe", async () => {
@@ -370,7 +372,7 @@ describe("PodmanSubstrate argv", () => {
       // No probe response is queued: the verdict does not consult the cell, so a healthy one cannot turn it into statusLost.
       const { requests, substrate } = recorder([ok(ID), unreported(exitCode, "Error: OCI runtime error")]);
       const cell = await substrate.createCell(spec);
-      const failed = await cell.exec(["true"], { timeoutSeconds: 1 }).catch((e: unknown) => e);
+      const failed = await cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 }).catch((e: unknown) => e);
       expect(failed).toBeInstanceOf(CellExecFailed);
       if (!(failed instanceof CellExecFailed)) return;
       expect(failed).toMatchObject({ exitCode, stderr: "Error: OCI runtime error", argv: ["true"] });
@@ -383,7 +385,7 @@ describe("PodmanSubstrate argv", () => {
   it("an exit with no status report in a cell that passes its probe is the command's result, its status unknown", async () => {
     const { requests, substrate } = recorder([ok(ID), { ...unreported(137, "partial err"), stdout: "partial" }, ok("", 0)]);
     const cell = await substrate.createCell(spec);
-    const result = await cell.exec(["sh", "-c", "pkill -f marker"], { timeoutSeconds: 10 });
+    const result = await cell.exec(["sh", "-c", "pkill -f marker"], { signal: new AbortController().signal, timeoutSeconds: 10 });
     expect(result).toEqual({
       exitCode: null,
       stdout: "partial",
@@ -407,20 +409,20 @@ describe("PodmanSubstrate argv", () => {
       { ...ran("", 0), statusReport: "unswept zero\n" },
     ]);
     const cell = await substrate.createCell(spec);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/still alive after the wrapper's sweep/);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/cannot be told from the session of the cell's init.*not run/);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/could not run the command; the command was not run/);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/still alive after the wrapper's sweep/);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/cannot be told from the session of the cell's init.*not run/);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/could not run the command; the command was not run/);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
   });
 
   it("sweeps the cell from a fresh exec after the host backstop, and fails closed when that sweep fails", async () => {
     const hung: ProcessResult = { ...ok("", null), killedByHost: true, statusReport: "" };
     const { requests, substrate } = recorder([ok(ID), hung, ok("", 0), hung, ok("", 1)]);
     const cell = await substrate.createCell(spec);
-    expect(await cell.exec(["sleep", "99"], { timeoutSeconds: 1 })).toMatchObject({ exitCode: null, timedOut: true });
+    expect(await cell.exec(["sleep", "99"], { signal: new AbortController().signal, timeoutSeconds: 1 })).toMatchObject({ exitCode: null, timedOut: true });
     expect(requests[2]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
     expect(requests[2]?.args[4]).toContain("ashara_sweep");
-    await expect(cell.exec(["sleep", "99"], { timeoutSeconds: 1 })).rejects.toThrow(/sweeping the cell afterwards failed/);
+    await expect(cell.exec(["sleep", "99"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toThrow(/sweeping the cell afterwards failed/);
   });
 
   it("runs a cell's execs one at a time", async () => {
@@ -436,17 +438,55 @@ describe("PodmanSubstrate argv", () => {
     };
     const substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "/opt/podman", mountRoot: root, runner });
     const cell = await substrate.createCell(spec);
-    const results = await Promise.all([1, 2, 3].map(() => cell.exec(["true"], { timeoutSeconds: 1 })));
+    const results = await Promise.all([1, 2, 3].map(() => cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })));
     expect(results.map((r) => r.exitCode)).toEqual([0, 0, 0]);
     expect(most).toBe(1);
+  });
+
+  it("runs no podman exec once its signal has aborted, and throws the interruption with the signal's reason", async () => {
+    const { requests, substrate } = recorder([ok(ID)]);
+    const cell = await substrate.createCell(spec);
+    const shutdown = new AbortController();
+    shutdown.abort(new Error("SIGTERM"));
+    const thrown = await cell.exec(["true"], { signal: shutdown.signal, timeoutSeconds: 1 }).catch((e: unknown) => e);
+    expect(thrown).toBeInstanceOf(CellExecInterrupted);
+    expect(cellExecInterruptedOf(thrown)?.reason).toEqual(new Error("SIGTERM"));
+    expect(requests).toHaveLength(1);
+  });
+
+  it("hands podman exec its signal, reports its abort as an interruption, never a result, and refuses the cell's later execs", async () => {
+    const shutdown = new AbortController();
+    const requests: ProcessRequest[] = [];
+    const runner = async (request: ProcessRequest): Promise<ProcessResult> => {
+      requests.push(request);
+      if (request.args[0] !== "exec") return ok(ID);
+      // A podman exec the runner kills on abort: it ends by the signal, its wrapper never reporting.
+      return new Promise((resolve) => request.signal?.addEventListener("abort", () => resolve({ ...ok("", null), signal: "SIGKILL", statusReport: "" }), { once: true }));
+    };
+    const substrate = new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS });
+    const cell = await substrate.createCell(spec);
+    const running = cell.exec(["sleep", "3600"], { signal: shutdown.signal, timeoutSeconds: 3600 }).catch((e: unknown) => e);
+    // A queued exec never starts: the abort reaches it before its turn.
+    const queued = cell.exec(["true"], { signal: shutdown.signal, timeoutSeconds: 1 }).catch((e: unknown) => e);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(requests[1]?.signal).toBe(shutdown.signal);
+    shutdown.abort(new Error("SIGTERM"));
+    expect(await running).toBeInstanceOf(CellExecInterrupted);
+    expect(await queued).toBeInstanceOf(CellExecInterrupted);
+    expect(requests).toHaveLength(2);
+    // What the interrupted command started may still run: the cell takes no other exec, whatever its signal.
+    const later = await cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 }).catch((e: unknown) => e);
+    expect(later).toBeInstanceOf(CellExecFailed);
+    expect(cellExecInterruptedOf(later)).toBeNull();
+    expect(requests).toHaveLength(2);
   });
 
   it("refuses a malformed exec request before podman runs", async () => {
     const { requests, substrate } = recorder([ok(ID)]);
     const cell = await substrate.createCell(spec);
-    await expect(cell.exec(["true"], { timeoutSeconds: 0 })).rejects.toBeInstanceOf(InvalidCellRequest);
-    await expect(cell.exec(["-x"], { timeoutSeconds: 1 })).rejects.toBeInstanceOf(InvalidCellRequest);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1, cwd: "../x" })).rejects.toBeInstanceOf(PathOutsideWorkspace);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 0 })).rejects.toBeInstanceOf(InvalidCellRequest);
+    await expect(cell.exec(["-x"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toBeInstanceOf(InvalidCellRequest);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1, cwd: "../x" })).rejects.toBeInstanceOf(PathOutsideWorkspace);
     expect(requests).toHaveLength(1);
   });
 
@@ -459,7 +499,7 @@ describe("PodmanSubstrate argv", () => {
     // Still tracked after a failed teardown, so teardownAll retries it, and names what it could not remove.
     await expect(substrate.teardownAll()).rejects.toBeInstanceOf(TeardownIncomplete);
     expect(await substrate.teardownAll()).toEqual([ID]);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toBeInstanceOf(CellExecFailed);
+    await expect(cell.exec(["true"], { signal: new AbortController().signal, timeoutSeconds: 1 })).rejects.toBeInstanceOf(CellExecFailed);
   });
 
   it("reconciles by both labels, skips live cells, and leaves alone what a podman that ORs its filters lists with one label", async () => {
@@ -581,7 +621,7 @@ describe("CellBackend", () => {
 
   it("builds POSIX argv with workspace-relative paths after --", async () => {
     const { calls, cell } = fakeCell({ stdout: "./src/\n./src/a.ts\n" });
-    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10 });
+    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10, signal: new AbortController().signal });
     await backend.readFile("src/a.ts");
     await backend.writeFile("src/b.ts", "body");
     const listing = await backend.listDirectory(".", 2);
@@ -603,7 +643,7 @@ describe("CellBackend", () => {
     // Kept: "./b\n./a\n./sp" | 500 characters cut | "lit\n./d\n./c\n".
     const head = "./b\n./a\n./sp";
     const { cell } = fakeCell({ stdout: `${head}lit\n./d\n./c\n`, stdoutCut: { at: head.length, chars: 500 } });
-    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10 });
+    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10, signal: new AbortController().signal });
     expect(await backend.listDirectory(".", 1)).toEqual([
       { kind: "kept", text: "a\nb\n" },
       { kind: "cut", chars: 4 + 500 + 4 },
@@ -613,7 +653,7 @@ describe("CellBackend", () => {
 
   it("rejects absolute paths and '..' escapes before any exec", async () => {
     const { calls, cell } = fakeCell();
-    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10 });
+    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10, signal: new AbortController().signal });
     for (const path of ["/etc/passwd", "..", "../x", "a/../../x", "a/\0b"]) {
       await expect(backend.readFile(path)).rejects.toBeInstanceOf(PathOutsideWorkspace);
     }

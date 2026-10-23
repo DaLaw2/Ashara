@@ -28,7 +28,7 @@ afterAll(async () => {
 
 describe("environment-file write without the grant", () => {
   it("lands in the cell's tree, and the ownership gate keeps it from main", async () => {
-    const verdict = await probeEnvironmentWrite({ substrate, image: ALPINE_IMAGE, instance: testCellInstance(), workRoot: mountRoot });
+    const verdict = await probeEnvironmentWrite({ substrate, image: ALPINE_IMAGE, instance: testCellInstance(), workRoot: mountRoot, signal: new AbortController().signal });
 
     expect(verdict.evidence).toMatch(/^the in-cell write exited 0; the ownership gate returned environment_change \(/);
     expect(verdict.evidence).toContain("the probe runs no merge, so this verdict is all it observed");

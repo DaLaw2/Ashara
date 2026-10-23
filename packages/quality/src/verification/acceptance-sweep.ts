@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { CurrentEnvironment, EnvironmentImages } from "@ashara/execution-infra";
-import { checkoutsRoot, resolveCurrentEnvironment, targetRepo } from "@ashara/execution-infra";
+import { cellExecInterruptedOf, checkoutsRoot, resolveCurrentEnvironment, targetRepo } from "@ashara/execution-infra";
 import type { ProjectId } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import { createSessionId } from "@ashara/workplace";
@@ -178,6 +178,8 @@ export async function sweepMain(deps: MainSweepDeps, projectId: ProjectId, targe
       step = next;
     });
   } catch (e) {
+    // The shutdown stopped the sweep: no verdict and no fault, so it escapes to the cycle's containment.
+    if (cellExecInterruptedOf(e) !== null) throw e;
     const substrate = environmentErrorOf(e);
     if (substrate !== null) return { kind: "unrunnable", error: substrate };
     return { kind: "faulted", mainCommit: main, error: new AcceptanceSweepFault(projectId, step, { cause: e }) };
@@ -248,6 +250,7 @@ async function runSweep(
       cells.substrate.createCell({ image, project: projectId, task: label, role, instance: cells.instance, mount: { hostPath, shared: true } }),
     teardownCell: (cell) => deps.teardown.teardownCell({ projectId }, cell),
     timeoutSeconds: deps.attemptPolicy.perCommandTimeoutSeconds,
+    signal: cells.shutdownSignal,
   };
   const dir = join(checkoutsRoot(deps.config.workdirBase), `acceptance-${projectId}-${createSessionId()}`);
   const runs: readonly SuiteRun[] = await runSuitesOnCheckout(checkCells, RED_RUN_ROLE, environment.imageId, main, dir, suites);

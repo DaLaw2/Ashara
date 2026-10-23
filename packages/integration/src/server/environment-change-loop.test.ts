@@ -156,7 +156,7 @@ async function harness(name: string): Promise<Harness> {
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [], interfaceEntries: [] }) },
-    cells: { substrate, baseCell: base, instance: testCellInstance() },
+    cells: { substrate, baseCell: base, instance: testCellInstance(), shutdownSignal: new AbortController().signal },
     llm: gateway,
     staffing: {
       widerModel: () => null,

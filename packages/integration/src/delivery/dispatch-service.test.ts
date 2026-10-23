@@ -444,6 +444,7 @@ function serviceOn(
       substrate,
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
       instance: "test-instance",
+      shutdownSignal,
     },
     eventSink: { emit: (event) => void events.push(event) },
     llm: {

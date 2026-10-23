@@ -512,6 +512,8 @@ export interface CheckCells {
   readonly createCell: (spec: Pick<CellSpec, "image" | "role"> & { readonly hostPath: string }) => Promise<Cell>;
   readonly teardownCell: (cell: Cell) => Promise<void>;
   readonly timeoutSeconds: number;
+  /** The process's shutdown: a check it interrupts throws CellExecInterrupted, and is no run, passed or failed. */
+  readonly signal: AbortSignal;
 }
 
 /** One named set of checks run on a checkout: its files are written over it just before they run. */
@@ -571,7 +573,7 @@ export async function runSuitesOnCheckout(
       cell ??= await cells.createCell({ image, role, hostPath: dir });
       const runs: CheckRun[] = [];
       for (const check of suite.checks) {
-        const result = await cell.exec(["sh", "-c", check.command], { timeoutSeconds: cells.timeoutSeconds });
+        const result = await cell.exec(["sh", "-c", check.command], { timeoutSeconds: cells.timeoutSeconds, signal: cells.signal });
         runs.push({
           name: check.name,
           command: check.command,

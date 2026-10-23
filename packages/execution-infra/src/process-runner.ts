@@ -12,6 +12,8 @@ export interface ProcessRequest {
   readonly stdin?: string | Buffer;
   /** Host-side backstop: SIGKILL the child after this long. */
   readonly killAfterMs?: number;
+  /** Policy default: none. Its abort SIGKILLs the child; the caller reads the abort from the signal itself. */
+  readonly signal?: AbortSignal;
   readonly maxOutputBytes: number;
   /**
    * Policy default false. True opens a fourth pipe, the child's fd 3, read into `statusReport`:
@@ -178,6 +180,12 @@ export const spawnProcess: ProcessRunner = (request) =>
             child.kill("SIGKILL");
           }, request.killAfterMs);
 
+    const onAbort = (): void => {
+      child.kill("SIGKILL");
+    };
+    if (request.signal?.aborted === true) onAbort();
+    else request.signal?.addEventListener("abort", onAbort, { once: true });
+
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.stdin.on("error", (err: Error) => {
@@ -186,6 +194,7 @@ export const spawnProcess: ProcessRunner = (request) =>
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (timer) clearTimeout(timer);
+      request.signal?.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
       // eslint-disable-next-line no-restricted-syntax -- policy default: a spawn error without an errno code; the code is shown in messages only, no caller branches on it
@@ -194,6 +203,7 @@ export const spawnProcess: ProcessRunner = (request) =>
 
     child.on("close", (exitCode, signal) => {
       if (timer) clearTimeout(timer);
+      request.signal?.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
       const out = stdout.output();

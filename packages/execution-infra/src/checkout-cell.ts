@@ -56,11 +56,16 @@ export interface EnvironmentCheckScope {
   /** Creates a cell from `image` with the given role that mounts `hostPath` (its `.git` replaced by the cell's own repository). */
   readonly createCell: (spec: Pick<CellSpec, "image" | "role"> & { readonly hostPath: string }) => Promise<Cell>;
   readonly teardownCell: (cell: Cell) => Promise<void>;
+  /** The process's shutdown: every command the check runs in a cell is interrupted by it. */
+  readonly signal: AbortSignal;
 }
 
-/** `command` in `cell` by `sh -c`, its streams cut to TEST_LOG_CHARS with every cut counted. */
-export async function runEnvironmentCommand(cell: Cell, command: string, timeoutSeconds: number): Promise<EnvironmentTestRun> {
-  const result = await cell.exec(["sh", "-c", command], { timeoutSeconds });
+/**
+ * `command` in `cell` by `sh -c`, its streams cut to TEST_LOG_CHARS with every cut counted. `signal`
+ * aborting interrupts it: it throws CellExecInterrupted, never a run.
+ */
+export async function runEnvironmentCommand(cell: Cell, command: string, timeoutSeconds: number, signal: AbortSignal): Promise<EnvironmentTestRun> {
+  const result = await cell.exec(["sh", "-c", command], { timeoutSeconds, signal });
   return {
     command,
     exitCode: result.exitCode,
@@ -110,7 +115,7 @@ export function runProbeOnCheckout(
   probe: string,
   timeoutSeconds: number,
 ): Promise<EnvironmentTestRun> {
-  return withCheckoutCell(scope, purpose, role, imageRef, commit, (cell) => runEnvironmentCommand(cell, probe, timeoutSeconds));
+  return withCheckoutCell(scope, purpose, role, imageRef, commit, (cell) => runEnvironmentCommand(cell, probe, timeoutSeconds, scope.signal));
 }
 
 /**

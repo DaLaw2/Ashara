@@ -127,7 +127,7 @@ describe("runAttempt on a real cell", () => {
         },
         {
           llm: gateway,
-          cell: createCellBackend(cell, { toolTimeoutSeconds: 30 }),
+          cell: createCellBackend(cell, { toolTimeoutSeconds: 30, signal: new AbortController().signal }),
           clock: { now: () => Date.now() },
           records: { append: async (record) => void records.push(record) },
           signal: new AbortController().signal,

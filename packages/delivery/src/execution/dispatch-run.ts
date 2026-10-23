@@ -7,6 +7,7 @@ import { PlanningService, salvagedReason, failWorkItem, takeEvents, startWorkIte
 import { recoverFailedItem, recoverParkedFailedItem } from "../lifecycle/failure-recovery.js";
 import { recordFailedApproach } from "../acl/knowledge-acl.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
+import { cellExecInterruptedOf } from "../acl/execution-infra-acl.js";
 import { toRecordedOutcome } from "../acl/workplace-acl.js";
 import type { DispatchRunDeps, LoopCore, TaskResult } from "../types.js";
 import { blockedResult } from "../types.js";
@@ -15,7 +16,7 @@ import { findEpicId, resolveTargetProjectPath } from "../task-helpers.js";
 import { publishBestEffort } from "./audit-events.js";
 import { workBudgetGiveUp } from "./give-up-causes.js";
 import { asharaFaultOf, haltOnProjectRefusal } from "./halt-causes.js";
-import { routeAsGivenUp } from "./reopen-routes.js";
+import { routeAsGivenUp, routeAsRequeued } from "./reopen-routes.js";
 import type { ExecutionRoutingDeps } from "./routing-deps.js";
 import { routingDepsOf } from "./routing-deps.js";
 import type { RoutedExecution } from "./verdict-routing.js";
@@ -231,6 +232,13 @@ async function runCountedDispatch(run: CountedDispatch): Promise<TaskResult> {
       // requeued, since every re-dispatch meets the same refusal.
       await routeAsGivenUp(routingDeps, task.id, workBudgetGiveUp(refusal), "refund");
       return blockedResult(task.id, refusal.reason);
+    }
+    const interrupted = cellExecInterruptedOf(e);
+    if (interrupted !== null) {
+      // The shutdown stopped a command of the dispatch in a cell: no verdict and no fault, routed as
+      // an interrupted attempt is (verdict-routing's "interrupted").
+      await routeAsRequeued(routingDeps, { taskId: task.id, why: "a shutdown interrupted its dispatch in a cell", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
+      return { taskId: task.id, status: "interrupted", detail: interrupted.message };
     }
     // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
     // code): never the task's work, so its counted dispatch is refunded and no lesson is written.

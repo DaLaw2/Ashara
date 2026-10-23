@@ -122,7 +122,7 @@ describe("composeSweepers", () => {
   test("builds Quality's acceptance and terminal sweepers of main", () => {
     const sweepers = composeSweepers({
       config: { workdirBase: "/nonexistent-compose-core-loop" },
-      cells: { substrate: new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: "/nonexistent-compose-core-loop", runner: notExercised("runner") }), instance: "compose-core-loop-test" },
+      cells: { substrate: new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: "/nonexistent-compose-core-loop", runner: notExercised("runner") }), instance: "compose-core-loop-test", shutdownSignal: new AbortController().signal },
       attemptPolicy: { perCommandTimeoutSeconds: 30 },
       environment: {
         images: { build: notExercised("build"), prune: notExercised("prune") },
@@ -170,6 +170,7 @@ function dispatchComposition(): DispatchComposition {
       substrate: new PodmanSubstrate({ logger: recordingLogger(), podmanPath: "podman", mountRoot: tmpdir(), runner: notExercised("runner") }),
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
       instance: "compose-dispatch-test",
+      shutdownSignal: new AbortController().signal,
     },
     llm: { forCall: notExercised("forCall") },
     staffing: { widerModel: notExercised("widerModel"), staff: notExercised("staff") },

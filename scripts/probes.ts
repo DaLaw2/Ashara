@@ -40,6 +40,13 @@ class ProbesUsageError extends Error {
   }
 }
 
+class ProbesInterrupted extends Error {
+  constructor(readonly signalName: NodeJS.Signals) {
+    super(`the probe run was interrupted by ${signalName}`);
+    this.name = "ProbesInterrupted";
+  }
+}
+
 /** Names a cell sets for itself; a host value under one of them proves nothing about a leak. */
 const CELL_OWN_NAMES = new Set(["PATH", "HOME", "HOSTNAME", "TERM", "PWD", "OLDPWD", "SHLVL", "_", "LANG", "USER", "LOGNAME", "SHELL", "container"]);
 /** Shorter values match by coincidence. */
@@ -97,21 +104,25 @@ async function main(): Promise<void> {
       `memory ${limits.memoryBytes} bytes, ${limits.cpus} CPUs, ${limits.pids} pids`,
   );
 
+  // An operator's interrupt ends the probe in flight: its exec is killed, and the cells are removed below.
+  const interrupt = new AbortController();
+  for (const name of ["SIGINT", "SIGTERM"] as const) process.once(name, () => interrupt.abort(new ProbesInterrupted(name)));
+  const { signal } = interrupt;
   const verdicts: ProbeVerdict[] = [];
   try {
     const tree = join(mountRoot, "tree");
     await mkdir(tree);
     const cell = await substrate.createCell({ image, project: "probe", task: "probe-cell", role: "worker", instance, mount: { hostPath: tree } });
     try {
-      verdicts.push(await probeResourceCaps(cell, limits));
-      verdicts.push(await probeCredentialRead(cell, await credentialCanaries()));
-      verdicts.push(await probeOutboundHost(cell, host));
+      verdicts.push(await probeResourceCaps(cell, limits, signal));
+      verdicts.push(await probeCredentialRead(cell, await credentialCanaries(), signal));
+      verdicts.push(await probeOutboundHost(cell, host, signal));
     } finally {
       await cell.teardown();
     }
     const workRoot = join(mountRoot, "environment-write");
     await mkdir(workRoot);
-    verdicts.push(await probeEnvironmentWrite({ substrate, image, instance, workRoot }));
+    verdicts.push(await probeEnvironmentWrite({ substrate, image, instance, workRoot, signal }));
   } finally {
     await substrate.teardownAll();
     await rm(mountRoot, { recursive: true, force: true });

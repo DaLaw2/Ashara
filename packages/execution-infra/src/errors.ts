@@ -4,7 +4,7 @@
  * in-cell path, and `podman exec` passes only the tool's own argv, as ASHARA_ARGC and ASHARA_ARG_<i>.
  */
 
-import { renderElided } from "@ashara/shared";
+import { describeErrorChain, renderElided } from "@ashara/shared";
 import type { ElidedText } from "@ashara/shared";
 
 class ExecutionInfraError extends Error {
@@ -134,6 +134,34 @@ export class CellExecFailed extends ExecutionInfraError {
     this.stderr = stderr;
     this.detail = detail;
   }
+}
+
+/**
+ * The exec's AbortSignal (the process's shutdown) aborted before or while the command ran, so its
+ * podman exec was killed and the command reached no outcome: neither a pass nor a failure of what
+ * it checked, and never the substrate's fault. What it started may still run in the cell until the
+ * cell is torn down, so the cell refuses every later exec. `reason` is the signal's own.
+ */
+export class CellExecInterrupted extends ExecutionInfraError {
+  readonly cellId: string;
+  readonly argv: readonly string[];
+  readonly reason: unknown;
+
+  constructor(cellId: string, argv: readonly string[], when: "before it started" | "while it ran", reason: unknown) {
+    super(`Exec in cell ${cellId} was interrupted ${when}: its signal aborted (${describeErrorChain(reason)}); argv: ${JSON.stringify(argv)}`);
+    this.name = "CellExecInterrupted";
+    this.cellId = cellId;
+    this.argv = argv;
+    this.reason = reason;
+  }
+}
+
+/** The interruption `err` is, or carries as a cause; null for any other failure. */
+export function cellExecInterruptedOf(err: unknown): CellExecInterrupted | null {
+  for (let current: unknown = err; current instanceof Error; current = current.cause) {
+    if (current instanceof CellExecInterrupted) return current;
+  }
+  return null;
 }
 
 /**

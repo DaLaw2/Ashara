@@ -49,6 +49,7 @@ export class DispatchCells {
       createCell: scope.createCell,
       teardownCell: scope.teardownCell,
       timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
+      signal: scope.signal,
     };
   }
 
@@ -69,6 +70,7 @@ export class DispatchCells {
       targetProjectPath: d.targetProjectPath,
       checkoutDir: (purpose) => this.checkoutDir(d, purpose),
       images: this.deps.images,
+      signal: cells.shutdownSignal,
       // Shared label (`:z`): the task cell may still mount the same tree. Its `.git` is a throwaway
       // repository of the cell's own: the checkout's names host paths, and Z0's git reads that
       // repository after the cell ran.

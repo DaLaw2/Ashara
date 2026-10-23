@@ -19,6 +19,7 @@ export const PODMAN_TEST_FILES = [
   "packages/integration/src/server/environment-change-loop.test.ts",
   "packages/integration/src/server/isolated-execution.test.ts",
   "packages/integration/src/server/merge-conflict-retry.test.ts",
+  "packages/integration/src/server/shutdown-cells.test.ts",
   "packages/integration/src/server/spend-cap-loop.test.ts",
   "packages/integration/src/server/sprint0-execution.test.ts",
   "packages/integration/src/server/task-checks-execution.test.ts",

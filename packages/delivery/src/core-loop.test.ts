@@ -289,6 +289,22 @@ describe("CoreLoop tender intake", () => {
     expect(order.filter((e) => e === "dispatch")).toHaveLength(2);
   });
 
+  test("a shutdown during a step ends the cycle at the next step boundary: no later step runs and nothing is dispatched", async () => {
+    const shutdown = new AbortController();
+    const intake = vi.fn(async () => []);
+    const built = buildDeps({ runPending: intake }, undefined, undefined, {
+      runPending: async () => {
+        shutdown.abort(new Error("SIGTERM"));
+        return [];
+      },
+    });
+    const deps = withOverrides(built, { loop: { shutdownSignal: shutdown.signal } });
+
+    await expect(new CoreLoop(deps).runCycle()).rejects.toThrow(/the cycle ended before step client-receipt: the process is shutting down/);
+    expect(intake).not.toHaveBeenCalled();
+    expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+
   test("an intake store failure fails the cycle instead of being skipped", async () => {
     const deps = buildDeps({
       runPending: async () => {

@@ -82,7 +82,7 @@ describe("cell on real podman", () => {
       instance,
       mount: { hostPath: workspace },
     });
-    const backend = createCellBackend(cell, { toolTimeoutSeconds: 30 });
+    const backend = createCellBackend(cell, { toolTimeoutSeconds: 30, signal: new AbortController().signal });
 
     await backend.writeFile("src/notes.txt", "alpha\nneedle here\n");
     expect(await readFile(join(workspace, "src", "notes.txt"), "utf8")).toBe("alpha\nneedle here\n");
@@ -107,15 +107,15 @@ describe("cell on real podman", () => {
       "ashara.role": "worker",
     });
 
-    const env = await cell.exec(["env"], { timeoutSeconds: 10 });
+    const env = await cell.exec(["env"], { signal: new AbortController().signal, timeoutSeconds: 10 });
     expect(env.exitCode).toBe(0);
     expect(env.stdout).not.toContain("ASHARA_PROBE_SECRET");
     expect(env.stdout).not.toContain("probe-secret-must-not-reach-the-cell");
     expect(env.stdout).not.toMatch(/^(DATABASE_URL|ASHARA_[A-Z_]*|[A-Z_]*API_KEY)=/m);
 
-    const interfaces = await cell.exec(["ls", "/sys/class/net"], { timeoutSeconds: 10 });
+    const interfaces = await cell.exec(["ls", "/sys/class/net"], { signal: new AbortController().signal, timeoutSeconds: 10 });
     expect(interfaces.stdout.split("\n").filter((l) => l !== "")).toEqual(["lo"]);
-    const dns = await cell.exec(["getent", "hosts", "example.com"], { timeoutSeconds: 10 });
+    const dns = await cell.exec(["getent", "hosts", "example.com"], { signal: new AbortController().signal, timeoutSeconds: 10 });
     expect(dns.exitCode).not.toBe(0);
 
     await cell.teardown();
@@ -168,7 +168,7 @@ describe("cell on real podman", () => {
       instance,
       mount: { hostPath: tree },
     });
-    const sh = (script: string) => cell.exec(["sh", "-c", script], { timeoutSeconds: 30 });
+    const sh = (script: string) => cell.exec(["sh", "-c", script], { signal: new AbortController().signal, timeoutSeconds: 30 });
     try {
       const head = await sh("git rev-parse HEAD");
       expect(head.exitCode, head.stderr).toBe(0);
@@ -229,9 +229,9 @@ describe("cell on real podman", () => {
     try {
       const whoami = 'id -u; id -g; echo "$HOME"; touch "$HOME/mine" && echo writable; ls "$HOME"';
       const expected = `${process.getuid?.() ?? -1}\n${process.getgid?.() ?? -1}\n/ashara-cell/home\nwritable\nmine\n`;
-      expect((await taskCell.exec(["sh", "-c", whoami], { timeoutSeconds: 10 })).stdout).toBe(expected);
-      expect((await probeCell.exec(["sh", "-c", whoami], { timeoutSeconds: 10 })).stdout).toBe(expected);
-      expect((await probeCell.exec(["id", "-u"], { timeoutSeconds: 10 })).stdout).not.toBe("0\n");
+      expect((await taskCell.exec(["sh", "-c", whoami], { signal: new AbortController().signal, timeoutSeconds: 10 })).stdout).toBe(expected);
+      expect((await probeCell.exec(["sh", "-c", whoami], { signal: new AbortController().signal, timeoutSeconds: 10 })).stdout).toBe(expected);
+      expect((await probeCell.exec(["id", "-u"], { signal: new AbortController().signal, timeoutSeconds: 10 })).stdout).not.toBe("0\n");
     } finally {
       try {
         await taskCell.teardown();
@@ -251,7 +251,7 @@ describe("cell on real podman", () => {
     const tree = await mkdtemp(join(mountRoot, "user-root-tree-"));
     const cell = await substrate.createCell({ image, project: "proj-cell-test", task: `${task}-user-root`, role: "worker", instance, mount: { hostPath: tree } });
     try {
-      const ids = await cell.exec(["sh", "-c", 'id -u; id -g; touch /workspace/made-here "$HOME/made-here"'], { timeoutSeconds: 10 });
+      const ids = await cell.exec(["sh", "-c", 'id -u; id -g; touch /workspace/made-here "$HOME/made-here"'], { signal: new AbortController().signal, timeoutSeconds: 10 });
       expect(ids).toMatchObject({ exitCode: 0, stdout: `${process.getuid?.()}\n${process.getgid?.()}\n` });
       const { stdout } = await run("podman", ["inspect", "--format", "{{range .Mounts}}{{.Destination}}={{.Source}}\n{{end}}", cell.id]);
       const home = stdout.split("\n").find((line) => line.startsWith("/ashara-cell/home="))?.slice("/ashara-cell/home=".length);
@@ -276,21 +276,21 @@ describe("cell on real podman", () => {
       mount: { hostPath: workspace },
     });
     try {
-      const check = await cell.exec(["sh", "-c", "echo checked; echo why >&2; exit 125"], { timeoutSeconds: 10 });
+      const check = await cell.exec(["sh", "-c", "echo checked; echo why >&2; exit 125"], { signal: new AbortController().signal, timeoutSeconds: 10 });
       expect(check).toMatchObject({ exitCode: 125, stdout: "checked\n", stderr: "why\n", timedOut: false });
       // The status channel is closed to the command: it cannot write a report of its own.
-      const forged = await cell.exec(["sh", "-c", "echo 0 >&3; exit 7"], { timeoutSeconds: 10 });
+      const forged = await cell.exec(["sh", "-c", "echo 0 >&3; exit 7"], { signal: new AbortController().signal, timeoutSeconds: 10 });
       expect(forged.exitCode).toBe(7);
-      expect((await cell.exec(["cat"], { timeoutSeconds: 10, stdin: "piped" })).stdout).toBe("piped");
-      expect((await cell.exec(["exit", "3"], { timeoutSeconds: 10 })).exitCode).toBe(127);
+      expect((await cell.exec(["cat"], { signal: new AbortController().signal, timeoutSeconds: 10, stdin: "piped" })).stdout).toBe("piped");
+      expect((await cell.exec(["exit", "3"], { signal: new AbortController().signal, timeoutSeconds: 10 })).exitCode).toBe(127);
 
       // A timed-out command, even one that ignores SIGTERM, is gone from the cell when the exec returns.
-      const stubborn = await cell.exec(["sh", "-c", "trap '' TERM; sleep 30"], { timeoutSeconds: 1 });
+      const stubborn = await cell.exec(["sh", "-c", "trap '' TERM; sleep 30"], { signal: new AbortController().signal, timeoutSeconds: 1 });
       expect(stubborn).toMatchObject({ exitCode: 137, timedOut: true });
       const left = await run("podman", ["exec", cell.id, "sh", "-c", "cat /proc/[0-9]*/cmdline | tr '\\0' ' '"]);
       expect(left.stdout).not.toContain("sleep 30");
 
-      const running = cell.exec(["sleep", "20"], { timeoutSeconds: 30 }).catch((e: unknown) => e);
+      const running = cell.exec(["sleep", "20"], { signal: new AbortController().signal, timeoutSeconds: 30 }).catch((e: unknown) => e);
       // eslint-disable-next-line no-restricted-syntax -- the exec's process must be running when the cell is removed and nothing reports when it starts; a poll for the process would replace this wait
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await run("podman", ["rm", "-f", "-t", "0", cell.id]);
@@ -329,17 +329,17 @@ describe("cell on real podman", () => {
           .filter((line) => line !== "" && !line.startsWith("1 ") && !/^\d+ sleep infinity$/.test(line));
       };
       const command = "sleep 30 & setsid sleep 40 & trap '' TERM; sleep 31; echo after";
-      const timed = await cell.exec(["sh", "-c", command], { timeoutSeconds: 1 });
+      const timed = await cell.exec(["sh", "-c", command], { signal: new AbortController().signal, timeoutSeconds: 1 });
       expect(timed.timedOut).toBe(true);
       expect(timed.stdout).not.toContain("after");
       expect(await left()).toEqual([]);
 
       // A command that ends by itself and leaves a background process behind leaves nothing either.
-      const background = await cell.exec(["sh", "-c", "sleep 45 & echo started"], { timeoutSeconds: 10 });
+      const background = await cell.exec(["sh", "-c", "sleep 45 & echo started"], { signal: new AbortController().signal, timeoutSeconds: 10 });
       expect(background).toMatchObject({ exitCode: 0, stdout: "started\n", timedOut: false });
       expect(await left()).toEqual([]);
 
-      const after = await cell.exec(["sh", "-c", "echo usable"], { timeoutSeconds: 10 });
+      const after = await cell.exec(["sh", "-c", "echo usable"], { signal: new AbortController().signal, timeoutSeconds: 10 });
       expect(after).toMatchObject({ exitCode: 0, stdout: "usable\n", timedOut: false });
     } finally {
       await cell.teardown();
@@ -378,17 +378,17 @@ describe("cell on real podman", () => {
         'read -r l < /proc/$$/stat; set -- ${l##*) }; sid=$4; if [ "$sid" = 0 ]; then echo outside; ' +
         `elif tr '\\0' ' ' < "/proc/$sid/cmdline" | grep -qF '${marker.slice(0, 6)}''${marker.slice(6)}'; then echo trampoline; ` +
         'else echo "other $sid"; fi; sleep 43 & setsid sleep 44 & echo started';
-      const ran = await cell.exec(["sh", "-c", session], { timeoutSeconds: 10 });
+      const ran = await cell.exec(["sh", "-c", session], { signal: new AbortController().signal, timeoutSeconds: 10 });
       expect(ran, ran.stderr).toMatchObject({ exitCode: 0, timedOut: false, statusLost: false });
       expect(ran.stdout).toMatch(/^(trampoline|outside)\nstarted\n$/);
       const { stdout: left } = await run("podman", ["top", cell.id, "args"]);
       expect(left).not.toMatch(/sleep 4[34]/);
 
-      const timed = await cell.exec(["sh", "-c", "sleep 45 & trap '' TERM; sleep 30"], { timeoutSeconds: 1 });
+      const timed = await cell.exec(["sh", "-c", "sleep 45 & trap '' TERM; sleep 30"], { signal: new AbortController().signal, timeoutSeconds: 1 });
       expect(timed).toMatchObject({ timedOut: true, statusLost: false });
       const { stdout: afterTimeout } = await run("podman", ["top", cell.id, "args"]);
       expect(afterTimeout).not.toMatch(/sleep (45|30)/);
-      expect(await cell.exec(["sh", "-c", "echo usable; exit 4"], { timeoutSeconds: 10 })).toMatchObject({ exitCode: 4, stdout: "usable\n" });
+      expect(await cell.exec(["sh", "-c", "echo usable; exit 4"], { signal: new AbortController().signal, timeoutSeconds: 10 })).toMatchObject({ exitCode: 4, stdout: "usable\n" });
     } finally {
       await cell.teardown();
     }
@@ -417,18 +417,18 @@ describe("cell on real podman", () => {
         // The marker is in the command's own text, so it matches its own processes.
         const own = await cell.exec(
           ["sh", "-c", `sleep 41 & echo started; ${pkill("'flock-x-ltest3'")}; sleep 2; echo survived`],
-          { timeoutSeconds: 20 },
+          { signal: new AbortController().signal, timeoutSeconds: 20 },
         );
         expect(own, `round ${round}: ${own.stderr}`).toMatchObject({ exitCode: 137, statusLost: false, timedOut: false, stdout: "started\n" });
 
         // A pattern only the wrapper's script holds (split, so this command's text does not): the
         // wrapper dies, the cell answers its probe, and its sweep ends what the command left.
-        const wrapper = await cell.exec(["sh", "-c", `sleep 42 & echo started; ${pkill('"ashara""_sweep"')}; sleep 5`], { timeoutSeconds: 20 });
+        const wrapper = await cell.exec(["sh", "-c", `sleep 42 & echo started; ${pkill('"ashara""_sweep"')}; sleep 5`], { signal: new AbortController().signal, timeoutSeconds: 20 });
         expect(wrapper, `round ${round}`).toMatchObject({ exitCode: null, statusLost: true, timedOut: false, stdout: "started\n" });
         const { stdout: left } = await run("podman", ["top", cell.id, "args"]);
         expect(left, `round ${round}`).not.toMatch(/sleep 4[12]/);
       }
-      expect(await cell.exec(["sh", "-c", "echo usable"], { timeoutSeconds: 10 })).toMatchObject({ exitCode: 0, stdout: "usable\n" });
+      expect(await cell.exec(["sh", "-c", "echo usable"], { signal: new AbortController().signal, timeoutSeconds: 10 })).toMatchObject({ exitCode: 0, stdout: "usable\n" });
     } finally {
       await cell.teardown();
     }

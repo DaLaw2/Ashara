@@ -35,6 +35,8 @@ interface EnvironmentWriteProbeRequest {
   readonly instance: string;
   /** An empty directory under the substrate's mount root: the probe's workdir base, holding its target and its worktree. */
   readonly workRoot: string;
+  /** Interrupts the in-cell write: the probe then throws CellExecInterrupted, never a verdict. */
+  readonly signal: AbortSignal;
 }
 
 /**
@@ -68,7 +70,7 @@ export async function probeEnvironmentWrite(request: EnvironmentWriteProbeReques
   });
   let exitCode: number | null;
   try {
-    exitCode = (await cell.exec(["sh", "-c", `printf 'RUN echo probe\\n' >> ${CONTAINERFILE}`], { timeoutSeconds: 30 })).exitCode;
+    exitCode = (await cell.exec(["sh", "-c", `printf 'RUN echo probe\\n' >> ${CONTAINERFILE}`], { timeoutSeconds: 30, signal: request.signal })).exitCode;
   } finally {
     await cell.teardown();
   }

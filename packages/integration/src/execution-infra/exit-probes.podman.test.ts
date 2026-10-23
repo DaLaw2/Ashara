@@ -21,6 +21,8 @@ import { TEST_IMAGES } from "../test-images.js";
 /** A busybox image with wget, pinned like the BaseCell. */
 const ALPINE_IMAGE = TEST_IMAGES.alpine;
 const LIMITS = { memoryBytes: 256 * 1024 * 1024, cpus: 0.5, pids: 64 };
+/** A signal that never aborts: these probes run to their end. */
+const LIVE = new AbortController().signal;
 const SECRET_VALUE = `ashara-probe-credential-${randomUUID()}`;
 
 let mountRoot = "";
@@ -56,17 +58,17 @@ afterAll(async () => {
 
 describe("exit 6 probes from inside a real cell", () => {
   it("the cell's cgroup holds the configured memory, swap, CPU and pids caps; other caps do not match", async () => {
-    const caps = await probeResourceCaps(cell, LIMITS);
+    const caps = await probeResourceCaps(cell, LIMITS, LIVE);
     // A host that does not delegate memory, cpu and pids to the cell's cgroup is reported as such,
     // apart from a cap that reads wrong.
     expect(caps.evidence, `the host delegates every capped controller to the cell: ${caps.evidence}`).not.toMatch(/cgroup\.controllers=/);
     expect(caps.evidence).toBe("memory.max=268435456, memory.swap.max=0, cpu.max=50000 100000, pids.max=64");
     expect(caps.outcome).toBe("held");
-    expect((await probeResourceCaps(cell, { ...LIMITS, pids: 65 })).outcome).toBe("breached");
+    expect((await probeResourceCaps(cell, { ...LIMITS, pids: 65 }, LIVE)).outcome).toBe("breached");
   });
 
   it("the pids cap stops a fork past it", async () => {
-    const result = await cell.exec(["sh", "-c", "i=0; while [ $i -lt 80 ]; do sleep 5 & i=$((i + 1)); done; wait"], { timeoutSeconds: 30 });
+    const result = await cell.exec(["sh", "-c", "i=0; while [ $i -lt 80 ]; do sleep 5 & i=$((i + 1)); done; wait"], { signal: new AbortController().signal, timeoutSeconds: 30 });
     expect(result.stderr).toMatch(/can't fork|Resource temporarily unavailable/);
   });
 
@@ -78,23 +80,23 @@ describe("exit 6 probes from inside a real cell", () => {
         { name: "DATABASE_URL", value: process.env.ASHARA_PROBE_DATABASE_URL ?? "" },
       ],
     };
-    const denied = await probeCredentialRead(cell, canaries);
+    const denied = await probeCredentialRead(cell, canaries, LIVE);
     expect(denied.evidence).toContain(`path ${join(keyDir, "secret.key")} absent`);
     expect(denied.evidence).toContain("none found");
     expect(denied.outcome).toBe("held");
 
     // A value inside a probed path (npx's INIT_CWD inside `<cwd>/.env`) is not the probe's own leak.
-    const pathPrefix = await probeCredentialRead(cell, { ...canaries, values: [...canaries.values, { name: "INIT_CWD", value: keyDir }] });
+    const pathPrefix = await probeCredentialRead(cell, { ...canaries, values: [...canaries.values, { name: "INIT_CWD", value: keyDir }] }, LIVE);
     expect(pathPrefix.evidence).toContain("none found");
     expect(pathPrefix.outcome).toBe("held");
 
-    const control = await probeCredentialRead(cell, { ...canaries, paths: [`${WORKSPACE_ROOT}/planted.txt`] });
+    const control = await probeCredentialRead(cell, { ...canaries, paths: [`${WORKSPACE_ROOT}/planted.txt`] }, LIVE);
     expect(control.outcome).toBe("breached");
     expect(control.evidence).toContain("found: the secret key file");
   });
 
   it("an outbound host is unreachable: loopback only, no route, and busybox's nc and wget both fail to connect", async () => {
-    const outbound = await probeOutboundHost(cell, "1.1.1.1");
+    const outbound = await probeOutboundHost(cell, "1.1.1.1", LIVE);
     expect(outbound.evidence).toMatch(/^interfaces \[lo\]; routes: 0; connect: nc exit [1-9][0-9]*.*, wget exit [1-9][0-9]*/);
     expect(outbound.outcome).toBe("held");
   });

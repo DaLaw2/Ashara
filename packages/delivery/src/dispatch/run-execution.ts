@@ -127,7 +127,7 @@ export async function runExecution({ context, dispatch: d, slot }: CellRun): Pro
     },
     {
       llm: deps.llm,
-      cell: createCellBackend(d.cell, { toolTimeoutSeconds: attemptPolicy.toolTimeoutSeconds }),
+      cell: createCellBackend(d.cell, { toolTimeoutSeconds: attemptPolicy.toolTimeoutSeconds, signal: deps.shutdownSignal }),
       clock: deps.clock,
       records: d.records,
       signal: deps.shutdownSignal,

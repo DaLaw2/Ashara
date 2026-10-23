@@ -27,6 +27,7 @@ function probeFailing(probeError: Error): MainSweepDeps {
         createCell: notExercised("a cell"),
       },
       instance: "instance-1",
+      shutdownSignal: new AbortController().signal,
     },
     attemptPolicy: { perCommandTimeoutSeconds: 30 },
     environment: { images: { build: notExercised("an image build"), prune: notExercised("an image prune") }, statements: { record: notExercised("a statement"), forVersion: notExercised("a statement") } },
@@ -116,6 +117,7 @@ async function hostSweep(product: Readonly<Record<string, string>>): Promise<{ r
     cells: {
       substrate: { probeSubstrate: async () => ({ version: "5", rootless: true }), createCell: async (spec) => hostCell(spec.mount.hostPath) },
       instance: "instance-1",
+      shutdownSignal: new AbortController().signal,
     },
     attemptPolicy: { perCommandTimeoutSeconds: 30 },
     environment: {
