@@ -50,7 +50,7 @@ describe("FailureRouter", () => {
     if (decision.action === "abandon") expect(decision.reason).toContain("left conflict markers");
   });
 
-  // The records that rejected a held set decide every later attempt the same way.
+  // The held-set rule has already spent its own retry budget, so the router adds none.
   test("a check set given up at the held-set rule's bound is abandoned at once, saying why", () => {
     const verdict: FailureVerdict = { kind: "non-retryable", ground: "held-set-given-up" };
     const decision = new FailureRouter(3).route(makeInput({ priorAttempts: 1, verdict }));

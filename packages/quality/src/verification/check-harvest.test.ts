@@ -219,7 +219,7 @@ describe("CheckHarvest, a set red-run on its foundation", () => {
     expect(rejections).toEqual([]);
   });
 
-  // The held-set rule bounds identical rejections: the records decide every later attempt the same way.
+  // The held-set rule bounds identical rejections by a retry budget.
   test.each<[string, HoldEvidence]>([
     ["an add-guarantee correction's item", { kind: "undelivered", items: ["G1"] }],
     ["an amended assumption no earlier check decided", { kind: "assumption-undecided", items: ["G1"] }],
