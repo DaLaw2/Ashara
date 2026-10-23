@@ -449,6 +449,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     db,
     config: config.coreLoop,
     workBudgets: config.workBudgets,
+    clock: ports.clock,
     logger,
     cycleLog: eventLog,
     llm: modelCalls,

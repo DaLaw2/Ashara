@@ -26,7 +26,7 @@ import {
 import type { InboundKind, InboundState, TerminalMessage } from "@ashara/engagement";
 import { readSweepOutcome } from "@ashara/quality";
 import { createIntakeStore } from "@ashara/server/intake-store";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, systemClock, type ProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { UNREAD_HALT_KINDS } from "../simulator/invariants.js";
 
@@ -181,7 +181,7 @@ async function haltReportVisionUnder(halt: HaltKind): Promise<{ readonly project
       INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, purpose, block_id)
       SELECT b.project_id, NULL, NULL, '[]'::jsonb, '[]'::jsonb, false, 'inbound-message-policy terminal sweep', 'terminal', b.id
         FROM project_blocks b WHERE b.ended_at IS NULL AND b.project_id IN (${fixture.projectId}, ${fixture.bareProjectId})`);
-    return listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }, TERMINAL_KINDS);
+    return listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }, TERMINAL_KINDS, systemClock);
   });
   const written = (projectId: ProjectId): boolean | undefined => {
     for (const each of due) {

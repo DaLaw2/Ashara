@@ -55,6 +55,7 @@ function parts(): CoreLoopParts {
     db,
     config: { ...DEFAULT_CONFIG, workdirBase: "/nonexistent-compose-core-loop" },
     workBudgets: DEFAULT_WORK_BUDGETS,
+    clock: systemClock,
     logger: recordingLogger(),
     cycleLog: idle.loop.cycleLog,
     llm: { forCall: notExercised("forCall") },

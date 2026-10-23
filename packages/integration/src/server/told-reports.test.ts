@@ -20,7 +20,7 @@ import {
   recordClientStop,
 } from "@ashara/engagement";
 import { readSweepOutcome } from "@ashara/quality";
-import { UnreadSubject } from "@ashara/shared";
+import { UnreadSubject, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { deliveredMessage, haltMessage } from "./terminal-reports.js";
 
@@ -68,7 +68,7 @@ async function outboundReports(db: Db, projectId: string): Promise<number> {
 
 /** The subjects each listing names: halts and resumptions, passed sweeps, plan revisions. */
 async function dueSubjects(db: Db): Promise<{ halts: string[]; resumptions: string[]; sweeps: string[]; revisions: string[] }> {
-  const terminals = await listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview: noReview }, TERMINAL_KINDS);
+  const terminals = await listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview: noReview }, TERMINAL_KINDS, systemClock);
   const halts = terminals.flatMap((due) => {
     if (due instanceof UnreadSubject) return due.id.startsWith("halted:") ? [due.id.slice("halted:".length)] : [];
     return due.kind === "listed" && due.event.kind === "halted" ? [due.event.halt.episodeId] : [];

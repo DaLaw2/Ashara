@@ -6,7 +6,7 @@ import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { ClientMessageRepository, ClientStops, TERMINAL_KINDS, TerminalMessage, VisionRepository, terminalTableOf } from "@ashara/engagement";
 import type { ClientStopStore, TerminalReportStore } from "@ashara/engagement";
-import { UnreadSubject } from "@ashara/shared";
+import { UnreadSubject, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
@@ -311,7 +311,7 @@ function messageOf(due: Due): TerminalMessage {
 /** The terminals one connection lists of `projects`, each terminal's sweep recorded first. */
 async function dueOn(handle: ReturnType<typeof createDb>, projects: ReadonlySet<string>): Promise<Due[]> {
   await sweepTerminalsOf(handle, (id) => projects.has(id));
-  return (await createTerminalReportStore(handle).dueTerminals(TERMINAL_KINDS)).filter((due) => projects.has(dueProjectOf(due)));
+  return (await createTerminalReportStore(handle, systemClock).dueTerminals(TERMINAL_KINDS)).filter((due) => projects.has(dueProjectOf(due)));
 }
 
 describe("the one due listing", () => {
@@ -328,7 +328,7 @@ describe("the one due listing", () => {
 
     const due = await dueOn(db, projects);
     expect(due.map(dueProjectOf).sort()).toEqual([...projects].sort());
-    const store = createTerminalReportStore(db);
+    const store = createTerminalReportStore(db, systemClock);
     for (const each of due) expect(await store.postTerminal(messageOf(each))).toBe("posted");
     expect(await dueOn(db, projects)).toEqual([]);
   });
@@ -356,7 +356,7 @@ describe("the one due listing", () => {
       expect((await dueOn(after, projects)).map(dueProjectOf).sort()).toEqual([...projectIds].sort());
       // The restarted process posts each once; the message the ended process listed is told already.
       expect((await terminalReportsOf(after, (id) => projects.has(id)).runPending(TERMINAL_KINDS)).map((outcome) => outcome.kind)).toEqual(["posted", "posted", "posted", "posted"]);
-      const store = createTerminalReportStore(after);
+      const store = createTerminalReportStore(after, systemClock);
       for (const message of listed) expect(await store.postTerminal(message)).toBe("already-posted");
       expect(await dueOn(after, projects)).toEqual([]);
     } finally {

@@ -65,7 +65,7 @@ import {
   TerminalSweeper,
 } from "@ashara/quality";
 import type { MainSweepDeps, SuiteReviewing } from "@ashara/quality";
-import type { Logger, StepContainment } from "@ashara/shared";
+import type { Clock, Logger, StepContainment } from "@ashara/shared";
 import { createAcceptanceStore, createTerminalSweepStore } from "./acceptance-store.js";
 import { createAnswerStore } from "./answer-store.js";
 import { createBlockReportStore } from "./block-report-store.js";
@@ -89,6 +89,8 @@ export interface CoreLoopParts {
   readonly db: Db;
   readonly config: CoreLoopConfig;
   readonly workBudgets: WorkBudgets;
+  /** The time the cycle runs on: every backoff a step's repository sets and reads. */
+  readonly clock: Clock;
   readonly logger: Logger;
   readonly cycleLog: LoopCore["cycleLog"];
   /** Finance's guarded port: every model call a step makes. */
@@ -218,7 +220,7 @@ export function composeCoreLoopDeps(parts: CoreLoopParts, overrides: CoreLoopOve
       },
       reporting: {
         // One Liaison path for every terminal message, each with the guarantee table.
-        terminalReports: createTerminalReports(createTerminalReportStore(db), containment),
+        terminalReports: createTerminalReports(createTerminalReportStore(db, parts.clock), containment),
         planReports: new PlanReports(createPlanReportStore(db), containment),
         stackChoices: new StackChoiceReports(createStackChoiceStore(db), containment),
         // A project's return to work, once its halt's terminal message is told.

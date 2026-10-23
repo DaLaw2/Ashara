@@ -1,7 +1,7 @@
 import type { createDb } from "@ashara/db";
 import { BlockReports, TerminalMessage, TerminalReports, terminalTableOf } from "@ashara/engagement";
 import type { BlockReportStore, TerminalKind, TerminalReportStore } from "@ashara/engagement";
-import { UnreadSubject, parseProjectId } from "@ashara/shared";
+import { UnreadSubject, parseProjectId, systemClock } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
@@ -55,7 +55,7 @@ export function dueProjectOf(due: Due): string {
  * @testseam the integration tests of the delivered report's listing; production lists it in the terminal step
  */
 export async function dueDeliveredOf(db: Db, projectId: string): Promise<DueDelivered | undefined> {
-  for (const due of await createTerminalReportStore(db).dueTerminals(["delivered"])) {
+  for (const due of await createTerminalReportStore(db, systemClock).dueTerminals(["delivered"])) {
     if (due instanceof UnreadSubject || due.kind === "listed" || due.report.projectId !== projectId) continue;
     return due.kind === "delivered" ? { ...due.report, guarantees: due.table } : due.report;
   }
@@ -85,7 +85,7 @@ interface TerminalReportsOptions {
  * @testseam the integration tests that post terminal messages outside the core loop; production runs it in the core loop
  */
 export function terminalReportsOf(db: Db, ours: (projectId: string) => boolean, options: TerminalReportsOptions = {}): TerminalReports {
-  const store = options.store ?? createTerminalReportStore(db);
+  const store = options.store ?? createTerminalReportStore(db, systemClock);
   const kinds = options.kinds;
   const scoped: TerminalReportStore = {
     ...store,

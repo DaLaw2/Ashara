@@ -3,7 +3,7 @@ import { z } from "zod";
 import { isDatabaseConnectionFault, projects } from "@ashara/db";
 import { visionDocuments } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
-import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import { parseProjectId, readEach, type Clock, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { haltEpisodesWhere } from "@ashara/delivery/predicates";
 import { stoppedPlanningsWhere, tasksWithMerge } from "@ashara/delivery/reads";
 import { passedSweepsWhere, sweepOfTerminal } from "@ashara/quality/published-reads";
@@ -162,13 +162,13 @@ async function tableOfUnread(db: DbHandle, sweepId: string): Promise<GuaranteeTa
  * never stop another's report. A project the client stopped, or has a stop awaiting the Liaison, is
  * not reported on: its stop report is what it is told, and says the acceptance stands.
  */
-async function dueDelivered(db: DbHandle, sweepOutcome: SweepOutcomeReader): Promise<DueTerminal[]> {
+async function dueDelivered(db: DbHandle, sweepOutcome: SweepOutcomeReader, clock: Clock): Promise<DueTerminal[]> {
   const sweeps = await passedSweepsWhere(
     db,
     (sweep) =>
       sql`(NOT ${terminalTold("delivered", sweep.id)}
         AND EXISTS (SELECT 1 FROM projects ap WHERE ap.id = ${sweep.projectId} AND ap.lifecycle = 'accepted')
-        AND ${noOpenStop(sweep.projectId)} AND ${deliveredRetryDue(sweep)})`,
+        AND ${noOpenStop(sweep.projectId)} AND ${deliveredRetryDue(sweep, clock)})`,
     deliveredAttempts,
   );
   const due: DueTerminal[] = [];
@@ -257,15 +257,15 @@ async function dueDeclined(db: DbHandle): Promise<Array<DueTerminal | UnreadSubj
  * Every terminal message of `kinds` owed: the one due listing. The stops come first, so a project the
  * client stopped is told its stop report before anything else is listed of it; the delivered reports,
  * each read on its own and kept as unread on any failure, come last. Each kind's listing is contained
- * to it (listEachKind).
+ * to it (listEachKind). A delivered report's backoff is waited out on `clock`.
  */
-export async function listDueTerminals(db: DbHandle, readers: TerminalReaders, kinds: readonly TerminalKind[]): Promise<Array<DueTerminal | UnreadSubject>> {
+export async function listDueTerminals(db: DbHandle, readers: TerminalReaders, kinds: readonly TerminalKind[], clock: Clock): Promise<Array<DueTerminal | UnreadSubject>> {
   return listEachKind(kinds, {
     stopped: () => dueStops(db),
     halted: () => dueHalts(db, readers.blockingReview),
     "planning-stopped": () => duePlanningStopped(db),
     declined: () => dueDeclined(db),
-    delivered: () => dueDelivered(db, readers.sweepOutcome),
+    delivered: () => dueDelivered(db, readers.sweepOutcome, clock),
   });
 }
 

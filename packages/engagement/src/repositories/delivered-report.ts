@@ -3,7 +3,7 @@ import { z } from "zod";
 import { deliveredReportAttempts, intakeReadings } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
-import type { ProjectId } from "@ashara/shared";
+import type { Clock, ProjectId } from "@ashara/shared";
 import { completedGoalTasks } from "@ashara/delivery/predicates";
 import { givenUpGoalTitles, mergedCommitsOf, workItemSummaries } from "@ashara/delivery/reads";
 import { recordedSweep, type SweepRef } from "@ashara/quality/published-reads";
@@ -208,9 +208,13 @@ export function deliveredAttempts(sweep: SweepRef): SQL<unknown> {
     WHERE ap.id = ${sweep.projectId})`;
 }
 
-/** No failed attempt at the sweep's delivered report is waiting out its backoff. */
-export function deliveredRetryDue(sweep: SweepRef): SQL {
-  return sql`NOT EXISTS (SELECT 1 FROM delivered_report_attempts da WHERE da.sweep_id = ${sweep.id} AND da.retry_at > now())`;
+/**
+ * No failed attempt at the sweep's delivered report is waiting out its backoff on `clock`, the time
+ * the cycle runs on, never the database's: a backoff set and read on another clock than the one that
+ * spaces the cycles passes in no number of cycles, or in none at all.
+ */
+export function deliveredRetryDue(sweep: SweepRef, clock: Clock): SQL {
+  return sql`NOT EXISTS (SELECT 1 FROM delivered_report_attempts da WHERE da.sweep_id = ${sweep.id} AND da.retry_at > ${new Date(clock.now())})`;
 }
 
 /** One passed sweep due its delivered report, as listed, with what deliveredAttempts selected beside it. */
@@ -271,14 +275,15 @@ export async function passedSweepProject(db: DbHandle, sweepId: string): Promise
 /**
  * Records a failure at a sweep's delivered report on Engagement's attempts record: its error; a
  * failed read of the public interface file, and records that did not read as a report, each counted
- * apart; and, for an attempt that failed, one more failure and when to try again.
+ * apart; and, for an attempt that failed, one more failure and when to try again, on `clock`, the
+ * clock deliveredRetryDue reads it on.
  */
-export async function recordDeliveredReportFailure(db: DbHandle, sweepId: string, failure: DeliveredReportFailureRecord): Promise<void> {
+export async function recordDeliveredReportFailure(db: DbHandle, sweepId: string, failure: DeliveredReportFailureRecord, clock: Clock): Promise<void> {
   const projectId = await passedSweepProject(db, sweepId);
   if (projectId === null) throw new DeliveredReportFailureUnrecorded(sweepId);
   const { retryAfterSeconds } = failure;
   const counted = retryAfterSeconds === null ? 0 : 1;
-  const retryAt = retryAfterSeconds === null ? null : sql`now() + make_interval(secs => ${retryAfterSeconds})`;
+  const retryAt = retryAfterSeconds === null ? null : new Date(clock.now() + retryAfterSeconds * 1000);
   await db
     .insert(deliveredReportAttempts)
     .values({

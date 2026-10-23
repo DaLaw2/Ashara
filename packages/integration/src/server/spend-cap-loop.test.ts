@@ -230,7 +230,7 @@ describe("the deployment cap halts two projects", () => {
     const first = (await projects.create(NAME, client.id)).id;
     const second = (await projects.create(NAME, client.id)).id;
     const ours = new Set([first, second]);
-    const store = createTerminalReportStore(db);
+    const store = createTerminalReportStore(db, systemClock);
     const sweeps = createTerminalSweepStore(db);
     let secondFaults = 1;
     // Only this suite's projects: the listing and the halt over the shared database would reach other suites'.

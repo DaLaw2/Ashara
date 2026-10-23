@@ -26,7 +26,7 @@ import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
 import { AcceptanceSweeper, SCAFFOLD_PLACEHOLDER_MARKER } from "@ashara/quality";
 import type { MainSweepDeps } from "@ashara/quality";
-import type { ProjectId } from "@ashara/shared";
+import { systemClock, type ProjectId } from "@ashara/shared";
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
@@ -436,7 +436,7 @@ async function statusOf(projectId: ProjectId): Promise<string> {
 async function reportAttempts(projectId: ProjectId): Promise<{ failures: number; interfaceReadFailures: number; lastError: string | null; waiting: boolean }> {
   const result = await db.execute(sql`
     SELECT COALESCE(a.failures, 0) AS failures, COALESCE(a.interface_read_failures, 0) AS "interfaceReadFailures", a.last_error AS "lastError",
-      COALESCE(a.retry_at > now(), false) AS waiting
+      COALESCE(a.retry_at > ${new Date(systemClock.now())}, false) AS waiting
     FROM acceptance_sweeps s LEFT JOIN delivered_report_attempts a ON a.sweep_id = s.id
     WHERE s.project_id = ${projectId} AND s.passed`);
   const [row] = z
@@ -446,9 +446,9 @@ async function reportAttempts(projectId: ProjectId): Promise<{ failures: number;
   return row;
 }
 
-/** Stands in for the backoff passing: the sweep's retry time is now. */
+/** Stands in for the backoff passing: the sweep's retry time is now, on the clock the listing reads. */
 async function endBackoff(projectId: ProjectId): Promise<void> {
-  await db.execute(sql`UPDATE delivered_report_attempts SET retry_at = now() WHERE project_id = ${projectId}`);
+  await db.execute(sql`UPDATE delivered_report_attempts SET retry_at = ${new Date(systemClock.now())} WHERE project_id = ${projectId}`);
 }
 
 const verdictRow = z.object({ guaranteeId: z.string(), verdict: z.string(), reason: z.string().nullable(), basis: z.string(), evidenceClass: z.string() });
@@ -881,7 +881,7 @@ describe("acceptance on main", () => {
         terminalReportsOf(db, (id) => id === projectId, {
           unswept: true,
           kinds: ["delivered"],
-          store: { ...createTerminalReportStore(handle), recordDeliveredFailure: createTerminalReportStore(db).recordDeliveredFailure },
+          store: { ...createTerminalReportStore(handle, systemClock), recordDeliveredFailure: createTerminalReportStore(db, systemClock).recordDeliveredFailure },
           productInterface: { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) },
         });
       expect(await reports(listedThenFailing(unreachable)).runPending(TERMINAL_KINDS)).toEqual([expect.objectContaining({ kind: "failed", projectId })]);
