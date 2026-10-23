@@ -91,8 +91,8 @@ type Listing =
   /** Contains each row in a fault path of its own, at `marker` (`why`). */
   | { readonly kind: "own"; readonly marker: string; readonly why: string }
   /**
-   * Copies each row's columns, and at most reads more rows per row (`why`): nothing in `body` (the
-   * listing itself unless named) parses, throws or converts a row, so no row can fail on its own.
+   * Copies each row's columns (`why`): nothing in `body` (the listing itself unless named) parses,
+   * throws or converts a row, or reads more for a row, so no row can fail on its own.
    */
   | { readonly kind: "rows-only"; readonly why: string; readonly body?: string }
   /** Not a listing of many projects' subjects that a cycle step contains (`why`). */
@@ -102,8 +102,13 @@ const LISTING_FILE = /\/(repositories|stores)\/|-store\.ts$|-repository\.ts$/;
 const LISTING_NAME = /(?:export async function|async) ((?:list|projectsAwaiting|due|open|readyFor)\w*)\(/g;
 /** What can throw for one row: a schema parse, a typed refusal, a parse or conversion of a stored value (parseProjectId of a uuid column names no project to blame, and is allowed). */
 const ROW_FALLIBLE = /\.parse\(|safeParse\(|throw new |\bparse(?!ProjectId\b)[A-Z]\w*\(|\browTo\w+\(/;
-
-const ROWS_ONLY_QUERIES = "each row's columns, with per-row queries only, whose failure is the database's and every project's alike";
+/** A loop over the listed rows. */
+const ROW_LOOP = /\bfor \([^)]*\bof\b/;
+/**
+ * A read for one row: a call awaited on a row's own value, or a project's current vision. Inside a loop
+ * over the rows, any of them can fail for that row alone, so it belongs in readEach.
+ */
+const PER_ROW_READ = /await [\w.]+\(.*\b(?:row|candidate)\b|\.getCurrent\(/;
 
 /** Every listing of a repository or store, keyed `<file>#<name>`. */
 const LISTINGS: Readonly<Record<string, Listing>> = {
@@ -136,8 +141,8 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/delivery/src/stores/replan-store.ts#projectsAwaitingReplan": { kind: "read-each" },
   "packages/engagement/src/repositories/block-report.ts#listDueResumptionReports": { kind: "read-each" },
   "packages/engagement/src/repositories/burn-warning.ts#listProjectBurns": { kind: "read-each" },
-  "packages/engagement/src/repositories/client-answer.ts#listOpenAnswers": { kind: "rows-only", why: ROWS_ONLY_QUERIES, body: "async function openAnswerRows(" },
-  "packages/engagement/src/repositories/client-change.ts#listUnconsumedChanges": { kind: "rows-only", why: "message and project ids only" },
+  "packages/engagement/src/repositories/client-answer.ts#listOpenAnswers": { kind: "read-each" },
+  "packages/engagement/src/repositories/client-change.ts#listUnconsumedChanges": { kind: "read-each" },
   "packages/engagement/src/repositories/client-receipt.ts#listDueReceipts": { kind: "read-each" },
   "packages/engagement/src/repositories/client-message.ts#listByProject": { kind: "not-a-step-listing", why: "one project's messages, for the client channel" },
   "packages/engagement/src/repositories/client-message.ts#listUnconsumedTenders": { kind: "rows-only", why: "message rows as stored" },
@@ -153,8 +158,8 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
       "every kind but the delivered report reads each row with readEach; dueDelivered reads each passed sweep in a catch of its own, " +
       "which lists one whose records do not read as its unread report, counted toward the notice sent in its place",
   },
-  "packages/engagement/src/repositories/stack-choice.ts#listDueStackChoices": { kind: "rows-only", why: ROWS_ONLY_QUERIES },
-  "packages/quality/src/repositories/acceptance.ts#listProjectsReadyForAcceptance": { kind: "rows-only", why: ROWS_ONLY_QUERIES },
+  "packages/engagement/src/repositories/stack-choice.ts#listDueStackChoices": { kind: "read-each" },
+  "packages/quality/src/repositories/acceptance.ts#listProjectsReadyForAcceptance": { kind: "read-each" },
   "packages/quality/src/repositories/acceptance.ts#listDueTerminalSweeps": { kind: "rows-only", why: "stop, halt episode and project ids and workspace paths as stored" },
   "packages/security/src/secret-store.ts#listNames": { kind: "not-a-step-listing", why: "the deployment's secret names" },
   "packages/server/src/intake-store.ts#openTenders": { kind: "rows-only", why: "message rows as stored" },
@@ -317,6 +322,10 @@ describe("the cycle's per-project steps", () => {
         const body = listing.body === undefined ? listed : bodyFrom(read(file), read(file).indexOf(listing.body));
         const fallible = ROW_FALLIBLE.exec(body);
         if (fallible !== null) throwing.push(`${key}: reads a row with ${fallible[0]}, which can throw for that row alone; read each row with readEach`);
+        const perRow = PER_ROW_READ.exec(body);
+        if (perRow !== null && (ROW_LOOP.test(body) || perRow[0].endsWith(".getCurrent("))) {
+          throwing.push(`${key}: reads more for each row with ${perRow[0]}, which can fail for that row alone; read each row with readEach`);
+        }
       }
     }
     expect(throwing).toEqual([]);

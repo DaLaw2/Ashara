@@ -11,7 +11,7 @@ import type { ClientChangeStore, StackChoiceStore } from "@ashara/engagement";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId } from "@ashara/shared";
+import { UnreadSubject, createWorkItemId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { createClientChangeStore } from "@ashara/server/client-change-store";
@@ -355,7 +355,7 @@ describe("a change is read only while its reading can succeed", () => {
     expect(await halt(projectId, category)).toBe("blocked");
     const changeId = await sendChange(projectId);
     const listed = (await listUnconsumedChanges(db)).filter((change) => change.projectId === projectId);
-    expect(listed.map((change) => [change.id, change.paused])).toEqual([[changeId, true]]);
+    expect(listed.map((change) => [change.id, change instanceof UnreadSubject ? "unread" : change.paused])).toEqual([[changeId, true]]);
   });
 });
 

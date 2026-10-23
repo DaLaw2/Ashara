@@ -1,10 +1,11 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { latestEnvironmentStatement } from "@ashara/delivery/reads";
 import { noOpenStop, projectAtWork } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
+import { stackChoiceSubject } from "../stack-choice.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
 import { postOnSubject } from "./client-message.js";
@@ -24,9 +25,11 @@ interface DueStackChoiceRow {
 /**
  * Every active project whose latest completed environment task carries a statement and that has
  * no stack-choice report, oldest project first. A project the client stopped, or has a stop
- * awaiting the Liaison, is not reported on.
+ * awaiting the Liaison, is not reported on. Each project is read on its own (readEach), its project
+ * the subject, since a project is told its stack choice once: one whose rows do not read is its
+ * UnreadSubject.
  */
-export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceRow[]> {
+export async function listDueStackChoices(db: DbHandle): Promise<Array<DueStackChoiceRow | UnreadSubject>> {
   const candidates = await db
     .select({ id: projects.id })
     .from(projects)
@@ -40,15 +43,18 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
   const visions = new VisionRepository(db);
-  const due: DueStackChoiceRow[] = [];
-  for (const candidate of candidates) {
-    // The report tells the client the environment is set up: only a task whose merge is on record did that.
-    const task = await latestEnvironmentStatement(db, candidate.id);
-    if (task === null) continue;
-    const projectId = parseProjectId(candidate.id, "projects.id");
-    due.push({ projectId, taskId: task.taskId, statement: task.statement, vision: await visions.getCurrent(projectId) });
-  }
-  return due;
+  const read = await readEach(
+    candidates,
+    (candidate) => stackChoiceSubject(parseProjectId(candidate.id, "projects.id")),
+    async (candidate): Promise<DueStackChoiceRow | null> => {
+      // The report tells the client the environment is set up: only a task whose merge is on record did that.
+      const task = await latestEnvironmentStatement(db, candidate.id);
+      if (task === null) return null;
+      const projectId = parseProjectId(candidate.id, "projects.id");
+      return { projectId, taskId: task.taskId, statement: task.statement, vision: await visions.getCurrent(projectId) };
+    },
+  );
+  return read.filter((row): row is DueStackChoiceRow | UnreadSubject => row !== null);
 }
 
 /** The project's vision moved past the version the stack choice was composed against. */

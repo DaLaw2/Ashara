@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent, ModelCallFailure } from "@ashara/finance";
 import { modelCallFailureOf, withStructuredLadder } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import {
@@ -100,7 +100,8 @@ type CorrectionRecording = { readonly kind: "recorded" } | { readonly kind: "alr
 
 /** Engagement's persistence port for client changes. Each write method is one transaction. */
 export interface ClientChangeStore {
-  openChanges(): Promise<readonly OpenChange[]>;
+  /** Every open change, each read on its own: one whose rows do not read is its UnreadSubject. */
+  openChanges(): Promise<ReadonlyArray<OpenChange | UnreadSubject>>;
   /** The change as openChanges lists it, read now; null when no longer listed. */
   openChange(changeId: string): Promise<OpenChange | null>;
   /** The tasks of the project's current plan citing any of `ids`, and its work ledger. */

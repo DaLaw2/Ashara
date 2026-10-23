@@ -3,7 +3,7 @@ import { z } from "zod";
 import { projects, qualifiedColumn } from "@ashara/db";
 import { acceptanceSweepFaults, acceptanceSweeps, guaranteeEvidence, taskChecks, terminalSweepFaults, undecidedItems } from "@ashara/db/schema/quality";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, firstPlanned, haltEpisodesWhere, noTaskOpen, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
 import { haltReported, noOpenAnswer, noOpenStop, projectActive, projectAtWork, reportTold, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
 import { coverageOf, judgeGuarantees } from "../guarantee-verdict.js";
@@ -52,24 +52,32 @@ interface ReadyProjectRow {
   readonly scaffoldMerges: readonly RecordedScaffold[];
 }
 
-/** The projects ready for their acceptance sweep, oldest first. */
-export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<ReadyProjectRow[]> {
+/**
+ * The projects ready for their acceptance sweep, oldest first. Each project is read on its own
+ * (readEach), so one whose rows do not read is its UnreadSubject.
+ */
+export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<Array<ReadyProjectRow | UnreadSubject>> {
   const rows = await db
     .select({ id: projects.id, workspacePath: projects.workspacePath })
     .from(projects)
     .where(readyForAcceptance)
     .orderBy(asc(projects.createdAt), asc(projects.id));
-  const ready: ReadyProjectRow[] = [];
-  for (const row of rows) {
-    const goals = await completedGoalTasks(db, row.id);
-    ready.push({
-      projectId: parseProjectId(row.id, "projects.id"),
-      workspacePath: row.workspacePath,
-      goalTaskIds: goals.map((goal) => goal.id),
-      scaffoldMerges: await completedScaffolds(db, row.id),
-    });
-  }
-  return ready;
+  return readEach(
+    rows,
+    (row) => {
+      const projectId = parseProjectId(row.id, "projects.id");
+      return { id: projectId, projectId };
+    },
+    async (row): Promise<ReadyProjectRow> => {
+      const goals = await completedGoalTasks(db, row.id);
+      return {
+        projectId: parseProjectId(row.id, "projects.id"),
+        workspacePath: row.workspacePath,
+        goalTaskIds: goals.map((goal) => goal.id),
+        scaffoldMerges: await completedScaffolds(db, row.id),
+      };
+    },
+  );
 }
 
 /** What one sweep recorded, whatever its verdict. */

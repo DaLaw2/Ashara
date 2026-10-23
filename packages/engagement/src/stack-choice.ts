@@ -1,5 +1,5 @@
 import { containEach } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
@@ -29,9 +29,18 @@ interface StackChoiceWrite {
   readonly report: string;
 }
 
+/**
+ * A stack choice's subject in the step's ledger: its project, which is told its stack choice once, and
+ * which the listing names before reading any of its rows.
+ */
+export function stackChoiceSubject(projectId: ProjectId): { readonly id: string; readonly projectId: ProjectId } {
+  return { id: projectId, projectId };
+}
+
 /** Engagement's persistence port for stack choices. */
 export interface StackChoiceStore {
-  dueStackChoices(): Promise<readonly DueStackChoice[]>;
+  /** Every due stack choice, each project read on its own: one whose rows do not read is its UnreadSubject. */
+  dueStackChoices(): Promise<ReadonlyArray<DueStackChoice | UnreadSubject>>;
   /**
    * Posts the report and appends the vision version after the one it was composed against together,
    * in one transaction; a project already reported on gets nothing new, and one no longer at work
@@ -92,7 +101,7 @@ export class StackChoiceReports implements LiaisonStackChoices {
    */
   async runPending(): Promise<readonly StackChoiceOutcome[]> {
     const due = await this.store.dueStackChoices();
-    return containEach(this.containment, "stack-choice", due, (choice) => ({ id: choice.taskId, projectId: choice.projectId }), async (choice): Promise<StackChoiceOutcome> => {
+    return containEach(this.containment, "stack-choice", due, (choice) => stackChoiceSubject(choice.projectId), async (choice): Promise<StackChoiceOutcome> => {
       let write: StackChoiceWrite;
       try {
         write = this.compose(choice);

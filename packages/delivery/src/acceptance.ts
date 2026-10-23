@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
+import type { Logger, ProjectId, StepContainment, UnreadSubject } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import { acceptanceUncoveredCause, projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
@@ -54,7 +54,8 @@ interface SweepRecord {
 
 /** The acceptance store; the composition root supplies it. */
 export interface AcceptanceStore {
-  readyForAcceptance(): Promise<readonly ReadyProject[]>;
+  /** Every project ready for its sweep, each read on its own: one whose rows do not read is its UnreadSubject. */
+  readyForAcceptance(): Promise<ReadonlyArray<ReadyProject | UnreadSubject>>;
   /**
    * Records a passed sweep that covers the contract in force, with the outcome of every stored check
    * it ran and each guarantee's evidence, and moves the project to accepted, together; "moved" when

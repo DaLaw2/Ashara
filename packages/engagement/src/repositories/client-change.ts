@@ -6,7 +6,7 @@ import { currentTasksCiting, implementationTaskStandings } from "@ashara/deliver
 import { parseWorkItemStatus, storedWorkOnMain } from "@ashara/delivery/work-item";
 import { projectWork, projectWorkBudget, tasksWorkDrawn } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { HoldCorrection } from "../ports.js";
 import { MAX_CHANGE_ATTEMPTS } from "../client-change.js";
 import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
@@ -57,16 +57,22 @@ export async function affectedKeysOf(db: DbHandle, projectId: ProjectId, version
  * halt the reading cannot get past, and a change at its cap of failed readings waits out any halt,
  * each as inboundDecision decides (clientMessageReadNow), which also holds a change of a project
  * with no vision yet for its tender's reading. One of a project with a stop awaiting the Liaison is
- * not listed, as for answers.
+ * not listed, as for answers. Each change is read on its own (readEach): one whose rows do not read
+ * is its UnreadSubject.
  */
-export async function listUnconsumedChanges(db: DbHandle): Promise<OpenChange[]> {
-  return openChangeRows(db, null);
+export async function listUnconsumedChanges(db: DbHandle): Promise<Array<OpenChange | UnreadSubject>> {
+  const visions = new VisionRepository(db);
+  return readEach(
+    await openChangeMessages(db, MAX_CHANGE_ATTEMPTS, null),
+    (row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "client_messages.project_id") }),
+    (row) => openChangeRow(db, visions, row),
+  );
 }
 
 /** One change as listUnconsumedChanges lists it, read now; null when it is no longer listed. */
 export async function readOpenChange(db: DbHandle, changeId: string): Promise<OpenChange | null> {
-  const [row] = await openChangeRows(db, changeId);
-  return row ?? null;
+  const [row] = await openChangeMessages(db, MAX_CHANGE_ATTEMPTS, changeId);
+  return row === undefined ? null : openChangeRow(db, new VisionRepository(db), row);
 }
 
 const KeyRowsSchema = z.array(z.object({ key: z.string().min(1) }));
@@ -74,24 +80,20 @@ const ProposalRowsSchema = z.array(
   z.object({ id: z.string(), ops: z.unknown(), sourceMessageId: z.string().nullable(), sourceBody: z.string().nullable() }),
 );
 
-async function openChangeRows(db: DbHandle, changeId: string | null): Promise<OpenChange[]> {
-  const rows = await openChangeMessages(db, MAX_CHANGE_ATTEMPTS, changeId);
+type OpenChangeMessage = Awaited<ReturnType<typeof openChangeMessages>>[number];
 
-  const visions = new VisionRepository(db);
-  const open: OpenChange[] = [];
-  for (const row of rows) {
-    const { halted, ...change } = row;
-    const projectId = parseProjectId(row.projectId, "client_messages.project_id");
-    open.push({
-      ...change,
-      projectId,
-      paused: z.boolean().parse(halted),
-      vision: await visions.getCurrent(projectId),
-      usedKeys: await usedKeysOf(db, projectId),
-      proposals: await proposalsOf(db, projectId),
-    });
-  }
-  return open;
+/** One open change's message, read with its project's current vision, used keys and proposals. */
+async function openChangeRow(db: DbHandle, visions: VisionRepository, row: OpenChangeMessage): Promise<OpenChange> {
+  const { halted, ...change } = row;
+  const projectId = parseProjectId(row.projectId, "client_messages.project_id");
+  return {
+    ...change,
+    projectId,
+    paused: z.boolean().parse(halted),
+    vision: await visions.getCurrent(projectId),
+    usedKeys: await usedKeysOf(db, projectId),
+    proposals: await proposalsOf(db, projectId),
+  };
 }
 
 /** Every key of an interface entry, guarantee, exclusion or assumption any version of the project held. */

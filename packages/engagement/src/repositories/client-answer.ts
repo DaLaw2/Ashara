@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { projects } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { firstPlanned } from "@ashara/delivery/predicates";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { StoredVision, VisionAppend } from "../vision.js";
@@ -37,9 +37,15 @@ interface OpenAnswerRow {
  * read all the same (a halt pauses the work, not the reading), except under a
  * halt the reading cannot get past, and an answer at its cap of failed readings
  * waits out any halt, each as inboundDecision decides (clientMessageReadNow). A project with a stop awaiting the Liaison is not listed, as for tenders.
+ * Each answer is read on its own (readEach): one whose rows do not read is its UnreadSubject.
  */
-export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
-  return openAnswerRows(db, null);
+export async function listOpenAnswers(db: DbHandle): Promise<Array<OpenAnswerRow | UnreadSubject>> {
+  const visions = new VisionRepository(db);
+  return readEach(
+    await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, null),
+    (row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "client_messages.project_id") }),
+    (row) => openAnswerRow(visions, row),
+  );
 }
 
 /**
@@ -48,31 +54,27 @@ export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
  * version sees that version. null when it is no longer listed (consumed, or its project stopped).
  */
 export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<OpenAnswerRow | null> {
-  const [row] = await openAnswerRows(db, answerId);
-  return row ?? null;
+  const [row] = await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, answerId);
+  return row === undefined ? null : openAnswerRow(new VisionRepository(db), row);
 }
 
-async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<OpenAnswerRow[]> {
-  const rows = await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, answerId);
+type OpenAnswerMessage = Awaited<ReturnType<typeof openAnswerMessages>>[number];
 
-  const visions = new VisionRepository(db);
-  const open: OpenAnswerRow[] = [];
-  for (const row of rows) {
-    const projectId = parseProjectId(row.projectId, "client_messages.project_id");
-    open.push({
-      id: row.id,
-      projectId,
-      body: row.body,
-      questionId: row.questionId,
-      intakeAttempts: row.intakeAttempts,
-      intakeLastError: row.intakeLastError,
-      intakeLastFailure: row.intakeLastFailure,
-      planned: row.planned,
-      vision: await visions.getCurrent(projectId),
-      paused: row.halted,
-    });
-  }
-  return open;
+/** One open answer's message, read with its project's current vision. */
+async function openAnswerRow(visions: VisionRepository, row: OpenAnswerMessage): Promise<OpenAnswerRow> {
+  const projectId = parseProjectId(row.projectId, "client_messages.project_id");
+  return {
+    id: row.id,
+    projectId,
+    body: row.body,
+    questionId: row.questionId,
+    intakeAttempts: row.intakeAttempts,
+    intakeLastError: row.intakeLastError,
+    intakeLastFailure: row.intakeLastFailure,
+    planned: row.planned,
+    vision: await visions.getCurrent(projectId),
+    paused: row.halted,
+  };
 }
 
 /** An unconsumed inbound answer with this id was needed, and none was found. */

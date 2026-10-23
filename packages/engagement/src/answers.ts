@@ -3,7 +3,7 @@ import type { ContextualLlm, ModelCallFailure } from "@ashara/finance";
 import { modelCallFailureOf, withStructuredLadder } from "@ashara/finance";
 import type { LadderAttemptEvent } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { ownSpendRefusal } from "./client-spend-refusal.js";
@@ -77,7 +77,8 @@ type AnswerRecording =
 
 /** Engagement's persistence port for answers. Each write method is one transaction. */
 export interface AnswerStore {
-  openAnswers(): Promise<readonly OpenAnswer[]>;
+  /** Every open answer, each read on its own: one whose rows do not read is its UnreadSubject. */
+  openAnswers(): Promise<ReadonlyArray<OpenAnswer | UnreadSubject>>;
   /** The answer as openAnswers lists it, with its project's vision as it is now; null when no longer listed. */
   openAnswer(answerId: string): Promise<OpenAnswer | null>;
   /**
