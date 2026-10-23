@@ -1,15 +1,35 @@
 import pg from "pg";
+import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { DEFAULT_DATABASE_URL } from "./connection.js";
-import { MIGRATIONS_DIR, runMigrations } from "./migrations.js";
+import { MIGRATIONS_DIR, migrationSetHash, runMigrations } from "./migrations.js";
 import type { MigrationRunResult } from "./migrations.js";
 
 /**
- * Where tests and the simulator connect when TEST_DATABASE_URL is unset: the test Postgres of
- * docker/postgres-test.yml, whose data lives in tmpfs with fsync off, so scratch databases cost the
- * disk nothing. It is a different server from the shared one `DEFAULT_DATABASE_URL` names.
+ * The test Postgres of docker/postgres-test.yml, whose data lives in tmpfs with fsync off, so
+ * scratch databases cost the disk nothing. It is a different server from the shared one
+ * `DEFAULT_DATABASE_URL` names.
  */
-const DEFAULT_TEST_DATABASE_URL = "postgresql://ashara@localhost:5433/ashara";
+const TEST_SERVER_URL = "postgresql://ashara@localhost:5433/postgres";
+
+/**
+ * Where tests and the simulator connect when TEST_DATABASE_URL is unset: the test server's database
+ * for exactly this checkout's migration files. Every checkout shares the test server, and a branch
+ * holds migrations that are still drafts or are renumbered when it lands; were they applied to one
+ * shared database, every other checkout would read them as drift. Keyed by the migrations' content,
+ * a checkout migrates only a database no other set of migrations ever touched.
+ */
+const DEFAULT_TEST_DATABASE_PREFIX = "ashara_test_";
+
+function defaultTestDatabaseUrl(): string {
+  return databaseUrlOn(TEST_SERVER_URL, `${DEFAULT_TEST_DATABASE_PREFIX}${migrationSetHash(MIGRATIONS_DIR)}`);
+}
+
+function databaseUrlOn(serverUrl: string, database: string): string {
+  const url = new URL(serverUrl);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
 
 const TEST_DB_UP = "start it with `just test-db-up`";
 
@@ -73,7 +93,7 @@ function serverAndDatabase(url: URL): string {
  * the shared database is refused rather than used.
  */
 export function resolveTestDatabaseUrl(env: Readonly<Record<string, string | undefined>>): string {
-  return refusingSharedDatabase("TEST_DATABASE_URL", env["TEST_DATABASE_URL"] ?? DEFAULT_TEST_DATABASE_URL);
+  return refusingSharedDatabase("TEST_DATABASE_URL", env["TEST_DATABASE_URL"] ?? defaultTestDatabaseUrl());
 }
 
 /**
@@ -109,13 +129,43 @@ export async function assertTestDatabaseReachable(url: string): Promise<void> {
   }
 }
 
+const PgErrorCodeSchema = z.object({ code: z.string() });
+
+/** Postgres's duplicate_database: another run created the database first. */
+const DUPLICATE_DATABASE = "42P04";
+
+/** Creates the default test database on the test server unless it is there; another run creating it at once is no fault. */
+async function createDefaultTestDatabase(url: string): Promise<void> {
+  const database = decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
+  const client = new pg.Client({ connectionString: databaseUrlOn(url, "postgres") });
+  await client.connect();
+  try {
+    const exists = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [database]);
+    if (exists.rowCount !== 0) return;
+    try {
+      await client.query(`CREATE DATABASE "${database}"`);
+    } catch (error) {
+      const coded = PgErrorCodeSchema.safeParse(error);
+      if (!coded.success || coded.data.code !== DUPLICATE_DATABASE) throw error;
+    }
+  } finally {
+    await client.end();
+  }
+}
+
 /**
  * Readies the tests' database before a run: resolves it (resolveTestDatabaseUrl), fails closed naming
- * `just test-db-up` when its server does not answer, and applies the pending migrations, since the
- * test Postgres keeps its data in tmpfs and starts empty.
+ * `just test-db-up` when its server does not answer, creates the default one for this checkout's
+ * migrations when TEST_DATABASE_URL is unset, and applies the pending migrations, since the test
+ * Postgres keeps its data in tmpfs and starts empty.
  */
 export async function readyTestDatabase(env: Readonly<Record<string, string | undefined>>): Promise<MigrationRunResult> {
   const url = resolveTestDatabaseUrl(env);
-  await assertTestDatabaseReachable(url);
+  if (env["TEST_DATABASE_URL"] === undefined) {
+    await assertTestDatabaseReachable(databaseUrlOn(url, "postgres"));
+    await createDefaultTestDatabase(url);
+  } else {
+    await assertTestDatabaseReachable(url);
+  }
   return runMigrations(url, MIGRATIONS_DIR);
 }

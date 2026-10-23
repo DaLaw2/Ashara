@@ -261,6 +261,8 @@ describe("the deployment cap halts two projects", () => {
         terminalSweeps: {
           dueTerminalSweeps: async () => (await sweeps.dueTerminalSweeps()).filter((due) => ours.has(due.projectId)),
           recordTerminalSweep: (sweep) => sweeps.recordTerminalSweep(sweep),
+          recordWithoutEvidence: notExercised("terminalSweeps.recordWithoutEvidence"),
+          recordSweepFault: notExercised("terminalSweeps.recordSweepFault"),
         } } }),
     );
     const blockedReports = async (projectId: ProjectId) =>

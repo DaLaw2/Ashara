@@ -61,7 +61,7 @@ export function wholeDatabaseStepsIdle(): WholeDatabaseSteps {
         recordSweepFault: notExercised("acceptance.recordSweepFault"),
         recordDefect: notExercised("acceptance.recordDefect"),
       },
-      terminalSweeps: { dueTerminalSweeps: idle, recordTerminalSweep: notExercised("terminalSweeps.recordTerminalSweep") },
+      terminalSweeps: { dueTerminalSweeps: idle, recordTerminalSweep: notExercised("terminalSweeps.recordTerminalSweep"), recordWithoutEvidence: notExercised("terminalSweeps.recordWithoutEvidence"), recordSweepFault: notExercised("terminalSweeps.recordSweepFault") },
     },
     reporting: {
       terminalReports: { runPending: idle },

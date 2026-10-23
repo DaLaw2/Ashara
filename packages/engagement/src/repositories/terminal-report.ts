@@ -28,9 +28,11 @@ import { tellOnce } from "./told-report.js";
 // of each passed sweep of an accepted project, the stop report of each stop that stopped its
 // project, the report of each halt, the report of each first planning that stopped, and the decline
 // of each contract version Ashara can verify no guarantee of. Each kind is listed on its own, so one
-// kind's listing that fails leaves every other kind listed. Each carries the guarantee table of its
-// terminal's sweep when one is on record, and otherwise of the project's vision in force, judged on
-// no sweep, so no terminal message waits for evidence.
+// kind's listing that fails leaves every other kind listed. A stop's and a halt's message carry the
+// guarantee table of their terminal's sweep and are not due until it is on record: the sweep ran, or
+// its retries were exhausted and it was recorded naming the fault, so neither is told on no sweep
+// while one is still owed or retryable. A message no terminal sweep is owed for (a stopped first
+// planning, a decline) carries the table of the project's vision in force, judged on no sweep.
 
 /** The readers of other contexts' records a terminal's words need, which the composition root supplies. */
 export interface TerminalReaders {
@@ -41,11 +43,6 @@ export interface TerminalReaders {
 /** The guarantee table a terminal message carries, read from its stored records (readGuaranteeTable). */
 export async function terminalTableOf(db: DbHandle, source: TableSource): Promise<GuaranteeTable> {
   return readGuaranteeTable(storedGuaranteeRecords(db), source);
-}
-
-/** The table of the terminal's own sweep when one is on record, else of the project's vision in force on no sweep. */
-function terminalSource(sweepId: string | null, projectId: string): TableSource {
-  return sweepId === null ? { kind: "no-sweep", projectId } : { kind: "sweep", sweepId };
 }
 
 /** work_items.merge_kind; NULL on a record from before merge kinds were recorded. */
@@ -86,31 +83,46 @@ async function mergedTasksOf(db: DbHandle, projectId: ProjectId): Promise<Merged
   return merged;
 }
 
-/** Every stop that stopped its project, still stopped, its report untold, oldest consumed first, with its terminal sweep's table. */
+/**
+ * Each of `rows` with its terminal's sweep, in order; a row whose sweep is not on record yet is left
+ * out: its message waits for the sweep.
+ */
+async function withSweepOnRecord<T>(rows: readonly T[], sweepOf: (row: T) => Promise<string | null>): Promise<Array<T & { readonly sweepId: string }>> {
+  const swept: Array<T & { readonly sweepId: string }> = [];
+  for (const row of rows) {
+    const sweepId = await sweepOf(row);
+    if (sweepId !== null) swept.push({ ...row, sweepId });
+  }
+  return swept;
+}
+
+/**
+ * Every stop that stopped its project, still stopped, its report untold and its terminal sweep on
+ * record, oldest consumed first, with that sweep's table.
+ */
 async function dueStops(db: DbHandle): Promise<Array<DueTerminal | UnreadSubject>> {
-  const rows = await dueStopReportMessages(db);
+  const rows = await withSweepOnRecord(await dueStopReportMessages(db), (row) => sweepOfTerminal(db, { kind: "stop", stopId: row.stopId }));
   const subject = (row: (typeof rows)[number]) => ({
     id: terminalSubjectId({ kind: "stopped", stopId: row.stopId }),
     projectId: parseProjectId(row.projectId, "client_messages.project_id"),
   });
   return readEach(rows, subject, async (row): Promise<DueTerminal> => {
     const { projectId } = subject(row);
-    const sweepId = await sweepOfTerminal(db, { kind: "stop", stopId: row.stopId });
     const stop = { stopId: row.stopId, projectId, merged: await mergedTasksOf(db, projectId), paused: row.paused === true, accepted: row.accepted };
-    return { kind: "listed", event: { kind: "stopped", projectId, stop }, table: await terminalTableOf(db, terminalSource(sweepId, projectId)) };
+    return { kind: "listed", event: { kind: "stopped", projectId, stop }, table: await terminalTableOf(db, { kind: "sweep", sweepId: row.sweepId }) };
   });
 }
 
 /**
- * Every halt episode Delivery publishes whose report is untold, oldest halt first, with its terminal
- * sweep's table and the records its register reads. A halt ended by an unblock or a passing probe
+ * Every halt episode Delivery publishes whose report is untold and whose terminal sweep is on record,
+ * oldest halt first, with that sweep's table and the records its register reads. A halt ended by an unblock or a passing probe
  * before its report was posted is still told, and its resumption after it; one the client's stop
  * ended is told by the stop report, and a project the client stopped, or has a stop awaiting the
  * Liaison, is told no halt. An episode whose resumption the client has already heard is never told
  * the halt after it, and a planning_stopped halt is told by the planning-stopped message.
  */
 async function dueHalts(db: DbHandle, blockingReview: BlockingReviewReader): Promise<Array<DueTerminal | UnreadSubject>> {
-  const episodes = await haltEpisodesWhere(db, (episode) =>
+  const listed = await haltEpisodesWhere(db, (episode) =>
     and(
       or(episode.open, and(episode.resumed, sql`NOT ${resumptionTold(episode.id)}`)),
       sql`NOT ${terminalTold("halted", episode.id)}`,
@@ -118,16 +130,16 @@ async function dueHalts(db: DbHandle, blockingReview: BlockingReviewReader): Pro
       notCoveredByPlanningStoppedReport(episode),
     ),
   );
+  const episodes = await withSweepOnRecord(listed, (row) => sweepOfTerminal(db, { kind: "halt", blockId: row.id }));
   return readEach(
     episodes,
     (row) => ({ id: terminalSubjectId({ kind: "halted", episodeId: row.id }), projectId: parseProjectId(row.projectId, "project_blocks.project_id") }),
     async (row): Promise<DueTerminal> => {
       const halt = await haltReportOf(db, row, blockingReview);
-      const sweepId = await sweepOfTerminal(db, { kind: "halt", blockId: row.id });
       return {
         kind: "listed",
         event: { kind: "halted", projectId: halt.projectId, halt, risk: await readRiskRecords(db, halt.projectId) },
-        table: await terminalTableOf(db, terminalSource(sweepId, halt.projectId)),
+        table: await terminalTableOf(db, { kind: "sweep", sweepId: row.sweepId }),
       };
     },
   );

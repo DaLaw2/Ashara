@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { projects, qualifiedColumn } from "@ashara/db";
-import { acceptanceSweepFaults, acceptanceSweeps, guaranteeEvidence, taskChecks, undecidedItems } from "@ashara/db/schema/quality";
+import { acceptanceSweepFaults, acceptanceSweeps, guaranteeEvidence, taskChecks, terminalSweepFaults, undecidedItems } from "@ashara/db/schema/quality";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, firstPlanned, noTaskOpen, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
-import { noOpenAnswer, noOpenStop, projectActive, projectAtWork, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
+import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, firstPlanned, haltEpisodesWhere, noTaskOpen, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
+import { haltReported, noOpenAnswer, noOpenStop, projectActive, projectAtWork, reportTold, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
 import { coverageOf, judgeGuarantees } from "../guarantee-verdict.js";
 import type { Coverage, Evidence, JudgedGuarantee } from "../guarantee-verdict.js";
 import type { FailedCheck, SweptCheck } from "../verification/acceptance-sweep.js";
@@ -391,16 +391,19 @@ interface DueTerminalSweepRow {
 
 /**
  * Every terminal owed its one terminal sweep, oldest first: each stop that stopped a project still
- * stopped, then each open halt episode of an active project. A second stop of a project already
- * stopped stopped nothing, so it is owed none. The stop's report is posted after the cycle's terminal
- * sweeps, so it carries this sweep when it is recorded, and is still posted, with no sweep, when it is not.
+ * stopped, then each halt episode open on an active project, or ended by a resumption before either
+ * its halt or its resumption was told, of a project not stopped. A second stop of a project already
+ * stopped stopped nothing, so it is owed none. The stop's and the halt's report wait for this sweep:
+ * each is told only once the sweep, or the fault that exhausted its retries, is on record.
  */
 export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSweepRow[]> {
   const stopped = await stopsThatStopped(db, (stop) => sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id})`);
-  const open = await openHaltEpisodesWhere(
+  const open = await haltEpisodesWhere(
     db,
-    (episode) => sql`(EXISTS (SELECT 1 FROM projects WHERE projects.id = ${episode.projectId} AND ${projectActive()})
-      AND NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.block_id = ${episode.id}))`,
+    (episode) => sql`(NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.block_id = ${episode.id})
+      AND ((${episode.open} AND EXISTS (SELECT 1 FROM projects WHERE projects.id = ${episode.projectId} AND ${projectActive()}))
+        OR (${episode.resumed} AND NOT ${haltReported(episode.id)} AND NOT ${reportTold("project-resumed", episode.id)}
+          AND EXISTS (SELECT 1 FROM projects WHERE projects.id = ${episode.projectId} AND projects.lifecycle <> 'stopped'))))`,
   );
   const workspaceOf = await workspacePaths(db, [...stopped.map((stop) => stop.projectId), ...open.map((episode) => episode.projectId)]);
   const stops = stopped.map((stop) => ({ projectId: stop.projectId, workspacePath: workspaceOf(stop.projectId), stopId: stop.stopId }));
@@ -419,6 +422,36 @@ export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSw
   ];
 }
 
+/** recordTerminalSweepFault named a project with no row, or the count returned no row. */
+class TerminalSweepFaultUncounted extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly terminal: Terminal,
+  ) {
+    super(
+      `cannot count a terminal sweep fault of ${terminal.kind === "stop" ? `stop ${terminal.stopId}` : `halt ${terminal.blockId}`} on project ${projectId}: ` +
+        "no projects row has that id, or the count returned no row",
+    );
+    this.name = "TerminalSweepFaultUncounted";
+  }
+}
+
+/**
+ * Counts one terminal sweep of `terminal` that could not run (terminal_sweep_faults), durably, and
+ * returns the count with it: the bound on its retries outlives a restart.
+ */
+export async function recordTerminalSweepFault(db: DbHandle, projectId: ProjectId, terminal: Terminal): Promise<number> {
+  const of = terminal.kind === "stop" ? { stopId: terminal.stopId } : { blockId: terminal.blockId };
+  const target = terminal.kind === "stop" ? terminalSweepFaults.stopId : terminalSweepFaults.blockId;
+  const [row] = await db
+    .insert(terminalSweepFaults)
+    .values({ projectId, ...of, faults: 1 })
+    .onConflictDoUpdate({ target, set: { faults: sql`${qualifiedColumn(terminalSweepFaults.faults)} + 1` } })
+    .returning({ faults: terminalSweepFaults.faults });
+  if (!row) throw new TerminalSweepFaultUncounted(projectId, terminal);
+  return row.faults;
+}
+
 /**
  * A terminal sweep: recorded once per stop or halt episode with the outcome of every stored check it
  * ran and the evidence of every guarantee in force (`readGuarantees`), in one transaction. It is
@@ -434,6 +467,25 @@ export async function recordTerminalSweep(
     const sweepId = await insertSweepWithEvidence(tx, sweep, { purpose: "terminal", passed: false, ...of }, await sweepEvidenceOf(tx, sweep, readGuarantees));
     return sweepId === null ? "already-recorded" : "recorded";
   });
+}
+
+/**
+ * A terminal sweep whose evidence could not be built (the guarantees in force, or the stored checks,
+ * did not read): recorded with no check run and no guarantee evidence, so its terminal's report is
+ * told on what its records hold. "already-recorded" when its terminal has one; nothing is written.
+ */
+export async function recordTerminalSweepWithoutEvidence(
+  db: DbHandle,
+  sweep: Omit<AcceptanceSweepRecord, "checkOutcomes"> & { readonly terminal: Terminal },
+): Promise<"recorded" | "already-recorded"> {
+  const of = sweep.terminal.kind === "stop" ? { stopId: sweep.terminal.stopId } : { blockId: sweep.terminal.blockId };
+  const sweepId = await insertSweepWithEvidence(
+    db,
+    { ...sweep, checkOutcomes: [] },
+    { purpose: "terminal", passed: false, ...of },
+    { swept: [], guarantees: { kind: "none" }, byGuarantee: new Map() },
+  );
+  return sweepId === null ? "already-recorded" : "recorded";
 }
 
 /**

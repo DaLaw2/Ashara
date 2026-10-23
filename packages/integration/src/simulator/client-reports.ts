@@ -100,6 +100,12 @@ const tableSweepRow = z.object({
   mainCommit: z.string().nullable(),
   visionAtSweep: z.number().nullable(),
 });
+/** The faults counted on a terminal's sweep that could not run: its stop or its halt episode, and how many. */
+const terminalSweepFaultRow = z.object({
+  stopId: z.string().nullable(),
+  blockId: z.string().nullable(),
+  faults: z.number(),
+});
 /** One guarantee's evidence on one sweep, as Quality recorded it. */
 const evidenceRow = z.object({
   sweepId: z.string(),
@@ -196,6 +202,8 @@ export interface ReportRecords {
   readonly tableSweeps: ReadonlyArray<z.infer<typeof tableSweepRow>>;
   /** Each stop's terminal sweep recorded at or before that stop's report: the sweep its table is judged from. */
   readonly stopSweepsBeforeReport: readonly string[];
+  /** The faults counted on each terminal sweep of the project that could not run. */
+  readonly terminalSweepFaults: ReadonlyArray<z.infer<typeof terminalSweepFaultRow>>;
   /** Every guarantee's evidence on every sweep. */
   readonly evidence: ReadonlyArray<z.infer<typeof evidenceRow>>;
   /** Every verdict stored beside a message. */
@@ -298,6 +306,11 @@ export async function readReportRecords(db: Database, projectId: string): Promis
             WHERE s.project_id = ${projectId} AND s.created_at <= m.created_at ORDER BY s.created_at, s.id`,
       )
     ).map((row) => row.id),
+    terminalSweepFaults: await rows(
+      terminalSweepFaultRow,
+      sql`SELECT stop_id AS "stopId", block_id AS "blockId", faults FROM terminal_sweep_faults
+          WHERE project_id = ${projectId} ORDER BY id`,
+    ),
     evidence: await rows(
       evidenceRow,
       sql`SELECT sweep_id AS "sweepId", guarantee_id AS "guaranteeId", vision_version AS "visionVersion", checks

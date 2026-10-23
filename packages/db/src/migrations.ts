@@ -266,6 +266,16 @@ function readMigrationFiles(migrationsDir: string): MigrationFile[] {
 }
 
 /**
+ * The content hash of the migration files in `migrationsDir`, names and bytes in filename order: two
+ * checkouts share it only when they hold exactly the same migrations.
+ */
+export function migrationSetHash(migrationsDir: string): string {
+  const hash = createHash("sha256");
+  for (const file of readMigrationFiles(migrationsDir)) hash.update(file.filename).update("\0").update(file.sql).update("\0");
+  return hash.digest("hex").slice(0, 12);
+}
+
+/**
  * A client that has lost its connection while idle emits 'error'; without a listener that
  * event kills the process. The loss itself surfaces as the next query's rejection.
  */

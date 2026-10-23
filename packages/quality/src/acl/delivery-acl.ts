@@ -12,7 +12,7 @@
 
 export type { StoredTaskSpec } from "@ashara/delivery/work-item";
 export { parseWorkItemJsonb } from "@ashara/delivery/work-item";
-export { completedGoalTasks, firstPlanned, isProductScaffoldOrigin, isSprint0Origin, openHaltEpisodesWhere, pendingCorrection, pendingRepair } from "@ashara/delivery/predicates";
+export { completedGoalTasks, firstPlanned, haltEpisodesWhere, isProductScaffoldOrigin, isSprint0Origin, pendingCorrection, pendingRepair } from "@ashara/delivery/predicates";
 // What Quality reads of the board (a project's tasks, a check task's foundation and review, the
 // task row its check revisions serialize on) it reads in Delivery's published reads, which import
 // nothing of Delivery's services.

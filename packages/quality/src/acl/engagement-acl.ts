@@ -10,7 +10,7 @@
 
 export type { Observation, VisionGuarantee, VisionSource } from "@ashara/engagement/vision";
 export { visionSourceCitation } from "@ashara/engagement/vision";
-export { noOpenAnswer, noOpenStop, projectActive, projectAtWork } from "@ashara/engagement/predicates";
+export { haltReported, noOpenAnswer, noOpenStop, projectActive, projectAtWork, reportTold } from "@ashara/engagement/predicates";
 export { stopsThatStopped } from "@ashara/engagement/message-reads";
 // The acceptance moves Engagement's lifecycle in the sweep's own transaction, through the port Engagement declares.
 export type { AcceptProject } from "@ashara/engagement/ports";

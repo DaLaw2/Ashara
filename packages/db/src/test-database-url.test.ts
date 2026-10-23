@@ -1,19 +1,42 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_DATABASE_URL } from "./connection.js";
+import { MIGRATIONS_DIR, migrationSetHash } from "./migrations.js";
 import { assertTestDatabaseReachable, readyTestDatabase, resolveSimulatorDatabaseUrl, resolveTestDatabaseUrl } from "./test-database-url.js";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
-const TEST_SERVER_URL = "postgresql://ashara@localhost:5433/ashara";
+const TEST_SERVER_URL = `postgresql://ashara@localhost:5433/ashara_test_${migrationSetHash(MIGRATIONS_DIR)}`;
 const refused = expect.objectContaining({ name: "TestDatabaseUrlRefused" });
 
 describe("resolveTestDatabaseUrl", () => {
-  test("defaults to the test server on 5433, never the shared database", () => {
+  test("defaults to the test server on 5433, in the database of exactly this checkout's migrations, never the shared database", () => {
     const url = resolveTestDatabaseUrl({});
     expect(url).toBe(TEST_SERVER_URL);
     expect(new URL(url).port).toBe("5433");
     expect(url).not.toBe(DEFAULT_DATABASE_URL);
+  });
+
+  test("a checkout whose migrations differ by a renumbered or redrafted file never shares a default database with this one", () => {
+    const dir = (files: Record<string, string>): string => {
+      const made = mkdtempSync(join(tmpdir(), "ashara-migration-set-"));
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(made, name), text);
+      return made;
+    };
+    const landed = dir({ "000_init.sql": "SELECT 1;", "005_reviewer_outcomes.sql": "SELECT 2;" });
+    const sameAgain = dir({ "000_init.sql": "SELECT 1;", "005_reviewer_outcomes.sql": "SELECT 2;" });
+    const renumbered = dir({ "000_init.sql": "SELECT 1;", "003_reviewer_outcomes.sql": "SELECT 2;" });
+    const redrafted = dir({ "000_init.sql": "SELECT 1;", "005_reviewer_outcomes.sql": "SELECT 3;" });
+    try {
+      expect(migrationSetHash(sameAgain)).toBe(migrationSetHash(landed));
+      expect(migrationSetHash(renumbered)).not.toBe(migrationSetHash(landed));
+      expect(migrationSetHash(redrafted)).not.toBe(migrationSetHash(landed));
+    } finally {
+      for (const made of [landed, sameAgain, renumbered, redrafted]) rmSync(made, { recursive: true, force: true });
+    }
   });
 
   test("never reads DATABASE_URL, which names the server's own database", () => {

@@ -294,6 +294,25 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
 });
 
 // ---------------------------------------------------------------------------
+// terminal_sweep_faults (Quality): the terminal sweeps that could not run, counted per terminal (the
+// consumed stop, or the halt episode) against the bound on their retries; one row per terminal.
+// ---------------------------------------------------------------------------
+
+export const terminalSweepFaults = pgTable("terminal_sweep_faults", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  stopId: uuid("stop_id")
+    .unique("terminal_sweep_faults_one_per_stop")
+    .references(() => clientMessages.id, { onDelete: "cascade" }),
+  blockId: uuid("block_id")
+    .unique("terminal_sweep_faults_one_per_block")
+    .references(() => projectBlocks.id, { onDelete: "cascade" }),
+  faults: integer().notNull(),
+});
+
+// ---------------------------------------------------------------------------
 // guarantee_evidence (Quality): one row per guarantee of the vision version in
 // force per sweep, each stored check deciding it with its outcome, evidence
 // class and whether a standing review finding lowers it, an empty list when no

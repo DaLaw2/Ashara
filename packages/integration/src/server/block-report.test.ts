@@ -135,26 +135,20 @@ afterAll(async () => {
 describe("a blocked project is told once; an operator's unblock is recorded and told once", () => {
   // The halt's report carries the guarantee table of the halt's own terminal sweep when it is on
   // record; a halt whose sweep never was is still told, its table judged on no sweep.
-  test("a halt whose terminal sweep is never recorded is still told, every guarantee unjudged for want of a sweep, its verdicts stored", async () => {
+  test("a halt whose terminal sweep is not on record is not told: its report waits for the sweep", async () => {
     const projectId = await newProject();
     await writeContract(projectId);
     await new ProjectHaltRepository(db).block(projectId, budgetCap);
     const unswept = terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["halted"] });
-    expect(await unswept.runPending(TERMINAL_KINDS)).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
+    expect(await unswept.runPending(TERMINAL_KINDS)).toEqual([]);
+    expect(await messagesOf(projectId)).toEqual([]);
+    expect(await episodesOf(projectId)).toEqual([expect.objectContaining({ kind: "budget_cap", reported: false })]);
 
+    const swept = terminalReportsOf(db, (id) => id === projectId, { kinds: ["halted"] });
+    expect(await swept.runPending(TERMINAL_KINDS)).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
     const [body = ""] = await messagesOf(projectId);
     expect(body).toContain("Ashara recorded the cause as this: the spending limit set for this project left no room");
-    expect(body).toContain("No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v1) is unjudged.");
-    for (const id of ["G1", "G2"]) {
-      const line = body.split("\n").find((each) => each.startsWith(`- ${id}: `) && each.includes(" | verdict: "));
-      expect(line).toContain("| verdict: unjudged, no check could run on a commit of main for this report |");
-    }
-    const stored = await db.execute(sql`
-      SELECT guarantee_id AS "guaranteeId", sweep_id AS "sweepId", verdict, reason FROM guarantee_verdicts WHERE project_id = ${projectId} ORDER BY guarantee_id`);
-    expect(z.array(z.object({ guaranteeId: z.string(), sweepId: z.string().nullable(), verdict: z.string(), reason: z.string().nullable() })).parse(stored.rows)).toEqual([
-      { guaranteeId: "G1", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
-      { guaranteeId: "G2", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
-    ]);
+    expect(body).not.toContain("no sweep of main is on record for it");
     expect(await episodesOf(projectId)).toEqual([expect.objectContaining({ kind: "budget_cap", reported: true })]);
   });
 

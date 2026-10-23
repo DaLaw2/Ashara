@@ -83,6 +83,13 @@ async function dueSubjects(db: Db): Promise<{ halts: string[]; resumptions: stri
 
 const fault = { category: "fault", errorClass: "ToldReportsTestFault", reason: "halted by the told-reports test" } as const;
 
+/** The halt episode's terminal sweep, recorded as one that ran on no commit: a halt's report is due only once it is on record. */
+async function sweepHalt(db: Db, episodeId: string): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, purpose, block_id)
+    SELECT project_id, NULL, NULL, '[]'::jsonb, '[]'::jsonb, false, 'told-reports terminal sweep', 'terminal', id FROM project_blocks WHERE id = ${episodeId}`);
+}
+
 describe("a report on another context's subject is told once across a restart", () => {
   let session: ReturnType<typeof connect>;
   let clientId: string;
@@ -125,6 +132,7 @@ describe("a report on another context's subject is told once across a restart", 
     await halts.block(projectId, fault);
     const [episode] = IdRows.parse((await session.db.execute(sql`SELECT id FROM project_blocks WHERE project_id = ${projectId}`)).rows);
     if (episode === undefined) throw new Error("the halt opened no episode");
+    await sweepHalt(session.db, episode.id);
 
     expect((await dueSubjects(session.db)).halts).toContain(episode.id);
     expect(await postTerminalMessage(session.db, await haltMessage(session.db, projectId, episode.id))).toBe("posted");
@@ -305,6 +313,9 @@ describe("after the migration that moves the told record, no subject already tol
 
     const after = connect(fresh.toString());
     try {
+      const untoldHalt = untold.get("halt");
+      if (untoldHalt === undefined) throw new Error("the untold halt was not seeded");
+      await sweepHalt(after.db, untoldHalt);
       const due = await dueSubjects(after.db);
       expect(due.halts).not.toContain(told.get("halt"));
       expect(due.halts).toContain(untold.get("halt"));

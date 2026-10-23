@@ -12,6 +12,7 @@ const noRecords: ReportRecords = {
   revisionReports: [],
   tableSweeps: [],
   stopSweepsBeforeReport: [],
+  terminalSweepFaults: [],
   evidence: [],
   verdicts: [],
   visions: [],
@@ -253,7 +254,10 @@ describe("checkReports, a delivered report", () => {
       expect(keys(judged(`${offPunch}${off(offLines)}`, offSweep))).toEqual(Array(3).fill("guarantee-table:delivered"));
       expect(keys(judged(""))).toEqual(["guarantee-table:delivered"]);
       // A halt told with no sweep before it judges its table on none: its body still says the sweep's no-contract line.
-      expect(keysOf({ ...haltWith("budget_cap", null, null, "Work on this project is paused.\n\nNo cause was recorded for this pause."), tableSweeps: [] }, "blocked")).toEqual(["guarantee-table:halt:budget_cap"]);
+      expect(keysOf({ ...haltWith("budget_cap", null, null, "Work on this project is paused.\n\nNo cause was recorded for this pause."), tableSweeps: [] }, "blocked")).toEqual([
+        "halt-sweep-unattempted:budget_cap",
+        "guarantee-table:halt:budget_cap",
+      ]);
     });
 
     // A terminal message no sweep is on record for: every guarantee of the version in force when it
@@ -285,11 +289,12 @@ describe("checkReports, a delivered report", () => {
         ...extra,
       });
 
-      it("accepts a halt told before its terminal sweep was recorded, every guarantee unjudged on no sweep, and refuses one that drops the table or names a sweep", () => {
-        expect(keysOf(halted(noSweepTable), "blocked")).toEqual([]);
-        expect(keysOf(halted(""), "blocked")).toEqual(["guarantee-table:halt:budget_cap"]);
-        expect(keysOf(halted(noSweepTable, { verdicts: noSweepVerdicts.map((each) => ({ ...each, sweepId: "t1" })) }), "blocked")).toEqual(Array(3).fill("guarantee-table:halt:budget_cap"));
-        expect(keysOf(halted(noSweepTable, { verdicts: [] }), "blocked")).toEqual(Array(3).fill("guarantee-table:halt:budget_cap"));
+      it("names a halt told before its terminal sweep was recorded, whose table is still judged on no sweep", () => {
+        const unattempted = "halt-sweep-unattempted:budget_cap";
+        expect(keysOf(halted(noSweepTable), "blocked")).toEqual([unattempted]);
+        expect(keysOf(halted(""), "blocked")).toEqual([unattempted, "guarantee-table:halt:budget_cap"]);
+        expect(keysOf(halted(noSweepTable, { verdicts: noSweepVerdicts.map((each) => ({ ...each, sweepId: "t1" })) }), "blocked")).toEqual([unattempted, ...Array(3).fill("guarantee-table:halt:budget_cap")]);
+        expect(keysOf(halted(noSweepTable, { verdicts: [] }), "blocked")).toEqual([unattempted, ...Array(3).fill("guarantee-table:halt:budget_cap")]);
       });
 
       it("holds the planning-stopped report to the table on no sweep: one with no table is named", () => {
@@ -306,6 +311,48 @@ describe("checkReports, a delivered report", () => {
         expect(keys(judged(unreadable, { evidence: mismatched }))).toEqual(["guarantee-table:delivered"]);
       });
     });
+  });
+});
+
+// A stop's and a halt's report are told only once their terminal sweep is over: it ran, it was
+// recorded on no commit with no fault counted (no workspace to sweep), or its retries were exhausted.
+// A report told with no sweep before it, or on a sweep recorded on no commit while retries remained,
+// is named. The bound is the oracle's own: four faults exhaust a terminal sweep's retries.
+describe("checkReports, the terminal sweep a stop's or a halt's report waits for", () => {
+  const PAUSED = "Work on this project is paused.\n\nNo cause was recorded for this pause.";
+  const halt = (extra: Partial<ReportRecords>): ReportRecords => ({ ...haltWith("budget_cap", null, null, PAUSED), ...extra });
+  const offCommit = { id: "t1", blockId: "e1", stopId: null, mainCommit: null, visionAtSweep: null };
+  const stopped = (extra: Partial<ReportRecords>): ReportRecords => ({
+    ...noRecords,
+    reports: [{ id: "r1", body: `Stopped.${noContract("t1")}`, reportsOn: "client-stop", inReplyTo: "m1", visionAtReport: null }],
+    tableSweeps: [{ ...offCommit, blockId: null, stopId: "m1" }],
+    stopSweepsBeforeReport: ["t1"],
+    ...extra,
+  });
+  const stopKeys = (records: ReportRecords): string[] => keysOf(records, "stopped").filter((key) => key.startsWith("stop-sweep"));
+
+  it("accepts a halt report on a sweep that ran, on one with no workspace to sweep, and on one whose retries were exhausted", () => {
+    expect(keysOf(halt({ tableSweeps: [{ ...offCommit, mainCommit: "m1" }], verdicts: [] }), "blocked").filter((key) => key.startsWith("halt-sweep"))).toEqual([]);
+    expect(keysOf(halt({}), "blocked")).toEqual([]);
+    expect(keysOf(halt({ terminalSweepFaults: [{ stopId: null, blockId: "e1", faults: 4 }] }), "blocked")).toEqual([]);
+  });
+
+  it("names a halt report told while its sweep was never attempted to the end, or was still retryable", () => {
+    expect(keysOf(halt({ episodes: haltWith("budget_cap", null, null, PAUSED).episodes.map((each) => ({ ...each, sweepBeforeReport: null })) }), "blocked")).toContain(
+      "halt-sweep-unattempted:budget_cap",
+    );
+    expect(keysOf(halt({ terminalSweepFaults: [{ stopId: null, blockId: "e1", faults: 1 }] }), "blocked")).toEqual(["halt-sweep-unexhausted:budget_cap"]);
+    expect(keysOf(halt({ terminalSweepFaults: [{ stopId: null, blockId: "e1", faults: 3 }] }), "blocked")).toEqual(["halt-sweep-unexhausted:budget_cap"]);
+    // Another terminal's faults are not this halt's.
+    expect(keysOf(halt({ terminalSweepFaults: [{ stopId: null, blockId: "e2", faults: 1 }] }), "blocked")).toEqual([]);
+  });
+
+  it("holds a stop report to the same: exhausted or never attempted are told apart", () => {
+    expect(stopKeys(stopped({}))).toEqual([]);
+    expect(stopKeys(stopped({ terminalSweepFaults: [{ stopId: "m1", blockId: null, faults: 4 }] }))).toEqual([]);
+    expect(stopKeys(stopped({ terminalSweepFaults: [{ stopId: "m1", blockId: null, faults: 2 }] }))).toEqual(["stop-sweep-unexhausted"]);
+    expect(stopKeys(stopped({ stopSweepsBeforeReport: [] }))).toEqual(["stop-sweep-unattempted"]);
+    expect(stopKeys(stopped({ tableSweeps: [], stopSweepsBeforeReport: [] }))).toEqual(["stop-sweep-unattempted"]);
   });
 });
 

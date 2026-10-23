@@ -24,9 +24,9 @@ import { WORK_WORDS } from "./vision-language/work-promise.js";
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
 // each at most once. No task is reported on its own: no task waits on a person. A halt's report is a
 // terminal message (terminal-report.ts), told around the guarantee table of the halt's terminal
-// sweep; under a halt of Ashara's own machines that sweep ran on no commit, and a halt whose sweep is
-// not on record is told all the same: either way every guarantee reads unjudged, saying so. Its
-// resumption's report is no terminal message and carries no table.
+// sweep, once that sweep is on record; under a halt of Ashara's own machines that sweep ran on no
+// commit, or exhausted its retries and was recorded naming the fault: either way every guarantee
+// reads unjudged, saying so. Its resumption's report is no terminal message and carries no table.
 
 /**
  * What paused a project, as recorded on its block episode: every kind of Delivery's halt vocabulary

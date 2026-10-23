@@ -96,6 +96,8 @@ export {
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
   recordTerminalSweep,
+  recordTerminalSweepFault,
+  recordTerminalSweepWithoutEvidence,
   readSweepOutcome,
 } from "./repositories/acceptance.js";
 export type { AcceptanceUncovered } from "./repositories/acceptance.js";

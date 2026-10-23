@@ -286,24 +286,26 @@ describe("a client's stop", () => {
 
   // The stop's report carries the table of the stop's terminal sweep when it is on record; a stop
   // whose sweep never was is still told, its table judged on no sweep.
-  test("a stop whose terminal sweep is never recorded is still told, every guarantee unjudged for want of a sweep, its verdicts stored", async () => {
+  test("a stop whose terminal sweep is not on record is not told: its report waits for the sweep, then carries it", async () => {
     const { projectId } = await projectWith([]);
     await writeContract(projectId);
     const stop = await sendStop(projectId, "Stop, please.");
     const reports = unsweptReports(projectId, true);
 
     expect(await reports.runPending()).toEqual([{ kind: "stopped", reportDue: true, stopId: stop.id, projectId }]);
-    expect(await reports.tellPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
+    expect(await reports.tellPending()).toEqual([]);
+    expect(await stopReports(projectId)).toEqual([]);
 
+    await sweepTerminalsOf(db, (id) => id === projectId);
+    expect(await reports.tellPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
     const [body = ""] = await stopReports(projectId);
     expect(body).toContain("Work on this project has stopped at your request.");
-    expect(body).toContain("No check could run on a commit of main for this report: no sweep of main is on record for it, so each guarantee of your contract (vision v1) is unjudged.");
+    expect(body).not.toContain("no sweep of main is on record for it");
     const stored = await db.execute(sql`
       SELECT guarantee_id AS "guaranteeId", sweep_id AS "sweepId", verdict, reason FROM guarantee_verdicts WHERE project_id = ${projectId} ORDER BY guarantee_id`);
-    expect(StoredVerdictsSchema.parse(stored.rows)).toEqual([
-      { guaranteeId: "G1", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
-      { guaranteeId: "G2", sweepId: null, verdict: "unjudged", reason: "no-sweep-on-commit" },
-    ]);
+    const verdicts = StoredVerdictsSchema.parse(stored.rows);
+    expect(verdicts.map((verdict) => verdict.guaranteeId)).toEqual(["G1", "G2"]);
+    expect(verdicts.every((verdict) => verdict.sweepId !== null)).toBe(true);
   });
 
   test("a stop whose sweep's guarantee records do not hold together is told once that its table cannot be read, never retried", async () => {

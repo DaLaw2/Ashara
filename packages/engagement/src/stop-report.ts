@@ -2,9 +2,9 @@ import type { ProjectId } from "@ashara/shared";
 
 // The client's stop report: the terminal message (terminal-report.ts) that tells the client, once,
 // what is on record as merged when work stopped at their request, around the guarantee table of the
-// stop's terminal sweep. A stop whose sweep is not on record (its recording failed) is still told,
-// every guarantee unjudged with no sweep on a commit, since the client is never left without the
-// stop's report for want of evidence.
+// stop's terminal sweep. It is told only once that sweep is on record: one that could not run is
+// retried within its bound, and once its retries are exhausted the sweep is recorded naming the
+// fault, so the report then tells every guarantee unjudged with no sweep on a commit.
 
 /**
  * A task with a commit on record and how that commit closed it:

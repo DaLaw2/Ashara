@@ -3,7 +3,14 @@ import type { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 import { BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/delivery";
 import type { StoredBlockedReason } from "@ashara/delivery";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
-import { namedLines, requestCount, sweptSource, tableProblems, unsweptSource } from "./client-report-core.js";
+import {
+  namedLines,
+  requestCount,
+  sweptSource,
+  tableProblems,
+  terminalSweepProblem,
+  unsweptSource,
+} from "./client-report-core.js";
 import type { ReportAdd, ReportRow, ReportsById } from "./client-report-core.js";
 import type { ReportRecords } from "./client-reports.js";
 
@@ -407,8 +414,12 @@ export function checkHaltReports(records: ReportRecords, byId: ReportsById, add:
       );
     }
     // The halt's terminal sweep, when it was on record before the report; a halt told before it was
-    // judges every guarantee on no sweep, as the version in force when it was told states them.
+    // is named, and its table judged on no sweep, as the version in force when it was told states them.
     const sweep = records.tableSweeps.find((each) => each.id === episode.sweepBeforeReport);
+    const unswept = terminalSweepProblem(records, { blockId: episode.id }, sweep);
+    if (unswept !== null) {
+      add(`${sweep === undefined ? "halt-sweep-unattempted" : "halt-sweep-unexhausted"}:${kind}`, unswept);
+    }
     for (const problem of tableProblems(
       records,
       report,

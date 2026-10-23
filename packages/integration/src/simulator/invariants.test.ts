@@ -109,7 +109,7 @@ function plantedSnapshot(items: Snapshot["items"]): Snapshot {
     unrecordedCalls: 0,
     transitions: [],
     main: [],
-    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
+    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], terminalSweepFaults: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
     textFacts: {
       visions: [], briefs: [], questions: [], answerReplies: [], tenderReports: [], declines: [], delivered: [],
       interfaceOnMain: { kind: "not-held" }, placeholderOnMain: { kind: "not-held" }, firstPlan: { report: null, items: [], revisions: [] }, workItems: 0, intakeReading: null,

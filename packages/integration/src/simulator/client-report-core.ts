@@ -242,6 +242,51 @@ export function unsweptSource(report: ReportRow): TableSource {
 }
 
 /**
+ * The faults a terminal sweep that could not run is retried through before it is recorded with no
+ * check run, restated here rather than read from production: the fault past the dispatch path's
+ * fault budget.
+ */
+const TERMINAL_SWEEP_FAULTS_TO_EXHAUST = 4;
+
+/**
+ * A stop's or a halt's terminal, as its sweep and its counted faults name it; a stop report in reply
+ * to no stop names none.
+ */
+type SweptTerminal = { readonly stopId: string | null } | { readonly blockId: string };
+
+/**
+ * Why a stop's or a halt's report was told on a terminal sweep that was not owed to be over; null
+ * when it was over. A sweep is over when it ran, or was recorded on no commit with no fault counted
+ * (a project with no workspace to sweep) or with its retries exhausted. A report with no sweep
+ * recorded before it was told while its sweep was never attempted to the end; one on a sweep
+ * recorded on no commit after fewer faults than exhaust its retries was told while it was retryable.
+ */
+export function terminalSweepProblem(
+  records: Pick<ReportRecords, "terminalSweepFaults">,
+  terminal: SweptTerminal,
+  sweep: ReportRecords["tableSweeps"][number] | undefined,
+): string | null {
+  const name = "stopId" in terminal ? `stop ${terminal.stopId ?? "(in reply to no stop)"}` : `halt ${terminal.blockId}`;
+  if (sweep === undefined) {
+    return (
+      `the report of ${name} was told with no terminal sweep on record before it: ` +
+      "its sweep was never attempted to the end"
+    );
+  }
+  if (sweep.mainCommit !== null) return null;
+  const counted = records.terminalSweepFaults.find((each) =>
+    "stopId" in terminal
+      ? terminal.stopId !== null && each.stopId === terminal.stopId
+      : each.blockId === terminal.blockId,
+  );
+  if (counted === undefined || counted.faults >= TERMINAL_SWEEP_FAULTS_TO_EXHAUST) return null;
+  return (
+    `the report of ${name} was told on a sweep recorded on no commit after ${counted.faults} fault(s), ` +
+    `fewer than the ${TERMINAL_SWEEP_FAULTS_TO_EXHAUST} that exhaust its retries`
+  );
+}
+
+/**
  * Where a terminal message's guarantee table departs from its records: the verdicts stored beside it
  * name its sweep (none, for a message no sweep is on record for) and every guarantee in force once,
  * each as `judged` reads its evidence; the table lists every guarantee once, in the version's order,

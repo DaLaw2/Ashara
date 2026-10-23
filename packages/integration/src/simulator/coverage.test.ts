@@ -18,7 +18,7 @@ function snapshotWith(transitions: Snapshot["transitions"]): Snapshot {
     unrecordedCalls: 0,
     transitions,
     main: [],
-    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
+    reports: { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], tableSweeps: [], stopSweepsBeforeReport: [], terminalSweepFaults: [], evidence: [], verdicts: [], visions: [], passedSweeps: [] },
     textFacts: {
       visions: [],
       briefs: [],

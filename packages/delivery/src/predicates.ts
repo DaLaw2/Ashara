@@ -222,15 +222,6 @@ export async function haltEpisodesWhere(db: DbHandle, where: (episode: HaltEpiso
     .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
 }
 
-/** The open halt episodes `where` admits, each by its id and project, oldest halt first. */
-export async function openHaltEpisodesWhere(db: DbHandle, where: (episode: HaltEpisodeRef) => SQL | undefined): Promise<Array<{ readonly id: string; readonly projectId: string }>> {
-  return db
-    .select({ id: projectBlocks.id, projectId: projectBlocks.projectId })
-    .from(projectBlocks)
-    .where(and(HALT_EPISODE.open, where(HALT_EPISODE)))
-    .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
-}
-
 /** A halt episode that ended, and how ('unblocked', 'probe_passed', 'answered' or 'client_stop', the project_blocks_end_kind_check CHECK). */
 export interface EndedHaltEpisode {
   readonly id: string;

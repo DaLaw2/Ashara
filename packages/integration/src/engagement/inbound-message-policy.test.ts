@@ -175,7 +175,14 @@ async function receiptStandingUnder(state: SetState): Promise<{ readonly change:
 
 /** Whether the halt report listed for each project under a `halt` halt says its first vision is written. */
 async function haltReportVisionUnder(halt: HaltKind): Promise<{ readonly project: boolean | undefined; readonly bare: boolean | undefined }> {
-  const due = await under({ lifecycle: "active", halt }, (tx) => listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }, TERMINAL_KINDS));
+  // A halt's report is listed once its terminal sweep is on record: one that ran on no commit is recorded for each.
+  const due = await under({ lifecycle: "active", halt }, async (tx) => {
+    await tx.execute(sql`
+      INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, purpose, block_id)
+      SELECT b.project_id, NULL, NULL, '[]'::jsonb, '[]'::jsonb, false, 'inbound-message-policy terminal sweep', 'terminal', b.id
+        FROM project_blocks b WHERE b.ended_at IS NULL AND b.project_id IN (${fixture.projectId}, ${fixture.bareProjectId})`);
+    return listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }, TERMINAL_KINDS);
+  });
   const written = (projectId: ProjectId): boolean | undefined => {
     for (const each of due) {
       if ("kind" in each && each.kind === "listed" && each.event.kind === "halted" && each.event.projectId === projectId) return each.event.halt.visionWritten;

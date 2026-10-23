@@ -9,6 +9,8 @@ import {
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
   recordTerminalSweep,
+  recordTerminalSweepFault,
+  recordTerminalSweepWithoutEvidence,
 } from "@ashara/quality";
 
 type Db = ReturnType<typeof createDb>;
@@ -35,5 +37,7 @@ export function createTerminalSweepStore(db: Db): TerminalSweepStore {
   return {
     dueTerminalSweeps: () => listDueTerminalSweeps(db),
     recordTerminalSweep: (sweep) => recordTerminalSweep(db, sweep, guaranteesInForce),
+    recordWithoutEvidence: (sweep) => recordTerminalSweepWithoutEvidence(db, sweep),
+    recordSweepFault: (projectId, terminal) => recordTerminalSweepFault(db, projectId, terminal),
   };
 }
