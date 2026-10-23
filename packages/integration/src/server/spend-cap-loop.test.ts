@@ -13,28 +13,28 @@ import { LlmCallRepository } from "@ashara/finance";
 import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, FailureRouter, FirstPlanner, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository, withOverrides } from "@ashara/delivery";
 import { idleProjectRepo, inertWorkItemRepo } from "@ashara/delivery/testing";
 import type { FirstPlanStore, CoreLoopDeps, CoreLoopOverrides, LoopCore } from "@ashara/delivery";
-import { BlockReports, ClientStops, ClientMessageRepository, DeliveredReports, PlanReports, VisionRepository } from "@ashara/engagement";
-import type { BlockReportStore, ClientStopStore, DeliveredReportStore, PlanReportStore } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, PlanReports, TerminalReports, VisionRepository, guaranteeTableOf } from "@ashara/engagement";
+import type { ClientStopStore, PlanReportStore, TerminalReportStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createWorkItemId, parseProjectId, systemClock, UnreadSubject } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, systemClock } from "@ashara/shared";
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createTerminalSweepStore } from "@ashara/server/acceptance-store";
-import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
-import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { dueProjectOf, terminalReportsOf } from "./terminal-reports.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.
@@ -177,12 +177,10 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
     const client = await new ClientRepository(db).create(`${NAME}-halted-stop`);
     const projectId = (await projects.create(NAME, client.id)).id;
     const stopStore = createClientStopStore(db);
-    const narrowed: ClientStopStore = {
-      ...stopStore,
-      openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === projectId),
-      dueStopReports: async () => (await stopStore.dueStopReports()).filter((due) => due.projectId === projectId),
-    };
+    const narrowed: ClientStopStore = { ...stopStore, openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === projectId) };
     const clientStops = new ClientStops(narrowed, memoryStepContainment(() => true));
+    // The halted cycle's terminal sweep and messages, over this suite's project only.
+    const terminals = terminalReportsOf(db, (id) => id === projectId);
     const abort = new AbortController();
     const base = loopDeps({ loop: { spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } } });
     const capReason = "budget_cap: the deployment has spent $1.000000 (llm_calls) of its $1.000000 cap";
@@ -190,14 +188,11 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
       projectRepo: {
         ...base.loop.projectRepo,
         blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
-      }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } }, client: { clientStops: {
-        runPending: () => clientStops.runPending(),
-        reportPending: async () => {
-          // The halted cycle's terminal sweep, over this suite's project only.
-          await sweepTerminalsOf(db, (id) => id === projectId);
-          const answered = await clientStops.reportPending();
+      }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } }, client: { clientStops: { runPending: () => clientStops.runPending() } }, reporting: { terminalReports: {
+        runPending: async () => {
+          const answered = await terminals.runPending();
           // Once the stop is answered, the test ends the halted runner, as SIGTERM does.
-          if (answered.some((outcome) => outcome.kind === "posted")) abort.abort();
+          if (answered.some((outcome) => outcome.kind === "posted" && outcome.terminal === "stopped")) abort.abort();
           return answered;
         },
       } } });
@@ -235,25 +230,20 @@ describe("the deployment cap halts two projects", () => {
     const first = (await projects.create(NAME, client.id)).id;
     const second = (await projects.create(NAME, client.id)).id;
     const ours = new Set([first, second]);
-    const store = createBlockReportStore(db);
+    const store = createTerminalReportStore(db);
     const sweeps = createTerminalSweepStore(db);
     let secondFaults = 1;
-    const projectOfEpisode = new Map<string, ProjectId>();
     // Only this suite's projects: the listing and the halt over the shared database would reach other suites'.
-    const narrowed: BlockReportStore = {
-      dueReports: async () => {
-        const due = (await store.dueReports()).filter((each) => ours.has(each.projectId));
-        for (const each of due) if (!(each instanceof UnreadSubject)) projectOfEpisode.set(each.episodeId, each.projectId);
-        return due;
-      },
-      postProjectReport: async (episodeId, on, body, verdicts) => {
-        if (projectOfEpisode.get(episodeId) === second && secondFaults > 0) {
+    const narrowed: TerminalReportStore = {
+      ...store,
+      dueTerminals: async () => (await store.dueTerminals()).filter((each) => [...ours].some((id) => id === dueProjectOf(each))),
+      postTerminal: async (message) => {
+        if (message.projectId === second && secondFaults > 0) {
           secondFaults -= 1;
           throw new Error("client_messages insert failed");
         }
-        return store.postProjectReport(episodeId, on, body, verdicts);
+        return store.postTerminal(message);
       },
-      riskRecords: (projectId) => store.riskRecords(projectId),
     };
     const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
     const spend = { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null };
@@ -266,7 +256,7 @@ describe("the deployment cap halts two projects", () => {
             for (const id of ours) if ((await projects.block(id, cause)) === "blocked") halted.push(id);
             return halted;
           },
-        }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend }), refusalOf: () => null } }, reporting: { blockReports: new BlockReports(narrowed, memoryStepContainment(() => false)) }, sweeps: { // The halt's terminal sweep comes before its report; neither project has a workspace, so the
+        }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend }), refusalOf: () => null } }, reporting: { terminalReports: new TerminalReports(narrowed, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => false)) }, sweeps: { // The halt's terminal sweep comes before its report; neither project has a workspace, so the
         // sweep records that it ran on no commit and the sweeper is never called.
         terminalSweeps: {
           dueTerminalSweeps: async () => (await sweeps.dueTerminalSweeps()).filter((due) => ours.has(due.projectId)),
@@ -302,7 +292,8 @@ describe("the deployment cap halts two projects", () => {
   });
 });
 
-type DueDeliveredReport = Extract<Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number], { readonly kind: "due" }>;
+type DueTerminal = Awaited<ReturnType<TerminalReportStore["dueTerminals"]>>[number];
+type DueDeliveredReport = Extract<DueTerminal, { readonly kind: "delivered" }>["report"];
 
 // An accepted project's delivered report whose post faulted in the cycle that stops at the cap: no
 // full cycle runs again in this process, so the halted cycles retry it once its backoff passed.
@@ -323,18 +314,17 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
       unchecked: [],
       givenUp: [],
       executed: { kind: "unrecorded" },
-      guarantees: { kind: "no-contract", sweep: { id: randomUUID(), mainCommit: "c3".repeat(20) } },
       reading: { kind: "unrecorded" },
     };
+    const table = guaranteeTableOf({ kind: "no-contract", sweep: { id: randomUUID(), mainCommit: "c3".repeat(20) } });
     const posted: string[] = [];
     let postFaults = 1;
     let failures = 0;
     let retryAt = 0;
     // The sweep's report columns, held here: the listing honours the retry time the failure set, as delivered_report_attempts.retry_at does.
-    const store: DeliveredReportStore = {
-      dueReports: async () => (posted.length > 0 || Date.now() < retryAt ? [] : [{ ...due, failures }]),
-      guaranteeTable: async () => due.guarantees,
-      postReport: async (_sweepId, body) => {
+    const store: TerminalReportStore = {
+      dueTerminals: async () => (posted.length > 0 || Date.now() < retryAt ? [] : [{ kind: "delivered", report: { ...due, failures }, table }]),
+      postTerminal: async ({ body }) => {
         if (postFaults > 0) {
           postFaults -= 1;
           throw new Error("client_messages insert failed");
@@ -342,7 +332,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
         posted.push(body);
         return "posted";
       },
-      recordReportFailure: async (_sweepId, failure) => {
+      recordDeliveredFailure: async (_sweepId, failure) => {
         if (failure.retryAfterSeconds === null) return;
         failures += 1;
         retryAt = Date.now() + failure.retryAfterSeconds * 1000;
@@ -350,7 +340,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
     };
     const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
     const loop = new CoreLoop(
-      loopDeps({ reporting: { deliveredReports: new DeliveredReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }) }, loop: { spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } } }),
+      loopDeps({ reporting: { terminalReports: new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)) }, loop: { spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } } }),
     );
 
     vi.useFakeTimers({ toFake: ["Date"] });

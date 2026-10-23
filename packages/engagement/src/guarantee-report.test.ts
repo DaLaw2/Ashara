@@ -1,14 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
-import { BlockReports } from "./block-report.js";
-import type { BlockReportStore } from "./block-report.js";
-import { DeliveredReports } from "./delivered-report.js";
-import type { DeliveredReportStore } from "./delivered-report.js";
-import { guaranteeSection, guaranteeTableOf, tableVerdicts, unverifiedGuarantees } from "./guarantee-report.js";
-import { PlanReports } from "./plan-report.js";
-import type { PlanReportStore } from "./plan-report.js";
+import { guaranteeSection, guaranteeTableOf, unverifiedGuarantees } from "./guarantee-report.js";
 import type { GuaranteeRecords, GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { TerminalMessage, TerminalReports } from "./terminal-report.js";
+import type { DueTerminal, TerminalReportStore } from "./terminal-report.js";
 import { readVisionVersion } from "./vision.js";
 import type { VisionVersion } from "./vision.js";
 
@@ -17,7 +13,8 @@ import type { VisionVersion } from "./vision.js";
 // it), each with Quality's verdict as given, which the table renders and never judges; a halt of
 // Ashara's own machines, whose sweep ran on no commit, holds every guarantee unjudged and says why,
 // as does a message no sweep is on record for; records that do not hold together judge nothing and
-// say so.
+// say so. A guarantee the contract marks not verifiable by Ashara is listed as not verified, on a
+// commit or off one.
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000031", "test");
 const MAIN = "d".repeat(40);
@@ -76,6 +73,11 @@ const NO_SWEEP: GuaranteeRecords = { kind: "judged", sweep: null, vision: VISION
 /** An infrastructure halt's terminal sweep: no commit of main could be swept, every guarantee unjudged for it. */
 const UNSWEPT = judgedBy(IDS.map((id) => unjudged(id, "no-sweep-on-commit")), null);
 
+/** The verdicts a terminal message carrying `table` persists. */
+function verdictsOfTable(table: GuaranteeTable): TableVerdicts {
+  return TerminalMessage.of({ kind: "declined", projectId }, table).verdicts;
+}
+
 /** A persisted verdict, flat: its guarantee, verdict, reason when unjudged, basis and evidence class. */
 function flat(each: TableVerdicts["verdicts"][number]): [string, string, string | null, string, string] {
   const { judged } = each;
@@ -102,7 +104,7 @@ describe("the guarantee table", () => {
   test("every guarantee of the version in force is in the table exactly once, in its order, and among the verdicts exactly once", () => {
     const table = guaranteeTableOf(SWEPT);
     expect(tableIds(guaranteeSection(table))).toEqual(IDS);
-    expect(tableVerdicts(table).verdicts.map((v) => v.judged.guaranteeId)).toEqual(IDS);
+    expect(verdictsOfTable(table).verdicts.map((v) => v.judged.guaranteeId)).toEqual(IDS);
   });
 
   test("verdicts that miss a guarantee of the version, name one it does not hold, or come out of its order are refused, never rendered", () => {
@@ -114,7 +116,7 @@ describe("the guarantee table", () => {
 
   test("each line renders Quality's verdict as given: pass, fail, stored data unjudged, a review's reading unjudged", () => {
     const table = guaranteeTableOf(SWEPT);
-    expect(tableVerdicts(table).verdicts.map(flat)).toEqual([
+    expect(verdictsOfTable(table).verdicts.map(flat)).toEqual([
       ["G1", "pass", null, "client-stated", "implementer-visible"],
       ["G2", "unjudged", "stored-data-unjudged", "assumed-unconfirmed", "implementer-visible"],
       ["G3", "fail", null, "client-stated", "implementer-visible"],
@@ -166,7 +168,7 @@ describe("the guarantee table", () => {
     });
     const verdicts = [unjudged("S1", "not-checkable-as-written"), unjudged("A10", "not-checkable-as-written")];
     const table = guaranteeTableOf({ kind: "judged", sweep: { id: "sweep-0", mainCommit: MAIN }, vision: legacy, judged: { evidence: "unrecorded", verdicts }, revisions: [] });
-    expect(tableVerdicts(table).verdicts.map((v) => flat(v).slice(0, 3))).toEqual([
+    expect(verdictsOfTable(table).verdicts.map((v) => flat(v).slice(0, 3))).toEqual([
       ["S1", "unjudged", "not-checkable-as-written"],
       ["A10", "unjudged", "not-checkable-as-written"],
     ]);
@@ -175,7 +177,7 @@ describe("the guarantee table", () => {
 
   test("a message no sweep is on record for holds every guarantee of the version in force unjudged for want of a sweep on a commit, naming no sweep", () => {
     const table = guaranteeTableOf(NO_SWEEP);
-    const verdicts = tableVerdicts(table);
+    const verdicts = verdictsOfTable(table);
     expect(verdicts.sweepId).toBeNull();
     expect(verdicts.verdicts.map((v) => [flat(v)[0], flat(v)[1], flat(v)[2], flat(v)[4]])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
     const section = guaranteeSection(table);
@@ -185,17 +187,17 @@ describe("the guarantee table", () => {
   });
 
   test("records that do not read as a table judge no guarantee, say so, and persist no verdict", () => {
-    const table: GuaranteeTable = { kind: "unreadable", sweepId: "sweep-4" };
+    const table = guaranteeTableOf({ kind: "unreadable", sweepId: "sweep-4" });
     expect(guaranteeSection(table)).toBe(
       "Ashara's records of this project's guarantees at sweep sweep-4 do not hold together, so no guarantee is judged in this message: none is told as holding, and none as failing. Its operator is told why.",
     );
-    expect(tableVerdicts(table)).toEqual({ sweepId: "sweep-4", verdicts: [] });
+    expect(verdictsOfTable(table)).toEqual({ sweepId: "sweep-4", verdicts: [] });
   });
 
   test("no vision at the sweep is said so, and persists no verdict", () => {
     const table: GuaranteeTable = guaranteeTableOf({ kind: "no-contract", sweep: { id: "sweep-2", mainCommit: MAIN } });
     expect(guaranteeSection(table)).toBe("No contract is on record for this project at sweep sweep-2, so no guarantee is judged.");
-    expect(tableVerdicts(table)).toEqual({ sweepId: "sweep-2", verdicts: [] });
+    expect(verdictsOfTable(table)).toEqual({ sweepId: "sweep-2", verdicts: [] });
   });
 });
 
@@ -278,95 +280,108 @@ describe("the appendix of the contract's revisions", () => {
   });
 });
 
+const RISK = { kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } } as const;
+
+/** Runs the terminal step over `due`, returning every message it posted. */
+async function postedFor(due: readonly DueTerminal[]): Promise<TerminalMessage[]> {
+  const posted: TerminalMessage[] = [];
+  const store: TerminalReportStore = {
+    dueTerminals: async () => due,
+    postTerminal: async (message) => {
+      posted.push(message);
+      return "posted";
+    },
+    recordDeliveredFailure: async () => expect.unreachable("no report failed"),
+  };
+  await new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)).runPending();
+  return posted;
+}
+
 describe("every terminal message carries the table", () => {
-  test("an infrastructure halt's report holds the table, every guarantee once and unjudged because no check ran on a commit, and posts those verdicts", async () => {
-    const posted: Array<{ body: string; verdicts: TableVerdicts | null }> = [];
-    const store: BlockReportStore = {
-      dueReports: async () => [
-        {
-          subject: "project-blocked",
-          episodeId: "e1",
-          projectId,
-          kind: "infrastructure",
-          cause: { errorClass: "InfrastructureFaultBudgetSpent", reason: "the substrate did not answer", spend: null, work: null },
-          guarantees: guaranteeTableOf(UNSWEPT),
-          visionWritten: true,
-        },
-      ],
-      postProjectReport: async (_episodeId, _on, body, verdicts) => {
-        posted.push({ body, verdicts });
-        return "posted";
-      },
-      riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
-    };
-    await new BlockReports(store, memoryStepContainment(() => true)).runPending();
+  test("an infrastructure halt's message holds the table, every guarantee once and unjudged because no check ran on a commit, and posts those verdicts", async () => {
+    const halt = {
+      episodeId: "e1",
+      projectId,
+      kind: "infrastructure",
+      cause: { errorClass: "InfrastructureFaultBudgetSpent", reason: "the substrate did not answer", spend: null, work: null },
+      visionWritten: true,
+    } as const;
+    const posted = await postedFor([{ kind: "listed", event: { kind: "halted", projectId, halt, risk: RISK }, table: guaranteeTableOf(UNSWEPT) }]);
     expect(posted).toHaveLength(1);
-    const [{ body, verdicts } = { body: "", verdicts: null }] = posted;
+    const [{ body, verdicts, subject }] = posted.length === 1 ? posted : expect.unreachable("one message");
+    expect(subject).toEqual({ kind: "halted", episodeId: "e1" });
     expect(body).toContain("the machines Ashara runs the work on kept failing");
     expect(tableIds(body)).toEqual(IDS);
     for (const id of IDS) expect(tableLine(body, id)).toContain("| verdict: unjudged, no check could run on a commit of main for this report |");
     expect(body).toContain("No check could run on a commit of main for this report; why is in Ashara's record of that attempt, sweep sweep-1.");
-    expect(verdicts?.verdicts.map((v) => [flat(v)[0], flat(v)[1], flat(v)[2], flat(v)[4]])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
+    expect(verdicts.verdicts.map((v) => [flat(v)[0], flat(v)[1], flat(v)[2], flat(v)[4]])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
   });
 
-  test("the report of a first planning that stopped holds the table, every guarantee unjudged with no sweep, and posts those verdicts", async () => {
-    const posted: Array<{ subject: string; body: string; verdicts: TableVerdicts | null }> = [];
-    const store: PlanReportStore = {
-      dueReports: async () => [{ subject: "planning-stopped", projectId, attempts: 3 }],
-      postReport: async (_projectId, subject, body, _revisionIds, verdicts) => {
-        posted.push({ subject, body, verdicts });
-        return "posted";
-      },
-      guaranteesWithoutSweep: async () => guaranteeTableOf(NO_SWEEP),
-      dueRevisionReports: async () => [],
-      postRevisionReport: async () => expect.unreachable("no revision is due"),
-      blockProject: async () => expect.unreachable("nothing is blocked"),
-      riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
-    };
-    await new PlanReports(store, memoryStepContainment(() => true)).runPending();
-    expect(posted.map((each) => each.subject)).toEqual(["planning-stopped"]);
-    const [{ body, verdicts } = { body: "", verdicts: null }] = posted;
+  test("the message of a first planning that stopped holds the table, every guarantee unjudged with no sweep, and posts those verdicts", async () => {
+    const posted = await postedFor([{ kind: "listed", event: { kind: "planning-stopped", projectId, attempts: 3, risk: RISK }, table: guaranteeTableOf(NO_SWEEP) }]);
+    expect(posted.map((each) => each.subject)).toEqual([{ kind: "planning-stopped", projectId }]);
+    const [{ body, verdicts }] = posted.length === 1 ? posted : expect.unreachable("one message");
     expect(body).toContain("Ashara could not turn this project's vision into a plan after 3 attempts");
     expect(tableIds(body)).toEqual(IDS);
-    expect(verdicts?.sweepId).toBeNull();
-    expect(verdicts?.verdicts.map((v) => flat(v).slice(0, 3))).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit"]));
+    expect(verdicts.sweepId).toBeNull();
+    expect(verdicts.verdicts.map((v) => flat(v).slice(0, 3))).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit"]));
   });
 
   test("the delivered report holds the table after what was delivered, every guarantee once, and posts its verdicts", async () => {
-    const posted: Array<{ body: string; verdicts: TableVerdicts | null }> = [];
-    const store: DeliveredReportStore = {
-      dueReports: async () => [
-        {
-          kind: "due",
-          failures: 0,
-          interfaceReadFailures: 0,
-          recordFailures: 0,
-          sweepId: "sweep-1",
-          projectId,
-          mainCommit: MAIN,
-          targetProjectPath: "/work/target",
-          goals: [{ title: "Store keys", close: { kind: "merged", commit: MAIN } }],
-          checked: ["Store keys"],
-          unchecked: [],
-          givenUp: [],
-          executed: { kind: "recorded", checks: [] },
-          guarantees: guaranteeTableOf(SWEPT),
-          reading: { kind: "not-needed" },
-        },
-      ],
-      guaranteeTable: async () => expect.unreachable("the report carries the table it was listed with"),
-      postReport: async (_sweepId, body, verdicts) => {
-        posted.push({ body, verdicts });
-        return "posted";
-      },
-      recordReportFailure: async () => expect.unreachable("no report failed"),
-    };
-    await new DeliveredReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }).runPending();
-    const [{ body, verdicts } = { body: "", verdicts: null }] = posted;
+    const report = {
+      kind: "due",
+      failures: 0,
+      interfaceReadFailures: 0,
+      recordFailures: 0,
+      sweepId: "sweep-1",
+      projectId,
+      mainCommit: MAIN,
+      targetProjectPath: "/work/target",
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: MAIN } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      executed: { kind: "recorded", checks: [] },
+      reading: { kind: "not-needed" },
+    } as const;
+    const posted = await postedFor([{ kind: "delivered", report, table: guaranteeTableOf(SWEPT) }]);
+    const [{ body, verdicts, subject }] = posted.length === 1 ? posted : expect.unreachable("one message");
+    expect(subject).toEqual({ kind: "delivered", sweepId: "sweep-1" });
     expect(tableIds(body)).toEqual(IDS);
     expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("The punch list"));
-    expect(verdicts).toEqual(tableVerdicts(guaranteeTableOf(SWEPT)));
+    expect(verdicts).toEqual(verdictsOfTable(guaranteeTableOf(SWEPT)));
     expect(body).not.toContain("second review");
+  });
+
+  test("a declined contract's message holds the table, every guarantee the contract marks not verifiable listed as not verified", async () => {
+    const held = readVisionVersion({
+      projectId,
+      version: 1,
+      visionText: TENDER,
+      summary: "A store.",
+      scopeBoundaries: [],
+      inferences: ASSUMPTIONS,
+      openQuestions: [],
+      contractForm: "guarantees",
+      interface: [{ id: "I1", text: "put KEY VALUE, get KEY, delete KEY", source: quote("Clients put and get values.") }],
+      guarantees: [{ ...GUARANTEES[1], verification: "not-by-ashara" }],
+      exclusions: [],
+    });
+    const records: GuaranteeRecords = { kind: "judged", sweep: null, vision: held, judged: { evidence: "unrecorded", verdicts: [unjudged("G2", "not-verifiable-by-ashara")] }, revisions: [] };
+    const posted = await postedFor([{ kind: "listed", event: { kind: "declined", projectId }, table: guaranteeTableOf(records) }]);
+    const [{ body, verdicts, subject }] = posted.length === 1 ? posted : expect.unreachable("one message");
+    expect(subject).toEqual({ kind: "declined", projectId });
+    expect(body.startsWith("Ashara declines the contract drafted from your tender as written.")).toBe(true);
+    expect(tableIds(body)).toEqual(["G2"]);
+    expect(unverifiedGuarantees(guaranteeTableOf(records))).toContain("- G2 (An acknowledged put survives a crash.): not verified");
+    expect(verdicts.verdicts.map((v) => flat(v).slice(0, 3))).toEqual([["G2", "unjudged", "not-verifiable-by-ashara"]]);
+  });
+
+  test("a table is only what guaranteeTableOf builds: a hand-made one is refused by the type of every terminal message", () => {
+    const shown = { kind: "unreadable", sweepId: "sweep-5" } as const;
+    // @ts-expect-error a table no builder made carries no brand, so no terminal message takes it
+    const refused: GuaranteeTable = shown;
+    expect(refused).toEqual(guaranteeTableOf(shown));
   });
 });
 

@@ -41,7 +41,8 @@ import type { FirstVision, InferredAssumption } from "./vision.js";
 // it is declined. Every message intake posts for it tells the client plainly that Ashara cannot verify
 // any guarantee as written and asks them to restate the guarantees; no work starts on it, and their
 // confirming it as written does not start work, since only a version holding a guarantee Ashara can
-// verify ends the decline (declinesUnverifiable).
+// verify ends the decline (declinesUnverifiable). The decline itself is told once more, as a terminal
+// message carrying the guarantee table, each guarantee in it not verified (terminal-report.ts).
 // A reading that asks the client nothing is a claim that the tender leaves nothing open worth asking,
 // as a clean suite review is a claim about its checks:
 // it is put to a second reading at the strongest independence the catalog offers. The questions a

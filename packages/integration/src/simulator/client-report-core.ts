@@ -167,7 +167,8 @@ const NOT_VERIFIABLE = "not-verifiable-by-ashara";
 
 /**
  * One guarantee's verdict from its evidence on the sweep, restated here by the rules the table
- * promises the client: nothing is judged off a commit; an executed check that failed fails it; one
+ * promises the client: nothing is judged off a commit, where one its contract marks not verifiable
+ * by Ashara still reads so; an executed check that failed fails it; one
  * its contract marks not verifiable by Ashara is never verified; one that names nothing refuting it,
  * or is about stored data (no fault set is run), no check decides; it passes only on an executed
  * check that passed and that no review's doubt holds back, a doubt holding back only the checks of
@@ -178,7 +179,7 @@ function judged(
   evidence: { readonly checks: z.infer<typeof checkEvidence> },
   onCommit: boolean,
 ): TableVerdict {
-  if (!onCommit) return unjudged("no-sweep-on-commit");
+  if (!onCommit) return unjudged(guarantee.notVerifiable ? NOT_VERIFIABLE : "no-sweep-on-commit");
   const executed = evidence.checks.filter(
     (check) => check.class === "witness" || check.class === "implementer-visible",
   );

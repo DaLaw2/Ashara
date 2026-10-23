@@ -48,7 +48,7 @@ import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
-import { BlockReports, ClientStops, DeliveredReports, PlanReports } from "@ashara/engagement";
+import { BlockReports, TerminalReports } from "@ashara/engagement";
 import {
   composedAgain,
   createReplayDatabase,
@@ -63,11 +63,10 @@ import {
 } from "@ashara/integration";
 import type { StoredTextViolation, StoredVerdict } from "@ashara/integration";
 import { PUBLIC_INTERFACE_FILE } from "@ashara/quality";
-import { createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
+import { createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { createClientStopStore } from "@ashara/server/client-stop-store";
-import { createPlanReportStore } from "@ashara/server/plan-report-store";
-import { UnreadSubject, createLogger, describeErrorChain, stdoutSink, systemClock, uncontainedSteps } from "@ashara/shared";
+import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
+import { createLogger, describeErrorChain, stdoutSink, systemClock, uncontainedSteps } from "@ashara/shared";
 
 const USAGE = 'Usage: npx tsx scripts/replay-run-state.ts --dump FILE --psql "COMMAND" [--keep]';
 const RESTORE_TIMEOUT_MS = 5 * 60_000;
@@ -176,19 +175,6 @@ async function recordUnsweptTerminals(db: ReturnType<typeof createDb>): Promise<
   return recorded;
 }
 
-/**
- * Today's planning-report store narrowed to the planning-stopped report: the first-plan and revision
- * reports are judged as kept, and a replay blocks no project.
- */
-function planningStoppedReportsOnly(db: ReturnType<typeof createDb>): ReturnType<typeof createPlanReportStore> {
-  const store = createPlanReportStore(db);
-  return {
-    ...store,
-    dueReports: async () => (await store.dueReports()).filter((due) => !(due instanceof UnreadSubject) && due.subject === "planning-stopped"),
-    dueRevisionReports: async () => [],
-  };
-}
-
 function printVerdicts(verdicts: readonly StoredVerdict[]): void {
   if (verdicts.length === 0) {
     console.log("  verdicts: none stored");
@@ -230,16 +216,12 @@ async function main(): Promise<void> {
       for (const project of projects) kept.set(project.id, await judgeStoredText(db, project.id, "as-recorded"));
       const setAside = await setAsideReports(db);
       console.log(`terminal sweeps recorded on no commit for the open halts and stops: ${await recordUnsweptTerminals(db)}`);
-      await new DeliveredReports(createDeliveredReportStore(db), {
-        file: PUBLIC_INTERFACE_FILE,
-        at: async () => ({ kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" }),
-      }).runPending();
       // A replay contains nothing and skips nothing: any report that fails throws, so the replay stops on it, and a
       // backoff kept in the restored step_faults does not hide a report.
       const steps = uncontainedSteps(createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }));
+      const notHeld = { kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" } as const;
+      await new TerminalReports(createTerminalReportStore(db), { file: PUBLIC_INTERFACE_FILE, at: async () => notHeld }, steps).runPending();
       await new BlockReports(createBlockReportStore(db), steps).runPending();
-      await new ClientStops(createClientStopStore(db), steps).reportPending();
-      await new PlanReports(planningStoppedReportsOnly(db), steps).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(
         `today's composers: every recorded brief's facts, and ${recomposed.length} of ${setAside.records.length} kept delivered, halt, stop and planning-stopped ` +

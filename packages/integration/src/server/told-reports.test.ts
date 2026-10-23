@@ -10,16 +10,18 @@ import type { PoolFactory } from "@ashara/db";
 import { ProjectHaltRepository, endHaltOnStop, listDuePlanRevisionReports } from "@ashara/delivery";
 import {
   ClientMessageRepository,
-  listDueBlockReports,
-  listDueDeliveredReports,
-  postDeliveredReport,
+  listDueResumptionReports,
+  listDueTerminals,
   postPlanReport,
   postPlanRevisionReport,
-  postProjectBlockReport,
+  postResumptionReport,
+  postTerminalMessage,
   recordClientStop,
 } from "@ashara/engagement";
 import { readSweepOutcome } from "@ashara/quality";
+import { UnreadSubject } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { deliveredMessage, haltMessage } from "./terminal-reports.js";
 
 // Each report the Liaison tells of another context's subject (a halt and its resumption, a passed
 // sweep, a plan revision) is recorded on Engagement's own told record in the transaction that posts
@@ -65,13 +67,15 @@ async function outboundReports(db: Db, projectId: string): Promise<number> {
 
 /** The subjects each listing names: halts and resumptions, passed sweeps, plan revisions. */
 async function dueSubjects(db: Db): Promise<{ halts: string[]; resumptions: string[]; sweeps: string[]; revisions: string[] }> {
-  const blocks = await listDueBlockReports(db, noReview);
-  const episodes = (subject: "project-blocked" | "project-resumed") =>
-    blocks.flatMap((due) => ("subject" in due && due.subject === subject ? [due.episodeId] : "id" in due && due.id.startsWith(`${subject}:`) ? [due.id.slice(subject.length + 1)] : []));
+  const terminals = await listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview: noReview });
+  const halts = terminals.flatMap((due) => {
+    if (due instanceof UnreadSubject) return due.id.startsWith("halted:") ? [due.id.slice("halted:".length)] : [];
+    return due.kind === "listed" && due.event.kind === "halted" ? [due.event.halt.episodeId] : [];
+  });
   return {
-    halts: episodes("project-blocked"),
-    resumptions: episodes("project-resumed"),
-    sweeps: (await listDueDeliveredReports(db, readSweepOutcome)).map((due) => due.sweepId),
+    halts,
+    resumptions: (await listDueResumptionReports(db)).map((due) => ("episodeId" in due ? due.episodeId : due.id.slice("project-resumed:".length))),
+    sweeps: terminals.flatMap((due) => (due instanceof UnreadSubject || due.kind === "listed" ? [] : [due.report.sweepId])),
     revisions: (await listDuePlanRevisionReports(db)).map((due) => ("revisionId" in due ? due.revisionId : due.id)),
   };
 }
@@ -122,17 +126,17 @@ describe("a report on another context's subject is told once across a restart", 
     if (episode === undefined) throw new Error("the halt opened no episode");
 
     expect((await dueSubjects(session.db)).halts).toContain(episode.id);
-    expect(await postProjectBlockReport(session.db, episode.id, "blocked", "Work on this project is paused.", null)).toBe("posted");
+    expect(await postTerminalMessage(session.db, haltMessage(projectId, episode.id))).toBe("posted");
     await restart();
     expect((await dueSubjects(session.db)).halts).not.toContain(episode.id);
-    expect(await postProjectBlockReport(session.db, episode.id, "blocked", "Work on this project is paused.", null)).toBe("already-posted");
+    expect(await postTerminalMessage(session.db, haltMessage(projectId, episode.id))).toBe("already-posted");
 
     await new ProjectHaltRepository(session.db).unblock(projectId, "operator-a", "cleared");
     expect((await dueSubjects(session.db)).resumptions).toContain(episode.id);
-    expect(await postProjectBlockReport(session.db, episode.id, "resumed", "Work on this project has resumed.", null)).toBe("posted");
+    expect(await postResumptionReport(session.db, episode.id, "Work on this project has resumed.")).toBe("posted");
     await restart();
     expect((await dueSubjects(session.db)).resumptions).not.toContain(episode.id);
-    expect(await postProjectBlockReport(session.db, episode.id, "resumed", "Work on this project has resumed.", null)).toBe("already-posted");
+    expect(await postResumptionReport(session.db, episode.id, "Work on this project has resumed.")).toBe("already-posted");
     expect(await outboundReports(session.db, projectId)).toBe(2);
   });
 
@@ -146,10 +150,10 @@ describe("a report on another context's subject is told once across a restart", 
     await session.db.execute(sql`UPDATE projects SET lifecycle = 'accepted', workspace_path = '/nonexistent/told-reports' WHERE id = ${projectId}`);
 
     expect((await dueSubjects(session.db)).sweeps).toContain(sweepId);
-    expect(await postDeliveredReport(session.db, sweepId, "Your project is delivered.", { sweepId, verdicts: [] })).toBe("posted");
+    expect(await postTerminalMessage(session.db, deliveredMessage(projectId, sweepId))).toBe("posted");
     await restart();
     expect((await dueSubjects(session.db)).sweeps).not.toContain(sweepId);
-    expect(await postDeliveredReport(session.db, sweepId, "Your project is delivered.", { sweepId, verdicts: [] })).toBe("already-posted");
+    expect(await postTerminalMessage(session.db, deliveredMessage(projectId, sweepId))).toBe("already-posted");
     expect(await outboundReports(session.db, projectId)).toBe(1);
   });
 
@@ -160,7 +164,7 @@ describe("a report on another context's subject is told once across a restart", 
       idOf(session.db, sql`INSERT INTO plan_revisions (project_id, revision, vision_version, kind, summary) VALUES (${projectId}, ${n}, 1, 'repair', '{}'::jsonb) RETURNING id`);
     const folded = await revision(2);
 
-    expect(await postPlanReport(session.db, projectId, "first-plan", "The plan.", [folded], null)).toBe("posted");
+    expect(await postPlanReport(session.db, projectId, "first-plan", "The plan.", [folded])).toBe("posted");
     await restart();
     expect((await dueSubjects(session.db)).revisions).not.toContain(folded);
     expect(await postPlanRevisionReport(session.db, { revisionId: folded, projectId, requestedBy: null }, "The revision.")).toBe("already-posted");
@@ -183,8 +187,8 @@ describe("a report on another context's subject is told once across a restart", 
       sql`INSERT INTO plan_revisions (project_id, revision, vision_version, kind, summary) VALUES (${other}, 2, 1, 'repair', '{}'::jsonb) RETURNING id`,
     );
 
-    await expect(postPlanReport(session.db, projectId, "first-plan", "The plan.", [othersRevision], null)).rejects.toMatchObject({ name: "ToldSubjectNotOfProject" });
-    await expect(postPlanReport(session.db, projectId, "first-plan", "The plan.", [randomUUID()], null)).rejects.toMatchObject({ name: "ToldSubjectNotOfProject" });
+    await expect(postPlanReport(session.db, projectId, "first-plan", "The plan.", [othersRevision])).rejects.toMatchObject({ name: "ToldSubjectNotOfProject" });
+    await expect(postPlanReport(session.db, projectId, "first-plan", "The plan.", [randomUUID()])).rejects.toMatchObject({ name: "ToldSubjectNotOfProject" });
     expect(await outboundReports(session.db, projectId)).toBe(0);
     expect(await countOf(session.db, sql`SELECT count(*)::int AS n FROM told_reports WHERE project_id = ${projectId}`)).toBe(0);
   });
@@ -315,9 +319,10 @@ describe("after the migration that moves the told record, no subject already tol
       const sweep = told.get("sweep");
       const revision = told.get("revision");
       if (halt === undefined || resumption === undefined || sweep === undefined || revision === undefined) throw new Error("a told subject was not seeded");
-      expect(await postProjectBlockReport(after.db, halt, "blocked", "again", null)).toBe("already-posted");
-      expect(await postProjectBlockReport(after.db, resumption, "resumed", "again", null)).toBe("already-posted");
-      expect(await postDeliveredReport(after.db, sweep, "again", { sweepId: sweep, verdicts: [] })).toBe("already-posted");
+      const projectOf = async (table: string, id: string) => idOf(after.db, sql`SELECT project_id AS id FROM ${sql.identifier(table)} WHERE id = ${id}`);
+      expect(await postTerminalMessage(after.db, haltMessage(await projectOf("project_blocks", halt), halt))).toBe("already-posted");
+      expect(await postResumptionReport(after.db, resumption, "again")).toBe("already-posted");
+      expect(await postTerminalMessage(after.db, deliveredMessage(await projectOf("acceptance_sweeps", sweep), sweep))).toBe("already-posted");
       const revisionProject = await idOf(after.db, sql`SELECT project_id AS id FROM plan_revisions WHERE id = ${revision}`);
       expect(await postPlanRevisionReport(after.db, { revisionId: revision, projectId: revisionProject, requestedBy: null }, "again")).toBe("already-posted");
       expect(await countOf(after.db, sql`SELECT count(*)::int AS n FROM client_messages WHERE direction = 'outbound'`)).toBe(reports);

@@ -79,7 +79,7 @@ describe("lifecycle simulator, directed", () => {
   it("keeps one project's corrupted rows from stopping the other", async (ctx) => {
     const contained = await directed(ctx, [], CORRUPTED);
     expect(contained.outcome.kind).toBe("accepted");
-    expect(contained.trace).toEqual(expect.arrayContaining(["plant: the second project's first task_spec corrupted", "contained block-report"]));
+    expect(contained.trace).toEqual(expect.arrayContaining(["plant: the second project's first task_spec corrupted", "contained terminal-report"]));
     expect(keys(contained), statements(contained)).toEqual(["I2:p2:episode:planted-unknown-kind"]);
   }, 90_000);
 

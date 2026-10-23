@@ -21,6 +21,7 @@ import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
+import { terminalReportsOf } from "./terminal-reports.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -586,8 +587,10 @@ describe("first plan", () => {
     expect(recorded?.error).toMatch(/StructuredOutputExhausted/);
     expect(new Set(await callSitesOf(projectId))).toEqual(new Set(["decomposition"]));
 
-    expect(await reports().runPending()).toEqual([{ kind: "posted", projectId, subject: "planning-stopped" }]);
+    const told = () => terminalReportsOf(db, (id) => ourProjects.has(id));
     expect(await reports().runPending()).toEqual([]);
+    expect(await told().runPending()).toEqual([{ kind: "posted", projectId, terminal: "planning-stopped" }]);
+    expect(await told().runPending()).toEqual([]);
     const outbound = await outboundOf(projectId);
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.body).toMatch(/could not turn this project's vision into a plan after 3 attempts/);

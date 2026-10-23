@@ -176,16 +176,18 @@ export class CoreLoop {
     if (answered.kind === "stop") return this.haltAtCap(answered.stop);
 
     // Each stop and halt episode still owed one gets its terminal sweep on main (no LLM call), before
-    // the stop's and the halt's report, so each guarantee's evidence on the last commit is on record
-    // when it is told.
+    // the stop's and the halt's terminal message, so each guarantee's evidence on the last commit is on
+    // record when it is told.
     const terminal = await this.sweepTerminals();
     if (terminal !== null) return this.haltAtCap(terminal);
-    const stopReports = await this.postStopReports();
-    if (stopReports !== null) return this.haltAtCap(stopReports);
+    // Every terminal message owed: a stop's, a halt's recorded in an earlier cycle (or before a
+    // restart), an acceptance recorded before a restart or before the cap stopped the loop, a first
+    // planning that stopped and a declined contract. No LLM call, so before the spend-cap check: a
+    // project the budget cap halted is told so.
+    const terminalReports = await this.postTerminalReports();
+    if (terminalReports !== null) return this.haltAtCap(terminalReports);
 
-    // Halts recorded in an earlier cycle (or before a restart) and a project's return to work: one
-    // plain report each to the client. No LLM call, so before the spend-cap check: a project the
-    // budget cap halted is told so.
+    // A project's return to work, once its halt is told: one plain report each to the client.
     const blockReports = await this.postBlockReports();
     if (blockReports !== null) return this.haltAtCap(blockReports);
     // A project whose model requests run ahead of its finished work is warned once per zone and plan
@@ -193,9 +195,6 @@ export class CoreLoop {
     // operator before the budget halts the project.
     const warnings = await this.postBurnWarnings();
     if (warnings !== null) return this.haltAtCap(warnings);
-    // An acceptance recorded before a restart, or before the cap stopped the loop, is told here.
-    const delivered = await this.postDeliveredReports();
-    if (delivered !== null) return this.haltAtCap(delivered);
 
     // Every step below makes LLM calls, each admitted by Finance's spend cap. A cycle at the cap
     // releases what the previous cycle's attempts held inside haltAtCap.
@@ -267,6 +266,9 @@ export class CoreLoop {
     for (const outcome of replans.outcomes) logReplan(deps.loop.logger, outcome);
     const planReports = await this.postPlanReports();
     if (planReports !== null) return this.haltAtCap(planReports);
+    // A first planning that stopped this cycle is told now, with the guarantee table.
+    const planningStopped = await this.postTerminalReports();
+    if (planningStopped !== null) return this.haltAtCap(planningStopped);
 
     // Every Blocked task takes its exit (Completed, Pending or given up) before the gate reads them.
     const released = await this.step("parked-exits", () =>
@@ -286,7 +288,7 @@ export class CoreLoop {
     // and told so, or a defect whose repair the next cycle's replanning plans.
     const swept = await this.step("acceptance", () => runAcceptanceSweeps({ ...deps.sweeps, projectRepo: deps.loop.projectRepo, eventStore: deps.loop.eventStore, containment: deps.loop.containment, logger: deps.loop.logger }));
     if (swept.kind === "stop") return this.haltAtCap(swept.stop);
-    const deliveredAfterSweep = await this.postDeliveredReports();
+    const deliveredAfterSweep = await this.postTerminalReports();
     if (deliveredAfterSweep !== null) return this.haltAtCap(deliveredAfterSweep);
 
     const gated = await this.step("gate", () => PlanningService.gate(deps.loop.workItemRepo, deps.loop.projectRepo, deps.loop.eventStore, deps.loop.containment, deps.loop.logger));
@@ -494,7 +496,7 @@ export class CoreLoop {
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
    * stops, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds,
    * the receipt of every message the client sends meanwhile, the release of what attempts held, and
-   * the block, delivered and plan reports still due. A project stopped here
+   * the terminal, resumption and plan reports still due. A project stopped here
    * stays stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
@@ -503,14 +505,13 @@ export class CoreLoop {
     await this.postReceipts("stopped-at-cap");
     await this.releaseHeld();
     // A stop taken here, and a halt recorded at the cap, is owed its terminal sweep (no LLM call)
-    // before its report; no full cycle runs again in this process to sweep it.
+    // before its terminal message; no full cycle runs again in this process to sweep it.
     await this.sweepTerminals();
-    await this.postStopReports();
     // A report whose post faulted is contained to its project and retried after a backoff, and a plan
-    // written in the cycle that reached the cap is reported after its block report; no full cycle runs
-    // again in this process, so both are here. No report makes an LLM call.
+    // written in the cycle that reached the cap is reported after its halt's message; no full cycle
+    // runs again in this process, so both are here. No report makes an LLM call.
+    await this.postTerminalReports();
     await this.postBlockReports();
-    await this.postDeliveredReports();
     await this.postPlanReports();
   }
 
@@ -561,16 +562,6 @@ export class CoreLoop {
     return null;
   }
 
-  /** The stop reports due, each posted once; the deployment cap's stop when a refusal named it, else null. */
-  private async postStopReports(): Promise<LoopStop | null> {
-    const reports = await this.step("client-stop-report", () => this.deps.client.clientStops.reportPending());
-    if (reports.kind === "stop") return reports.stop;
-    for (const report of reports.kind === "ran" ? reports.value : []) {
-      if (report.kind !== "step-faulted") this.deps.loop.logger.info("delivery.client-stop", `stop ${report.stopId}: ${report.kind}`, { projectId: report.projectId, stopId: report.stopId, outcome: report.kind });
-    }
-    return null;
-  }
-
   /**
    * The terminal sweep of each stop and halt episode owed one, each contained to its terminal; the
    * deployment cap's stop when a refusal named it, else null.
@@ -592,14 +583,17 @@ export class CoreLoop {
   }
 
   /**
-   * A project whose report failed is logged at warn by the Liaison, recorded on its sweep and retried;
-   * the cycle goes on. The deployment cap's stop when a refusal named it, else null.
+   * Every terminal message owed, each posted once through the Liaison's one terminal step; one whose
+   * post failed is logged at warn by the Liaison and retried, and the cycle goes on. The deployment
+   * cap's stop when a refusal named it, else null.
    */
-  private async postDeliveredReports(): Promise<LoopStop | null> {
-    const reports = await this.step("delivered-report", () => this.deps.reporting.deliveredReports.runPending());
+  private async postTerminalReports(): Promise<LoopStop | null> {
+    const reports = await this.step("terminal-report", () => this.deps.reporting.terminalReports.runPending());
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
-      if (report.kind !== "failed") this.deps.loop.logger.info("delivery.delivered-report", `delivered report ${report.kind}`, { projectId: report.projectId, outcome: report.kind });
+      if (report.kind === "posted" || report.kind === "already-posted") {
+        this.deps.loop.logger.info("delivery.terminal-report", `${report.terminal} message ${report.kind}`, { projectId: report.projectId, terminal: report.terminal, outcome: report.kind });
+      }
     }
     return null;
   }
@@ -647,7 +641,7 @@ export class CoreLoop {
     }
     // The loop stops here on `stop`: a stop the sweeps' or the reports' step returns is the cap's too.
     await this.sweepTerminals();
-    await this.postStopReports();
+    await this.postTerminalReports();
     await this.postBlockReports();
     await this.postReceipts("stopped-at-cap");
     return stopped(stop);

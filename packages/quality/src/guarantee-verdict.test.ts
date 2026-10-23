@@ -229,6 +229,19 @@ describe("judgeGuarantees: every guarantee of the version once, in its order", (
     }
   });
 
+  test("off a commit, a guarantee the contract marks not verifiable by Ashara reads not verifiable, never unjudged for want of a sweep", () => {
+    const marked: readonly JudgedGuarantee[] = [
+      { id: "G1", observation: "stored-data", refutedBy: ["x"], verification: "not-by-ashara" },
+      { id: "G2", observation: "output", refutedBy: ["y"], verification: "by-ashara" },
+    ];
+    for (const sweep of [null, { id: "sweep-4", mainCommit: null }]) {
+      expect(judgeGuarantees(marked, 1, sweep, { kind: "unrecorded" }).map((v) => [v.guaranteeId, v.verdict])).toEqual([
+        ["G1", { kind: "unjudged", reason: "not-verifiable-by-ashara" }],
+        ["G2", { kind: "unjudged", reason: "no-sweep-on-commit" }],
+      ]);
+    }
+  });
+
   test("a sweep recorded before evidence per guarantee judges every guarantee on none: a legacy one is not checkable as written", () => {
     const legacy: readonly JudgedGuarantee[] = [
       { id: "S1", observation: "unclassified", refutedBy: [], verification: "unmarked" },

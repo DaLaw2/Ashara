@@ -83,7 +83,7 @@ function buildDeps(
   liaisonIntake: LiaisonIntake = { runPending: async () => [] },
   firstPlanning: FirstPlanning = { runPending: async () => [] },
   planReports: LiaisonPlanReports = { runPending: async () => [] },
-  clientStops: LiaisonClientStops = { runPending: async () => [], reportPending: async () => [] },
+  clientStops: LiaisonClientStops = { runPending: async () => [] },
   rosterDerivation: RosterDerivationStep = { runPending: async () => [] },
   stackChoices: LiaisonStackChoices = { runPending: async () => [] },
   spendCap: SpendCapPort = { deploymentStop: async () => null, refusalOf: () => null },
@@ -316,26 +316,28 @@ describe("CoreLoop first plan", () => {
       { runPending: step("intake") },
       { runPending: step("plan") },
       { runPending: step("report") },
-      { runPending: step("stop"), reportPending: step("stop-report") },
+      { runPending: step("stop") },
       { runPending: step("roster") },
     );
-    await new CoreLoop(withOverrides(deps, { client: { clientChanges: { runPending: step("change") } } })).runCycle();
+    await new CoreLoop(withOverrides(deps, { client: { clientChanges: { runPending: step("change") } }, reporting: { terminalReports: { runPending: step("terminal") } } })).runCycle();
 
-    expect(order).toEqual(["stop", "stop-report", "intake", "change", "roster", "plan", "report", "dispatch", "dispatch"]);
+    // The terminal messages are posted after the terminal sweeps, after the planning reports (a first
+    // planning that stopped) and after the acceptance sweeps.
+    expect(order).toEqual(["stop", "terminal", "intake", "change", "roster", "plan", "report", "terminal", "terminal", "dispatch", "dispatch"]);
   });
 
-  test("a cycle halted at the spend cap takes the client's stops and posts the block, delivered and plan reports still due, and nothing else: a change is read by a model, so it waits", async () => {
+  test("a cycle halted at the spend cap takes the client's stops and posts the terminal, resumption and plan reports still due, and nothing else: a change is read by a model, so it waits", async () => {
     const order: string[] = [];
     const step = (name: string) =>
       vi.fn(async () => {
         order.push(name);
         return [];
       });
-    const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop"), reportPending: step("stop-report") });
+    const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop") });
 
-    await new CoreLoop(withOverrides(deps, { client: { clientChanges: { runPending: step("change") } }, reporting: { blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } } })).runHaltedCycle();
+    await new CoreLoop(withOverrides(deps, { client: { clientChanges: { runPending: step("change") } }, reporting: { blockReports: { runPending: step("block-report") }, terminalReports: { runPending: step("terminal") } } })).runHaltedCycle();
 
-    expect(order).toEqual(["stop", "stop-report", "block-report", "delivered-report", "report"]);
+    expect(order).toEqual(["stop", "terminal", "block-report", "report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
@@ -352,15 +354,20 @@ describe("CoreLoop first plan", () => {
         order.push(name);
         return [];
       });
-    const deps = buildDeps({ runPending: step("intake") }, undefined, undefined, { runPending: step("stop"), reportPending: step("stop-report") });
-    const loop = new CoreLoop(withOverrides(deps, { client: { clientReceipts: { runPending: step("receipt"), dueMessages: async () => new Set() }, clientChanges: { runPending: step("change") } } }));
+    const deps = buildDeps({ runPending: step("intake") }, undefined, undefined, { runPending: step("stop") });
+    const loop = new CoreLoop(
+      withOverrides(deps, {
+        client: { clientReceipts: { runPending: step("receipt"), dueMessages: async () => new Set() }, clientChanges: { runPending: step("change") } },
+        reporting: { terminalReports: { runPending: step("terminal") } },
+      }),
+    );
 
     await loop.runCycle();
-    expect(order).toEqual(["stop", "receipt", "stop-report", "intake", "change", "dispatch", "dispatch", "receipt"]);
+    expect(order).toEqual(["stop", "receipt", "terminal", "intake", "change", "terminal", "terminal", "dispatch", "dispatch", "receipt"]);
 
     order.length = 0;
     await loop.runHaltedCycle();
-    expect(order).toEqual(["stop", "receipt", "stop-report"]);
+    expect(order).toEqual(["stop", "receipt", "terminal"]);
   });
 
   // A halted cycle runs no round of work again in this process, so its receipts never promise one; a
@@ -394,10 +401,9 @@ describe("CoreLoop first plan", () => {
     const classified: Record<string, "halted" | { readonly excluded: string }> = {
       "client-stop": "halted",
       "client-receipt": "halted",
-      "client-stop-report": "halted",
       "settled-branches": "halted",
       "block-report": "halted",
-      "delivered-report": "halted",
+      "terminal-report": "halted",
       "plan-report": "halted",
       "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; only a project at work has a choice due, so a project halted at the cap has its choice recorded and reported once it resumes, in a full cycle after the process restarts" },
       "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
@@ -484,19 +490,22 @@ describe("CoreLoop spend cap", () => {
       });
 
     const result = await new CoreLoop(
-      buildDeps(
-        { runPending: step("intake") },
-        { runPending: step("plan") },
-        { runPending: step("report") },
-        { runPending: step("stop"), reportPending: step("stop-report") },
-        { runPending: step("roster") },
-        undefined,
-        stubSpendCap(() => true),
+      withOverrides(
+        buildDeps(
+          { runPending: step("intake") },
+          { runPending: step("plan") },
+          { runPending: step("report") },
+          { runPending: step("stop") },
+          { runPending: step("roster") },
+          undefined,
+          stubSpendCap(() => true),
+        ),
+        { reporting: { terminalReports: { runPending: step("terminal") } } },
       ),
     ).runCycle();
 
-    // The stop reports run in the cycle's own steps and again as the cap halts it, both with no LLM call.
-    expect(order).toEqual(["stop", "stop-report", "stop-report"]);
+    // The terminal messages run in the cycle's own steps and again as the cap halts it, both with no LLM call.
+    expect(order).toEqual(["stop", "terminal", "terminal"]);
     expect(result.stop?.reason).toMatch(/budget_cap/);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });

@@ -1,15 +1,14 @@
 import type { createDb } from "@ashara/db";
-import { listDueBlockReports, postProjectBlockReport, readRiskRecords } from "@ashara/engagement";
+import { listDueResumptionReports, postResumptionReport, readRiskRecords } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
-import { blockingReview } from "@ashara/quality";
 
 type Db = ReturnType<typeof createDb>;
 
-/** Engagement's block-report store over Delivery's published halt episodes, Engagement's told record and client_messages, and Quality's published guarantee verdicts. */
+/** Engagement's resumption-report store over Delivery's published halt episodes, Engagement's told record and client_messages. */
 export function createBlockReportStore(db: Db): BlockReportStore {
   return {
-    dueReports: () => listDueBlockReports(db, blockingReview),
-    postProjectReport: (episodeId, on, body, verdicts) => postProjectBlockReport(db, episodeId, on, body, verdicts),
+    dueReports: () => listDueResumptionReports(db),
+    postResumedReport: (episodeId, body) => postResumptionReport(db, episodeId, body),
     riskRecords: (projectId) => readRiskRecords(db, projectId),
   };
 }

@@ -123,12 +123,51 @@ export type ToldSubjectKind = (typeof TOLD_SUBJECT_KINDS)[number];
 export const reportTold = (kind: ToldSubjectKind, subjectId: AnyColumn | SQL): SQL =>
   sql`EXISTS (SELECT 1 FROM told_reports tr WHERE tr.subject_kind = ${kind} AND tr.subject_id = ${subjectId instanceof SQL ? subjectId : qualifiedColumn(subjectId)})`;
 
+/**
+ * How each kind of terminal message (terminal-report.ts) is recorded as told, so it is told once and a
+ * restart neither tells it again nor drops it: by a told record of its subject (a passed sweep, a halt
+ * episode), or as the project's one report on its subject (the client's stop, a first planning that
+ * stopped, a contract Ashara declines).
+ */
+const TERMINAL_TOLD = {
+  delivered: { told: "delivered" },
+  halted: { told: "project-blocked" },
+  "planning-stopped": { reportsOn: REPORT_SUBJECT.planningStopped },
+  stopped: { reportsOn: REPORT_SUBJECT.clientStop },
+  declined: { reportsOn: REPORT_SUBJECT.declined },
+} as const satisfies Record<string, { readonly told: ToldSubjectKind } | { readonly reportsOn: string }>;
+
+/** Every kind of terminal message the client is sent. */
+export type TerminalKind = keyof typeof TERMINAL_TOLD;
+
+/**
+ * The terminal message of `kind` on `subject` is told: the one predicate every terminal kind's due
+ * listing and its post-once write agree on. `subject` is the told record's subject (the sweep, the
+ * halt episode) for a kind told by one, and the project for a kind told as the project's one report.
+ */
+export function terminalTold(kind: TerminalKind, subject: AnyColumn | SQL): SQL {
+  const ref = subject instanceof SQL ? subject : qualifiedColumn(subject);
+  const by: { readonly told: ToldSubjectKind } | { readonly reportsOn: string } = TERMINAL_TOLD[kind];
+  if ("told" in by) return reportTold(by.told, ref);
+  return sql`EXISTS (SELECT 1 FROM client_messages tt WHERE tt.project_id = ${ref} AND tt.reports_on = ${by.reportsOn})`;
+}
+
+/** The client message `messageId` (an outbound report, its reports_on `reportsOn`) is a terminal message of any kind. */
+export function terminalMessage(messageId: SQL, reportsOn: SQL): SQL {
+  const by: ReadonlyArray<{ readonly told: ToldSubjectKind } | { readonly reportsOn: string }> = Object.values(TERMINAL_TOLD);
+  const told = by.flatMap((each) => ("told" in each ? [each.told] : []));
+  const subjects = by.flatMap((each) => ("reportsOn" in each ? [each.reportsOn] : []));
+  return sql`(EXISTS (SELECT 1 FROM told_reports tm WHERE tm.report_id = ${messageId} AND tm.subject_kind IN (${sql.join(
+    told.map((kind) => sql`${kind}`),
+    sql`, `,
+  )})) OR ${reportsOn} IN (${sql.join(
+    subjects.map((subjectName) => sql`${subjectName}`),
+    sql`, `,
+  )}))`;
+}
+
 /** The halt episode's own report is posted. Delivery resumes an infrastructure halt only once it is. */
-export const haltReported = (episodeId: AnyColumn | SQL): SQL => reportTold("project-blocked", episodeId);
+export const haltReported = (episodeId: AnyColumn | SQL): SQL => terminalTold("halted", episodeId);
 
 /** The plan revision's report is posted: its own, or the first-plan report that described it. */
 export const planRevisionTold = (revisionId: AnyColumn | SQL): SQL => reportTold("plan-revision", revisionId);
-
-/** The Liaison's report on the project's planning-stopped outcome (reports_on 'planning-stopped') is posted. */
-export const planningStoppedTold = (projectId: AnyColumn): SQL =>
-  sql`EXISTS (SELECT 1 FROM client_messages ps WHERE ps.project_id = ${qualifiedColumn(projectId)} AND ps.reports_on = ${REPORT_SUBJECT.planningStopped})`;

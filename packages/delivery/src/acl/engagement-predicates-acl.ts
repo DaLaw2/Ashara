@@ -17,7 +17,6 @@ export {
   noOpenAnswer,
   noOpenStop,
   noUnverifiableContractHeld,
-  planningStoppedTold,
   planRevisionTold,
   projectActive,
   projectAtWork,

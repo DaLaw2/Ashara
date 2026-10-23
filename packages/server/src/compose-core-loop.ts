@@ -66,7 +66,7 @@ import {
 } from "@ashara/quality";
 import type { MainSweepDeps, SuiteReviewing } from "@ashara/quality";
 import type { Logger, StepContainment } from "@ashara/shared";
-import { createAcceptanceStore, createDeliveredReportStore, createDeliveredReports, createTerminalSweepStore } from "./acceptance-store.js";
+import { createAcceptanceStore, createTerminalSweepStore } from "./acceptance-store.js";
 import { createAnswerStore } from "./answer-store.js";
 import { createBlockReportStore } from "./block-report-store.js";
 import { createClientChangeStore } from "./client-change-store.js";
@@ -76,6 +76,7 @@ import { createIntakeStore } from "./intake-store.js";
 import { createPlanReportStore } from "./plan-report-store.js";
 import { createRosterStore } from "./roster-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
+import { createTerminalReportStore, createTerminalReports } from "./terminal-report-store.js";
 
 type Db = ReturnType<typeof createDb>;
 
@@ -216,10 +217,11 @@ export function composeCoreLoopDeps(parts: CoreLoopParts, overrides: CoreLoopOve
         terminalSweeps: createTerminalSweepStore(db),
       },
       reporting: {
-        deliveredReports: createDeliveredReports(createDeliveredReportStore(db)),
+        // One Liaison path for every terminal message, each with the guarantee table.
+        terminalReports: createTerminalReports(createTerminalReportStore(db), containment),
         planReports: new PlanReports(createPlanReportStore(db), containment),
         stackChoices: new StackChoiceReports(createStackChoiceStore(db), containment),
-        // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
+        // A project's return to work, once its halt's terminal message is told.
         blockReports: new BlockReports(createBlockReportStore(db), containment),
         burnWarnings: new BurnWarnings(
           {

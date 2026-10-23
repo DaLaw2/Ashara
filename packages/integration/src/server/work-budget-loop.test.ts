@@ -11,8 +11,6 @@ import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository, WorkGrantRepository } from "@ashara/finance";
 import { CoreLoop, DEFAULT_CONFIG, FailureRouter, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import { BlockReports } from "@ashara/engagement";
-import type { BlockReportStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap, WORK_BUDGET_ERROR_CLASS } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
@@ -21,13 +19,12 @@ import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
-import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
-import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { haltReportsOf } from "./terminal-reports.js";
 
 // The work ledger end to end: Finance draws one model request from the
 // project's and the task's budgets before every gateway request, counted from llm_calls rows, and
@@ -312,10 +309,7 @@ describe("a project that draws its whole work budget", () => {
       ]);
 
       // The client and the operator are told the budget, what was drawn and by which call site.
-      const store = createBlockReportStore(db);
-      await sweepTerminalsOf(db, (projectId) => projectId === at.projectId);
-      const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => due.projectId === at.projectId) };
-      await new BlockReports(ours, memoryStepContainment(() => false)).runPending();
+      await haltReportsOf(db, (projectId) => projectId === at.projectId, { escapes: false }).runPending();
       const reports = await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${at.projectId} AND direction = 'outbound'`);
       const [report] = z.array(z.object({ body: z.string() })).parse(reports.rows);
       expect(report?.body).toContain("the budget of model requests set for this project was used up");

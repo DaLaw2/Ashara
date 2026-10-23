@@ -7,7 +7,7 @@ import type { Database, DbHandle, ProjectRow } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { HALT_KINDS, firstPlanned, openHaltKind, projectHalted, type HaltKind } from "@ashara/delivery/predicates";
 import { INBOUND_KINDS, inboundDecision, type InboundKind, type InboundState } from "../inbound-policy.js";
-import { clientMessageReadNow, noOpenStop, unverifiableContractHeld, visionWritten } from "../predicates.js";
+import { clientMessageReadNow, noOpenStop, terminalMessage, terminalTold, unverifiableContractHeld, visionWritten } from "../predicates.js";
 import { REPORT_SUBJECT, type REPORT_SUBJECTS } from "../report-subjects.js";
 
 // The client channel's one writer and reader in Engagement: the only file that holds the
@@ -463,29 +463,29 @@ export async function unconsumedStopMessages(db: DbHandle): Promise<Array<{ read
     .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
 }
 
-/** Whether the project's stop report is posted. */
-function stopReportPostedSql(projectId: string | SQL): SQL<boolean> {
-  return sql<boolean>`EXISTS (SELECT 1 FROM client_messages r WHERE r.project_id = ${projectId} AND r.reports_on = ${REPORT_SUBJECT.clientStop})`;
-}
+const StopReportPostedSchema = z.object({ posted: z.boolean() });
 
-/** Whether the project's stop report is posted; null when the project does not exist. */
+/** Whether the project's stop report is posted (terminalTold); null when the project does not exist. */
 export async function stopReportPosted(db: DbHandle, projectId: ProjectId): Promise<boolean | null> {
-  const [row] = await db.select({ posted: stopReportPostedSql(projectId) }).from(projects).where(eq(projects.id, projectId));
-  return row === undefined ? null : row.posted;
+  const [row] = await db.select({ posted: terminalTold("stopped", sql`${projectId}`) }).from(projects).where(eq(projects.id, projectId));
+  return row === undefined ? null : StopReportPostedSchema.parse(row).posted;
 }
 
-/** Records on the stop `stopId`, consumed in the proof's transaction, whether Delivery had its project halted when it stopped it. */
-export async function recordStopFoundHalted(standing: LockedStanding, stopId: string, wasHalted: boolean): Promise<void> {
+/** Records on the stop `stopId`, consumed in the proof's transaction, whether Delivery had its project halted, and whether it was accepted, when it stopped it. */
+export async function recordStopFound(standing: LockedStanding, stopId: string, found: { readonly halted: boolean; readonly accepted: boolean }): Promise<void> {
   await standing.tx
     .update(clientMessages)
-    .set({ stopFoundHalted: wasHalted })
+    .set({ stopFoundHalted: found.halted, stopFoundAccepted: found.accepted })
     .where(and(eq(clientMessages.id, stopId), eq(clientMessages.projectId, standing.projectId), eq(clientMessages.kind, standing.messageKind)));
 }
 
-/** Every stop that stopped its project, the project still stopped and with no stop report yet, oldest consumed first, as stored. */
+/**
+ * Every stop that stopped its project, the project still stopped and its stop report not told
+ * (terminalTold), oldest consumed first, as stored: the terminal due listing's stops.
+ */
 export async function dueStopReportMessages(db: DbHandle) {
   return db
-    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted })
+    .select({ stopId: clientMessages.id, projectId: clientMessages.projectId, paused: clientMessages.stopFoundHalted, accepted: clientMessages.stopFoundAccepted })
     .from(clientMessages)
     .innerJoin(projects, eq(projects.id, clientMessages.projectId))
     .where(
@@ -494,7 +494,7 @@ export async function dueStopReportMessages(db: DbHandle) {
         eq(clientMessages.kind, "stop"),
         isNotNull(clientMessages.stopFoundHalted),
         eq(projects.lifecycle, "stopped"),
-        sql`NOT ${stopReportPostedSql(sql`${clientMessages.projectId}`)}`,
+        sql`NOT ${terminalTold("stopped", clientMessages.projectId)}`,
       ),
     )
     .orderBy(asc(clientMessages.consumedAt), asc(clientMessages.id));
@@ -594,20 +594,13 @@ export async function postReceiptOf(tx: DbHandle, receipt: { readonly projectId:
   return inserted.length === 0 ? "already-posted" : "posted";
 }
 
-/**
- * A message that carries the guarantee table as a terminal: the delivered report or acceptance notice of a sweep, a
- * halt's report, the client's stop report, or the planning-stopped report.
- */
-const terminalReport = sql`(
-  EXISTS (SELECT 1 FROM told_reports t WHERE t.report_id = ${clientMessages.id} AND t.subject_kind IN ('delivered', 'project-blocked'))
-  OR ${inArray(clientMessages.reportsOn, [REPORT_SUBJECT.clientStop, REPORT_SUBJECT.planningStopped])})`;
-
-/** The id of the project's last terminal report; null when it has none. */
+/** The id of the project's last terminal message (terminalMessage), the guarantee table's carrier; null when it has none. */
 export async function lastTerminalReportId(db: DbHandle, projectId: string): Promise<string | null> {
+  const terminal = terminalMessage(qualifiedColumn(clientMessages.id), qualifiedColumn(clientMessages.reportsOn));
   const [last] = await db
     .select({ reportId: clientMessages.id })
     .from(clientMessages)
-    .where(and(eq(clientMessages.projectId, projectId), eq(clientMessages.direction, "outbound"), eq(clientMessages.kind, "report"), terminalReport))
+    .where(and(eq(clientMessages.projectId, projectId), eq(clientMessages.direction, "outbound"), eq(clientMessages.kind, "report"), terminal))
     .orderBy(desc(clientMessages.createdAt), desc(clientMessages.id))
     .limit(1);
   return last === undefined ? null : last.reportId;

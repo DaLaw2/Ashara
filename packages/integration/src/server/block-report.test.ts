@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
-import { BlockReports, VisionRepository, postPlanReport } from "@ashara/engagement";
+import { BlockReports, VisionRepository } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
@@ -12,7 +12,7 @@ import { memoryStepContainment } from "@ashara/shared/testing";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { projectState } from "../simulator/project-state.js";
-import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { terminalReportsOf } from "./terminal-reports.js";
 
 // Every project halt is told to the client
 // once, in plain words, stating its cause, and its end (an operator's unblock, or the substrate
@@ -31,17 +31,22 @@ async function newProject(): Promise<ProjectId> {
   return project.id;
 }
 
-/** The Liaison's block reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
-function reports(): BlockReports {
+/** The Liaison's resumption reports over the projects `mine` admits. */
+function resumptionsOf(mine: (projectId: string) => boolean, escapes: boolean): BlockReports {
   const store = createBlockReportStore(db);
-  const ours: BlockReportStore = {
-    ...store,
-    dueReports: async () => {
-      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
-      return (await store.dueReports()).filter((r) => ourProjects.has(r.projectId));
-    },
-  };
-  return new BlockReports(ours, memoryStepContainment(() => true));
+  const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((r) => mine(r.projectId)) };
+  return new BlockReports(ours, memoryStepContainment(() => escapes));
+}
+
+/**
+ * The Liaison's halt messages and resumption reports over this suite's projects, as the core loop
+ * orders them: each halt's terminal sweep recorded, its terminal message posted, then the resumptions.
+ */
+function reports() {
+  const mine = (projectId: string) => ourProjects.has(projectId);
+  const halts = terminalReportsOf(db, mine, { kinds: ["halted"] });
+  const resumptions = resumptionsOf(mine, true);
+  return { runPending: async () => [...(await halts.runPending()), ...(await resumptions.runPending())] };
 }
 
 const MessagesSchema = z.array(z.object({ body: z.string() }));
@@ -134,9 +139,8 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     const projectId = await newProject();
     await writeContract(projectId);
     await new ProjectHaltRepository(db).block(projectId, budgetCap);
-    const store = createBlockReportStore(db);
-    const unswept = new BlockReports({ ...store, dueReports: async () => (await store.dueReports()).filter((r) => r.projectId === projectId) }, memoryStepContainment(() => true));
-    expect(await unswept.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+    const unswept = terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["halted"] });
+    expect(await unswept.runPending()).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
 
     const [body = ""] = await messagesOf(projectId);
     expect(body).toContain("Ashara recorded the cause as this: the spending limit set for this project left no room");
@@ -221,15 +225,12 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await db.execute(sql`UPDATE project_blocks SET spend = '{"capUsd": "five"}'::jsonb WHERE project_id = ${unreadable}`);
 
     try {
-      const store = createBlockReportStore(db);
       const mine = (projectId: string): boolean => projectId === unreadable || projectId === healthy;
-      await sweepTerminalsOf(db, mine);
-      const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((r) => mine(r.projectId)) };
-      const outcomes = await new BlockReports(ours, memoryStepContainment(() => false)).runPending();
+      const outcomes = await terminalReportsOf(db, mine, { escapes: false, kinds: ["halted"] }).runPending();
 
       expect(outcomes).toEqual([
-        expect.objectContaining({ kind: "step-faulted", step: "block-report", projectId: unreadable, error: expect.stringContaining("BlockSpendUnreadable") }),
-        { kind: "posted", projectId: healthy, subject: "project-blocked" },
+        expect.objectContaining({ kind: "step-faulted", step: "terminal-report", projectId: unreadable, error: expect.stringContaining("BlockSpendUnreadable") }),
+        { kind: "posted", projectId: healthy, terminal: "halted" },
       ]);
       expect(await messagesOf(healthy)).toHaveLength(1);
       expect(await messagesOf(unreadable)).toEqual([]);
@@ -246,8 +247,11 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await projects.unblock(projectId, "operator-a", "raised the project cap to $10");
 
     const ours = async () => (await reports().runPending()).filter((outcome) => outcome.projectId === projectId);
-    expect(await ours()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
-    expect(await ours()).toEqual([{ kind: "posted", projectId, subject: "project-resumed" }]);
+    // The resumption is listed once its halt is told, which the halt's message, posted first, records.
+    expect(await ours()).toEqual([
+      { kind: "posted", projectId, terminal: "halted" },
+      { kind: "posted", projectId, subject: "project-resumed" },
+    ]);
     expect(await ours()).toEqual([]);
 
     const bodies = await messagesOf(projectId);
@@ -316,7 +320,9 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await stop();
     await reports().runPending();
     expect(await messagesOf(projectId)).toEqual([]);
-    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [], null)).toBe("posted");
+    expect(await terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["planning-stopped"] }).runPending()).toEqual([
+      { kind: "posted", projectId, terminal: "planning-stopped" },
+    ]);
 
     await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
     const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM project_plans WHERE project_id = ${projectId}`);

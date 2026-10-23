@@ -24,6 +24,7 @@
     "./secrets": "./src/secrets.ts",
     "./stack-choice-store": "./src/stack-choice-store.ts",
     "./task-check-store": "./src/task-check-store.ts",
+    "./terminal-report-store": "./src/terminal-report-store.ts",
     "./web-client": "./src/web-client.ts"
   },
   "dependencies": {

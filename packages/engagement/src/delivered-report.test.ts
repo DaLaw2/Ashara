@@ -1,15 +1,34 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import { DeliveredReports } from "./delivered-report.js";
-import type { DeliveredReportFailureRecord, DeliveredReportStore } from "./delivered-report.js";
+import { memoryStepContainment } from "@ashara/shared/testing";
+import type { DeliveredReportFailureRecord, DueDeliveredReport, ProductInterfaceSource, UnreadDeliveredReport } from "./delivered-report.js";
+import { guaranteeTableOf } from "./guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { TerminalReports } from "./terminal-report.js";
+import type { DueTerminal, TerminalReportStore } from "./terminal-report.js";
+
+// The delivered report is the terminal message of a passed acceptance sweep (terminal-report.ts):
+// told once of its sweep, with the sweep's guarantee table.
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000021", "test");
 const MAIN = "c".repeat(40);
 const MERGE_A = "a".repeat(40);
 
-type Listed = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
-type Due = Extract<Listed, { readonly kind: "due" }>;
+type Due = DueDeliveredReport;
+type Listed = Due | UnreadDeliveredReport;
+
+/** A delivered report's terminal step over `store`, reading the interface file through `productInterface`. */
+function deliveredReports(store: TerminalReportStore, productInterface: ProductInterfaceSource): TerminalReports {
+  return new TerminalReports(store, productInterface, memoryStepContainment(() => true));
+}
+
+/** The listing of each delivered report, with the table each carries: an unread one's read on its own, or lost with the connection. */
+function listedWith(listed: readonly Listed[], table: GuaranteeTable | "lost"): DueTerminal[] {
+  return listed.map((report): DueTerminal => {
+    if (report.kind === "due") return { kind: "delivered", report, table: NO_CONTRACT };
+    return { kind: "delivered-unread", report, table: table === "lost" ? { kind: "not-read", error: new Error("Connection terminated unexpectedly") } : table };
+  });
+}
 /**
  * A due report's records; `executed`, when not the case under test, is one check that ran, and
  * `reading` a first reading of the tender that asked the client questions.
@@ -21,26 +40,25 @@ type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceRe
 const ONE_RUN: Due["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
 
 /** A table with no contract behind it; guarantee-report.test.ts judges the table's own text. */
-const NO_CONTRACT: GuaranteeTable = { kind: "no-contract", sweep: { id: "s9", mainCommit: MAIN } };
+const NO_CONTRACT: GuaranteeTable = guaranteeTableOf({ kind: "no-contract", sweep: { id: "s9", mainCommit: MAIN } });
 
 const WORKSPACE = "/work/target";
 const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
-type InterfaceRead = Awaited<ReturnType<ConstructorParameters<typeof DeliveredReports>[1]["at"]>>;
+type InterfaceRead = Awaited<ReturnType<ProductInterfaceSource["at"]>>;
 
 async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }): Promise<string> {
   const due: Due = { ...fields, executed: fields.executed ?? ONE_RUN, reading: fields.reading ?? { kind: "not-needed" }, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
   const reads: string[] = [];
-  const reports = new DeliveredReports(
+  const reports = deliveredReports(
     {
-      dueReports: async () => [due],
-      guaranteeTable: async () => expect.unreachable("the report carries the table it was listed with"),
-      postReport: async (sweepId, body) => {
-        expect(sweepId).toBe(due.sweepId);
-        posted.push(body);
+      dueTerminals: async () => listedWith([due], NO_CONTRACT),
+      postTerminal: async (message) => {
+        expect(message.subject).toEqual({ kind: "delivered", sweepId: due.sweepId });
+        posted.push(message.body);
         return "posted";
       },
-      recordReportFailure: async () => expect.unreachable("no report failed"),
+      recordDeliveredFailure: async () => expect.unreachable("no report failed"),
     },
     {
       file: INTERFACE_FILE,
@@ -50,7 +68,7 @@ async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }):
       },
     },
   );
-  expect(await reports.runPending()).toEqual([{ kind: "posted", projectId }]);
+  expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
   expect(posted).toHaveLength(1);
   expect(reads).toEqual([`${WORKSPACE}@${due.mainCommit}`]);
   return posted[0];
@@ -64,7 +82,6 @@ const BASE: Fields = {
   checked: ["Count words"],
   unchecked: [],
   givenUp: [],
-  guarantees: NO_CONTRACT,
 };
 
 /** The section that says how acceptance ran the product, up to the interface file's. */
@@ -196,7 +213,6 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: ["Set up the product's module root"],
       givenUp: ["Shard the store"],
-      guarantees: NO_CONTRACT,
     });
     const [opening] = body.split("\n\n");
     expect(opening).toBe(
@@ -217,7 +233,6 @@ describe("the delivered report", () => {
       checked: [],
       unchecked: ["Set up the product's module root"],
       givenUp: [],
-      guarantees: NO_CONTRACT,
     });
     expect(body).toContain(`the environment's test passed on main, commit ${MAIN}; no stored check of any task ran with it.`);
     expect(body).not.toContain("passed together");
@@ -266,22 +281,18 @@ describe("a delivered report that fails is its own project's", () => {
   function store(listed: readonly Listed[], post: "posts" | "fails" = "posts", table: GuaranteeTable | "lost" = NO_CONTRACT) {
     const posted: Array<{ sweepId: string; body: string; verdicts: TableVerdicts }> = [];
     const failures: Array<{ sweepId: string } & DeliveredReportFailureRecord> = [];
-    const reportStore: DeliveredReportStore = {
-      dueReports: async () => listed,
-      guaranteeTable: async () => {
-        if (table === "lost") throw new Error("Connection terminated unexpectedly");
-        return table;
-      },
-      postReport: async (sweepId, body, verdicts) => {
+    const reportStore: TerminalReportStore = {
+      dueTerminals: async () => listedWith(listed, table),
+      postTerminal: async ({ subject, body, verdicts }) => {
         if (post === "fails") throw new Error("client_messages insert failed: connection reset");
-        posted.push({ sweepId, body, verdicts });
+        posted.push({ sweepId: subject.kind === "delivered" ? subject.sweepId : expect.unreachable("a delivered report"), body, verdicts });
         return "posted";
       },
-      recordReportFailure: async (sweepId, failure) => {
+      recordDeliveredFailure: async (sweepId, failure) => {
         failures.push({ sweepId, ...failure });
       },
     };
-    const reports = new DeliveredReports(reportStore, {
+    const reports = deliveredReports(reportStore, {
       file: INTERFACE_FILE,
       at: async (targetProjectPath) => {
         if (targetProjectPath === BROKEN) throw new Error("git ls-tree: fatal: not a git repository");
@@ -325,12 +336,11 @@ describe("a delivered report that fails is its own project's", () => {
 
   test("a failure that cannot be recorded throws through: a report's failure is never dropped", async () => {
     const unread: Listed = { kind: "unread", cause: "record", failures: 0, recordFailures: 0, sweepId: "s-unread", projectId: otherId, error: new Error("bad record") };
-    const reports = new DeliveredReports(
+    const reports = deliveredReports(
       {
-        dueReports: async () => [unread],
-        guaranteeTable: async () => NO_CONTRACT,
-        postReport: async () => "posted",
-        recordReportFailure: async () => Promise.reject(new Error("ledger down")),
+        dueTerminals: async () => listedWith([unread], NO_CONTRACT),
+        postTerminal: async () => "posted",
+        recordDeliveredFailure: async () => Promise.reject(new Error("ledger down")),
       },
       { file: INTERFACE_FILE, at: async () => ({ kind: "absent" }) },
     );

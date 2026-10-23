@@ -1,10 +1,8 @@
 import type { SecondOpinionStrength } from "@ashara/finance";
-import { describeErrorChain, faultBackoffSeconds, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
+import { keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
-import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 
-// The Liaison's delivered report:
+// The Liaison's delivered report, a terminal message (terminal-report.ts):
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
 // each goal task and how its record says it closed, and the guarantee table judged from that
 // sweep's evidence: one verdict per guarantee, which a review of the checks can only hold back.
@@ -42,7 +40,7 @@ export type ReadingTold =
   | { readonly kind: "unrecorded" };
 
 /** An accepted project whose delivered report the client has not been sent. */
-interface DueDeliveredReport {
+export interface DueDeliveredReport {
   readonly kind: "due";
   /** Failed attempts at this report so far (delivered_report_attempts.failures). */
   readonly failures: number;
@@ -65,8 +63,6 @@ interface DueDeliveredReport {
   readonly givenUp: readonly string[];
   /** The stored checks the sweep ran and saw pass (acceptance_sweeps.check_outcomes, those passed). */
   readonly executed: ExecutedChecks;
-  /** The guarantee table judged from the sweep's evidence. */
-  readonly guarantees: GuaranteeTable;
   readonly reading: ReadingTold;
 }
 
@@ -84,7 +80,7 @@ type ExecutedChecks =
  * for every other failure (a row that does not parse, a reference to nothing, Ashara's own reading
  * of them failing), which a retry meets again.
  */
-interface UnreadDeliveredReport {
+export interface UnreadDeliveredReport {
   readonly kind: "unread";
   readonly cause: "record" | "connection";
   readonly failures: number;
@@ -105,35 +101,17 @@ type ProductFileAt =
   | { readonly kind: "not-held"; readonly reason: string };
 
 /** The interface file as the report tells it: read, or every attempt to read it failed. */
-type InterfaceTold = ProductFileAt | { readonly kind: "unreadable"; readonly attempts: number; readonly sweepId: string };
+export type InterfaceTold = ProductFileAt | { readonly kind: "unreadable"; readonly attempts: number; readonly sweepId: string };
 
 /**
  * Where the product states how it is run: its public interface file, one name for every product,
  * read at one commit of the project's target checkout. The composition root supplies it from the
  * context that owns the convention; what the file says is the product's, quoted as is.
  */
-interface ProductInterfaceSource {
+export interface ProductInterfaceSource {
   /** The file, at the repository root, the product's public interface is written in. */
   readonly file: string;
   at(targetProjectPath: string, commit: string): Promise<ProductFileAt>;
-}
-
-/** Engagement's persistence port for delivered reports. */
-export interface DeliveredReportStore {
-  /**
-   * Every report due, each assembled from its records or the reason it could not be; a sweep whose
-   * last failed attempt set a retry time is listed once that time has passed.
-   */
-  dueReports(): Promise<ReadonlyArray<DueDeliveredReport | UnreadDeliveredReport>>;
-  /**
-   * The sweep's guarantee table read on its own, for the acceptance notice; records that do not hold
-   * together as a table read as the unreadable table.
-   */
-  guaranteeTable(sweepId: string): Promise<GuaranteeTable>;
-  /** Posts the report on the accepted sweep unless one is posted, with its table's verdicts. */
-  postReport(sweepId: string, body: string, verdicts: TableVerdicts): Promise<"posted" | "already-posted">;
-  /** Records a failure at the sweep's report (DeliveredReportFailureRecord). */
-  recordReportFailure(sweepId: string, failure: DeliveredReportFailureRecord): Promise<void>;
 }
 
 /** A failure at a delivered report, as recorded on its sweep. */
@@ -151,39 +129,6 @@ export interface DeliveredReportFailureRecord {
   readonly retryAfterSeconds: number | null;
 }
 
-/** A failure at a delivered report could not be recorded on its sweep: the cycle's step fails, as its listing would. */
-class DeliveredReportFailureUnrecorded extends Error {
-  constructor(
-    readonly sweepId: string,
-    cause: unknown,
-  ) {
-    super(`a failed delivered report could not be recorded on acceptance sweep ${sweepId}`, { cause });
-    this.name = "DeliveredReportFailureUnrecorded";
-  }
-}
-
-/** One project's delivered report failed this cycle; it is tried again after `retryAfterSeconds`. */
-class DeliveredReportFailed extends Error {
-  constructor(
-    readonly projectId: ProjectId,
-    readonly sweepId: string,
-    readonly failures: number,
-    readonly retryAfterSeconds: number,
-    cause: unknown,
-  ) {
-    super(
-      `delivered report of project ${projectId} (acceptance sweep ${sweepId}) failed, attempt ${failures}; tried again in ` +
-        `${retryAfterSeconds}s: ${describeErrorChain(cause)}`,
-      { cause },
-    );
-    this.name = "DeliveredReportFailed";
-  }
-}
-
-type DeliveredReportOutcome =
-  | { readonly kind: "posted" | "already-posted"; readonly projectId: ProjectId }
-  | { readonly kind: "failed"; readonly projectId: ProjectId; readonly failure: DeliveredReportFailed };
-
 /** At most this many characters of the public interface file are quoted; a longer one keeps its start and end. */
 const INTERFACE_QUOTE_CHARS = 4000;
 
@@ -191,25 +136,32 @@ const INTERFACE_QUOTE_CHARS = 4000;
  * Failed attempts after which a report whose interface file still cannot be read is posted without
  * the quote, saying so: the client is told the project is delivered, never left waiting on a read.
  */
-const MAX_INTERFACE_READ_FAILURES = 3;
+export const MAX_INTERFACE_READ_FAILURES = 3;
 
 /**
  * Failed attempts after which a report whose records still cannot be read is posted as an
  * acceptance notice saying so: the client is told the project was accepted, never left waiting.
  */
-const MAX_UNREAD_ATTEMPTS = 5;
+export const MAX_UNREAD_ATTEMPTS = 5;
+
+/** The paragraphs of a terminal message before its guarantee table and after it (terminal-report.ts). */
+interface AroundTable {
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+}
 
 /**
  * The client's notice of acceptance when the delivered report cannot be written from the records: a
- * terminal message like the report, so it carries the sweep's guarantee table.
+ * terminal message like the report, so the sweep's guarantee table follows its first paragraph.
  */
-function unreadNotice(due: UnreadDeliveredReport, attempts: number, guarantees: GuaranteeTable): string {
-  return [
-    `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
-      `records in ${attempts} attempts. Ashara keeps the error in its record of this delivery, acceptance sweep ${due.sweepId}.`,
-    guaranteeSection(guarantees),
-    `Nothing more is built on this project; it waits until you stop it.`,
-  ].join("\n\n");
+export function unreadNotice(sweepId: string, attempts: number): AroundTable {
+  return {
+    before: [
+      `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
+        `records in ${attempts} attempts. Ashara keeps the error in its record of this delivery, acceptance sweep ${sweepId}.`,
+    ],
+    after: [`Nothing more is built on this project; it waits until you stop it.`],
+  };
 }
 
 /** A fence no run of backticks in `text` can close early. */
@@ -276,11 +228,6 @@ function executedSection(commit: string, executed: ExecutedChecks): string {
       `at commit ${commit}, inside the project environment, and passed. These are the only ways of running the product Ashara verified.`,
     ...executed.checks.map((check) => `- "${check.task}", check "${check.name}":\n${fenced(renderElided(keepEnds(wholeText(check.command), COMMAND_QUOTE_CHARS)))}`),
   ].join("\n");
-}
-
-/** What the core loop asks of the Liaison each cycle (no LLM call). */
-export interface LiaisonDeliveredReports {
-  runPending(): Promise<readonly DeliveredReportOutcome[]>;
 }
 
 function closeLine(title: string, close: GoalClose): string {
@@ -359,130 +306,17 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** The client's delivered report, every line from the records. */
-function deliveredReport(due: DueDeliveredReport, file: string, productInterface: InterfaceTold): string {
-  return [
-    opening(due),
-    `What was delivered:\n${due.goals.map((goal) => closeLine(goal.title, goal.close)).join("\n")}`,
-    executedSection(due.mainCommit, due.executed),
-    interfaceSection(file, due.mainCommit, productInterface),
-    ...uncheckedSection(due.unchecked),
-    ...givenUpSection(due.givenUp),
-    guaranteeSection(due.guarantees),
-    ...readingSection(due.reading),
-    `Nothing more is built on this project; it waits until you stop it.`,
-  ].join("\n\n");
-}
-
-export class DeliveredReports implements LiaisonDeliveredReports {
-  constructor(
-    private readonly store: DeliveredReportStore,
-    private readonly productInterface: ProductInterfaceSource,
-  ) {}
-
-  /**
-   * One report per due sweep. A failure of one project's report (its records, its interface file,
-   * its post) is that project's: recorded on its sweep, logged at warn and tried again after a
-   * backoff, never thrown into the cycle. Past MAX_INTERFACE_READ_FAILURES reads the report is
-   * posted without the quote; past MAX_UNREAD_ATTEMPTS attempts whose records did not read as a
-   * report the client is sent an acceptance notice instead of it. A read of the records the database's
-   * connection failed is retried and never counted toward that notice: a lost connection says nothing
-   * of the records. Only a failure to list the reports or to record a failure throws through.
-   */
-  async runPending(): Promise<readonly DeliveredReportOutcome[]> {
-    const outcomes: DeliveredReportOutcome[] = [];
-    for (const due of await this.store.dueReports()) outcomes.push(await this.contained(due));
-    return outcomes;
-  }
-
-  /**
-   * One report, its every failure its own: one no step below handled (a report that cannot be
-   * rendered from what was read) is a report its records did not make, counted toward the notice
-   * like any other. Only a failure to record a failure throws through.
-   */
-  private async contained(due: DueDeliveredReport | UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
-    try {
-      return await this.report(due);
-    } catch (err) {
-      if (err instanceof DeliveredReportFailureUnrecorded) throw err;
-      return this.unread({ kind: "unread", cause: "record", failures: due.failures, recordFailures: due.recordFailures, sweepId: due.sweepId, projectId: due.projectId, error: err });
-    }
-  }
-
-  /** Records a failure on the sweep; a failure to record it is marked, so it is never taken for the report's own. */
-  private async recordFailure(sweepId: string, failure: DeliveredReportFailureRecord): Promise<void> {
-    try {
-      await this.store.recordReportFailure(sweepId, failure);
-    } catch (err) {
-      throw new DeliveredReportFailureUnrecorded(sweepId, err);
-    }
-  }
-
-  private async report(due: DueDeliveredReport | UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
-    if (due.kind === "unread") return this.unread(due);
-    let read: InterfaceTold;
-    try {
-      read = await this.productInterface.at(due.targetProjectPath, due.mainCommit);
-    } catch (err) {
-      const reads = due.interfaceReadFailures + 1;
-      if (reads < MAX_INTERFACE_READ_FAILURES) return this.failed(due, err, "interface");
-      await this.recordFailure(due.sweepId, { error: describeErrorChain(err), interfaceRead: true, recordUnread: false, retryAfterSeconds: null });
-      console.warn(
-        `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): ${this.productInterface.file} ` +
-          `could not be read in ${reads} attempts; the report is posted without it: ${describeErrorChain(err)}`,
-      );
-      read = { kind: "unreadable", attempts: reads, sweepId: due.sweepId };
-    }
-    return this.post(due, deliveredReport(due, this.productInterface.file, read), tableVerdicts(due.guarantees));
-  }
-
-  /**
-   * A report whose records cannot be read: retried; past its bound of records that do not read as a
-   * report, the client is told it was accepted, with the sweep's guarantee table. A read the
-   * database's connection failed, of the report or of its table, is only retried.
-   */
-  private async unread(due: UnreadDeliveredReport): Promise<DeliveredReportOutcome> {
-    if (due.cause === "connection") return this.failed(due, due.error, "connection");
-    const attempts = due.recordFailures + 1;
-    if (attempts < MAX_UNREAD_ATTEMPTS) return this.failed(due, due.error, "record");
-    let guarantees: GuaranteeTable;
-    try {
-      guarantees = await this.store.guaranteeTable(due.sweepId);
-    } catch (err) {
-      return this.failed(due, err, "table");
-    }
-    await this.recordFailure(due.sweepId, { error: describeErrorChain(due.error), interfaceRead: false, recordUnread: true, retryAfterSeconds: null });
-    console.warn(
-      `[liaison-delivered-report] project ${due.projectId} (acceptance sweep ${due.sweepId}): its records did not read as a report in ` +
-        `${attempts} attempts; the client is sent an acceptance notice without the report: ${describeErrorChain(due.error)}`,
-    );
-    return this.post(due, unreadNotice(due, attempts, guarantees), tableVerdicts(guarantees));
-  }
-
-  private async post(due: DueDeliveredReport | UnreadDeliveredReport, body: string, verdicts: TableVerdicts): Promise<DeliveredReportOutcome> {
-    try {
-      const kind = await this.store.postReport(due.sweepId, body, verdicts);
-      return { kind, projectId: due.projectId };
-    } catch (err) {
-      return this.failed(due, err, "post");
-    }
-  }
-
-  /** A failed attempt, counted and backed off; `what` failed says which bound, if any, it counts against too. */
-  private async failed(
-    due: DueDeliveredReport | UnreadDeliveredReport,
-    err: unknown,
-    what: "interface" | "record" | "connection" | "table" | "post",
-  ): Promise<DeliveredReportOutcome> {
-    const failures = due.failures + 1;
-    const failure = new DeliveredReportFailed(due.projectId, due.sweepId, failures, faultBackoffSeconds(failures), err);
-    await this.recordFailure(due.sweepId, {
-      error: describeErrorChain(err),
-      interfaceRead: what === "interface",
-      recordUnread: what === "record",
-      retryAfterSeconds: failure.retryAfterSeconds,
-    });
-    console.warn(`[liaison-delivered-report] ${failure.message}`);
-    return { kind: "failed", projectId: due.projectId, failure };
-  }
+/** The client's delivered report, every line from the records; the sweep's guarantee table goes between its two parts. */
+export function deliveredReport(due: DueDeliveredReport, file: string, productInterface: InterfaceTold): AroundTable {
+  return {
+    before: [
+      opening(due),
+      `What was delivered:\n${due.goals.map((goal) => closeLine(goal.title, goal.close)).join("\n")}`,
+      executedSection(due.mainCommit, due.executed),
+      interfaceSection(file, due.mainCommit, productInterface),
+      ...uncheckedSection(due.unchecked),
+      ...givenUpSection(due.givenUp),
+    ],
+    after: [...readingSection(due.reading), `Nothing more is built on this project; it waits until you stop it.`],
+  };
 }

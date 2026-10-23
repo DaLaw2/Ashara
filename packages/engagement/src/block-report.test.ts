@@ -1,45 +1,68 @@
 import { describe, expect, test, vi } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { parseProjectId, type UnreadSubject } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { HALT_KINDS } from "@ashara/delivery/predicates";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
-import type { BlockReportStore } from "./block-report.js";
+import type { BlockReportStore, ProjectBlockedReport } from "./block-report.js";
 import type { RiskRecords } from "./early-warning.js";
-import type { GuaranteeTable } from "./guarantee-report.js";
+import { guaranteeTableOf } from "./guarantee-report.js";
 import { inboundDecision } from "./inbound-policy.js";
+import { TerminalReports } from "./terminal-report.js";
+import type { DueTerminal, TerminalReportStore } from "./terminal-report.js";
+
+// A halt is told by its terminal message (terminal-report.ts), and its resumption by the block-report
+// step once that message is told; the tests spell both as one listing.
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000020", "test");
 
-type Listed = Awaited<ReturnType<BlockReportStore["dueReports"]>>[number];
-type Due = Extract<Listed, { readonly subject: string }>;
+type DueResumption = Exclude<Awaited<ReturnType<BlockReportStore["dueReports"]>>[number], UnreadSubject>;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-/** The table these reports carry; guarantee-report.test.ts judges its text. */
-const TABLE: GuaranteeTable = { kind: "no-contract", sweep: { id: "s1", mainCommit: null } };
+/** The table these messages carry; guarantee-report.test.ts judges its text. */
+const TABLE = guaranteeTableOf({ kind: "no-contract", sweep: { id: "s1", mainCommit: null } });
 
-/** A listed report as a test spells it: the table added, and the project's vision written unless it says otherwise. */
-type Spelled = DistributiveOmit<Due, "guarantees" | "visionWritten"> & { readonly visionWritten?: boolean };
-
-function withTable(each: Spelled): Due {
-  return each.subject === "project-resumed" ? each : { visionWritten: true, ...each, guarantees: TABLE };
-}
+/** A listed report as a test spells it: its subject named, and the project's vision written unless it says otherwise. */
+type Spelled =
+  | (DistributiveOmit<ProjectBlockedReport, "visionWritten"> & { readonly subject: "project-blocked"; readonly visionWritten?: boolean })
+  | (DueResumption & { readonly subject: "project-resumed" });
 
 /** The register's records of a project with no guarantee: a contract none of whose guarantees is held. */
 const OPEN_RECORDS: RiskRecords = { kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } };
 
 function reportsFor(listed: readonly Spelled[], records: RiskRecords = OPEN_RECORDS) {
-  const due = listed.map(withTable);
+  const halts: DueTerminal[] = [];
+  const resumptions: DueResumption[] = [];
+  for (const each of listed) {
+    if (each.subject === "project-resumed") {
+      resumptions.push({ episodeId: each.episodeId, projectId: each.projectId, how: each.how });
+      continue;
+    }
+    const { subject: _subject, ...spelled } = each;
+    const halt: ProjectBlockedReport = { visionWritten: true, ...spelled };
+    halts.push({ kind: "listed", event: { kind: "halted", projectId: halt.projectId, halt, risk: records }, table: TABLE });
+  }
   const posted: Array<{ key: string; body: string }> = [];
+  const terminals: TerminalReportStore = {
+    dueTerminals: async () => halts,
+    postTerminal: async (message) => {
+      posted.push({ key: `${message.subject.kind === "halted" ? message.subject.episodeId : message.subject.kind}:blocked`, body: message.body });
+      return "posted";
+    },
+    recordDeliveredFailure: async () => expect.unreachable("no delivered report is due"),
+  };
   const store: BlockReportStore = {
-    dueReports: async () => due,
-    postProjectReport: async (episodeId, on, body) => {
-      posted.push({ key: `${episodeId}:${on}`, body });
+    dueReports: async () => resumptions,
+    postResumedReport: async (episodeId, body) => {
+      posted.push({ key: `${episodeId}:resumed`, body });
       return "posted";
     },
     riskRecords: async () => records,
   };
-  return { reports: new BlockReports(store, memoryStepContainment(() => true)), posted };
+  const containment = memoryStepContainment(() => true);
+  const halted = new TerminalReports(terminals, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, containment);
+  const resumed = new BlockReports(store, containment);
+  return { reports: { runPending: async () => [...(await halted.runPending()), ...(await resumed.runPending())] }, posted };
 }
 
 describe("project block reports", () => {
@@ -49,7 +72,7 @@ describe("project block reports", () => {
       const cause = { errorClass: "SomethingFailed", reason: `the ${kind} cause as recorded`, spend: null, work: null };
       const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }]);
 
-      expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+      expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
 
       expect(posted).toHaveLength(1);
       expect(posted[0].key).toBe("e1:blocked");

@@ -42,8 +42,8 @@ class ProjectLifecycleRefused extends Error {
   }
 }
 
-/** What the client's stop found: whether it moved the project, and whether Delivery had it halted. */
-type StopOutcome = { readonly kind: "stopped"; readonly wasHalted: boolean } | { readonly kind: "already-stopped" };
+/** What the client's stop found: whether it moved the project, whether Delivery had it halted, and whether it was accepted. */
+type StopOutcome = { readonly kind: "stopped"; readonly wasHalted: boolean; readonly wasAccepted: boolean } | { readonly kind: "already-stopped" };
 
 /**
  * Moves the project to 'stopped', inside the caller's transaction, with the project
@@ -63,7 +63,7 @@ export async function stopProject(tx: DbHandle, projectId: ProjectId, endHalt: E
   if (!moved || !halt) throw new ProjectLifecycleRefused(projectId, "stop", locked?.lifecycle ?? null);
   const wasHalted = z.boolean().parse(halt.halted);
   if (wasHalted) await endHalt(tx, projectId);
-  return { kind: "stopped", wasHalted };
+  return { kind: "stopped", wasHalted, wasAccepted: locked?.lifecycle === PROJECT_LIFECYCLE.accept.to };
 }
 
 /**

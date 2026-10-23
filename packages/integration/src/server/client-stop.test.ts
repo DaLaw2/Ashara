@@ -12,6 +12,7 @@ import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { projectState } from "../simulator/project-state.js";
+import { terminalReportsOf } from "./terminal-reports.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // A client's stop halts its project. Every row belongs
@@ -60,35 +61,25 @@ async function sendStop(projectId: ProjectId, body: string) {
   return new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body, inReplyTo: null });
 }
 
-/** The Liaison's stop step over this suite's projects, each stop's terminal sweep recorded before its report is due. */
-function liaison(): ClientStops {
+/** The Liaison's stop step over the projects `ours` admits. */
+function stopsOf(ours: (projectId: string) => boolean, escapes: boolean): ClientStops {
   const store = createClientStopStore(db);
-  const ours: ClientStopStore = {
-    ...store,
-    openStops: async () => (await store.openStops()).filter((stop) => ourProjects.has(stop.projectId)),
-    dueStopReports: async () => {
-      await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
-      return (await store.dueStopReports()).filter((due) => ourProjects.has(due.projectId));
-    },
-  };
-  return new ClientStops(ours, memoryStepContainment(() => true));
+  const scoped: ClientStopStore = { ...store, openStops: async () => (await store.openStops()).filter((stop) => ours(stop.projectId)) };
+  return new ClientStops(scoped, memoryStepContainment(() => escapes));
 }
 
-/** One cycle's stop steps over this suite's projects: the stops taken, then the reports due after the terminal sweeps. */
+/** One cycle's stop steps over this suite's projects: the stops taken, then the terminal messages due after the terminal sweeps. */
 async function stopSteps() {
-  const steps = liaison();
-  return [...(await steps.runPending()), ...(await steps.reportPending())];
+  const ours = (projectId: string) => ourProjects.has(projectId);
+  return [...(await stopsOf(ours, true).runPending()), ...(await terminalReportsOf(db, ours).runPending())];
 }
 
-/** The stop reports over one project with no terminal sweep run first: what is due when a stop's sweep could not be recorded. */
-function unsweptReports(projectId: ProjectId, escapes: boolean): ClientStops {
-  const store = createClientStopStore(db);
-  const ours: ClientStopStore = {
-    ...store,
-    openStops: async () => (await store.openStops()).filter((stop) => stop.projectId === projectId),
-    dueStopReports: async () => (await store.dueStopReports()).filter((due) => due.projectId === projectId),
-  };
-  return new ClientStops(ours, memoryStepContainment(() => escapes));
+/** The stops and terminal messages of one project with no terminal sweep run first: what is due when a stop's sweep could not be recorded. */
+function unsweptReports(projectId: ProjectId, escapes: boolean) {
+  const ours = (id: string) => id === projectId;
+  const stops = stopsOf(ours, escapes);
+  const terminals = terminalReportsOf(db, ours, { escapes, unswept: true });
+  return { runPending: () => stops.runPending(), tellPending: () => terminals.runPending() };
 }
 
 /** Vision v1 in the guarantees form: G1 and G2, both observed at I1 and quoted from the tender. */
@@ -186,7 +177,7 @@ describe("a client's stop", () => {
 
     expect(outcomes).toEqual([
       { kind: "stopped", reportDue: true, stopId: stop.id, projectId: stopped.projectId },
-      { kind: "posted", stopId: stop.id, projectId: stopped.projectId },
+      { kind: "posted", projectId: stopped.projectId, terminal: "stopped" },
     ]);
     expect(await projectRow(stopped.projectId)).toEqual({ status: "stopped", errorClass: null, reason: null });
     expect(await projectRow(other.projectId)).toEqual({ status: "active", errorClass: null, reason: null });
@@ -302,7 +293,7 @@ describe("a client's stop", () => {
     const reports = unsweptReports(projectId, true);
 
     expect(await reports.runPending()).toEqual([{ kind: "stopped", reportDue: true, stopId: stop.id, projectId }]);
-    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+    expect(await reports.tellPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
 
     const [body = ""] = await stopReports(projectId);
     expect(body).toContain("Work on this project has stopped at your request.");
@@ -326,8 +317,8 @@ describe("a client's stop", () => {
       INSERT INTO guarantee_evidence (project_id, sweep_id, vision_version, guarantee_id, main_commit, checks)
       SELECT ${projectId}, s.id, 7, 'G1', NULL, '[]'::jsonb FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id}`);
 
-    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
-    expect(await reports.reportPending()).toEqual([]);
+    expect(await reports.tellPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
+    expect(await reports.tellPending()).toEqual([]);
 
     const posted = await stopReports(projectId);
     expect(posted).toHaveLength(1);
@@ -351,12 +342,12 @@ describe("a client's stop", () => {
     const { projectId } = await projectWith([]);
     await writeContract(projectId);
     await proposeNarrowing(projectId, "G1", "A get returns some value put for its key.");
-    const stop = await sendStop(projectId, "Stop, please.");
+    await sendStop(projectId, "Stop, please.");
     const reports = unsweptReports(projectId, false);
     await reports.runPending();
     await sweepTerminalsOf(db, (id) => id === projectId);
 
-    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
+    expect(await reports.tellPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
 
     const [body = ""] = await stopReports(projectId);
     const appendix = body.slice(body.indexOf("Appendix, how your contract has been revised:"));
@@ -370,13 +361,13 @@ describe("a client's stop", () => {
     const { projectId } = await projectWith([]);
     await writeContract(projectId);
     await proposeNarrowing(projectId, "G9", "A key lives for ever.");
-    const stop = await sendStop(projectId, "Stop, please.");
+    await sendStop(projectId, "Stop, please.");
     const reports = unsweptReports(projectId, false);
     await reports.runPending();
     await sweepTerminalsOf(db, (id) => id === projectId);
 
-    expect(await reports.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
-    expect(await reports.reportPending()).toEqual([]);
+    expect(await reports.tellPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
+    expect(await reports.tellPending()).toEqual([]);
 
     const posted = await stopReports(projectId);
     expect(posted).toHaveLength(1);

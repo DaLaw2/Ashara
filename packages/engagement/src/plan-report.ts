@@ -5,8 +5,6 @@ import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
-import { guaranteeSection, tableVerdicts } from "./guarantee-report.js";
-import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 import { REPORT_SUBJECT } from "./report-subjects.js";
 import type { PlanReportSubject } from "./report-subjects.js";
 
@@ -17,8 +15,7 @@ import type { PlanReportSubject } from "./report-subjects.js";
 // of the plan for a client's change is reported the same way, once each, naming
 // every answer it took in: each of them was promised the client would
 // be told what changed. The report of a first planning that stopped is the report of that halt, a
-// terminal message, so it carries the guarantee table: no sweep is on record for it (nothing was
-// built), so every guarantee of the version in force reads unjudged for want of a sweep on a commit.
+// terminal message (terminal-report.ts): its words are here, and it carries the guarantee table.
 
 /** The plan's tasks by producer, as task_spec.origin records it. */
 interface PlanTaskCounts {
@@ -64,7 +61,6 @@ type DuePlanReport =
       /** The behaviour the plan that stands adds beyond what the contract states, each recorded as an assumption under its key. */
       readonly assumptions: readonly PlannedAssumption[];
     }
-  | { readonly subject: typeof REPORT_SUBJECT.planningStopped; readonly projectId: ProjectId; readonly attempts: number }
   /** A first plan the store could not read back (a work item that does not parse). */
   | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
@@ -90,18 +86,9 @@ export interface PlanReportStore extends RiskRecordReader {
   dueReports(): Promise<ReadonlyArray<DuePlanReport | UnreadSubject>>;
   /**
    * Posts the report unless one on this subject already exists for the project, recording each of
-   * `revisionIds` as reported by it, and the verdicts of the table it carries (a planning-stopped
-   * report's; null for a first plan's, which carries none), in the same write.
+   * `revisionIds` as reported by it, in the same write.
    */
-  postReport(
-    projectId: ProjectId,
-    subject: PlanReportSubject,
-    body: string,
-    revisionIds: readonly string[],
-    verdicts: TableVerdicts | null,
-  ): Promise<"posted" | "already-posted">;
-  /** The project's guarantee table for a message no sweep is on record for: its vision version in force, nothing judged. */
-  guaranteesWithoutSweep(projectId: ProjectId): Promise<GuaranteeTable>;
+  postReport(projectId: ProjectId, subject: PlanReportSubject, body: string, revisionIds: readonly string[]): Promise<"posted" | "already-posted">;
   /** Each due revision report read on its own: one whose row does not read is its UnreadSubject. */
   dueRevisionReports(): Promise<ReadonlyArray<DuePlanRevisionReport | UnreadSubject>>;
   /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
@@ -375,10 +362,11 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
 }
 
 /**
- * What the client reads when planning gives up. The error chain stays in
- * Delivery's planning record and the warn log, never in the client channel.
+ * What the client reads when planning gives up, before the guarantee table its terminal message
+ * carries (terminal-report.ts). The error chain stays in Delivery's planning record and the warn
+ * log, never in the client channel.
  */
-function planningStoppedReport(attempts: number): string {
+export function planningStoppedReport(attempts: number): string {
   return [
     `Ashara could not turn this project's vision into a plan after ${attempts} attempts, so work on this project has stopped.`,
     `No tasks were planned and nothing was built.`,
@@ -406,12 +394,6 @@ export class PlanReports implements LiaisonPlanReports {
       (due) => ({ id: `${due.subject}:${due.projectId}`, projectId: due.projectId }),
       async (due): Promise<PlanReportOutcome> => {
         if (due.subject === "first-plan-unreadable") return this.block(due.projectId, due.cause);
-        if (due.subject === REPORT_SUBJECT.planningStopped) {
-          const guarantees = await this.store.guaranteesWithoutSweep(due.projectId);
-          const body = `${planningStoppedReport(due.attempts)}\n\n${guaranteeSection(guarantees)}`;
-          const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), [], tableVerdicts(guarantees));
-          return { kind, projectId: due.projectId, subject: due.subject };
-        }
         let body: string;
         try {
           body = this.compose(due);
@@ -427,7 +409,7 @@ export class PlanReports implements LiaisonPlanReports {
           return this.block(due.projectId, projectBlockCause(err));
         }
         const revisionIds = due.revisions.map((r) => r.revisionId);
-        const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), revisionIds, null);
+        const kind = await this.store.postReport(due.projectId, due.subject, await this.withRegister(due.projectId, body), revisionIds);
         return { kind, projectId: due.projectId, subject: due.subject };
       },
     );

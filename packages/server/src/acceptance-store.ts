@@ -1,14 +1,10 @@
 import type { createDb } from "@ashara/db";
 import { WorkItemRowRepository, adaptWorkItemRepo } from "@ashara/delivery";
 import type { AcceptanceStore, TerminalSweepStore } from "@ashara/delivery";
-import { DeliveredReports, acceptProject, guaranteesInForce, listDueDeliveredReports, postDeliveredReport, readGuaranteeTable, recordDeliveredReportFailure } from "@ashara/engagement";
-import type { DeliveredReportStore } from "@ashara/engagement";
+import { acceptProject, guaranteesInForce } from "@ashara/engagement";
 import {
-  PUBLIC_INTERFACE_FILE,
-  gitPublicInterface,
   listDueTerminalSweeps,
   listProjectsReadyForAcceptance,
-  readSweepOutcome,
   recordAcceptance,
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
@@ -40,22 +36,4 @@ export function createTerminalSweepStore(db: Db): TerminalSweepStore {
     dueTerminalSweeps: () => listDueTerminalSweeps(db),
     recordTerminalSweep: (sweep) => recordTerminalSweep(db, sweep, guaranteesInForce),
   };
-}
-
-/** Engagement's delivered-report store over Quality's published sweep outcomes, work_items, Engagement's told and attempts records and client_messages. */
-export function createDeliveredReportStore(db: Db): DeliveredReportStore {
-  return {
-    dueReports: () => listDueDeliveredReports(db, readSweepOutcome),
-    guaranteeTable: (sweepId) => readGuaranteeTable(db, { kind: "sweep", sweepId }),
-    postReport: (sweepId, body, verdicts) => postDeliveredReport(db, sweepId, body, verdicts),
-    recordReportFailure: (sweepId, failure) => recordDeliveredReportFailure(db, sweepId, failure),
-  };
-}
-
-/**
- * The Liaison's delivered reports over `store`, each quoting how to run the product from main: the
- * public interface file is Quality's convention, read through its git reader at the accepted commit.
- */
-export function createDeliveredReports(store: DeliveredReportStore): DeliveredReports {
-  return new DeliveredReports(store, { file: PUBLIC_INTERFACE_FILE, at: (targetProjectPath, commit) => gitPublicInterface.at(targetProjectPath, commit) });
 }

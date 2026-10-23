@@ -33,7 +33,7 @@ export type {
   LiaisonClientChanges,
   LiaisonClientReceipts,
   LiaisonClientStops,
-  LiaisonDeliveredReports,
+  LiaisonTerminalReports,
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,

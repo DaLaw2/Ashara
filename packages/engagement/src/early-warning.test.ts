@@ -135,7 +135,6 @@ describe("every progress report reissues the register", () => {
           posted.push(body);
           return "posted";
         },
-        guaranteesWithoutSweep: async () => expect.unreachable("no planning-stopped report is due"),
         dueRevisionReports: async () => [],
         postRevisionReport: async () => "posted",
         blockProject: async () => "blocked",
@@ -175,8 +174,8 @@ describe("every progress report reissues the register", () => {
     const posted: string[] = [];
     const reports = new BlockReports(
       {
-        dueReports: async () => [{ subject: "project-resumed", episodeId: "e1", projectId, how: "unblocked" }],
-        postProjectReport: async (_episodeId, _on, body) => {
+        dueReports: async () => [{ episodeId: "e1", projectId, how: "unblocked" }],
+        postResumedReport: async (_episodeId, body) => {
           posted.push(body);
           return "posted";
         },

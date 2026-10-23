@@ -25,7 +25,6 @@ const runPending = (file: string, ownLedger?: { readonly marker: string; readonl
 /** Every call CoreLoop makes into a dependency or an imported function. */
 const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.client.clientStops.runPending": runPending("packages/engagement/src/client-stop.ts"),
-  "deps.client.clientStops.reportPending": { kind: "step", file: "packages/engagement/src/client-stop.ts", declaration: "async reportPending(" },
   "deps.client.clientChanges.runPending": runPending("packages/engagement/src/client-change.ts"),
   "deps.client.clientReceipts.runPending": runPending("packages/engagement/src/client-receipt.ts"),
   "deps.client.clientReceipts.dueMessages": {
@@ -45,13 +44,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.reporting.planReports.runPending": runPending("packages/engagement/src/plan-report.ts"),
   "deps.reporting.blockReports.runPending": runPending("packages/engagement/src/block-report.ts"),
   "deps.reporting.burnWarnings.runPending": runPending("packages/engagement/src/burn-warning.ts"),
-  "deps.reporting.deliveredReports.runPending": runPending(
-    "packages/engagement/src/delivered-report.ts",
-    {
-      marker: "this.contained(",
-      why: "every report runs through contained(), which records any failure of it on its acceptance sweep with a backoff, bounded by the notice sent in its place",
-    },
-  ),
+  "deps.reporting.terminalReports.runPending": runPending("packages/engagement/src/terminal-report.ts"),
   resumeInfrastructureHalts: { kind: "step", file: "packages/delivery/src/infrastructure-halts.ts", declaration: "export async function resumeInfrastructureHalts(" },
   resumeClientWaitHalts: { kind: "step", file: "packages/delivery/src/client-wait-halts.ts", declaration: "export async function resumeClientWaitHalts(" },
   releaseClearedBlocks: { kind: "step", file: "packages/delivery/src/parked-exits.ts", declaration: "export async function releaseClearedBlocks(" },
@@ -141,7 +134,7 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/delivery/src/repositories/work-item.ts#listCorrectionHeld": { kind: "not-a-step-listing", why: "one project's tasks a client correction holds, read inside that project's gate and hold" },
   "packages/delivery/src/stores/first-plan-store.ts#projectsAwaitingPlan": { kind: "read-each" },
   "packages/delivery/src/stores/replan-store.ts#projectsAwaitingReplan": { kind: "read-each" },
-  "packages/engagement/src/repositories/block-report.ts#listDueBlockReports": { kind: "read-each" },
+  "packages/engagement/src/repositories/block-report.ts#listDueResumptionReports": { kind: "read-each" },
   "packages/engagement/src/repositories/burn-warning.ts#listProjectBurns": { kind: "read-each" },
   "packages/engagement/src/repositories/client-answer.ts#listOpenAnswers": { kind: "rows-only", why: ROWS_ONLY_QUERIES, body: "async function openAnswerRows(" },
   "packages/engagement/src/repositories/client-change.ts#listUnconsumedChanges": { kind: "rows-only", why: "message and project ids only" },
@@ -152,12 +145,13 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/engagement/src/repositories/client-message.ts#openChangeMessages": { kind: "rows-only", why: "message rows as stored, with their projects' columns" },
   "packages/engagement/src/repositories/client-message.ts#dueStopReportMessages": { kind: "rows-only", why: "stop and project ids as stored" },
   "packages/engagement/src/repositories/client-message.ts#dueReceiptMessages": { kind: "rows-only", why: "message rows as stored, with their projects' columns" },
-  "packages/engagement/src/repositories/client-stop.ts#listDueStopReports": { kind: "read-each" },
   "packages/engagement/src/repositories/client-stop.ts#listUnconsumedStops": { kind: "rows-only", why: "message and project ids only" },
-  "packages/engagement/src/repositories/delivered-report.ts#listDueDeliveredReports": {
+  "packages/engagement/src/repositories/terminal-report.ts#listDueTerminals": {
     kind: "own",
-    marker: "catch (error)",
-    why: "a sweep whose records do not read is listed as its unread report, which counts toward the notice sent in its place",
+    marker: "dueDelivered(",
+    why:
+      "every kind but the delivered report reads each row with readEach; dueDelivered reads each passed sweep in a catch of its own, " +
+      "which lists one whose records do not read as its unread report, counted toward the notice sent in its place",
   },
   "packages/engagement/src/repositories/stack-choice.ts#listDueStackChoices": { kind: "rows-only", why: ROWS_ONLY_QUERIES },
   "packages/quality/src/repositories/acceptance.ts#listProjectsReadyForAcceptance": { kind: "rows-only", why: ROWS_ONLY_QUERIES },

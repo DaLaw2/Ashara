@@ -11,6 +11,7 @@ import {
   sweptScopeLine,
 } from "./client-report-core.js";
 import type { GuaranteeInForce, ReportAdd, ReportViolation, ReportedItem } from "./client-report-core.js";
+import { checkDeclinedReports } from "./client-report-declined.js";
 import { checkDeliveredReport } from "./client-report-delivered.js";
 import { checkHaltReports } from "./client-report-halt.js";
 import { checkReportedOnce } from "./client-report-once.js";
@@ -401,6 +402,7 @@ export function checkReports(
   checkBurnWarnings(records, byId, add);
   checkHaltReports(records, byId, add);
   checkPlanningStoppedReports(records, add);
+  checkDeclinedReports(records, add);
   if (project.status === "stopped") checkStopReport(records, items, add);
   if (project.status === "accepted") checkDeliveredReport(records, byId, items, checkedTaskIds, add);
   return found;

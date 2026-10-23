@@ -1,15 +1,14 @@
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import type { PlanReportSubject } from "../report-subjects.js";
-import type { TableVerdicts } from "../guarantee-report.js";
 import { insertOutboundReport, postOnSubject } from "./client-message.js";
-import { insertGuaranteeVerdicts } from "./guarantee-report.js";
 import { recordTold, tellOnce } from "./told-report.js";
 
 // The Liaison's write of its reports on Delivery's planning outcomes, which Delivery publishes in its
-// plan-report reads: a first plan's or a planning stop's report, once per project by the partial
-// unique index on (project_id, reports_on), and a plan revision's, once per revision by its told
-// record. A revision the first-plan report describes is recorded as told by it.
+// plan-report reads: a first plan's report, once per project by the partial unique index on
+// (project_id, reports_on), and a plan revision's, once per revision by its told record. A revision
+// the first-plan report describes is recorded as told by it. A first planning that stopped is told
+// by its terminal message (repositories/terminal-report.ts).
 
 /** A revision the first-plan report was to describe is already told: nothing of the report is recorded. */
 class RevisionsNotFoldable extends Error {
@@ -30,8 +29,7 @@ class RevisionsNotFoldable extends Error {
  * Posts an outbound report on a planning outcome. The partial unique index on (project_id,
  * reports_on) admits one per outcome: a second post inserts nothing and returns "already-posted".
  * `revisionIds` are the revisions a first-plan report describes: each is recorded as told by it in
- * the same transaction, so none of them is reported again on its own. A planning-stopped report's
- * verdicts are posted with it.
+ * the same transaction, so none of them is reported again on its own.
  */
 export async function postPlanReport(
   db: DbHandle,
@@ -39,14 +37,12 @@ export async function postPlanReport(
   subject: PlanReportSubject,
   body: string,
   revisionIds: readonly string[],
-  verdicts: TableVerdicts | null,
 ): Promise<"posted" | "already-posted"> {
   return db.transaction(async (tx): Promise<"posted" | "already-posted"> => {
     const reportId = await postOnSubject(tx, { projectId, body, inReplyTo: null, reportsOn: subject }, "skip");
     if (reportId === null) return "already-posted";
     const recorded = await recordTold(tx, "plan-revision", revisionIds, projectId, reportId);
     if (recorded !== revisionIds.length) throw new RevisionsNotFoldable(projectId, revisionIds, recorded);
-    if (verdicts !== null) await insertGuaranteeVerdicts(tx, projectId, reportId, verdicts);
     return "posted";
   });
 }

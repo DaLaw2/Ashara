@@ -19,8 +19,12 @@ export { BlockReports } from "./block-report.js";
 export type { BlockReportStore, LiaisonBlockReports } from "./block-report.js";
 export { BurnWarnings } from "./burn-warning.js";
 export type { LiaisonBurnWarnings } from "./burn-warning.js";
-export { DeliveredReports } from "./delivered-report.js";
-export type { DeliveredReportStore, LiaisonDeliveredReports } from "./delivered-report.js";
+export { TerminalReports } from "./terminal-report.js";
+export type { LiaisonTerminalReports, TerminalReportStore } from "./terminal-report.js";
+/** @testseam the integration terminal-message tests list a terminal with the table only this builder makes */
+export { guaranteeTableOf } from "./guarantee-report.js";
+/** @testseam the integration terminal-message tests post a message of a subject directly, as a retried or restarted post does */
+export { TerminalMessage } from "./terminal-report.js";
 export { StackChoiceReports } from "./stack-choice.js";
 export { askTaskQuestion, taskQuestionAnswered } from "./client-question.js";
 export type { TaskQuestion, TaskQuestionPosting } from "./client-question.js";
@@ -39,16 +43,17 @@ export { ClientMessageRepository, createProjectWithTender, restartClientReadings
 export { ClientMessageNotConsumable } from "./repositories/client-message.js";
 export type { CreatedTender } from "./repositories/client-message.js";
 export { consumeTenderWithoutIntake, recordTenderIntake } from "./repositories/tender-intake.js";
-export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
+export { listDueResumptionReports, postResumptionReport } from "./repositories/block-report.js";
 export { listProjectBurns, postBurnWarning } from "./repositories/burn-warning.js";
 export { readRiskRecords } from "./repositories/early-warning.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
-export { listDueStopReports, listUnconsumedStops, postClientStopReport, recordClientStop } from "./repositories/client-stop.js";
+export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
 export { listDueReceipts, postClientReceipt } from "./repositories/client-receipt.js";
 export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "./repositories/client-change.js";
-export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
+export { recordDeliveredReportFailure } from "./repositories/delivered-report.js";
+export { listDueTerminals, postTerminalMessage } from "./repositories/terminal-report.js";
 export { postPlanReport, postPlanRevisionReport } from "./repositories/plan-report.js";
-export { lastReportGuaranteeVerdictsOf, readGuaranteeTable } from "./repositories/guarantee-report.js";
+export { lastReportGuaranteeVerdictsOf } from "./repositories/guarantee-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { PROJECT_STATUSES, acceptProject } from "./project-lifecycle.js";
 export type { VisionSource } from "./vision-language/index.js";

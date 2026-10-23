@@ -30,7 +30,7 @@ import { loadWebClientAssets } from "@ashara/server/web-client";
 import type { WebClientDeps } from "@ashara/server/web-client";
 import { ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
-import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { terminalReportsOf } from "./terminal-reports.js";
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
@@ -865,11 +865,9 @@ describe("recorded web-client session", () => {
       const liaison = new ClientStops({
         ...stopStore,
         openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === project.id),
-        dueStopReports: async () => (await stopStore.dueStopReports()).filter((due) => due.projectId === project.id),
       }, memoryStepContainment(() => true));
       expect(await liaison.runPending()).toMatchObject([{ kind: "stopped", reportDue: true, projectId: project.id }]);
-      await sweepTerminalsOf(db, (id) => id === project.id);
-      expect(await liaison.reportPending()).toMatchObject([{ kind: "posted", projectId: project.id }]);
+      expect(await terminalReportsOf(db, (id) => id === project.id).runPending()).toMatchObject([{ kind: "posted", projectId: project.id, terminal: "stopped" }]);
       const stoppedState = page.locator('#project-state[data-status="stopped"]');
       await stoppedState.waitFor({ timeout: 15_000 });
       expect(await stoppedState.textContent()).toContain("Stopped at your request");

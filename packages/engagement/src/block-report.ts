@@ -6,8 +6,8 @@ import type { HaltKind } from "@ashara/delivery/predicates";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 import { registerOf, registerParagraph, standingOfRegister } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
-import { guaranteeSection, tableVerdicts, unverifiedGuarantees } from "./guarantee-report.js";
-import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { unverifiedGuarantees } from "./guarantee-report.js";
+import type { GuaranteeTable } from "./guarantee-report.js";
 import { INBOUND_KINDS, WAITS_FOR_HALT_END, inboundDecision } from "./inbound-policy.js";
 import type { InboundKind, Told } from "./inbound-policy.js";
 import type { ContractStanding } from "./vision-language/guarantee.js";
@@ -22,10 +22,11 @@ import { WORK_WORDS } from "./vision-language/work-promise.js";
 // in the client's words, naming the task's record, which holds the stored text (stored reasons are
 // Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
-// each at most once. No task is reported on its own: no task waits on a person. A halt's report
-// carries the guarantee table of the halt's terminal sweep; under a halt of Ashara's own machines
-// that sweep ran on no commit, and a halt whose sweep is not on record is told all the same: either
-// way every guarantee reads unjudged, saying so.
+// each at most once. No task is reported on its own: no task waits on a person. A halt's report is a
+// terminal message (terminal-report.ts), told around the guarantee table of the halt's terminal
+// sweep; under a halt of Ashara's own machines that sweep ran on no commit, and a halt whose sweep is
+// not on record is told all the same: either way every guarantee reads unjudged, saying so. Its
+// resumption's report is no terminal message and carries no table.
 
 /**
  * What paused a project, as recorded on its block episode: every kind of Delivery's halt vocabulary
@@ -86,69 +87,39 @@ interface BlockingAbandonment {
   readonly cause: StoredBlockedReason;
 }
 
-/** A recorded halt or resumption the client has not been told about. */
-type DueBlockReport =
-  | {
-      readonly subject: "project-blocked";
-      readonly episodeId: string;
-      readonly projectId: ProjectId;
-      readonly kind: ProjectBlockKind;
-      readonly cause: RecordedCause;
-      readonly guarantees: GuaranteeTable;
-      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
-      readonly visionWritten: boolean;
-    }
-  | {
-      readonly subject: "project-blocked";
-      readonly episodeId: string;
-      readonly projectId: ProjectId;
-      readonly kind: "suite_review";
-      readonly review: BlockingReview;
-      readonly guarantees: GuaranteeTable;
-      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
-      readonly visionWritten: boolean;
-    }
-  | {
-      readonly subject: "project-blocked";
-      readonly episodeId: string;
-      readonly projectId: ProjectId;
-      readonly kind: "plan_repair";
-      readonly abandoned: readonly BlockingAbandonment[];
-      readonly guarantees: GuaranteeTable;
-      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
-      readonly visionWritten: boolean;
-    }
-  | {
-      readonly subject: "project-blocked";
-      readonly episodeId: string;
-      readonly projectId: ProjectId;
-      readonly kind: "check_dispute";
-      readonly dispute: BlockingDispute;
-      readonly guarantees: GuaranteeTable;
-      /** Whether the project's tender's reading had written its first vision, which a change waits for, when the report was listed. */
-      readonly visionWritten: boolean;
-    }
-  /** `how` the halt ended: an owner's unblock, the substrate probe passing after an infrastructure halt, or the client's answer read after a client_wait halt. */
-  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" | "answered" };
+/**
+ * A recorded halt the client has not been told about, as its terminal message tells it (terminal-report.ts).
+ * `visionWritten` is whether the project's tender's reading had written its first vision, which a
+ * change waits for, when the halt was listed.
+ */
+export type ProjectBlockedReport =
+  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind; readonly cause: RecordedCause; readonly visionWritten: boolean }
+  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "suite_review"; readonly review: BlockingReview; readonly visionWritten: boolean }
+  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "plan_repair"; readonly abandoned: readonly BlockingAbandonment[]; readonly visionWritten: boolean }
+  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "check_dispute"; readonly dispute: BlockingDispute; readonly visionWritten: boolean };
 
-/** A recorded halt the client has not been told about. */
-type ProjectBlockedReport = Extract<DueBlockReport, { readonly subject: "project-blocked" }>;
+/**
+ * A recorded resumption the client has not been told about: `how` the halt ended, an owner's unblock,
+ * the substrate probe passing after an infrastructure halt, or the client's answer read after a client_wait halt.
+ */
+interface DueResumption {
+  readonly episodeId: string;
+  readonly projectId: ProjectId;
+  readonly how: "unblocked" | "probe_passed" | "answered";
+}
 
-/** Engagement's persistence port for block reports; each report reissues the register of guarantees at risk. */
+/** Engagement's persistence port for resumption reports; each report reissues the register of guarantees at risk. */
 export interface BlockReportStore extends RiskRecordReader {
-  /** Every report due, each read on its own: one whose record does not read as a report is its UnreadSubject. */
-  dueReports(): Promise<ReadonlyArray<DueBlockReport | UnreadSubject>>;
-  /**
-   * Posts the report on a project's block episode, `on` the block (with its table's verdicts) or its
-   * resumption (with none), unless one exists.
-   */
-  postProjectReport(episodeId: string, on: "blocked" | "resumed", body: string, verdicts: TableVerdicts | null): Promise<"posted" | "already-posted">;
+  /** Every resumption report due, each read on its own: one whose record does not read as a report is its UnreadSubject. */
+  dueReports(): Promise<ReadonlyArray<DueResumption | UnreadSubject>>;
+  /** Posts the report on a block episode's resumption, unless one exists. */
+  postResumedReport(episodeId: string, body: string): Promise<"posted" | "already-posted">;
 }
 
 interface BlockReportOutcome {
   readonly kind: "posted" | "already-posted";
   readonly projectId: ProjectId;
-  readonly subject: "project-blocked" | "project-resumed";
+  readonly subject: "project-resumed";
 }
 
 /** What the core loop asks of the Liaison each cycle, at the spend cap too (no LLM call). */
@@ -572,7 +543,7 @@ function resumedBecause(how: "unblocked" | "probe_passed" | "answered"): string 
   }
 }
 
-function haltBody(due: ProjectBlockedReport, standing: ContractStanding): string {
+function haltBody(due: ProjectBlockedReport, standing: ContractStanding, guarantees: GuaranteeTable): string {
   switch (due.kind) {
     case "check_dispute":
       return disputeBoundReport(due.dispute, standing);
@@ -594,17 +565,22 @@ function haltBody(due: ProjectBlockedReport, standing: ContractStanding): string
     case "client_wait":
       return projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing);
     case "acceptance_uncovered":
-      return `${projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing)}\n\n${unverifiedGuarantees(due.guarantees)}`;
+      return `${projectBlockedReport(due.episodeId, due.kind, due.cause, due.visionWritten, standing)}\n\n${unverifiedGuarantees(guarantees)}`;
   }
   throw new HaltKindUnworded(due);
 }
 
 /**
- * A halt's report: what paused the project, what a change sent during it does, then the guarantee
- * table of its terminal sweep; whatever it says of the work after the halt, as the contract's `standing` allows.
+ * A halt's report: what paused the project and what a change sent during it does, before the
+ * guarantee table of its terminal sweep (terminal-report.ts); whatever it says of the work after the
+ * halt, as the contract's `standing` allows.
  */
-function blockedBody(due: ProjectBlockedReport, standing: ContractStanding): string {
-  return `${haltBody(due, standing)}\n\n${changeSentDuringHalt(due.kind, due.visionWritten, standing)}\n\n${guaranteeSection(due.guarantees)}`;
+export function blockedBody(
+  due: ProjectBlockedReport,
+  standing: ContractStanding,
+  guarantees: GuaranteeTable,
+): { readonly before: readonly string[]; readonly after: readonly string[] } {
+  return { before: [haltBody(due, standing, guarantees), changeSentDuringHalt(due.kind, due.visionWritten, standing)], after: [] };
 }
 
 export class BlockReports implements LiaisonBlockReports {
@@ -615,8 +591,8 @@ export class BlockReports implements LiaisonBlockReports {
   ) {}
 
   /**
-   * A report that cannot be read or posted is that report's, contained to it (containEach); only a
-   * failure of the listing as a whole throws through.
+   * The resumption reports due. A report that cannot be read or posted is that report's, contained to
+   * it (containEach); only a failure of the listing as a whole throws through.
    */
   async runPending(): Promise<ReadonlyArray<BlockReportOutcome | StepFaulted>> {
     const due = await this.store.dueReports();
@@ -624,28 +600,13 @@ export class BlockReports implements LiaisonBlockReports {
       this.containment,
       "block-report",
       due,
-      (report) => ({ id: `${report.subject}:${report.episodeId}`, projectId: report.projectId }),
+      (report) => ({ id: `project-resumed:${report.episodeId}`, projectId: report.projectId }),
       async (report): Promise<BlockReportOutcome> => {
-        switch (report.subject) {
-          case "project-blocked": {
-            const kind = await this.store.postProjectReport(
-              report.episodeId,
-              "blocked",
-              await this.withRegister(report.projectId, (standing) => blockedBody(report, standing)),
-              tableVerdicts(report.guarantees),
-            );
-            return { kind, projectId: report.projectId, subject: report.subject };
-          }
-          case "project-resumed": {
-            const kind = await this.store.postProjectReport(
-              report.episodeId,
-              "resumed",
-              await this.withRegister(report.projectId, (standing) => projectResumedReport(report.how, standing)),
-              null,
-            );
-            return { kind, projectId: report.projectId, subject: report.subject };
-          }
-        }
+        const kind = await this.store.postResumedReport(
+          report.episodeId,
+          await this.withRegister(report.projectId, (standing) => projectResumedReport(report.how, standing)),
+        );
+        return { kind, projectId: report.projectId, subject: "project-resumed" };
       },
     );
   }

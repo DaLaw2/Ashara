@@ -14,16 +14,13 @@ import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } fro
 import { environmentVersion } from "@ashara/execution-infra";
 import type { Cell } from "@ashara/execution-infra";
 import {
-  BlockReports,
   ClientAnswers,
   ClientStops,
-  DeliveredReports,
   ClientMessageRepository,
   createProjectWithTender,
   guaranteesInForce,
   VisionRepository,
 } from "@ashara/engagement";
-import type { BlockReportStore, DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
 import { AcceptanceSweeper, SCAFFOLD_PLACEHOLDER_MARKER } from "@ashara/quality";
@@ -31,11 +28,12 @@ import type { MainSweepDeps } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { VisionSource } from "@ashara/engagement";
-import { createAcceptanceStore, createDeliveredReportStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
+import { createAcceptanceStore, createTerminalSweepStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
-import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
 import { projectState } from "../simulator/project-state.js";
+import { dueDeliveredOf, terminalReportsOf } from "./terminal-reports.js";
 
 // A project whose goal tasks are
 // all done is swept on main once; a pass that judges every guarantee in force pass makes it Accepted
@@ -230,15 +228,18 @@ const INTERFACE_TEXT = "Run: kv put <key> <value>\n";
 /** A workspace whose git fails every read, as a checkout that is not a repository does. */
 const BROKEN_WORKSPACE = `/tmp/${NAME_PREFIX}-not-a-repository`;
 
-function deliveredReports(): DeliveredReports {
-  const store = createDeliveredReportStore(db);
-  const ours: DeliveredReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => ourProjects.has(due.projectId)) };
-  return new DeliveredReports(ours, {
-    file: "PUBLIC_INTERFACE.md",
-    at: async (targetProjectPath, commit) => {
-      interfaceReads.push(`${targetProjectPath}@${commit}`);
-      if (targetProjectPath === BROKEN_WORKSPACE) throw new Error(`git ls-tree: fatal: not a git repository: ${BROKEN_WORKSPACE}`);
-      return { kind: "present", text: INTERFACE_TEXT };
+/** The terminal step's delivered reports over this suite's projects. */
+function deliveredReports() {
+  return terminalReportsOf(db, (projectId) => ourProjects.has(projectId), {
+    unswept: true,
+    kinds: ["delivered"],
+    productInterface: {
+      file: "PUBLIC_INTERFACE.md",
+      at: async (targetProjectPath, commit) => {
+        interfaceReads.push(`${targetProjectPath}@${commit}`);
+        if (targetProjectPath === BROKEN_WORKSPACE) throw new Error(`git ls-tree: fatal: not a git repository: ${BROKEN_WORKSPACE}`);
+        return { kind: "present", text: INTERFACE_TEXT };
+      },
     },
   });
 }
@@ -515,7 +516,7 @@ describe("acceptance on main", () => {
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
 
     interfaceReads.length = 0;
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
     expect(await deliveredReports().runPending()).toEqual([]);
     expect(interfaceReads).toEqual([`/tmp/${NAME_PREFIX}@${MAIN}`]);
     const reports = await reportsOf(projectId);
@@ -564,7 +565,7 @@ describe("acceptance on main", () => {
     expect(await projects.listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
 
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
     const [body = ""] = await reportsOf(projectId);
     expect(tableIds(body)).toEqual(["G1", "G2"]);
     expect(body).toContain("The punch list is empty");
@@ -586,7 +587,7 @@ describe("acceptance on main", () => {
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2", "G3"]))).toBe(1);
     expect(await statusOf(projectId)).toBe("accepted");
 
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
     const [body = ""] = await reportsOf(projectId);
     expect(tableIds(body)).toEqual(["G1", "G2", "G3"]);
     expect(body).toContain("- G3: A put survives a restart. | verdict: not verified, Ashara cannot verify it");
@@ -644,9 +645,8 @@ describe("acceptance on main", () => {
     expect(
       await terminals.recordTerminalSweep({ projectId, terminal: due.terminal, mainCommit: MAIN, environmentVersion: "v1", checkedTasks: goals, uncheckedTasks: [], checkOutcomes, details: "all suites passed" }),
     ).toBe("recorded");
-    const store = createBlockReportStore(db);
-    const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((report) => report.projectId === projectId) };
-    expect(await new BlockReports(ours, memoryStepContainment(() => true)).runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
+    const halts = terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["halted"] });
+    expect(await halts.runPending()).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
 
     const [body = ""] = await reportsOf(projectId);
     expect(body).toContain(
@@ -693,7 +693,7 @@ describe("acceptance on main", () => {
     // The records of a project accepted before every guarantee had to be judged are still reported on, as Quality judges them.
     const { projectId, goals } = await reviewed();
     await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [] }, ["G1", "G2"]);
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
     const [body = ""] = await reportsOf(projectId);
     expect(tableIds(body)).toEqual(["G1", "G2"]);
     expect(body).toContain("- G1: A get returns the value of the last put of its key. | verdict: pass | basis: what your tender states | evidence: checked by a check its implementer could see");
@@ -718,9 +718,9 @@ describe("acceptance on main", () => {
     });
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [] }, [], ["G1", "G2"]))).toBe(1);
 
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const due = await dueDeliveredOf(db, projectId);
     expect(due).toMatchObject({ kind: "due", guarantees: { kind: "unreadable" } });
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
     expect(await deliveredReports().runPending()).toEqual([]);
     const posted = await reportsOf(projectId);
     expect(posted).toHaveLength(1);
@@ -740,9 +740,9 @@ describe("acceptance on main", () => {
     };
     await abandoned("List keys", { source: "failure_given_up", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 });
     await abandoned("Watch keys", { source: "superseded", planRevision: 2, requestedBy: null, repairOf: ["x"], reason: "replaced by the repaired plan" });
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const due = await dueDeliveredOf(db, projectId);
     expect(due?.kind === "due" ? due.givenUp : due).toEqual(["List keys"]);
-    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
     const [body] = await reportsOf(projectId);
     expect(body).toContain(`These tasks were given up, and the plan was revised around them:\n- "List keys"`);
     expect(body).not.toContain("Watch keys");
@@ -785,12 +785,12 @@ describe("acceptance on main", () => {
     await insert("Epic", "Abandoned", "An abandoned epic", { origin: "decomposition" }, givenUp);
     const expected = (await rowsOf()).filter((row) => row.status === "Abandoned" && row.source !== "superseded" && isGoalTask(row)).map((row) => row.title);
     expect(expected).toEqual(["List keys"]);
-    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const due = await dueDeliveredOf(db, projectId);
     expect(due?.kind === "due" ? due.givenUp : due).toEqual(expected);
   });
 
   test("a sweep recorded without what it ran states no way of running the product as verified, and one whose record does not parse is refused", async () => {
-    const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const due = async (projectId: ProjectId) => dueDeliveredOf(db, projectId);
     const unrecorded = await deliveredProject();
     await acceptedBeforeCoverage(unrecorded.projectId, { checked: unrecorded.goals, unchecked: [unrecorded.scaffold] });
     await db.execute(sql`UPDATE acceptance_sweeps SET check_outcomes = NULL WHERE project_id = ${unrecorded.projectId}`);
@@ -809,7 +809,7 @@ describe("acceptance on main", () => {
 
   // Evidence that misses a guarantee is a record that does not hold together: that report alone tells its table as unreadable.
   test("a sweep whose evidence misses a guarantee posts its report with the table told as unreadable, never read as no evidence", async () => {
-    const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const due = async (projectId: ProjectId) => dueDeliveredOf(db, projectId);
     const accepted = async (): Promise<Delivered> => {
       const delivered = await deliveredProject();
       await acceptedBeforeCoverage(delivered.projectId, { checked: delivered.goals, unchecked: [delivered.scaffold] });
@@ -842,12 +842,20 @@ describe("acceptance on main", () => {
     await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
     const unreachable = createDb(Object.assign(new URL(DATABASE_URL), { port: "1" }).toString());
     try {
+      // The handle fails from the select after the one that lists the passed sweeps (it selects their
+      // annotation): the delivered reports are listed last.
       const listedThenFailing = (failing: Database): Database => {
         let listed = false;
         return new Proxy(db, {
           get(target, prop) {
             const source = listed ? failing : target;
-            if (prop === "select") listed = true;
+            if (prop === "select") {
+              return (...args: unknown[]): unknown => {
+                const handle = listed ? failing : target;
+                if (args.some((arg) => typeof arg === "object" && arg !== null && "annotation" in arg)) listed = true;
+                return Reflect.apply(handle.select, handle, args);
+              };
+            }
             const value: unknown = Reflect.get(source, prop);
             return typeof value === "function" ? value.bind(source) : value;
           },
@@ -860,20 +868,20 @@ describe("acceptance on main", () => {
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      const ours = async (handle: Database) => (await createDeliveredReportStore(handle).dueReports()).find((due) => due.projectId === projectId);
+      const ours = async (handle: Database) => dueDeliveredOf(handle, projectId);
       const recordFailures = async () =>
         z.array(z.object({ n: z.number() })).parse((await db.execute(sql`SELECT COALESCE(a.record_failures, 0) AS n FROM acceptance_sweeps s LEFT JOIN delivered_report_attempts a ON a.sweep_id = s.id WHERE s.project_id = ${projectId} AND s.passed`)).rows)[0]?.n;
 
       expect(await ours(listedThenFailing(unreachable))).toMatchObject({ kind: "unread", cause: "connection" });
       expect(await ours(listedThenFailing(unnamed))).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "TypeError" }) });
 
-      const reports = (handle: Database) => {
-        const store = createDeliveredReportStore(handle);
-        return new DeliveredReports(
-          { ...store, recordReportFailure: createDeliveredReportStore(db).recordReportFailure, dueReports: async () => (await store.dueReports()).filter((due) => due.projectId === projectId) },
-          { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) },
-        );
-      };
+      const reports = (handle: Database) =>
+        terminalReportsOf(db, (id) => id === projectId, {
+          unswept: true,
+          kinds: ["delivered"],
+          store: { ...createTerminalReportStore(handle), recordDeliveredFailure: createTerminalReportStore(db).recordDeliveredFailure },
+          productInterface: { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) },
+        });
       expect(await reports(listedThenFailing(unreachable)).runPending()).toEqual([expect.objectContaining({ kind: "failed", projectId })]);
       expect(await recordFailures()).toBe(0);
       await endBackoff(projectId);
@@ -895,7 +903,7 @@ describe("acceptance on main", () => {
     ]);
     await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
 
-    expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });
+    expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId, terminal: "delivered" });
     const [body] = await reportsOf(projectId);
     expect(body).toContain("- A3: An empty prefix lists every key (stated by you)\n");
     expect(body).not.toContain("not confirmed by you");
@@ -911,7 +919,7 @@ describe("acceptance on main", () => {
     await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${torn.projectId} AND version = 2`);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId: torn.projectId }]);
+      expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId: torn.projectId, terminal: "delivered" }]);
       expect(warn.mock.calls.flat().join("\n")).toMatch(/a Stated assumption carries the client answer that stated it/);
     } finally {
       warn.mockRestore();
@@ -999,12 +1007,9 @@ describe("acceptance on main", () => {
 
     const stop = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Thanks, done.", inReplyTo: null });
     const store = createClientStopStore(db);
-    const ours: typeof store = {
-      ...store,
-      openStops: async () => (await store.openStops()).filter((open) => open.projectId === projectId),
-      dueStopReports: async () => (await store.dueStopReports()).filter((due) => due.projectId === projectId),
-    };
+    const ours: typeof store = { ...store, openStops: async () => (await store.openStops()).filter((open) => open.projectId === projectId) };
     const stops = new ClientStops(ours, memoryStepContainment(() => true));
+    const terminals = terminalReportsOf(db, (id) => id === projectId, { unswept: true });
     expect(await stops.runPending()).toEqual([expect.objectContaining({ kind: "stopped", reportDue: true })]);
     expect(await statusOf(projectId)).toBe("stopped");
     // The stop's report is posted after the cycle's terminal sweep, and carries that sweep's table.
@@ -1021,9 +1026,12 @@ describe("acceptance on main", () => {
         details: "no stored check to run",
       }),
     ).toBe("recorded");
-    expect(await stops.reportPending()).toEqual([{ kind: "posted", stopId: stop.id, projectId }]);
-    expect(await stops.reportPending()).toEqual([]);
+    // An accepted project the client stops is told by its stop message alone, which says the acceptance stands.
+    expect(await terminals.runPending()).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
+    expect(await terminals.runPending()).toEqual([]);
+    expect(await reportsOf(projectId)).toHaveLength(1);
     const stopReport = (await reportsOf(projectId)).find((body) => body.includes("stopped at your request"));
+    expect(stopReport).toContain("This project had already been accepted when your request arrived: its acceptance stands");
     expect(tableIds(stopReport ?? "")).toEqual(["S1", "S2", "S3", "A1", "A3"]);
     expect(stopReport).toContain(`- "Set up the module root": merged, commit ${SCAFFOLD_MERGE}`);
     expect(stopReport).toContain(`- "Store keys": merged, commit ${MERGE_A}`);

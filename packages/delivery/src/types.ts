@@ -17,7 +17,7 @@ import type {
   LiaisonClientChanges,
   LiaisonClientReceipts,
   LiaisonClientStops,
-  LiaisonDeliveredReports,
+  LiaisonTerminalReports,
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
@@ -181,7 +181,7 @@ interface ClientIntakeSteps {
   /**
    * The Liaison's handling of the client's stops, run first in every cycle,
    * before the spend-cap check: a stopped project is never intaken, planned or gated.
-   * Their reports are posted after the cycle's terminal sweeps, each with its stop's table.
+   * Their reports are terminal messages (terminalReports), posted after the cycle's terminal sweeps.
    */
   readonly clientStops: LiaisonClientStops;
   /**
@@ -276,8 +276,13 @@ export interface SweepSteps {
 
 /** Engagement's Liaison reporting to the client; none makes an LLM call. */
 interface ReportingSteps {
-  /** The Liaison's one delivered report per accepted project; run every cycle. */
-  readonly deliveredReports: LiaisonDeliveredReports;
+  /**
+   * The Liaison's terminal messages, every one with the guarantee table and each once: a delivered
+   * report, a stop's, a halt's, a first planning stopped's and a declined contract's; run every
+   * cycle after the terminal sweeps, at the budget cap too, and once more when the deployment cap
+   * stops the loop.
+   */
+  readonly terminalReports: LiaisonTerminalReports;
   /** The Liaison's reports on recorded planning outcomes and plan revisions, run after planning. */
   readonly planReports: LiaisonPlanReports;
   /**
@@ -286,7 +291,7 @@ interface ReportingSteps {
    */
   readonly stackChoices: LiaisonStackChoices;
   /**
-   * The Liaison's one report per project halt and per resumption; run every cycle, at the budget
+   * The Liaison's one report per resumption, once its halt is told; run every cycle, at the budget
    * cap too, and once more when the deployment cap stops the loop.
    */
   readonly blockReports: LiaisonBlockReports;

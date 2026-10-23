@@ -175,16 +175,24 @@ function strongestClass(evidence: Evidence): EvidenceClass {
   return CLASS_RANK.find((cls) => seen.includes(cls)) ?? "none";
 }
 
+/**
+ * Off a commit nothing is judged: a guarantee the contract marks not verifiable by Ashara still reads
+ * as such, since no sweep would verify it, and every other one reads unjudged for want of a sweep on a commit.
+ */
 function judged(guarantee: JudgedGuarantee, evidence: Evidence, onCommit: boolean): GuaranteeVerdict {
-  if (!onCommit) return { guaranteeId: guarantee.id, verdict: { kind: "unjudged", reason: "no-sweep-on-commit" }, evidenceClass: "none" };
+  if (!onCommit) {
+    const reason = guarantee.verification === "not-by-ashara" ? "not-verifiable-by-ashara" : "no-sweep-on-commit";
+    return { guaranteeId: guarantee.id, verdict: { kind: "unjudged", reason }, evidenceClass: "none" };
+  }
   const verdict = verdictOf(guarantee, evidence, FAULT_SET);
   return { guaranteeId: guarantee.id, verdict, evidenceClass: verdict.kind === "pass" ? verdict.evidence : strongestClass(evidence) };
 }
 
 /**
  * The verdict on every guarantee of the version `visionVersion` holds, each exactly once and in its
- * order, from the sweep's evidence. No sweep, or one that ran on no commit, judges nothing: every
- * guarantee reads unjudged for want of a sweep on a commit. Evidence that misses a guarantee or names
+ * order, from the sweep's evidence. No sweep, or one that ran on no commit, judges nothing: a guarantee
+ * the contract marks not verifiable by Ashara reads not verifiable, and every other one unjudged for
+ * want of a sweep on a commit. Evidence that misses a guarantee or names
  * one the version does not hold is a record that does not hold together: it throws, never reads as no
  * evidence.
  */

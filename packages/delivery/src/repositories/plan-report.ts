@@ -4,9 +4,9 @@ import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@a
 import type { DbHandle } from "@ashara/db";
 import { projects } from "@ashara/db";
 import { planRevisions, projectPlans, workItems } from "@ashara/db/schema/delivery";
-import { firstPlanTold, noOpenStop, planningStoppedTold, planRevisionTold } from "../acl/engagement-predicates-acl.js";
+import { firstPlanTold, noOpenStop, planRevisionTold } from "../acl/engagement-predicates-acl.js";
 import { REPORT_SUBJECT } from "../acl/engagement-report-subjects-acl.js";
-import { isSupersededItem, pendingCorrection, projectHalted } from "../predicates.js";
+import { isSupersededItem, pendingCorrection } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
@@ -82,7 +82,6 @@ type DuePlanReportRow =
       /** The behaviour the standing plan's tasks add beyond what the contract states, once each, in the order the tasks cite it. */
       readonly assumptions: ReadonlyArray<{ readonly key: string; readonly statement: string }>;
     }
-  | { readonly subject: typeof REPORT_SUBJECT.planningStopped; readonly projectId: ProjectId; readonly attempts: number }
   /**
    * A planned project with a work item whose jsonb does not parse (WorkItemRowCorrupt), or whose
    * recorded dropped ordering hints do not (PlanDroppedDependenciesCorrupt).
@@ -100,10 +99,8 @@ type DuePlanReportRow =
  * plan already replaced followed by its revision. Only the first plan of a
  * project at work, or halted at the deployment's spend cap (projectReportsPlans),
  * is due, and none while the project awaits a revision: the client is
- * not told of a plan already known to be changing. Planning that
- * stopped is due only while the project is blocked: a project the client has
- * stopped, or has a stop awaiting the Liaison, gets the stop
- * report and nothing more. A work item
+ * not told of a plan already known to be changing. A first planning that
+ * stopped is a terminal message, read through stoppedPlanningsWhere. A work item
  * whose jsonb does not parse is that one project's bad record, so it is
  * returned as that project's row instead of failing the listing for every
  * project; any other planned project whose rows do
@@ -198,16 +195,6 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
       droppedOrderingHints: dropped,
     };
   });
-
-  const stopped = await db
-    .select({ id: projects.id, attempts: projectPlans.planAttempts })
-    .from(projects)
-    .innerJoin(projectPlans, eq(projectPlans.projectId, projects.id))
-    .where(
-      and(projectHalted(projects.id), isNotNull(projectPlans.planStoppedAt), sql`NOT ${planningStoppedTold(projects.id)}`, noOpenStop(projects.id)),
-    )
-    .orderBy(asc(projects.createdAt), asc(projects.id));
-  const stops = stopped.map((row): DuePlanReportRow => ({ subject: REPORT_SUBJECT.planningStopped, projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts }));
-  return [...firstPlans, ...stops];
+  return firstPlans;
 }
 

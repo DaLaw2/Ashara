@@ -10,10 +10,10 @@ import {
   ClientChanges,
   ClientReceipts,
   ClientStops,
-  DeliveredReports,
   PlanReports,
   StackChoiceReports,
   TenderIntake,
+  TerminalReports,
 } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { DEFAULT_WORK_BUDGETS } from "@ashara/finance";
@@ -88,7 +88,7 @@ describe("composeCoreLoopDeps", () => {
     expect(deps.dispatch.checkDisputes).toBeInstanceOf(CheckDisputeRepository);
     expect(deps.dispatch.suiteReviewFindings).toBeInstanceOf(SuiteReviewFindingRepository);
     expect(deps.dispatch.checkSetFreeze).toBeInstanceOf(CheckSetFreezeRepository);
-    expect(deps.reporting.deliveredReports).toBeInstanceOf(DeliveredReports);
+    expect(deps.reporting.terminalReports).toBeInstanceOf(TerminalReports);
     expect(deps.reporting.planReports).toBeInstanceOf(PlanReports);
     expect(deps.reporting.stackChoices).toBeInstanceOf(StackChoiceReports);
     expect(deps.reporting.blockReports).toBeInstanceOf(BlockReports);

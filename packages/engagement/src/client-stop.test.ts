@@ -3,12 +3,16 @@ import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { ClientStops } from "./client-stop.js";
 import type { ClientStopStore } from "./client-stop.js";
-import { guaranteeTableOf, tableVerdicts } from "./guarantee-report.js";
-import type { GuaranteeRecords, TableVerdicts } from "./guarantee-report.js";
+import { guaranteeTableOf } from "./guarantee-report.js";
+import type { GuaranteeRecords } from "./guarantee-report.js";
+import type { DueStopReport } from "./stop-report.js";
+import { TerminalMessage, TerminalReports } from "./terminal-report.js";
+import type { TerminalReportStore } from "./terminal-report.js";
 import { readVisionVersion } from "./vision.js";
 
-// The client's stop is answered once its terminal sweep is recorded, and the answer carries that
-// sweep's guarantee table: every guarantee of the version in force once, its verdicts posted with it.
+// The client's stop is answered once its terminal sweep is recorded, by a terminal message that
+// carries that sweep's guarantee table: every guarantee of the version in force once, its verdicts
+// posted with it. A stop of a project already accepted says the acceptance stands.
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000032", "test");
 const MAIN = "e".repeat(40);
@@ -46,34 +50,54 @@ const SWEPT: GuaranteeRecords = {
   revisions: [],
 };
 
+const STOP: DueStopReport = { stopId: "stop-1", projectId, merged: [{ title: "Store keys", commit: MAIN, kind: "merged" }], paused: false, accepted: false };
+
+/** The terminal step over one due stop report, returning what it posted. */
+async function postStop(stop: DueStopReport): Promise<TerminalMessage[]> {
+  const posted: TerminalMessage[] = [];
+  const store: TerminalReportStore = {
+    dueTerminals: async () => [{ kind: "listed", event: { kind: "stopped", projectId, stop }, table: guaranteeTableOf(SWEPT) }],
+    postTerminal: async (message) => {
+      posted.push(message);
+      return "posted";
+    },
+    recordDeliveredFailure: async () => expect.unreachable("no delivered report is due"),
+  };
+  const outcomes = await new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)).runPending();
+  expect(outcomes).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
+  return posted;
+}
+
 describe("the stop report", () => {
   test("holds the table of the stop's sweep, every guarantee once, and posts its verdicts", async () => {
-    const posted: Array<{ stopId: string; body: string; verdicts: TableVerdicts }> = [];
-    const store: ClientStopStore = {
-      openStops: async () => [],
-      recordStop: async () => expect.unreachable("no stop is open"),
-      dueStopReports: async () => [{ stopId: "stop-1", projectId, merged: [{ title: "Store keys", commit: MAIN, kind: "merged" }], paused: false, guarantees: guaranteeTableOf(SWEPT) }],
-      postStopReport: async (stopId, body, verdicts) => {
-        posted.push({ stopId, body, verdicts });
-        return "posted";
-      },
-    };
-    expect(await new ClientStops(store, memoryStepContainment(() => true)).reportPending()).toEqual([{ kind: "posted", stopId: "stop-1", projectId }]);
-    const [{ stopId, body, verdicts } = { stopId: "", body: "", verdicts: null }] = posted;
-    expect(stopId).toBe("stop-1");
+    const [message, ...rest] = await postStop(STOP);
+    expect(rest).toEqual([]);
+    const { subject, body, verdicts } = message ?? expect.unreachable("one message is posted");
+    expect(subject).toEqual({ kind: "stopped", stopId: "stop-1" });
     expect(body.startsWith("Work on this project has stopped at your request.")).toBe(true);
     const table = body.split("\n\n").find((part) => part.startsWith("Each guarantee of your contract")) ?? "";
     expect(table.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2, 4))).toEqual(["G1", "G2"]);
     expect(body).toContain("- G2: unjudged, no check deciding it ran and passed");
-    expect(verdicts).toEqual(tableVerdicts(guaranteeTableOf(SWEPT)));
+    expect(verdicts).toEqual(TerminalMessage.of({ kind: "declined", projectId }, guaranteeTableOf(SWEPT)).verdicts);
+    expect(body).not.toContain("accepted");
+  });
+
+  test("a stop of a project already accepted says its acceptance stands, with the table", async () => {
+    const [message] = await postStop({ ...STOP, accepted: true });
+    const { body } = message ?? expect.unreachable("one message is posted");
+    expect(body).toContain("This project had already been accepted when your request arrived: its acceptance stands");
+    expect(body.indexOf("its acceptance stands")).toBeLessThan(body.indexOf("Each guarantee of your contract"));
+  });
+
+  test("a stop recorded before acceptance was recorded on it says that is not on record", async () => {
+    const [message] = await postStop({ ...STOP, accepted: null });
+    expect(message?.body).toContain("Whether this project had already been accepted when your request arrived is not on record.");
   });
 
   test("a stop is taken at once; its report waits for the cycle's terminal sweeps", async () => {
     const store: ClientStopStore = {
       openStops: async () => [{ id: "stop-1", projectId }],
       recordStop: async () => ({ kind: "stopped", reportDue: true }),
-      dueStopReports: async () => expect.unreachable("taking the stops reads no report"),
-      postStopReport: async () => expect.unreachable("no report is posted before the terminal sweeps"),
     };
     expect(await new ClientStops(store, memoryStepContainment(() => true)).runPending()).toEqual([{ kind: "stopped", reportDue: true, stopId: "stop-1", projectId }]);
   });

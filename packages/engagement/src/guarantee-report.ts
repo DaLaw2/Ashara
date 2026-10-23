@@ -5,8 +5,8 @@ import { OBSERVATION_UNDECIDED, verifiableByAshara, verifiableCountLine, whyNotV
 import type { GuaranteeBasis } from "./vision-language/guarantee.js";
 import type { VisionVersion } from "./vision.js";
 
-// The guarantee table every terminal message carries: the delivered report, a halt's report and the
-// client's stop report. It renders Quality's verdict on each guarantee of the vision version that
+// The guarantee table every terminal message carries (terminal-report.ts), and its one builder. It
+// renders Quality's verdict on each guarantee of the vision version that
 // one sweep's evidence was recorded against, each guarantee exactly once, and judges none itself. A
 // guarantee passes only on a check deciding it that ran on that commit and passed; a review's
 // reading of the checks can only hold one back. A guarantee the contract marks not verifiable by
@@ -73,11 +73,27 @@ interface Appendix {
 /** One guarantee's line of the table: the guarantee, and Quality's verdict on it with the class of evidence it names. */
 type GuaranteeLine = Omit<GuaranteeVerdict, "guaranteeId"> & { readonly guarantee: VisionGuarantee };
 
+/** Records that did not hold together as a table, on the sweep named (null when none was on record for the message). */
+interface UnreadableRecords {
+  readonly kind: "unreadable";
+  readonly sweepId: string | null;
+}
+
+/** Where a terminal message's table is read from: its sweep, or, with none on record for it, its project's vision in force. */
+export type TableSource = { readonly kind: "sweep"; readonly sweepId: string } | { readonly kind: "no-sweep"; readonly projectId: string };
+
+/** Marks a table guaranteeTableOf built; no other module can name it, so no other module can make a table. */
+const BUILT = Symbol("guarantee-table");
+
 /**
  * The table a terminal message carries; or that no contract was on record at its sweep; or that its
- * records did not read as a table, on the sweep named (null when none was on record).
+ * records did not read as a table, on the sweep named (null when none was on record). Only
+ * guaranteeTableOf builds one, so a message that requires a table carries the one its records judge.
  */
-export type GuaranteeTable =
+export type GuaranteeTable = ShownTable & { readonly [BUILT]: true };
+
+/** What a table shows, before guaranteeTableOf marks it built. */
+type ShownTable =
   | {
       readonly kind: "table";
       readonly sweep: JudgedSweep | null;
@@ -87,13 +103,20 @@ export type GuaranteeTable =
       readonly appendix: Appendix;
     }
   | { readonly kind: "no-contract"; readonly sweep: JudgedSweep | null }
-  | { readonly kind: "unreadable"; readonly sweepId: string | null };
+  | UnreadableRecords;
 
 /**
  * The verdicts a message's table persists through Quality, with the sweep they were judged on (null
  * when none was on record); none when no contract was on record or the table could not be read.
  */
 export type TableVerdicts = ReportVerdicts;
+
+/** `shown` as a built table. The mark is not enumerable, so two tables of the same records compare equal field by field. */
+function built(shown: ShownTable): GuaranteeTable {
+  const table = Object.assign({ ...shown }, { [BUILT]: true as const });
+  Object.defineProperty(table, BUILT, { enumerable: false });
+  return table;
+}
 
 /** Quality's verdicts do not name each guarantee of the version they were judged on exactly once, in its order. */
 export class GuaranteeVerdictsMismatch extends Error {
@@ -179,13 +202,14 @@ function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[
 }
 
 /**
- * The table of every guarantee of the version in force at the sweep, each exactly once, in the
- * version's order, with Quality's verdict on it and the appendix of the contract's revisions. Verdicts
- * that do not name each guarantee once, in order, throw, never render as a guarantee unjudged; so does
- * a revision naming a guarantee its versions do not hold.
+ * The one builder of a guarantee table: every guarantee of the version in force at the sweep, each
+ * exactly once, in the version's order, with Quality's verdict on it and the appendix of the
+ * contract's revisions; or that no contract was on record; or that the records did not hold together.
+ * Verdicts that do not name each guarantee once, in order, throw, never render as a guarantee
+ * unjudged; so does a revision naming a guarantee its versions do not hold.
  */
-export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
-  if (records.kind === "no-contract") return records;
+export function guaranteeTableOf(records: GuaranteeRecords | UnreadableRecords): GuaranteeTable {
+  if (records.kind === "no-contract" || records.kind === "unreadable") return built(records);
   const { sweep, vision, judged } = records;
   const appendix = appendixOf(vision, records.revisions);
   const held = vision.guarantees.map((guarantee) => guarantee.id);
@@ -195,22 +219,7 @@ export function guaranteeTableOf(records: GuaranteeRecords): GuaranteeTable {
     const guarantee = vision.guarantees[i];
     return guarantee === undefined ? [] : [{ guarantee, verdict: each.verdict, evidenceClass: each.evidenceClass }];
   });
-  return { kind: "table", sweep, vision, evidence: judged.evidence, lines, appendix };
-}
-
-/** The verdicts the table persists beside its message, through Quality. */
-export function tableVerdicts(table: GuaranteeTable): TableVerdicts {
-  if (table.kind === "unreadable") return { sweepId: table.sweepId, verdicts: [] };
-  const sweepId = table.sweep === null ? null : table.sweep.id;
-  if (table.kind === "no-contract") return { sweepId, verdicts: [] };
-  return {
-    sweepId,
-    verdicts: table.lines.map((line) => ({
-      visionVersion: table.vision.version,
-      basis: line.guarantee.basis,
-      judged: { guaranteeId: line.guarantee.id, verdict: line.verdict, evidenceClass: line.evidenceClass },
-    })),
-  };
+  return built({ kind: "table", sweep, vision, evidence: judged.evidence, lines, appendix });
 }
 
 /** Why a guarantee the contract marks not verifiable by Ashara is not verified, as the client was told when it was proposed. */

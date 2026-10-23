@@ -1315,7 +1315,12 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   // No code path writes a check_dispute or suite_review halt; I4 names any one a run writes.
   { source: `${ENGAGEMENT}/block-report.ts#disputeBoundReport`, judges: [i4("halt-kind-retired")] },
   { source: `${ENGAGEMENT}/block-report.ts#suiteReviewBoundReport`, judges: [i4("halt-kind-retired")] },
-  { source: `${ENGAGEMENT}/client-stop.ts#stopReport`, judges: [i4("stop-merges")] },
+  { source: `${ENGAGEMENT}/stop-report.ts#stopReport`, judges: [i4("stop-merges")] },
+  // The decline of a contract Ashara can verify no guarantee of: a terminal message, its table on no sweep.
+  {
+    source: `${ENGAGEMENT}/terminal-report.ts#declinedReport`,
+    judges: [i4("guarantee-table:declined"), i9(checkDeclinedContract)],
+  },
   // The work ledger's early warning: its figures against its own record and the ledger, its zone, once per revision.
   {
     source: `${ENGAGEMENT}/burn-warning.ts#burnWarningReport`,
@@ -1348,27 +1353,17 @@ export const TEXT_EXCLUDED: readonly ExcludedText[] = [
     reason: "joins the halt's own text and the guarantee table, each placed on its own",
   },
   {
-    source: `${ENGAGEMENT}/repositories/block-report.ts#postProjectBlockReport`,
+    source: `${ENGAGEMENT}/repositories/block-report.ts#postResumptionReport`,
     kind: "not-a-composer",
     reason: "posts the body it is given, through insertOutboundReport",
   },
   {
     source: `${ENGAGEMENT}/repositories/block-report.ts#notCoveredByPlanningStoppedReport`,
     kind: "not-a-composer",
-    reason: "a predicate on which halts a planning-stopped report already tells; it composes no text",
+    reason: "a predicate on which halts a planning-stopped message already tells; it composes no text",
   },
   {
     source: `${ENGAGEMENT}/repositories/client-message.ts#insertOutboundReport`,
-    kind: "not-a-composer",
-    reason: "posts the body it is given",
-  },
-  {
-    source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`,
-    kind: "not-a-composer",
-    reason: "posts the body it is given",
-  },
-  {
-    source: `${ENGAGEMENT}/repositories/client-stop.ts#postClientStopReport`,
     kind: "not-a-composer",
     reason: "posts the body it is given",
   },
@@ -1609,7 +1604,8 @@ export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
     posts: [
       `${ENGAGEMENT}/plan-report.ts#firstPlanReport`,
       `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`,
-      `${ENGAGEMENT}/client-stop.ts#stopReport`,
+      `${ENGAGEMENT}/stop-report.ts#stopReport`,
+      `${ENGAGEMENT}/terminal-report.ts#declinedReport`,
       `${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`,
       `${ENGAGEMENT}/intake.ts#contractDraftReport`,
     ],

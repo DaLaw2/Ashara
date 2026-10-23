@@ -106,8 +106,9 @@ describe("guarantee_verdicts", () => {
     await insertVerdict({ guaranteeId: "G5", verdict: "pass", reason: null, evidenceClass: "implementer-visible" });
   });
 
-  test("a verdict naming no sweep is unjudged for want of a sweep on a commit, and refused as anything else", async () => {
+  test("a verdict naming no sweep is unjudged for want of a sweep on a commit or as not verifiable by Ashara, and refused as anything else", async () => {
     await insertVerdict({ guaranteeId: "G6", verdict: "unjudged", reason: "no-sweep-on-commit", evidenceClass: "none" }, "no-sweep");
+    await insertVerdict({ guaranteeId: "G9", verdict: "unjudged", reason: "not-verifiable-by-ashara", evidenceClass: "none" }, "no-sweep");
     expect(await failureOf(() => insertVerdict({ guaranteeId: "G7", verdict: "unjudged", reason: "no-executed-evidence", evidenceClass: "none" }, "no-sweep"))).toMatch(
       /guarantee_verdicts_no_sweep_unjudged/,
     );

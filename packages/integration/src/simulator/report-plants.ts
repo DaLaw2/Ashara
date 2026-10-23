@@ -245,7 +245,7 @@ function suppressListing(matches: (text: string) => boolean): QueryPlant {
 }
 
 /**
- * No halt is ever due its report (Engagement listDueBlockReports, the halts it lists through Delivery's
+ * No halt is ever due its terminal message (Engagement listDueTerminals, the halts it lists through Delivery's
  * haltEpisodesWhere).
  */
 export const haltReportSuppressed = suppressListing((text) =>
@@ -256,19 +256,19 @@ export const haltReportSuppressed = suppressListing((text) =>
 );
 
 /**
- * No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueBlockReports, the
+ * No halt that ended by an unblock or a passing probe is ever due its resumption report (listDueResumptionReports, the
  * resumptions it lists through Delivery's endedHaltEpisodesWhere).
  */
 export const resumptionReportSuppressed = suppressListing((text) =>
   text.startsWith(`select "id", "project_id", "end_kind" from "project_blocks" where `),
 );
 
-/** No stop is ever due its stop report (Engagement listDueStopReports). */
+/** No stop is ever due its stop report (Engagement listDueTerminals, the stops it lists). */
 export const stopReportSuppressed = suppressListing(
   (text) => text.includes(`from "client_messages"`) && text.includes(`"stop_found_halted" is not null`),
 );
 
-/** No first planning that stopped is ever due its planning-stopped report (Delivery's plan report listing). */
+/** No first planning that stopped is ever due its planning-stopped message (Delivery's stoppedPlanningsWhere). */
 export const planningStoppedReportSuppressed = suppressListing(
   (text) =>
     text.includes(`"project_plans"."plan_attempts" from "projects"`) &&

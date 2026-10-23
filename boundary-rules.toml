@@ -141,15 +141,15 @@ allow = ["shared", "db", "finance", "execution-infra"]
 # contract's guarantee vocabulary records, when a guarantee is proposed, Quality's decision of whether
 # Ashara can verify it, read from the published verdicts.
 allow = ["shared", "db", "finance", "delivery", "quality"]
-restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/block-report.test.ts", "src/client-change.ts", "src/client-receipt.ts", "src/client-receipt.test.ts", "src/inbound-policy.ts", "src/inbound-policy.test.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-message.ts", "src/repositories/client-receipt.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/told-report.ts", "src/stack-choice.ts"]
-restrict.quality = ["src/guarantee-report.ts", "src/repositories/block-report.ts", "src/repositories/client-stop.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts", "src/vision-language/guarantee.ts"]
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/block-report.test.ts", "src/client-change.ts", "src/client-receipt.ts", "src/client-receipt.test.ts", "src/inbound-policy.ts", "src/inbound-policy.test.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/predicates.ts", "src/project-lifecycle.ts", "src/repositories/block-report.ts", "src/repositories/burn-warning.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-message.ts", "src/repositories/client-receipt.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/terminal-report.ts", "src/repositories/told-report.ts", "src/stack-choice.ts"]
+restrict.quality = ["src/guarantee-report.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/early-warning.ts", "src/repositories/guarantee-report.ts", "src/repositories/terminal-report.ts", "src/repositories/told-report.ts", "src/vision-language/guarantee.ts"]
 entries.quality = ["published-reads", "published-verdicts", "stored-checks"]
 # Its modules by business purpose: the vision (the contract, its published language), the intake that
 # reads a tender into the first vision, the client's inbound messages after it (answers, stops, and changes read
 # into corrections of the contract), the reports back, and the client channel that every message is
 # written to and read from.
 # Every module reads the vision; intake reads only the client channel. The client's
-# stop is answered with a terminal report, so inbound reads the reports' guarantee table. The
+# stop is answered with a terminal message, which the reports list and post. The
 # published predicates (a project at work, a stop or an answer awaiting the Liaison, the first plan
 # told), the decision of when each inbound message is read and what the client is told of it, and the
 # vocabulary of the subjects a report is on import no other module; intake, inbound and reports admit
@@ -161,7 +161,7 @@ module.vision  = ["src/vision.ts", "src/vision-language/*.ts", "src/repositories
 module.intake  = ["src/intake.ts", "src/repositories/tender-intake.ts"]
 module.client-messages = ["src/repositories/client-message.ts"]
 module.inbound = ["src/answers.ts", "src/client-*.ts", "src/correction.ts", "src/project-lifecycle.ts", "src/repositories/client-answer.ts", "src/repositories/client-change.ts", "src/repositories/client-receipt.ts", "src/repositories/client-stop.ts"]
-module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts", "src/repositories/plan-report.ts"]
+module.reports = ["src/plan-report.ts", "src/block-report.ts", "src/delivered-report.ts", "src/burn-warning.ts", "src/stack-choice.ts", "src/early-warning.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/repositories/burn-warning.ts", "src/repositories/stack-choice.ts", "src/repositories/early-warning.ts", "src/guarantee-report.ts", "src/repositories/guarantee-report.ts", "src/repositories/told-report.ts", "src/repositories/plan-report.ts", "src/stop-report.ts", "src/terminal-report.ts", "src/repositories/terminal-report.ts"]
 module.predicates = ["src/predicates.ts", "src/report-subjects.ts", "src/inbound-policy.ts"]
 module.ports   = ["src/ports.ts"]
 module.entry   = ["src/index.ts", "src/model-schemas.ts", "src/message-reads.ts"]

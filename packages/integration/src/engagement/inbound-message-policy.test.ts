@@ -6,7 +6,6 @@ import { ClientRepository, createDb, resolveTestDatabaseUrl, type Database, type
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { HALT_KINDS, type HaltKind } from "@ashara/delivery/predicates";
 import {
-  BlockReports,
   CLOSED_LIFECYCLES,
   ClientMessageRepository,
   ClientReceipts,
@@ -14,14 +13,17 @@ import {
   VisionRepository,
   consumeTenderWithoutIntake,
   createProjectWithTender,
+  TerminalReports,
+  guaranteeTableOf,
   inboundDecision,
-  listDueBlockReports,
   listDueReceipts,
+  listDueTerminals,
   listOpenAnswers,
   listUnconsumedChanges,
   listUnconsumedStops,
 } from "@ashara/engagement";
-import type { BlockReportStore, InboundKind, InboundState } from "@ashara/engagement";
+import type { InboundKind, InboundState, TerminalMessage } from "@ashara/engagement";
+import { readSweepOutcome } from "@ashara/quality";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
@@ -172,10 +174,12 @@ async function receiptStandingUnder(state: SetState): Promise<{ readonly change:
 
 /** Whether the halt report listed for each project under a `halt` halt says its first vision is written. */
 async function haltReportVisionUnder(halt: HaltKind): Promise<{ readonly project: boolean | undefined; readonly bare: boolean | undefined }> {
-  const due = await under({ lifecycle: "active", halt }, (tx) => listDueBlockReports(tx, async () => null));
+  const due = await under({ lifecycle: "active", halt }, (tx) => listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }));
   const written = (projectId: ProjectId): boolean | undefined => {
-    const report = due.find((each) => "subject" in each && each.subject === "project-blocked" && each.projectId === projectId);
-    return report !== undefined && "visionWritten" in report ? report.visionWritten : undefined;
+    for (const each of due) {
+      if ("kind" in each && each.kind === "listed" && each.event.kind === "halted" && each.event.projectId === projectId) return each.event.halt.visionWritten;
+    }
+    return undefined;
   };
   return { project: written(fixture.projectId), bare: written(fixture.bareProjectId) };
 }
@@ -515,11 +519,11 @@ const HALT_REPORT_WORDS: Readonly<Partial<Record<Told, (paragraph: string) => bo
   "waits-for-model-work": (paragraph) => paragraph.includes("what paused this project is model work failing"),
 };
 
-type DueHalt = Extract<Awaited<ReturnType<BlockReportStore["dueReports"]>>[number], { readonly subject: "project-blocked" }>;
+type DueHalt = Extract<Parameters<typeof TerminalMessage.of>[0], { readonly kind: "halted" }>["halt"];
 
 /** A due report on a `halt` halt of a project whose first vision is written or not, with the detail its kind's report reads. */
 function dueHalt(halt: HaltKind, visionWritten: boolean): DueHalt {
-  const base = { subject: "project-blocked", episodeId: `e-${halt}`, projectId: parseProjectId(fixture.projectId, "fixture"), guarantees: { kind: "no-contract", sweep: null }, visionWritten } as const;
+  const base = { episodeId: `e-${halt}`, projectId: parseProjectId(fixture.projectId, "fixture"), visionWritten } as const;
   switch (halt) {
     case "check_dispute":
       return { ...base, kind: halt, dispute: { taskTitle: "Port", checkName: "imports", reason: "the check cannot pass", disputes: 3 } };
@@ -534,15 +538,20 @@ function dueHalt(halt: HaltKind, visionWritten: boolean): DueHalt {
 
 async function haltReportBody(due: DueHalt): Promise<string> {
   const bodies: string[] = [];
-  const store: BlockReportStore = {
-    dueReports: async () => [due],
-    postProjectReport: async (_episodeId, _on, body) => {
-      bodies.push(body);
-      return "posted";
+  const risk = { kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } } as const;
+  const table = guaranteeTableOf({ kind: "no-contract", sweep: null });
+  await new TerminalReports(
+    {
+      dueTerminals: async () => [{ kind: "listed", event: { kind: "halted", projectId: due.projectId, halt: due, risk }, table }],
+      postTerminal: async ({ body }) => {
+        bodies.push(body);
+        return "posted";
+      },
+      recordDeliveredFailure: async () => expect.unreachable("no delivered report is due"),
     },
-    riskRecords: async () => ({ kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } }),
-  };
-  await new BlockReports(store, memoryStepContainment(() => false)).runPending();
+    { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) },
+    memoryStepContainment(() => false),
+  ).runPending();
   return bodies[0] ?? "";
 }
 

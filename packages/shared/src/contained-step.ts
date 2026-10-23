@@ -28,6 +28,7 @@ export type CycleStep =
   | "plan-report"
   | "plan-revision-report"
   | "block-report"
+  | "terminal-report"
   | "burn-warning"
   | "stack-choice"
   | "client-stop"

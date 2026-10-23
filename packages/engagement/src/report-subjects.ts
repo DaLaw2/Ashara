@@ -11,6 +11,7 @@ export const REPORT_SUBJECT = {
   clientStop: "client-stop",
   stackChoice: "stack-choice",
   contractDraft: "contract-draft",
+  declined: "declined",
 } as const;
 
 /**
@@ -23,7 +24,8 @@ export const REPORT_SUBJECTS = [
   REPORT_SUBJECT.clientStop,
   REPORT_SUBJECT.stackChoice,
   REPORT_SUBJECT.contractDraft,
+  REPORT_SUBJECT.declined,
 ] as const;
 
-/** The outcomes of planning a report is on: the first plan, or a first planning that stopped. */
-export type PlanReportSubject = typeof REPORT_SUBJECT.firstPlan | typeof REPORT_SUBJECT.planningStopped;
+/** The outcome of planning a progress report is on: the first plan. A planning that stopped is told by its terminal message. */
+export type PlanReportSubject = typeof REPORT_SUBJECT.firstPlan;

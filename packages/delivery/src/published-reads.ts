@@ -2,13 +2,13 @@ import { SQL, and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, sql, type
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { projects, qualifiedColumn } from "@ashara/db";
-import { dependencies, planRepairs, planRevisions, workItems } from "@ashara/db/schema/delivery";
+import { dependencies, planRepairs, planRevisions, projectPlans, workItems } from "@ashara/db/schema/delivery";
 import type { DbHandle } from "@ashara/db";
 import { givenUpItem, goalTaskSql, inCurrentPlan, liveInCurrentPlan, productScaffoldTask, projectHalted, reviewTask } from "./predicates.js";
 import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/index.js";
 
 // Delivery's published reads: what another context reads of the board (work_items, its dependency
-// edges, plan revisions and repairs) goes through these, never a query of Delivery's tables of its
+// edges, plan revisions and repairs, the planning record) goes through these, never a query of Delivery's tables of its
 // own. Each returns Delivery's rows as stored, its jsonb unread; the reader parses them in Delivery's
 // work-item language. This module imports nothing of Delivery but its predicates and its status
 // vocabulary, which import nothing else, so a context Delivery itself reads can import it without a
@@ -122,6 +122,25 @@ export async function mergedCommitsOf(db: DbHandle, projectId: string): Promise<
     .select({ title: workItems.title, commit: workItems.mergeCommit })
     .from(workItems)
     .where(and(eq(workItems.projectId, projectId), eq(workItems.mergeKind, "merged")));
+}
+
+/** A project whose first planning stopped, with the attempts its planning record counts. */
+export interface StoppedPlanning {
+  readonly projectId: string;
+  readonly attempts: number;
+}
+
+/**
+ * Every project whose first planning stopped and which Delivery still has halted, that `where`
+ * admits (an expression over the project's id), oldest project first.
+ */
+export async function stoppedPlanningsWhere(db: DbHandle, where: (projectId: SQL) => SQL | undefined): Promise<StoppedPlanning[]> {
+  return db
+    .select({ projectId: projects.id, attempts: projectPlans.planAttempts })
+    .from(projects)
+    .innerJoin(projectPlans, eq(projectPlans.projectId, projects.id))
+    .where(and(projectHalted(projects.id), isNotNull(projectPlans.planStoppedAt), where(qualifiedColumn(projects.id))))
+    .orderBy(asc(projects.createdAt), asc(projects.id));
 }
 
 /**

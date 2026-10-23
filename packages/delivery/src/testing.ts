@@ -42,7 +42,7 @@ export function wholeDatabaseStepsIdle(): WholeDatabaseSteps {
   return {
     loop: {},
     client: {
-      clientStops: { runPending: idle, reportPending: idle },
+      clientStops: { runPending: idle },
       clientReceipts: { runPending: idle, dueMessages: async () => new Set() },
       clientChanges: { runPending: idle },
       liaisonIntake: { runPending: idle },
@@ -64,7 +64,7 @@ export function wholeDatabaseStepsIdle(): WholeDatabaseSteps {
       terminalSweeps: { dueTerminalSweeps: idle, recordTerminalSweep: notExercised("terminalSweeps.recordTerminalSweep") },
     },
     reporting: {
-      deliveredReports: { runPending: idle },
+      terminalReports: { runPending: idle },
       planReports: { runPending: idle },
       stackChoices: { runPending: idle },
       blockReports: { runPending: idle },

@@ -5,8 +5,8 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
-import { BlockReports, ClientAnswers, PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
-import type { AnswerStore, BlockReportStore, IntakeStore, PlanReportStore } from "@ashara/engagement";
+import { ClientAnswers, PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
+import type { AnswerStore, IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
@@ -17,13 +17,12 @@ import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
 import { parseWorkItemId, type ProjectId, type StepContainment } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { createAnswerStore } from "@ashara/server/answer-store";
-import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
-import { sweepTerminalsOf } from "./terminal-sweeps.js";
+import { haltReportsOf } from "./terminal-reports.js";
 
 // The plan revision suites' shared fixture. Every row a suite writes belongs to a project it
 // creates under a unique name, and its afterAll deletes exactly those rows. Each store is narrowed
@@ -207,17 +206,9 @@ export function replanStoreSuite(stub: { model: unknown }) {
     return new PlanReports(narrowed, memoryStepContainment(() => true));
   }
 
-  /** The Liaison's block reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
-  function blockReports(): BlockReports {
-    const store = createBlockReportStore(db);
-    const narrowed: BlockReportStore = {
-      ...store,
-      dueReports: ours(async () => {
-        await sweepTerminalsOf(db, (projectId) => ourProjects.has(projectId));
-        return store.dueReports();
-      }),
-    };
-    return new BlockReports(narrowed, memoryStepContainment(() => true));
+  /** The Liaison's halt and resumption reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
+  function blockReports(): ReturnType<typeof haltReportsOf> {
+    return haltReportsOf(db, (projectId) => ourProjects.has(projectId));
   }
 
   /** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */

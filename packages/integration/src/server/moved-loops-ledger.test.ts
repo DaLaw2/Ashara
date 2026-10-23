@@ -33,6 +33,7 @@ import { createRosterStore } from "@ashara/server/roster-store";
 import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
+import { terminalReportsOf } from "./terminal-reports.js";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
 // The "moved" loops have no counter of their own: a plan revision whose write finds the project
@@ -254,7 +255,10 @@ function loopWith(
       },
       client: { liaisonAnswers: steps.liaisonAnswers },
       planning: { replanning: steps.replanning },
-      reporting: { blockReports: new BlockReports(reports, memoryStepContainment(() => false)) },
+      reporting: {
+        blockReports: new BlockReports(reports, memoryStepContainment(() => false)),
+        terminalReports: terminalReportsOf(db, (projectId) => ourProjects.has(projectId), { escapes: false, kinds: ["halted"] }),
+      },
     },
   );
   return new CoreLoop(deps);
