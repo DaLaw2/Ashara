@@ -237,15 +237,27 @@ export function replanStoreSuite(stub: { model: unknown }) {
 
   const HILL_FIRST = { body: "No, the hill studio opens first.", statement: "The hill studio opens first.", amends: [] };
 
-  /** The client's answer changing the plan's assumption, read by the Liaison: the project awaits a revision for it. */
-  async function contradict(projectId: ProjectId, questionId: string, change: { readonly body: string; readonly statement: string; readonly amends: readonly unknown[] } = HILL_FIRST): Promise<string> {
+  /**
+   * The client's answer changing the plan's assumption, or confirming it as `verdict` "confirms" says while it
+   * restates other records, read by the Liaison: the project awaits a revision for it.
+   */
+  async function contradict(
+    projectId: ProjectId,
+    questionId: string,
+    change: { readonly body: string; readonly statement: string; readonly amends: readonly unknown[]; readonly verdict?: "confirms" } = HILL_FIRST,
+  ): Promise<string> {
     const row = await new ClientMessageRepository(db).insertInbound({
       projectId,
       kind: "answer",
       body: change.body,
       inReplyTo: questionId,
     });
-    pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible", amends: change.amends } });
+    pipelineModel({
+      reading:
+        change.verdict === "confirms"
+          ? { verdict: "confirms", amends: change.amends }
+          : { verdict: "changes", statement: change.statement, kind: "client-visible", amends: change.amends },
+    });
     const answerStore = createAnswerStore(db);
     const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
     const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: memoryStepContainment(() => true), llm: gateway, store: narrowed }).runPending();

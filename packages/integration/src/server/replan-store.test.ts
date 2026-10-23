@@ -569,6 +569,23 @@ describe("a client answer is reconciled with every assumption and guarantee it c
     ],
   };
 
+  test("an answer confirming its question's assumption while it restates another holds only the work citing what it restated", async () => {
+    const { projectId, questionId } = await plannedProject({ reported: true, intake: WALK_IN_INTAKE, firstTasks: TASK_PER_RECORD });
+    const answerId = await contradict(projectId, questionId, {
+      body: "Yes, the harbour studio opens first, and only members with an account book.",
+      statement: "The harbour studio opens first.",
+      verdict: "confirms",
+      amends: [{ op: "amend-assumption", id: "A2", statement: "Bookings need a member account.", direction: "neutral" }],
+    });
+
+    const holds = await suite.db.execute(sql`SELECT requested_by AS "requestedBy", affected FROM correction_holds WHERE project_id = ${projectId}`);
+    expect(holds.rows).toEqual([{ requestedBy: answerId, affected: ["A2", "G2"] }]);
+    const revisions = await suite.db.execute(sql`
+      SELECT ops FROM vision_revisions WHERE project_id = ${projectId} AND source_message_id = ${answerId}`);
+    const OpsSchema = z.array(z.object({ ops: z.array(z.object({ action: z.string(), key: z.string() })) }));
+    expect(OpsSchema.parse(revisions.rows).map((r) => r.ops.map((op) => [op.action, op.key]))).toEqual([[["confirm", "A1"], ["amend", "A2"]]]);
+  });
+
   test("an answer contradicting its question's assumption, another one and a guarantee is one client-change revision, and one plan revision replaces the work citing any", async () => {
     const { projectId, questionId } = await plannedProject({ reported: true, intake: WALK_IN_INTAKE, firstTasks: TASK_PER_RECORD });
     const first = await itemsOf(projectId);

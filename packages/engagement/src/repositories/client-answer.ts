@@ -117,6 +117,11 @@ interface AnswerWrite {
    * and the report posted in reply to the answer.
    */
   readonly replanReport: string | null;
+  /**
+   * What the client is told of an answer that records nothing, posted to the project: not in reply to
+   * the answer, whose replies each name the vision version recording it.
+   */
+  readonly notice: string | null;
   /** Whether the project was halted when the answer was composed. */
   readonly paused: boolean;
 }
@@ -198,6 +203,7 @@ function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrectio
       await hold(tx, { projectId: write.projectId, visionVersion: applied.version, requestedBy: write.answerId, affected: await affectedKeysOf(tx, write.projectId, applied.version, applied.revision.ops) });
       await insertOutboundReport(tx, write.projectId, write.replanReport, write.answerId, `post the report on answer ${write.answerId}`);
     }
+    if (write.notice !== null) await insertOutboundReport(tx, write.projectId, write.notice, null, `post the notice on answer ${write.answerId}`);
     return "recorded";
   });
 }

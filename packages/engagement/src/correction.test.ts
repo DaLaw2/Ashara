@@ -39,8 +39,21 @@ function version(number: number, statement: string): Vision {
 
 describe("the keys a revision affects", () => {
   test("an amended assumption reaches every guarantee resting on it, underpinned or citing it as its source, and no other", () => {
-    const keys = affectedKeys([{ target: "assumption", key: "A8" }], version(1, "The greeting is in English."), version(2, "The greeting is in French."));
+    const keys = affectedKeys([{ target: "assumption", action: "amend", key: "A8" }], version(1, "The greeting is in English."), version(2, "The greeting is in French."));
 
     expect([...keys].sort()).toEqual(["A8", "G13", "G14", "G15", "G17"]);
+  });
+
+  test("an assumption confirmed as it reads affects nothing, beside an amendment that affects its own keys", () => {
+    const keys = affectedKeys(
+      [
+        { target: "assumption", action: "confirm", key: "A8" },
+        { target: "guarantee", action: "amend", key: "G16" },
+      ],
+      version(1, "The greeting is in English."),
+      version(2, "The greeting is in English."),
+    );
+
+    expect(keys).toEqual(["G16"]);
   });
 });

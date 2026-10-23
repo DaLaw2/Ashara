@@ -7,7 +7,7 @@ import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause, recordedFailureOf } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { ownSpendRefusal } from "./client-spend-refusal.js";
-import { checkedDirection } from "./correction.js";
+import { causeOf, checkedDirection } from "./correction.js";
 import { AmendOpSchema, opShape, revisionDirection } from "./vision-language/contract-op.js";
 import type { AmendOp, RevisionOp, RevisionRecord } from "./vision-language/contract-op.js";
 import { OBSERVATION_RULE, contractStandingOf } from "./vision-language/guarantee.js";
@@ -63,6 +63,8 @@ interface AnswerWrite {
   readonly planned: boolean;
   readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
   readonly replanReport: string | null;
+  /** What the client is told of an answer that records nothing: one replying to a question already closed. */
+  readonly notice: string | null;
   /** Whether the project was halted when the answer was composed: its report says so, so a write finding otherwise writes nothing. */
   readonly paused: boolean;
 }
@@ -98,12 +100,19 @@ export type AnswerOutcome =
       readonly answerId: string;
       readonly projectId: ProjectId;
       readonly assumptionKey: string;
+      /** Every other assumption and guarantee the answer restated beside it, in the order read. */
+      readonly restatedKeys: readonly string[];
       readonly verdict: "confirms" | "changes";
       readonly visionVersion: number;
       readonly replanRequested: boolean;
     }
   /** The answer neither confirms nor changes its assumption: it is consumed and the vision is unchanged. */
   | { readonly kind: "not-an-answer"; readonly answerId: string; readonly projectId: ProjectId }
+  /**
+   * The answer replies to a question no longer open: an earlier answer settled the decision it asked
+   * about. It is consumed, the vision is unchanged, and the client is told how to change that decision.
+   */
+  | { readonly kind: "question-closed"; readonly answerId: string; readonly projectId: ProjectId }
   | { readonly kind: "already-consumed"; readonly answerId: string; readonly projectId: ProjectId }
   /** Listed at the cycle's start, but consumed or its project stopped before it was read: nothing was done. */
   | { readonly kind: "not-open"; readonly answerId: string; readonly projectId: ProjectId }
@@ -371,7 +380,9 @@ export class ClientAnswers implements LiaisonAnswers {
       // (inboundDecision's resetOnHaltEnd), so only a count left by no halt at all leads here, and halts the project, blamed as it was.
       throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError, recordedFailureOf(answer.intakeLastFailure));
     }
-    let context = contextOf(answer);
+    const opened = contextOf(answer);
+    if (opened === "question-closed") return this.closed(answer);
+    let context = opened;
     let reading = await this.interpret(context);
     if (reading.kind === "failed") return reading.outcome;
 
@@ -393,6 +404,7 @@ export class ClientAnswers implements LiaisonAnswers {
       const fresh = await this.deps.store.openAnswer(answer.id);
       if (fresh === null) return { kind: "not-open", ...base };
       const moved = contextOf(fresh);
+      if (moved === "question-closed") return this.closed(fresh);
       // The reading answers a question about one assumption: while both read the same, it holds
       // against the new version as it did against the old, and is not paid for again.
       if (!readingStillApplies(context, moved)) {
@@ -405,6 +417,22 @@ export class ClientAnswers implements LiaisonAnswers {
       }
       context = moved;
     }
+  }
+
+  /**
+   * An answer to a question an earlier answer closed is not read: the decision it asks about is the
+   * client's own word already. It is consumed with a notice saying so, never dropped unseen.
+   */
+  private async closed(answer: OpenAnswer): Promise<AnswerOutcome> {
+    const base = { answerId: answer.id, projectId: answer.projectId };
+    const notice =
+      `Your message ${answer.id} answers a question that is no longer open: an earlier answer of yours ` +
+      `settled the decision it asked about, so this message changed nothing. To change that decision, send it as a change.`;
+    const recorded = await this.deps.store.recordAnswer({ ...base, planned: answer.planned, paused: answer.paused, vision: null, replanReport: null, notice });
+    if (recorded.kind === "moved") return { kind: "moved", ...base, detail: recorded.detail };
+    if (recorded.kind === "already-consumed") return { kind: recorded.kind, ...base };
+    console.warn(`[liaison-answer] answer ${answer.id} (project ${answer.projectId}) replies to question ${answer.questionId}, no longer open; consumed, vision unchanged, client told`);
+    return { kind: "question-closed", ...base };
   }
 
   /** One paid reading of the answer; a failed read is counted (and blocks at the cap), Ashara's own fault throws to runPending, which contains it. */
@@ -496,6 +524,7 @@ function recordedOutcome(context: AnswerContext, reading: AnswerReading, write: 
     kind: "stated",
     ...base,
     assumptionKey: context.question.assumptionKey,
+    restatedKeys: reading.amends.map((op) => op.id),
     verdict: reading.verdict,
     visionVersion: context.vision.current.version + 1,
     replanRequested: write.replanReport !== null,
@@ -521,8 +550,11 @@ function reconciledWith(context: AnswerContext): unknown {
   };
 }
 
-/** The question the answer replies to, open in the current vision, and the assumption it adopted. */
-function contextOf(answer: OpenAnswer): AnswerContext {
+/**
+ * The question the answer replies to, open in the current vision, and the assumption it adopted;
+ * "question-closed" when the vision holds that question open no longer.
+ */
+function contextOf(answer: OpenAnswer): AnswerContext | "question-closed" {
   const unusable = (detail: string) => new AnswerVisionUnusable(answer.id, answer.projectId, detail);
   if (answer.vision === null) throw unusable("the project has no vision");
   const { version } = answer.vision;
@@ -534,7 +566,8 @@ function contextOf(answer: OpenAnswer): AnswerContext {
     throw unusable(`vision v${version} ${err.field} are not readable: ${err.issues}`);
   }
   const open = vision.current.openQuestions.find((q) => q.messageId === answer.questionId);
-  if (open === undefined || open.messageId === null || open.assumptionKey === null) throw unusable(`question ${answer.questionId} is not open in vision v${version}`);
+  if (open === undefined) return "question-closed";
+  if (open.messageId === null || open.assumptionKey === null) throw unusable(`question ${answer.questionId} is open in vision v${version} without the assumption it adopted`);
   const question: AnsweredQuestion = { messageId: open.messageId, text: open.text, assumptionKey: open.assumptionKey };
   const assumption = vision.current.assumptions.find((a) => a.keyed && a.id === question.assumptionKey);
   if (assumption === undefined) {
@@ -546,7 +579,7 @@ function contextOf(answer: OpenAnswer): AnswerContext {
 function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWrite {
   const { answer } = context;
   const base = { answerId: answer.id, projectId: answer.projectId, planned: answer.planned, paused: answer.paused };
-  if (reading.verdict === "does-not-answer") return { ...base, vision: null, replanReport: null };
+  if (reading.verdict === "does-not-answer") return { ...base, vision: null, replanReport: null, notice: null };
 
   const statement = reading.verdict === "confirms" ? context.assumption.statement : reading.statement;
   const key = context.question.assumptionKey;
@@ -554,19 +587,10 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
   const amended: RevisionOp[] = reading.amends.map((op) => ({ ...opShape(op), key: op.id, direction: checkedDirection(op, current), labelled: op.direction, read: op, statement: op.statement }));
   const ops: readonly [RevisionOp, ...RevisionOp[]] = [
     // An answer settles its own assumption's wording; which way that moves the promise no record decides.
-    { target: "assumption", action: "amend", key, direction: "neutral", labelled: null, read: null, statement },
+    { target: "assumption", action: reading.verdict === "confirms" ? "confirm" : "amend", key, direction: "neutral", labelled: null, read: null, statement },
     ...amended,
   ];
-  const revision: RevisionRecord = {
-    author: "client",
-    sourceMessageId: answer.id,
-    approver: "client",
-    direction: revisionDirection(ops),
-    cause: "client-change",
-    ops,
-    pushback: null,
-  };
-  const append = context.vision.stateAssumption(key, {
+  const { amended: applied, ...append } = context.vision.stateAssumption(key, {
       messageId: answer.id,
       questionMessageId: answer.questionId,
       question: context.question.text,
@@ -584,6 +608,16 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
     },
     reading.amends,
   );
+  const revision: RevisionRecord = {
+    author: "client",
+    sourceMessageId: answer.id,
+    approver: "client",
+    direction: revisionDirection(ops),
+    // A confirmation changes nothing, so what the answer restated beside it says why the revision was written.
+    cause: reading.verdict === "confirms" ? causeOf(applied) : "client-change",
+    ops,
+    pushback: null,
+  };
   // A confirmed assumption with nothing else restated leaves the plan as it is; any record it was built on that changed does not.
   const changes: AnswerChange[] = [
     ...(reading.verdict === "changes" ? [{ target: "assumption", before: context.assumption.statement, after: statement } as const] : []),
@@ -594,6 +628,7 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
     ...base,
     vision: { append, revision },
     replanReport: answer.planned && first !== undefined ? replanReport(context, [first, ...rest], contractStandingOf(current.guarantees)) : null,
+    notice: null,
   };
 }
 

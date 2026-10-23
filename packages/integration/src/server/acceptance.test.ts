@@ -901,7 +901,7 @@ describe("acceptance on main", () => {
     if (question === null) throw new Error("the fixture posted no question");
     const answerId = (await new ClientMessageRepository(db).insertInbound({ projectId, kind: "answer", body: "Yes, every key.", inReplyTo: question })).id;
     expect(await clientAnswers().runPending()).toEqual([
-      { kind: "stated", answerId, projectId, assumptionKey: "A3", verdict: "confirms", visionVersion: 2, replanRequested: false },
+      { kind: "stated", answerId, projectId, assumptionKey: "A3", restatedKeys: [], verdict: "confirms", visionVersion: 2, replanRequested: false },
     ]);
     await acceptedBeforeCoverage(projectId, { checked: goals, unchecked: [scaffold] });
 
@@ -915,7 +915,7 @@ describe("acceptance on main", () => {
     if (torn.question === null) throw new Error("the fixture posted no question");
     const tornAnswer = (await new ClientMessageRepository(db).insertInbound({ projectId: torn.projectId, kind: "answer", body: "Yes, every key.", inReplyTo: torn.question })).id;
     expect(await clientAnswers().runPending()).toEqual([
-      { kind: "stated", answerId: tornAnswer, projectId: torn.projectId, assumptionKey: "A3", verdict: "confirms", visionVersion: 2, replanRequested: false },
+      { kind: "stated", answerId: tornAnswer, projectId: torn.projectId, assumptionKey: "A3", restatedKeys: [], verdict: "confirms", visionVersion: 2, replanRequested: false },
     ]);
     await acceptedBeforeCoverage(torn.projectId, { checked: torn.goals, unchecked: [torn.scaffold] });
     await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${torn.projectId} AND version = 2`);

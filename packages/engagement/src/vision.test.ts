@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { AmendOp } from "./vision-language/contract-op.js";
 import { basisOf } from "./vision-language/guarantee.js";
 import { Vision, VisionChangeRefused, VisionUnreadable, readVisionVersion, visionWritable } from "./vision.js";
 
@@ -257,6 +258,52 @@ describe("Vision: the only way a next version is composed", () => {
     expect(next.assumptions[0]).toMatchObject({ id: "A1", status: "Stated", standing: "stated", statement: "Commands fail at once." });
     expect(next.assumptions[0]?.clientAnswer).toMatchObject({ messageId: "m1", verdict: "changes" });
     expect(() => vision.stateAssumption("A9", answer, [])).toThrow(VisionChangeRefused);
+  });
+
+  test("an answer restating a guarantee Ashara read into the tender in the tender's own words is classified a misreading, as a correction's is", () => {
+    const vision = Vision.read(contractVersion([DURABLE, OPEN]));
+    const restore: AmendOp = {
+      op: "amend-guarantee",
+      id: "G2",
+      statement: "A crash never loses an acknowledged put.",
+      interface: ["I1"],
+      observation: "stored-data",
+      refutedBy: ["after the process is killed, a get misses an acknowledged put"],
+      direction: "neutral",
+    };
+    const change = vision.stateAssumption(
+      "A1",
+      { messageId: "m1", questionMessageId: "q1", question: "Ack after disk?", answer: "Yes, as the tender says.", verdict: "confirms", statement: DURABLE.statement, kind: null, rationale: "client answer", changeReason: "answered" },
+      [restore],
+    );
+    const corrected = vision.correct([restore], { messageId: "m1", body: "As the tender says.", usedKeys: new Set(), changeReason: "corrected" });
+
+    expect(change.amended.map((a) => [a.key, a.cause])).toEqual([["G2", "misread"]]);
+    expect(change.amended.map((a) => a.cause)).toEqual(corrected.applied.map((a) => a.cause));
+    const answered = change.contract.kind === "revised" ? change.contract.records.guarantees.find((g) => g.id === "G2") : undefined;
+    const correctedG2 = corrected.append.contract.kind === "revised" ? corrected.append.contract.records.guarantees.find((g) => g.id === "G2") : undefined;
+    expect(answered?.source).toEqual({ kind: "tender", quote: restore.statement });
+    expect(answered).toEqual(correctedG2);
+  });
+
+  test("every other open question on an assumption the answer states closes with the answered one", () => {
+    const vision = Vision.read({
+      ...contractVersion([DURABLE, OPEN, LAYOUT]),
+      openQuestions: [
+        { messageId: "q1", text: "Ack after disk?", assumptionKey: "A1" },
+        { messageId: "q2", text: "Who may connect?", assumptionKey: "A2" },
+        { messageId: "q3", text: "Ack after disk, again?", assumptionKey: "A1" },
+        { messageId: "q4", text: "Which layout?", assumptionKey: "A3" },
+      ],
+    });
+    const change = vision.stateAssumption(
+      "A1",
+      { messageId: "m1", questionMessageId: "q1", question: "Ack after disk?", answer: "Yes, and only members connect.", verdict: "confirms", statement: DURABLE.statement, kind: null, rationale: "client answer", changeReason: "answered" },
+      [{ op: "amend-assumption", id: "A2", statement: "Only members may connect.", direction: "narrows" }],
+    );
+
+    expect(change.openQuestions).toEqual([{ messageId: "q4", text: "Which layout?", assumptionKey: "A3" }]);
+    expect(change.amended.map((a) => [a.key, a.cause])).toEqual([["A2", "client-change"]]);
   });
 
   test("the legacy map takes no keyed change, and a version the reader would refuse is never written", () => {

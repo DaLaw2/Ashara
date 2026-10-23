@@ -106,8 +106,8 @@ export interface CheckedOp {
   readonly direction: Direction;
 }
 
-/** An operation as the affected-key reading needs it: what it acts on and the record's key, null on an add not applied. */
-type AffectingOp = Pick<RevisionOp, "target" | "key">;
+/** An operation as the affected-key reading needs it: what it acts on, how, and the record's key, null on an add not applied. */
+type AffectingOp = Pick<RevisionOp, "target" | "action" | "key">;
 
 /**
  * The guarantees of `version` resting on assumption `key`: each it underpins, and each citing it as
@@ -133,12 +133,14 @@ function restingOn(key: string, version: VisionVersion): string[] {
  * is passed over as untouched. Each is read against both `appliedTo`, the version in force, and
  * `written`, the version the operations write, so a guarantee observed at an entry the correction
  * withdrew, or one an amendment moved off an assumption, is still affected. Both are read whole
- * (Vision.read), so every key they name resolves.
+ * (Vision.read), so every key they name resolves. A confirmation changes no statement, so it affects
+ * nothing.
  */
 export function affectedKeys(ops: readonly AffectingOp[], appliedTo: Vision, written: Vision): string[] {
   const guarantees: readonly VisionGuarantee[] = [...appliedTo.current.guarantees, ...written.current.guarantees];
   const keys = new Set<string>();
-  for (const { target, key } of ops) {
+  for (const { target, action, key } of ops) {
+    if (action === "confirm") continue;
     switch (target) {
       case "guarantee":
         if (key !== null) keys.add(key);

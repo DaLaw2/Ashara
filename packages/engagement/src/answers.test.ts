@@ -80,7 +80,7 @@ function model(reading: unknown): { readonly llm: ContextualLlm; readonly calls:
   return { llm, calls: () => calls };
 }
 
-function recordingStore(intakeAttempts: number) {
+function recordingStore(intakeAttempts: number, vision: StoredVision = VISION) {
   const answer = {
     id: "answer-1",
     projectId: PROJECT,
@@ -90,7 +90,7 @@ function recordingStore(intakeAttempts: number) {
     intakeLastError: null,
     intakeLastFailure: null,
     planned: true,
-    vision: VISION,
+    vision,
     paused: false,
   };
   const writes: Parameters<AnswerStore["recordAnswer"]>[0][] = [];
@@ -170,6 +170,42 @@ describe("a client's answer is reconciled with every record it contradicts, in o
     expect(write?.vision?.revision.direction).toBe("widens");
     const contract = write?.vision?.append.contract;
     expect(contract?.kind === "revised" ? contract.records.guarantees.find((g) => g.id === "G2")?.statement : null).toBe(amendG2.statement);
+  });
+
+  test("an answer confirming its assumption as it reads records a confirmation, which no work rests on, beside the record it restates; every restated key is reported", async () => {
+    const amendG2 = {
+      op: "amend-guarantee",
+      id: "G2",
+      statement: "A member with a loan overdue since a previous calendar day cannot borrow.",
+      interface: ["I1"],
+      observation: "errors",
+      refutedBy: ["A member with an overdue loan borrows an item."],
+      direction: "widens",
+    };
+    const reading = { verdict: "confirms", amends: [...RECORDED_READING.amends, amendG2] };
+    const { store, writes } = recordingStore(0);
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, llm: model(reading).llm, store, containment: memoryStepContainment(() => false) }).runPending();
+
+    expect(outcomes).toMatchObject([{ kind: "stated", assumptionKey: "A3", restatedKeys: ["A8", "G2"], verdict: "confirms", replanRequested: true }]);
+    const [write] = writes;
+    expect(write?.vision?.revision.ops.map((op) => [op.target, op.action, op.key, op.statement])).toEqual([
+      ["assumption", "confirm", "A3", FINE],
+      ["assumption", "amend", "A8", OVERDUE_FROM_NEXT_DAY],
+      ["guarantee", "amend", "G2", amendG2.statement],
+    ]);
+    expect(write?.replanReport).not.toContain(`The plan assumed: ${FINE}`);
+  });
+
+  test("an answer to a question no longer open is consumed with a notice to the client, read by no model and recording nothing", async () => {
+    const { store, writes, blocked } = recordingStore(0, { ...VISION, openQuestions: [] });
+    const { llm, calls } = model(RECORDED_READING);
+    const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, llm, store, containment: memoryStepContainment(() => false) }).runPending();
+
+    expect(outcomes).toMatchObject([{ kind: "question-closed", answerId: "answer-1" }]);
+    expect(calls()).toBe(0);
+    expect(blocked).toEqual([]);
+    expect(writes).toMatchObject([{ vision: null, replanReport: null }]);
+    expect(writes[0]?.notice).toContain("no longer open");
   });
 
   test("a reading that does not reconcile the answer with the other records is retried, then held: nothing is written and the project is blocked", async () => {

@@ -62,7 +62,11 @@ export const ContractOpSchema = z.discriminatedUnion("op", [
 export type ContractOp = z.infer<typeof ContractOpSchema>;
 
 const OpTargetSchema = z.enum(["interface", "guarantee", "assumption", "exclusion"]);
-const OpActionSchema = z.enum(["add", "amend", "withdraw"]);
+/**
+ * How an operation acts on its record. "confirm" settles a record as it already reads, as an answer
+ * confirming its question's assumption does: it changes no statement, so no work rests on it.
+ */
+const OpActionSchema = z.enum(["add", "amend", "withdraw", "confirm"]);
 
 export type OpTarget = z.infer<typeof OpTargetSchema>;
 export type OpAction = z.infer<typeof OpActionSchema>;

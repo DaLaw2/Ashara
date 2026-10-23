@@ -601,10 +601,13 @@ export class Vision {
   /**
    * The next version with the assumption `key` Stated by the client's answer to the open question
    * `answer.questionMessageId`, which closes, and every other assumption and guarantee the answer
-   * contradicts or refines restated as `amends` says, each assumption Stated by the same answer; every
-   * other record is carried over as stored. All of it is one version or none: an amendment naming a
-   * record this version does not hold, naming `key` (its verdict settles that one), naming a record
-   * twice, or leaving a contract that breaks a rule throws VisionChangeRefused.
+   * contradicts or refines restated as `amends` says, each assumption Stated by the same answer and each
+   * guarantee classified as a correction's is (restatedGuarantee); every other record is carried over as
+   * stored. Every other open question on an assumption the answer Stated closes with it, since the
+   * client settled what it asks. `amended` is each amendment applied, in order, with its cause. All of
+   * it is one version or none: an amendment naming a record this version does not hold, naming `key`
+   * (its verdict settles that one), naming a record twice, or leaving a contract that breaks a rule
+   * throws VisionChangeRefused.
    */
   stateAssumption(
     key: string,
@@ -621,7 +624,7 @@ export class Vision {
       readonly changeReason: string;
     },
     amends: readonly AmendOp[],
-  ): VisionAppend {
+  ): VisionAppend & { readonly amended: readonly AppliedOp[] } {
     const refused = (detail: string) => new VisionChangeRefused(this.current.projectId, this.current.version, detail);
     const records = this.keyedRecords();
     const index = records.findIndex((record) => record.key === key);
@@ -645,6 +648,8 @@ export class Vision {
     let working = records.map((other, i) => (i === index ? stated : other));
     let contract = this.contract;
     const named = new Set([key]);
+    const settled = new Set([key]);
+    const amended: AppliedOp[] = [];
     for (const op of amends) {
       if (named.has(op.id)) throw refused(op.id === key ? `the answer's own assumption ${key} is settled by its verdict, not restated beside it` : `the answer restates ${op.id} twice`);
       named.add(op.id);
@@ -660,11 +665,16 @@ export class Vision {
           clientAnswer: { ...clientAnswer, verdict: "changes" },
         };
         working = working.map((other, i) => (i === at ? restated : other));
+        settled.add(op.id);
+        amended.push({ op, key: op.id, cause: "client-change" });
         continue;
       }
-      if (contract === null || !contract.guarantees.some((g) => g.id === op.id)) throw refused(`it holds no guarantee keyed ${op.id}`);
-      const amended = observed(op, { id: op.id, statement: op.statement, refutedBy: op.refutedBy, source: { kind: "correction", messageId: answer.messageId } });
-      contract = { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? amended : g)) };
+      const old = contract?.guarantees.find((g) => g.id === op.id);
+      if (contract === null || old === undefined) throw refused(`it holds no guarantee keyed ${op.id}`);
+      // Read against the version in force: the assumption this answer states does not make Ashara's reading the client's word.
+      const restated = this.restatedGuarantee(op, old, records, answer.messageId);
+      contract = { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? restated.guarantee : g)) };
+      amended.push({ op, key: op.id, cause: restated.cause });
     }
     try {
       if (contract !== this.contract && contract !== null) {
@@ -683,10 +693,36 @@ export class Vision {
       basedOnVersion: this.current.version,
       // A guarantee resting on it reads client-stated from the next version on: its basis is computed there, never rewritten.
       inferences: working,
-      openQuestions: this.questions.filter((question) => typeof question === "string" || question.messageId !== answer.questionMessageId),
+      openQuestions: this.questions.filter(
+        (question) => typeof question === "string" || (question.messageId !== answer.questionMessageId && !settled.has(question.assumptionKey)),
+      ),
       contract: contract === this.contract || contract === null ? { kind: "unchanged" } : { kind: "revised", records: contract },
       changeReason: answer.changeReason,
+      amended,
     };
+  }
+
+  /**
+   * A guarantee restated whole by a client, by an answer or a correction alike, with why: one Ashara
+   * read into the tender (its basis among `records` is not the client's word), put back in the
+   * tender's own words, was Ashara's misreading and is sourced to the tender; any other restatement is
+   * the client's change, sourced to their message `messageId`.
+   */
+  private restatedGuarantee(
+    op: Extract<ContractOp, { readonly op: "amend-guarantee" }>,
+    old: StoredGuarantee,
+    records: readonly AssumptionRecord[],
+    messageId: string,
+  ): { readonly guarantee: StoredGuarantee; readonly cause: "client-change" | "misread" } {
+    const basis = visionGuaranteeOf(old, records.map(assumptionOf)).basis;
+    const restores = basis !== "client-stated" && collapseWhitespace(this.current.visionText).includes(collapseWhitespace(op.statement));
+    const guarantee = observed(op, {
+      id: op.id,
+      statement: op.statement,
+      refutedBy: op.refutedBy,
+      source: restores ? ({ kind: "tender", quote: op.statement } as const) : ({ kind: "correction", messageId } as const),
+    });
+    return { guarantee, cause: restores ? "misread" : "client-change" };
   }
 
   /**
@@ -793,16 +829,8 @@ export class Vision {
       case "amend-guarantee": {
         const old = contract.guarantees.find((g) => g.id === op.id);
         if (old === undefined) throw missing("guarantees", "guarantee", op.id);
-        // A guarantee Ashara read into the tender, put back in the tender's own words, was Ashara's misreading.
-        const basis = visionGuaranteeOf(old, records.map(assumptionOf)).basis;
-        const restores = basis !== "client-stated" && collapseWhitespace(this.current.visionText).includes(collapseWhitespace(op.statement));
-        const amended = observed(op, {
-          id: op.id,
-          statement: op.statement,
-          refutedBy: op.refutedBy,
-          source: restores ? ({ kind: "tender", quote: op.statement } as const) : correction,
-        });
-        return done({ contract: { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? amended : g)) } }, op.id, restores ? "misread" : "client-change");
+        const restated = this.restatedGuarantee(op, old, records, source.messageId);
+        return done({ contract: { ...contract, guarantees: contract.guarantees.map((g) => (g.id === op.id ? restated.guarantee : g)) } }, op.id, restated.cause);
       }
       case "withdraw-guarantee": {
         const old = contract.guarantees.find((g) => g.id === op.id);

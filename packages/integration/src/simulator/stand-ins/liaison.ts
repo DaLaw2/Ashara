@@ -179,13 +179,15 @@ export class LiaisonStandIn {
   }
 
   /**
-   * The client's answer read as changing its question's assumption and contradicting the first other
-   * assumption the prompt lists, which it restates, so every answer that has another assumption beside
-   * its own is a multi-record reconciliation.
+   * The client's answer, read as confirming its question's assumption when the seed's universe asks for an
+   * even number of behaviours and as changing it otherwise, so both verdicts are met across seeds, and as
+   * contradicting the first other assumption the prompt lists and the first guarantee of the project whose
+   * open answer it is, each restated, so every answer with another record beside its own is a multi-record
+   * reconciliation, a confirming one included.
    */
-  answer(prompt: string): unknown {
+  async answer(prompt: string): Promise<unknown> {
     const [other] = promptEntries(prompt, OTHER_ASSUMPTIONS_HEADING);
-    const amends =
+    const assumption =
       other === undefined
         ? []
         : [
@@ -196,7 +198,44 @@ export class LiaisonStandIn {
               direction: "neutral",
             },
           ];
+    const guarantee = await this.answeredGuarantee(prompt);
+    const restated =
+      guarantee === null
+        ? []
+        : [
+            {
+              op: "amend-guarantee",
+              id: guarantee.id,
+              statement: `${guarantee.statement} It holds as the client's answer restates it.`,
+              interface: guarantee.observable.interface,
+              observation: guarantee.observable.observation,
+              refutedBy: guarantee.refutedBy,
+              direction: "neutral",
+            },
+          ];
+    const amends = [...assumption, ...restated];
+    if (this.context.universe.behaviours.length % 2 === 0) return { reading: { verdict: "confirms", amends } };
     return { reading: { verdict: "changes", statement: "Messages are in French.", kind: "undecided", amends } };
+  }
+
+  /**
+   * The first guarantee of the project with an unread answer whose contract the prompt lists; null when no
+   * such project holds one.
+   */
+  private async answeredGuarantee(prompt: string): Promise<StoredGuarantee | null> {
+    const { observer, projectIds } = this.context;
+    for (const projectId of projectIds) {
+      const open = await observer.execute(sql`
+        SELECT 1 FROM client_messages WHERE project_id = ${projectId} AND direction = 'inbound' AND kind = 'answer'
+          AND consumed_at IS NULL`);
+      if (open.rows.length === 0) continue;
+      const vision = await observer.execute(sql`
+        SELECT guarantees FROM vision_documents WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`);
+      const [latest] = z.array(z.object({ guarantees: z.array(storedGuaranteeSchema) })).parse(vision.rows);
+      if (latest === undefined || !latest.guarantees.every((g) => listsGuarantee(prompt, g.id, g.statement))) continue;
+      return latest.guarantees[0] ?? null;
+    }
+    return null;
   }
 
   /**

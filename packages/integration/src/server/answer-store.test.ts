@@ -290,7 +290,7 @@ describe("the client's answers", () => {
     const outcomes = await answers().runPending();
 
     expect(outcomes).toEqual([
-      { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 2, replanRequested: false },
+      { kind: "stated", answerId, projectId, assumptionKey: "A2", restatedKeys: [], verdict: "confirms", visionVersion: 2, replanRequested: false },
     ]);
     const [v1, v2, ...rest] = await visionsOf(projectId);
     expect(rest).toHaveLength(0);
@@ -354,7 +354,7 @@ describe("the client's answers", () => {
     const outcomes = await answers().runPending();
 
     expect(outcomes).toEqual([
-      { kind: "stated", answerId, projectId, assumptionKey: "A1", verdict: "changes", visionVersion: 2, replanRequested: true },
+      { kind: "stated", answerId, projectId, assumptionKey: "A1", restatedKeys: [], verdict: "changes", visionVersion: 2, replanRequested: true },
     ]);
     expect((await visionsOf(projectId))[1]?.inferences.find((a) => a.key === "A1")).toMatchObject({
       statement: "The hill studio opens first.",
@@ -441,8 +441,8 @@ describe("the client's answers", () => {
     const outcomes = await answers().runPending();
 
     expect(outcomes).toEqual([
-      { kind: "stated", answerId: firstAnswer, projectId, assumptionKey: "A1", verdict: "confirms", visionVersion: 2, replanRequested: false },
-      { kind: "stated", answerId: secondAnswer, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 3, replanRequested: false },
+      { kind: "stated", answerId: firstAnswer, projectId, assumptionKey: "A1", restatedKeys: [], verdict: "confirms", visionVersion: 2, replanRequested: false },
+      { kind: "stated", answerId: secondAnswer, projectId, assumptionKey: "A2", restatedKeys: [], verdict: "confirms", visionVersion: 3, replanRequested: false },
     ]);
     // One paid reading per answer: none was discarded.
     expect(mock.doGenerateCalls).toHaveLength(2);
@@ -481,7 +481,7 @@ describe("the client's answers", () => {
     const outcomes = await new ClientAnswers({ shutdownSignal: new AbortController().signal, containment: containment(), llm: gateway, store: racing }).runPending();
 
     expect(outcomes).toEqual([
-      { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 3, replanRequested: false },
+      { kind: "stated", answerId, projectId, assumptionKey: "A2", restatedKeys: [], verdict: "confirms", visionVersion: 3, replanRequested: false },
     ]);
     expect(mock.doGenerateCalls).toHaveLength(1);
     expect((await visionsOf(projectId)).map((v) => v.version)).toEqual([1, 2, 3]);
@@ -569,8 +569,8 @@ describe("the client's answers", () => {
     const { projectId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
-    // A vision whose open questions no longer hold the one answered: no reading of the answer can be recorded against it.
-    await db.execute(sql`UPDATE vision_documents SET open_questions = '[]'::jsonb WHERE project_id = ${projectId}`);
+    // A vision whose open question names an assumption it does not hold: no reading of the answer can be recorded against it.
+    await db.execute(sql`UPDATE vision_documents SET open_questions = jsonb_build_array(jsonb_build_object('messageId', ${first}::text, 'text', 'Which studio?', 'assumptionKey', 'A99')) WHERE project_id = ${projectId}`);
     expect(await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBound", reason: "repaired its bound of times" })).toBe("blocked");
     const answerId = await answer(projectId, first, "Harbour.");
     const mock = pipelineModel({ verdict: "confirms", amends: [] });
@@ -587,6 +587,28 @@ describe("the client's answers", () => {
     const blocks = await db.execute(sql`SELECT kind, error_class AS "errorClass" FROM project_blocks WHERE project_id = ${projectId} AND ended_at IS NULL`);
     expect(blocks.rows).toEqual([{ kind: "fault", errorClass: "AnswerVisionUnusable" }]);
     expect(await attemptsOf(answerId)).toEqual({ attempts: 0, kept: false });
+  });
+
+  test("an answer to a question an earlier answer closed is consumed unread with a notice to the client, and blocks nothing", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [first] = questionIds;
+    if (first === undefined) throw new Error("intake posted no question");
+    await db.execute(sql`UPDATE vision_documents SET open_questions = '[]'::jsonb WHERE project_id = ${projectId}`);
+    const answerId = await answer(projectId, first, "Harbour.");
+    const mock = pipelineModel({ verdict: "confirms", amends: [] });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect((await answers().runPending()).map((outcome) => outcome.kind)).toEqual(["question-closed"]);
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    const consumed = await db.execute(sql`SELECT consumed_at IS NOT NULL AS consumed FROM client_messages WHERE id = ${answerId}`);
+    expect(consumed.rows).toEqual([{ consumed: true }]);
+    const notices = await db.execute(sql`
+      SELECT in_reply_to AS "inReplyTo" FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound' AND kind = 'report'
+        AND body LIKE ${`%${answerId} answers a question that is no longer open%`}`);
+    expect(notices.rows).toEqual([{ inReplyTo: null }]);
+    const blocks = await db.execute(sql`SELECT kind FROM project_blocks WHERE project_id = ${projectId}`);
+    expect(blocks.rows).toEqual([]);
+    expect(await answers().runPending()).toEqual([]);
   });
 
   test.each(["model_failed", "provider_failed", "replan_stopped", "replan_provider_failed", "budget_cap"] as const)(
@@ -630,7 +652,7 @@ describe("the client's answers", () => {
     pipelineModel({ verdict: "confirms", amends: [] });
 
     expect(await answers().runPending()).toEqual([
-      { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 2, replanRequested: false },
+      { kind: "stated", answerId, projectId, assumptionKey: "A2", restatedKeys: [], verdict: "confirms", visionVersion: 2, replanRequested: false },
     ]);
     expect((await new ClientMessageRepository(db).findById(answerId))?.consumedAt).toBeInstanceOf(Date);
     expect(await haltKindOf(projectId)).toBe("plan_repair");

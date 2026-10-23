@@ -44,14 +44,16 @@ function logAnswer(logger: Logger, outcome: AnswerOutcome): void {
     const replan = outcome.replanRequested
       ? "; the plan relied on it, so the tasks citing it are held until its plan is revised"
       : "";
+    const restated = outcome.restatedKeys.length === 0 ? "" : `, and restated ${outcome.restatedKeys.join(", ")}`;
     logger.info(
       "delivery.answer-stated",
       `answer ${outcome.answerId}: ${outcome.verdict} assumption ${outcome.assumptionKey} of project ` +
-        `${outcome.projectId}, now Stated in vision v${outcome.visionVersion}${replan}`,
+        `${outcome.projectId}${restated}, now Stated in vision v${outcome.visionVersion}${replan}`,
       {
         projectId: outcome.projectId,
         answerId: outcome.answerId,
         assumptionKey: outcome.assumptionKey,
+        restatedKeys: outcome.restatedKeys,
         visionVersion: outcome.visionVersion,
         replanRequested: outcome.replanRequested,
       },
