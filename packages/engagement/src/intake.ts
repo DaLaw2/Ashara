@@ -17,7 +17,6 @@ import {
   AssumptionKeySchema,
   ContractDraftSchema,
   GuaranteeKeySchema,
-  NOTHING_VERIFIABLE,
   OBSERVATION_RULE,
   basisOf,
   contractStandingOf,
@@ -505,7 +504,8 @@ function intakeReask(ctx: { readonly errors: readonly string[] }): string {
 
 /**
  * What the client reads: the question, why it matters, and what Ashara does if they stay silent; on a
- * held contract, then the decline, so no message of the intake reads as work under way.
+ * held contract, that work has not started, so no message of the intake reads as work under way. The
+ * decline itself is told once, by its terminal message with the guarantee table.
  */
 function questionBody(question: QuestionText, standing: DraftStanding): string {
   const held = standing === "held";
@@ -514,7 +514,7 @@ function questionBody(question: QuestionText, standing: DraftStanding): string {
     `Why it matters: ${question.whyItMatters}`,
     `${held ? HELD_ASSUMPTION_LABEL : ASSUMPTION_LABEL} ${question.assumption.statement}`,
     `Why this assumption: ${question.assumption.rationale}`,
-    ...(held ? [NOTHING_VERIFIABLE] : []),
+    ...(held ? [DECLINE_TOLD_APART] : []),
   ].join("\n\n");
 }
 
@@ -607,8 +607,9 @@ const BASIS_WORDS: Readonly<Record<GuaranteeBasis, string>> = {
  * drafter could not tell where it is observed put to the client; how many Ashara can verify; the
  * assumptions they could observe, each with the guarantees it underpins; the exclusions, so silence is
  * never read as a promise; and the team's own design choices, which acceptance does not depend on.
- * Nothing waits on a reply, unless the contract is held: then the draft opens with the decline and
- * never says work has started or that nothing waits.
+ * Nothing waits on a reply, unless the contract is held: then the draft says work has not started and
+ * never that it has or that nothing waits; the decline itself is told once, by its terminal message
+ * with the guarantee table.
  */
 function contractDraftReport(first: IntakeResponse, inferences: readonly InferredAssumption[], standing: DraftStanding): string {
   const held = standing === "held";
@@ -632,7 +633,7 @@ function contractDraftReport(first: IntakeResponse, inferences: readonly Inferre
   });
   const design = inferences.filter((a) => a.kind === "internal-design").map((a) => `- ${a.key}: ${a.statement}`);
   return [
-    held ? `This is the contract drafted from your tender, and Ashara declines it as written. ${NOTHING_VERIFIABLE}` : `This is the contract we are working to, drafted from your tender.`,
+    held ? `This is the contract drafted from your tender.` : `This is the contract we are working to, drafted from your tender.`,
     `The interface, as we read it; it is the first thing you may correct:\n${first.interface.map((entry) => `- ${entry.id}: ${entry.text}`).join("\n")}`,
     `What we guarantee, each with what it rests on:\n${guarantees.join("\n")}`,
     verifiableCountLine(verifiable, first.guarantees.length),
@@ -642,13 +643,16 @@ function contractDraftReport(first: IntakeResponse, inferences: readonly Inferre
       : `What is left out, so that silence is never read as a promise:\n${first.exclusions.map((x) => `- ${x.id}: ${x.text}`).join("\n")}`,
     ...(design.length === 0 ? [] : [`Basis of Design, our own design choices, which your acceptance does not depend on:\n${design.join("\n")}`]),
     held
-      ? `Correct any line at any time. ${RESTATE_TO_START}`
+      ? `Correct any line at any time. ${DECLINE_TOLD_APART}`
       : `Work has started on this list; correct any line at any time; nothing waits for your reply.`,
   ].join("\n\n");
 }
 
-/** How a declined contract's draft closes: what starts work on it. */
-const RESTATE_TO_START = "Work starts once you restate the guarantees so that Ashara can verify at least one of them.";
+/**
+ * What an intake message on a contract Ashara declines says in place of the decline: that work has not
+ * started and where the client is told why. The decline is told once, by its terminal message.
+ */
+const DECLINE_TOLD_APART = "Work has not started on this contract: Ashara's decline of it, sent with its guarantee table, says why and what starts work.";
 
 /** Who gave a second reading, in the client's words: a weaker strength says what it shares with the first. */
 const READ_BY: Readonly<Record<SecondOpinionStrength, string>> = {
@@ -662,8 +666,8 @@ const READ_BY: Readonly<Record<SecondOpinionStrength, string>> = {
  * reading, of the strength named, found nothing to ask either, or raised the questions they are sent;
  * or that none could be had, so the reading is unconfirmed and work proceeds on it. Null when the first
  * reading asked questions: those are what the client reads. When the contract is held no work
- * proceeds on anything, so the report says what the reading found and then the decline, never that
- * work proceeds or does not wait.
+ * proceeds on anything, so the report says what the reading found and that work has not started,
+ * never that work proceeds or does not wait; the decline itself is told by its terminal message.
  */
 function readingReport(confirmation: ReadingConfirmation, standing: DraftStanding): string | null {
   if (confirmation.kind === "not-needed") return null;
@@ -684,7 +688,7 @@ function readingReport(confirmation: ReadingConfirmation, standing: DraftStandin
           );
       }
     })();
-    return [found, NOTHING_VERIFIABLE].join("\n\n");
+    return [found, DECLINE_TOLD_APART].join("\n\n");
   }
   switch (confirmation.kind) {
     case "confirmed":

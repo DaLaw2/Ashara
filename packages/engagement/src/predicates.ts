@@ -123,40 +123,50 @@ export type ToldSubjectKind = (typeof TOLD_SUBJECT_KINDS)[number];
 export const reportTold = (kind: ToldSubjectKind, subjectId: AnyColumn | SQL): SQL =>
   sql`EXISTS (SELECT 1 FROM told_reports tr WHERE tr.subject_kind = ${kind} AND tr.subject_id = ${subjectId instanceof SQL ? subjectId : qualifiedColumn(subjectId)})`;
 
+/** Every kind of terminal message the client is sent, in the order the due listing lists them. */
+export const TERMINAL_KINDS = ["stopped", "halted", "planning-stopped", "declined", "delivered"] as const;
+export type TerminalKind = (typeof TERMINAL_KINDS)[number];
+
+/** How a terminal kind is recorded told: a told record of its subject, the project's one report on it, or one report on it per vision version. */
+type ToldBy = { readonly told: ToldSubjectKind } | { readonly reportsOn: string } | { readonly reportsOnVersion: string };
+
 /**
  * How each kind of terminal message (terminal-report.ts) is recorded as told, so it is told once and a
  * restart neither tells it again nor drops it: by a told record of its subject (a passed sweep, a halt
- * episode), or as the project's one report on its subject (the client's stop, a first planning that
- * stopped, a contract Ashara declines).
+ * episode), as the project's one report on its subject (the client's stop, a first planning that
+ * stopped), or as the project's one report on its subject for a vision version (a contract Ashara
+ * declines: a later version declined again is told again).
  */
 const TERMINAL_TOLD = {
   delivered: { told: "delivered" },
   halted: { told: "project-blocked" },
   "planning-stopped": { reportsOn: REPORT_SUBJECT.planningStopped },
   stopped: { reportsOn: REPORT_SUBJECT.clientStop },
-  declined: { reportsOn: REPORT_SUBJECT.declined },
-} as const satisfies Record<string, { readonly told: ToldSubjectKind } | { readonly reportsOn: string }>;
-
-/** Every kind of terminal message the client is sent. */
-export type TerminalKind = keyof typeof TERMINAL_TOLD;
+  declined: { reportsOnVersion: REPORT_SUBJECT.declined },
+} as const satisfies Record<TerminalKind, ToldBy>;
 
 /**
  * The terminal message of `kind` on `subject` is told: the one predicate every terminal kind's due
  * listing and its post-once write agree on. `subject` is the told record's subject (the sweep, the
- * halt episode) for a kind told by one, and the project for a kind told as the project's one report.
+ * halt episode) for a kind told by one, the project for a kind told as the project's one report, and
+ * the vision version's row (vision_documents.id) for a kind told once per version.
  */
 export function terminalTold(kind: TerminalKind, subject: AnyColumn | SQL): SQL {
   const ref = subject instanceof SQL ? subject : qualifiedColumn(subject);
-  const by: { readonly told: ToldSubjectKind } | { readonly reportsOn: string } = TERMINAL_TOLD[kind];
+  const by: ToldBy = TERMINAL_TOLD[kind];
   if ("told" in by) return reportTold(by.told, ref);
+  if ("reportsOnVersion" in by) {
+    return sql`EXISTS (SELECT 1 FROM client_messages tt JOIN vision_documents tv ON tv.project_id = tt.project_id
+      AND tv.version = tt.reports_on_version WHERE tv.id = ${ref} AND tt.reports_on = ${by.reportsOnVersion})`;
+  }
   return sql`EXISTS (SELECT 1 FROM client_messages tt WHERE tt.project_id = ${ref} AND tt.reports_on = ${by.reportsOn})`;
 }
 
 /** The client message `messageId` (an outbound report, its reports_on `reportsOn`) is a terminal message of any kind. */
 export function terminalMessage(messageId: SQL, reportsOn: SQL): SQL {
-  const by: ReadonlyArray<{ readonly told: ToldSubjectKind } | { readonly reportsOn: string }> = Object.values(TERMINAL_TOLD);
+  const by: readonly ToldBy[] = Object.values(TERMINAL_TOLD);
   const told = by.flatMap((each) => ("told" in each ? [each.told] : []));
-  const subjects = by.flatMap((each) => ("reportsOn" in each ? [each.reportsOn] : []));
+  const subjects = by.flatMap((each) => ("reportsOn" in each ? [each.reportsOn] : "reportsOnVersion" in each ? [each.reportsOnVersion] : []));
   return sql`(EXISTS (SELECT 1 FROM told_reports tm WHERE tm.report_id = ${messageId} AND tm.subject_kind IN (${sql.join(
     told.map((kind) => sql`${kind}`),
     sql`, `,

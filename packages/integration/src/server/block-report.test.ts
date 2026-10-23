@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
-import { BlockReports, VisionRepository } from "@ashara/engagement";
+import { BlockReports, TERMINAL_KINDS, VisionRepository } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
@@ -46,7 +46,7 @@ function reports() {
   const mine = (projectId: string) => ourProjects.has(projectId);
   const halts = terminalReportsOf(db, mine, { kinds: ["halted"] });
   const resumptions = resumptionsOf(mine, true);
-  return { runPending: async () => [...(await halts.runPending()), ...(await resumptions.runPending())] };
+  return { runPending: async () => [...(await halts.runPending(TERMINAL_KINDS)), ...(await resumptions.runPending())] };
 }
 
 const MessagesSchema = z.array(z.object({ body: z.string() }));
@@ -140,7 +140,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await writeContract(projectId);
     await new ProjectHaltRepository(db).block(projectId, budgetCap);
     const unswept = terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["halted"] });
-    expect(await unswept.runPending()).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
+    expect(await unswept.runPending(TERMINAL_KINDS)).toEqual([{ kind: "posted", projectId, terminal: "halted" }]);
 
     const [body = ""] = await messagesOf(projectId);
     expect(body).toContain("Ashara recorded the cause as this: the spending limit set for this project left no room");
@@ -226,7 +226,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
 
     try {
       const mine = (projectId: string): boolean => projectId === unreadable || projectId === healthy;
-      const outcomes = await terminalReportsOf(db, mine, { escapes: false, kinds: ["halted"] }).runPending();
+      const outcomes = await terminalReportsOf(db, mine, { escapes: false, kinds: ["halted"] }).runPending(TERMINAL_KINDS);
 
       expect(outcomes).toEqual([
         expect.objectContaining({ kind: "step-faulted", step: "terminal-report", projectId: unreadable, error: expect.stringContaining("BlockSpendUnreadable") }),
@@ -320,7 +320,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await stop();
     await reports().runPending();
     expect(await messagesOf(projectId)).toEqual([]);
-    expect(await terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["planning-stopped"] }).runPending()).toEqual([
+    expect(await terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["planning-stopped"] }).runPending(TERMINAL_KINDS)).toEqual([
       { kind: "posted", projectId, terminal: "planning-stopped" },
     ]);
 

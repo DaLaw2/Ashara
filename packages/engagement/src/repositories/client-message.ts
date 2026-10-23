@@ -517,29 +517,46 @@ export async function postOnStop(tx: DbHandle, stopId: string, body: string): Pr
   return reportId === null ? { kind: "already-posted" } : { kind: "posted", projectId: stop.projectId, reportId };
 }
 
-/** An outbound report on one of the subjects a project gets at most one report on. */
-interface SubjectReport {
+/**
+ * The subject a report is on: one of those a project gets at most one report on, or the decline,
+ * which a project gets at most once per vision version, naming the version it declines.
+ */
+export type ReportOn =
+  | { readonly reportsOn: Exclude<(typeof REPORT_SUBJECTS)[number], typeof REPORT_SUBJECT.declined> }
+  | { readonly reportsOn: typeof REPORT_SUBJECT.declined; readonly visionVersion: number };
+
+/** An outbound report on its subject. */
+type SubjectReport = ReportOn & {
   readonly projectId: string;
   readonly body: string;
   readonly inReplyTo: string | null;
-  readonly reportsOn: (typeof REPORT_SUBJECTS)[number];
-}
+};
 
 /**
- * Posts the report on its subject and returns its id. The partial unique index on (project_id,
- * reports_on) admits one per project: on a repeat, "skip" inserts nothing and returns null, and
- * "fail" fails the statement, rolling back the transaction it is in.
+ * Posts the report on its subject and returns its id. The partial unique indexes on the project's
+ * reports admit one per project on each subject, and one decline per vision version: on a repeat,
+ * "skip" inserts nothing and returns null, and "fail" fails the statement, rolling back the
+ * transaction it is in.
  */
 export async function postOnSubject(tx: DbHandle, report: SubjectReport, onRepeat: "skip" | "fail"): Promise<string | null> {
-  const insert = tx
-    .insert(clientMessages)
-    .values({ projectId: report.projectId, direction: "outbound", kind: "report", body: report.body, inReplyTo: report.inReplyTo, reportsOn: report.reportsOn });
+  const version = "visionVersion" in report ? report.visionVersion : null;
+  const insert = tx.insert(clientMessages).values({
+    projectId: report.projectId,
+    direction: "outbound",
+    kind: "report",
+    body: report.body,
+    inReplyTo: report.inReplyTo,
+    reportsOn: report.reportsOn,
+    reportsOnVersion: version,
+  });
   if (onRepeat === "fail") {
     return insertedRow(await insert.returning({ id: clientMessages.id }), "client_messages", `post the ${report.reportsOn} report to project ${report.projectId}`).id;
   }
-  const [row] = await insert
-    .onConflictDoNothing({ target: [clientMessages.projectId, clientMessages.reportsOn], where: isNotNull(clientMessages.reportsOn) })
-    .returning({ id: clientMessages.id });
+  const conflict =
+    version === null
+      ? { target: [clientMessages.projectId, clientMessages.reportsOn], where: and(isNotNull(clientMessages.reportsOn), isNull(clientMessages.reportsOnVersion)) }
+      : { target: [clientMessages.projectId, clientMessages.reportsOn, clientMessages.reportsOnVersion], where: isNotNull(clientMessages.reportsOnVersion) };
+  const [row] = await insert.onConflictDoNothing(conflict).returning({ id: clientMessages.id });
   return row === undefined ? null : row.id;
 }
 

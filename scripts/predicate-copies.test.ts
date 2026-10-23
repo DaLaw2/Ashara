@@ -183,6 +183,25 @@ describe("findPredicateCopies", () => {
     ]);
   });
 
+  test("every report subject Engagement's vocabulary names is a copy outside it, the decline among them; a subject named lines after the column, past anything but a comparison, is not", () => {
+    const planted = [
+      "const a = sql`m.reports_on = 'declined'`;",
+      'const b = { reportsOn: "declined" };',
+      'if (report.subject === "declined") return;',
+      "const c = sql`m.reports_on IS NOT NULL",
+      "  AND ${this.step('client-stop')}`;",
+      "const d = sql`m.reports_on IN ('first-plan', 'declined')`;",
+      'const e = { status: "declined" };',
+    ].join("\n");
+    const root = treeOf({ "packages/delivery/src/planted.ts": planted });
+    expect(findPredicateCopies(root).map((copy) => [copy.line, copy.rule])).toEqual([
+      [1, REPORT_SUBJECT],
+      [2, REPORT_SUBJECT],
+      [3, REPORT_SUBJECT],
+      [6, REPORT_SUBJECT],
+    ]);
+  });
+
   test("an inline subset of the work-item vocabulary outside Delivery's work-item language is a copy, on one line or split across lines; a subset the language names is not", () => {
     const planted = [
       'const a = inArray(workItems.status, OPEN_WORK_ITEM_STATUSES.filter((status) => status !== "InProgress"));',

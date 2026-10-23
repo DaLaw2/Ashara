@@ -1,5 +1,6 @@
 // Engagement's vocabulary of the subjects a report to the client is on (client_messages.reports_on):
-// a project gets at most one report on each, by the unique index on (project_id, reports_on). Each
+// a project gets at most one report on each, by the unique index on (project_id, reports_on), and at
+// most one decline per vision version, by the one on (project_id, reports_on, reports_on_version). Each
 // subject is spelled here once; a reader or writer in any context names it from here, and the
 // column's CHECK holds exactly REPORT_SUBJECTS. This module imports nothing else of Engagement, so a
 // context Engagement reads can import it without a cycle at load time.

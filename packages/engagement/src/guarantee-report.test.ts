@@ -1,8 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
-import { guaranteeSection, guaranteeTableOf, unverifiedGuarantees } from "./guarantee-report.js";
+import { guaranteeSection, readGuaranteeTable, unverifiedGuarantees } from "./guarantee-report.js";
 import type { GuaranteeRecords, GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { TERMINAL_KINDS } from "./predicates.js";
 import { TerminalMessage, TerminalReports } from "./terminal-report.js";
 import type { DueTerminal, TerminalReportStore } from "./terminal-report.js";
 import { readVisionVersion } from "./vision.js";
@@ -73,9 +74,14 @@ const NO_SWEEP: GuaranteeRecords = { kind: "judged", sweep: null, vision: VISION
 /** An infrastructure halt's terminal sweep: no commit of main could be swept, every guarantee unjudged for it. */
 const UNSWEPT = judgedBy(IDS.map((id) => unjudged(id, "no-sweep-on-commit")), null);
 
+/** The table the records reader builds over `records`, as it builds one over the stored records. */
+async function tableOf(records: GuaranteeRecords): Promise<GuaranteeTable> {
+  return readGuaranteeTable({ records: async () => records, unreadable: () => false }, { kind: "no-sweep", projectId: "fixture" });
+}
+
 /** The verdicts a terminal message carrying `table` persists. */
 function verdictsOfTable(table: GuaranteeTable): TableVerdicts {
-  return TerminalMessage.of({ kind: "declined", projectId }, table).verdicts;
+  return TerminalMessage.of({ kind: "declined", projectId, visionVersion: 1 }, table).verdicts;
 }
 
 /** A persisted verdict, flat: its guarantee, verdict, reason when unjudged, basis and evidence class. */
@@ -101,21 +107,34 @@ function tableLine(body: string, id: string): string {
 }
 
 describe("the guarantee table", () => {
-  test("every guarantee of the version in force is in the table exactly once, in its order, and among the verdicts exactly once", () => {
-    const table = guaranteeTableOf(SWEPT);
+  test("every guarantee of the version in force is in the table exactly once, in its order, and among the verdicts exactly once", async () => {
+    const table = await tableOf(SWEPT);
     expect(tableIds(guaranteeSection(table))).toEqual(IDS);
     expect(verdictsOfTable(table).verdicts.map((v) => v.judged.guaranteeId)).toEqual(IDS);
   });
 
-  test("verdicts that miss a guarantee of the version, name one it does not hold, or come out of its order are refused, never rendered", () => {
+  test("verdicts that miss a guarantee of the version, name one it does not hold, or come out of its order are refused, never rendered: the table judges nothing and says why at warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const verdicts = IDS.map((id) => unjudged(id, "no-executed-evidence"));
-    expect(() => guaranteeTableOf(judgedBy(verdicts.slice(0, 3)))).toThrow(/name \[G1, G2, G3\], but it holds \[G1, G2, G3, G4\]/);
-    expect(() => guaranteeTableOf(judgedBy([...verdicts, unjudged("G9", "no-executed-evidence")]))).toThrow(/G9/);
-    expect(() => guaranteeTableOf(judgedBy([...verdicts].reverse()))).toThrow(/name \[G4, G3, G2, G1\]/);
+    for (const [records, why] of [
+      [judgedBy(verdicts.slice(0, 3)), /name \[G1, G2, G3\], but it holds \[G1, G2, G3, G4\]/],
+      [judgedBy([...verdicts, unjudged("G9", "no-executed-evidence")]), /G9/],
+      [judgedBy([...verdicts].reverse()), /name \[G4, G3, G2, G1\]/],
+    ] as const) {
+      warn.mockClear();
+      expect(await tableOf(records)).toEqual({ kind: "unreadable", sweepId: null });
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(why);
+    }
+    warn.mockRestore();
   });
 
-  test("each line renders Quality's verdict as given: pass, fail, stored data unjudged, a review's reading unjudged", () => {
-    const table = guaranteeTableOf(SWEPT);
+  test("a read that fails for any reason but records that do not hold together throws for a retry, never reads as a table", async () => {
+    const lost = new Error("connection reset");
+    await expect(readGuaranteeTable({ records: async () => Promise.reject(lost), unreadable: () => false }, { kind: "sweep", sweepId: "sweep-6" })).rejects.toBe(lost);
+  });
+
+  test("each line renders Quality's verdict as given: pass, fail, stored data unjudged, a review's reading unjudged", async () => {
+    const table = await tableOf(SWEPT);
     expect(verdictsOfTable(table).verdicts.map(flat)).toEqual([
       ["G1", "pass", null, "client-stated", "implementer-visible"],
       ["G2", "unjudged", "stored-data-unjudged", "assumed-unconfirmed", "implementer-visible"],
@@ -130,8 +149,8 @@ describe("the guarantee table", () => {
     expect(tableLine(body, "G2")).toContain("| basis: an assumption you have not confirmed, so it is at risk |");
   });
 
-  test("the punch list comes first: failures, then every unjudged guarantee with why", () => {
-    const table = guaranteeTableOf(judgedBy([pass("G1"), unjudged("G2", "stored-data-unjudged"), fail("G3", "witness"), unjudged("G4", "lowered-by-review", "witness")]));
+  test("the punch list comes first: failures, then every unjudged guarantee with why", async () => {
+    const table = await tableOf(judgedBy([pass("G1"), unjudged("G2", "stored-data-unjudged"), fail("G3", "witness"), unjudged("G4", "lowered-by-review", "witness")]));
     const [punch] = guaranteeSection(table).split("\n\n");
     expect(punch).toBe(
       [
@@ -143,8 +162,8 @@ describe("the guarantee table", () => {
     );
   });
 
-  test("the assumptions, exclusions and Basis of Design follow the table, never as verdicts", () => {
-    const parts = guaranteeSection(guaranteeTableOf(SWEPT)).split("\n\n");
+  test("the assumptions, exclusions and Basis of Design follow the table, never as verdicts", async () => {
+    const parts = guaranteeSection(await tableOf(SWEPT)).split("\n\n");
     expect(parts.slice(2)).toEqual([
       "The assumptions the guarantees rest on:\n- A1: A put is acknowledged once it is on disk. (underpins G2; not confirmed by you)",
       "What is left out, so that silence is never read as a promise:\n- X1: No authentication.",
@@ -152,7 +171,7 @@ describe("the guarantee table", () => {
     ]);
   });
 
-  test("a sweep recorded before evidence per guarantee says so, and renders the verdicts judged on none", () => {
+  test("a sweep recorded before evidence per guarantee says so, and renders the verdicts judged on none", async () => {
     const legacy = readVisionVersion({
       projectId,
       version: 1,
@@ -167,7 +186,7 @@ describe("the guarantee table", () => {
       exclusions: [],
     });
     const verdicts = [unjudged("S1", "not-checkable-as-written"), unjudged("A10", "not-checkable-as-written")];
-    const table = guaranteeTableOf({ kind: "judged", sweep: { id: "sweep-0", mainCommit: MAIN }, vision: legacy, judged: { evidence: "unrecorded", verdicts }, revisions: [] });
+    const table = await tableOf({ kind: "judged", sweep: { id: "sweep-0", mainCommit: MAIN }, vision: legacy, judged: { evidence: "unrecorded", verdicts }, revisions: [] });
     expect(verdictsOfTable(table).verdicts.map((v) => flat(v).slice(0, 3))).toEqual([
       ["S1", "unjudged", "not-checkable-as-written"],
       ["A10", "unjudged", "not-checkable-as-written"],
@@ -175,8 +194,8 @@ describe("the guarantee table", () => {
     expect(guaranteeSection(table)).toContain("Which checks decided each guarantee is not on record for that sweep, so none is judged as holding.");
   });
 
-  test("a message no sweep is on record for holds every guarantee of the version in force unjudged for want of a sweep on a commit, naming no sweep", () => {
-    const table = guaranteeTableOf(NO_SWEEP);
+  test("a message no sweep is on record for holds every guarantee of the version in force unjudged for want of a sweep on a commit, naming no sweep", async () => {
+    const table = await tableOf(NO_SWEEP);
     const verdicts = verdictsOfTable(table);
     expect(verdicts.sweepId).toBeNull();
     expect(verdicts.verdicts.map((v) => [flat(v)[0], flat(v)[1], flat(v)[2], flat(v)[4]])).toEqual(IDS.map((id) => [id, "unjudged", "no-sweep-on-commit", "none"]));
@@ -186,16 +205,17 @@ describe("the guarantee table", () => {
     expect(tableIds(section)).toEqual(IDS);
   });
 
-  test("records that do not read as a table judge no guarantee, say so, and persist no verdict", () => {
-    const table = guaranteeTableOf({ kind: "unreadable", sweepId: "sweep-4" });
+  test("records that do not read as a table judge no guarantee, say so, and persist no verdict", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const table = await readGuaranteeTable({ records: async () => Promise.reject(new Error("evidence names v9")), unreadable: () => true }, { kind: "sweep", sweepId: "sweep-4" });
     expect(guaranteeSection(table)).toBe(
       "Ashara's records of this project's guarantees at sweep sweep-4 do not hold together, so no guarantee is judged in this message: none is told as holding, and none as failing. Its operator is told why.",
     );
     expect(verdictsOfTable(table)).toEqual({ sweepId: "sweep-4", verdicts: [] });
   });
 
-  test("no vision at the sweep is said so, and persists no verdict", () => {
-    const table: GuaranteeTable = guaranteeTableOf({ kind: "no-contract", sweep: { id: "sweep-2", mainCommit: MAIN } });
+  test("no vision at the sweep is said so, and persists no verdict", async () => {
+    const table: GuaranteeTable = await tableOf({ kind: "no-contract", sweep: { id: "sweep-2", mainCommit: MAIN } });
     expect(guaranteeSection(table)).toBe("No contract is on record for this project at sweep sweep-2, so no guarantee is judged.");
     expect(verdictsOfTable(table)).toEqual({ sweepId: "sweep-2", verdicts: [] });
   });
@@ -234,8 +254,8 @@ describe("the appendix of the contract's revisions", () => {
     SWEPT.kind === "judged" ? { ...SWEPT, revisions } : expect.unreachable("the sweep's records are judged");
   const HEAD = "Appendix, how your contract has been revised:";
 
-  test("a proposed Ashara narrowing leaves the prior guarantee in the table and is told only in the appendix", () => {
-    const body = guaranteeSection(guaranteeTableOf(revised([PROPOSAL])));
+  test("a proposed Ashara narrowing leaves the prior guarantee in the table and is told only in the appendix", async () => {
+    const body = guaranteeSection(await tableOf(revised([PROPOSAL])));
     expect(tableLine(body, "G1")).toContain("- G1: A get returns the value of the last put of its key. | verdict: pass |");
     const head = body.indexOf(HEAD);
     expect(head).toBeGreaterThan(body.indexOf("- G1: A get returns the value"));
@@ -246,18 +266,18 @@ describe("the appendix of the contract's revisions", () => {
     ]);
   });
 
-  test("the narrowings Ashara proposed list only the operations of its proposal that narrow", () => {
+  test("the narrowings Ashara proposed list only the operations of its proposal that narrow", async () => {
     const widening = { ...op("amend", "G2", "A put is acknowledged and kept."), direction: "widens" } as const;
     const neutral = { ...op("amend", "G4", "A deleted key reads as missing."), direction: "neutral" } as const;
-    const body = guaranteeSection(guaranteeTableOf(revised([{ ...PROPOSAL, ops: [widening, op("amend", "G1", PROPOSED_G1), neutral] }])));
+    const body = guaranteeSection(await tableOf(revised([{ ...PROPOSAL, ops: [widening, op("amend", "G1", PROPOSED_G1), neutral] }])));
     const head = body.indexOf(HEAD);
     expect(body.slice(head).split("\n").filter((line) => line.startsWith("- "))).toEqual([
       `- G1 (as it stands: A get returns the value of the last put of its key.) | Ashara proposes to amend it to: ${PROPOSED_G1}`,
     ]);
   });
 
-  test("every guarantee an applied revision superseded is listed with what replaced it, or that nothing did", () => {
-    const parts = guaranteeSection(guaranteeTableOf(revised([APPLIED]))).split("\n\n");
+  test("every guarantee an applied revision superseded is listed with what replaced it, or that nothing did", async () => {
+    const parts = guaranteeSection(await tableOf(revised([APPLIED]))).split("\n\n");
     expect(parts.at(-1)).toBe(
       [
         HEAD,
@@ -268,15 +288,19 @@ describe("the appendix of the contract's revisions", () => {
     );
   });
 
-  test("a contract with no revision, or none the appendix lists, prints no appendix heading", () => {
-    expect(guaranteeSection(guaranteeTableOf(SWEPT))).not.toContain("Appendix");
+  test("a contract with no revision, or none the appendix lists, prints no appendix heading", async () => {
+    expect(guaranteeSection(await tableOf(SWEPT))).not.toContain("Appendix");
     const clientProposal: ContractRevision = { ...PROPOSAL, author: "client" };
     const assumptionOnly: ContractRevision = { ...APPLIED, ops: [{ ...op("amend", "A1", "A put is acknowledged at once."), target: "assumption" }] };
-    expect(guaranteeSection(guaranteeTableOf(revised([clientProposal, assumptionOnly])))).not.toContain("Appendix");
+    expect(guaranteeSection(await tableOf(revised([clientProposal, assumptionOnly])))).not.toContain("Appendix");
   });
 
-  test("a revision naming a guarantee its versions do not hold is refused, never read as no change", () => {
-    expect(() => guaranteeTableOf(revised([{ ...APPLIED, ops: [op("withdraw", "G9", null)] }]))).toThrow(/G9, which vision v1 does not hold/);
+  test("a revision naming a guarantee its versions do not hold is refused, never read as no change: the table judges nothing and says why at warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    expect(await tableOf(revised([{ ...APPLIED, ops: [op("withdraw", "G9", null)] }]))).toEqual({ kind: "unreadable", sweepId: null });
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/G9, which vision v1 does not hold/);
+    warn.mockRestore();
   });
 });
 
@@ -293,7 +317,7 @@ async function postedFor(due: readonly DueTerminal[]): Promise<TerminalMessage[]
     },
     recordDeliveredFailure: async () => expect.unreachable("no report failed"),
   };
-  await new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)).runPending();
+  await new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)).runPending(TERMINAL_KINDS);
   return posted;
 }
 
@@ -306,7 +330,7 @@ describe("every terminal message carries the table", () => {
       cause: { errorClass: "InfrastructureFaultBudgetSpent", reason: "the substrate did not answer", spend: null, work: null },
       visionWritten: true,
     } as const;
-    const posted = await postedFor([{ kind: "listed", event: { kind: "halted", projectId, halt, risk: RISK }, table: guaranteeTableOf(UNSWEPT) }]);
+    const posted = await postedFor([{ kind: "listed", event: { kind: "halted", projectId, halt, risk: RISK }, table: await tableOf(UNSWEPT) }]);
     expect(posted).toHaveLength(1);
     const [{ body, verdicts, subject }] = posted.length === 1 ? posted : expect.unreachable("one message");
     expect(subject).toEqual({ kind: "halted", episodeId: "e1" });
@@ -318,7 +342,7 @@ describe("every terminal message carries the table", () => {
   });
 
   test("the message of a first planning that stopped holds the table, every guarantee unjudged with no sweep, and posts those verdicts", async () => {
-    const posted = await postedFor([{ kind: "listed", event: { kind: "planning-stopped", projectId, attempts: 3, risk: RISK }, table: guaranteeTableOf(NO_SWEEP) }]);
+    const posted = await postedFor([{ kind: "listed", event: { kind: "planning-stopped", projectId, attempts: 3, risk: RISK }, table: await tableOf(NO_SWEEP) }]);
     expect(posted.map((each) => each.subject)).toEqual([{ kind: "planning-stopped", projectId }]);
     const [{ body, verdicts }] = posted.length === 1 ? posted : expect.unreachable("one message");
     expect(body).toContain("Ashara could not turn this project's vision into a plan after 3 attempts");
@@ -344,12 +368,12 @@ describe("every terminal message carries the table", () => {
       executed: { kind: "recorded", checks: [] },
       reading: { kind: "not-needed" },
     } as const;
-    const posted = await postedFor([{ kind: "delivered", report, table: guaranteeTableOf(SWEPT) }]);
+    const posted = await postedFor([{ kind: "delivered", report, table: await tableOf(SWEPT) }]);
     const [{ body, verdicts, subject }] = posted.length === 1 ? posted : expect.unreachable("one message");
     expect(subject).toEqual({ kind: "delivered", sweepId: "sweep-1" });
     expect(tableIds(body)).toEqual(IDS);
     expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("The punch list"));
-    expect(verdicts).toEqual(verdictsOfTable(guaranteeTableOf(SWEPT)));
+    expect(verdicts).toEqual(verdictsOfTable(await tableOf(SWEPT)));
     expect(body).not.toContain("second review");
   });
 
@@ -368,20 +392,21 @@ describe("every terminal message carries the table", () => {
       exclusions: [],
     });
     const records: GuaranteeRecords = { kind: "judged", sweep: null, vision: held, judged: { evidence: "unrecorded", verdicts: [unjudged("G2", "not-verifiable-by-ashara")] }, revisions: [] };
-    const posted = await postedFor([{ kind: "listed", event: { kind: "declined", projectId }, table: guaranteeTableOf(records) }]);
+    const posted = await postedFor([{ kind: "listed", event: { kind: "declined", projectId, visionVersion: 1 }, table: await tableOf(records) }]);
     const [{ body, verdicts, subject }] = posted.length === 1 ? posted : expect.unreachable("one message");
-    expect(subject).toEqual({ kind: "declined", projectId });
+    expect(subject).toEqual({ kind: "declined", projectId, visionVersion: 1 });
     expect(body.startsWith("Ashara declines the contract drafted from your tender as written.")).toBe(true);
     expect(tableIds(body)).toEqual(["G2"]);
-    expect(unverifiedGuarantees(guaranteeTableOf(records))).toContain("- G2 (An acknowledged put survives a crash.): not verified");
+    expect(unverifiedGuarantees(await tableOf(records))).toContain("- G2 (An acknowledged put survives a crash.): not verified");
     expect(verdicts.verdicts.map((v) => flat(v).slice(0, 3))).toEqual([["G2", "unjudged", "not-verifiable-by-ashara"]]);
   });
 
-  test("a table is only what guaranteeTableOf builds: a hand-made one is refused by the type of every terminal message", () => {
+  test("a table is only what the records reader builds: a hand-made one is refused by the type of every terminal message", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const shown = { kind: "unreadable", sweepId: "sweep-5" } as const;
-    // @ts-expect-error a table no builder made carries no brand, so no terminal message takes it
+    // @ts-expect-error a table no reader built carries no brand, so no terminal message takes it
     const refused: GuaranteeTable = shown;
-    expect(refused).toEqual(guaranteeTableOf(shown));
+    expect(refused).toEqual(await readGuaranteeTable({ records: async () => Promise.reject(new Error("unreadable")), unreadable: () => true }, { kind: "sweep", sweepId: "sweep-5" }));
   });
 });
 
@@ -389,7 +414,7 @@ describe("every terminal message carries the table", () => {
 // Ashara cannot verify as written only the client can, by restating or removing it; one a check could
 // decide is the team's. A contract the client confirmed as holding nothing Ashara can verify says so.
 describe("the guarantees an acceptance_uncovered halt names", () => {
-  test("a contract confirmed as holding nothing Ashara can verify names each guarantee as the client's to settle, and counts none verifiable", () => {
+  test("a contract confirmed as holding nothing Ashara can verify names each guarantee as the client's to settle, and counts none verifiable", async () => {
     const confirmed = readVisionVersion({
       projectId,
       version: 3,
@@ -403,7 +428,7 @@ describe("the guarantees an acceptance_uncovered halt names", () => {
       guarantees: [GUARANTEES[1], { ...GUARANTEES[0], observable: { interface: ["I1"], observation: "stored-data" } }].map((g) => ({ ...g, verification: "not-by-ashara" })),
       exclusions: [],
     });
-    const table = guaranteeTableOf(judgedBy([unjudged("G2", "not-verifiable-by-ashara"), unjudged("G1", "not-verifiable-by-ashara")], MAIN, confirmed));
+    const table = await tableOf(judgedBy([unjudged("G2", "not-verifiable-by-ashara"), unjudged("G1", "not-verifiable-by-ashara")], MAIN, confirmed));
     const words = unverifiedGuarantees(table);
     const settled = "Ashara cannot verify it as written, so only you can settle it, by restating it or removing it";
     // Each is a stored-data guarantee marked before the reason was recorded: it reads the reason of the one rule that marked it.
@@ -417,8 +442,8 @@ describe("the guarantees an acceptance_uncovered halt names", () => {
     expect(words).toContain("Ashara can verify 0 of the 2 guarantees of this contract with the checks it can run today.");
   });
 
-  test("a guarantee a check could decide is named as the team's to look into", () => {
-    const words = unverifiedGuarantees(guaranteeTableOf(SWEPT));
+  test("a guarantee a check could decide is named as the team's to look into", async () => {
+    const words = unverifiedGuarantees(await tableOf(SWEPT));
     expect(words).toContain("- G3 (A get of a missing key exits 1.): fail, a check deciding it failed on this commit; a check could decide it, so the team looks into it");
     expect(words).toContain("- G4 (A delete removes the key.): unjudged, only a review of the checks speaks for it, and a review never makes a guarantee pass; a check could decide it, so the team looks into it");
     expect(words).toContain("- G2 (An acknowledged put survives a crash.): unjudged, it is seen only outside what the product's interface shows, and no check Ashara runs reads stored data directly or injects the faults that would show it; Ashara cannot verify it as written");

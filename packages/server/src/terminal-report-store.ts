@@ -13,7 +13,7 @@ type Db = ReturnType<typeof createDb>;
  */
 export function createTerminalReportStore(db: Db): TerminalReportStore {
   return {
-    dueTerminals: () => listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview }),
+    dueTerminals: (kinds) => listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview }, kinds),
     postTerminal: (message) => postTerminalMessage(db, message),
     recordDeliveredFailure: (sweepId, failure) => recordDeliveredReportFailure(db, sweepId, failure),
   };

@@ -7,15 +7,14 @@ import { GuaranteeEvidenceMismatch, GuaranteeEvidenceUnreadable, guaranteeVerdic
 import { StoredRevisionOpsSchema } from "../vision-language/contract-op.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { VisionVersion } from "../vision.js";
-import { ContractRevisionMismatch, GuaranteeVerdictsMismatch } from "../guarantee-report.js";
-import type { ContractRevision, GuaranteeRecords, TableSource, TableVerdicts } from "../guarantee-report.js";
+import type { ContractRevision, GuaranteeRecords, GuaranteeRecordsReader, TableSource, TableVerdicts } from "../guarantee-report.js";
 import { lastTerminalReportId } from "./client-message.js";
 
 // What a terminal message's guarantee table is read from: its sweep, the vision version that sweep's
 // evidence was recorded against and Quality's verdict on each of its guarantees, or, for a message no
 // sweep is on record for, the version in force when it is told; every revision record of the
-// project's contract, for its appendix. The table itself is built and read only where every terminal
-// message is (repositories/terminal-report.ts). The verdicts the message carries are persisted
+// project's contract, for its appendix. The table itself is built only by readGuaranteeTable over these
+// records (repositories/terminal-report.ts reads every terminal's). The verdicts the message carries are persisted
 // through Quality, in the transaction that posts it.
 
 /** A sweep's or a project's records do not hold together as the source of a guarantee table; a retry reads the same. */
@@ -121,25 +120,18 @@ async function recordsWithoutSweep(db: DbHandle, projectId: string): Promise<Gua
   return { kind: "judged", sweep: null, vision, judged, revisions: await revisionsOf(db, projectId) };
 }
 
-/** The records a terminal message's table is read from: its sweep's, or, with none on record for it, its project's vision in force. */
-export async function tableRecordsOf(db: DbHandle, source: TableSource): Promise<GuaranteeRecords> {
-  return source.kind === "sweep" ? guaranteeRecordsOf(db, source.sweepId) : recordsWithoutSweep(db, source.projectId);
-}
-
 /**
- * Whether reading or building a table threw because its records do not hold together (evidence that
- * does not match its version, a version that does not read, a revision record that does not parse or
- * names a guarantee its versions do not hold), which a retry reads the same.
+ * The stored records a terminal message's table is read from: its sweep's, or, with none on record for
+ * it, its project's vision in force. A read is unreadable when its records do not hold together
+ * (evidence that does not match its version, a version that does not read, a revision record that does
+ * not parse), which a retry reads the same.
  */
-export function tableRecordsUnreadable(err: unknown): boolean {
-  return (
-    err instanceof GuaranteeRecordsUnreadable ||
-    err instanceof GuaranteeEvidenceUnreadable ||
-    err instanceof GuaranteeEvidenceMismatch ||
-    err instanceof GuaranteeVerdictsMismatch ||
-    err instanceof ContractRevisionMismatch ||
-    err instanceof VisionUnreadable
-  );
+export function storedGuaranteeRecords(db: DbHandle): GuaranteeRecordsReader {
+  return {
+    records: (source: TableSource) => (source.kind === "sweep" ? guaranteeRecordsOf(db, source.sweepId) : recordsWithoutSweep(db, source.projectId)),
+    unreadable: (err: unknown) =>
+      err instanceof GuaranteeRecordsUnreadable || err instanceof GuaranteeEvidenceUnreadable || err instanceof GuaranteeEvidenceMismatch || err instanceof VisionUnreadable,
+  };
 }
 
 /** Persists a message's verdicts beside it through Quality, inside the transaction that posts it. */

@@ -17,6 +17,7 @@ import { createClientChangeStore } from "@ashara/server/client-change-store";
 import { createClientReceiptStore } from "@ashara/server/client-receipt-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { terminalReportsOf } from "./terminal-reports.js";
 
 // What Ashara can verify of a contract is told to the client before work, never found at acceptance:
 // every contract version that reaches the client states how many of its guarantees Ashara can verify;
@@ -196,8 +197,10 @@ async function noteOn(changeId: string): Promise<string> {
   return row.body;
 }
 
-/** How every message posted while a contract is declined begins its decline. */
+/** How every message posted while a contract is declined begins its decline; at intake its terminal message alone says it. */
 const DECLINE = "Ashara cannot verify any guarantee of this contract as written";
+/** What every intake message on a declined contract says in the decline's place. */
+const NOT_STARTED = "Work has not started on this contract";
 /** What no message posted while a contract is declined may say: each claims work under way or not waiting. */
 const UNDER_WAY = [
   "Work does not wait",
@@ -289,6 +292,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM vision_revisions WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${ours})`);
+  await db.execute(sql`DELETE FROM guarantee_verdicts WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours}) AND in_reply_to IS NOT NULL`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
@@ -297,17 +301,27 @@ afterAll(async () => {
 });
 
 describe("a contract in which Ashara can verify no guarantee", () => {
-  test("drafted at intake is declined: the proposal states 0 verifiable and every message for it carries the decline, never work under way", async () => {
+  test("drafted at intake is declined: the proposal states 0 verifiable, exactly one message tells the decline with the guarantee table, and none says work is under way", async () => {
     const projectId = await readTender(["stored-data", "stored-data"]);
     await rostered(projectId);
 
     const draft = await contractDraftOf(projectId);
-    expect(draft).toMatch(new RegExp(`^This is the contract drafted from your tender, and Ashara declines it as written\\. ${DECLINE}`));
+    expect(draft).toMatch(/^This is the contract drafted from your tender\.\n\n/);
     expect(draft).toContain("Ashara can verify 0 of the 2 guarantees of this contract with the checks it can run today.");
+    const intake = await outboundOf(projectId);
+    expect(intake.map((m) => m.kind).sort()).toEqual(["question", "report"]);
+    for (const { body } of intake) expect(body).toContain(NOT_STARTED);
+
+    expect(await terminalReportsOf(db, (id) => id === projectId, { unswept: true, kinds: ["declined"] }).runPending(["declined"])).toEqual([
+      { kind: "posted", projectId, terminal: "declined" },
+    ]);
     const posted = await outboundOf(projectId);
-    expect(posted.map((m) => m.kind).sort()).toEqual(["question", "report"]);
+    const declines = posted.filter(({ body }) => body.includes(DECLINE));
+    expect(declines).toHaveLength(1);
+    const [decline] = declines;
+    expect(decline?.body).toMatch(/^Ashara declines the contract drafted from your tender as written\./);
+    for (const id of ["G1", "G2"]) expect(decline?.body).toMatch(new RegExp(`^- ${id}: .* \\| verdict: not verified, `, "m"));
     for (const { body } of posted) {
-      expect(body).toContain(DECLINE);
       for (const proceeds of UNDER_WAY) expect(body).not.toContain(proceeds);
     }
     expect(await revisionsOf(projectId)).toEqual([]);
@@ -484,7 +498,7 @@ describe("a drafter's undecided observation", () => {
       { id: "G2", observation: "undecided", verification: "undecided", because: undefined },
     ]);
     const draft = await contractDraftOf(projectId);
-    expect(draft).toContain(DECLINE);
+    expect(draft).toContain(NOT_STARTED);
     expect(draft.match(/Ashara could not tell where you would see it hold or break/g)).toHaveLength(2);
     expect(await workMayStart(projectId)).toEqual({ roster: false, firstPlan: false });
   });

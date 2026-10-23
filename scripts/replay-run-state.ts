@@ -48,7 +48,7 @@ import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
-import { BlockReports, TerminalReports } from "@ashara/engagement";
+import { BlockReports, TERMINAL_KINDS, TerminalReports } from "@ashara/engagement";
 import {
   composedAgain,
   createReplayDatabase,
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
       // backoff kept in the restored step_faults does not hide a report.
       const steps = uncontainedSteps(createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }));
       const notHeld = { kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" } as const;
-      await new TerminalReports(createTerminalReportStore(db), { file: PUBLIC_INTERFACE_FILE, at: async () => notHeld }, steps).runPending();
+      await new TerminalReports(createTerminalReportStore(db), { file: PUBLIC_INTERFACE_FILE, at: async () => notHeld }, steps).runPending(TERMINAL_KINDS);
       await new BlockReports(createBlockReportStore(db), steps).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(

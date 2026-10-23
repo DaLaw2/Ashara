@@ -3,9 +3,10 @@ import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { ClientStops } from "./client-stop.js";
 import type { ClientStopStore } from "./client-stop.js";
-import { guaranteeTableOf } from "./guarantee-report.js";
-import type { GuaranteeRecords } from "./guarantee-report.js";
+import { readGuaranteeTable } from "./guarantee-report.js";
+import type { GuaranteeRecords, GuaranteeTable } from "./guarantee-report.js";
 import type { DueStopReport } from "./stop-report.js";
+import { TERMINAL_KINDS } from "./predicates.js";
 import { TerminalMessage, TerminalReports } from "./terminal-report.js";
 import type { TerminalReportStore } from "./terminal-report.js";
 import { readVisionVersion } from "./vision.js";
@@ -50,20 +51,25 @@ const SWEPT: GuaranteeRecords = {
   revisions: [],
 };
 
+/** The table the records reader builds over `records`, as it builds one over the stored records. */
+async function tableOf(records: GuaranteeRecords): Promise<GuaranteeTable> {
+  return readGuaranteeTable({ records: async () => records, unreadable: () => false }, { kind: "no-sweep", projectId: "fixture" });
+}
+
 const STOP: DueStopReport = { stopId: "stop-1", projectId, merged: [{ title: "Store keys", commit: MAIN, kind: "merged" }], paused: false, accepted: false };
 
 /** The terminal step over one due stop report, returning what it posted. */
 async function postStop(stop: DueStopReport): Promise<TerminalMessage[]> {
   const posted: TerminalMessage[] = [];
   const store: TerminalReportStore = {
-    dueTerminals: async () => [{ kind: "listed", event: { kind: "stopped", projectId, stop }, table: guaranteeTableOf(SWEPT) }],
+    dueTerminals: async () => [{ kind: "listed", event: { kind: "stopped", projectId, stop }, table: await tableOf(SWEPT) }],
     postTerminal: async (message) => {
       posted.push(message);
       return "posted";
     },
     recordDeliveredFailure: async () => expect.unreachable("no delivered report is due"),
   };
-  const outcomes = await new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)).runPending();
+  const outcomes = await new TerminalReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, memoryStepContainment(() => true)).runPending(TERMINAL_KINDS);
   expect(outcomes).toEqual([{ kind: "posted", projectId, terminal: "stopped" }]);
   return posted;
 }
@@ -78,7 +84,7 @@ describe("the stop report", () => {
     const table = body.split("\n\n").find((part) => part.startsWith("Each guarantee of your contract")) ?? "";
     expect(table.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2, 4))).toEqual(["G1", "G2"]);
     expect(body).toContain("- G2: unjudged, no check deciding it ran and passed");
-    expect(verdicts).toEqual(TerminalMessage.of({ kind: "declined", projectId }, guaranteeTableOf(SWEPT)).verdicts);
+    expect(verdicts).toEqual(TerminalMessage.of({ kind: "declined", projectId, visionVersion: 1 }, await tableOf(SWEPT)).verdicts);
     expect(body).not.toContain("accepted");
   });
 

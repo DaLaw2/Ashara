@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
-import { PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
+import { PlanReports, TERMINAL_KINDS, TenderIntake, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -589,8 +589,8 @@ describe("first plan", () => {
 
     const told = () => terminalReportsOf(db, (id) => ourProjects.has(id));
     expect(await reports().runPending()).toEqual([]);
-    expect(await told().runPending()).toEqual([{ kind: "posted", projectId, terminal: "planning-stopped" }]);
-    expect(await told().runPending()).toEqual([]);
+    expect(await told().runPending(TERMINAL_KINDS)).toEqual([{ kind: "posted", projectId, terminal: "planning-stopped" }]);
+    expect(await told().runPending(TERMINAL_KINDS)).toEqual([]);
     const outbound = await outboundOf(projectId);
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.body).toMatch(/could not turn this project's vision into a plan after 3 attempts/);

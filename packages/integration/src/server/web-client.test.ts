@@ -17,7 +17,7 @@ import { z } from "zod";
 import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { SecretRepository } from "@ashara/security";
 import { DevSessionRepository } from "@ashara/workplace";
-import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, TERMINAL_KINDS, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { CLIENT_SESSION_COOKIE, clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
@@ -867,7 +867,7 @@ describe("recorded web-client session", () => {
         openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === project.id),
       }, memoryStepContainment(() => true));
       expect(await liaison.runPending()).toMatchObject([{ kind: "stopped", reportDue: true, projectId: project.id }]);
-      expect(await terminalReportsOf(db, (id) => id === project.id).runPending()).toMatchObject([{ kind: "posted", projectId: project.id, terminal: "stopped" }]);
+      expect(await terminalReportsOf(db, (id) => id === project.id).runPending(TERMINAL_KINDS)).toMatchObject([{ kind: "posted", projectId: project.id, terminal: "stopped" }]);
       const stoppedState = page.locator('#project-state[data-status="stopped"]');
       await stoppedState.waitFor({ timeout: 15_000 });
       expect(await stoppedState.textContent()).toContain("Stopped at your request");

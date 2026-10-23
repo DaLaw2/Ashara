@@ -1,23 +1,24 @@
-import { and, asc, or, sql } from "drizzle-orm";
+import { and, asc, eq, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { isDatabaseConnectionFault, projects } from "@ashara/db";
+import { visionDocuments } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
-import { describeErrorChain, parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { haltEpisodesWhere } from "@ashara/delivery/predicates";
 import { stoppedPlanningsWhere, tasksWithMerge } from "@ashara/delivery/reads";
 import { passedSweepsWhere, sweepOfTerminal } from "@ashara/quality/published-reads";
-import { guaranteeTableOf } from "../guarantee-report.js";
+import { readGuaranteeTable } from "../guarantee-report.js";
 import type { GuaranteeTable, TableSource } from "../guarantee-report.js";
-import { noOpenStop, projectActive, terminalTold, unverifiableContractHeld } from "../predicates.js";
+import { noOpenStop, projectActive, terminalTold, unverifiableContractHeld, type TerminalKind } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import type { MergedTask } from "../stop-report.js";
-import { terminalSubjectId } from "../terminal-report.js";
+import { listEachKind, terminalSubjectId } from "../terminal-report.js";
 import type { DueTerminal, TableNotRead, TerminalMessage } from "../terminal-report.js";
 import { haltReportOf, haltsToldOf, notCoveredByPlanningStoppedReport, reportedEpisode, resumptionTold, type BlockingReviewReader } from "./block-report.js";
-import { dueStopReportMessages, insertOutboundReport, postOnStop, postOnSubject } from "./client-message.js";
+import { dueStopReportMessages, insertOutboundReport, postOnStop, postOnSubject, type ReportOn } from "./client-message.js";
 import { attemptsOf, deliveredAttempts, deliveredReportOf, deliveredRetryDue, passedSweepProject, type SweepOutcomeReader } from "./delivered-report.js";
 import { readRiskRecords } from "./early-warning.js";
-import { insertGuaranteeVerdicts, tableRecordsOf, tableRecordsUnreadable } from "./guarantee-report.js";
+import { insertGuaranteeVerdicts, storedGuaranteeRecords } from "./guarantee-report.js";
 import { tellOnce } from "./told-report.js";
 
 // Every terminal message's due listing, its guarantee table and its post-once write: the one place a
@@ -26,7 +27,8 @@ import { tellOnce } from "./told-report.js";
 // restart between the listing and the post neither tells it twice nor drops it: the delivered report
 // of each passed sweep of an accepted project, the stop report of each stop that stopped its
 // project, the report of each halt, the report of each first planning that stopped, and the decline
-// of each contract Ashara can verify no guarantee of. Each carries the guarantee table of its
+// of each contract version Ashara can verify no guarantee of. Each kind is listed on its own, so one
+// kind's listing that fails leaves every other kind listed. Each carries the guarantee table of its
 // terminal's sweep when one is on record, and otherwise of the project's vision in force, judged on
 // no sweep, so no terminal message waits for evidence.
 
@@ -36,20 +38,9 @@ export interface TerminalReaders {
   readonly blockingReview: BlockingReviewReader;
 }
 
-/**
- * The guarantee table a terminal message carries, built by guaranteeTableOf from its records. Records
- * that do not hold together are the unreadable table, logged at warn with why, so the message still
- * goes out judging nothing; any other failure throws for a retry.
- */
-async function readGuaranteeTable(db: DbHandle, source: TableSource): Promise<GuaranteeTable> {
-  try {
-    return guaranteeTableOf(await tableRecordsOf(db, source));
-  } catch (err) {
-    if (!tableRecordsUnreadable(err)) throw err;
-    const where = source.kind === "sweep" ? `sweep ${source.sweepId}` : `project ${source.projectId}`;
-    console.warn(`[terminal-report] ${where}: its guarantee table cannot be read, so its message judges no guarantee: ${describeErrorChain(err)}`);
-    return guaranteeTableOf({ kind: "unreadable", sweepId: source.kind === "sweep" ? source.sweepId : null });
-  }
+/** The guarantee table a terminal message carries, read from its stored records (readGuaranteeTable). */
+export async function terminalTableOf(db: DbHandle, source: TableSource): Promise<GuaranteeTable> {
+  return readGuaranteeTable(storedGuaranteeRecords(db), source);
 }
 
 /** The table of the terminal's own sweep when one is on record, else of the project's vision in force on no sweep. */
@@ -106,7 +97,7 @@ async function dueStops(db: DbHandle): Promise<Array<DueTerminal | UnreadSubject
     const { projectId } = subject(row);
     const sweepId = await sweepOfTerminal(db, { kind: "stop", stopId: row.stopId });
     const stop = { stopId: row.stopId, projectId, merged: await mergedTasksOf(db, projectId), paused: row.paused === true, accepted: row.accepted };
-    return { kind: "listed", event: { kind: "stopped", projectId, stop }, table: await readGuaranteeTable(db, terminalSource(sweepId, projectId)) };
+    return { kind: "listed", event: { kind: "stopped", projectId, stop }, table: await terminalTableOf(db, terminalSource(sweepId, projectId)) };
   });
 }
 
@@ -136,7 +127,7 @@ async function dueHalts(db: DbHandle, blockingReview: BlockingReviewReader): Pro
       return {
         kind: "listed",
         event: { kind: "halted", projectId: halt.projectId, halt, risk: await readRiskRecords(db, halt.projectId) },
-        table: await readGuaranteeTable(db, terminalSource(sweepId, halt.projectId)),
+        table: await terminalTableOf(db, terminalSource(sweepId, halt.projectId)),
       };
     },
   );
@@ -145,7 +136,7 @@ async function dueHalts(db: DbHandle, blockingReview: BlockingReviewReader): Pro
 /** The sweep's table read on its own, for the acceptance notice; a failure that is not of the records waits for a retry. */
 async function tableOfUnread(db: DbHandle, sweepId: string): Promise<GuaranteeTable | TableNotRead> {
   try {
-    return await readGuaranteeTable(db, { kind: "sweep", sweepId });
+    return await terminalTableOf(db, { kind: "sweep", sweepId });
   } catch (error) {
     // The failed read is kept as the notice's table-not-read, which counts as a failed attempt and is retried.
     return { kind: "not-read", error };
@@ -173,7 +164,7 @@ async function dueDelivered(db: DbHandle, sweepOutcome: SweepOutcomeReader): Pro
     const row = { id: sweep.id, projectId: parseProjectId(sweep.projectId, "acceptance_sweeps.project_id"), mainCommit: sweep.mainCommit, ...attemptsOf(sweep.annotation) };
     try {
       const report = await deliveredReportOf(db, row, sweepOutcome);
-      due.push({ kind: "delivered", report, table: await readGuaranteeTable(db, { kind: "sweep", sweepId: row.id }) });
+      due.push({ kind: "delivered", report, table: await terminalTableOf(db, { kind: "sweep", sweepId: row.id }) });
     } catch (error) {
       // Only a database that could not be reached says nothing of the records, and is retried
       // uncounted; every other failure counts toward the notice sent in the report's place, so one
@@ -201,49 +192,69 @@ async function duePlanningStopped(db: DbHandle): Promise<Array<DueTerminal | Unr
       return {
         kind: "listed",
         event: { kind: "planning-stopped", projectId, attempts: row.attempts, risk: await readRiskRecords(db, projectId) },
-        table: await readGuaranteeTable(db, { kind: "no-sweep", projectId }),
+        table: await terminalTableOf(db, { kind: "no-sweep", projectId }),
       };
     },
   );
 }
 
+/** The table read for a decline is of a later version than the one listed: one written since, which the next listing judges. */
+class DeclinedVersionMoved extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly listed: number,
+    readonly read: number,
+  ) {
+    super(`project ${projectId}: the decline of vision v${listed} read the table of vision v${read}, written since it was listed; it is listed again`);
+    this.name = "DeclinedVersionMoved";
+  }
+}
+
 /**
  * Every project at work or halted whose contract in force Ashara declines (unverifiableContractHeld),
- * its decline untold and no stop awaiting the Liaison, oldest first: the table of its vision in force
- * names each guarantee as not verified by Ashara.
+ * the decline of that version untold and no stop awaiting the Liaison, oldest first: the table of its
+ * vision in force names each guarantee as not verified by Ashara. A version declined and told is not
+ * told again; a later version declined again is.
  */
 async function dueDeclined(db: DbHandle): Promise<Array<DueTerminal | UnreadSubject>> {
   const rows = await db
-    .select({ id: projects.id })
+    .select({ id: projects.id, visionVersion: visionDocuments.version })
     .from(projects)
-    .where(and(projectActive(), unverifiableContractHeld(projects.id), sql`NOT ${terminalTold("declined", projects.id)}`, noOpenStop(projects.id)))
+    .innerJoin(
+      visionDocuments,
+      and(eq(visionDocuments.projectId, projects.id), sql`${visionDocuments.version} = (SELECT max(dvm.version) FROM vision_documents dvm WHERE dvm.project_id = ${projects.id})`),
+    )
+    .where(and(projectActive(), unverifiableContractHeld(projects.id), sql`NOT ${terminalTold("declined", visionDocuments.id)}`, noOpenStop(projects.id)))
     .orderBy(asc(projects.createdAt), asc(projects.id));
   return readEach(
     rows,
     (row) => {
       const projectId = parseProjectId(row.id, "projects.id");
-      return { id: terminalSubjectId({ kind: "declined", projectId }), projectId };
+      return { id: terminalSubjectId({ kind: "declined", projectId, visionVersion: row.visionVersion }), projectId };
     },
     async (row): Promise<DueTerminal> => {
       const projectId = parseProjectId(row.id, "projects.id");
-      return { kind: "listed", event: { kind: "declined", projectId }, table: await readGuaranteeTable(db, { kind: "no-sweep", projectId }) };
+      const table = await terminalTableOf(db, { kind: "no-sweep", projectId });
+      if (table.kind === "table" && table.vision.version !== row.visionVersion) throw new DeclinedVersionMoved(projectId, row.visionVersion, table.vision.version);
+      return { kind: "listed", event: { kind: "declined", projectId, visionVersion: row.visionVersion }, table };
     },
   );
 }
 
 /**
- * Every terminal message owed, of every kind: the one due listing. The stops come first, so a
- * project the client stopped is told its stop report before anything else is listed of it; the
- * delivered reports, each read on its own and kept as unread on any failure, come last.
+ * Every terminal message of `kinds` owed: the one due listing. The stops come first, so a project the
+ * client stopped is told its stop report before anything else is listed of it; the delivered reports,
+ * each read on its own and kept as unread on any failure, come last. Each kind's listing is contained
+ * to it (listEachKind).
  */
-export async function listDueTerminals(db: DbHandle, readers: TerminalReaders): Promise<Array<DueTerminal | UnreadSubject>> {
-  return [
-    ...(await dueStops(db)),
-    ...(await dueHalts(db, readers.blockingReview)),
-    ...(await duePlanningStopped(db)),
-    ...(await dueDeclined(db)),
-    ...(await dueDelivered(db, readers.sweepOutcome)),
-  ];
+export async function listDueTerminals(db: DbHandle, readers: TerminalReaders, kinds: readonly TerminalKind[]): Promise<Array<DueTerminal | UnreadSubject>> {
+  return listEachKind(kinds, {
+    stopped: () => dueStops(db),
+    halted: () => dueHalts(db, readers.blockingReview),
+    "planning-stopped": () => duePlanningStopped(db),
+    declined: () => dueDeclined(db),
+    delivered: () => dueDelivered(db, readers.sweepOutcome),
+  });
 }
 
 /** A delivered report was asked to be posted for a sweep that does not exist or did not pass. */
@@ -266,8 +277,8 @@ class StopNotFound extends Error {
  * Posts a terminal message with its table's verdicts and records its subject told, in one
  * transaction, so a retried, concurrent or restarted post tells the client once: a delivered
  * report or acceptance notice once per sweep and a halt's report once per episode by their told
- * records; the stop report (in reply to the stop), the planning-stopped report and the decline once
- * per project by the unique index on (project_id, reports_on).
+ * records; the stop report (in reply to the stop) and the planning-stopped report once per project,
+ * and the decline once per vision version, by the unique indexes on the project's reports.
  */
 export async function postTerminalMessage(db: DbHandle, message: TerminalMessage): Promise<"posted" | "already-posted"> {
   const { subject, body, verdicts } = message;
@@ -299,9 +310,9 @@ export async function postTerminalMessage(db: DbHandle, message: TerminalMessage
       });
     case "planning-stopped":
     case "declined": {
-      const reportsOn = subject.kind === "declined" ? REPORT_SUBJECT.declined : REPORT_SUBJECT.planningStopped;
+      const on: ReportOn = subject.kind === "declined" ? { reportsOn: REPORT_SUBJECT.declined, visionVersion: subject.visionVersion } : { reportsOn: REPORT_SUBJECT.planningStopped };
       return db.transaction(async (tx): Promise<"posted" | "already-posted"> => {
-        const reportId = await postOnSubject(tx, { projectId: subject.projectId, body, inReplyTo: null, reportsOn }, "skip");
+        const reportId = await postOnSubject(tx, { projectId: subject.projectId, body, inReplyTo: null, ...on }, "skip");
         if (reportId === null) return "already-posted";
         await insertGuaranteeVerdicts(tx, subject.projectId, reportId, verdicts);
         return "posted";

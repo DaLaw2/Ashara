@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
-import { ClientMessageRepository, ClientStops, TerminalMessage, VisionRepository } from "@ashara/engagement";
+import { ClientMessageRepository, ClientStops, TERMINAL_KINDS, TerminalMessage, VisionRepository, terminalTableOf } from "@ashara/engagement";
 import type { ClientStopStore, TerminalReportStore } from "@ashara/engagement";
 import { UnreadSubject } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
@@ -100,7 +100,7 @@ function carriesTheTable(message: z.infer<typeof MessageRows>[number]): void {
 
 /** One run of the terminal step over this suite's projects, each terminal's sweep recorded first. */
 async function terminalStep() {
-  return terminalReportsOf(db, ours).runPending();
+  return terminalReportsOf(db, ours).runPending(TERMINAL_KINDS);
 }
 
 beforeAll(async () => {
@@ -231,6 +231,73 @@ describe("every kind of terminal reaches the client as exactly one message carry
   });
 });
 
+/**
+ * Appends vision v`version` to `projectId`, a copy of its declined v1 as a restatement by the client
+ * writes it: still declined when `declined`, else with every guarantee observed in its output and
+ * unmarked, so Ashara can verify it.
+ */
+async function restate(projectId: ProjectId, version: number, declined: boolean): Promise<void> {
+  const guarantees = declined
+    ? sql`guarantees`
+    : sql`(SELECT jsonb_agg(jsonb_set(g - 'verification' - 'unverifiableBecause', '{observable,observation}', '"output"')) FROM jsonb_array_elements(guarantees) g)`;
+  await db.execute(sql`
+    INSERT INTO vision_documents (project_id, version, vision_text, summary, inferences, contract_form, interface, guarantees, exclusions, change_reason)
+    SELECT project_id, ${version}, vision_text, summary, inferences, contract_form, interface, ${guarantees}, exclusions, 'restated by the test'
+    FROM vision_documents WHERE project_id = ${projectId} AND version = 1`);
+}
+
+const DeclineRows = z.array(z.object({ version: z.number() }));
+
+describe("a decline is told once per vision version", () => {
+  test("declined, restated into a contract Ashara can verify, then declined again: two declines, one per version, each with its table", async () => {
+    const projectId = await newProject();
+    await writeContract(projectId, true);
+    expect(await terminalStep()).toEqual([{ kind: "posted", projectId, terminal: "declined" }]);
+
+    await restate(projectId, 2, false);
+    expect(await terminalStep()).toEqual([]);
+
+    await restate(projectId, 3, true);
+    expect(await terminalStep()).toEqual([{ kind: "posted", projectId, terminal: "declined" }]);
+    expect(await terminalStep()).toEqual([]);
+
+    const [first, second, ...rest] = await messagesOf(projectId);
+    expect(rest).toEqual([]);
+    expect(first?.body).toMatch(/^Ashara declines the contract drafted from your tender as written\./);
+    expect(second?.body).toMatch(/^Ashara declines your contract as it stands in vision v3\./);
+    for (const message of [first, second]) carriesTheTable(message ?? expect.unreachable("two declines"));
+    const versions = await db.execute(sql`SELECT reports_on_version AS version FROM client_messages
+      WHERE project_id = ${projectId} AND reports_on = 'declined' ORDER BY created_at, id`);
+    expect(DeclineRows.parse(versions.rows).map((row) => row.version)).toEqual([1, 3]);
+  });
+
+  test("a second decline of one version is refused by the unique index on the project's declines", async () => {
+    const projectId = await newProject();
+    await writeContract(projectId, true);
+    expect(await terminalStep()).toEqual([{ kind: "posted", projectId, terminal: "declined" }]);
+    const again = sql`INSERT INTO client_messages (project_id, direction, kind, body, reports_on, reports_on_version)
+      VALUES (${projectId}, 'outbound', 'report', 'Declined again.', 'declined', 1)`;
+    await expect(db.execute(again)).rejects.toThrow();
+    const unversioned = sql`INSERT INTO client_messages (project_id, direction, kind, body, reports_on)
+      VALUES (${projectId}, 'outbound', 'report', 'Declined, no version.', 'declined')`;
+    await expect(db.execute(unversioned)).rejects.toThrow();
+    expect(await messagesOf(projectId)).toHaveLength(1);
+  });
+});
+
+describe("a guarantee table is built only by Engagement's records reader", () => {
+  test("Engagement exports no other builder of a table, and a hand-made table is refused by the type of every terminal message", async () => {
+    const engagement = await import("@ashara/engagement");
+    expect(Object.keys(engagement)).not.toContain("guaranteeTableOf");
+    const projectId = await newProject();
+    const event = { kind: "declined", projectId, visionVersion: 1 } as const;
+    // @ts-expect-error a table no records reader built carries no brand, so no terminal message takes it
+    const handMade: Parameters<typeof TerminalMessage.of>[1] = { kind: "unreadable", sweepId: null };
+    expect(TerminalMessage.of(event, await terminalTableOf(db, { kind: "no-sweep", projectId })).body).toContain("No contract is on record for this project");
+    expect(handMade.kind).toBe("unreadable");
+  });
+});
+
 type Due = Awaited<ReturnType<TerminalReportStore["dueTerminals"]>>[number];
 
 /** The message the step would post for a listed terminal, built from the listing alone. */
@@ -244,7 +311,7 @@ function messageOf(due: Due): TerminalMessage {
 /** The terminals one connection lists of `projects`, each terminal's sweep recorded first. */
 async function dueOn(handle: ReturnType<typeof createDb>, projects: ReadonlySet<string>): Promise<Due[]> {
   await sweepTerminalsOf(handle, (id) => projects.has(id));
-  return (await createTerminalReportStore(handle).dueTerminals()).filter((due) => projects.has(dueProjectOf(due)));
+  return (await createTerminalReportStore(handle).dueTerminals(TERMINAL_KINDS)).filter((due) => projects.has(dueProjectOf(due)));
 }
 
 describe("the one due listing", () => {
@@ -288,7 +355,7 @@ describe("the one due listing", () => {
     try {
       expect((await dueOn(after, projects)).map(dueProjectOf).sort()).toEqual([...projectIds].sort());
       // The restarted process posts each once; the message the ended process listed is told already.
-      expect((await terminalReportsOf(after, (id) => projects.has(id)).runPending()).map((outcome) => outcome.kind)).toEqual(["posted", "posted", "posted", "posted"]);
+      expect((await terminalReportsOf(after, (id) => projects.has(id)).runPending(TERMINAL_KINDS)).map((outcome) => outcome.kind)).toEqual(["posted", "posted", "posted", "posted"]);
       const store = createTerminalReportStore(after);
       for (const message of listed) expect(await store.postTerminal(message)).toBe("already-posted");
       expect(await dueOn(after, projects)).toEqual([]);

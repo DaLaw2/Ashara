@@ -1,4 +1,4 @@
-import { VisionChangeRefused, VisionUnreadable, plannedBehaviourKeys, readVisionVersion, recordPlannedBehaviour, restartClientReadings } from "@ashara/engagement";
+import { TERMINAL_KINDS, VisionChangeRefused, VisionUnreadable, plannedBehaviourKeys, readVisionVersion, recordPlannedBehaviour, restartClientReadings } from "@ashara/engagement";
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
 import type { AgentBrief } from "@ashara/workplace";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
@@ -39,7 +39,11 @@ export type {
   LiaisonStackChoices,
   TaskQuestion,
   TaskQuestionPosting,
+  TerminalKind,
 } from "@ashara/engagement";
+
+// The kinds of terminal message the loop asks the Liaison to tell, each where it can become due.
+export { TERMINAL_KINDS };
 
 // The behaviour a plan adds beyond what the contract states is recorded on it, in the plan's own
 // transaction, as Engagement's Inferred assumptions under the keys plannedBehaviourKeys gave the plan.

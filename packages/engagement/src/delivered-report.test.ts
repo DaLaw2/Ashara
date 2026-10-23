@@ -2,8 +2,9 @@ import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import type { DeliveredReportFailureRecord, DueDeliveredReport, ProductInterfaceSource, UnreadDeliveredReport } from "./delivered-report.js";
-import { guaranteeTableOf } from "./guarantee-report.js";
-import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { readGuaranteeTable } from "./guarantee-report.js";
+import type { GuaranteeRecords, GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
+import { TERMINAL_KINDS } from "./predicates.js";
 import { TerminalReports } from "./terminal-report.js";
 import type { DueTerminal, TerminalReportStore } from "./terminal-report.js";
 
@@ -39,8 +40,13 @@ type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceRe
 };
 const ONE_RUN: Due["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
 
+/** The table the records reader builds over `records`, as it builds one over the stored records. */
+async function tableOf(records: GuaranteeRecords): Promise<GuaranteeTable> {
+  return readGuaranteeTable({ records: async () => records, unreadable: () => false }, { kind: "no-sweep", projectId: "fixture" });
+}
+
 /** A table with no contract behind it; guarantee-report.test.ts judges the table's own text. */
-const NO_CONTRACT: GuaranteeTable = guaranteeTableOf({ kind: "no-contract", sweep: { id: "s9", mainCommit: MAIN } });
+const NO_CONTRACT: GuaranteeTable = await tableOf({ kind: "no-contract", sweep: { id: "s9", mainCommit: MAIN } });
 
 const WORKSPACE = "/work/target";
 const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
@@ -68,7 +74,7 @@ async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }):
       },
     },
   );
-  expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
+  expect(await reports.runPending(TERMINAL_KINDS)).toEqual([{ kind: "posted", projectId, terminal: "delivered" }]);
   expect(posted).toHaveLength(1);
   expect(reads).toEqual([`${WORKSPACE}@${due.mainCommit}`]);
   return posted[0];
@@ -326,7 +332,7 @@ describe("a delivered report that fails is its own project's", () => {
   test("a report that cannot be rendered from what was read is that project's: counted toward the notice, the other project's posted", async () => {
     const { reports, posted, failures } = store([due("s-bad", otherId, UNRENDERABLE, 0), due("s-ok", projectId, WORKSPACE, 0)]);
 
-    expect((await reports.runPending()).map((o) => [o.kind, o.projectId])).toEqual([
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => [o.kind, o.projectId])).toEqual([
       ["failed", otherId],
       ["posted", projectId],
     ]);
@@ -344,13 +350,13 @@ describe("a delivered report that fails is its own project's", () => {
       },
       { file: INTERFACE_FILE, at: async () => ({ kind: "absent" }) },
     );
-    await expect(reports.runPending()).rejects.toMatchObject({ name: "DeliveredReportFailureUnrecorded" });
+    await expect(reports.runPending(TERMINAL_KINDS)).rejects.toMatchObject({ name: "DeliveredReportFailureUnrecorded" });
   });
 
   test("two projects, one whose interface file git cannot read: the other is posted, the failure recorded with a backoff", async () => {
     const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 0), due("s-ok", projectId, WORKSPACE, 0)]);
 
-    const outcomes = await reports.runPending();
+    const outcomes = await reports.runPending(TERMINAL_KINDS);
 
     expect(outcomes.map((o) => [o.kind, o.projectId])).toEqual([
       ["failed", otherId],
@@ -367,7 +373,7 @@ describe("a delivered report that fails is its own project's", () => {
     const unread: Listed = { kind: "unread", cause: "record", failures: 2, recordFailures: 2, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
     const { reports, posted, failures } = store([unread, due("s-ok", projectId, WORKSPACE, 0)]);
 
-    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed", "posted"]);
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => o.kind)).toEqual(["failed", "posted"]);
     expect(posted.map((p) => p.sweepId)).toEqual(["s-ok"]);
     expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, recordUnread: true, retryAfterSeconds: 240 }]);
   });
@@ -376,7 +382,7 @@ describe("a delivered report that fails is its own project's", () => {
     const unread: Listed = { kind: "unread", cause: "record", failures: 4, recordFailures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
     const { reports, posted, failures } = store([unread]);
 
-    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => o.kind)).toEqual(["posted"]);
     expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, recordUnread: true, retryAfterSeconds: null }]);
     expect(posted[0]?.body).toBe(
       `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
@@ -391,7 +397,7 @@ describe("a delivered report that fails is its own project's", () => {
     const unread: Listed = { kind: "unread", cause: "record", failures: 4, recordFailures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
     const { reports, posted, failures } = store([unread], "posts", "lost");
 
-    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => o.kind)).toEqual(["failed"]);
     expect(posted).toEqual([]);
     expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("Connection terminated"), interfaceRead: false, recordUnread: false, retryAfterSeconds: expect.any(Number) }]);
   });
@@ -400,7 +406,7 @@ describe("a delivered report that fails is its own project's", () => {
     const lost: Listed = { kind: "unread", cause: "connection", failures: 9, recordFailures: 0, sweepId: "s-lost", projectId: otherId, error: new Error("Connection terminated unexpectedly") };
     const { reports, posted, failures } = store([lost]);
 
-    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => o.kind)).toEqual(["failed"]);
     expect(posted).toEqual([]);
     expect(failures).toEqual([{ sweepId: "s-lost", error: expect.stringContaining("Connection terminated"), interfaceRead: false, recordUnread: false, retryAfterSeconds: 3600 }]);
   });
@@ -408,7 +414,7 @@ describe("a delivered report that fails is its own project's", () => {
   test("past its bound of failed reads, the report is posted saying the file could not be read and where the error is kept", async () => {
     const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 2)]);
 
-    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => o.kind)).toEqual(["posted"]);
     expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, recordUnread: false, retryAfterSeconds: null }]);
     expect(howToRun(posted[0]?.body ?? "")).toBe(
       `How to run the product is not quoted: ${INTERFACE_FILE} on main at commit ${MAIN} could not be read in 3 attempts. ` +
@@ -420,7 +426,7 @@ describe("a delivered report that fails is its own project's", () => {
   test("failures of other kinds do not count against the interface file's reads: one failed read is retried, never posted without the quote", async () => {
     const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 4, 0)]);
 
-    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+    expect((await reports.runPending(TERMINAL_KINDS)).map((o) => o.kind)).toEqual(["failed"]);
     expect(posted).toEqual([]);
     expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, recordUnread: false, retryAfterSeconds: 960 }]);
   });
@@ -428,7 +434,7 @@ describe("a delivered report that fails is its own project's", () => {
   test("a post that fails after the reads ran out counts one failed attempt, the attempt the log names", async () => {
     const { reports, failures } = store([due("s-broken", otherId, BROKEN, 2)], "fails");
 
-    const [outcome] = await reports.runPending();
+    const [outcome] = await reports.runPending(TERMINAL_KINDS);
 
     if (outcome?.kind !== "failed") return expect.unreachable("the post did not fail");
     expect(failures.map((f) => [f.interfaceRead, f.retryAfterSeconds])).toEqual([

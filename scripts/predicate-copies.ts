@@ -12,17 +12,19 @@
  * rest of that file is read. A line whose first non-blank characters open a comment (`//`, `/*`,
  * `*`) is not read: prose that names a rule decides nothing. A pattern is matched against the file's
  * text as a whole, so the work-item status patterns, which may cross a line break, catch a list, a
- * chain or an inline subset split across lines, and the latest-revision pattern reads a SQL template
- * literal whole; a copy is reported at the line it starts on.
+ * chain or an inline subset split across lines, the latest-revision pattern reads a SQL template
+ * literal whole, and a report subject is caught across the line break between the column and the
+ * comparison that names it, never across anything else; a copy is reported at the line it starts on.
  *
  * Blind spots, each a copy this check passes:
  * - A copy spelled in another shape: a different alias or quoting, a literal built from pieces, a
  *   rule restated through a column the patterns do not name, or a cross-context predicate split across
- *   lines (only the work-item status and latest-revision patterns cross a line break).
+ *   lines (only the work-item status, latest-revision and report subject patterns cross a line break).
  * - A latest revision whose max() and `FROM task_checks` an interpolation holding a backtick separates.
  * - A rule no pattern below names; only the shapes listed here are enumerated.
  * - A report subject's literal that reaches the column through a name the patterns do not read, such
- *   as a function argument (`unreported("planning-stopped")`) or a constant not named *subject*.
+ *   as a function argument (`unreported("planning-stopped")`) or a constant not named *subject*, or
+ *   one compared after anything but a comparison (`reports_on IS NOT NULL AND ... = 'declined'`).
  * - Comparison inside the owner itself is not checked: an owner may spell its rule twice.
  * - A list of work-item statuses whose literals are not adjacent (`["Pending", x, "Failed"]`), a
  *   chain of comparisons on a name other than `status`, or a chain whose comparisons a `;`, `{` or
@@ -32,6 +34,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { WORK_ITEM_STATUSES } from "@ashara/delivery/work-item";
+import { REPORT_SUBJECTS } from "@ashara/engagement/report-subjects";
 
 interface PredicateRule {
   readonly name: string;
@@ -62,6 +65,8 @@ const STATUS_COMPARISON = `\\bstatus\\b['"]?\\s*(?:===|!==|==|!=|=|<>)\\s*${STAT
 /** The vocabulary or a half of it, not a subset the language names. */
 const STATUS_PARTITION = "\\b(?:OPEN_|SETTLED_)?WORK_ITEM_STATUSES";
 const ENGAGEMENT_REPORT_SUBJECTS = "packages/engagement/src/report-subjects.ts";
+/** Every subject a report is on, from Engagement's one vocabulary, so no subject is left out of the patterns. */
+const REPORT_SUBJECT_LITERAL = `['"\`](?:${REPORT_SUBJECTS.join("|")})['"\`]`;
 const QUALITY_STORED_CHECKS = "packages/quality/src/stored-checks.ts";
 /** Model Access's catalog: read by Model Access itself (its catalog repository loads it at boot) and by Finance in front of it. */
 const MODEL_CATALOG_OWNERS = ["packages/model-access/src/", "packages/finance/src/"];
@@ -151,11 +156,12 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
   {
     name: "a report subject (client_messages.reports_on)",
     owners: [ENGAGEMENT_REPORT_SUBJECTS],
-    // A literal a report's subject is compared with, stored as or named by; the same words name the
-    // core loop's contained steps (shared ContainedStep), which are another vocabulary and not read.
+    // A literal a report's subject is compared with, stored as or named by, the column and the
+    // comparison only whitespace apart; the same words name the core loop's contained steps (shared
+    // ContainedStep), which are another vocabulary and not read.
     patterns: [
-      /reports_?[oO]n\b[^`;]*?['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/,
-      /\bsubject\w*\s*(?:===?|!==?|=|:)\s*['"`](?:first-plan|planning-stopped|client-stop|contract-draft|stack-choice)['"`]/i,
+      new RegExp(`reports_?[oO]n\\b['"]?\\s*(?:===?|!==?|<>|=|:|,|\\b(?:IN|in)\\s*\\()\\s*${REPORT_SUBJECT_LITERAL}`),
+      new RegExp(`\\bsubject\\w*\\s*(?:===?|!==?|=|:)\\s*${REPORT_SUBJECT_LITERAL}`, "i"),
       /\b(?:type|interface)\s+PlanReportSubject\b/,
     ],
     use: "REPORT_SUBJECT or PlanReportSubject from @ashara/engagement/report-subjects",

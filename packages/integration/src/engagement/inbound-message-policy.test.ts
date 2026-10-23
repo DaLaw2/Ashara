@@ -14,10 +14,11 @@ import {
   consumeTenderWithoutIntake,
   createProjectWithTender,
   TerminalReports,
-  guaranteeTableOf,
+  TERMINAL_KINDS,
   inboundDecision,
   listDueReceipts,
   listDueTerminals,
+  terminalTableOf,
   listOpenAnswers,
   listUnconsumedChanges,
   listUnconsumedStops,
@@ -174,7 +175,7 @@ async function receiptStandingUnder(state: SetState): Promise<{ readonly change:
 
 /** Whether the halt report listed for each project under a `halt` halt says its first vision is written. */
 async function haltReportVisionUnder(halt: HaltKind): Promise<{ readonly project: boolean | undefined; readonly bare: boolean | undefined }> {
-  const due = await under({ lifecycle: "active", halt }, (tx) => listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }));
+  const due = await under({ lifecycle: "active", halt }, (tx) => listDueTerminals(tx, { sweepOutcome: readSweepOutcome, blockingReview: async () => null }, TERMINAL_KINDS));
   const written = (projectId: ProjectId): boolean | undefined => {
     for (const each of due) {
       if ("kind" in each && each.kind === "listed" && each.event.kind === "halted" && each.event.projectId === projectId) return each.event.halt.visionWritten;
@@ -539,7 +540,7 @@ function dueHalt(halt: HaltKind, visionWritten: boolean): DueHalt {
 async function haltReportBody(due: DueHalt): Promise<string> {
   const bodies: string[] = [];
   const risk = { kind: "read", version: { guarantees: [], assumptions: [] }, standing: { tasks: [], decided: [], burnZone: null } } as const;
-  const table = guaranteeTableOf({ kind: "no-contract", sweep: null });
+  const table = await terminalTableOf(db, { kind: "no-sweep", projectId: randomUUID() });
   await new TerminalReports(
     {
       dueTerminals: async () => [{ kind: "listed", event: { kind: "halted", projectId: due.projectId, halt: due, risk }, table }],
@@ -551,7 +552,7 @@ async function haltReportBody(due: DueHalt): Promise<string> {
     },
     { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) },
     memoryStepContainment(() => false),
-  ).runPending();
+  ).runPending(TERMINAL_KINDS);
   return bodies[0] ?? "";
 }
 

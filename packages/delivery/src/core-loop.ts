@@ -1,6 +1,7 @@
 import { parseProjectId } from "@ashara/shared";
 import type { Logger, ProjectId } from "@ashara/shared";
-import type { AnswerOutcome, ClientChangeOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
+import { TERMINAL_KINDS } from "./acl/engagement-acl.js";
+import type { AnswerOutcome, ClientChangeOutcome, IntakeOutcome, TerminalKind } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";
 import type { ReplanOutcome } from "./replan-port.js";
@@ -16,6 +17,14 @@ import { deploymentCapCause, projectBlockCause, projectCapCause, projectWorkCaus
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
+
+// The kinds of terminal message each point of a full cycle tells, each where it can become due: a stop
+// or a halt once its terminal sweep is recorded, carried into the cycle; a first planning that stopped
+// and a declined contract version after the steps that write them; a delivered report after the
+// acceptance sweeps. Each kind is told at one point of a full cycle, and every kind as the cap halts it.
+const CARRIED_TERMINALS: readonly TerminalKind[] = ["stopped", "halted"];
+const PLANNED_TERMINALS: readonly TerminalKind[] = ["planning-stopped", "declined"];
+const ACCEPTED_TERMINALS: readonly TerminalKind[] = ["delivered"];
 
 /** Failures are logged at warn by the Liaison itself, with their attempt count. */
 function logIntake(logger: Logger, outcome: IntakeOutcome): void {
@@ -242,11 +251,11 @@ export class CoreLoop {
     // record when it is told.
     const terminal = await this.sweepTerminals();
     if (terminal !== null) return this.haltAtCap(terminal);
-    // Every terminal message owed: a stop's, a halt's recorded in an earlier cycle (or before a
-    // restart), an acceptance recorded before a restart or before the cap stopped the loop, a first
-    // planning that stopped and a declined contract. No LLM call, so before the spend-cap check: a
-    // project the budget cap halted is told so.
-    const terminalReports = await this.postTerminalReports();
+    // The stop and halt messages owed: a stop's taken above, a halt's recorded in an earlier cycle (or
+    // before a restart), each after its terminal sweep. No LLM call, so before the spend-cap check: a
+    // project the budget cap halted is told so. Every other kind is told where it can become due below,
+    // and every kind as the cap halts the cycle.
+    const terminalReports = await this.postTerminalReports(CARRIED_TERMINALS);
     if (terminalReports !== null) return this.haltAtCap(terminalReports);
 
     // A project's return to work, once its halt is told: one plain report each to the client.
@@ -328,8 +337,9 @@ export class CoreLoop {
     for (const outcome of replans.outcomes) logReplan(deps.loop.logger, outcome);
     const planReports = await this.postPlanReports();
     if (planReports !== null) return this.haltAtCap(planReports);
-    // A first planning that stopped this cycle is told now, with the guarantee table.
-    const planningStopped = await this.postTerminalReports();
+    // A first planning that stopped, and a contract version Ashara declines that intake, an answer or a
+    // change wrote, are told now, with the guarantee table.
+    const planningStopped = await this.postTerminalReports(PLANNED_TERMINALS);
     if (planningStopped !== null) return this.haltAtCap(planningStopped);
 
     // Every Blocked task takes its exit (Completed, Pending or given up) before the gate reads them.
@@ -350,7 +360,7 @@ export class CoreLoop {
     // and told so, or a defect whose repair the next cycle's replanning plans.
     const swept = await this.step("acceptance", () => runAcceptanceSweeps({ ...deps.sweeps, projectRepo: deps.loop.projectRepo, eventStore: deps.loop.eventStore, containment: deps.loop.containment, logger: deps.loop.logger }));
     if (swept.kind === "stop") return this.haltAtCap(swept.stop);
-    const deliveredAfterSweep = await this.postTerminalReports();
+    const deliveredAfterSweep = await this.postTerminalReports(ACCEPTED_TERMINALS);
     if (deliveredAfterSweep !== null) return this.haltAtCap(deliveredAfterSweep);
 
     const gated = await this.step("gate", () => PlanningService.gate(deps.loop.workItemRepo, deps.loop.projectRepo, deps.loop.eventStore, deps.loop.containment, deps.loop.logger));
@@ -572,7 +582,7 @@ export class CoreLoop {
     // A report whose post faulted is contained to its project and retried after a backoff, and a plan
     // written in the cycle that reached the cap is reported after its halt's message; no full cycle
     // runs again in this process, so both are here. No report makes an LLM call.
-    await this.postTerminalReports();
+    await this.postTerminalReports(TERMINAL_KINDS);
     await this.postBlockReports();
     await this.postPlanReports();
   }
@@ -645,12 +655,12 @@ export class CoreLoop {
   }
 
   /**
-   * Every terminal message owed, each posted once through the Liaison's one terminal step; one whose
-   * post failed is logged at warn by the Liaison and retried, and the cycle goes on. The deployment
-   * cap's stop when a refusal named it, else null.
+   * Every terminal message of `kinds` owed, each posted once through the Liaison's one terminal step;
+   * one whose post failed is logged at warn by the Liaison and retried, and the cycle goes on. The
+   * deployment cap's stop when a refusal named it, else null.
    */
-  private async postTerminalReports(): Promise<LoopStop | null> {
-    const reports = await this.step("terminal-report", () => this.deps.reporting.terminalReports.runPending());
+  private async postTerminalReports(kinds: readonly TerminalKind[]): Promise<LoopStop | null> {
+    const reports = await this.step("terminal-report", () => this.deps.reporting.terminalReports.runPending(kinds));
     if (reports.kind === "stop") return reports.stop;
     for (const report of reports.kind === "ran" ? reports.value : []) {
       if (report.kind === "posted" || report.kind === "already-posted") {
@@ -703,7 +713,7 @@ export class CoreLoop {
     }
     // The loop stops here on `stop`: a stop the sweeps' or the reports' step returns is the cap's too.
     await this.sweepTerminals();
-    await this.postTerminalReports();
+    await this.postTerminalReports(TERMINAL_KINDS);
     await this.postBlockReports();
     await this.postReceipts("stopped-at-cap");
     return stopped(stop);

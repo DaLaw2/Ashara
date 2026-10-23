@@ -73,8 +73,10 @@ function answering(reply: (call: number) => unknown, prompts: string[] = []): Co
 
 const RATIONALE = "The tender implies it.";
 
-/** How every message posted for a contract Ashara declines begins its decline. */
+/** How the decline of a contract begins: its terminal message says it, once, so no intake message does. */
 const DECLINE = "Ashara cannot verify any guarantee of this contract as written";
+/** What every intake message on a contract Ashara declines says in its place: work has not started, and where the client is told why. */
+const NOT_STARTED = "Work has not started on this contract: Ashara's decline of it, sent with its guarantee table, says why and what starts work.";
 /** What no message posted while a contract is declined may say: each claims work under way or not waiting. */
 const UNDER_WAY = ["Work does not wait", "work proceeds", "Work proceeds", "Work has started", "nothing waits"];
 
@@ -437,15 +439,15 @@ describe("TenderIntake contract draft", () => {
     expect(draft).not.toContain("Ashara cannot verify any guarantee");
   });
 
-  test("a contract Ashara can verify no guarantee of is declined: the draft and every question say so, and none reads as work under way", async () => {
+  test("a contract Ashara can verify no guarantee of is declined by its terminal message alone: the draft and every question say work has not started, never the decline, and none reads as work under way", async () => {
     const unverifiable = { ...reply, guarantees: reply.guarantees.map((g) => ({ ...g, observable: { ...g.observable, observation: g.id === "G1" ? "stored-data" : "undecided" } })) };
     const write = await intakeOf(unverifiable);
-    expect(write.contractDraft).toMatch(/^This is the contract drafted from your tender, and Ashara declines it as written\. Ashara cannot verify any guarantee of this contract as written/);
+    expect(write.contractDraft).toMatch(/^This is the contract drafted from your tender\.\n\n/);
     expect(write.contractDraft).toContain("Ashara can verify 0 of the 3 guarantees of this contract with the checks it can run today.");
-    expect(write.contractDraft).toContain("confirming it as written does not start it.");
     expect(write.questions).toHaveLength(1);
     for (const message of [write.contractDraft, ...write.questions]) {
-      expect(message).toContain(DECLINE);
+      expect(message).toContain(NOT_STARTED);
+      expect(message).not.toContain(DECLINE);
       for (const proceeds of UNDER_WAY) expect(message).not.toContain(proceeds);
     }
   });
@@ -799,8 +801,9 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
     expect(write?.readingReport).toContain("no second reading of it could be had to confirm that, so that reading is unconfirmed. Work proceeds on it.");
   });
 
-  // A declined contract's reading report says what the reading found and then the decline, whatever the
-  // second reading did: no message posted while the contract is declined says work proceeds.
+  // A declined contract's reading report says what the reading found and that work has not started,
+  // whatever the second reading did, leaving the decline to its terminal message: no message posted
+  // while the contract is declined says work proceeds.
   test.each([
     ["confirmed", () => ({ data: { questions: [] }, provider: "openai", model: "gpt" })],
     ["questions-raised", () => ({ data: { questions: [QUESTION] }, provider: "openai", model: "gpt" })],
@@ -811,19 +814,20 @@ describe("TenderIntake second reading of a reading that asks nothing", () => {
         throw new SchemaValidationError(["scripted failure"], null);
       },
     ],
-  ] as const)("on a contract Ashara declines, a reading %s is reported with the decline, never as work under way", async (kind, second) => {
+  ] as const)("on a contract Ashara declines, a reading %s is reported as not started, never as work under way nor with the decline", async (kind, second) => {
     const declined = { ...lazy, guarantees: lazy.guarantees.map((g) => ({ ...g, observable: { ...g.observable, observation: "stored-data" } })) };
     const { outcome, write } = await intakeWith(declined, second);
     expect(outcome).toMatchObject({ kind: "recorded", confirmation: kind });
     const messages = [write?.readingReport ?? "", write?.contractDraft ?? "", ...(write?.questions ?? [])];
     expect(messages[0]).not.toBe("");
     for (const message of messages) {
-      expect(message).toContain(DECLINE);
+      expect(message).toContain(NOT_STARTED);
+      expect(message).not.toContain(DECLINE);
       for (const proceeds of UNDER_WAY) expect(message).not.toContain(proceeds);
     }
     // The same reading on a contract Ashara can verify reads as work under way: the decline alone changes the report.
     const kept = await intakeWith(lazy, second);
-    expect(kept.write?.readingReport).not.toContain(DECLINE);
+    expect(kept.write?.readingReport).not.toContain(NOT_STARTED);
   });
 
   test("a second reading answered by a model of another strength confirms nothing: the intake faults on Ashara's side, uncounted", async () => {

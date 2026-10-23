@@ -67,6 +67,8 @@ export const clientMessages = pgTable(
     intakeLastFailure: text("intake_last_failure"),
     // The planning outcome an outbound report tells the client about.
     reportsOn: varchar("reports_on", { length: 20 }),
+    // On a decline: the vision version it declines, so each version is declined once; null on every other row.
+    reportsOnVersion: integer("reports_on_version"),
     // An outbound question's 1-based rank among those posted with it.
     position: integer(),
     // On the inbound stop that moved its project to 'stopped': whether Delivery had it halted then.

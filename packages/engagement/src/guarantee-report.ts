@@ -1,4 +1,5 @@
 import type { EvidenceClass, GuaranteeVerdict, JudgedSweep, JudgedVerdicts, ReportVerdicts, UnjudgedReason, Verdict } from "@ashara/quality/published-verdicts";
+import { describeErrorChain } from "@ashara/shared";
 import type { VisionGuarantee } from "./vision-language/index.js";
 import type { Direction, RevisionOp } from "./vision-language/contract-op.js";
 import { OBSERVATION_UNDECIDED, verifiableByAshara, verifiableCountLine, whyNotVerifiable } from "./vision-language/guarantee.js";
@@ -82,17 +83,17 @@ interface UnreadableRecords {
 /** Where a terminal message's table is read from: its sweep, or, with none on record for it, its project's vision in force. */
 export type TableSource = { readonly kind: "sweep"; readonly sweepId: string } | { readonly kind: "no-sweep"; readonly projectId: string };
 
-/** Marks a table guaranteeTableOf built; no other module can name it, so no other module can make a table. */
+/** Marks a table readGuaranteeTable built; no other module can name it, so no other module can make a table. */
 const BUILT = Symbol("guarantee-table");
 
 /**
  * The table a terminal message carries; or that no contract was on record at its sweep; or that its
  * records did not read as a table, on the sweep named (null when none was on record). Only
- * guaranteeTableOf builds one, so a message that requires a table carries the one its records judge.
+ * readGuaranteeTable builds one, from records it read, so a message that requires a table carries the one its records judge.
  */
 export type GuaranteeTable = ShownTable & { readonly [BUILT]: true };
 
-/** What a table shows, before guaranteeTableOf marks it built. */
+/** What a table shows, before readGuaranteeTable marks it built. */
 type ShownTable =
   | {
       readonly kind: "table";
@@ -119,7 +120,7 @@ function built(shown: ShownTable): GuaranteeTable {
 }
 
 /** Quality's verdicts do not name each guarantee of the version they were judged on exactly once, in its order. */
-export class GuaranteeVerdictsMismatch extends Error {
+class GuaranteeVerdictsMismatch extends Error {
   constructor(
     readonly visionVersion: number,
     readonly judged: readonly string[],
@@ -131,7 +132,7 @@ export class GuaranteeVerdictsMismatch extends Error {
 }
 
 /** A revision's record names a guarantee that the version it revised, or the version it wrote, does not hold. */
-export class ContractRevisionMismatch extends Error {
+class ContractRevisionMismatch extends Error {
   constructor(
     readonly projectId: string,
     readonly visionVersion: number,
@@ -202,14 +203,14 @@ function appendixOf(vision: VisionVersion, revisions: readonly ContractRevision[
 }
 
 /**
- * The one builder of a guarantee table: every guarantee of the version in force at the sweep, each
- * exactly once, in the version's order, with Quality's verdict on it and the appendix of the
- * contract's revisions; or that no contract was on record; or that the records did not hold together.
- * Verdicts that do not name each guarantee once, in order, throw, never render as a guarantee
- * unjudged; so does a revision naming a guarantee its versions do not hold.
+ * A table built from records: every guarantee of the version in force at the sweep, each exactly
+ * once, in the version's order, with Quality's verdict on it and the appendix of the contract's
+ * revisions; or that no contract was on record. Verdicts that do not name each guarantee once, in
+ * order, throw, never render as a guarantee unjudged; so does a revision naming a guarantee its
+ * versions do not hold.
  */
-export function guaranteeTableOf(records: GuaranteeRecords | UnreadableRecords): GuaranteeTable {
-  if (records.kind === "no-contract" || records.kind === "unreadable") return built(records);
+function tableOf(records: GuaranteeRecords): GuaranteeTable {
+  if (records.kind === "no-contract") return built(records);
   const { sweep, vision, judged } = records;
   const appendix = appendixOf(vision, records.revisions);
   const held = vision.guarantees.map((guarantee) => guarantee.id);
@@ -220,6 +221,33 @@ export function guaranteeTableOf(records: GuaranteeRecords | UnreadableRecords):
     return guarantee === undefined ? [] : [{ guarantee, verdict: each.verdict, evidenceClass: each.evidenceClass }];
   });
   return built({ kind: "table", sweep, vision, evidence: judged.evidence, lines, appendix });
+}
+
+/** Where a table's records are read from: Engagement's store over the database, or a test's fixtures. */
+export interface GuaranteeRecordsReader {
+  /** The records a table of `source` is judged from. */
+  records(source: TableSource): Promise<GuaranteeRecords>;
+  /** Whether a read threw because the records do not hold together, which a retry reads the same. */
+  unreadable(err: unknown): boolean;
+}
+
+/**
+ * The one builder of a guarantee table, from the records `reader` reads for `source`. Records that do
+ * not hold together (a read that throws what `reader` names unreadable, verdicts that do not name the
+ * version's guarantees, a revision naming a guarantee its versions do not hold) are the unreadable
+ * table, logged at warn with why, so the message still goes out judging nothing; any other failure
+ * throws for a retry. Nothing else makes a table, so every table a message carries is one its records
+ * judge, or one that says they did not read.
+ */
+export async function readGuaranteeTable(reader: GuaranteeRecordsReader, source: TableSource): Promise<GuaranteeTable> {
+  try {
+    return tableOf(await reader.records(source));
+  } catch (err) {
+    if (!(err instanceof GuaranteeVerdictsMismatch || err instanceof ContractRevisionMismatch || reader.unreadable(err))) throw err;
+    const where = source.kind === "sweep" ? `sweep ${source.sweepId}` : `project ${source.projectId}`;
+    console.warn(`[terminal-report] ${where}: its guarantee table cannot be read, so its message judges no guarantee: ${describeErrorChain(err)}`);
+    return built({ kind: "unreadable", sweepId: source.kind === "sweep" ? source.sweepId : null });
+  }
 }
 
 /** Why a guarantee the contract marks not verifiable by Ashara is not verified, as the client was told when it was proposed. */

@@ -10,6 +10,7 @@ const none: TextFactRecords = {
   questions: [],
   answerReplies: [],
   tenderReports: [],
+  declines: [],
   delivered: [],
   firstPlan: { report: null, items: [], revisions: [] }, workItems: 0,
   interfaceOnMain: { kind: "not-held" },
@@ -137,41 +138,52 @@ describe("checkTextFacts, the Liaison's questions and replies", () => {
     expect(keysOf({ visions: [v1], tenderReports: [draft(atRisk)] })).toEqual(["contract-draft"]);
   });
 
-  // A contract whose every guarantee is marked not verifiable by Ashara is declined: each guarantee is
-  // listed marked so, every intake message states the decline, and none says work is under way.
-  it("holds a declined contract's draft and questions to the decline", () => {
+  // A contract whose every guarantee is marked not verifiable by Ashara is declined by its terminal
+  // message alone: each guarantee is listed marked so, every intake message says work has not started
+  // and never restates the decline, none says work is under way, and the decline message states it.
+  it("holds a declined contract's draft and questions to work not started, and its decline message to the decline", () => {
     const marked = { id: "G1", statement: "put waits for the lock.", source: { kind: "tender", quote: "put" }, verification: "not-by-ashara" };
     const vision = { ...v1, inferences: [{ ...asked, underpins: ["G1"] }], guarantees: [marked] };
     const decline =
       "Ashara cannot verify any guarantee of this contract as written: no check Ashara can run today would show any of them holding. " +
       "Please restate the guarantees so that at least one is seen in what the product outputs. No work starts on this contract until you do: " +
       "confirming it as written does not start it.";
+    const notStarted = "Work has not started on this contract: the decline says why.";
     const draft = (opening: string, g1: string) => ({
       id: "r1",
       body: [
         opening,
         `What we guarantee, each with what it rests on:\n- G1: put waits for the lock. (basis: ${g1})`,
         "The assumptions the guarantees rest on:\n- A1: Commands wait for the lock. (underpins G1; asked in a question)",
+        `Correct any line at any time. ${notStarted}`,
       ].join("\n\n"),
     });
     const listed = "an assumption you have not confirmed; at risk until you confirm A1; not verifiable by Ashara: no check Ashara can run today shows it holding";
-    const question = { id: "q1", intake: true, body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, the contract rests on this assumption: Commands wait for the lock.\n\nWhy this assumption: y\n\n${decline}` };
-    const declined = `This is the contract drafted from your tender, and Ashara declines it as written. ${decline}`;
-    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(declined, listed)] })).toEqual([]);
-    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(declined, "an assumption you have not confirmed; at risk until you confirm A1")] })).toEqual([
+    const question = { id: "q1", intake: true, body: `Should commands wait?\n\nWhy it matters: x\n\nUntil you answer, the contract rests on this assumption: Commands wait for the lock.\n\nWhy this assumption: y\n\n${notStarted}` };
+    const drafted = "This is the contract drafted from your tender.";
+    const declineMessage = { id: "d1", body: `Ashara declines the contract drafted from your tender as written. ${decline}` };
+    const declines = [declineMessage];
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(drafted, listed)], declines })).toEqual([]);
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(drafted, "an assumption you have not confirmed; at risk until you confirm A1")], declines })).toEqual([
       "contract-draft:G1",
     ]);
-    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(`${declined} Work has started on this list.`, listed)] })).toEqual([
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(`${drafted} Work has started on this list.`, listed)], declines })).toEqual([
       "declined-intake:2",
     ]);
-    expect(keysOf({ visions: [vision], questions: [{ ...question, body: question.body.replace(decline, "") }], tenderReports: [draft(declined, listed)] })).toEqual([
+    // The decline told again in an intake message is the second message saying it.
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(`${drafted} ${decline}`, listed)], declines })).toEqual(["declined-intake:2"]);
+    expect(keysOf({ visions: [vision], questions: [{ ...question, body: question.body.replace(notStarted, "") }], tenderReports: [draft(drafted, listed)], declines })).toEqual([
       "declined-intake:1",
     ]);
     const proceeds = question.body.replace("the contract rests on this assumption", "we proceed on this assumption");
-    expect(keysOf({ visions: [vision], questions: [{ ...question, body: proceeds }], tenderReports: [draft(declined, listed)] })).toEqual(["declined-intake:1"]);
+    expect(keysOf({ visions: [vision], questions: [{ ...question, body: proceeds }], tenderReports: [draft(drafted, listed)], declines })).toEqual(["declined-intake:1"]);
+    // A decline message that does not state the decline is named.
+    expect(keysOf({ visions: [vision], questions: [question], tenderReports: [draft(drafted, listed)], declines: [{ id: "d1", body: "Ashara declines your contract." }] })).toEqual([
+      "declined-message:1",
+    ]);
     // A task's question, posted once work is under way on a restated contract, is no intake message.
     const taskQuestion = { id: "q2", intake: false, body: "Which start command?" };
-    expect(keysOf({ visions: [vision], questions: [question, taskQuestion], tenderReports: [draft(declined, listed)] }).filter((key) => key.startsWith("declined-intake"))).toEqual([]);
+    expect(keysOf({ visions: [vision], questions: [question, taskQuestion], tenderReports: [draft(drafted, listed)], declines }).filter((key) => key.startsWith("declined-intake"))).toEqual([]);
   });
 
   it("finds work on a project whose every vision version is declined, and none once a version holds a guarantee Ashara can verify", () => {

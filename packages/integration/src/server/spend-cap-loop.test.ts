@@ -13,7 +13,7 @@ import { LlmCallRepository } from "@ashara/finance";
 import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, FailureRouter, FirstPlanner, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository, withOverrides } from "@ashara/delivery";
 import { idleProjectRepo, inertWorkItemRepo } from "@ashara/delivery/testing";
 import type { FirstPlanStore, CoreLoopDeps, CoreLoopOverrides, LoopCore } from "@ashara/delivery";
-import { ClientStops, ClientMessageRepository, PlanReports, TerminalReports, VisionRepository, guaranteeTableOf } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, PlanReports, TERMINAL_KINDS, TerminalReports, VisionRepository, terminalTableOf } from "@ashara/engagement";
 import type { ClientStopStore, PlanReportStore, TerminalReportStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -190,7 +190,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
         blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
       }, spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null } }, client: { clientStops: { runPending: () => clientStops.runPending() } }, reporting: { terminalReports: {
         runPending: async () => {
-          const answered = await terminals.runPending();
+          const answered = await terminals.runPending(TERMINAL_KINDS);
           // Once the stop is answered, the test ends the halted runner, as SIGTERM does.
           if (answered.some((outcome) => outcome.kind === "posted" && outcome.terminal === "stopped")) abort.abort();
           return answered;
@@ -236,7 +236,7 @@ describe("the deployment cap halts two projects", () => {
     // Only this suite's projects: the listing and the halt over the shared database would reach other suites'.
     const narrowed: TerminalReportStore = {
       ...store,
-      dueTerminals: async () => (await store.dueTerminals()).filter((each) => [...ours].some((id) => id === dueProjectOf(each))),
+      dueTerminals: async (kinds) => (await store.dueTerminals(kinds)).filter((each) => [...ours].some((id) => id === dueProjectOf(each))),
       postTerminal: async (message) => {
         if (message.projectId === second && secondFaults > 0) {
           secondFaults -= 1;
@@ -316,7 +316,7 @@ describe("the deployment cap stops the cycle an accepted project's delivered rep
       executed: { kind: "unrecorded" },
       reading: { kind: "unrecorded" },
     };
-    const table = guaranteeTableOf({ kind: "no-contract", sweep: { id: randomUUID(), mainCommit: "c3".repeat(20) } });
+    const table = await terminalTableOf(db, { kind: "no-sweep", projectId });
     const posted: string[] = [];
     let postFaults = 1;
     let failures = 0;

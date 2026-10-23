@@ -68,6 +68,8 @@ export interface TextFactRecords {
    * Outbound reports posted in reply to the tender, other than its receipt: the contract draft and the reading report.
    */
   readonly tenderReports: ReadonlyArray<z.infer<typeof messageRow>>;
+  /** Every decline of a contract version Ashara can verify no guarantee of (reports_on 'declined'). */
+  readonly declines: ReadonlyArray<z.infer<typeof messageRow>>;
   /** The tender's reading as intake_readings records it, or null when none is. */
   readonly intakeReading: z.infer<typeof intakeReadingRow> | null;
   /** Every posted delivered report, with the vision version current at its sweep. */
@@ -240,6 +242,12 @@ async function readStoreRecords(
             AND t.direction = 'inbound' AND t.kind = 'tender'
             AND r.receipt_of IS NULL
           ORDER BY r.created_at, r.id`,
+    ),
+    declines: await rows(
+      messageRow,
+      sql`SELECT id, body FROM client_messages
+          WHERE project_id = ${projectId} AND direction = 'outbound' AND kind = 'report' AND reports_on = 'declined'
+          ORDER BY created_at, id`,
     ),
     delivered: await rows(
       deliveredRow,
@@ -796,12 +804,14 @@ function checkContractDraft(records: TextFactRecords, add: Add): void {
   }
 }
 
-/** How every message posted for a contract Ashara declines states the decline, as the oracle words it. */
+/** How the decline of a contract states it, as the oracle words it: its terminal message says it, once. */
 const DECLINE_WORDS = [
   "Ashara cannot verify any guarantee of this contract as written",
   "Please restate the guarantees",
   "confirming it as written does not start it",
 ];
+/** What every intake message on a declined contract says in the decline's place, as the oracle words it. */
+const NOT_STARTED_WORDS = ["Work has not started"];
 /** What no message posted for a declined contract says: each tells the client work is under way or waits. */
 const UNDER_WAY_WORDS = [
   "Work does not wait",
@@ -829,12 +839,18 @@ function declinedVersion(vision: z.infer<typeof visionRow>): boolean | null {
 }
 
 /**
- * A contract Ashara can verify no guarantee of is declined at proposal: when vision v1 is one, every
- * message intake posted with it (the questions, the contract draft and the reading report) states the
- * decline, asks for the guarantees restated and says no confirmation starts work, and none says work
- * is under way.
+ * A contract Ashara can verify no guarantee of is declined at proposal, by its terminal message alone:
+ * when vision v1 is one, every message intake posted with it (the questions, the contract draft and the
+ * reading report) says work has not started, never restates the decline and never says work is under
+ * way; and every decline message states the decline, asks for the guarantees restated and says no
+ * confirmation starts work.
  */
 function checkDeclinedContract(records: TextFactRecords, add: Add): void {
+  for (const [index, message] of records.declines.entries()) {
+    const missing = DECLINE_WORDS.filter((words) => !message.body.includes(words));
+    const named = missing.map((w) => `"${w}"`).join(", ");
+    if (missing.length > 0) add(`declined-message:${index + 1}`, `decline ${index + 1} does not state ${named}`);
+  }
   const [first] = records.visions;
   if (first === undefined) return;
   const declined = declinedVersion(first);
@@ -845,15 +861,20 @@ function checkDeclinedContract(records: TextFactRecords, add: Add): void {
   if (declined) {
     const intakeQuestions = records.questions.filter((question) => question.intake);
     for (const [index, message] of [...intakeQuestions, ...records.tenderReports].entries()) {
-      const missing = DECLINE_WORDS.filter((words) => !message.body.includes(words));
+      const missing = NOT_STARTED_WORDS.filter((words) => !message.body.includes(words));
+      const restated = DECLINE_WORDS.filter((words) => message.body.includes(words));
       const underWay = UNDER_WAY_WORDS.filter((words) => message.body.includes(words));
-      if (missing.length > 0 || underWay.length > 0)
+      const quoted = (words: readonly string[]): string => words.map((w) => `"${w}"`).join(", ");
+      const faults = [
+        ...(missing.length > 0 ? [`does not state ${quoted(missing)}`] : []),
+        ...(restated.length > 0 ? [`restates the decline its terminal message tells (${quoted(restated)})`] : []),
+        ...(underWay.length > 0 ? [`says ${quoted(underWay)}`] : []),
+      ];
+      const opening = message.body.slice(0, 80);
+      if (faults.length > 0)
         add(
           `declined-intake:${index + 1}`,
-          `intake message ${index + 1} ("${message.body.slice(0, 80)}") on a contract Ashara declines ` +
-            `${missing.length > 0 ? `does not state ${missing.map((w) => `"${w}"`).join(", ")}` : ""}` +
-            `${missing.length > 0 && underWay.length > 0 ? " and " : ""}` +
-            `${underWay.length > 0 ? `says ${underWay.map((w) => `"${w}"`).join(", ")}` : ""}`,
+          `intake message ${index + 1} ("${opening}") on a contract Ashara declines ${faults.join(" and ")}`,
         );
     }
   }
@@ -1289,7 +1310,8 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions), i9(checkDeclinedContract)] },
   { source: `${ENGAGEMENT}/client-question.ts#questionBody`, judges: [i9(checkQuestions)] },
   { source: `${ENGAGEMENT}/answers.ts#replanReport`, judges: [i9(checkAnswerReplies)] },
-  // A contract Ashara declines: the draft, like every intake message, states the decline, and no work starts on it.
+  // A contract Ashara declines: the draft, like every intake message, says work has not started and
+  // leaves the decline to its terminal message.
   {
     source: `${ENGAGEMENT}/intake.ts#contractDraftReport`,
     judges: [i9(checkContractDraft), i9(checkDeclinedContract)],

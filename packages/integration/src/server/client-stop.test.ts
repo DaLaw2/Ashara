@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
-import { ClientStops, ClientMessageRepository, VisionRepository, createProjectWithTender } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, TERMINAL_KINDS, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
@@ -71,7 +71,7 @@ function stopsOf(ours: (projectId: string) => boolean, escapes: boolean): Client
 /** One cycle's stop steps over this suite's projects: the stops taken, then the terminal messages due after the terminal sweeps. */
 async function stopSteps() {
   const ours = (projectId: string) => ourProjects.has(projectId);
-  return [...(await stopsOf(ours, true).runPending()), ...(await terminalReportsOf(db, ours).runPending())];
+  return [...(await stopsOf(ours, true).runPending()), ...(await terminalReportsOf(db, ours).runPending(TERMINAL_KINDS))];
 }
 
 /** The stops and terminal messages of one project with no terminal sweep run first: what is due when a stop's sweep could not be recorded. */
@@ -79,7 +79,7 @@ function unsweptReports(projectId: ProjectId, escapes: boolean) {
   const ours = (id: string) => id === projectId;
   const stops = stopsOf(ours, escapes);
   const terminals = terminalReportsOf(db, ours, { escapes, unswept: true });
-  return { runPending: () => stops.runPending(), tellPending: () => terminals.runPending() };
+  return { runPending: () => stops.runPending(), tellPending: () => terminals.runPending(TERMINAL_KINDS) };
 }
 
 /** Vision v1 in the guarantees form: G1 and G2, both observed at I1 and quoted from the tender. */

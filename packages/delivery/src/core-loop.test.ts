@@ -6,7 +6,8 @@ import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
-import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
+import { TERMINAL_KINDS } from "./acl/engagement-acl.js";
+import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices, TerminalKind } from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning } from "./first-plan.js";
 import type { WorkItem } from "./domain/index.js";
@@ -324,6 +325,29 @@ describe("CoreLoop first plan", () => {
     // The terminal messages are posted after the terminal sweeps, after the planning reports (a first
     // planning that stopped) and after the acceptance sweeps.
     expect(order).toEqual(["stop", "terminal", "intake", "change", "roster", "plan", "report", "terminal", "terminal", "dispatch", "dispatch"]);
+  });
+
+  test("a full cycle asks for each kind of terminal message once, where it can become due; a halted cycle asks for every kind", async () => {
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({ taskId: task.id, status: "completed" as const, detail: "ok" }));
+    const asked: Array<readonly string[]> = [];
+    const terminal = vi.fn(async (kinds: readonly TerminalKind[]) => {
+      asked.push([...kinds]);
+      return [];
+    });
+    const loop = new CoreLoop(withOverrides(buildDeps(), { reporting: { terminalReports: { runPending: terminal } } }));
+
+    await loop.runCycle();
+    // The stops and halts carried into the cycle, then the plannings that stopped and the contracts
+    // declined after the steps that write them, then the delivered reports after the acceptance sweeps.
+    expect(asked).toEqual([["stopped", "halted"], ["planning-stopped", "declined"], ["delivered"]]);
+    const perKind = new Map<string, number>();
+    for (const kind of asked.flat()) perKind.set(kind, (perKind.get(kind) ?? 0) + 1);
+    expect([...perKind.values()]).toEqual([1, 1, 1, 1, 1]);
+    expect([...perKind.keys()].sort()).toEqual([...TERMINAL_KINDS].sort());
+
+    asked.length = 0;
+    await loop.runHaltedCycle();
+    expect(asked).toEqual([[...TERMINAL_KINDS]]);
   });
 
   test("a cycle halted at the spend cap takes the client's stops and posts the terminal, resumption and plan reports still due, and nothing else: a change is read by a model, so it waits", async () => {

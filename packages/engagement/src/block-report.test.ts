@@ -6,8 +6,10 @@ import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore, ProjectBlockedReport } from "./block-report.js";
 import type { RiskRecords } from "./early-warning.js";
-import { guaranteeTableOf } from "./guarantee-report.js";
+import { readGuaranteeTable } from "./guarantee-report.js";
+import type { GuaranteeRecords, GuaranteeTable } from "./guarantee-report.js";
 import { inboundDecision } from "./inbound-policy.js";
+import { TERMINAL_KINDS } from "./predicates.js";
 import { TerminalReports } from "./terminal-report.js";
 import type { DueTerminal, TerminalReportStore } from "./terminal-report.js";
 
@@ -19,8 +21,13 @@ const projectId = parseProjectId("00000000-0000-4000-8000-000000000020", "test")
 type DueResumption = Exclude<Awaited<ReturnType<BlockReportStore["dueReports"]>>[number], UnreadSubject>;
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
+/** The table the records reader builds over `records`, as it builds one over the stored records. */
+async function tableOf(records: GuaranteeRecords): Promise<GuaranteeTable> {
+  return readGuaranteeTable({ records: async () => records, unreadable: () => false }, { kind: "no-sweep", projectId: "fixture" });
+}
+
 /** The table these messages carry; guarantee-report.test.ts judges its text. */
-const TABLE = guaranteeTableOf({ kind: "no-contract", sweep: { id: "s1", mainCommit: null } });
+const TABLE = await tableOf({ kind: "no-contract", sweep: { id: "s1", mainCommit: null } });
 
 /** A listed report as a test spells it: its subject named, and the project's vision written unless it says otherwise. */
 type Spelled =
@@ -62,7 +69,7 @@ function reportsFor(listed: readonly Spelled[], records: RiskRecords = OPEN_RECO
   const containment = memoryStepContainment(() => true);
   const halted = new TerminalReports(terminals, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }, containment);
   const resumed = new BlockReports(store, containment);
-  return { reports: { runPending: async () => [...(await halted.runPending()), ...(await resumed.runPending())] }, posted };
+  return { reports: { runPending: async () => [...(await halted.runPending(TERMINAL_KINDS)), ...(await resumed.runPending())] }, posted };
 }
 
 describe("project block reports", () => {

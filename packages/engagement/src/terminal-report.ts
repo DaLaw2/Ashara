@@ -9,6 +9,7 @@ import type { RiskRecords } from "./early-warning.js";
 import { guaranteeSection } from "./guarantee-report.js";
 import type { GuaranteeTable, TableVerdicts } from "./guarantee-report.js";
 import { planningStoppedReport } from "./plan-report.js";
+import { TERMINAL_KINDS } from "./predicates.js";
 import type { TerminalKind } from "./predicates.js";
 import { stopReport } from "./stop-report.js";
 import type { DueStopReport } from "./stop-report.js";
@@ -16,12 +17,12 @@ import { NOTHING_VERIFIABLE } from "./vision-language/guarantee.js";
 
 // Every terminal message the client is sent goes through here: the delivered report (or the
 // acceptance notice in its place), the client's stop report, a halt's report, the report of a first
-// planning that stopped, and the decline of a contract Ashara can verify no guarantee of. One due
+// planning that stopped, and the decline of a contract version Ashara can verify no guarantee of. One due
 // listing (the store's dueTerminals, repositories/terminal-report.ts) names every one owed, each keyed
 // by the subject it is told once of, behind the record that tells it (terminalTold), so a restart
-// neither tells one again nor drops it; one builder (guaranteeTableOf) makes the guarantee table
-// each carries; and a TerminalMessage, the only thing the store posts, cannot be made without that
-// table. Quality judges every verdict in the table; this module only renders it.
+// neither tells one again nor drops it; one reader of the records (readGuaranteeTable) makes the
+// guarantee table each carries; and a TerminalMessage, the only thing the store posts, cannot be made
+// without that table. Quality judges every verdict in the table; this module only renders it.
 
 /** The subject a terminal message is told once of. */
 export type TerminalSubject =
@@ -29,7 +30,7 @@ export type TerminalSubject =
   | { readonly kind: "stopped"; readonly stopId: string }
   | { readonly kind: "halted"; readonly episodeId: string }
   | { readonly kind: "planning-stopped"; readonly projectId: ProjectId }
-  | { readonly kind: "declined"; readonly projectId: ProjectId };
+  | { readonly kind: "declined"; readonly projectId: ProjectId; readonly visionVersion: number };
 
 /**
  * What a terminal message tells, each kind with everything its words need: the closed set of
@@ -48,7 +49,7 @@ export type TerminalEvent =
   | { readonly kind: "stopped"; readonly projectId: ProjectId; readonly stop: DueStopReport }
   | { readonly kind: "halted"; readonly projectId: ProjectId; readonly halt: ProjectBlockedReport; readonly risk: RiskRecords }
   | { readonly kind: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number; readonly risk: RiskRecords }
-  | { readonly kind: "declined"; readonly projectId: ProjectId };
+  | { readonly kind: "declined"; readonly projectId: ProjectId; readonly visionVersion: number };
 
 /** A terminal event the due listing reads whole from the records. */
 type ListedEvent = Extract<TerminalEvent, { readonly kind: "stopped" | "halted" | "planning-stopped" | "declined" }>;
@@ -98,9 +99,13 @@ function tableVerdicts(table: GuaranteeTable): TableVerdicts {
   };
 }
 
-/** The decline of a contract Ashara can verify no guarantee of; the table that follows names why for each. */
-function declinedReport(): TerminalParts {
-  return { before: [`Ashara declines the contract drafted from your tender as written. ${NOTHING_VERIFIABLE}`], after: [] };
+/**
+ * The decline of a contract version Ashara can verify no guarantee of; the table that follows names why
+ * for each. The first version is the one drafted from the tender; a later one is the contract as revised.
+ */
+function declinedReport(visionVersion: number): TerminalParts {
+  const contract = visionVersion === 1 ? "the contract drafted from your tender as written" : `your contract as it stands in vision v${visionVersion}`;
+  return { before: [`Ashara declines ${contract}. ${NOTHING_VERIFIABLE}`], after: [] };
 }
 
 /** The register of guarantees at risk, reissued as the last paragraph of a halt's and a stopped planning's message. */
@@ -122,7 +127,7 @@ function partsOf(event: TerminalEvent, table: GuaranteeTable): TerminalParts {
     case "planning-stopped":
       return withRegister(event.projectId, event.risk, { before: [planningStoppedReport(event.attempts)], after: [] });
     case "declined":
-      return declinedReport();
+      return declinedReport(event.visionVersion);
   }
   throw new TerminalKindUnworded(event);
 }
@@ -138,15 +143,16 @@ function subjectOf(event: TerminalEvent): TerminalSubject {
     case "halted":
       return { kind: "halted", episodeId: event.halt.episodeId };
     case "planning-stopped":
-    case "declined":
       return { kind: event.kind, projectId: event.projectId };
+    case "declined":
+      return { kind: event.kind, projectId: event.projectId, visionVersion: event.visionVersion };
   }
   throw new TerminalKindUnworded(event);
 }
 
 /**
  * A terminal message as it is posted: its subject, its words and the verdicts of the table it
- * carries. Its constructor is private and `of` requires a table, which only guaranteeTableOf builds,
+ * carries. Its constructor is private and `of` requires a table, which only readGuaranteeTable builds,
  * so no terminal message reaches the store without the table its records judge.
  */
 export class TerminalMessage {
@@ -167,11 +173,11 @@ export class TerminalMessage {
 /** Engagement's persistence port for terminal messages. */
 export interface TerminalReportStore {
   /**
-   * Every terminal message owed, each with its table, read on its own: one whose records do not read
-   * is its UnreadSubject (a delivered report's, its own unread entry); a delivered report waiting
-   * out the backoff of a failed attempt is listed once that time has passed.
+   * Every terminal message of the kinds named that is owed, each with its table, read on its own: one
+   * whose records do not read is its UnreadSubject (a delivered report's, its own unread entry); a
+   * delivered report waiting out the backoff of a failed attempt is listed once that time has passed.
    */
-  dueTerminals(): Promise<ReadonlyArray<DueTerminal | UnreadSubject>>;
+  dueTerminals(kinds: readonly TerminalKind[]): Promise<ReadonlyArray<DueTerminal | UnreadSubject>>;
   /** Posts the message with its table's verdicts and records its subject told, unless it is told. */
   postTerminal(message: TerminalMessage): Promise<"posted" | "already-posted">;
   /** Records a failure at a sweep's delivered report (DeliveredReportFailureRecord). */
@@ -212,9 +218,12 @@ export type TerminalOutcome =
   | { readonly kind: "posted" | "already-posted"; readonly projectId: ProjectId; readonly terminal: TerminalKind }
   | { readonly kind: "failed"; readonly projectId: ProjectId; readonly terminal: "delivered"; readonly failure: DeliveredReportFailed };
 
-/** What the core loop asks of the Liaison: every terminal message owed, each told once (no LLM call). */
+/**
+ * What the core loop asks of the Liaison: every terminal message of the kinds named that is owed, each
+ * told once (no LLM call). The loop names the kinds that can have become due where it asks.
+ */
 export interface LiaisonTerminalReports {
-  runPending(): Promise<ReadonlyArray<TerminalOutcome | StepFaulted>>;
+  runPending(kinds: readonly TerminalKind[]): Promise<ReadonlyArray<TerminalOutcome | StepFaulted>>;
 }
 
 /** The id a subject is contained under (containEach): its kind and the id it is told once of. */
@@ -227,9 +236,31 @@ export function terminalSubjectId(subject: TerminalSubject): string {
     case "halted":
       return `halted:${subject.episodeId}`;
     case "planning-stopped":
-    case "declined":
       return `${subject.kind}:${subject.projectId}`;
+    case "declined":
+      return `${subject.kind}:${subject.projectId}:v${subject.visionVersion}`;
   }
+}
+
+/** Each kind's own listing of the terminals of it owed. */
+export type KindListings = Readonly<Record<TerminalKind, () => Promise<ReadonlyArray<DueTerminal | UnreadSubject>>>>;
+
+/**
+ * The terminals of `kinds` owed, each kind listed on its own, in the order TERMINAL_KINDS names them:
+ * a kind whose listing fails is logged at warn and listed again where it is next asked for, and every
+ * other kind is still listed, so one kind's fault never silences another's.
+ */
+export async function listEachKind(kinds: readonly TerminalKind[], listings: KindListings): Promise<Array<DueTerminal | UnreadSubject>> {
+  const due: Array<DueTerminal | UnreadSubject> = [];
+  for (const kind of TERMINAL_KINDS.filter((each) => kinds.includes(each))) {
+    try {
+      due.push(...(await listings[kind]()));
+    } catch (err) {
+      // eslint-disable-next-line ashara/catch-continue -- best effort: the kind's terminals stay untold, so each is listed again where the kind is next asked for; none is dropped or told twice, and no verdict, counter or client text reads the failure
+      console.warn(`[terminal-report] the ${kind} terminals could not be listed, so none of them is told this time; every other kind is: ${describeErrorChain(err)}`);
+    }
+  }
+  return due;
 }
 
 /** The subject a due terminal is contained to (containEach), as the due listing names an unread one. */
@@ -247,15 +278,15 @@ export class TerminalReports implements LiaisonTerminalReports {
   ) {}
 
   /**
-   * One message per terminal owed, each contained to its subject (containEach): one that cannot be
+   * One message per terminal of `kinds` owed, each contained to its subject (containEach): one that cannot be
    * read or posted is that subject's, and only a failure of the listing as a whole throws through. A
    * delivered report keeps its own record of failed attempts (DeliveredReportFailureRecord): its
    * interface file, records and post are retried after a backoff, past MAX_INTERFACE_READ_FAILURES
    * reads it is posted without the quote, and past MAX_UNREAD_ATTEMPTS attempts whose records did not
    * read as a report the client is sent the acceptance notice in its place.
    */
-  async runPending(): Promise<ReadonlyArray<TerminalOutcome | StepFaulted>> {
-    return containEach(this.containment, "terminal-report", await this.store.dueTerminals(), dueTerminalSubject, async (due) => {
+  async runPending(kinds: readonly TerminalKind[]): Promise<ReadonlyArray<TerminalOutcome | StepFaulted>> {
+    return containEach(this.containment, "terminal-report", await this.store.dueTerminals(kinds), dueTerminalSubject, async (due) => {
       switch (due.kind) {
         case "delivered":
           return this.delivered(due.report, due.table);
