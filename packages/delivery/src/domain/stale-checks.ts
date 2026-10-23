@@ -1,4 +1,5 @@
 import { createDomainEvent } from "@ashara/shared";
+import { HELD_SET_RULE, heldSetRuleText } from "../acl/workplace-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
@@ -129,7 +130,8 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
     task.id,
     `the checks this task recorded for task ${task.id} (revision ${stale.revision}) no longer hold the red-run rule ` +
       `on the plan's foundation in the project's current environment, so they cannot decide that task; define them ` +
-      `again so that they run there and at least one fails there. The red run that rejected them:\n${stale.detail}`,
+      `again so that each runs there to its verdict and the set keeps the held-set rule: ${heldSetRuleText(HELD_SET_RULE)} ` +
+      `The red run that rejected them:\n${stale.detail}`,
     { staleRevision: stale.revision },
     { stale_revision: stale.revision },
   );
@@ -172,7 +174,8 @@ function disputeBrief(taskId: string, dispute: CheckDispute): string {
     `The implementer of task ${taskId} disputes check ${JSON.stringify(dispute.check.name)} of the checks this task ` +
       `recorded for it (revision ${dispute.revision}): it holds that the check cannot pass on correct work. Weigh the ` +
       `dispute and define the task's checks again: fix the check if the dispute is right, or keep it if it is wrong, ` +
-      `so that each check can pass on correct work and at least one fails on the plan's foundation.`,
+      `so that each check can pass on correct work and the set keeps the held-set rule on the plan's foundation: ` +
+      heldSetRuleText(HELD_SET_RULE),
     `The disputed check: ${JSON.stringify(dispute.check.name)}, command: ${dispute.check.command}`,
     `The implementer's reason:\n${dispute.reason}`,
     dispute.evidence === null

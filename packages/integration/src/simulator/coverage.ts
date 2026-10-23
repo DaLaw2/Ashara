@@ -4,8 +4,10 @@ import { PROJECT_BLOCK_KINDS } from "@ashara/db/schema/delivery";
 import { EXECUTION_STATUSES, observeAcceptanceSweeps as observeQualitySweeps } from "@ashara/quality";
 import type { AcceptanceSweep } from "@ashara/quality";
 import { ATTEMPT_TERMINALS } from "@ashara/workplace";
+import type { HoldEvidence } from "@ashara/workplace";
 import { BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { PROJECT_STATUSES } from "@ashara/engagement";
+import type { LogRecord, LogSink } from "@ashara/shared";
 import { CORRECTION_PAIRS } from "./correction-draws.js";
 import type { Database } from "./database.js";
 import { APPLICABLE_FAULTS, SEAM_KINDS } from "./faults.js";
@@ -46,6 +48,12 @@ export interface Coverage {
    * (correction-coverage.ts sampleCorrection).
    */
   readonly corrections: Set<string>;
+  /**
+   * Each HoldEvidence arm a set whose every check passed on its foundation met: still-holds as
+   * production logged keeping such a set (quality.checks-held), every other arm as a rejection
+   * held_set_rejections records, read at the run's end.
+   */
+  readonly holds: Set<string>;
 }
 
 /**
@@ -98,6 +106,7 @@ export function emptyCoverage(): Coverage {
     models: new Set(),
     plants: new Set(),
     corrections: new Set(),
+    holds: new Set(),
   };
 }
 
@@ -115,6 +124,7 @@ const COVERAGE_KEYS = [
   "models",
   "plants",
   "corrections",
+  "holds",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
 
 const coverageSet = z.set(z.string());
@@ -134,6 +144,7 @@ export const CoverageSchema = z.strictObject({
   models: coverageSet,
   plants: coverageSet,
   corrections: coverageSet,
+  holds: coverageSet,
 }) satisfies z.ZodType<Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
@@ -274,6 +285,48 @@ export async function sampleModelPaths(
   }
 }
 
+/**
+ * Every arm of HoldEvidence: `satisfies` makes the type checker refuse this table when an arm is
+ * added or removed there, so it cannot drift from Workplace's own union.
+ */
+const HOLD_EVIDENCE_ARMS = Object.keys({
+  "still-holds": true,
+  uncited: true,
+  uncorrected: true,
+  "partly-corrected": true,
+  undelivered: true,
+  "assumption-undecided": true,
+} as const satisfies Record<HoldEvidence["kind"], true>);
+
+/** The log event production writes when it keeps a set every check of which passes on its foundation as held. */
+const CHECKS_HELD_EVENT = "quality.checks-held";
+
+/** `sink`, recording on `coverage` each set production kept as held (still-holds). */
+export function holdCoverageSink(sink: LogSink, coverage: Coverage): LogSink {
+  return {
+    write(record: LogRecord) {
+      if (record.event === CHECKS_HELD_EVENT) coverage.holds.add("still-holds");
+      sink.write(record);
+    },
+  };
+}
+
+const reasonRows = z.array(z.object({ reason: z.string() }));
+
+/** The HoldEvidence arms the run's projects' held-set rejections record, read at the run's end. */
+export async function sampleHeldSetRejections(
+  coverage: Coverage,
+  observer: Database,
+  projectIds: readonly string[],
+): Promise<void> {
+  for (const projectId of projectIds) {
+    const rows = await observer.execute(
+      sql`SELECT DISTINCT reason FROM held_set_rejections WHERE project_id = ${projectId}`,
+    );
+    for (const row of reasonRows.parse(rows.rows)) coverage.holds.add(row.reason);
+  }
+}
+
 interface MachineCoverage {
   readonly machine: string;
   readonly reached: readonly string[];
@@ -306,6 +359,7 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("model misbehaviour met (MODEL_PATHS)", MODEL_PATHS, coverage.models),
     split("plant seams reached (MUTATIONS)", MUTATIONS, coverage.plants),
     split("corrections by arrival and kind (CORRECTION_PAIRS)", CORRECTION_PAIRS, coverage.corrections),
+    split("sets holding whole on their foundation (HoldEvidence arms)", HOLD_EVIDENCE_ARMS, coverage.holds),
   ];
 }
 

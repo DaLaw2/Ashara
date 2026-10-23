@@ -8,7 +8,7 @@ import { NO_AGENT, cellImageOf, mainRunBlocked, sessionEnvironmentVersion } from
 import type { ExecutionEventSink, ExecutionResult, VerifiedDispatch } from "../dispatch-result.js";
 import { runFoundationBuild } from "../environment-check.js";
 import { environmentBuildPassed } from "../environment-verdict.js";
-import { StoredChecksStale, describeFoundationBuild, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout } from "../task-checks.js";
+import { StoredChecksStale, describeFoundationBuild, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout, setRejected } from "../task-checks.js";
 import type { TaskCheckStore, TaskChecks } from "../task-checks.js";
 import { RED_RUN_ROLE } from "./dispatch-cells.js";
 import type { DispatchCells } from "./dispatch-cells.js";
@@ -32,9 +32,10 @@ export class BaselineRevalidation {
   /**
    * Stored checks were red-run on their baseline in their check task's environment version. On a
    * dispatch from another version they are red-run again on that baseline in a CI cell from this
-   * dispatch's image, by the same set rule (redRunSetVerdict): every check runs to a verdict, and at
-   * least one fails decisively, or every one passes and the records show what they decide held
-   * before the correction that put it in scope. Holding: trusted, null, and the delivered sweep
+   * dispatch's image, by the same held-set rule (redRunSetVerdict, which reads the records only for a
+   * set holding whole): every check runs to a verdict, and at least one fails decisively, or every
+   * one passes and the records show what they decide held before the correction that put it in
+   * scope. Holding: trusted, null, and the delivered sweep
    * decides the task next. Not holding, or no baseline on record
    * (a revision stored before baselines were recorded): checks_stale before the model is called, naming both
    * versions and the check task, since such a set cannot tell the task's work from its absence and
@@ -95,10 +96,10 @@ export class BaselineRevalidation {
       } else if (redRun.kind === "product_changed") {
         problem = `on the baseline, ${describeProductChange(redRun)}`;
       } else {
-        const set = redRunSetVerdict(redRun.runs, await this.deps.checks.holdEvidenceOf(task.id));
+        const set = await redRunSetVerdict(redRun.runs, () => this.deps.checks.holdEvidenceOf(task.id));
         const setLine = redRunSetLine(set);
         problem =
-          redRun.runs.some((run) => redRunProblem(run) !== null) || set.kind === "rejected"
+          redRun.runs.some((run) => redRunProblem(run) !== null) || setRejected(set)
             ? `${formatCheckRuns(redRun.runs, redRunVerdict)}${setLine === null ? "" : `\n${setLine}`}`
             : null;
       }

@@ -3,6 +3,7 @@ import type { CapabilityLevel } from "./acl/finance-acl.js";
 import type { StructuredValidation } from "./acl/finance-acl.js";
 import { visionSourceCitation, visionSourceLine } from "./acl/engagement-vision-acl.js";
 import { PUBLIC_INTERFACE_FILE, SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
+import { HELD_SET_RULE, heldSetRuleText } from "./acl/workplace-acl.js";
 import type {
     AddedAssumption,
     DecomposedTaskSpec,
@@ -696,7 +697,7 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
     const description = [
         `${goal}.`,
         `Vision items "${task.title}" cites (its checks may test only what these ask for, and the inputs they say to ` +
-            `reject; each needs at least one check that decides it, named in that check's "decides"; where each ` +
+            `reject; each needs a check that decides it, named in that check's "decides"; where each ` +
             `assumption stands with the client is under the assumptions work proceeds on):\n` +
             bulleted(task.taskSpec.sources.map(visionSourceCitation)),
         `Acceptance of "${task.title}", each line with the items it serves:\n` +
@@ -707,14 +708,14 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
             "to start, configure or call the product. On the foundation the product starts and refuses every entry " +
             `with a refusal carrying ${SCAFFOLD_PLACEHOLDER_MARKER}, which "${task.title}" removes from every entry ` +
             "it owns, " +
-            `so each check must fail there because "${task.title}" is not done, never because the product did not ` +
-            `start. If ${PUBLIC_INTERFACE_FILE} is missing, or does not name what a check needs, say so in your ` +
+            `so a check that fails there must fail because "${task.title}" is not done, never because the product did ` +
+            `not start. If ${PUBLIC_INTERFACE_FILE} is missing, or does not name what a check needs, say so in your ` +
             "finish summary.",
     ].join("\n\n");
     const successCriteria = [
         "every check is defined with define_check, naming the cited vision items it decides",
-        `every vision item "${task.title}" cites is decided by at least one check`,
-        `at least one check fails on the plan's foundation, because "${task.title}" is not done there`,
+        `every vision item "${task.title}" cites has a check that decides it`,
+        `the set keeps the held-set rule on the plan's foundation: ${heldSetRuleText(HELD_SET_RULE)}`,
     ];
     return {
         id: generateId("task"),

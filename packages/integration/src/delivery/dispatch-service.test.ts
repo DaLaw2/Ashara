@@ -412,7 +412,8 @@ function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] =
       throw new Error("no checks may be appended");
     },
     latest: async () => stored,
-    holdEvidenceOf: async () => ({ kind: "untested" as const, why: "this test records no correction" }),
+    holdEvidenceOf: async () => ({ kind: "uncorrected" as const, items: ["G1"] as [string] }),
+    recordSetRejection: async () => 1,
   };
 }
 
@@ -1339,7 +1340,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_failed")).toBe(false);
     expect(result.detail).toContain(`environment version ${"e".repeat(64)}`);
     expect(result.detail).toContain(`environment version ${String(probe.version)}`);
-    expect(result.detail).toContain("no check of the set fails on the foundation");
+    expect(result.detail).toContain("REJECTED, the set: every check passes on the foundation");
     // The detail reopens the check task as its brief: the baseline commit stays in the chain, for the operator.
     expect(result.detail).not.toContain(mainBefore);
     expect(result.errorEnvelope.chain.context).toMatchObject({ baselineCommit: mainBefore });

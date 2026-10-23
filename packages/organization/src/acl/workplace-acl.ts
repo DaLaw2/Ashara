@@ -4,5 +4,5 @@
 // Organization: Delivery hands it each attempt's charter and tool profile, which Organization grants in
 // Workplace's tool-profile vocabulary.
 
-export { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT, environmentDefinitionRules } from "@ashara/workplace";
+export { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT, HELD_SET_RULE, environmentDefinitionRules, heldSetRuleText } from "@ashara/workplace";
 export type { ToolProfile } from "@ashara/workplace";

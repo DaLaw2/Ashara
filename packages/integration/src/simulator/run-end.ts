@@ -1,5 +1,5 @@
 import { sampleCorrection } from "./correction-coverage.js";
-import { sampleModelPaths } from "./coverage.js";
+import { sampleHeldSetRejections, sampleModelPaths } from "./coverage.js";
 import { asharaFaultHaltOf, checkSnapshot, checkTotality, mainFiles, outcomeOf, sourceOf } from "./invariants.js";
 import type { Snapshot } from "./invariants.js";
 import { readCorrelationRows } from "./log-correlation.js";
@@ -53,6 +53,7 @@ export async function judgeRunEnd(parts: EndParts): Promise<void> {
   }
   const finals = await snapshotsOf(observer, projectIds);
   await sampleModelPaths(state.coverage, observer, projectIds);
+  await sampleHeldSetRejections(state.coverage, observer, projectIds);
   // The correction is the first project's, recorded as the system stored it, never as drawn.
   const [corrected] = projectIds;
   if (draws.correctionDraw !== null && corrected !== undefined) {

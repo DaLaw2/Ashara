@@ -1,21 +1,22 @@
 import { buildContextPaths } from "@ashara/execution-infra";
-import type { Logger } from "@ashara/shared";
+import type { Logger, WorkItemId } from "@ashara/shared";
 import { parseWorkItemId, wrapError } from "@ashara/shared";
-import { outcomeRecord } from "@ashara/workplace";
-import type { Outcome } from "@ashara/workplace";
+import { HELD_SET_RULE, outcomeRecord, unheldItems, unheldReason } from "@ashara/workplace";
+import type { Outcome, UnheldEvidence } from "@ashara/workplace";
 import { describeProductChange, formatCheckRuns } from "../check-verdict.js";
 import type { CheckRunReport } from "../check-verdict.js";
 import { mainRunBlocked } from "../dispatch-result.js";
 import type { CheckAuthoring, ExecutionEventSink, ExecutionResult, VerifiedDispatch } from "../dispatch-result.js";
-import { checkAreaOf, discardCheckWorkdir, harvestCheckFiles, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout } from "../task-checks.js";
+import { checkAreaOf, discardCheckWorkdir, harvestCheckFiles, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout, setRejected } from "../task-checks.js";
 import type { TaskCheckStore } from "../task-checks.js";
-import { WORK_FAILED } from "../task-verdict.js";
+import { HELD_SET_GIVEN_UP, WORK_FAILED } from "../task-verdict.js";
+import type { FailureVerdict } from "../task-verdict.js";
 import { RED_RUN_ROLE } from "./dispatch-cells.js";
 import type { DispatchCells } from "./dispatch-cells.js";
 
 export interface CheckHarvestDeps {
   readonly dispatchCells: Pick<DispatchCells, "checkCells" | "checkoutDir">;
-  readonly checks: Pick<TaskCheckStore, "append" | "holdEvidenceOf">;
+  readonly checks: Pick<TaskCheckStore, "append" | "holdEvidenceOf" | "recordSetRejection">;
   readonly eventSink?: ExecutionEventSink;
   readonly logger: Logger;
 }
@@ -35,6 +36,7 @@ export class CheckHarvest {
     reason: string,
     // open-by-design: what the operator needs beyond the author's reason, per rejection
     operator: Record<string, unknown>,
+    verdict: FailureVerdict = WORK_FAILED,
   ): ExecutionResult {
     const { task, sessionId } = d;
     // The summary and the chain, its context included, become the next check attempt's brief
@@ -45,13 +47,54 @@ export class CheckHarvest {
     const chain = wrapError("development", "keepChecks", reason, { taskId: task.id });
     return {
       status: "failed",
-      verdict: WORK_FAILED,
+      verdict,
       detail: summary,
       outcome,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) },
     };
+  }
+
+  /**
+   * A set holding whole on its foundation, rejected for `evidence`: recorded, and failed for another
+   * attempt until the records hold as many identical rejections (same reason, same items) for the
+   * checked task, or for a task an earlier plan wrote, as the held-set rule bounds; then the task
+   * is given up (HELD_SET_GIVEN_UP): the rule's retry budget for that reason and those items is spent.
+   */
+  private async unheldRejected(
+    d: VerifiedDispatch,
+    outcome: Outcome,
+    checkedTaskId: WorkItemId,
+    evidence: UnheldEvidence,
+    rejection: string,
+    // open-by-design: what the operator needs beyond the author's reason, per rejection
+    operator: Record<string, unknown>,
+  ): Promise<ExecutionResult> {
+    const { task } = d;
+    const identical = await this.deps.checks.recordSetRejection({
+      projectId: task.projectId,
+      checkedTaskId,
+      checkTaskId: parseWorkItemId(task.id, "VerifiedDispatch.task.id"),
+      attempt: task.attempt,
+      evidence,
+    });
+    const context = { ...operator, unheld: evidence.kind, items: unheldItems(evidence), identical };
+    if (identical < HELD_SET_RULE.giveUpAfter) return this.checksRejected(d, outcome, rejection, context);
+    this.deps.logger.warn(
+      "quality.held-set-given-up",
+      `check task ${task.id}: the checks of task ${checkedTaskId} hold whole on the foundation and were rejected ${identical} ` +
+        `time(s) for the same reason (${unheldReason(evidence)}); the check task is given up`,
+      { taskId: task.id, attempt: task.attempt, checkedTaskId, unheld: evidence.kind, items: unheldItems(evidence), identical },
+    );
+    return this.checksRejected(
+      d,
+      outcome,
+      `${rejection}\nThis is rejection ${identical} of a set for the same reason and items, the held-set rule's bound of ` +
+        `${HELD_SET_RULE.giveUpAfter}: the task is given up, since every attempt the rule allows was handed this reason and none changed it.`,
+      context,
+      HELD_SET_GIVEN_UP,
+    );
   }
 
   /**
@@ -64,8 +107,10 @@ export class CheckHarvest {
    * and when at least one of its checks fails there decisively or, every one passing there, the
    * records show what it decides held before the correction that put it in scope (redRunSetVerdict's
    * held arm): the checks then join that task's check set, and its delivered sweep closes it on main
-   * before any implementer is dispatched. The kept revision is appended to Quality's task_checks for
-   * the implementation task with the foundation as its baseline; the throwaway branch is discarded
+   * before any implementer is dispatched. A set every check of which passes there without that
+   * evidence is rejected for its typed reason (unheldRejected), and given up at the held-set rule's
+   * bound of identical rejections. The kept revision is appended to Quality's task_checks for the
+   * implementation task with the foundation as its baseline; the throwaway branch is discarded
    * either way.
    */
   async keepChecks(d: VerifiedDispatch, work: CheckAuthoring, outcome: Outcome): Promise<ExecutionResult> {
@@ -133,7 +178,8 @@ export class CheckHarvest {
       }
       const runsReport = formatCheckRuns(redRun.runs, redRunVerdict);
       const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
-      const set = redRunSetVerdict(redRun.runs, await this.deps.checks.holdEvidenceOf(parseWorkItemId(work.checkedTaskId, "CheckAuthoring.checkedTaskId")));
+      const checkedTaskId = parseWorkItemId(work.checkedTaskId, "CheckAuthoring.checkedTaskId");
+      const set = await redRunSetVerdict(redRun.runs, () => this.deps.checks.holdEvidenceOf(checkedTaskId));
       const setLine = redRunSetLine(set);
       const report = setLine === null ? runsReport : `${runsReport}\n${setLine}`;
       eventSink?.emit({
@@ -144,13 +190,13 @@ export class CheckHarvest {
         foundationTaskId: foundation.taskId,
         rejected: problems.map((run) => run.name),
         holdsAlready: redRun.runs.filter((run) => run.exitCode === 0 && redRunProblem(run) === null).map((run) => run.name),
-        setRejected: set.kind === "rejected",
+        setRejected: setRejected(set),
         setHeld: set.kind === "held",
         report,
       });
-      if (problems.length > 0 || set.kind === "rejected") {
-        return this.checksRejected(d, outcome, `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`, atFoundation);
-      }
+      const rejection = `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`;
+      if (set.kind === "unheld") return this.unheldRejected(d, outcome, checkedTaskId, set.evidence, rejection, atFoundation);
+      if (problems.length > 0 || setRejected(set)) return this.checksRejected(d, outcome, rejection, atFoundation);
 
       const revision = await this.deps.checks.append({
         projectId: task.projectId,

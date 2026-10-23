@@ -8,7 +8,7 @@ import { describeErrorChain } from "@ashara/shared";
 import type { LogRecord } from "@ashara/shared";
 import type { AdmissionLedger } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
-import { emptyCoverage } from "./coverage.js";
+import { emptyCoverage, holdCoverageSink } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import type { Database } from "./database.js";
 import type { FakePodman } from "./fake-podman.js";
@@ -350,11 +350,14 @@ export class SimulatedProcess {
           git: faultingGit(seam, gitBroker.runner),
           clock,
           taskLanes: interleaver.lanes,
-          log: judgingSink(
-            this.parts.correlation,
-            () => ({ step: state.cycles, cycleRunning: state.cycleRunning }),
-            state.records,
-            LOG_RECORDS,
+          log: holdCoverageSink(
+            judgingSink(
+              this.parts.correlation,
+              () => ({ step: state.cycles, cycleRunning: state.cycleRunning }),
+              state.records,
+              LOG_RECORDS,
+            ),
+            state.coverage,
           ),
         });
         handle.abort = () => ashara.abort();

@@ -10,6 +10,7 @@ import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
+import { HELD_SET_RULE, heldSetRuleText } from "./check-definition.js";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, DefinedCheck } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
@@ -835,12 +836,12 @@ describe("define_check", () => {
     });
   });
 
-  // A passing check is told the set rule its own task is held to, as the records decide it: a
-  // revision-scoped item that held before closes as held, anything else still needs a failing check.
+  // A passing check is told the held-set rule from the value the red run applies, and what it makes
+  // of this task's set as the records decide it: held, or rejected for its typed reason.
   it("tells the author of a passing check whether a set that holds whole closes the task as held or is rejected", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "define_check", input: { name: "held", command: "true", decides: ["S1"] } }]),
-      () => turn([{ name: "define_check", input: { name: "untested", command: "true", decides: ["S1"] } }]),
+      () => turn([{ name: "define_check", input: { name: "uncorrected", command: "true", decides: ["S1"] } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "Two checks." } }]),
     ]);
     const { checks } = recorder((check) => ({
@@ -848,7 +849,7 @@ describe("define_check", () => {
       run: { name: check.name, command: check.command, exitCode: 0, timedOut: false, output: "" },
       timeoutSeconds: 60,
       rejection: null,
-      holdsAlready: check.name === "held" ? { kind: "still-holds", items: ["S1"] } : { kind: "untested", why: "no correction affects S1" },
+      holdsAlready: check.name === "held" ? { kind: "still-holds", items: ["S1"] } : { kind: "uncorrected", items: ["S1"] },
     }));
 
     await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
@@ -856,9 +857,11 @@ describe("define_check", () => {
     const held = toolResultsOf(requests[1]?.messages.at(-1))[0];
     expect(held).toMatchObject({ value: expect.stringContaining("S1 held before the correction that put them in scope") });
     expect(held).toMatchObject({ value: expect.stringContaining("the task closes as held with no work owed") });
-    expect(held).not.toMatchObject({ value: expect.stringContaining("must fail on the foundation") });
-    expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({
-      value: expect.stringContaining("least one check of the set must fail on the foundation for the reason the task's work is missing, since no correction affects S1."),
+    expect(held).toMatchObject({ value: expect.stringContaining(heldSetRuleText(HELD_SET_RULE)) });
+    const uncorrected = toolResultsOf(requests[2]?.messages.at(-1))[0];
+    expect(uncorrected).toMatchObject({ value: expect.stringContaining(heldSetRuleText(HELD_SET_RULE)) });
+    expect(uncorrected).toMatchObject({
+      value: expect.stringContaining("the set is rejected: no client correction a plan revision took in before the task was planned affects S1"),
     });
   });
 

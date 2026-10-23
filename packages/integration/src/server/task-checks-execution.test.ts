@@ -24,6 +24,7 @@ import { createWorkItemId, systemClock } from "@ashara/shared";
 import { recordingLogger } from "@ashara/shared/testing";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { WorkKind } from "@ashara/organization";
+import { HELD_SET_RULE, heldSetRuleText, unheldReason } from "@ashara/workplace";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { composeDispatchService } from "@ashara/server/compose-core-loop";
 import { testCellInstance } from "../test-cells.js";
@@ -404,6 +405,7 @@ describe("independent verification", () => {
 
   it("a vacuous set, none of whose checks fails on the foundation, is rejected and nothing is stored", async () => {
     const vacuous = await plannedPair("Write a page");
+    const uncited = { kind: "uncited", taskId: vacuous.implementation.id } as const;
 
     const { result, events } = await runTask(vacuous.check, [
       toolCallTurn("define_check", { name: "always", command: "echo fine", decides: ["S1"] }),
@@ -411,7 +413,8 @@ describe("independent verification", () => {
     ]);
 
     expect(result.status).toBe("failed");
-    expect(result.detail).toContain("no check of the set fails on the foundation");
+    expect(result.detail).toContain(`REJECTED, the set: every check passes on the foundation, and ${unheldReason(uncited)}`);
+    expect(result.detail).toContain(heldSetRuleText(HELD_SET_RULE));
     // The detail and the chain are the next check attempt's brief: no commit the cell cannot reach;
     // the operator's copy is in the task_failed event alone.
     expect(result.detail).not.toContain(foundation);
@@ -434,7 +437,8 @@ describe("independent verification", () => {
     const brief = promptText(retry.mock);
     expect(brief).toContain("Previous attempt FAILED");
     expect(brief).toContain("# Error Chain");
-    expect(brief).toContain("no check of the set fails on the foundation");
+    expect(brief).toContain(unheldReason(uncited));
+    expect(brief).toContain(heldSetRuleText(HELD_SET_RULE));
     expect(brief.match(/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/g)).toBeNull();
     // The only 64-hex string a brief may hold is the environment's version, a content hash, never a commit.
     const withoutVersion = brief.replace(/environment, version [0-9a-f]{64}\b/g, "environment, version <v>");

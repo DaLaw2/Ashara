@@ -25,16 +25,37 @@ export const CHECK_RUNNER =
   "environment's image, with no network.";
 
 /**
- * The exit status by which a check states its own verdict that the behaviour it checks is missing.
- * On the foundation only this exit is a decisive failure: any other
- * non-zero exit (the product or the check's harness failing to build or start, a shell error) is a
- * check that never reached its verdict, and counting it would accept "nothing builds" as "the work
- * is missing". Which part of a command is setup and which is the verdict only the check's author
- * knows, so the check declares it; no exit status a tool uses on its own is read as one. 99 is
- * chosen as a status no common build or test tool exits with by itself (they use 1, 2, 101 and the
- * shell's 124-127 and 128+n); a tool that does is told apart by the author's own mapping.
+ * The rule a check task's whole set is kept by on the plan's foundation, beyond each check's own:
+ * Quality's red run applies this value and every text that states the rule to an author renders it
+ * from this value, so no text can state another rule.
  */
-export const CHECK_MISSING_EXIT = 99;
+export interface HeldSetRule {
+  /**
+   * The exit status by which a check states its own verdict that the behaviour it checks is
+   * missing; one check failing on the foundation by it makes the set tell the task's work from its
+   * absence. Any other non-zero exit there (the product or the check's harness failing to build or
+   * start, a shell error) is a check that never reached its verdict, and counting it would accept
+   * "nothing builds" as "the work is missing". Which part of a command is setup and which is the
+   * verdict only the check's author knows, so the check declares it; no exit status a tool uses on
+   * its own is read as one.
+   */
+  readonly decisiveExit: number;
+  /** How many identical rejections of a set holding whole, for the same items, give its task up. */
+  readonly giveUpAfter: number;
+}
+
+/**
+ * 99 is a status no common build or test tool exits with by itself (they use 1, 2, 101 and the
+ * shell's 124-127 and 128+n); a tool that does is told apart by the author's own mapping.
+ * giveUpAfter is a retry policy: a rejected set is handed its typed reason and attempted again, and
+ * a later attempt can still write a check that fails decisively or a plan can record the evidence
+ * that is missing, so a task gets no fewer identical rejections than the failure router gives any
+ * failed attempt before it is given up.
+ */
+export const HELD_SET_RULE: HeldSetRule = { decisiveExit: 99, giveUpAfter: 3 };
+
+/** The exit status by which a check states its own verdict that the behaviour it checks is missing: the held-set rule's decisive exit. */
+export const CHECK_MISSING_EXIT = HELD_SET_RULE.decisiveExit;
 
 /** How a check states its verdict, stated once for each brief and tool that names it. */
 export const CHECK_VERDICT =
@@ -43,16 +64,78 @@ export const CHECK_VERDICT =
   `harness step of its own failed): run such steps first and let their failure exit as it does, then map only the ` +
   `verdict's failure to ${CHECK_MISSING_EXIT}, for example \`<build step> && { <test of the behaviour> || exit ${CHECK_MISSING_EXIT}; }\`.`;
 
+/** Vision item ids, never none. */
+type ItemIds = readonly [string, ...string[]];
+
 /**
- * What the red run at finish makes of a set whose every check passes on the foundation, as the
- * records decide it. `still-holds`: the items it decides held before the correction that put them
- * in scope, so the set shows they still hold and the task closes as held with no work owed.
- * `untested`: the set is rejected, since it does not test what the task adds; at least one check
- * must fail on the foundation for the reason the task's work is missing.
+ * What a check set of an implementation task whose every check passes on its foundation is evidence
+ * of, as the records decide it. `still-holds`: every item it decides is a key a client correction
+ * put in scope and an earlier Completed task's checks decide, so it held before the correction and
+ * the set shows it still holds. Every other arm is a typed reason the set is rejected: holding
+ * before any work, it shows only that it does not test what the task adds.
  */
-type SetHoldReading =
-  | { readonly kind: "still-holds"; readonly items: readonly [string, ...string[]] }
-  | { readonly kind: "untested"; readonly why: string };
+export type HoldEvidence =
+  | { readonly kind: "still-holds"; readonly items: ItemIds }
+  /** The task records no vision item it cites. */
+  | { readonly kind: "uncited"; readonly taskId: string }
+  /** No client correction a plan revision took in before the task was planned affects any item it cites: a first plan's task. */
+  | { readonly kind: "uncorrected"; readonly items: ItemIds }
+  /** A correction put some cited items in scope and none affects the others. */
+  | { readonly kind: "partly-corrected"; readonly corrected: ItemIds; readonly uncorrected: ItemIds }
+  /** Corrected items no Completed task's checks decide, a guarantee among them: one the correction adds, or one never delivered. */
+  | { readonly kind: "undelivered"; readonly items: ItemIds }
+  /** Every corrected item no Completed task's checks decide is an amended assumption no earlier check decided. */
+  | { readonly kind: "assumption-undecided"; readonly items: ItemIds };
+
+/** A HoldEvidence arm that rejects a set whose every check passes on the foundation. */
+export type UnheldEvidence = Exclude<HoldEvidence, { readonly kind: "still-holds" }>;
+
+/** The held-set rule as an author is told it. */
+export function heldSetRuleText(rule: HeldSetRule): string {
+  return (
+    `At least one check of the set must fail on the foundation by exiting ${rule.decisiveExit}, for the reason the ` +
+    `task's work is missing there. A set whose every check passes on the foundation is kept only when the records show ` +
+    `that every item it decides held before the client correction that put it in scope: the task then closes as held, ` +
+    `with no work owed. Any other set whose every check passes there is rejected, and after ${rule.giveUpAfter} ` +
+    `identical rejections for the same items the task is given up.`
+  );
+}
+
+/** Why a set whose every check passes on the foundation is rejected, by the evidence the records hold. */
+export function unheldReason(evidence: UnheldEvidence): string {
+  switch (evidence.kind) {
+    case "uncited":
+      return `task ${evidence.taskId} records no vision item it cites (task_spec.sources), so nothing shows what the set decides held before`;
+    case "uncorrected":
+      return `no client correction a plan revision took in before the task was planned affects ${evidence.items.join(", ")}, so the set does not test what the task adds`;
+    case "partly-corrected":
+      return (
+        `a client correction put ${evidence.corrected.join(", ")} in scope, but none affects ${evidence.uncorrected.join(", ")}, ` +
+        `so the set does not test what the task adds for them`
+      );
+    case "undelivered":
+      return (
+        `no Completed implementation task's checks decide ${evidence.items.join(", ")}, so nothing shows they held before ` +
+        `the correction: what a correction adds, or what was never delivered, is behaviour the set does not test`
+      );
+    case "assumption-undecided":
+      return `no earlier check decided the amended assumption(s) ${evidence.items.join(", ")}, so nothing shows they held before the correction`;
+  }
+}
+
+/** The items an unheld rejection is about, sorted: two rejections of one reason and the same items are identical. */
+export function unheldItems(evidence: UnheldEvidence): string[] {
+  switch (evidence.kind) {
+    case "uncited":
+      return [];
+    case "partly-corrected":
+      return [...evidence.corrected, ...evidence.uncorrected].sort();
+    case "uncorrected":
+    case "undelivered":
+    case "assumption-undecided":
+      return [...evidence.items].sort();
+  }
+}
 
 /**
  * Z0's immediate red run of one defined check on the plan's foundation, with the files the attempt
@@ -72,7 +155,7 @@ export type CheckRedRunPreview =
        * behaviour that already holds there; then what a set whose every check passes there shows,
        * as the records decide it.
        */
-      readonly holdsAlready: SetHoldReading | null;
+      readonly holdsAlready: HoldEvidence | null;
     }
   /** The attempt's files could not be kept or placed on the foundation, so the check could not run. */
   | { readonly kind: "files_refused"; readonly detail: string }

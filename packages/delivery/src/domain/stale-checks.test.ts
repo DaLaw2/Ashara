@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
+import { HELD_SET_RULE, heldSetRuleText } from "../acl/workplace-acl.js";
 import { exitDisputedCheck, exitStaleChecks, exitSuiteReview } from "./stale-checks.js";
 import { createPendingWorkItem, startWorkItem } from "./work-item.js";
 import type { WorkItem } from "./work-item.js";
@@ -27,6 +28,7 @@ describe("exitStaleChecks", () => {
     expect(check.status).toBe("Pending");
     expect(check.events.map((e) => e.eventType)).toEqual(["work_item.reopened"]);
     expect(task.events.map((e) => e.eventType)).toEqual(["work_item.awaiting_checks"]);
+    expect(check.blockedReason).toMatchObject({ replanContext: { detail: expect.stringContaining(heldSetRuleText(HELD_SET_RULE)) } });
   });
 
   test("a stale revision 3 is past the bound: the task is given up and the check task untouched", () => {
@@ -190,6 +192,7 @@ describe("exitDisputedCheck: an implementer disputes one check task's checks at 
     const check = completedCheckTask();
     expect(exitDisputedCheck(task, check, dispute(check.id, 2))).toEqual({ kind: "rewrite" });
     expect([task.status, check.status]).toEqual(["Pending", "Pending"]);
+    expect(check.blockedReason).toMatchObject({ replanContext: { detail: expect.stringContaining(heldSetRuleText(HELD_SET_RULE)) } });
   });
 
   test("a dispute past the bound gives the task up for a plan repair, never waiting on a person", () => {

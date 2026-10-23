@@ -1,10 +1,11 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewFindings, taskChecks } from "@ashara/db/schema/quality";
+import { heldSetRejections, suiteReviewFindings, taskChecks } from "@ashara/db/schema/quality";
 import type { Database } from "@ashara/db";
 import { CapabilityLevelSchema } from "@ashara/finance";
 import type { CapabilityLevel } from "@ashara/finance";
-import { attemptsWithModel } from "@ashara/workplace";
+import { attemptsWithModel, unheldItems } from "@ashara/workplace";
+import type { HoldEvidence } from "@ashara/workplace";
 import {
   checkTasksOfReview,
   completedImplementationTaskIds,
@@ -17,7 +18,7 @@ import {
   workItemSummaries,
 } from "../acl/delivery-acl.js";
 import type { VisionSource } from "../acl/engagement-acl.js";
-import type { HoldEvidence } from "../task-checks.js";
+import type { SetRejection } from "../task-checks.js";
 import { inLatestCheckRevision, latestCheckRevision, StoredDecidesSchema } from "../stored-checks.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
@@ -36,6 +37,15 @@ const NO_REOPEN = 0;
 
 /** A count of suite_review_findings rows as Postgres returns it cast to int. */
 const ReopenCountSchema = z.number().int().nonnegative();
+
+/** How many identical held-set rejections a project records, as Postgres returns the count cast to int: at least the one just written. */
+const IdenticalCountSchema = z.number().int().positive();
+
+/** `list` as a non-empty tuple, or null when it is empty. */
+function nonEmpty(list: readonly string[]): readonly [string, ...string[]] | null {
+  const [first, ...rest] = list;
+  return first === undefined ? null : [first, ...rest];
+}
 
 /** A task's latest stored revision of checks as latestCheckRevision reads it: null when none is stored. */
 const StoredRevisionSchema = z.number().int().positive().nullable();
@@ -179,30 +189,69 @@ export class TaskCheckRepository {
 
   /**
    * What a check set of implementation task `taskId` that holds whole on its foundation is evidence
-   * of (HoldEvidence): still-holds only when every item it cites is a key a client correction
-   * affects, taken in by a plan revision written at or before it, and decided by the latest checks
-   * of another Completed implementation task. Throws CheckedTaskMissing when no such task exists.
+   * of (HoldEvidence), one arm for every shape of the records: still-holds only when every item it
+   * cites is a key a client correction affects, taken in by a plan revision written at or before
+   * it, and decided by the latest checks of another Completed implementation task; otherwise the
+   * typed reason it is not. Throws CheckedTaskMissing when no such task exists.
    */
   async holdEvidenceOf(taskId: string): Promise<HoldEvidence> {
     const task = await correctedTaskOf(this.db, taskId);
     if (task === null) throw new CheckedTaskMissing(taskId);
-    const sources = parseWorkItemJsonb(task).taskSpec?.sources;
-    const [first, ...rest] = sources === undefined ? [] : [...new Set(sources.map((source) => source.id))];
-    if (first === undefined) return { kind: "untested", why: `task ${taskId} records no vision item it cites (task_spec.sources)` };
-    const cited: readonly [string, ...string[]] = [first, ...rest];
+    // eslint-disable-next-line no-restricted-syntax -- evidence default: a task recording no sources cites nothing, which the uncited arm rejects below
+    const sources = parseWorkItemJsonb(task).taskSpec?.sources ?? [];
+    const cited = nonEmpty([...new Set(sources.map((source) => source.id))]);
+    if (cited === null) return { kind: "uncited", taskId };
     const corrected = new Set(task.corrected);
-    const uncorrected = cited.filter((id) => !corrected.has(id));
-    if (uncorrected.length > 0) {
-      return { kind: "untested", why: `no client correction a plan revision took in before task ${taskId} was planned affects ${uncorrected.join(", ")}` };
-    }
+    const correctedCited = nonEmpty(cited.filter((id) => corrected.has(id)));
+    const uncorrected = nonEmpty(cited.filter((id) => !corrected.has(id)));
+    if (correctedCited === null) return { kind: "uncorrected", items: cited };
+    if (uncorrected !== null) return { kind: "partly-corrected", corrected: correctedCited, uncorrected };
     const completed = await this.completedOf(task.projectId, taskId);
     // A check stored before decides was recorded decides nothing on record.
     const decided = new Set(completed.checked.flatMap((record) => record.checks.flatMap((check) => (check.decides === null ? [] : check.decides))));
-    const undelivered = cited.filter((id) => !decided.has(id));
-    if (undelivered.length > 0) {
-      return { kind: "untested", why: `no Completed implementation task's checks decide ${undelivered.join(", ")}, so nothing shows it held before the correction` };
-    }
-    return { kind: "still-holds", items: cited };
+    const undecided = nonEmpty(cited.filter((id) => !decided.has(id)));
+    if (undecided === null) return { kind: "still-holds", items: cited };
+    const assumptions = new Set(sources.filter((source) => source.type === "assumption").map((source) => source.id));
+    return undecided.every((id) => assumptions.has(id)) ? { kind: "assumption-undecided", items: undecided } : { kind: "undelivered", items: undecided };
+  }
+
+  /**
+   * Records one rejection of a check set holding whole on its foundation (held_set_rejections) and
+   * returns how many identical ones the records hold for its checked task, this one included: the
+   * same reason and the same items, rejected for that task or for a task written before it (a plan
+   * that planned the same items earlier). A task of the same plan is written with it, before any
+   * rejection, so a sibling citing the same items never counts toward its bound. For a task citing
+   * no item only its own rejections count. Writing the same check attempt's rejection again counts
+   * it once. Throws CheckedTaskMissing when the checked task does not exist.
+   */
+  async recordSetRejection(rejection: SetRejection): Promise<number> {
+    const checked = await correctedTaskOf(this.db, rejection.checkedTaskId);
+    if (checked === null) throw new CheckedTaskMissing(rejection.checkedTaskId);
+    const items = unheldItems(rejection.evidence);
+    const sameTask = eq(heldSetRejections.checkedTaskId, rejection.checkedTaskId);
+    await this.db
+      .insert(heldSetRejections)
+      .values({
+        projectId: rejection.projectId,
+        checkedTaskId: rejection.checkedTaskId,
+        checkTaskId: rejection.checkTaskId,
+        attempt: rejection.attempt,
+        reason: rejection.evidence.kind,
+        items,
+      })
+      .onConflictDoNothing();
+    const [row] = await this.db
+      .select({ identical: sql<unknown>`count(*)::int` })
+      .from(heldSetRejections)
+      .where(
+        and(
+          eq(heldSetRejections.projectId, rejection.projectId),
+          eq(heldSetRejections.reason, rejection.evidence.kind),
+          sql`${heldSetRejections.items} = ${sql.param(items)}::text[]`,
+          items.length > 0 ? or(sameTask, sql`${heldSetRejections.createdAt} < ${checked.createdAt}::timestamptz`) : sameTask,
+        ),
+      );
+    return IdenticalCountSchema.parse(row?.identical);
   }
 
   /**

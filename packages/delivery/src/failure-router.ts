@@ -157,5 +157,11 @@ function nonRetryableReason(ground: Extract<FailureVerdict, { kind: "non-retryab
     // between the work and main to the plan to re-cut.
     case "conflict-markers-left":
       return "the attempt was handed its conflict with main and left conflict markers in it; the plan is repaired around it";
+    // The held-set rule's retry budget is spent: the set was handed its reason on every attempt it allows.
+    case "held-set-given-up":
+      return (
+        "its check set holds whole on the plan's foundation and was rejected for the same reason and items as often as " +
+        "the held-set rule allows; the task is given up and the plan is repaired around it"
+      );
   }
 }

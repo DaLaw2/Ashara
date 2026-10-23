@@ -10,6 +10,9 @@ function messagesGuarantee(behaviours: number): string {
   return `G${behaviours + 1}`;
 }
 
+/** The key a first reading gives the assumption its one question asks about. */
+const ASKED_ASSUMPTION = "A1";
+
 /** The Liaison's reading of a tender, first and second, as the stand-in answers it. */
 export class IntakeStandIn {
   /** Every tender reading the stand-ins were asked for or answered whole, in order (intake-readings.ts lazyIntakes). */
@@ -75,7 +78,10 @@ export class IntakeStandIn {
    * question the tender leaves open, or none, when the lazy intake persona fires (sticky: it asks
    * nothing whatever the tender leaves open) or a reading misses the open decision
    * (`unaskedReading`, per reading). On an `unverifiable` tender every guarantee is observed in stored
-   * data, so Ashara can verify none of them.
+   * data, so Ashara can verify none of them. A reading that asks may rest the guarantee naming no
+   * behaviour on the asked assumption by its source alone (`bySource`): the assumption then underpins
+   * nothing and an exclusion of its own cites it, so a correction amending it reaches that guarantee
+   * only through the guarantee's source.
    */
   private intake(unverifiable: boolean): { readonly questions: readonly unknown[] } & Record<string, unknown> {
     const { universe, personas, tape, rates } = this.context;
@@ -86,28 +92,29 @@ export class IntakeStandIn {
         site: "liaison-intake",
         action: persona ? "persona lazy: no question asked" : "unasked: no question asked",
       });
+    const bySource = !lazy && tape.chance("model.liaison-intake.rests-by-source", 0.5);
     const tender = (quote: string) => ({ kind: "tender", quote });
-    const guarantee = (id: string, statement: string, quote: string) => ({
+    const guarantee = (id: string, statement: string, source: Record<string, string>) => ({
       id,
       statement,
       observable: { interface: ["I1"], observation: unverifiable ? "stored-data" : "output" },
       refutedBy: [`The product does not hold that ${statement.charAt(0).toLowerCase()}${statement.slice(1)}`],
-      source: tender(quote),
+      source,
     });
     return {
       summary: `A product with ${universe.behaviours.length} behaviours.`,
       interface: [{ id: "I1", text: "The product, run as the tender asks.", source: tender("Build a product") }],
       guarantees: [
-        ...universe.behaviours.map((b, i) => guarantee(`G${i + 1}`, `The product does ${b}.`, b)),
+        ...universe.behaviours.map((b, i) => guarantee(`G${i + 1}`, `The product does ${b}.`, tender(b))),
         // It names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that
         // line's check decides it.
         guarantee(
           messagesGuarantee(universe.behaviours.length),
           "Every message reads the same on every run.",
-          "Build a product",
+          bySource ? { kind: "assumption", id: ASKED_ASSUMPTION } : tender("Build a product"),
         ),
       ],
-      questions: lazy ? [] : this.intakeQuestions(true),
+      questions: lazy ? [] : this.intakeQuestions(true, bySource),
       assumptions: [
         {
           id: "A2",
@@ -125,26 +132,32 @@ export class IntakeStandIn {
           underpins: [],
         },
       ],
-      exclusions: [{ id: "X1", text: "Any network service.", source: { kind: "assumption", id: "A3" } }],
+      exclusions: [
+        { id: "X1", text: "Any network service.", source: { kind: "assumption", id: "A3" } },
+        ...(bySource
+          ? [{ id: "X2", text: "Messages in another language.", source: { kind: "assumption", id: ASKED_ASSUMPTION } }]
+          : []),
+      ],
     };
   }
 
   /**
    * The questions an honest reading of the tender asks: the one decision it leaves open that the
-   * client would see, keyed A1 by a first reading (`keyed`) and by intake after a second reading's.
+   * client would see, keyed A1 by a first reading (`keyed`) and by intake after a second reading's;
+   * it underpins the messages guarantee unless that guarantee rests on it by its source (`bySource`).
    */
-  private intakeQuestions(keyed: boolean): readonly unknown[] {
+  private intakeQuestions(keyed: boolean, bySource = false): readonly unknown[] {
     return [
       {
         text: "Which language should messages use?",
         whyItMatters: "It decides what every message shows.",
         // A model that cannot tell answers "undecided": the vision records it client-visible, so it is checked.
         assumption: {
-          ...(keyed ? { id: "A1" } : {}),
+          ...(keyed ? { id: ASKED_ASSUMPTION } : {}),
           statement: "Messages are in English.",
           rationale: "The tender is written in English.",
           kind: "undecided",
-          underpins: [messagesGuarantee(this.context.universe.behaviours.length)],
+          underpins: bySource ? [] : [messagesGuarantee(this.context.universe.behaviours.length)],
         },
       },
     ];

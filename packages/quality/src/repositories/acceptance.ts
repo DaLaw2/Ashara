@@ -394,9 +394,15 @@ interface DueTerminalSweepRow {
  * stopped, then each halt episode open on an active project, or ended by a resumption before either
  * its halt or its resumption was told, of a project not stopped. A second stop of a project already
  * stopped stopped nothing, so it is owed none. The stop's and the halt's report wait for this sweep:
- * each is told only once the sweep, or the fault that exhausted its retries, is on record.
+ * each is told only once the sweep, or the fault that exhausted its retries, is on record. The
+ * terminals and their projects are read in one snapshot: a project deleted between two separate
+ * reads would leave a terminal naming a project no row holds.
  */
-export async function listDueTerminalSweeps(db: DbHandle): Promise<DueTerminalSweepRow[]> {
+export async function listDueTerminalSweeps(db: Database): Promise<DueTerminalSweepRow[]> {
+  return db.transaction((tx) => dueTerminalSweepsIn(tx), { isolationLevel: "repeatable read", accessMode: "read only" });
+}
+
+async function dueTerminalSweepsIn(db: DbTransaction): Promise<DueTerminalSweepRow[]> {
   const stopped = await stopsThatStopped(db, (stop) => sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id})`);
   const open = await haltEpisodesWhere(
     db,

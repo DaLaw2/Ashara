@@ -42,7 +42,7 @@ function logIntake(logger: Logger, outcome: IntakeOutcome): void {
 function logAnswer(logger: Logger, outcome: AnswerOutcome): void {
   if (outcome.kind === "stated") {
     const replan = outcome.replanRequested
-      ? "; the plan relied on it, so the tasks citing it are held until its plan is revised"
+      ? "; the plan relied on it, so the tasks citing it or a guarantee resting on it are held until its plan is revised"
       : "";
     const restated = outcome.restatedKeys.length === 0 ? "" : `, and restated ${outcome.restatedKeys.join(", ")}`;
     logger.info(

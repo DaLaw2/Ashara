@@ -46,6 +46,18 @@ describe("lifecycle simulator, directed: a client's correction", () => {
     expect(clean.outcome.kind, statements(clean)).toBe("accepted");
   }, 90_000);
 
+  // The same answer, where the asked assumption underpins nothing and the messages guarantee rests on
+  // it by its source alone: the correction still reaches that guarantee (I2's unreached clause reads a
+  // guarantee's source as well as an assumption's underpins), so its revision plans it again.
+  it("holds the work citing a guarantee resting on an amended assumption by its source alone", async (ctx) => {
+    const clean = await directed(ctx, [draw("model.liaison-intake.rests-by-source", 1), draw("client.late-change", 1)]);
+    expect(keys(clean), statements(clean)).toEqual([]);
+    expect(clean.trace.some((line) => line.startsWith("client answer changes an assumption")), clean.trace.join("\n")).toBe(true);
+    const restated = clean.records.some((r) => r.event === "quality.task-started" && String(r.fields?.["title"]).startsWith("Deliver what the corrected contract states"));
+    expect(restated, clean.trace.join("\n")).toBe(true);
+    expect(clean.outcome.kind, statements(clean)).toBe("accepted");
+  }, 90_000);
+
   // The same answer, where the messages guarantee already holds on main as the amended assumption
   // states it: its check passes on the revision's foundation. The guarantee held before the
   // correction (the merged first task's checks decide it), so the set is kept as evidence it still

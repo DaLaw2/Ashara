@@ -14,6 +14,7 @@ export function createTaskCheckStore(db: ReturnType<typeof createDb>): TaskCheck
     append: (write) => repo.append(write),
     latest: (taskId) => repo.latest(taskId),
     holdEvidenceOf: (taskId) => repo.holdEvidenceOf(taskId),
+    recordSetRejection: (rejection) => repo.recordSetRejection(rejection),
   };
 }
 

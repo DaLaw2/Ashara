@@ -405,3 +405,34 @@ export const reviewerOutcomes = pgTable(
     onePerEvidence: unique("reviewer_outcomes_one_per_evidence").on(t.verdictKind, t.verdictId, t.reviewerRole, t.evidenceKind, t.evidenceRef),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// held_set_rejections (Quality): one row per check attempt whose set held whole on its foundation
+// and was rejected because the records do not show what it decides held before (Workplace's
+// HoldEvidence): the reason's kind and the sorted items it is about. Identical rows (same project,
+// reason and items, of the checked task or of a task written before it) bound how often a task is
+// attempted again before it is given up. Append-only; a row leaves only with its project.
+// ---------------------------------------------------------------------------
+
+export const heldSetRejections = pgTable(
+  "held_set_rejections",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    checkedTaskId: uuid("checked_task_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "cascade" }),
+    checkTaskId: uuid("check_task_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "cascade" }),
+    attempt: integer().notNull(),
+    reason: text().notNull(),
+    items: text().array().notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    onePerAttempt: unique("held_set_rejections_one_per_attempt").on(t.checkTaskId, t.attempt),
+  }),
+);

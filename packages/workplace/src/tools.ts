@@ -5,8 +5,8 @@ import type { TurnToolSchema } from "@ashara/finance";
 import { joinElided, uncutText, wholeText } from "@ashara/shared";
 import type { ElidedText } from "@ashara/shared";
 import type { ToolProfile } from "./assignment.js";
-import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
-import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe } from "./check-definition.js";
+import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT, HELD_SET_RULE, heldSetRuleText, unheldReason } from "./check-definition.js";
+import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe, HoldEvidence } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { truncateElided } from "./records.js";
@@ -239,8 +239,8 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
     CHECK_RUNNER +
     " The check passes when the command exits 0 and prints output. " +
     CHECK_VERDICT +
-    ` At least one check must FAIL on the plan's foundation, by exiting ${CHECK_MISSING_EXIT} within its time limit, for ` +
-    "the reason the task's work is missing; a check that fails there with any other exit is rejected. Any file a " +
+    ` ${heldSetRuleText(HELD_SET_RULE)} A check that fails on the foundation with any other exit than ` +
+    `${CHECK_MISSING_EXIT}, or does not exit there within its time limit, is rejected. Any file a ` +
     "check needs must be one you write in your checks directory (the Context names it): only those are kept with " +
     "the checks and written over the project whenever they run; a file you write anywhere else is discarded. A check " +
     "that changes a file the project tracks is rejected. The check is red-run at once on the foundation, with your " +
@@ -451,18 +451,21 @@ function formatDefinedCheck(name: string, defined: Extract<CheckDefinitionResult
     `  output: ${run.output === "" ? "(empty)" : run.output}`,
     redRun.rejection !== null
       ? `WOULD BE REJECTED at finish: ${redRun.rejection}. Fix it and define it again under the same name.`
-      : redRun.holdsAlready?.kind === "still-holds"
-        ? `It passes on the foundation: it is kept as a guard of behaviour that already holds there. The records show ` +
-          `${redRun.holdsAlready.items.join(", ")} held before the correction that put them in scope: if every check of the ` +
-          `set passes on the foundation at finish, the task closes as held with no work owed.`
-        : redRun.holdsAlready?.kind === "untested"
-          ? `It passes on the foundation: it is kept as a guard of behaviour that already holds there. At finish at ` +
-            `least one check of the set must fail on the foundation for the reason the task's work is missing, since ` +
-            `${redRun.holdsAlready.why}.`
-          : `It fails on the foundation. Make sure it fails for the reason the task's work is missing, not because of a ` +
-            `syntax error or a file that does not exist: such a check can never pass.`,
+      : redRun.holdsAlready === null
+        ? `It fails on the foundation. Make sure it fails for the reason the task's work is missing, not because of a ` +
+          `syntax error or a file that does not exist: such a check can never pass.`
+        : `It passes on the foundation: it is kept as a guard of behaviour that already holds there. ` +
+          `${heldSetRuleText(HELD_SET_RULE)} ${holdingSetOutcome(redRun.holdsAlready)}`,
   ];
   return result(lines.join("\n"), redRun.rejection !== null);
+}
+
+/** What the held-set rule makes of this task's set if every check of it passes on the foundation at finish. */
+function holdingSetOutcome(evidence: HoldEvidence): string {
+  return evidence.kind === "still-holds"
+    ? `The records show ${evidence.items.join(", ")} held before the correction that put them in scope: if every check ` +
+        `of the set passes on the foundation at finish, the task closes as held with no work owed.`
+    : `If every check of the set passes on the foundation at finish, the set is rejected: ${unheldReason(evidence)}.`;
 }
 
 /** probe_foundation's answer: the command's run on the foundation; nothing was recorded. */

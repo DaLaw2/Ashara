@@ -1,4 +1,4 @@
-import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT, environmentDefinitionRules } from "./acl/workplace-acl.js";
+import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT, HELD_SET_RULE, environmentDefinitionRules, heldSetRuleText } from "./acl/workplace-acl.js";
 import type { WorkKind } from "./work-kind.js";
 
 /**
@@ -44,7 +44,7 @@ const CHECK_DUTIES = [
   `foundation: the project as it stood before any task of the plan did its work. Your workspace shows the project as`,
   `it is now, which may already hold some of that task's behaviour, delivered by other work.`,
   `- Define each check with define_check: a name, a shell command and the ids of the cited vision items it decides.`,
-  `  Every item the task cites must be decided by at least one check, or the checks are not kept. ${CHECK_RUNNER}`,
+  `  Every item the task cites must have a check that decides it, or the checks are not kept. ${CHECK_RUNNER}`,
   `  A check passes when its command exits 0 and prints output, and fails otherwise. ${CHECK_VERDICT}`,
   `- Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites: a check states`,
   `  observable behaviour an acceptance line asks for, as its cited items say it, never how it is built. Check nothing`,
@@ -58,8 +58,8 @@ const CHECK_DUTIES = [
   `  never test it, except as the public interface names it (a command, a file the client reads), in its one form.`,
   `- Name the files and entry points the project already has (its file tree is in the Project Context Map below),`,
   `  or the ones the task names; do not invent other names for them.`,
-  `- At least one check must FAIL on the foundation by exiting ${CHECK_MISSING_EXIT}, for the reason the task's work is missing there; a check that`,
-  `  passes on the foundation is kept as a guard of behaviour that already holds. Write each check for the task's`,
+  `- ${heldSetRuleText(HELD_SET_RULE)}`,
+  `  A check that passes on the foundation is kept as a guard of behaviour that already holds. Write each check for the task's`,
   `  behaviour as its acceptance lines and their cited items state it, never stronger to make it fail: a check that demands more`,
   `  than the task asks for makes the task's developer build more than the task. A check that times out, whose`,
   `  command cannot be found or run, or that fails on the foundation with any exit other than ${CHECK_MISSING_EXIT}, is rejected:`,

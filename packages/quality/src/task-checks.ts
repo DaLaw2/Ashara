@@ -13,16 +13,15 @@ import {
 } from "@ashara/execution-infra";
 import { joinElided, keepEnds, renderElided } from "@ashara/shared";
 import type { ElidedText, Logger, ProjectId, WorkItemId } from "@ashara/shared";
-import { CHECK_MISSING_EXIT, CHECK_RUNNER } from "@ashara/workplace";
-import type { CheckDefinition, CheckRedRunPreview, CheckRun, DefinedCheck, FoundationProbe } from "@ashara/workplace";
+import { CHECK_MISSING_EXIT, CHECK_RUNNER, HELD_SET_RULE, heldSetRuleText, unheldReason } from "@ashara/workplace";
+import type { CheckDefinition, CheckRedRunPreview, CheckRun, DefinedCheck, FoundationProbe, HoldEvidence, UnheldEvidence } from "@ashara/workplace";
 import { describeProductChange } from "./check-verdict.js";
 import type { CheckRunReport, ProductChangedReport } from "./check-verdict.js";
 
 // Independent verification: the check
 // author writes an implementation task's checks in its check task, before the implementation
-// starts. Z0 keeps a set of checks only if it fails on the plan revision's foundation (the red-run
-// rule: a fixed commit, never today's main), or holds there whole for items a client correction
-// put in scope that held before it (HoldEvidence), stores it in Quality's task_checks, and decides
+// starts. Z0 keeps a set of checks only by the held-set rule (Workplace's HELD_SET_RULE) on the plan
+// revision's foundation (a fixed commit, never today's main), stores it in Quality's task_checks, and decides
 // the implementation task by running the stored checks, with their stored files written over
 // whatever the implementer left at those paths, on a throwaway checkout of its tentative merge.
 // Nothing a check runs is on the host: every command runs in a cell.
@@ -132,20 +131,22 @@ export interface TaskCheckStore {
   latest(taskId: WorkItemId): Promise<TaskChecks | null>;
   /** What a check set of the implementation task that holds whole on its foundation is evidence of (HoldEvidence). */
   holdEvidenceOf(taskId: WorkItemId): Promise<HoldEvidence>;
+  /**
+   * Records that a check attempt's set holding whole on its foundation was rejected for `evidence`;
+   * returns how many identical rejections (same reason, same items) the records hold for the checked task or a task
+   * written before it, this one included; a sibling task of the same plan never counts.
+   */
+  recordSetRejection(rejection: SetRejection): Promise<number>;
 }
 
-/**
- * What a check set of an implementation task that holds whole on its foundation is evidence of, as
- * the records decide it. `still-holds`: every item the task cites is a key a client correction
- * affects, taken in by a plan revision written at or before the task (correction_holds), and is
- * decided by the latest checks of a Completed implementation task: it held before the correction,
- * so checks that hold before any work show it still holds as the correction states it. `untested`:
- * anything else, a first plan's task among them, where checks that hold before any work show only
- * that they do not test what the task adds.
- */
-export type HoldEvidence =
-  | { readonly kind: "still-holds"; readonly items: readonly [string, ...string[]] }
-  | { readonly kind: "untested"; readonly why: string };
+/** One rejection of a check set that holds whole on its foundation, as recordSetRejection records it. */
+export interface SetRejection {
+  readonly projectId: ProjectId;
+  readonly checkedTaskId: WorkItemId;
+  readonly checkTaskId: WorkItemId;
+  readonly attempt: number;
+  readonly evidence: UnheldEvidence;
+}
 
 /** What recording one definition did: refused, or kept as the last definition of its name. */
 type CheckRecording =
@@ -693,32 +694,38 @@ export function redRunProblem(run: CheckRun): string | null {
 
 /** Whether a check's run on the foundation is a decisive failure there: its own verdict that the behaviour is missing. */
 function failsDecisively(run: CheckRun): boolean {
-  return run.exitCode === CHECK_MISSING_EXIT && redRunProblem(run) === null;
+  return run.exitCode === HELD_SET_RULE.decisiveExit && redRunProblem(run) === null;
 }
 
-/** The red run's verdict on the whole set, beyond each check's own (redRunSetVerdict). */
+/** The red run's verdict on the whole set by the held-set rule (HELD_SET_RULE), beyond each check's own. */
 export type RedRunSetVerdict =
   /** At least one check fails on the foundation decisively: the set tells the task's work from its absence. */
   | { readonly kind: "decisive" }
   /** Every check passes on the foundation and the records show the items it decides held before: they still hold. */
   | { readonly kind: "held"; readonly items: readonly [string, ...string[]] }
-  | { readonly kind: "rejected"; readonly problem: string };
+  /** No check fails there decisively and not every one passes: some check reached no verdict, or none ran. */
+  | { readonly kind: "unverdicted" }
+  /** Every check passes there and the records do not show what it decides held before: the typed reason. */
+  | { readonly kind: "unheld"; readonly evidence: UnheldEvidence };
 
 /**
- * The red run's verdict on the whole set, beyond each check's own: decisive when at least one check
- * fails on the foundation decisively, for the reason the task's work is missing there. Every check
- * passing there is held when `evidence` is still-holds: the items it decides are what a correction
- * put in scope and held before it, so the set shows they still hold and no work is owed. Anything
- * else is rejected: a set holding before any work on items nothing shows held does not test what
- * the task adds.
+ * The red run's verdict on the whole set by the held-set rule: decisive when at least one check
+ * fails on the foundation decisively, for the reason the task's work is missing there. Only a set
+ * whose every check passes there reads `evidenceOf`, which decides it held or unheld from the
+ * records; any other set reaches no verdict as a whole.
  */
-export function redRunSetVerdict(runs: readonly CheckRun[], evidence: HoldEvidence): RedRunSetVerdict {
+export async function redRunSetVerdict(runs: readonly CheckRun[], evidenceOf: () => Promise<HoldEvidence>): Promise<RedRunSetVerdict> {
   if (runs.some(failsDecisively)) return { kind: "decisive" };
-  const problem = `no check of the set fails on the foundation; at least one must fail there by exiting ${CHECK_MISSING_EXIT}, for the reason the task's work is missing`;
   const holdsWhole = runs.length > 0 && runs.every((run) => run.exitCode === 0 && redRunProblem(run) === null);
-  if (!holdsWhole) return { kind: "rejected", problem };
+  if (!holdsWhole) return { kind: "unverdicted" };
+  const evidence = await evidenceOf();
   if (evidence.kind === "still-holds") return { kind: "held", items: evidence.items };
-  return { kind: "rejected", problem: `${problem}; every check passes there, and ${evidence.why}` };
+  return { kind: "unheld", evidence };
+}
+
+/** Whether the set as a whole is rejected: it neither tells the task's work from its absence nor shows its items held. */
+export function setRejected(set: RedRunSetVerdict): set is Extract<RedRunSetVerdict, { readonly kind: "unverdicted" | "unheld" }> {
+  return set.kind === "unverdicted" || set.kind === "unheld";
 }
 
 /** The set's line in a red run's report; null for a decisive set, which needs none. */
@@ -728,8 +735,10 @@ export function redRunSetLine(set: RedRunSetVerdict): string | null {
       return null;
     case "held":
       return `HELD, the set: every check passes on the foundation, and ${set.items.join(", ")} held before the correction that put them in scope, so they still hold`;
-    case "rejected":
-      return `REJECTED, the set: ${set.problem}`;
+    case "unverdicted":
+      return `REJECTED, the set: no check of it fails on the foundation and not every one passes there. ${heldSetRuleText(HELD_SET_RULE)}`;
+    case "unheld":
+      return `REJECTED, the set: every check passes on the foundation, and ${unheldReason(set.evidence)}. ${heldSetRuleText(HELD_SET_RULE)}`;
   }
 }
 

@@ -314,9 +314,11 @@ const CorrectedTaskRowSchema = z.object({
   successCriteria: z.unknown(),
   blockedReason: z.unknown(),
   corrected: z.array(z.string().min(1)),
+  /** When the task was written, as Postgres renders the timestamp; cast back with `::timestamptz` it is the stored instant. */
+  createdAt: z.string().min(1),
 });
 
-/** A task as stored, with the keys the client corrections taken in by a plan revision written at or before it affect. */
+/** A task as stored, with when it was written and the keys the client corrections taken in by a plan revision written at or before it affect. */
 export type CorrectedTask = z.infer<typeof CorrectedTaskRowSchema>;
 
 /**
@@ -327,7 +329,7 @@ export type CorrectedTask = z.infer<typeof CorrectedTaskRowSchema>;
 export async function correctedTaskOf(db: DbHandle, taskId: string): Promise<CorrectedTask | null> {
   const result = await db.execute(sql`
     SELECT w.id, w.project_id AS "projectId", w.task_spec AS "taskSpec", w.success_criteria AS "successCriteria",
-           w.blocked_reason AS "blockedReason",
+           w.blocked_reason AS "blockedReason", w.created_at::text AS "createdAt",
            COALESCE((SELECT json_agg(DISTINCT k.key ORDER BY k.key)
              FROM correction_holds ch JOIN plan_revisions r ON r.id = ch.plan_revision_id, unnest(ch.affected) k(key)
              WHERE ch.project_id = w.project_id AND r.created_at <= w.created_at), '[]'::json) AS corrected

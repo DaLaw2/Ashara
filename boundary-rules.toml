@@ -295,6 +295,7 @@ importers = []
 # TenderIntake is the class a code plant patches (plants.ts intake-second-reading-dropped): the plant
 # replaces its second reading, and no oracle reads anything of it. contendedWait is read only to see
 # that a run put the process's wait observer back: with none installed it returns its argument.
+# HoldEvidence is imported as a type only, so the coverage line of its arms cannot drift from the union.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "TargetCheckoutClaimedElsewhere", "createDb", "resolveTestDatabaseUrl", "runMigrations"]
 names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "DELIVERY_MODEL_SCHEMAS", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
@@ -307,7 +308,7 @@ names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "QUALITY_MODEL_SCHEMAS
 names.security = ["MasterKey", "SecretRepository", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "contendedWait", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "parseJson"]
-names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "offeredToolSchemas"]
+names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "HoldEvidence", "offeredToolSchemas"]
 # A stand-in model answers the product's model calls, so one that imports the rule judging
 # its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the
 # oracle judging that rule stops being independent. A stand-in, and every simulator file it reaches by
@@ -382,6 +383,7 @@ check_disputes = "quality"
 check_set_freezes = "quality"
 guarantee_evidence = "quality"
 guarantee_verdicts = "quality"
+held_set_rejections = "quality"
 reviewer_outcomes = "quality"
 suite_review_claims = "quality"
 suite_review_findings = "quality"

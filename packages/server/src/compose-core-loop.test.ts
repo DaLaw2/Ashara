@@ -188,6 +188,7 @@ function dispatchComposition(): DispatchComposition {
       append: notExercised("append"),
       latest: notExercised("latest"),
       holdEvidenceOf: notExercised("holdEvidenceOf"),
+      recordSetRejection: notExercised("recordSetRejection"),
     },
     suiteReview: { review: notExercised("review") },
     shutdownSignal: new AbortController().signal,

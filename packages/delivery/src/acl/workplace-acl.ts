@@ -11,7 +11,7 @@ import type { AttemptGrant, WorkKind } from "./organization-acl.js";
 import { PUBLIC_INTERFACE_FILE, SCAFFOLD_PLACEHOLDER_MARKER } from "./quality-acl.js";
 
 export type { DevSessionRepository, ErrorEnvelope, Outcome } from "@ashara/workplace";
-export { ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, lastCompletedAttempts, toRecordedOutcome } from "@ashara/workplace";
+export { HELD_SET_RULE, ORPHANED_SESSION_RESOLVER, TERMINAL_SESSION_PHASES, heldSetRuleText, lastCompletedAttempts, toRecordedOutcome } from "@ashara/workplace";
 
 /**
  * What Workplace is told of a task's kind of work: Organization's grant (the tools the attempt is
