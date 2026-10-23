@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
@@ -12,7 +12,7 @@ import type { FirstPlanning } from "./first-plan.js";
 import type { WorkItem } from "./domain/index.js";
 import { DEFAULT_CONFIG, withOverrides } from "./types.js";
 import type { CoreLoopDeps, LoopStop, TaskResult } from "./types.js";
-import { CoreLoop } from "./core-loop.js";
+import { CORE_LOOP_STEPS, CoreLoop, HALTED_CYCLE_CLASSIFICATION } from "./core-loop.js";
 import { inertCoreLoopDeps, inertWorkItemRepo } from "./testing.js";
 
 type SpendCapPort = CoreLoopDeps["loop"]["spendCap"];
@@ -395,29 +395,33 @@ describe("CoreLoop first plan", () => {
     expect(asked).toEqual([{ kind: "stopped-at-cap" }]);
   });
 
-  test("every step the cycle runs with no model call is either run by a halted cycle or excluded from it with its reason", () => {
-    // A step with no model call that posts what the client is owed and is left out of runHaltedCycle
-    // waits, after a cap halt, for a full cycle this process never runs. A new step is classified here.
-    const classified: Record<string, "halted" | { readonly excluded: string }> = {
-      "client-stop": "halted",
-      "client-receipt": "halted",
-      "settled-branches": "halted",
-      "block-report": "halted",
-      "terminal-report": "halted",
-      "plan-report": "halted",
-      "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; only a project at work has a choice due, so a project halted at the cap has its choice recorded and reported once it resumes, in a full cycle after the process restarts" },
-      "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
-      "client-wait-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
-      "parked-exits": { excluded: "it moves Blocked tasks toward dispatch, and a halted cycle dispatches nothing" },
-      "acceptance": { excluded: "it sweeps main on cells, which is work, not a report" },
-      "terminal-sweep": "halted",
-      "gate": { excluded: "it selects tasks to dispatch, and a halted cycle dispatches nothing" },
-      "burn-warning": { excluded: "it warns before the budget halts a project; a project halted at the cap is told so by its block report" },
-    };
-    const source = readFileSync(new URL("./core-loop.ts", import.meta.url), "utf8");
-    const steps = [...source.matchAll(/this\.step\("([a-z-]+)"/g)].map((match) => match[1]);
+  test("the halted-cycle classification names exactly the steps CoreLoop runs", () => {
+    expect(new Set(Object.keys(HALTED_CYCLE_CLASSIFICATION))).toEqual(new Set(CORE_LOOP_STEPS));
+  });
 
-    expect(new Set(steps)).toEqual(new Set(Object.keys(classified)));
+  // Every step runs through CoreLoop's private step (stepThenCap included), so wrapping it on the
+  // prototype sees every name a cycle passes, whichever wrapper ran it.
+  test("every step a full cycle and a halted cycle run is in the step list, and a halted cycle runs only the steps classified halted", async () => {
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({ taskId: task.id, status: "completed" as const, detail: "ok" }));
+    const original: unknown = Reflect.get(CoreLoop.prototype, "step");
+    if (typeof original !== "function") throw new TypeError("CoreLoop has no step method to observe");
+    const ran: unknown[] = [];
+    Reflect.set(CoreLoop.prototype, "step", function (this: CoreLoop, ...args: unknown[]) {
+      ran.push(args[0]);
+      return Reflect.apply(original, this, args);
+    });
+    try {
+      const loop = new CoreLoop(buildDeps());
+      await loop.runCycle();
+      expect(new Set(ran)).toEqual(new Set(CORE_LOOP_STEPS));
+
+      ran.length = 0;
+      await loop.runHaltedCycle();
+      const halted = Object.entries(HALTED_CYCLE_CLASSIFICATION).filter(([, kind]) => kind === "halted").map(([name]) => name);
+      expect(new Set(ran)).toEqual(new Set(halted));
+    } finally {
+      Reflect.set(CoreLoop.prototype, "step", original);
+    }
   });
 
   test("answers posted during the roster or the first plan are read in the same cycle, before the plan is revised or dispatched", async () => {

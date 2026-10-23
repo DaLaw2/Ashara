@@ -102,6 +102,68 @@ function logReplan(logger: Logger, outcome: ReplanOutcome): void {
 }
 
 /**
+ * @testseam core-loop.test.ts checks every step a cycle runs is named here
+ * Every step CoreLoop runs, in the order a full cycle first runs them; step and stepThenCap take
+ * only these names, so a step is named here before it can run.
+ */
+export const CORE_LOOP_STEPS = [
+  "client-stop",
+  "client-receipt",
+  "stack-choice",
+  "infrastructure-resume",
+  "client-wait-resume",
+  "terminal-sweep",
+  "terminal-report",
+  "block-report",
+  "burn-warning",
+  "settled-branches",
+  "liaison-intake",
+  "liaison-answers",
+  "client-change",
+  "roster",
+  "first-plan",
+  "replan",
+  "plan-report",
+  "parked-exits",
+  "acceptance",
+  "gate",
+] as const;
+
+type CoreLoopStep = (typeof CORE_LOOP_STEPS)[number];
+
+/** Why a step of model calls is left out of a halted cycle. */
+const MODEL_CALLS = { excluded: "it makes model calls, which the deployment's spend cap the loop is halted at refuses" } as const;
+
+/**
+ * @testseam core-loop.test.ts checks it at runtime against the steps a cycle runs
+ * Whether runHaltedCycle runs each step, or why not. A step with no model call that posts what the
+ * client is owed and is left out of runHaltedCycle waits, after a cap halt, for a full cycle this
+ * process never runs; the map is total over CORE_LOOP_STEPS, so a new step is classified here.
+ */
+export const HALTED_CYCLE_CLASSIFICATION: Readonly<Record<CoreLoopStep, "halted" | { readonly excluded: string }>> = {
+  "client-stop": "halted",
+  "client-receipt": "halted",
+  "settled-branches": "halted",
+  "block-report": "halted",
+  "terminal-report": "halted",
+  "plan-report": "halted",
+  "terminal-sweep": "halted",
+  "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; only a project at work has a choice due, so a project halted at the cap has its choice recorded and reported once it resumes, in a full cycle after the process restarts" },
+  "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
+  "client-wait-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
+  "parked-exits": { excluded: "it moves Blocked tasks toward dispatch, and a halted cycle dispatches nothing" },
+  acceptance: { excluded: "it sweeps main on cells, which is work, not a report" },
+  gate: { excluded: "it selects tasks to dispatch, and a halted cycle dispatches nothing" },
+  "burn-warning": { excluded: "it warns before the budget halts a project; a project halted at the cap is told so by its block report" },
+  "liaison-intake": MODEL_CALLS,
+  "liaison-answers": MODEL_CALLS,
+  "client-change": MODEL_CALLS,
+  roster: MODEL_CALLS,
+  "first-plan": MODEL_CALLS,
+  replan: MODEL_CALLS,
+};
+
+/**
  * How one step ended: it ran, with its value; a project's spend-cap refusal ended it (that project is
  * halted, and the step's other subjects run next cycle); or the deployment's cap stopped the loop.
  */
@@ -672,7 +734,7 @@ export class CoreLoop {
    * failure itself (containEach records it on the subject and retries it after a backoff), so what
    * reaches here is a failure of the step as a whole, such as recording a fault.
    */
-  private async step<T>(name: string, run: () => Promise<T>): Promise<StepEnd<T>> {
+  private async step<T>(name: CoreLoopStep, run: () => Promise<T>): Promise<StepEnd<T>> {
     try {
       return { kind: "ran", value: await run() };
     } catch (err) {
@@ -694,7 +756,7 @@ export class CoreLoop {
   }
 
   /** Runs a step of model calls (step) and checks the deployment cap after it. */
-  private async stepThenCap<T>(name: string, run: () => Promise<readonly T[]>): Promise<StepRun<T>> {
+  private async stepThenCap<T>(name: CoreLoopStep, run: () => Promise<readonly T[]>): Promise<StepRun<T>> {
     const ended = await this.step(name, run);
     if (ended.kind === "stop") return ended;
     const stop = await this.deps.loop.spendCap.deploymentStop();
