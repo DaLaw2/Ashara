@@ -57,18 +57,18 @@ export async function awaitedRepairsRecordedBy(db: DbHandle, projectId: string, 
 
 const w = alias(workItems, "w");
 
-const CitingRowsSchema = z.array(z.object({ id: z.string(), title: z.string(), status: z.string(), cites: z.array(z.string()) }));
+const CitingRowsSchema = z.array(z.object({ id: z.string(), title: z.string(), status: z.string(), blockedReason: z.unknown(), cites: z.array(z.string()) }));
 
 /**
  * The implementation tasks live in the project's current plan (liveInCurrentPlan) that cite any of
- * the vision keys `keys` names, each with the keys of them it cites, oldest first. A given-up task is
- * not one: the plan was repaired around it.
+ * the vision keys `keys` names, each with its status, its blocked reason as stored and the keys of
+ * them it cites, oldest first. A given-up task is not one: the plan was repaired around it.
  */
 export async function currentTasksCiting(db: DbHandle, projectId: string, keys: readonly string[]): Promise<Array<z.infer<typeof CitingRowsSchema>[number]>> {
   // The keys are vision keys (a letter and a number), so the array literal needs no quoting.
   const keyArray = `{${keys.join(",")}}`;
   const citing = await db.execute(sql`
-    SELECT w.id, w.title, w.status,
+    SELECT w.id, w.title, w.status, w.blocked_reason AS "blockedReason",
       ARRAY(SELECT DISTINCT s->>'id' FROM jsonb_array_elements(w.task_spec->'sources') s
             WHERE s->>'id' = ANY(${keyArray}::text[])) AS cites
     FROM work_items w
@@ -76,6 +76,21 @@ export async function currentTasksCiting(db: DbHandle, projectId: string, keys: 
       AND jsonb_typeof(w.task_spec->'sources') = 'array'
     ORDER BY w.created_at, w.id`);
   return CitingRowsSchema.parse(citing.rows).filter((row) => row.cites.length > 0);
+}
+
+const StandingRowsSchema = z.array(z.object({ id: z.string(), status: z.string(), blockedReason: z.unknown() }));
+
+/**
+ * Every implementation task of the project with its status and its blocked reason as stored, oldest
+ * planned first: the reader decides from them whose work is on main (workOnMain).
+ */
+export async function implementationTaskStandings(db: DbHandle, projectId: string): Promise<Array<z.infer<typeof StandingRowsSchema>[number]>> {
+  const rows = await db
+    .select({ id: workItems.id, status: workItems.status, blockedReason: workItems.blockedReason })
+    .from(workItems)
+    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), eq(workItems.workKind, "implementation")))
+    .orderBy(asc(workItems.createdAt), asc(workItems.id));
+  return StandingRowsSchema.parse(rows);
 }
 
 /**

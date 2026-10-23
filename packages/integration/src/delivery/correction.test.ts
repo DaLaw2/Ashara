@@ -23,6 +23,7 @@ import {
   createFirstPlanStore,
   createReplanStore,
   failWorkItem,
+  recoverFailedItem,
   replanWorkItem,
   startWorkItem,
 } from "@ashara/delivery";
@@ -35,6 +36,7 @@ import { createRosterStore } from "@ashara/server/roster-store";
 import { createRoutes } from "@ashara/server/routes";
 import { DevSessionRepository } from "@ashara/workplace";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
+import { itemsToCheck } from "../simulator/stand-ins/recognised-wording.js";
 
 // A client's correction holds and replaces only the work citing a guarantee it changes: with two
 // tasks citing G1 and G2, a correction amending G2 lets the G1 task dispatch before the revision,
@@ -171,7 +173,7 @@ const ADD_AT_I2 = {
   confirms: [],
 };
 
-type Reading = typeof AMEND_G2 | typeof AMEND_I2 | typeof ADD_EXCLUSION | typeof ADD_AT_I2;
+type Reading = typeof AMEND_G2 | typeof AMEND_I2 | typeof ADD_EXCLUSION | typeof ADD_AT_I2 | { readonly ops: readonly object[]; readonly confirms: readonly string[] };
 
 /** One model for every call, answering each by what its prompt asks; returns it to read the prompts sent. */
 function pipelineModel(reading: Reading = AMEND_G2): MockLanguageModelV4 {
@@ -616,5 +618,121 @@ describe("no path outside the correction gate starts or replaces a task the corr
     expect(notes).toHaveLength(1);
     const named = /^Affected: (.+)\. Work citing/m.exec(notes[0]?.body ?? "")?.[1]?.split(/, | and /) ?? [];
     expect([...named].sort()).toEqual([...held].sort());
+  });
+});
+
+/** The client's withdrawal of G2, which narrows the contract. */
+const WITHDRAW_G2 = { ops: [{ op: "withdraw-guarantee", id: "G2", direction: "narrows" }], confirms: [] };
+
+/** The client's confirmation of the change Ashara held as P1, asking nothing else. */
+const CONFIRM_P1 = { ops: [], confirms: ["P1"] };
+
+/** Parks a task in progress as a merge whose record could not be written: its work is on main, its status Blocked. */
+async function parkUnrecorded(id: string): Promise<void> {
+  await startTask(id);
+  const unrecorded = { source: "merge_unrecorded", mergeCommit: "a".repeat(40), mergeKind: "merged", reason: "the merge record could not be written" };
+  const parked = await db.execute(sql`
+    UPDATE work_items SET status = 'Blocked', updated_at = now(), blocked_reason = ${JSON.stringify(unrecorded)}::jsonb
+    WHERE id = ${id} AND status = 'InProgress' RETURNING id`);
+  expect(parked.rows).toHaveLength(1);
+}
+
+/** Stores a check of the task's check task that decides `key`, as the check author's merged suite records it. */
+async function storeCheckDeciding(projectId: ProjectId, taskId: string, key: string): Promise<void> {
+  const checkTask = (await itemsOf(projectId)).find((i) => i.origin === "check" && i.sources?.some((s) => s.id === key) === true);
+  if (checkTask === undefined) throw new Error(`the first plan has no check task for ${key}`);
+  await db.execute(sql`
+    INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
+    VALUES (${projectId}, ${taskId}, ${checkTask.id}, 1, ${`${key} holds`}, 'true', '[]'::jsonb, ${"e".repeat(64)}, ${JSON.stringify([key])}::jsonb)`);
+}
+
+/** Starts, fails and gives up a task as a dispatch's failure and the failure router's abandonment do, which opens a plan repair. */
+async function giveUp(id: string): Promise<void> {
+  await startTask(id);
+  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
+  const item = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
+  if (item === null) throw new Error(`task ${id} not found`);
+  failWorkItem(item, { source: "task_failed", reason: "its checks did not pass" }, { kind: "retryable", ground: "work" });
+  await PlanningService.saveWorkItem(repo, item, "InProgress");
+  const failure = { detail: "its checks kept failing", raw: {} };
+  const decision = await recoverFailedItem(
+    {
+      logger: recordingLogger(),
+      workItemRepo: repo,
+      eventPublisher: { publish: async () => {} },
+      failureRouter: { route: () => ({ action: "abandon", reason: "the task failed 3 time(s)", attempts: 3, failure }) },
+    },
+    item,
+    failure,
+    { kind: "retryable", ground: "work" },
+  );
+  expect(decision).toBe("abandon");
+}
+
+/** A model for a repair: the environment stands, and the planner plans only the first plan's tasks citing an item the prompt says is still to check. */
+function repairModel(): MockLanguageModelV4 {
+  const mock = new MockLanguageModelV4({
+    doGenerate: async (call) => {
+      const prompt = JSON.stringify(call.prompt);
+      if (prompt.includes("environmentChange")) return jsonResult({ environmentChange: false, reason: "The work failed, not the environment." });
+      const toCheck = itemsToCheck(prompt);
+      const tasks = FIRST_TASKS.tasks.filter((t) => t.acceptance.some((line) => line.sources.some((source) => toCheck.includes(source))));
+      return jsonResult(citingItemsToCheck({ tasks }, prompt));
+    },
+  });
+  stub.model = mock;
+  return mock;
+}
+
+/** The client's change read as `reading`; returns its id and the outcome the Liaison records. */
+async function sendChange(projectId: ProjectId, body: string, reading: Reading) {
+  const change = await new ClientMessageRepository(db).insertInbound({ projectId, kind: "change", body, inReplyTo: null });
+  pipelineModel(reading);
+  const store = createClientChangeStore(db, DEFAULT_WORK_BUDGETS);
+  const narrowed: ClientChangeStore = { ...store, openChanges: async () => (await store.openChanges()).filter((c) => ourProjects.has(c.projectId)) };
+  const outcomes = await new ClientChanges({ shutdownSignal: new AbortController().signal, llm: gateway, store: narrowed, containment: memoryStepContainment(() => true) }).runPending();
+  const notes = z.array(z.object({ body: z.string() })).parse((await db.execute(sql`SELECT body FROM client_messages WHERE in_reply_to = ${change.id} AND direction = 'outbound'`)).rows);
+  expect(notes).toHaveLength(1);
+  return { changeId: change.id, outcomes, note: notes[0]?.body ?? "" };
+}
+
+// A task merged on main whose merge record could not be written (Blocked, merge_unrecorded) is merged
+// work to every correction reader: a repair keeps it and does not plan its key again, and a correction
+// withdrawing its guarantee is held for the client's confirmation as one withdrawing merged work.
+describe("merged work with its record unwritten counts as merged everywhere a correction reads it", () => {
+  test("a repair keeps it as done and plans no new task for the key its checks decide", async () => {
+    const { projectId, g1, g2 } = await readyProject();
+    await parkUnrecorded(g2);
+    await storeCheckDeciding(projectId, g2, "G2");
+    await giveUp(g1);
+
+    const mock = repairModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
+    const planning = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("Plan the work still to do again"));
+    if (planning === undefined) throw new Error("the repair asked the planner nothing");
+    expect(planning).toContain("Already done, and kept as it is");
+    expect(planning).toContain("- Delete keys");
+    expect(itemsToCheck(planning)).toContain("G1");
+    expect(itemsToCheck(planning)).not.toContain("G2");
+
+    const after = await itemsOf(projectId);
+    expect(after.find((i) => i.id === g2)).toMatchObject({ status: "Blocked", reason: { source: "merge_unrecorded" } });
+    expect(await newG2Tasks(projectId, g2)).toEqual([]);
+  });
+
+  test("a withdrawal of its guarantee is pushed back, and the message confirming it names the key it affects", async () => {
+    const { projectId, g2 } = await readyProject();
+    await parkUnrecorded(g2);
+
+    const withdrawn = await sendChange(projectId, "Drop the deleting.", WITHDRAW_G2);
+    expect(withdrawn.outcomes).toMatchObject([
+      { kind: "recorded", changeId: withdrawn.changeId, revision: { status: "proposed", direction: "narrows", pushback: { reasons: [{ kind: "merged-guarantee", guarantees: ["G2"] }] } } },
+    ]);
+    expect(withdrawn.note).toContain("Delete keys (merged)");
+    expect(withdrawn.note).toContain("G2 is already delivered");
+
+    const confirmed = await sendChange(projectId, "Yes, drop it.", CONFIRM_P1);
+    expect(confirmed.outcomes).toMatchObject([{ kind: "recorded", changeId: confirmed.changeId, confirmed: [expect.any(String)] }]);
+    expect(confirmed.note).toContain("You confirmed the change held as P1; it is now part of the contract as version 2. It affects G2.");
   });
 });

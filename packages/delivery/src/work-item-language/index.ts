@@ -1,4 +1,6 @@
 export type { WorkItemStatus } from "./work-item-status.js";
+export { parseWorkItemStatus } from "./work-item-status.js";
+export { storedWorkOnMain } from "./work-on-main.js";
 export { OPEN_WORK_ITEM_STATUSES, SETTLED_WORK_ITEM_STATUSES, WORK_ITEM_STATUSES } from "./work-item-status.js";
 export { InvalidStatusTransition, OUTBOUND_TRANSITIONS } from "./transitions.js";
 export type { StoredTaskSpec } from "./task-spec.js";

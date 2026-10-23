@@ -159,7 +159,6 @@ export function affectedKeys(ops: readonly AffectingOp[], appliedTo: Vision, wri
   return [...keys];
 }
 
-
 /** A task of the project's current plan citing an affected key, with where it stands. */
 export interface CitingTask {
   readonly id: string;
@@ -250,12 +249,18 @@ export function causeOf(applied: readonly AppliedOp[]): RevisionCause {
   return applied.length > 0 && applied.every((a) => a.cause === "misread") ? "misread" : "client-change";
 }
 
-
 /** What one correction message did, as its impact note tells it. */
 export interface CorrectionNote {
   /** The version the operations were read against, for naming the records they act on. */
   readonly vision: VisionVersion;
-  readonly confirmed: ReadonlyArray<{ readonly label: string; readonly version: number; readonly verifiable: VerifiableCount; readonly unapplied: readonly UnappliedOp[] }>;
+  /** Each held change the message confirmed, with the keys its operations affect as the hold reads them (affectedKeys). */
+  readonly confirmed: ReadonlyArray<{
+    readonly label: string;
+    readonly version: number;
+    readonly affected: readonly string[];
+    readonly verifiable: VerifiableCount;
+    readonly unapplied: readonly UnappliedOp[];
+  }>;
   /** The labels of the held changes the message confirmed that are declined (declinedCorrection), so not made. */
   readonly declinedConfirmations: readonly string[];
   readonly ops: readonly CheckedOp[];
@@ -342,6 +347,10 @@ function list(ids: readonly string[]): string {
   return ids.length === 1 ? ids.join("") : `${ids.slice(0, -1).join(", ")} and ${ids.slice(-1).join("")}`;
 }
 
+function affectedLine(ids: readonly string[]): string {
+  return ids.length === 0 ? "It affects no guarantee or assumption." : `It affects ${list(ids)}.`;
+}
+
 function pushbackLine(reason: PushbackReason): string {
   if (reason.kind === "merged-guarantee") {
     const ids = list(reason.guarantees);
@@ -388,7 +397,7 @@ export function correctionReport(note: CorrectionNote): string {
   const words = WORK_WORDS[note.contract];
   const confirmed = [
     ...note.confirmed.flatMap((c) => [
-      `You confirmed the change held as ${c.label}; it is now part of the contract as version ${c.version}. ${verifiableCountLine(c.verifiable.verifiable, c.verifiable.total)}`,
+      `You confirmed the change held as ${c.label}; it is now part of the contract as version ${c.version}. ${affectedLine(c.affected)} ${verifiableCountLine(c.verifiable.verifiable, c.verifiable.total)}`,
       ...unappliedLines(c.unapplied, vision),
     ]),
     ...note.declinedConfirmations.map((label) => `You confirmed the change held as ${label}, but it is not made: ${CORRECTION_DECLINED}`),

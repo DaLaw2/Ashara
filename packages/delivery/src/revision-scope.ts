@@ -6,6 +6,7 @@ import type { WorkItem } from "./domain/index.js";
 import type { PlannedItem, ProjectAwaitingReplan, RevisionCause } from "./replan-port.js";
 import { affectedKeys } from "./revision-cause.js";
 import { IDLE_OPEN_WORK_ITEM_STATUSES, SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/work-item-status.js";
+import { workOnMain } from "./work-item-language/work-on-main.js";
 
 /** What a revision replaces and plans again. */
 export interface RevisionScope {
@@ -28,7 +29,7 @@ interface RegatedTask {
   readonly checkTasks: readonly string[];
 }
 
-export function isTask(planned: PlannedItem): boolean {
+function isTask(planned: PlannedItem): boolean {
   return planned.item.level === "Task";
 }
 
@@ -76,14 +77,17 @@ export function checkedByDone(completed: readonly PlannedItem[], cause: Revision
 }
 
 /**
- * Open and not in progress: work a revision may supersede, since an attempt in progress is waited
- * on instead. A task Blocked as merge_unrecorded is merged work, its code on main and only its record
- * unwritten, so it is kept as a Completed task is (its exit completes it): a correction citing its
- * key plans that key again beside it.
+ * Open, not in progress and not on main: work a revision may supersede, since an attempt in progress
+ * is waited on instead, and merged work (workOnMain) is kept: a correction citing its key plans that
+ * key again beside it.
  */
 function isSupersedable(item: WorkItem): boolean {
-  if (!IDLE_OPEN_WORK_ITEM_STATUSES.includes(item.status)) return false;
-  return item.status !== "Blocked" || item.blockedReason?.source !== "merge_unrecorded";
+  return IDLE_OPEN_WORK_ITEM_STATUSES.includes(item.status) && !workOnMain(item);
+}
+
+/** The project's tasks whose work is on main (workOnMain): the completed work a revision keeps and builds on. */
+export function mergedTasks(items: readonly PlannedItem[]): PlannedItem[] {
+  return items.filter(isTask).filter(({ item }) => workOnMain(item));
 }
 
 /** Not settled: an Epic a revision may still close or keep. */
@@ -189,9 +193,9 @@ export function correctionScope(project: ProjectAwaitingReplan, affected: readon
   const reviewWaits = regating.regated.length > 0 && stillToCheck(regating.planned, checked).length === 0 ? "replace" : "regate";
   const scope = reviewWaits === "regate" ? regating : closeOver(held, reviewWaits);
   if (stillToCheck(scope.planned, checked).length === 0) return scope;
-  // With no environment or layout completed, a revision that plans work plans its own (environmentOf,
+  // With no environment or layout merged, a revision that plans work plans its own (environmentOf,
   // layoutOf): the open one it would duplicate is replaced too, with the work waiting on it.
-  const completed = tasks.filter(({ item }) => item.status === "Completed");
+  const completed = mergedTasks(tasks);
   const setUpAgain = (setsUp: (item: WorkItem) => boolean) => !completed.some(({ item }) => setsUp(item));
   const isScaffold = (item: WorkItem) => item.taskSpec?.origin === "product-scaffold";
   const setsUpAgain = (item: WorkItem) => (isEnvironmentTask(item) && setUpAgain(isEnvironmentTask)) || (isScaffold(item) && setUpAgain(isScaffold));

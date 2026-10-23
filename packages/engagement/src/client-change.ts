@@ -367,7 +367,13 @@ export class ClientChanges implements LiaisonClientChanges {
       }
       const applied = revisionOpsOf(read, corrected.applied);
       confirmations.push({ proposalId: proposal.id, vision: corrected.append, ops: applied, direction: revisionDirection(applied) });
-      confirmedNotes.push({ label, version: corrected.next.current.version, verifiable: verifiableCountOf(corrected.next.current), unapplied: corrected.unapplied });
+      confirmedNotes.push({
+        label,
+        version: corrected.next.current.version,
+        affected: affectedKeys(applied, vision, corrected.next),
+        verifiable: verifiableCountOf(corrected.next.current),
+        unapplied: corrected.unapplied,
+      });
       vision = corrected.next;
     }
 

@@ -2,7 +2,8 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { visionDocuments } from "@ashara/db/schema/engagement";
 import type { Database, DbHandle } from "@ashara/db";
-import { completedImplementationTaskIds, currentTasksCiting } from "@ashara/delivery/reads";
+import { currentTasksCiting, implementationTaskStandings } from "@ashara/delivery/reads";
+import { parseWorkItemStatus, storedWorkOnMain } from "@ashara/delivery/work-item";
 import { projectWork, projectWorkBudget, tasksWorkDrawn } from "@ashara/finance";
 import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
@@ -122,7 +123,6 @@ async function proposalsOf(db: DbHandle, projectId: ProjectId): Promise<StoredPr
   }));
 }
 
-
 /** Finance's read of the requests each task drew names no figure for a task it was asked of. */
 class TaskDrawnUnread extends Error {
   constructor(readonly taskId: string) {
@@ -148,7 +148,16 @@ class CitingTaskStatusUnknown extends Error {
   }
 }
 
-function citingStatus(taskId: string, status: string): CitingTask["status"] {
+interface StoredStanding {
+  readonly id: string;
+  readonly status: string;
+  readonly blockedReason: unknown;
+}
+
+/** Merged when Delivery reads the task's work as on main (storedWorkOnMain), whatever status holds it there. */
+function citingStatus(row: StoredStanding): CitingTask["status"] {
+  if (storedWorkOnMain(row)) return "merged";
+  const status = parseWorkItemStatus(row.status);
   switch (status) {
     case "Pending":
       return "pending";
@@ -157,21 +166,19 @@ function citingStatus(taskId: string, status: string): CitingTask["status"] {
     case "Blocked":
     case "Failed":
       return "blocked";
-    case "Completed":
-      return "merged";
     default:
-      throw new CitingTaskStatusUnknown(taskId, status);
+      throw new CitingTaskStatusUnknown(row.id, status);
   }
 }
 
 /**
  * What a correction of `ids` touches: the implementation tasks of the project's current plan citing
- * any of them, the requests each completed implementation task drew, and what the project's work
- * budget has left.
+ * any of them, the requests each implementation task whose work is on main (storedWorkOnMain) drew, and what
+ * the project's work budget has left.
  */
 export async function readChangeImpact(db: DbHandle, projectId: ProjectId, ids: readonly string[], budgets: WorkBudgets): Promise<ChangeImpact> {
-  const tasks = (await currentTasksCiting(db, projectId, ids)).map((row): CitingTask => ({ id: row.id, title: row.title, status: citingStatus(row.id, row.status), cites: row.cites }));
-  const completed = await completedImplementationTaskIds(db, projectId, null, "planned");
+  const tasks = (await currentTasksCiting(db, projectId, ids)).map((row): CitingTask => ({ id: row.id, title: row.title, status: citingStatus(row), cites: row.cites }));
+  const completed = (await implementationTaskStandings(db, projectId)).filter(storedWorkOnMain).map((row) => row.id);
   const drawnByTask = await tasksWorkDrawn(db, completed);
   const work = await projectWork(db, projectId);
   return {

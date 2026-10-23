@@ -17,7 +17,7 @@ import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 import type { AbandonedTask, PlanRevisionWrite, PlannedItem, ProjectAwaitingReplan, ReplanOutcome, ReplanStore, Replanning, RevisionCause, RevisionFailure } from "./replan-port.js";
 import { EnvironmentJudgmentSchema, causeSection, doneSection, environmentPrompt, judgmentReask } from "./replan-prompts.js";
 import { RepairSubjectUnreadable, RevisionUnasked, affectedKeys, causeOf, decisionOf } from "./revision-cause.js";
-import { checkedByDone, correctionScope, isEnvironmentTask, isTask, layoutOf, stillToCheck, wholePlanScope } from "./revision-scope.js";
+import { checkedByDone, correctionScope, isEnvironmentTask, layoutOf, mergedTasks, stillToCheck, wholePlanScope } from "./revision-scope.js";
 import { composeRevision } from "./revision-write.js";
 
 // Delivery's revision of a plan already under way, asked for in one of two ways. A client's
@@ -235,7 +235,7 @@ export class Replanner implements Replanning {
     const owners = planOwners(projectId, project.rosterRows);
     // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
     const vision = planningVisionOf(project.vision);
-    const completed = project.items.filter(isTask).filter(({ item }) => item.status === "Completed");
+    const completed = mergedTasks(project.items);
     const checked = checkedByDone(completed, cause);
     const scope =
       cause.kind === "client-change" ? correctionScope(project, affectedKeys(cause.changes), vision, checked) : wholePlanScope(project, vision);
