@@ -408,6 +408,8 @@ edge.finance-model-catalog = { file = "packages/finance/src/attempt-grade.ts", t
 WorkPlan = "delivery"
 DispatchWork = "delivery"
 agentWorkOf = "delivery"
+# A plan's task counts are Delivery's board; the Liaison's first-plan report reads them as published.
+PlanTaskCounts = "delivery"
 # The bearer check, a login's source network, the client's login and session are Security's; the
 # server only mounts them.
 bearerAuth = "security"

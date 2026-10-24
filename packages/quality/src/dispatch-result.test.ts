@@ -53,9 +53,9 @@ describe("a stage the shutdown interrupted in a cell", () => {
     const task = { id: createWorkItemId(), attempt: 2 };
     const logger = recordingLogger();
     const results = [
-      thrownBlocked(task, "s1", "substrateGate", interrupted, { step: "substrate gate run", cell: "CI cell" }, NO_AGENT, undefined, logger),
-      mainRunBlocked(task, "s1", interrupted, NO_AGENT, undefined, logger, "checkRedRun", "red run on the baseline"),
-      asharaBlocked(task, "s1", "postMergeCheckRun", new VerificationInfrastructureFault(task.id, "run_checks", { cause: interrupted }), NO_AGENT, undefined, logger),
+      thrownBlocked({ task, sessionId: "s1", stage: "substrateGate", error: interrupted, where: { step: "substrate gate run", cell: "CI cell" }, agent: NO_AGENT, eventSink: undefined, logger }),
+      mainRunBlocked({ task, sessionId: "s1", error: interrupted, agent: NO_AGENT, eventSink: undefined, logger, stage: "checkRedRun", step: "red run on the baseline" }),
+      asharaBlocked({ task, sessionId: "s1", stage: "postMergeCheckRun", fault: new VerificationInfrastructureFault(task.id, "run_checks", { cause: interrupted }), agent: NO_AGENT, eventSink: undefined, logger }),
     ];
     expect(results.map((result) => result.status)).toEqual(["interrupted", "interrupted", "interrupted"]);
     expect(results.every((result) => result.attempt === 2 && result.detail.includes("interrupted by shutdown"))).toBe(true);

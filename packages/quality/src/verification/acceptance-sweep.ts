@@ -174,7 +174,7 @@ export async function sweepMain(deps: MainSweepDeps, projectId: ProjectId, targe
     await deps.cells.substrate.probeSubstrate();
     step = "read main";
     main = await mainCommit(targetProjectPath, label);
-    return await runSweep(deps, projectId, targetProjectPath, acceptance, main, (next) => {
+    return await runSweep(deps, { projectId, targetProjectPath, acceptance, main }, (next) => {
       step = next;
     });
   } catch (e) {
@@ -186,15 +186,17 @@ export async function sweepMain(deps: MainSweepDeps, projectId: ProjectId, targe
   }
 }
 
+/** One project's sweep of main at the commit read, judged against `acceptance`. */
+interface SweepOfMain {
+  readonly projectId: ProjectId;
+  readonly targetProjectPath: string;
+  readonly acceptance: AcceptanceTerms;
+  readonly main: string;
+}
+
 /** The sweep once the substrate answered and main was read; `at` names each step, for a fault. */
-async function runSweep(
-  deps: MainSweepDeps,
-  projectId: ProjectId,
-  targetProjectPath: string,
-  acceptance: AcceptanceTerms,
-  main: string,
-  at: (step: string) => void,
-): Promise<AcceptanceSweep> {
+async function runSweep(deps: MainSweepDeps, sweep: SweepOfMain, at: (step: string) => void): Promise<AcceptanceSweep> {
+  const { projectId, targetProjectPath, acceptance, main } = sweep;
   const { cells, eventSink } = deps;
   const label = `acceptance-${projectId}`;
   at("resolve main's environment");

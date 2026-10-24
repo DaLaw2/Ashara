@@ -187,16 +187,20 @@ function unrestoredFailure(
   };
 }
 
-async function abortAndFail(
-  logger: Logger,
-  taskId: string,
-  targetProjectPath: string,
-  failedLogMessage: string,
-  gateFailureContext: string,
+/** One aborted merge: what is logged, what the failure carries, and where its tentative merge is undone. */
+interface MergeAbort {
+  readonly logger: Logger;
+  readonly taskId: string;
+  readonly targetProjectPath: string;
+  readonly failedLogMessage: string;
+  readonly gateFailureContext: string;
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
-  errorLayerInfo: { operation: string; gateOutput: string | Error; gateContext?: Record<string, unknown> },
-  fault: FinalizeFault,
-): Promise<FinalizeResult> {
+  readonly errorLayerInfo: { operation: string; gateOutput: string | Error; gateContext?: Record<string, unknown> };
+  readonly fault: FinalizeFault;
+}
+
+async function abortAndFail(abort: MergeAbort): Promise<FinalizeResult> {
+  const { logger, taskId, targetProjectPath, failedLogMessage, gateFailureContext, errorLayerInfo, fault } = abort;
   logger.info("quality.merge-aborted", failedLogMessage, { taskId, operation: errorLayerInfo.operation });
 
   const unrestored = await undoTentativeMerge(logger, taskId, targetProjectPath, errorLayerInfo.operation);
@@ -347,43 +351,43 @@ async function finalizeHeld(
     const detail = describeErrorChain(e);
     const environmentFailure = environmentErrorOf(e);
     if (environmentFailure !== null) {
-      return abortAndFail(
-        deps.logger,
-        task.id,
+      return abortAndFail({
+        logger: deps.logger,
+        taskId: task.id,
         targetProjectPath,
-        `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`,
-        `Post-merge verify could not run: ${detail}`,
+        failedLogMessage: `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`,
+        gateFailureContext: `Post-merge verify could not run: ${detail}`,
         // The typed error itself is the cause, its class and fields intact, never a flattened string.
-        { operation: "postMergeVerify", gateOutput: environmentFailure, gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
-        { class: "substrate", error: environmentFailure },
-      );
+        errorLayerInfo: { operation: "postMergeVerify", gateOutput: environmentFailure, gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
+        fault: { class: "substrate", error: environmentFailure },
+      });
     }
     const fault = e instanceof VerificationInfrastructureFault ? e : new VerificationInfrastructureFault(task.id, "post-merge verification", { cause: e });
-    return abortAndFail(
-      deps.logger,
-      task.id,
+    return abortAndFail({
+      logger: deps.logger,
+      taskId: task.id,
       targetProjectPath,
-      `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
-      `Post-merge verify could not run: ${fault.message}`,
-      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
-      { class: "ashara", error: fault },
-    );
+      failedLogMessage: `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
+      gateFailureContext: `Post-merge verify could not run: ${fault.message}`,
+      errorLayerInfo: { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
+      fault: { class: "ashara", error: fault },
+    });
   }
 
   if (!postMergeVerify.passed) {
-    return abortAndFail(
-      deps.logger,
-      task.id,
+    return abortAndFail({
+      logger: deps.logger,
+      taskId: task.id,
       targetProjectPath,
-      "post-merge verification FAILED — aborting tentative merge",
-      `Post-merge verify failed:\n${postMergeVerify.details}`,
-      {
+      failedLogMessage: "post-merge verification FAILED — aborting tentative merge",
+      gateFailureContext: `Post-merge verify failed:\n${postMergeVerify.details}`,
+      errorLayerInfo: {
         operation: deps.postMergeOperation,
         gateOutput: postMergeVerify.details,
         gateContext: { taskId: task.id, attempt },
       },
-      { class: "agent_work", verdict: postMergeVerdict(deps.postMergeOperation) },
-    );
+      fault: { class: "agent_work", verdict: postMergeVerdict(deps.postMergeOperation) },
+    });
   }
 
   // Dirty-tree check: the merge must be the only change in the target checkout before it is
@@ -395,30 +399,30 @@ async function finalizeHeld(
     dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
   } catch (e) {
     const fault = new VerificationInfrastructureFault(task.id, "dirty-tree check of the target checkout (git diff)", { cause: e });
-    return abortAndFail(
-      deps.logger,
-      task.id,
+    return abortAndFail({
+      logger: deps.logger,
+      taskId: task.id,
       targetProjectPath,
-      "post-merge dirty-tree check could not run, git diff failed — aborting tentative merge",
-      `Could not run git diff to verify clean working tree: ${fault.message}`,
-      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
-      { class: "ashara", error: fault },
-    );
+      failedLogMessage: "post-merge dirty-tree check could not run, git diff failed — aborting tentative merge",
+      gateFailureContext: `Could not run git diff to verify clean working tree: ${fault.message}`,
+      errorLayerInfo: { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
+      fault: { class: "ashara", error: fault },
+    });
   }
   if (dirtyFiles.length > 0) {
     const fileList = dirtyFiles.slice(0, 20).join(", ");
     const fault = new VerificationInfrastructureFault(task.id, "dirty-tree check of the target checkout", {
       cause: new TargetCheckoutDirty(task.id, targetProjectPath, dirtyFiles),
     });
-    return abortAndFail(
-      deps.logger,
-      task.id,
+    return abortAndFail({
+      logger: deps.logger,
+      taskId: task.id,
       targetProjectPath,
-      "post-merge dirty-tree check FAILED — tracked files changed outside the merge — aborting tentative merge",
-      `${dirtyFiles.length} tracked file(s) of the target checkout changed outside the merge: ${fileList}`,
-      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step, dirtyFiles } },
-      { class: "ashara", error: fault },
-    );
+      failedLogMessage: "post-merge dirty-tree check FAILED — tracked files changed outside the merge — aborting tentative merge",
+      gateFailureContext: `${dirtyFiles.length} tracked file(s) of the target checkout changed outside the merge: ${fileList}`,
+      errorLayerInfo: { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step, dirtyFiles } },
+      fault: { class: "ashara", error: fault },
+    });
   }
 
   const mergeCommit = await commitMerge(targetProjectPath, task.id);

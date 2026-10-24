@@ -87,15 +87,15 @@ export async function createBulkPlan(
       parentRealId = resolved;
     }
 
-    const item = createPendingWorkItem(
+    const item = createPendingWorkItem({
       level,
-      spec.title,
-      deps.projectId,
-      parentRealId,
-      spec.description,
-      resolveChecksFor(spec.taskSpec, tempIdToId),
-      spec.northStar,
-    );
+      title: spec.title,
+      projectId: deps.projectId,
+      parentId: parentRealId,
+      description: spec.description,
+      taskSpec: resolveChecksFor(spec.taskSpec, tempIdToId),
+      northStar: spec.northStar,
+    });
     const createdItem = await PlanningService.createWorkItem(workItemRepo, item);
     tempIdToId.set(spec.tempId, createdItem.id);
   }

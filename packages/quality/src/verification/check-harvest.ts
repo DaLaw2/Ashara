@@ -21,6 +21,15 @@ export interface CheckHarvestDeps {
   readonly logger: Logger;
 }
 
+/** A set rejected while holding whole on its foundation: the checked task, why the set is unheld, and the rejection to report. */
+interface UnheldRejection {
+  readonly checkedTaskId: WorkItemId;
+  readonly evidence: UnheldEvidence;
+  readonly rejection: string;
+  // open-by-design: what the operator needs beyond the author's reason, per rejection
+  readonly operator: Record<string, unknown>;
+}
+
 /** A finished check attempt's harvest: its checks kept as a stored revision only once their red run on the foundation holds. */
 export class CheckHarvest {
   private readonly deps: CheckHarvestDeps;
@@ -62,15 +71,8 @@ export class CheckHarvest {
    * checked task, or for a task an earlier plan wrote, as the held-set rule bounds; then the task
    * is given up (HELD_SET_GIVEN_UP): the rule's retry budget for that reason and those items is spent.
    */
-  private async unheldRejected(
-    d: VerifiedDispatch,
-    outcome: Outcome,
-    checkedTaskId: WorkItemId,
-    evidence: UnheldEvidence,
-    rejection: string,
-    // open-by-design: what the operator needs beyond the author's reason, per rejection
-    operator: Record<string, unknown>,
-  ): Promise<ExecutionResult> {
+  private async unheldRejected(d: VerifiedDispatch, outcome: Outcome, unheld: UnheldRejection): Promise<ExecutionResult> {
+    const { checkedTaskId, evidence, rejection, operator } = unheld;
     const { task } = d;
     const identical = await this.deps.checks.recordSetRejection({
       projectId: task.projectId,
@@ -157,7 +159,7 @@ export class CheckHarvest {
           harvest.files,
         );
       } catch (e) {
-        return mainRunBlocked(task, sessionId, e, { outcome, agentWork: "discarded" }, eventSink, this.deps.logger, "checkRedRun", "red run on the foundation");
+        return mainRunBlocked({ task, sessionId, error: e, agent: { outcome, agentWork: "discarded" }, eventSink, logger: this.deps.logger, stage: "checkRedRun", step: "red run on the foundation" });
       }
       const atFoundation = { baselineCommit: foundation.commit, foundationTaskId: foundation.taskId };
       if (redRun.kind === "files_refused") {
@@ -195,7 +197,7 @@ export class CheckHarvest {
         report,
       });
       const rejection = `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`;
-      if (set.kind === "unheld") return this.unheldRejected(d, outcome, checkedTaskId, set.evidence, rejection, atFoundation);
+      if (set.kind === "unheld") return this.unheldRejected(d, outcome, { checkedTaskId, evidence: set.evidence, rejection, operator: atFoundation });
       if (problems.length > 0 || setRejected(set)) return this.checksRejected(d, outcome, rejection, atFoundation);
 
       const revision = await this.deps.checks.append({

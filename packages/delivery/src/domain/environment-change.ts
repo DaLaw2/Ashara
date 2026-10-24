@@ -146,15 +146,15 @@ export function requestEnvironmentChange(
   if (!canTransitionTo(task.status, "Pending")) throw new InvalidStatusTransition(task.id, task.status, "Pending");
 
   const ordinal = context.opened + 1;
-  const environment = createPendingWorkItem(
-    "Task",
+  const environment = createPendingWorkItem({
+    level: "Task",
     // Unique per request: the gate counts a Completed item with the same parent and title as done.
-    `Environment change ${ordinal} for task ${task.id}`,
-    task.projectId,
-    task.parentId,
-    `Requested by implementation task ${task.id}: ${request.paths.join(", ")}`,
-    environmentTaskSpec(task, request, ordinal, context.product),
-  );
+    title: `Environment change ${ordinal} for task ${task.id}`,
+    projectId: task.projectId,
+    parentId: task.parentId,
+    description: `Requested by implementation task ${task.id}: ${request.paths.join(", ")}`,
+    taskSpec: environmentTaskSpec(task, request, ordinal, context.product),
+  });
   environment.workKind = "environment";
   environment.ownerRoleId = context.owner.roleId;
   environment.repairsTaskId = task.id;

@@ -8,14 +8,14 @@ import type { WorkItem } from "./work-item.js";
 const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000bb", "test");
 
 function implementation(): WorkItem {
-  const item = { ...createPendingWorkItem("Task", "write hello.txt", PROJECT), workKind: "implementation" as const };
+  const item = { ...createPendingWorkItem({ level: "Task", title: "write hello.txt", projectId: PROJECT }), workKind: "implementation" as const };
   startWorkItem(item);
   item.events = [];
   return item;
 }
 
 function completedCheckTask(): WorkItem {
-  return { ...createPendingWorkItem("Task", "write the checks", PROJECT), workKind: "check", status: "Completed" };
+  return { ...createPendingWorkItem({ level: "Task", title: "write the checks", projectId: PROJECT }), workKind: "check", status: "Completed" };
 }
 
 describe("exitStaleChecks", () => {
@@ -73,7 +73,7 @@ describe("exitStaleChecks", () => {
 });
 
 function reviewTask(): WorkItem {
-  const item = { ...createPendingWorkItem("Task", "review the checks", PROJECT, undefined, undefined, { origin: "review" }), workKind: "check" as const };
+  const item = { ...createPendingWorkItem({ level: "Task", title: "review the checks", projectId: PROJECT, taskSpec: { origin: "review" } }), workKind: "check" as const };
   startWorkItem(item);
   item.events = [];
   return item;

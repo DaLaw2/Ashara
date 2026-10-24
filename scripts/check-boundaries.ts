@@ -8,7 +8,8 @@
  * optional dependencies, stack literals, table ownership, the project record's columns, the
  * simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
- * recognise, the line limits of the modules split by role, and a name declared outside its one home.
+ * recognise, the line limits of the modules split by role, a name declared outside its one home, and an
+ * exported function or constructor with a long positional parameter list.
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -27,6 +28,7 @@ import type { LintContext, Violation } from "./lints/lint.js";
 import { run as moduleNames } from "./lints/module-names.js";
 import { run as optionalDeps } from "./lints/optional-deps.js";
 import { run as packageImports } from "./lints/package-imports.js";
+import { run as positionalParams } from "./lints/positional-params.js";
 import { run as predicateCopies } from "./lints/predicate-copies.js";
 import { run as priceDefaults } from "./lints/price-defaults.js";
 import { run as projectRecord } from "./lints/project-record.js";
@@ -58,6 +60,7 @@ const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   recognisedWording,
   fileSizes,
   languageHomes,
+  positionalParams,
 ];
 
 function main(): void {

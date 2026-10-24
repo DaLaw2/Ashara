@@ -191,10 +191,19 @@ function isInside(child: string, parent: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
+/** What every entry of one populate run is linked against, and the tally it adds to. */
+interface LinkScope {
+  readonly source: string;
+  readonly sourceModules: string;
+  readonly worktree: string;
+  readonly counts: LinkCounts;
+}
+
 // A source entry that is a symlink into the source checkout outside its node_modules is a workspace
 // link; it is recreated against the same relative directory in the worktree. Every other entry is
 // linked to the source's installed copy.
-function linkEntry(srcEntry: string, dstEntry: string, source: string, sourceModules: string, worktree: string, counts: LinkCounts): void {
+function linkEntry(srcEntry: string, dstEntry: string, scope: LinkScope): void {
+  const { source, sourceModules, worktree, counts } = scope;
   if (fs.lstatSync(srcEntry).isSymbolicLink()) {
     const target = path.resolve(path.dirname(srcEntry), fs.readlinkSync(srcEntry));
     if (isInside(target, source) && !isInside(target, sourceModules)) {
@@ -228,6 +237,7 @@ function linkBins(srcBin: string, dstBin: string, counts: LinkCounts): void {
 // builds its own rather than writing into the source's.
 function populate(staging: string, source: string, sourceModules: string, worktree: string): LinkCounts {
   const counts: LinkCounts = { external: 0, workspace: 0, bin: 0 };
+  const scope: LinkScope = { source, sourceModules, worktree, counts };
   for (const entry of fs.readdirSync(sourceModules, { withFileTypes: true })) {
     const srcEntry = path.join(sourceModules, entry.name);
     const dstEntry = path.join(staging, entry.name);
@@ -236,8 +246,8 @@ function populate(staging: string, source: string, sourceModules: string, worktr
     else if (entry.name.startsWith(".")) continue;
     else if (entry.name.startsWith("@") && entry.isDirectory()) {
       fs.mkdirSync(dstEntry);
-      for (const scoped of fs.readdirSync(srcEntry)) linkEntry(path.join(srcEntry, scoped), path.join(dstEntry, scoped), source, sourceModules, worktree, counts);
-    } else linkEntry(srcEntry, dstEntry, source, sourceModules, worktree, counts);
+      for (const scoped of fs.readdirSync(srcEntry)) linkEntry(path.join(srcEntry, scoped), path.join(dstEntry, scoped), scope);
+    } else linkEntry(srcEntry, dstEntry, scope);
   }
   return counts;
 }

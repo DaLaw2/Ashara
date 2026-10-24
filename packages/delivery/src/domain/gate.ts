@@ -122,9 +122,16 @@ async function admitProject(
   const statusById = new Map(items.map((item) => [item.id, item.status] as const));
   for (const item of pending) {
     const result = resolution.get(item.id);
-    if (result?.resolution === "blocked") await giveUpUnsatisfiable(repo, events, logger, item, result.blockedBy, statusById);
+    if (result?.resolution === "blocked") await giveUpUnsatisfiable({ repo, events, logger }, item, result.blockedBy, statusById);
   }
   return { kind: "admitted", items: pending.filter((item) => isMet(resolution, item.id)), weights: graph.computeUnlockWeights() };
+}
+
+/** The ports a give-up saves, publishes and logs through. */
+interface GiveUpPorts {
+  readonly repo: WorkItemRepository;
+  readonly events: EventPublisher;
+  readonly logger: Logger;
 }
 
 /**
@@ -133,13 +140,12 @@ async function admitProject(
  * The event is published after the save commits, best-effort, like every routing site's.
  */
 async function giveUpUnsatisfiable(
-  repo: WorkItemRepository,
-  events: EventPublisher,
-  logger: Logger,
+  ports: GiveUpPorts,
   item: WorkItem,
   blockedBy: readonly string[],
   statusById: ReadonlyMap<string, WorkItemStatus>,
 ): Promise<void> {
+  const { repo, events, logger } = ports;
   const causes = blockedBy
     .map((id) => {
       const status = statusById.get(id);

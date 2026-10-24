@@ -41,11 +41,11 @@ export class OwnershipGate {
     const blockOn = (e: unknown, step: string): ExecutionResult => {
       const environmentFailure = environmentErrorOf(e);
       if (environmentFailure !== null) {
-        return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { outcome, agentWork: "kept" }, eventSink, this.deps.logger);
+        return substrateBlocked({ task, sessionId, stage: "ownershipGate", error: environmentFailure, cell: "host git", agent: { outcome, agentWork: "kept" }, eventSink, logger: this.deps.logger });
       }
       const fault = new VerificationInfrastructureFault(task.id, step, { cause: e });
       const chain = wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name });
-      return asharaBlocked(task, sessionId, "ownershipGate", fault, { outcome, agentWork: "kept" }, eventSink, this.deps.logger, chain);
+      return asharaBlocked({ task, sessionId, stage: "ownershipGate", fault, agent: { outcome, agentWork: "kept" }, eventSink, logger: this.deps.logger, chain });
     };
     let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
     try {

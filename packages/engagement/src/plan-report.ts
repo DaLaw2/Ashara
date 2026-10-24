@@ -3,6 +3,7 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
+import type { PlanTaskCounts } from "@ashara/delivery/reads";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
 import { REPORT_SUBJECT } from "./report-subjects.js";
@@ -16,22 +17,6 @@ import type { PlanReportSubject } from "./report-subjects.js";
 // every answer it took in: each of them was promised the client would
 // be told what changed. The report of a first planning that stopped is the report of that halt, a
 // terminal message (terminal-report.ts): its words are here, and it carries the guarantee table.
-
-/** The plan's tasks by producer, as task_spec.origin records it. */
-interface PlanTaskCounts {
-  readonly decomposition: number;
-  /** The task that sets up the project environment before any other. */
-  readonly sprint0: number;
-  /** The task that sets up the product's layout after the environment and before any check is written. */
-  readonly scaffolds: number;
-  /** The tasks in which the checks of a decomposed task are written, one per decomposed task. */
-  readonly checks: number;
-  /** The review that reads every check of the plan together before any of its work starts. */
-  readonly reviews: number;
-  readonly unrecorded: number;
-  /** Tasks already dispatched: the report says none of the plan's tasks has started. */
-  readonly started: number;
-}
 
 /** A revision written before the first plan was reported; `summary` as Delivery recorded it, parsed here. */
 interface RevisionBeforeReport {

@@ -9,7 +9,7 @@ import type { StoredTaskSpec } from "./work-item-language/task-spec.js";
 const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000cc", "test");
 
 function task(title: string, workKind: WorkItem["workKind"], taskSpec?: StoredTaskSpec): WorkItem {
-  return { ...createPendingWorkItem("Task", title, PROJECT, undefined, undefined, taskSpec), workKind };
+  return { ...createPendingWorkItem({ level: "Task", title, projectId: PROJECT, taskSpec }), workKind };
 }
 
 describe("setAsideWork: a revision names the superseded goal tasks by the one definition", () => {

@@ -48,7 +48,7 @@ export class FoundationGate {
       );
     } catch (e) {
       await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch, this.deps.logger);
-      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "checkRedRun", "build on the foundation");
+      return mainRunBlocked({ task, sessionId, error: e, agent: NO_AGENT, eventSink, logger: this.deps.logger, stage: "checkRedRun", step: "build on the foundation" });
     }
     const passed = environmentBuildPassed(build);
     eventSink?.emit({

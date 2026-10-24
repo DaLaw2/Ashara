@@ -100,7 +100,7 @@ export class SuiteReviewRun {
           this.deps.logger,
         );
       }
-      return thrownBlocked(task, sessionId, "reviewSuites", e, { step: "review the plan's checks", cell: "no cell" }, NO_AGENT, eventSink, this.deps.logger);
+      return thrownBlocked({ task, sessionId, stage: "reviewSuites", error: e, where: { step: "review the plan's checks", cell: "no cell" }, agent: NO_AGENT, eventSink, logger: this.deps.logger });
     }
     const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
     // A rejection the second review did not reach is released; both judgements are recorded whole

@@ -252,7 +252,7 @@ export class Replanner implements Replanning {
       let planned: { readonly decomposition: DecompositionResult; readonly environment: EnvironmentPlanning } | null = null;
       if (!nothingToPlan) {
         const environment = await this.environmentOf(project, cause, completed, vision);
-        planned = { decomposition: await this.decompose(project, vision, scope.planned, cause, completed, environment), environment };
+        planned = { decomposition: await this.decompose({ project, vision, planned: scope.planned, cause, completed, environment }), environment };
       }
       write = composeRevision({ project, cause, vision, planned, owners, completed, scope });
       result = await this.deps.store.writeRevision(write);
@@ -334,14 +334,22 @@ export class Replanner implements Replanning {
     return planned;
   }
 
-  private async decompose(
-    project: ProjectAwaitingReplan,
-    vision: PlanningVision,
-    planned: readonly VisionItem[],
-    cause: RevisionCause,
-    completed: readonly PlannedItem[],
-    environment: EnvironmentPlanning,
-  ): Promise<DecompositionResult> {
+  private async decompose({
+    project,
+    vision,
+    planned,
+    cause,
+    completed,
+    environment,
+  }: {
+    readonly project: ProjectAwaitingReplan;
+    readonly vision: PlanningVision;
+    /** The vision items the revision plans again. */
+    readonly planned: readonly VisionItem[];
+    readonly cause: RevisionCause;
+    readonly completed: readonly PlannedItem[];
+    readonly environment: EnvironmentPlanning;
+  }): Promise<DecompositionResult> {
     const llm = createGatewayDecompositionLLM(
       this.deps.llm.forCall({ projectId: project.projectId, taskId: null, callSite: "decomposition" }),
       this.deps.shutdownSignal,

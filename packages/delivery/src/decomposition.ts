@@ -58,6 +58,14 @@ interface PlannedLookup {
     readonly item: VisionItem;
 }
 
+/** What one epic's emitted tasks are checked against: the task cap, the epic, and the vision items they trace to. */
+interface EpicScope {
+    readonly cap: number;
+    readonly parentId: string;
+    readonly visionItems: readonly VisionItem[];
+    readonly checkedItems: readonly VisionItem[];
+}
+
 export class DecompositionEngine {
     private readonly llm: DecompositionLLM;
     private readonly config: DecompositionConfig;
@@ -192,14 +200,8 @@ export class DecompositionEngine {
      * feedback rather than accepted. It mirrors {@link resolveTasks}'s failure
      * checks without assigning ids (generateId runs once, after this passes).
      */
-    private validateTasks(
-        rawTasks: readonly RawTask[],
-        rawPlanned: readonly RawPlanned[],
-        cap: number,
-        parentId: string,
-        visionItems: readonly VisionItem[],
-        checkedItems: readonly VisionItem[],
-    ): StructuredValidation {
+    private validateTasks(rawTasks: readonly RawTask[], rawPlanned: readonly RawPlanned[], scope: EpicScope): StructuredValidation {
+        const { cap, parentId, visionItems, checkedItems } = scope;
         if (rawTasks.length > cap) {
             return { ok: false, errors: [new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId }).message] };
         }
@@ -261,11 +263,9 @@ export class DecompositionEngine {
     private resolveTasks(
         rawTasks: readonly RawTask[],
         planned: readonly PlannedLookup[],
-        cap: number,
-        parentId: string,
-        visionItems: readonly VisionItem[],
-        checkedItems: readonly VisionItem[],
+        scope: EpicScope,
     ): Array<WorkItemSpec & { taskSpec: DecomposedTaskSpec }> {
+        const { cap, parentId, visionItems, checkedItems } = scope;
         if (rawTasks.length > cap) {
             throw new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId });
         }
@@ -348,22 +348,23 @@ export class DecompositionEngine {
     }> {
         const taskCap = this.config.maxTasksPerEpic;
         const priorContext = this.buildPriorContext(input.priorEpicResults);
-        const prompt = this.buildDecomposePrompt(
-            "decompose this epic into tasks",
-            epic.title,
-            epic.description,
+        const prompt = this.buildDecomposePrompt({
+            instruction: "decompose this epic into tasks",
+            title: epic.title,
+            description: epic.description,
             priorContext,
-            input.epicNorthStar,
+            northStar: input.epicNorthStar,
             taskCap,
-            input.environment,
-            input.visionItems,
-            input.checkedItems,
-        );
+            environment: input.environment,
+            visionItems: input.visionItems,
+            checkedItems: input.checkedItems,
+        });
 
         // Every unresolvable edge a rejected attempt carried. The re-ask tells the
         // model to drop what it cannot express (gateway-adapters.ts), so an edge
         // the accepted answer no longer carries is recorded here instead of vanishing.
         const unresolvedSeen = new Map<string, DroppedDependency>();
+        const scope: EpicScope = { cap: taskCap, parentId: epic.id, visionItems: input.visionItems, checkedItems: input.checkedItems };
         const parsed = await this.llm.generateStructured(
             prompt,
             TaskOutputSchema,
@@ -371,7 +372,7 @@ export class DecompositionEngine {
                 for (const unresolved of unresolvedDependencies(value.tasks)) {
                     unresolvedSeen.set(JSON.stringify([unresolved.dependentTaskTitle, unresolved.unresolvedRef]), unresolved);
                 }
-                return this.validateTasks(value.tasks, value.assumptions, taskCap, epic.id, input.visionItems, input.checkedItems);
+                return this.validateTasks(value.tasks, value.assumptions, scope);
             },
         );
         // A ref that now resolves on the same task is kept, not dropped. An edge
@@ -383,7 +384,7 @@ export class DecompositionEngine {
         );
         const planned = this.plannedAssumptions(parsed.assumptions, parsed.tasks, input, epic.id);
         return {
-            tasks: this.resolveTasks(parsed.tasks, planned, taskCap, epic.id, input.visionItems, input.checkedItems),
+            tasks: this.resolveTasks(parsed.tasks, planned, scope),
             droppedDependencies,
             assumptions: planned.map(({ key, statement, underpins }) => ({ key, statement, underpins })),
         };
@@ -409,17 +410,27 @@ export class DecompositionEngine {
         return `\n\nPrior Epic Context (use these results to inform decomposition):\n${sections.join("\n\n")}`;
     }
 
-    private buildDecomposePrompt(
-        instruction: string,
-        title: string,
-        description: string,
-        priorContext: string,
-        northStar: string,
-        taskCap: number,
-        environment: EnvironmentPlanning,
-        visionItems: readonly VisionItem[],
-        checkedItems: readonly VisionItem[],
-    ): string {
+    private buildDecomposePrompt({
+        instruction,
+        title,
+        description,
+        priorContext,
+        northStar,
+        taskCap,
+        environment,
+        visionItems,
+        checkedItems,
+    }: {
+        readonly instruction: string;
+        readonly title: string;
+        readonly description: string;
+        readonly priorContext: string;
+        readonly northStar: string;
+        readonly taskCap: number;
+        readonly environment: EnvironmentPlanning;
+        readonly visionItems: readonly VisionItem[];
+        readonly checkedItems: readonly VisionItem[];
+    }): string {
         const jsonFormat = '{"assumptions": [{"ref": "n1", "statement": "...", "underpins": ["G1"]}], "tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["G1"]}], "acceptance": [{"text": "...", "sources": ["G1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
 
         const lines = [

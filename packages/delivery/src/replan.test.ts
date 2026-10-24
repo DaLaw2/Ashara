@@ -26,12 +26,12 @@ describe("Replanner: the environment judgement asks for a judge of the environme
   async function judgedTier(planned: CapabilityLevel, attemptGrade: AttemptGrade) {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const environment: WorkItem = {
-      ...createPendingWorkItem("Task", "Set up the environment", PROJECT, undefined, undefined, { origin: "sprint0", capability: planned }),
+      ...createPendingWorkItem({ level: "Task", title: "Set up the environment", projectId: PROJECT, taskSpec: { origin: "sprint0", capability: planned } }),
       workKind: "environment",
       status: "Completed",
     };
     const given: WorkItem = {
-      ...createPendingWorkItem("Task", "Store keys", PROJECT, undefined, undefined, { origin: "decomposition", capability: "Strong" }),
+      ...createPendingWorkItem({ level: "Task", title: "Store keys", projectId: PROJECT, taskSpec: { origin: "decomposition", capability: "Strong" } }),
       workKind: "implementation",
       status: "Abandoned",
       blockedReason: { source: "task_failed", reason: "its checks failed" },

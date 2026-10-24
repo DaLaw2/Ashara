@@ -10,6 +10,7 @@ import { isSupersededItem, pendingCorrection } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
+import type { PlanTaskCounts } from "../published-reads.js";
 import type { DroppedPlanDependency } from "./project-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { answersTakenBy, parseAnswersTaken } from "./replan.js";
@@ -17,24 +18,6 @@ import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 // Delivery's published reads of its planning outcomes the Liaison reports on. A report is due
 // while the outcome is stamped on the project's planning record and Engagement's told record holds
 // no report on it; the report itself is Engagement's write.
-
-/** A plan's tasks counted by the producer task_spec.origin records. */
-interface TaskCounts {
-  /** Tasks the decomposition of the client's goal produced. */
-  readonly decomposition: number;
-  /** The Sprint 0 task decomposition adds to every plan: the project environment. */
-  readonly sprint0: number;
-  /** The product scaffold decomposition adds after Sprint 0: the product's layout. */
-  readonly scaffolds: number;
-  /** The check task decomposition adds for each task it produced. */
-  readonly checks: number;
-  /** The review of every check of the plan, read together before any of its work starts. */
-  readonly reviews: number;
-  /** Tasks whose task_spec records no origin (written before origin was recorded). */
-  readonly unrecorded: number;
-  /** Tasks already dispatched at least once. */
-  readonly started: number;
-}
 
 /** A revision of the plan written before the first plan was reported; `summary` as stored. */
 interface RevisionBeforeReport {
@@ -75,7 +58,7 @@ type DuePlanReportRow =
       readonly subject: typeof REPORT_SUBJECT.firstPlan;
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
-      readonly tasks: TaskCounts;
+      readonly tasks: PlanTaskCounts;
       readonly droppedOrderingHints: DroppedOrderingHints;
       /** Revisions written before this report, oldest first: the report describes the plan they left. */
       readonly revisions: readonly RevisionBeforeReport[];

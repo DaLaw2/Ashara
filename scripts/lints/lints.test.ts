@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { run as languageHomes } from "./language-homes.js";
 import { loadLintContext, type LintContext, type PackageScan } from "./lint.js";
+import { run as positionalParams } from "./positional-params.js";
 import { run as projectRecord } from "./project-record.js";
 import { run as recognisedWording } from "./recognised-wording.js";
 import { parseRules } from "./rules.js";
@@ -199,5 +200,44 @@ describe("language-homes", () => {
 
   test("the repository declares every name of [homes] at its home only", () => {
     expect(languageHomes(loadLintContext(REPO))).toEqual([]);
+  });
+});
+
+describe("positional-params", () => {
+  const POSITIONAL = "positional-params";
+  /** The violations of `files` under quality, leaving out the allowed sites this tree does not hold. */
+  const sites = (files: Readonly<Record<string, string>>): string[] =>
+    positionalParams(homesTree("", { quality: files }))
+      .filter((v) => v.specifier === POSITIONAL && v.line > 0)
+      .map((v) => `${v.file}:${v.line}`);
+
+  test("an exported function, constructor or arrow past five positional parameters is a violation", () => {
+    const source = [
+      "export function built(a: string, b: string, c: string, d: string, e: string, f: string): void {}",
+      "export class Built { constructor(a: string, b: string, c: string, d: string, e: string, f: string) {} }",
+      "export const arrow = (a: string, b: string, c: string, d: string, e: string, f: string): void => {};",
+      "function listed(a: string, b: string, c: string, d: string, e: string, f: string): void {}",
+      "export { listed };",
+    ].join("\n");
+    expect(sites({ "result.ts": source })).toEqual(["packages/quality/src/result.ts:1", "packages/quality/src/result.ts:2", "packages/quality/src/result.ts:3", "packages/quality/src/result.ts:4"]);
+  });
+
+  test("a named-parameter object, five positional parameters, a private helper and a test are clean", () => {
+    const source = [
+      "export function named({ a, b }: { a: string; b: string }): void {}",
+      "export function five(a: string, b: string, c: string, d: string, e: string): void {}",
+      "function local(a: string, b: string, c: string, d: string, e: string, f: string): void {}",
+    ].join("\n");
+    const test = "export function built(a: string, b: string, c: string, d: string, e: string, f: string): void {}";
+    expect(sites({ "result.ts": source, "result.test.ts": test })).toEqual([]);
+  });
+
+  test("an allowed site that no longer takes a long list is a stale entry", () => {
+    const stale = positionalParams(homesTree("", { quality: { "task-checks.ts": "export function harvestCheckFiles(a: string): void {}" } }));
+    expect(stale.map((v) => v.reason)).toContainEqual(expect.stringContaining("harvestCheckFiles no longer takes"));
+  });
+
+  test("the repository's exported functions and constructors keep to five positional parameters", () => {
+    expect(positionalParams(loadLintContext(REPO))).toEqual([]);
   });
 });

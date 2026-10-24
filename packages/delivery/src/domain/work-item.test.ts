@@ -41,7 +41,7 @@ const ABANDON_REASON: StoredBlockedReason = { source: "failure_given_up", reason
 const OWNER_ABANDON_REASON: StoredBlockedReason = { source: "api", note: "abandoned via API" };
 
 function seedFailed() {
-  const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+  const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
   startWorkItem(item);
   failWorkItem(item, FAIL_REASON, WORK_FAILED);
   takeEvents(item);
@@ -106,7 +106,7 @@ describe("state-machine totality", () => {
 
   test("Blocked -> Completed is merge_unrecorded's alone; such an item never goes back to Pending", () => {
     const merged: StoredBlockedReason = { source: "merge_unrecorded", mergeCommit: "a".repeat(40), reason: "db down" };
-    const item = createPendingWorkItem("Task", "merged-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "merged-task", projectId: TEST_PROJECT_ID });
     blockWorkItem(item, merged);
     takeEvents(item);
     expect(() => unblockWorkItem(item)).toThrow(InvalidStatusTransition);
@@ -116,14 +116,14 @@ describe("state-machine totality", () => {
     expect(item.blockedReason).toBeUndefined();
     expect(takeEvents(item).map((e) => e.eventType)).toEqual(["work_item.completed"]);
 
-    const other = createPendingWorkItem("Task", "parked-task", TEST_PROJECT_ID);
+    const other = createPendingWorkItem({ level: "Task", title: "parked-task", projectId: TEST_PROJECT_ID });
     blockWorkItem(other, BLOCK_REASON);
     expect(() => completeRecordedMerge(other)).toThrow(InvalidStatusTransition);
     expect(() => completeWorkItem(other)).toThrow(InvalidStatusTransition);
   });
 
   test("a task held for a client's correction never goes back to Pending: only its revision supersedes it", () => {
-    const item = createPendingWorkItem("Task", "held-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "held-task", projectId: TEST_PROJECT_ID });
     holdForCorrection(item, { visionVersion: 2, requestedBy: "change-1", affected: ["G2"] });
     expect(item.blockedReason).toMatchObject({ source: "correction_pending", visionVersion: 2, affected: ["G2"] });
     expect(() => unblockWorkItem(item)).toThrow(InvalidStatusTransition);
@@ -131,7 +131,7 @@ describe("state-machine totality", () => {
   });
 
   test("abandonWorkItem accepts a Blocked item (the owner-parked give-up path)", () => {
-    const item = createPendingWorkItem("Task", "parked-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "parked-task", projectId: TEST_PROJECT_ID });
     blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
     abandonWorkItem(item, { source: "api", reason: "owner dropped it" });
@@ -141,7 +141,7 @@ describe("state-machine totality", () => {
 
 describe("requeueWorkItem", () => {
   function seedInProgress() {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     startWorkItem(item);
     takeEvents(item);
     return item;
@@ -160,7 +160,7 @@ describe("requeueWorkItem", () => {
   });
 
   test("throws InvalidStatusTransition when the item is not InProgress", () => {
-    const pending = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const pending = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     expect(() => requeueWorkItem(pending)).toThrow(InvalidStatusTransition);
 
     const failed = seedFailed();
@@ -176,14 +176,14 @@ describe("method-level preconditions guard the shared -> Pending edge", () => {
   // shared edge cannot be reached through the wrong intent (e.g. the HTTP unblock
   // path forcing a live-agent InProgress item back to Pending).
   function seedInProgress() {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     startWorkItem(item);
     takeEvents(item);
     return item;
   }
 
   function seedBlocked() {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
     return item;
@@ -240,7 +240,7 @@ describe("replanWorkItem", () => {
   });
 
   test("throws InvalidStatusTransition when the item is not Failed", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
 
     expect(() => replanWorkItem(item, null)).toThrow(InvalidStatusTransition);
   });
@@ -261,7 +261,7 @@ describe("abandonWorkItem", () => {
   });
 
   test("moves a Pending item directly to Abandoned (owner abandon via API)", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
 
     abandonWorkItem(item, OWNER_ABANDON_REASON);
     const events = takeEvents(item);
@@ -272,7 +272,7 @@ describe("abandonWorkItem", () => {
   });
 
   test("moves an InProgress item directly to Abandoned (owner abandon via API)", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     startWorkItem(item);
     takeEvents(item);
 
@@ -285,7 +285,7 @@ describe("abandonWorkItem", () => {
   });
 
   test("throws InvalidStatusTransition from a terminal status", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     startWorkItem(item);
     failWorkItem(item, FAIL_REASON, WORK_FAILED);
     abandonWorkItem(item, ABANDON_REASON);
@@ -316,7 +316,7 @@ describe("giveUpWorkItem", () => {
   const CAUSE: StoredBlockedReason = { source: "check_disputed", checkTaskId: "c1", checkName: "put", reason: "past the bound" };
 
   function inStatus(status: "Pending" | "InProgress" | "Blocked" | "Failed") {
-    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
+    const item = createPendingWorkItem({ level: "Task", title: "leaf-task", projectId: TEST_PROJECT_ID });
     if (status === "InProgress" || status === "Failed") startWorkItem(item);
     if (status === "Failed") failWorkItem(item, FAIL_REASON, WORK_FAILED);
     if (status === "Blocked") blockWorkItem(item, BLOCK_REASON);

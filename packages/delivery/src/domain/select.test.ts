@@ -17,7 +17,7 @@ function inTurn(items: Parameters<typeof TaskSelector.next>[0], unlockWeights?: 
 describe("TaskSelector.next", () => {
   test("items created at one instant are taken in id order, whatever order they arrive in", () => {
     const at = new Date("2026-10-14T00:00:00Z");
-    const items = ["a", "b", "c"].map((title) => ({ ...createPendingWorkItem("Task", title, PROJECT_ID), createdAt: at }));
+    const items = ["a", "b", "c"].map((title) => ({ ...createPendingWorkItem({ level: "Task", title, projectId: PROJECT_ID }), createdAt: at }));
     const byId = [...items].sort((x, y) => (x.id < y.id ? -1 : 1)).map((item) => item.id);
 
     expect(inTurn(items)).toEqual(byId);
@@ -26,7 +26,7 @@ describe("TaskSelector.next", () => {
 
   test("the task that unlocks the most goes first, and a taken task is never handed out again", () => {
     const at = new Date("2026-10-14T00:00:00Z");
-    const [a, b] = ["a", "b"].map((title) => ({ ...createPendingWorkItem("Task", title, PROJECT_ID), createdAt: at }));
+    const [a, b] = ["a", "b"].map((title) => ({ ...createPendingWorkItem({ level: "Task", title, projectId: PROJECT_ID }), createdAt: at }));
     const weights = new Map([[b.id, 3]]);
 
     expect(TaskSelector.next([a, b], new Set(), weights)?.id).toBe(b.id);

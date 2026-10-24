@@ -370,7 +370,7 @@ describe("a shutdown while commands run in cells", () => {
     // interrupted, never failed or blocked.
     const interrupted = cellExecInterruptedOf(ended.sweep);
     expect(interrupted?.reason).toEqual(new Error("SIGTERM"));
-    const routed = thrownBlocked({ id: taskId, attempt: 1 }, sessionId, "checkRedRun", ended.sweep, { step: "red run", cell: "CI cell" }, { outcome: null, agentWork: "none" }, undefined, logger);
+    const routed = thrownBlocked({ task: { id: taskId, attempt: 1 }, sessionId, stage: "checkRedRun", error: ended.sweep, where: { step: "red run", cell: "CI cell" }, agent: { outcome: null, agentWork: "none" }, eventSink: undefined, logger });
     expect(routed.status).toBe("interrupted");
 
     // Both cells were torn down (the sweep's by its own teardown, the task's by the shutdown) and no container is left.

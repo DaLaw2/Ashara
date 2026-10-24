@@ -61,7 +61,7 @@ export class SubstrateGate {
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
       const fault = environmentErrorOf(e) ?? new VerificationInfrastructureFault(task.id, "substrate gate run", { cause: e });
-      return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { outcome, agentWork: "kept" }, eventSink, this.deps.logger) };
+      return { kind: "ended", result: thrownBlocked({ task, sessionId, stage: "substrateGate", error: fault, where: { step: "substrate gate run", cell: "CI cell" }, agent: { outcome, agentWork: "kept" }, eventSink, logger: this.deps.logger }) };
     }
 
     const passed = environmentCheckPassed(run.report);
@@ -79,7 +79,7 @@ export class SubstrateGate {
       // The gate passed; only Z0's store failed to keep its statement, as recordRebuiltStatement's write.
       await cleanupWorkdir(workDir, targetProjectPath);
       const fault = new VerificationInfrastructureFault(task.id, `record the environment statement for version ${run.tested.version}`, { cause: e });
-      return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { outcome, agentWork: "kept" }, eventSink, this.deps.logger) };
+      return { kind: "ended", result: asharaBlocked({ task, sessionId, stage: "substrateGate", fault, agent: { outcome, agentWork: "kept" }, eventSink, logger: this.deps.logger }) };
     }
     return { kind: "passed", tested: run.tested };
   }

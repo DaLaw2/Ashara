@@ -19,6 +19,24 @@ type ProjectRef = AnyColumn | SQL;
 
 const named = (ref: ProjectRef): SQL => (ref instanceof SQL ? ref : qualifiedColumn(ref));
 
+/** A plan's tasks counted by the producer task_spec.origin records, as the first plan's report states them. */
+export interface PlanTaskCounts {
+  /** Tasks the decomposition of the client's goal produced. */
+  readonly decomposition: number;
+  /** The Sprint 0 task decomposition adds to every plan: the project environment. */
+  readonly sprint0: number;
+  /** The product scaffold decomposition adds after Sprint 0: the product's layout. */
+  readonly scaffolds: number;
+  /** The check task decomposition adds for each task it produced. */
+  readonly checks: number;
+  /** The review of every check of the plan, read together before any of its work starts. */
+  readonly reviews: number;
+  /** Tasks whose task_spec records no origin (written before origin was recorded). */
+  readonly unrecorded: number;
+  /** Tasks already dispatched at least once: the report says none of the plan's tasks has started. */
+  readonly started: number;
+}
+
 /** A work item as other contexts name it: its title, its status and when it was planned. */
 export interface WorkItemSummary {
   readonly id: string;

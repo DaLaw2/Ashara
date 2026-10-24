@@ -255,23 +255,13 @@ async function mergeAndVerify({ context, dispatch: d, outcome }: DoneStep, work:
       // The merge was aborted and the branch kept: the verifier cell's substrate
       // failed, which is the operator's to fix, not a regression of the tree.
       await cleanupWorkdir(workDir, targetProjectPath);
-      return substrateBlocked(
-        task,
-        sessionId,
-        "postMergeVerify",
-        fault.error,
-        "verifier cell",
-        { outcome, agentWork: "kept" },
-        eventSink,
-        deps.logger,
-        finalizeResult.errorLayer,
-      );
+      return substrateBlocked({ task, sessionId, stage: "postMergeVerify", error: fault.error, cell: "verifier cell", agent: { outcome, agentWork: "kept" }, eventSink, logger: deps.logger, chain: finalizeResult.errorLayer });
     }
     if (fault.class === "ashara") {
       // No verdict was reached, so nothing is known of the task's work: blocked for the operator,
       // the merge aborted and the branch kept, never a failure the task is replanned against.
       await cleanupWorkdir(workDir, targetProjectPath);
-      return asharaBlocked(task, sessionId, "postMergeCheckRun", fault.error, { outcome, agentWork: "kept" }, eventSink, deps.logger, finalizeResult.errorLayer);
+      return asharaBlocked({ task, sessionId, stage: "postMergeCheckRun", fault: fault.error, agent: { outcome, agentWork: "kept" }, eventSink, logger: deps.logger, chain: finalizeResult.errorLayer });
     }
     const { verdict } = fault;
     const gateChain = finalizeResult.errorLayer;
@@ -336,7 +326,7 @@ async function conflictResolution({ context, dispatch: d, outcome }: DoneStep, c
     await cleanupWorkdir(workDir, targetProjectPath);
     const fault = new VerificationInfrastructureFault(task.id, "conflict marker read of the task worktree", { cause: e });
     const chain = wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name });
-    return asharaBlocked(task, sessionId, "conflictResolution", fault, { outcome, agentWork: "merge-discarded" }, eventSink, logger, chain);
+    return asharaBlocked({ task, sessionId, stage: "conflictResolution", fault, agent: { outcome, agentWork: "merge-discarded" }, eventSink, logger, chain });
   }
   eventSink?.emit({ event: "merge_conflict_resolution", taskId: task.id, attempt: task.attempt, files: conflict.files, markersLeft: left });
   if (left.length === 0) return null;
@@ -371,7 +361,7 @@ async function commitWork({ context, dispatch: d, outcome }: DoneStep): Promise<
     await cleanupWorkdir(workDir, targetProjectPath);
     if (!(e instanceof WorktreeCommitIncomplete)) {
       // Z0's git refused to record the work (WorktreeCommitFailed), or anything else failed: never the agent's.
-      return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { outcome, agentWork: "kept" }, eventSink, logger);
+      return thrownBlocked({ task, sessionId, stage: "commitWork", error: e, where: { step: "commit the agent's work on the task branch", cell: "host git" }, agent: { outcome, agentWork: "kept" }, eventSink, logger });
     }
     const chain = wrapError("development", "commitWork", e, { taskId: task.id });
     const envelope: ErrorEnvelope = {
@@ -405,11 +395,11 @@ async function branchWork({
     if (environmentFailure !== null) {
       return {
         kind: "ended",
-        result: substrateBlocked(task, sessionId, "branchWork", environmentFailure, "host git", { outcome, agentWork: "kept" }, eventSink, logger),
+        result: substrateBlocked({ task, sessionId, stage: "branchWork", error: environmentFailure, cell: "host git", agent: { outcome, agentWork: "kept" }, eventSink, logger }),
       };
     }
     const fault = new VerificationInfrastructureFault(task.id, "task branch diff against main", { cause: e });
     const chain = wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name });
-    return { kind: "ended", result: asharaBlocked(task, sessionId, "branchWork", fault, { outcome, agentWork: "kept" }, eventSink, logger, chain) };
+    return { kind: "ended", result: asharaBlocked({ task, sessionId, stage: "branchWork", fault, agent: { outcome, agentWork: "kept" }, eventSink, logger, chain }) };
   }
 }

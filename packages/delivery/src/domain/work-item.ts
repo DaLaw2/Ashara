@@ -66,16 +66,19 @@ export interface WorkItem {
   events: DomainEvent[];
 }
 
-export function createPendingWorkItem(
-  level: WorkItemLevel,
-  title: string,
-  projectId: ProjectId,
-  parentId?: WorkItemId,
-  description?: string,
-  taskSpec?: StoredTaskSpec,
-  northStar?: string,
-  successCriteria?: StoredSuccessCriteria,
-): WorkItem {
+/** What a new work item is created with, each field by name; every other field starts at its Pending default. */
+interface NewWorkItem {
+  readonly level: WorkItemLevel;
+  readonly title: string;
+  readonly projectId: ProjectId;
+  readonly parentId?: WorkItemId;
+  readonly description?: string;
+  readonly taskSpec?: StoredTaskSpec;
+  readonly northStar?: string;
+  readonly successCriteria?: StoredSuccessCriteria;
+}
+
+export function createPendingWorkItem({ level, title, projectId, parentId, description, taskSpec, northStar, successCriteria }: NewWorkItem): WorkItem {
   const now = new Date();
   return {
     id: createWorkItemId(),

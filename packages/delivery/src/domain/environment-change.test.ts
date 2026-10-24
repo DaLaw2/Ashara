@@ -11,7 +11,7 @@ const CONTEXT = { opened: 0, owner: { kind: "role", roleId: "00000000-0000-4000-
 
 function requester(capability: CapabilityLevel | undefined): WorkItem {
   return {
-    ...createPendingWorkItem("Task", "Parse the config", PROJECT, undefined, undefined, { origin: "decomposition", ...(capability === undefined ? {} : { capability }) }),
+    ...createPendingWorkItem({ level: "Task", title: "Parse the config", projectId: PROJECT, taskSpec: { origin: "decomposition", ...(capability === undefined ? {} : { capability }) } }),
     status: "InProgress",
   };
 }

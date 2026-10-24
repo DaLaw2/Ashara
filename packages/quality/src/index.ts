@@ -61,12 +61,12 @@ export {
   taskMergeOnMain,
 } from "./merge.js";
 export type { MainConflict } from "./merge.js";
-export { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
+export { PUBLIC_INTERFACE_FILE, gitPublicInterface } from "./public-interface.js";
 export { SCAFFOLD_PLACEHOLDER_MARKER } from "./scaffold-placeholder.js";
 export { releaseSettledBranches } from "./settled-branches.js";
 export { CONFLICT_MARKERS_LEFT, WORK_FAILED, failureVerdictSchema } from "./task-verdict.js";
 export type { FailureVerdict } from "./task-verdict.js";
-export { SuiteReviewer, gitPublicInterface } from "./suite-review.js";
+export { SuiteReviewer } from "./suite-review.js";
 export type { SuiteReviewSource, SuiteReviewing } from "./suite-review.js";
 export {
   CheckRecorder,

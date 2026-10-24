@@ -120,14 +120,13 @@ export function openAcceptanceDefect(sweep: FailedAcceptance): WorkItem {
   ]
     .map((each) => `: ${each}`)
     .join("");
-  const defect = createPendingWorkItem(
-    "Task",
-    `Acceptance on main ${sweep.mainCommit === null ? "(not read)" : sweep.mainCommit.slice(0, 12)}${asked}`,
-    sweep.projectId,
-    undefined,
-    sweep.mainCommit === null ? "The acceptance run could not read main." : `The acceptance run on main ${sweep.mainCommit} did not pass.`,
-    { ...spec, scope: sweep.details, origin: "acceptance" },
-  );
+  const defect = createPendingWorkItem({
+    level: "Task",
+    title: `Acceptance on main ${sweep.mainCommit === null ? "(not read)" : sweep.mainCommit.slice(0, 12)}${asked}`,
+    projectId: sweep.projectId,
+    description: sweep.mainCommit === null ? "The acceptance run could not read main." : `The acceptance run on main ${sweep.mainCommit} did not pass.`,
+    taskSpec: { ...spec, scope: sweep.details, origin: "acceptance" },
+  });
   defect.events.push(
     createDomainEvent("work_item.created", "delivery", {
       work_item_id: defect.id,

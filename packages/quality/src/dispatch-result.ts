@@ -165,20 +165,22 @@ export function environmentBlocked(block: EnvironmentBlock, eventSink: Execution
   };
 }
 
+/** The stage a dispatch stopped at, what its agent left, and who is told: what every blocked or interrupted result is built from. */
+interface StoppedAt {
+  readonly task: DispatchRef;
+  readonly sessionId: string;
+  readonly stage: EnvironmentStage;
+  readonly agent: AgentPart;
+  readonly eventSink: ExecutionEventSink | undefined;
+  readonly logger: Logger;
+}
+
 /**
  * A stage the shutdown stopped by interrupting a command in a cell: no verdict was reached, so the
  * dispatch is neither failed nor blocked but interrupted (InterruptedResult), its item requeued
  * with its dispatch refunded.
  */
-function interruptedInCell(
-  task: DispatchRef,
-  sessionId: string,
-  stage: EnvironmentStage,
-  interrupted: CellExecInterrupted,
-  agent: AgentPart,
-  eventSink: ExecutionEventSink | undefined,
-  logger: Logger,
-): ExecutionResult {
+function interruptedInCell({ task, sessionId, stage, agent, eventSink, logger }: StoppedAt, interrupted: CellExecInterrupted): ExecutionResult {
   const turns = agent.outcome === null ? 0 : agent.outcome.turnsUsed;
   const summary = `stage ${stage} of task ${task.id} interrupted by shutdown in a cell: ${interrupted.message}; ${describeAgentWork(agent.agentWork)}`;
   logger.info("quality.stage-interrupted", summary, { taskId: task.id, attempt: task.attempt, stage, cellId: interrupted.cellId });
@@ -200,16 +202,9 @@ function interruptedInCell(
 
 /** An environment block for a typed substrate error raised at `stage`. */
 export function substrateBlocked(
-  task: DispatchRef,
-  sessionId: string,
-  stage: EnvironmentStage,
-  e: EnvironmentError,
-  cell: string,
-  agent: AgentPart,
-  eventSink: ExecutionEventSink | undefined,
-  logger: Logger,
-  chain?: ErrorLayer,
+  blocked: StoppedAt & { readonly error: EnvironmentError; readonly cell: string; readonly chain?: ErrorLayer },
 ): ExecutionResult {
+  const { task, sessionId, stage, error: e, cell, agent, eventSink, logger, chain } = blocked;
   const unavailable = unavailableOf(e, cell);
   return environmentBlocked(
     {
@@ -237,17 +232,11 @@ function asharaUnavailableOf(fault: VerificationInfrastructureFault | DispatchFa
 
 /** A block of class `ashara`: Z0's own machinery failed at `stage`. */
 export function asharaBlocked(
-  task: DispatchRef,
-  sessionId: string,
-  stage: EnvironmentStage,
-  fault: VerificationInfrastructureFault | DispatchFault,
-  agent: AgentPart,
-  eventSink: ExecutionEventSink | undefined,
-  logger: Logger,
-  chain?: ErrorLayer,
+  blocked: StoppedAt & { readonly fault: VerificationInfrastructureFault | DispatchFault; readonly chain?: ErrorLayer },
 ): ExecutionResult {
+  const { task, sessionId, stage, fault, agent, eventSink, logger, chain } = blocked;
   const interrupted = cellExecInterruptedOf(fault);
-  if (interrupted !== null) return interruptedInCell(task, sessionId, stage, interrupted, agent, eventSink, logger);
+  if (interrupted !== null) return interruptedInCell(blocked, interrupted);
   const unavailable = asharaUnavailableOf(fault);
   return environmentBlocked(
     {
@@ -272,24 +261,18 @@ export function asharaBlocked(
  * throw is never the agent's work, so it is never failed against the task nor taught as a lesson.
  */
 export function thrownBlocked(
-  task: DispatchRef,
-  sessionId: string,
-  stage: EnvironmentStage,
-  e: unknown,
-  where: { readonly step: string; readonly cell: string },
-  agent: AgentPart,
-  eventSink: ExecutionEventSink | undefined,
-  logger: Logger,
+  blocked: StoppedAt & { readonly error: unknown; readonly where: { readonly step: string; readonly cell: string } },
 ): ExecutionResult {
+  const { error: e, where, ...at } = blocked;
   const interrupted = cellExecInterruptedOf(e);
-  if (interrupted !== null) return interruptedInCell(task, sessionId, stage, interrupted, agent, eventSink, logger);
+  if (interrupted !== null) return interruptedInCell(at, interrupted);
   const fault = thrownFaultOf(e);
-  if (fault.class === "substrate") return substrateBlocked(task, sessionId, stage, fault.error, where.cell, agent, eventSink, logger);
+  if (fault.class === "substrate") return substrateBlocked({ ...at, error: fault.error, cell: where.cell });
   const asharaFault =
     fault.error instanceof VerificationInfrastructureFault || fault.error instanceof DispatchFault
       ? fault.error
-      : new DispatchFault(task.id, where.step, { cause: fault.error });
-  return asharaBlocked(task, sessionId, stage, asharaFault, agent, eventSink, logger);
+      : new DispatchFault(at.task.id, where.step, { cause: fault.error });
+  return asharaBlocked({ ...at, fault: asharaFault });
 }
 
 /**
@@ -300,20 +283,14 @@ export function thrownBlocked(
  * Neither says anything about the checks or the task, so neither is ever a failure to route.
  */
 export function mainRunBlocked(
-  task: DispatchRef,
-  sessionId: string,
-  e: unknown,
-  agent: AgentPart,
-  eventSink: ExecutionEventSink | undefined,
-  logger: Logger,
-  stage: Extract<EnvironmentStage, "checkRedRun" | "deliveredCheckRun">,
-  step: string,
+  blocked: StoppedAt & { readonly stage: Extract<EnvironmentStage, "checkRedRun" | "deliveredCheckRun">; readonly error: unknown; readonly step: string },
 ): ExecutionResult {
+  const { error: e, step, ...at } = blocked;
   const interrupted = cellExecInterruptedOf(e);
-  if (interrupted !== null) return interruptedInCell(task, sessionId, stage, interrupted, agent, eventSink, logger);
+  if (interrupted !== null) return interruptedInCell(at, interrupted);
   const environmentFailure = environmentErrorOf(e);
-  if (environmentFailure !== null) return substrateBlocked(task, sessionId, stage, environmentFailure, "CI cell", agent, eventSink, logger);
-  return asharaBlocked(task, sessionId, stage, new VerificationInfrastructureFault(task.id, step, { cause: e }), agent, eventSink, logger);
+  if (environmentFailure !== null) return substrateBlocked({ ...at, error: environmentFailure, cell: "CI cell" });
+  return asharaBlocked({ ...at, fault: new VerificationInfrastructureFault(at.task.id, step, { cause: e }) });
 }
 
 /**

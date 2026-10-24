@@ -157,7 +157,7 @@ function noWiderModel({ context, task, sessionId }: BlockedBeforeWork, unfit: No
  */
 function conflictUnprepared({ context, task, sessionId }: SessionDispatch, e: unknown): ExecutionResult {
   const where = { step: "prepare the task's conflict with main for its next attempt", cell: "host git" };
-  return thrownBlocked(task, sessionId, "prepareConflictRetry", e, where, NO_AGENT, context.deps.eventSink, context.deps.logger);
+  return thrownBlocked({ task, sessionId, stage: "prepareConflictRetry", error: e, where, agent: NO_AGENT, eventSink: context.deps.eventSink, logger: context.deps.logger });
 }
 
 /**
@@ -197,7 +197,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
   try {
     await cells.substrate.probeSubstrate();
   } catch (e) {
-    return thrownBlocked(task, sessionId, "probeSubstrate", e, { step: "probe the container substrate", cell: "container substrate" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "probeSubstrate", error: e, where: { step: "probe the container substrate", cell: "container substrate" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
 
   // Only the environment role's work and the product scaffold are checked by the substrate: any
@@ -236,7 +236,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
     if (planned.kind === "unplannable") return await unplannable(planned);
     plan = planned;
   } catch (e) {
-    return thrownBlocked(task, sessionId, "planWork", e, { step: "read the checks that decide the work", cell: "CI cell" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "planWork", error: e, where: { step: "read the checks that decide the work", cell: "CI cell" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
 
   // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
@@ -254,7 +254,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
       resumesBranch = await branchExists(targetProjectPath, taskBranchName(task.id));
     }
   } catch (e) {
-    return thrownBlocked(task, sessionId, "resumeBranch", e, { step: "read whether the task branch exists", cell: "host git" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "resumeBranch", error: e, where: { step: "read whether the task branch exists", cell: "host git" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
   let conflict: MainConflict | null = null;
   if (resumesBranch) {
@@ -275,7 +275,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
     // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
     // other throw building the brief: never the agent's work, so blocked under class ashara.
     const step = e instanceof ProjectIntentUnavailable ? "load the project's intent" : "build the brief";
-    return thrownBlocked(task, sessionId, "buildBrief", e, { step, cell: "brief" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "buildBrief", error: e, where: { step, cell: "brief" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
 
   // The Assignment's agent half, once per attempt: a model that cannot be
@@ -290,7 +290,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
     records = new DispatchRecords(deps.config.workdirBase, task.id, sessionId);
     await records.writeBrief(brief);
   } catch (e) {
-    return thrownBlocked(task, sessionId, "assignAgent", e, { step: "staff the attempt and write its brief", cell: "attempt records" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "assignAgent", error: e, where: { step: "staff the attempt and write its brief", cell: "attempt records" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
 
   return dispatchInCell({ ...session, environment, plan, resumesBranch, conflict, brief, staff, records });
@@ -320,7 +320,7 @@ async function dispatchEnvironment(session: SessionDispatch): Promise<DispatchEn
     environment = { kind: "environment", ...resolution.environment };
   } catch (e) {
     const where = { step: "resolve the current environment", cell: "environment image build" };
-    return thrownBlocked(task, sessionId, "resolveEnvironment", e, where, NO_AGENT, deps.eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "resolveEnvironment", error: e, where, agent: NO_AGENT, eventSink: deps.eventSink, logger: deps.logger });
   }
   deps.eventSink?.emit({
     event: "environment_resolved",
@@ -378,7 +378,7 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
     }
   } catch (e) {
     if (e instanceof ConflictRetryUnprepared) return conflictUnprepared(staffed, e);
-    return thrownBlocked(task, sessionId, "createWorkdir", e, { step: "create the task worktree", cell: "host git" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "createWorkdir", error: e, where: { step: "create the task worktree", cell: "host git" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
   const { workDir, repo } = workdir;
 
@@ -398,7 +398,7 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
     });
   } catch (e) {
     await cleanupWorkdir(workDir, targetProjectPath);
-    return thrownBlocked(task, sessionId, "createCell", e, { step: "create the task cell", cell: "task cell" }, NO_AGENT, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "createCell", error: e, where: { step: "create the task cell", cell: "task cell" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
   eventSink?.emit({ event: "cell_created", taskId: task.id, attempt: task.attempt, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
 
@@ -422,7 +422,7 @@ async function dispatchInCell(staffed: StaffedDispatch): Promise<ExecutionResult
     // A throw no stage caught: never the agent's work, so blocked under its class, no lesson.
     eventSink?.emit({ event: "error", location: "DispatchService:execute", taskId: task.id, attempt: task.attempt, error: describeErrorChain(e) });
     await cleanupWorkdir(workDir, targetProjectPath);
-    return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink, deps.logger);
+    return thrownBlocked({ task, sessionId, stage: "runExecution", error: e, where: { step: "run the dispatch", cell: "task cell" }, agent: { outcome: null, agentWork: "unknown" }, eventSink, logger: deps.logger });
   } finally {
     await verification.teardown.teardownCell({ taskId: task.id, attempt: task.attempt }, cell);
   }

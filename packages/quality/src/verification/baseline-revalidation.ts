@@ -67,7 +67,7 @@ export class BaselineRevalidation {
           );
         } catch (e) {
           await cleanupWorkdir(workDir, targetProjectPath);
-          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "checkRedRun", "build on the baseline");
+          return mainRunBlocked({ task, sessionId, error: e, agent: NO_AGENT, eventSink, logger: this.deps.logger, stage: "checkRedRun", step: "build on the baseline" });
         }
       }
       let redRun: CheckRunReport | { readonly kind: "unbuilt"; readonly build: EnvironmentTestRun };
@@ -86,7 +86,7 @@ export class BaselineRevalidation {
           );
         } catch (e) {
           await cleanupWorkdir(workDir, targetProjectPath);
-          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "checkRedRun", "red run on the baseline");
+          return mainRunBlocked({ task, sessionId, error: e, agent: NO_AGENT, eventSink, logger: this.deps.logger, stage: "checkRedRun", step: "red run on the baseline" });
         }
       }
       if (redRun.kind === "unbuilt") {

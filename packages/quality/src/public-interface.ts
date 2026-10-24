@@ -51,6 +51,26 @@ class InterfaceEntryUnreadable extends Error {
 const COMMIT_ID = /^[0-9a-f]{7,64}$/;
 const BLOB_ENTRY = /^\d{6} blob ([0-9a-f]{40,64})\t/;
 
+/** The product's public interface as it stood at one commit of the target checkout. */
+export type PublicInterface = { readonly kind: "present"; readonly text: string } | { readonly kind: "absent" };
+
+/** Reads PUBLIC_INTERFACE.md at a commit of the project's target checkout. */
+export interface PublicInterfaceReader {
+  at(targetProjectPath: string, commit: string): Promise<PublicInterface>;
+}
+
+/** The target checkout's git: absent when the commit's tree holds no such file; any git failure throws. */
+export const gitPublicInterface: PublicInterfaceReader = {
+  async at(targetProjectPath, commit) {
+    if (!COMMIT_ID.test(commit)) throw new InterfaceCommitInvalid(commit);
+    const repo = targetRepo(targetProjectPath);
+    const { stdout: listed } = await runHostGit(repo, ["ls-tree", "--name-only", commit, "--", PUBLIC_INTERFACE_FILE]);
+    if (listed.trim() === "") return { kind: "absent" };
+    const { stdout: text } = await runHostGit(repo, ["show", `${commit}:${PUBLIC_INTERFACE_FILE}`]);
+    return { kind: "present", text };
+  },
+};
+
 /** The blob id of the public interface file in `commit`'s tree, or null when that tree holds none. */
 async function interfaceBlobAt(targetProjectPath: string, commit: string): Promise<string | null> {
   if (!COMMIT_ID.test(commit)) throw new InterfaceCommitInvalid(commit);

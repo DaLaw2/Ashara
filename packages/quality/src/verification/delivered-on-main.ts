@@ -164,7 +164,7 @@ export class DeliveredOnMain {
       }
     } catch (e) {
       if (subject.cleanWorkdir) await cleanupWorkdir(workDir, targetProjectPath);
-      return { kind: "blocked", result: mainRunBlocked(task, sessionId, e, agent, eventSink, this.deps.logger, "deliveredCheckRun", "checks run on main") };
+      return { kind: "blocked", result: mainRunBlocked({ task, sessionId, error: e, agent, eventSink, logger: this.deps.logger, stage: "deliveredCheckRun", step: "checks run on main" }) };
     }
     const ran = suitesVerdict(suites, runs, earlier.length, "main");
     const verdict: PostMergeVerdict =
@@ -241,7 +241,7 @@ export class DeliveredOnMain {
       );
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, this.deps.logger, "deliveredCheckRun", "delivered sweep on main");
+      return mainRunBlocked({ task, sessionId, error: e, agent: NO_AGENT, eventSink, logger: this.deps.logger, stage: "deliveredCheckRun", step: "delivered sweep on main" });
     }
     const passed = onMain.kind === "ran" ? onMain.runs.filter(checkPassed).map((run) => run.name) : [];
     const allPass = onMain.kind === "ran" && onMain.runs.length === stored.checks.length && passed.length === stored.checks.length;

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { ContextualLlm } from "@ashara/finance";
 import {
   CAPABILITY_RANK,
@@ -18,6 +17,7 @@ import type { StoredTaskSpec } from "./acl/delivery-acl.js";
 import type { VisionSource } from "./acl/engagement-acl.js";
 import { visionSourceCitation } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
+import type { PublicInterface, PublicInterfaceReader } from "./public-interface.js";
 import type { TaskChecks } from "./task-checks.js";
 
 // Quality's review of a plan revision's check suites: checks written by
@@ -109,36 +109,6 @@ export interface SuiteReviewSource {
   /** Whether the review task's check set is frozen: an implementation depending on it was dispatched (check_set_freezes). */
   frozen(reviewTaskId: WorkItemId): Promise<boolean>;
 }
-
-/** The product's public interface as it stood at one commit of the target checkout. */
-type PublicInterface = { readonly kind: "present"; readonly text: string } | { readonly kind: "absent" };
-
-/** Reads PUBLIC_INTERFACE.md at a commit of the project's target checkout. */
-interface PublicInterfaceReader {
-  at(targetProjectPath: string, commit: string): Promise<PublicInterface>;
-}
-
-/** A recorded baseline commit that is not a commit id: it is never handed to git. */
-class BaselineCommitInvalid extends Error {
-  constructor(readonly commit: string) {
-    super(`the recorded baseline commit ${JSON.stringify(commit)} is not a commit id; ${PUBLIC_INTERFACE_FILE} is not read at it`);
-    this.name = "BaselineCommitInvalid";
-  }
-}
-
-const COMMIT_ID = /^[0-9a-f]{7,64}$/;
-
-/** The target checkout's git: absent when the commit's tree holds no such file; any git failure throws. */
-export const gitPublicInterface: PublicInterfaceReader = {
-  async at(targetProjectPath, commit) {
-    if (!COMMIT_ID.test(commit)) throw new BaselineCommitInvalid(commit);
-    const repo = targetRepo(targetProjectPath);
-    const { stdout: listed } = await runHostGit(repo, ["ls-tree", "--name-only", commit, "--", PUBLIC_INTERFACE_FILE]);
-    if (listed.trim() === "") return { kind: "absent" };
-    const { stdout: text } = await runHostGit(repo, ["show", `${commit}:${PUBLIC_INTERFACE_FILE}`]);
-    return { kind: "present", text };
-  },
-};
 
 /** One problem the review routes, with the check tasks whose checks it involves. */
 interface SuiteReviewProblem {
