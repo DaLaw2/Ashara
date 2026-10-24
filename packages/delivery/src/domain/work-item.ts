@@ -132,15 +132,16 @@ export function completeWorkItem(item: WorkItem): void {
 }
 
 /**
- * Completes an item Blocked as `merge_unrecorded`, or as `orphan_unreconciled` whose merge was
- * since found on main, once the record of its merge is written: its work is on main already, so it
- * never goes back to Pending. Clears the block's reason.
+ * Completes an item Blocked as `merge_unrecorded`, or under a block whose exit to Pending reads
+ * main first (`orphan_unreconciled`, `environment_unavailable`, `awaiting_client`) and found its
+ * merge there, once the record of its merge is written: its work is on main already, so it never
+ * goes back to Pending. Clears the block's reason.
  */
 export function completeRecordedMerge(item: WorkItem): void {
   const source = item.blockedReason?.source;
   if (
     item.status !== "Blocked" ||
-    (source !== "merge_unrecorded" && source !== "orphan_unreconciled") ||
+    (source !== "merge_unrecorded" && source !== "orphan_unreconciled" && source !== "environment_unavailable" && source !== "awaiting_client") ||
     !canTransitionTo(item.status, "Completed")
   ) {
     throw new InvalidStatusTransition(item.id, item.status, "Completed");

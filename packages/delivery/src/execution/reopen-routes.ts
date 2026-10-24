@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { InvalidId, parseWorkItemId } from "@ashara/shared";
-import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import type { InterfaceTable, WorkItem } from "../domain/index.js";
 import {
   PlanningService,
   awaitWork,
-  blockWorkItem,
   clientWaitPastBound,
   deliveringTasks,
   exitDisputedCheck,
@@ -13,17 +11,16 @@ import {
   exitSuiteReview,
   giveUpWorkItem,
   holdForClient,
-  requeueWorkItem,
   requestEnvironmentChange,
 } from "../domain/index.js";
+import type { MainHoldsNoMerge } from "../requeue-on-main.js";
+import { returnToPending } from "../requeue-on-main.js";
 import { GiveUpMisrouted, giveUpRoute } from "./give-up-causes.js";
 import type { GiveUpCause } from "./give-up-causes.js";
 import type { ExecutionRoutingDeps } from "./routing-deps.js";
 import type { ItemWrite, ReopenPlan } from "./reopen.js";
 import { reopen } from "./reopen.js";
-
-/** The block a dispatch parks a task with: the loop takes its exit by itself (parked-exits.ts). */
-export type ParkedReason = Extract<StoredBlockedReason, { source: "merge_unrecorded" | "orphan_unreconciled" }>;
+import { mainHoldsNoMergeOf } from "./main-settle.js";
 
 interface StaleChecksResult {
   readonly checkTaskId: string;
@@ -88,9 +85,9 @@ interface ClientDecisionNeededResult {
   readonly detail: string;
 }
 
-/** A return to Pending: after what, the site its events name, and its write. */
+/** A return to Pending: the task, after what, the site its events name, and its write. */
 interface Requeue {
-  readonly taskId: WorkItem["id"];
+  readonly task: WorkItem;
   readonly why: string;
   readonly site: string;
   /**
@@ -102,18 +99,30 @@ interface Requeue {
 }
 
 /**
- * Returns the item to Pending. The dispatch stopped without the task being tried and found
+ * Returns the item to Pending once main is read and holds no merge of it (mainHoldsNoMergeOf, which
+ * settles the task itself otherwise). The dispatch stopped without the task being tried and found
  * wanting (a model call refused before it was sent, a shutdown, a fault beneath it): no failed
  * approach. At a project-cap or configuration refusal the project is blocked already, so the gate
  * skips the item until the owner returns the project to work; a deployment refusal stops the loop.
  */
 export async function routeAsRequeued(deps: ExecutionRoutingDeps, requeue: Requeue): Promise<void> {
-  const { taskId, why } = requeue;
+  const absent = await mainHoldsNoMergeOf(deps, requeue.task, requeue.why);
+  if (absent === null) return;
+  await requeueOnAbsence(deps, requeue, absent);
+}
+
+/**
+ * Returns the item to Pending on the evidence that main holds no merge of it, for a route that reads
+ * main itself before what it writes first (routeAsInfrastructureFault counts the fault in between).
+ */
+export async function requeueOnAbsence(deps: ExecutionRoutingDeps, requeue: Requeue, absent: MainHoldsNoMerge): Promise<void> {
+  const { why } = requeue;
+  const taskId = requeue.task.id;
   await reopen(deps, {
     taskId,
     site: requeue.site,
     vanished: `work item vanished before it could be returned to Pending after ${why}`,
-    transition: (item) => requeueWorkItem(item),
+    transition: (item) => returnToPending(item, absent),
     transitionRejected: (e) => ({ message: `requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`, to: "Pending" }),
     plan: () => ({
       before: [],
@@ -142,12 +151,12 @@ export async function routeAsRequeued(deps: ExecutionRoutingDeps, requeue: Reque
  * within the catalog. With none, the task is given up naming the window and the estimate, and its
  * plan repaired, which can cut it smaller.
  */
-export async function routeAsContextExceeded(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], exceeded: ContextExceededResult): Promise<void> {
+export async function routeAsContextExceeded(deps: ExecutionRoutingDeps, task: WorkItem, exceeded: ContextExceededResult): Promise<void> {
   const { model, windowTokens, wider } = exceeded;
   if (wider === null) {
     await routeAsGivenUp(
       deps,
-      taskId,
+      task.id,
       {
         source: "context_window_exceeded",
         provider: model.provider,
@@ -164,39 +173,7 @@ export async function routeAsContextExceeded(deps: ExecutionRoutingDeps, taskId:
   const why =
     `a turn that did not fit the ${windowTokens}-token window of ${model.provider}/${model.modelId}; ` +
     `dispatched next on a model whose window is larger (${wider.provider}/${wider.modelId}, ${wider.windowTokens} tokens)`;
-  await routeAsRequeued(deps, { taskId, why, site: "execution.routeAsContextExceeded", write: { kind: "refund-overflow", windowTokens } });
-}
-
-/**
- * Parks the item at Blocked with the stated reason. An item that is no longer
- * InProgress (moved by the owner during dispatch) is left where it is: no
- * agent ran, so there is no result to salvage.
- */
-export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: ParkedReason): Promise<void> {
-  await reopen(deps, {
-    taskId,
-    site: "execution.routeAsParked",
-    vanished: `work item vanished before it could be blocked (${reason.reason})`,
-    transition: (item) => blockWorkItem(item, reason),
-    transitionRejected: (e) => ({
-      message: `${reason.source} block rejected (${e.from} -> Blocked); item left at ${e.from} (${reason.reason})`,
-      to: "Blocked",
-      source: reason.source,
-    }),
-    plan: () => ({
-      before: [],
-      write: { kind: "save" },
-      rejected: null,
-      log: () =>
-        deps.logger.info(
-          "delivery.task-parked",
-          reason.source === "merge_unrecorded"
-            ? `blocked, merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle: ${reason.reason}`
-            : `blocked, main unread for its merge (${reason.step}), the loop reads it again each cycle: ${reason.reason}`,
-          { taskId, source: reason.source },
-        ),
-    }),
-  });
+  await routeAsRequeued(deps, { task, why, site: "execution.routeAsContextExceeded", write: { kind: "refund-overflow", windowTokens } });
 }
 
 /**

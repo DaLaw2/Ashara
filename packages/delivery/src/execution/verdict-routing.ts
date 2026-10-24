@@ -3,26 +3,25 @@ import { describeErrorChain } from "@ashara/shared";
 import type { MergeKind } from "../work-item-language/blocked-reason.js";
 import type { ErrorEnvelope, Outcome } from "../acl/workplace-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
-import { projectBlockCause } from "../project-halt.js";
 import type { WorkItem } from "../domain/index.js";
 import { PlanningService, failWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import type { DispatchSteps, TaskRefusal, TaskResult } from "../types.js";
 import { blockedResult, completedResult, failedResult } from "../types.js";
-import { mergeOnMainOf, OrphanUnreconciled, releaseMergedTask } from "../orphan-merge.js";
 import { publishBestEffort } from "./audit-events.js";
 import { configurationRefusal, workBudgetGiveUp } from "./give-up-causes.js";
 import type { InfrastructureFault } from "./halt-causes.js";
 import { INFRASTRUCTURE_FAULT_BUDGET, haltOnFaultBudget, haltOnRefusal } from "./halt-causes.js";
 import { MERGE_RECORD_BACKOFF_MS, recordMergeWithRetry } from "./merge-record.js";
+import { mainHoldsNoMergeOf, routeAsParked, routeAsSuccess } from "./main-settle.js";
 import {
+  requeueOnAbsence,
   routeAsAwaitingClient,
   routeAsAwaitingWork,
   routeAsContextExceeded,
   routeAsDisputed,
   routeAsEnvironmentChange,
   routeAsGivenUp,
-  routeAsParked,
   routeAsRequeued,
   routeAsStaleChecks,
   routeAsSuiteReview,
@@ -119,14 +118,14 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
       // finds nothing InProgress to requeue and nothing Failed to route. No counter of its own bounds
       // these requeues: the work ledger does, since a refund returns no request drawn, and
       // the task whose budget they spend is given up as work_budget_spent.
-      await routeAsRequeued(deps, { taskId: task.id, why: "a shutdown interrupted its attempt", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
+      await routeAsRequeued(deps, { task, why: "a shutdown interrupted its attempt", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
       return routedHere(executed, { taskId: task.id, status: "interrupted", detail: executed.detail });
 
     case "context_exceeded":
       // Not a task failure and no lesson: the same model meets the same window again, so the
       // FailureRouter's replan would only spend the work ledger on it (a
       // bound reached escalates). The task goes on to a model whose window is larger, or is given up.
-      await routeAsContextExceeded(deps, task.id, executed);
+      await routeAsContextExceeded(deps, task, executed);
       return routedHere(executed, blockedResult(task.id, executed.detail));
 
     case "no_wider_model":
@@ -199,7 +198,7 @@ async function routeAsRefused(deps: ExecutionRoutingDeps, task: WorkItem, execut
   // These requeues have no counter of their own: each refusal here halts the project
   // (its spend cap, its work budget, its configuration) or stops the loop (the deployment's cap),
   // so the task is dispatched again only after a person's grant or unblock.
-  await routeAsRequeued(deps, { taskId: task.id, why: `a refusal at ${cap}: ${refusal.reason}`, site: "execution.routeAsRefused", write: { kind: "refund" } });
+  await routeAsRequeued(deps, { task, why: `a refusal at ${cap}: ${refusal.reason}`, site: "execution.routeAsRefused", write: { kind: "refund" } });
   return routedHere(executed, { taskId: task.id, status: "refused", detail: executed.detail, refusal });
 }
 
@@ -255,10 +254,12 @@ async function routeAsCompleted(deps: ExecutionRoutingDeps, task: WorkItem, exec
 
 /**
  * A fault under a dispatch that is not the task's work:
- * the substrate's or Ashara's own Z0 machinery. It is counted on the task, durably, and the attempt
- * is not charged and no lesson is written. Within the budget the item goes back to Pending (its
- * dispatch refunded when the seam `counted` it). The fault past the budget halts the project under
- * its class, with one report, and requeues the item the same way: a substrate fault on
+ * the substrate's or Ashara's own Z0 machinery. Main is read first (mainHoldsNoMergeOf): a fault
+ * after the merge commit leaves merged work behind, which is settled there, never counted as a
+ * fault nor requeued. Otherwise the fault is counted on the task, durably, and the attempt is not
+ * charged and no lesson is written. Within the budget the item goes back to Pending (its dispatch
+ * refunded when the seam `counted` it). The fault past the budget halts the project under its
+ * class, with one report, and requeues the item the same way: a substrate fault on
  * infrastructure, which the substrate probe resumes; Ashara's own, or its model provider's, as a
  * fault, which the operator repairs. A fault after that gives the item up: the halt could not wait it out.
  */
@@ -268,7 +269,8 @@ export async function routeAsInfrastructureFault(
   fault: InfrastructureFault,
   dispatch: "counted" | "not-counted",
 ): Promise<void> {
-  if (dispatch === "counted" && (await settledOnMain(deps, task))) return;
+  const absent = await mainHoldsNoMergeOf(deps, task, `a fault that was not its work (${fault.class}: ${fault.unavailable} unavailable)`);
+  if (absent === null) return;
   const faults = await deps.workItemRepo.recordInfrastructureFault(task.id);
   if (faults > INFRASTRUCTURE_FAULT_BUDGET + 1) {
     await routeAsGivenUp(deps, task.id, {
@@ -284,102 +286,14 @@ export async function routeAsInfrastructureFault(
     return;
   }
   const why = `infrastructure fault ${faults} of ${INFRASTRUCTURE_FAULT_BUDGET} (${fault.class}: ${fault.unavailable} unavailable)`;
-  await routeAsRequeued(
+  await requeueOnAbsence(
     deps,
     dispatch === "counted"
-      ? { taskId: task.id, why, site: "execution.routeAsInfrastructureFault", write: { kind: "refund" } }
-      : { taskId: task.id, why, site: "execution.requeueUncounted", write: { kind: "save" } },
+      ? { task, why, site: "execution.routeAsInfrastructureFault", write: { kind: "refund" } }
+      : { task, why, site: "execution.requeueUncounted", write: { kind: "save" } },
+    absent,
   );
   if (faults > INFRASTRUCTURE_FAULT_BUDGET) await haltOnFaultBudget(deps, task, faults, fault);
-}
-
-/**
- * Whether a dispatch that stopped on a fault had already merged its work: Z0 commits the merge on
- * main and only then reads its id and writes the record, so a fault after the commit leaves merged
- * work behind, and a requeue would redo it. Main is read first, within the merge record's
- * bound. A merge found is recorded, its worktree and branch released, and the task Completed (or
- * parked merge_unrecorded when the record cannot be written); main that cannot be read parks the
- * task orphan_unreconciled, whose exit reads main again, with the project blocked on Ashara's own
- * fault. False only when main holds no merge of the task: then the fault is routed as one.
- */
-async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promise<boolean> {
-  let merge: string | null | undefined;
-  let last: unknown = null;
-  for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1 && merge === undefined; attempt++) {
-    try {
-      merge = await mergeOnMainOf(deps.projects, deps.workdirBase, task);
-    } catch (e) {
-      // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept, and main still unread after it parks the task orphan_unreconciled with the project blocked, below
-      last = e;
-      const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
-      deps.logger.warn("delivery.main-unread", `main could not be read for its merge after a fault, attempt ${attempt}`, { taskId: task.id, attempt }, e);
-      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
-    }
-  }
-  if (merge === null) return false;
-  if (merge === undefined) {
-    const step = "read main for the task's merge after its dispatch faulted";
-    const unread = new OrphanUnreconciled(task.id, step, MERGE_RECORD_BACKOFF_MS.length + 1, { cause: last });
-    await routeAsParked(deps, task.id, { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(last) });
-    const halted = await deps.projects.block(task.projectId, projectBlockCause(unread));
-    deps.logger.error("delivery.project-halted", `project ${task.projectId} ${halted} on Ashara's own fault: ${unread.message}`, {
-      taskId: task.id,
-      projectId: task.projectId,
-      faultClass: "ashara",
-      result: halted,
-    }, unread);
-    return true;
-  }
-  deps.logger.info("delivery.merged-before-fault", `its dispatch faulted after merging it on main as ${merge}: recorded and Completed, never requeued`, {
-    taskId: task.id,
-    mergeCommit: merge,
-  });
-  const unrecorded = await recordMergeWithRetry(deps, task.id, merge, "merged");
-  if (unrecorded !== null) {
-    await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason: `merged on main as ${merge}, but the merge record could not be written: ${unrecorded}` });
-    return true;
-  }
-  await releaseMergedTask(deps.projects, deps.workdirBase, task, "merged", deps.logger);
-  try {
-    await routeAsSuccess(deps, task, MERGE_RECORD_BACKOFF_MS.length + 1);
-  } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- not a reopen: merged work whose completion is rejected stays where the item moved, never parked or requeued
-    if (e instanceof InvalidStatusTransition) {
-      deps.logger.warn("delivery.transition-rejected", `merged as ${merge} and recorded; its completion was rejected (${e.from} -> Completed), left at ${e.from}`, {
-        taskId: task.id,
-        from: e.from,
-        to: "Completed",
-      }, e);
-      return true;
-    }
-    const reason = `merged on main as ${merge} and recorded, but the task could not be Completed: ${describeErrorChain(e)}`;
-    await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason });
-  }
-  return true;
-}
-
-/**
- * Completes the task, within `attempts` (the waits between them MERGE_RECORD_BACKOFF_MS's). An
- * InvalidStatusTransition is an answer, never retried: the item moved; the last other error throws.
- */
-async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem, attempts: number): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    let events: DomainEvent[];
-    try {
-      // The Completed transition is committed before its events return: a publish failure after it
-      // must not route a merged, Completed task as failed.
-      events = await PlanningService.route(deps.workItemRepo, task.id, "passed");
-    } catch (e) {
-      const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
-      // eslint-disable-next-line no-restricted-syntax -- not a reopen: a rejected completion is the caller's answer, never retried
-      if (e instanceof InvalidStatusTransition || attempt >= attempts || wait === undefined) throw e;
-      deps.logger.warn("delivery.completion-retry", `completion failed on attempt ${attempt} of ${attempts}; retrying in ${wait}ms`, { taskId: task.id, attempt, attempts }, e);
-      await new Promise((resolve) => setTimeout(resolve, wait));
-      continue;
-    }
-    await publishBestEffort(deps, task.id, events, "execution.routeAsSuccess");
-    return;
-  }
 }
 
 async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem, verdict: FailureVerdict): Promise<void> {

@@ -557,11 +557,12 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * `merge-recorded`: to Completed (not Pending), once the record of `mergeCommit` is written; the
  * loop itself writes it again each cycle. `read-main`: main is read for the task's merge, then to
  * Completed with the merge found or to Pending when main holds none; main still unreadable stays
- * Blocked for the next cycle. `requeue`: back to Pending at once, uncharged: an
- * infrastructure fault is not the task's. `await-revision`: it stays Blocked until the plan revision
- * the loop writes for the correction holding it supersedes it. `await-answer`: it stays Blocked until
- * the client's answer to its question is read (posted first if it is not yet on record), then back to
- * Pending; its project halts on client_wait while no other work of it could proceed. `give-up`: the cause cannot clear by itself, so the task is given up
+ * Blocked for the next cycle. `requeue`: back to Pending uncharged, an infrastructure fault is not
+ * the task's, once main is read as `read-main` reads it. `await-revision`: it stays Blocked until the
+ * plan revision the loop writes for the correction holding it supersedes it. `await-answer`: it stays
+ * Blocked until the client's answer to its question is read (posted first if it is not yet on
+ * record), then, once main is read as `read-main` reads it, back to Pending; its project halts on
+ * client_wait while no other work of it could proceed. `give-up`: the cause cannot clear by itself, so the task is given up
  * (Abandoned) and its plan repaired.
  */
 type BlockedExit =

@@ -12,11 +12,13 @@ import { projectBlockCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { FailureRouter, RawFailureContext } from "./failure-router.js";
 import type { ParkedFailureDeps } from "./lifecycle/failure-recovery.js";
-import { blockWorkItem, giveUpWorkItem, PlanningService, requeueWorkItem, takeEvents } from "./domain/index.js";
+import { blockWorkItem, giveUpWorkItem, PlanningService, takeEvents } from "./domain/index.js";
 import { recoverParkedFailedItem } from "./lifecycle/failure-recovery.js";
 import { ORPHANED_SESSION_RESOLVER } from "./acl/workplace-acl.js";
-import { mergeOnMainOf, OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
+import { OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
+import type { MainHoldsNoMerge, MainRead } from "./requeue-on-main.js";
+import { readMainForMerge, returnToPending } from "./requeue-on-main.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 import type { SettledTargets } from "./settled-branches.js";
 
@@ -189,7 +191,7 @@ type Settled = "requeued" | "given-up" | "completed" | "blocked" | "moved";
 /**
  * Settles an InProgress item a previous process left (Discipline A, B). Main is read first: a
  * dead process may have committed the task's merge and died before its record, and a requeue
- * would redo merged work. A merge found is recorded, the worktree and branch the dead process left
+ * would redo merged work (readMainForMerge, once per attempt here). A merge found is recorded, the worktree and branch the dead process left
  * released (releaseMergedTask), and the task Completed through the path a finished dispatch takes
  * (recordMergeCommit, then PlanningService.route); none found, the startup is counted on the task
  * (recordCrashOrphan, once per startup) and the task requeued (requeueOrphan), or given up as
@@ -201,7 +203,7 @@ type Settled = "requeued" | "given-up" | "completed" | "blocked" | "moved";
  * rather than run with an item InProgress and no attempt alive.
  */
 async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<Settled> {
-  let merge: string | null | undefined;
+  let read: Exclude<MainRead, { readonly kind: "unread" }> | undefined;
   let boots: number | undefined;
   let step = "read main for the task's merge";
   let last: unknown = null;
@@ -217,8 +219,12 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
         return "moved";
       }
       step = "read main for the task's merge";
-      if (merge === undefined) merge = await mergeOnMainOf(deps.projects, deps.workdirBase, item);
-      if (merge === null) {
+      if (read === undefined) {
+        const fresh = await readMainForMerge(deps, item, []);
+        if (fresh.kind === "unread") throw fresh.error;
+        read = fresh;
+      }
+      if (read.kind === "absent") {
         step = "count the startup that found it InProgress";
         if (boots === undefined) boots = await deps.workItemRepo.recordCrashOrphan(item.id);
         if (boots >= CRASH_LOOP_BOUND) {
@@ -227,9 +233,10 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
           return "given-up";
         }
         step = "requeue the task";
-        await requeueOrphan(deps, item);
+        await requeueOrphan(deps, item, read.absent);
         return "requeued";
       }
+      const merge = read.mergeCommit;
       step = `record the merge ${merge}`;
       await deps.workItemRepo.recordMergeCommit(item.id, merge, "merged");
       await releaseMergedTask(deps.projects, deps.workdirBase, item, "merged", deps.logger);
@@ -257,8 +264,8 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
   }
   const unsettled = new OrphanUnreconciled(orphan.id, step, ORPHAN_BACKOFF_MS.length + 1, { cause: last });
   const reason: StoredBlockedReason =
-    typeof merge === "string"
-      ? { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason: unsettled.message }
+    read?.kind === "merged"
+      ? { source: "merge_unrecorded", mergeCommit: read.mergeCommit, mergeKind: "merged", reason: unsettled.message }
       : { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(last) };
   const blocked = await blockUnsettled(deps, orphan, reason, unsettled);
   if (blocked === "moved") return "moved";
@@ -338,11 +345,11 @@ async function giveUpCrashLoop(deps: StartupReconcilerDeps, orphan: WorkItem, bo
  * lost), when there is none (the process died before the dispatch opened its session, which no
  * record tells apart from a session of an earlier dispatch), and past MAX_ORPHAN_REFUNDS.
  */
-async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<void> {
+async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem, absent: MainHoldsNoMerge): Promise<void> {
   const evidence = await deps.devSessionStore.dispatchEvidence(orphan.id, ORPHANED_SESSION_RESOLVER);
   const unfinished = evidence.latestPhase !== null && !isTerminalSessionPhase(evidence.latestPhase);
   const previousStatus = orphan.status;
-  requeueWorkItem(orphan);
+  returnToPending(orphan, absent);
   if (!unfinished) {
     await deps.workItemRepo.saveOrphanExit(orphan, previousStatus, "keep-counted");
     deps.logger.info(

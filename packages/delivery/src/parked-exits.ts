@@ -7,9 +7,11 @@ import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import { OPEN_WORK_ITEM_STATUSES } from "./work-item-language/work-item-status.js";
 import { WorkItemRowCorrupt } from "./work-item-language/work-item-row.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
-import { giveUpUnaskable, giveUpWorkItem, PlanningService, resumeOnAnswer, takeEvents, unblockWorkItem } from "./domain/index.js";
-import { mergeOnMainOf, releaseMergedTask } from "./orphan-merge.js";
+import { giveUpUnaskable, giveUpWorkItem, PlanningService, takeEvents } from "./domain/index.js";
+import { releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
+import type { MainHoldsNoMerge } from "./requeue-on-main.js";
+import { readMainForMerge, returnToPending } from "./requeue-on-main.js";
 import { clientWaitCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import type { ClientQuestions } from "./types.js";
@@ -19,19 +21,20 @@ type HeldReason = Extract<StoredBlockedReason, { source: "awaiting_client" }>;
 // The exits of Blocked work items (no work item waits on a person), each taken by the loop every
 // cycle: a merged task whose merge record was not written has the record written again, then
 // Completed; a crash orphan the startup reconciler could not settle has main read again, then
-// Completed with its merge or back to Pending; an infrastructure block from a legacy row goes back
-// to Pending at once; a task a client's correction holds waits for the correction's plan revision,
-// which supersedes it; a task held for the client's answer has its question posted if it is not on
-// record yet, and goes back to Pending once the answer is read, its project halting on client_wait
-// while no other work of it could proceed; any other block (from a legacy row, or with no reason) has
-// no cause that clears by itself, so the task is given up and its plan repaired.
-// Shared blockedExitOf decides which is which.
+// Completed with its merge or back to Pending; an infrastructure block from a legacy row has main
+// read, then Completed with its merge or back to Pending; a task a client's correction holds waits
+// for the correction's plan revision, which supersedes it; a task held for the client's answer has
+// its question posted if it is not on record yet, and once the answer is read has main read, then
+// goes back to Pending, its project halting on client_wait while no other work of it could proceed;
+// any other block (from a legacy row, or with no reason) has no cause that clears by itself, so the
+// task is given up and its plan repaired. Shared blockedExitOf decides which is which. Every exit to
+// Pending reads main first (readMainForMerge): a task whose dispatch merged is never dispatched again.
 
 interface ParkedExitDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   /**
-   * `get` names the target whose main an orphan_unreconciled task's merge is read from; `block`
+   * `get` names the target whose main a task's merge is read from before it leaves Blocked; `block`
    * halts a project whose only work left waits on the client's answers.
    */
   readonly projects: {
@@ -50,7 +53,7 @@ interface ParkedExitDeps {
 /**
  * Takes the exit of every Blocked task of an active project, publishing its events: a
  * merge_unrecorded task is Completed once its merge record is written, an infrastructure block is
- * released to Pending, a correction_pending task stays for its revision, and any other block is given up. A project whose Blocked rows do not parse
+ * Completed with its merge on main or released to Pending, a correction_pending task stays for its revision, and any other block is given up. A project whose Blocked rows do not parse
  * is skipped here: the gate blocks it this same cycle. Any other failure is that project's,
  * contained to it (containEach). Returns how many tasks left Blocked.
  */
@@ -86,19 +89,19 @@ async function releaseProject(deps: ParkedExitDeps, projectId: ProjectId): Promi
         left = await giveUp(deps, item);
         break;
       case "read-main":
-        left = await settleOnMain(deps, item);
-        break;
       case "requeue":
-        left = await release(deps, item);
+        left = await settleOnMain(deps, item);
         break;
       case "await-revision":
         // Held by a client's correction: the revision the replanning step writes for it supersedes it.
         left = false;
         break;
-      case "await-answer":
-        left = await awaitAnswer(deps, item, exit.held);
-        if (!left) stillHeld.push(exit.held);
+      case "await-answer": {
+        const answer = await awaitAnswer(deps, item, exit.held);
+        left = answer === "left";
+        if (answer === "held") stillHeld.push(exit.held);
         break;
+      }
     }
     if (left) released++;
   }
@@ -139,33 +142,32 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
 }
 
 /**
- * A crash orphan the startup reconciler could not settle (orphan_unreconciled): main is read again
- * for the task's merge. Found, it is recorded and the task Completed; none, the task goes back to
- * Pending, now that main says nothing of it was merged. Main still unreadable leaves it Blocked for
- * the next cycle: it is never requeued blind.
+ * A blocked task whose exit is Pending: a crash orphan the startup reconciler could not settle
+ * (orphan_unreconciled), or an infrastructure block from a legacy row. Main is read for the task's
+ * merge. Found, it is recorded and the task Completed; none, the task goes back to Pending, now that
+ * main says nothing of it was merged. Main unreadable leaves it Blocked for the next cycle: it is
+ * never requeued blind.
  */
 async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
-  let merge: string | null;
-  try {
-    merge = await mergeOnMainOf(deps.projects, deps.workdirBase, item);
-  } catch (err) {
-    deps.logger.warn("delivery.main-unread", "main still cannot be read for its merge; it stays Blocked", { taskId: item.id }, err);
-    // eslint-disable-next-line no-restricted-syntax -- policy default: false is the fail-closed answer, the task stays Blocked; the record above names why
+  const read = await readMainForMerge(deps, item, []);
+  if (read.kind === "unread") {
+    deps.logger.warn("delivery.main-unread", "main cannot be read for its merge; it stays Blocked", { taskId: item.id }, read.error);
     return false;
   }
-  if (merge !== null) return completeRecordedMerge(deps, item, merge, "merged");
-  return release(deps, item);
+  if (read.kind === "merged") return completeRecordedMerge(deps, item, read.mergeCommit, "merged");
+  return release(deps, item, read.absent);
 }
 
 /**
  * A task held for the client's answer to its question: the question is posted under the id the hold
  * chose, unless it is on record already (a hold written before a crash is posted here, from the next
- * cycle on); once the answer is read the task goes back to Pending, its next attempt reading the
- * answer in the vision. A question that cannot be put to the client gives the task up, its plan
- * repaired, never counted as a failed attempt. Returns whether it left Blocked; still held, it is
- * one the project may halt on (haltOnClientWait).
+ * cycle on); once the answer is read main is read for the task's merge, and the task goes back to
+ * Pending, its next attempt reading the answer in the vision (Completed instead with a merge found;
+ * left Blocked for the next cycle while main cannot be read). A question that cannot be put to the
+ * client gives the task up, its plan repaired, never counted as a failed attempt. Returns whether it
+ * left Blocked; `held`, it is one the project may halt on (haltOnClientWait).
  */
-async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReason): Promise<boolean> {
+async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReason): Promise<"left" | "held" | "main-unread"> {
   const { questionId } = held;
   const posting = await deps.clientQuestions.ask({
     questionId,
@@ -178,14 +180,14 @@ async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReaso
   });
   if (posting.kind === "not-askable") {
     giveUpUnaskable(item, posting.why);
-    if (!(await saveBlocked(deps, item, "not given up on a question that cannot be asked"))) return false;
+    if (!(await saveBlocked(deps, item, "not given up on a question that cannot be asked"))) return "held";
     deps.logger.info("delivery.task-given-up", `question ${questionId} cannot be put to the client (${posting.why}); given up, its plan is repaired`, {
       taskId: item.id,
       source: "prerequisite_unresolved",
       questionId,
     });
     await publishAll(deps, item.id, takeEvents(item));
-    return true;
+    return "left";
   }
   if (posting.kind === "posted") {
     deps.logger.info("delivery.client-question-posted", `question ${questionId} is posted to the client as assumption ${posting.assumptionKey} (vision v${posting.visionVersion})`, {
@@ -195,12 +197,18 @@ async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReaso
       visionVersion: posting.visionVersion,
     });
   }
-  if (!(await deps.clientQuestions.answered(questionId))) return false;
-  resumeOnAnswer(item);
-  if (!(await saveBlocked(deps, item, "not resumed on the client's answer"))) return false;
+  if (!(await deps.clientQuestions.answered(questionId))) return "held";
+  const read = await readMainForMerge(deps, item, []);
+  if (read.kind === "unread") {
+    deps.logger.warn("delivery.main-unread", `the client's answer to question ${questionId} is read, but main cannot be read for its merge; it stays Blocked`, { taskId: item.id, questionId }, read.error);
+    return "main-unread";
+  }
+  if (read.kind === "merged") return (await completeRecordedMerge(deps, item, read.mergeCommit, "merged")) ? "left" : "held";
+  returnToPending(item, read.absent);
+  if (!(await saveBlocked(deps, item, "not resumed on the client's answer"))) return "held";
   deps.logger.info("delivery.client-answered", `the client's answer to question ${questionId} is read; back to Pending`, { taskId: item.id, questionId });
   await publishAll(deps, item.id, takeEvents(item));
-  return true;
+  return "left";
 }
 
 /** The guarantees a task delivers, by key: what a decision it waits on underpins. */
@@ -312,9 +320,9 @@ async function giveUp(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   return true;
 }
 
-async function release(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
+async function release(deps: ParkedExitDeps, item: WorkItem, absent: MainHoldsNoMerge): Promise<boolean> {
   const source = item.blockedReason?.source ?? "none";
-  unblockWorkItem(item);
+  returnToPending(item, absent);
   try {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {

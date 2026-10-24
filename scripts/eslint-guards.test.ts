@@ -22,6 +22,9 @@ const FIXED_WAIT = "Fixed wait";
 const HAND_BUILT_DEPS = "Hand-built CoreLoopDeps";
 const COMPOSE_SOURCE = "Reading a compose module's source text";
 const INTEGRATION_TEST_FILE = join(REPO, "packages", "integration", "src", "server", "planted.test.ts");
+const EXECUTION_FILE = join(REPO, "packages", "delivery", "src", "execution", "planted.ts");
+const REQUEUE_ON_MAIN_FILE = join(REPO, "packages", "delivery", "src", "requeue-on-main.ts");
+const REQUEUE_UNREAD = "Requeue unread";
 
 /** The guard each finding of `code`, linted as the file at `filePath` with the repo's config, belongs to. */
 async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<string[]> {
@@ -29,6 +32,7 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
   expect(results).toHaveLength(1);
   return results.flatMap((result) => result.messages).map((message) => {
     if (message.ruleId === ASSERTION) return ASSERTION;
+    if (message.ruleId === "no-restricted-imports" && message.message.includes(REQUEUE_UNREAD)) return REQUEUE_UNREAD;
     const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT, HAND_BUILT_DEPS, COMPOSE_SOURCE].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
@@ -230,5 +234,23 @@ describe("eslint guards fire on planted instances", () => {
     'const compose = await readFile(join(dir, "compose.ts"), "utf-8");',
   ])("a test reading a compose module's source text: %s", async (line) => {
     expect(await guardsOf(line, TEST_FILE)).toEqual([COMPOSE_SOURCE]);
+  });
+
+  test.each([
+    ['import { requeueWorkItem } from "./domain/index.js";\nexport const planted = requeueWorkItem;', DELIVERY_FILE],
+    ['import { unblockWorkItem } from "./domain/index.js";\nexport const planted = unblockWorkItem;', DELIVERY_FILE],
+    ['import { resumeOnAnswer } from "./domain/prerequisite-wait.js";\nexport const planted = resumeOnAnswer;', DELIVERY_FILE],
+    ['import { requeueWorkItem } from "../domain/work-item.js";\nexport const planted = requeueWorkItem;', EXECUTION_FILE],
+    ['import { mergeOnMainOf } from "../orphan-merge.js";\nexport const planted = mergeOnMainOf;', EXECUTION_FILE],
+  ])("a return to Pending, or a read of main, outside requeue-on-main.ts: %s", async (code, filePath) => {
+    expect(await guardsOf(code, filePath)).toEqual([REQUEUE_UNREAD]);
+  });
+
+  test.each([
+    ['import { takeEvents } from "./domain/index.js";\nexport const planted = takeEvents;', DELIVERY_FILE],
+    ['import { requeueWorkItem, unblockWorkItem } from "./domain/index.js";\nexport const planted = [requeueWorkItem, unblockWorkItem];', REQUEUE_ON_MAIN_FILE],
+    ['import { mergeOnMainOf } from "./orphan-merge.js";\nexport const planted = mergeOnMainOf;', REQUEUE_ON_MAIN_FILE],
+  ])("leaves another domain import, and requeue-on-main.ts's own: %s", async (code, filePath) => {
+    expect(await guardsOf(code, filePath)).toEqual([]);
   });
 });

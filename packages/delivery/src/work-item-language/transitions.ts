@@ -28,8 +28,8 @@ import type { WorkItemStatus } from "./work-item-status.js";
  * "check" (unblock/replan/requeue each pin a different from-status).
  *
  * `Blocked -> Completed` has one traverser: planning's completeRecordedMerge, pinned to a
- * `merge_unrecorded` block, or an `orphan_unreconciled` one whose merge the loop found on main, for
- * work already merged on main whose merge record is written late.
+ * `merge_unrecorded` block, or one whose exit to Pending reads main first and found the task's
+ * merge there, for work already merged on main whose merge record is written late.
  * Unblocking such an item to Pending would re-dispatch merged work.
  */
 export const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {

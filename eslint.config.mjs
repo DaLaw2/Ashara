@@ -477,6 +477,35 @@ export default tseslint.config(
     },
   },
   {
+    // A dispatch can merge its work on main and stop before the record of it is written, so every
+    // return to Pending reads main first: returnToPending alone moves a task back to Pending, and it
+    // takes the evidence only readMainForMerge returns, the one reader of mergeOnMainOf.
+    // Blind spot: a namespace import of the domain barrel, or a new domain function that moves a
+    // task to Pending.
+    files: ["packages/delivery/src/**/*.ts"],
+    ignores: ["**/*.test.ts", "packages/delivery/src/requeue-on-main.ts", "packages/delivery/src/domain/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "(^|/)domain/(index|work-item|prerequisite-wait)\\.js$",
+              importNames: ["requeueWorkItem", "unblockWorkItem", "resumeOnAnswer"],
+              message:
+                "Requeue unread: a task goes back to Pending through returnToPending (requeue-on-main.ts), on the evidence readMainForMerge returns that main holds no merge of it.",
+            },
+            {
+              regex: "(^|/)orphan-merge\\.js$",
+              importNames: ["mergeOnMainOf"],
+              message: "Requeue unread: main is read for a task's merge through readMainForMerge (requeue-on-main.ts), whose answer is what returnToPending takes.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The dispatch and its routing take a named-parameter object past five values, so no call
     // site can swap two of the same type unseen.
     files: ["packages/delivery/src/execution/**/*.ts", "packages/delivery/src/dispatch/**/*.ts"],

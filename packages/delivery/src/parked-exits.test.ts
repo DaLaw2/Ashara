@@ -217,10 +217,10 @@ describe("no Blocked item is left with an exit only a person takes", () => {
   // its writer is named. None is a person, and none waits on a write no production path makes.
   const WRITER: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: string } = {
     "merge-recorded": "parked-exits.ts completeRecordedMerge: WorkItemRepository.recordMergeCommit, then completeRecordedMerge to Completed",
-    "read-main": "parked-exits.ts settleOnMain: mergeOnMainOf reads main; none found (no target here), release: unblockWorkItem to Pending",
-    requeue: "parked-exits.ts release: unblockWorkItem to Pending",
+    "read-main": "parked-exits.ts settleOnMain: readMainForMerge reads main; none found (no target here), release: returnToPending, unblockWorkItem to Pending",
+    requeue: "parked-exits.ts settleOnMain: readMainForMerge reads main; none found (no target here), release: returnToPending, unblockWorkItem to Pending",
     "await-revision": "replan.ts Replanner.compose: supersedeWorkItem to Abandoned, in the plan revision the replanning step writes for the correction holding it",
-    "await-answer": "parked-exits.ts awaitAnswer: the question posted if not on record, then resumeOnAnswer to Pending once the client's answer is read",
+    "await-answer": "parked-exits.ts awaitAnswer: the question posted if not on record, then once the client's answer is read readMainForMerge reads main and returnToPending, resumeOnAnswer to Pending",
     "give-up": "parked-exits.ts giveUp: giveUpWorkItem to Abandoned; the plan_repair_on_abandon trigger opens the repair the Replanner answers",
   };
   const LEAVES_TO: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: WorkItemStatus } = {
@@ -349,6 +349,26 @@ describe("a task held for the client's answer: its question is posted from the h
     expect(await released).toBe(1);
     expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Pending", reason: expect.objectContaining({ source: "client_answered", waits: 1, questionId: held.questionId }) }]);
     expect(published.map((e) => e.eventType)).toEqual(["work_item.client_answered"]);
+  });
+
+  test("its answer read with its merge on main: recorded and Completed, never back to Pending", async () => {
+    const item = blocked(held);
+    const main = repoWith(`merge: task ${item.id}`);
+    const records: string[] = [];
+    const { released, saves } = run([item], false, async (id, commit) => void records.push(`${id}:${commit}`), main.path, { askable: true, answered: true });
+    expect(await released).toBe(1);
+    expect(records).toEqual([`${item.id}:${main.head}`]);
+    expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Completed", reason: undefined }]);
+  });
+
+  test("its answer read with main unreadable: it stays Blocked, never resumed blind, and no client_wait halt is raised for it", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const { released, saves, blocks } = run([blocked(held)], false, notExercised("recordMergeCommit"), unreadable, { askable: true, answered: true });
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(blocks).toEqual([]);
   });
 
   test("unanswered once no other work of the project could proceed, the project halts on client_wait and the task is neither given up nor moved", async () => {

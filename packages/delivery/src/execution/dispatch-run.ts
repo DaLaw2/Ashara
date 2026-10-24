@@ -237,7 +237,7 @@ async function runCountedDispatch(run: CountedDispatch): Promise<TaskResult> {
     if (interrupted !== null) {
       // The shutdown stopped a command of the dispatch in a cell: no verdict and no fault, routed as
       // an interrupted attempt is (verdict-routing's "interrupted").
-      await routeAsRequeued(routingDeps, { taskId: task.id, why: "a shutdown interrupted its dispatch in a cell", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
+      await routeAsRequeued(routingDeps, { task: workItem, why: "a shutdown interrupted its dispatch in a cell", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
       return { taskId: task.id, status: "interrupted", detail: interrupted.message };
     }
     // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own

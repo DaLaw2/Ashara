@@ -52,7 +52,7 @@ afterAll(async () => {
 });
 
 describe("a project whose workspace path is refused", () => {
-  test("blocks the item environment_unavailable with no dispatch counted, no llm_calls row and no cell", async () => {
+  test("parks the item with no dispatch counted, no llm_calls row and no cell, never requeued on an unread main", async () => {
     const calls = new LlmCallRepository(db);
     const projects = new ProjectHaltRepository(db);
     const client = await new ClientRepository(db).create(NAME);
@@ -171,12 +171,15 @@ describe("a project whose workspace path is refused", () => {
 
     const cycle = await loop.runCycle();
 
-    // An uncharged infrastructure fault: back to Pending, no dispatch counted.
+    // An uncharged fault, no dispatch counted. Main cannot be read for the task's merge from the
+    // refused path either, so the task is never requeued blind: Blocked orphan_unreconciled, whose
+    // exit reads main again each cycle, with the project halted on Ashara's own fault.
     expect(cycle.results).toEqual([
       expect.objectContaining({ taskId: itemId, status: "interrupted", detail: expect.stringContaining("not inside the workdir base") }),
     ]);
     const item = await workItems.findById(itemId);
-    expect(item).toMatchObject({ status: "Pending", dispatchCount: 0, infrastructureFaults: 1 });
+    expect(item).toMatchObject({ status: "Blocked", dispatchCount: 0, infrastructureFaults: 0, blockedReason: { source: "orphan_unreconciled", faultClass: "ashara" } });
+    expect(await projects.get(projectId)).toMatchObject({ status: "blocked" });
     const rows = await db.execute(sql`SELECT count(*)::int AS n FROM llm_calls WHERE project_id = ${projectId}`);
     expect(rows.rows).toEqual([{ n: 0 }]);
     expect(mock.doGenerateCalls).toHaveLength(0);

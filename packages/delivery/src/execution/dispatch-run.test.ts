@@ -683,14 +683,18 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       counted++;
       return 1;
     };
+    // The store fails once, under the workspace's read; main is read for the task's merge after it.
+    let projectReads = 0;
     deps.loop.projectRepo.get = async () => {
-      throw new Error("connection terminated unexpectedly");
+      if (projectReads++ === 0) throw new Error("connection terminated unexpectedly");
+      return { workspacePath: UNMERGED_TARGET };
     };
 
     const result = await processTask(deps, freshPendingItem());
 
     expect(result.status).toBe("interrupted");
     expect(result.detail).toContain("connection terminated unexpectedly");
+    expect(projectReads).toBe(2);
     expect(statusesWritten).toEqual(["InProgress", "Pending"]);
     expect(stored().status).toBe("Pending");
     expect(counted).toBe(0);
