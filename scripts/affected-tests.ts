@@ -11,7 +11,8 @@
  * Bound: a selection (the whole suite included) of more test files than the cap (--cap, default
  * DEFAULT_SELECTION_CONFIG) runs only the direct tests of the changed files: a changed test file, the
  * test file a changed snapshot belongs to, the colocated `<name>.test.ts` of a changed module, and
- * the test files whose own import specifiers resolve to a changed module. One line says the
+ * the test files whose own import edges may load a changed module (an import() or require() whose
+ * target no literal spells counts by its template prefix, or else by its workspace). One line says the
  * selection exceeds the cap and how many files were skipped, or that none was; the merge lane's
  * full suite runs the skipped ones. The cap never
  * trims what a dependency or toolchain change selects: those tests run whatever their number, and
@@ -29,11 +30,15 @@
  *   resolves it (lockfile-impact.ts); package-lock.json selects every workspace that resolves a
  *   changed entry, or the whole suite when the change cannot be attributed to a workspace (an entry
  *   the root project resolves among them). A selected workspace brings every test under it, the
- *   graph dependants of every module under it, and the graph dependants of every module that names
- *   its package, or the outermost package a changed entry sits under, in a quoted import specifier
- *   or in the static prefix of a template-literal dynamic import. A module with a dynamic import
- *   whose target no static prefix bounds brings every module and test of its workspace (the
- *   deepest enclosing directory with a package.json, or the root project's files outside them).
+ *   graph dependants of every module under it, and the graph dependants of every module or test
+ *   that imports its package, or the outermost package a changed entry sits under (a changed
+ *   workspace entry: that workspace's package), by name: the import edges are read from each
+ *   file's syntax tree (import-targets.ts), never from its text, so a comment or a string that
+ *   spells a specifier is no edge. A literal specifier names the package whole; a template-literal
+ *   one names it by its static prefix. An import() or require() whose target no static prefix
+ *   bounds, or a file whose text cannot be read, brings every module and test of its workspace
+ *   (the deepest enclosing directory with a package.json, or the root project's files outside
+ *   them). The reasons name every file each of these adds.
  * - Whole suite (WHOLE_SUITE_RULES): a file that changes how every test is collected, compiled,
  *   resolved or run, or that every database test reads at runtime. Any one such file selects the
  *   whole suite, each with the reason the table states.
@@ -73,6 +78,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
+import { importTargets, type ImportTarget } from "./import-targets.js";
 import { lockfileImpact, manifestImpact, parseLockfile, type DependencyImpact, type Lockfile } from "./lockfile-impact.js";
 
 class AffectedTestsError extends Error {
@@ -203,7 +209,7 @@ export interface SelectionSources {
   readonly testsImporting: (modules: readonly string[]) => Promise<readonly string[]>;
   /** The tracked or untracked files whose text contains `name`, repo-relative. */
   readonly filesNaming: (name: string) => readonly string[];
-  /** The test files whose own import specifiers resolve to any of these modules (depth 1), repo-relative. */
+  /** The test files whose own import edges resolve to any of these modules (depth 1), repo-relative. */
   readonly testsImportingDirectly: (modules: readonly string[]) => Promise<readonly string[]>;
 }
 
@@ -241,7 +247,7 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
         uncappedWholeSuite = true;
       } else {
         impacts.push(impact);
-        const names = impact.packageNames.length > 0 ? `, and of every module that imports ${impact.packageNames.join(", ")} by name` : "";
+        const names = impact.packageNames.length > 0 ? `, and of every module that imports ${impact.packageNames.join(", ")} by name (listed below)` : "";
         reasons.push(`${file}: ${impact.reason}; selects every test of ${impact.workspaces.length} workspace(s) (${impact.workspaces.join(", ")}) and the graph dependants of their modules${names}, past the cap`);
       }
       continue;
@@ -307,7 +313,9 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
   if (changedModules.size > 0) for (const t of await sources.testsImportingDirectly([...changedModules])) direct.add(t);
   const basis: SelectionBasis = { direct: [...direct].sort(), touchesSource };
   if (wholeSuite.length > 0 && uncappedWholeSuite) return { ...basis, kind: "whole-suite", reasons: wholeSuite, capped: false, required: [] };
-  const required = await dependencyTests(impacts, sources);
+  const dependency = await dependencyTests(impacts, sources);
+  const required = dependency.tests;
+  reasons.push(...dependency.reasons);
   if (wholeSuite.length > 0) return { ...basis, kind: "whole-suite", reasons: [...wholeSuite, ...reasons], capped: true, required };
   if (graphModules.size > 0) for (const t of await sources.testsImporting([...graphModules])) tests.add(t);
   for (const t of required) tests.add(t);
@@ -332,38 +340,6 @@ function dependencyImpact(file: string, lockfiles: LockfileRevisions): Dependenc
   return manifestImpact(workspace, lockfiles.base, lockfiles.head);
 }
 
-/** The quoted import specifiers a module that imports `name`, or a subpath of it, spells. */
-function specifierSpellings(name: string): string[] {
-  return [`"${name}"`, `"${name}/`, `'${name}'`, `'${name}/`];
-}
-
-/** What a dynamic import's argument says about the specifier it loads. */
-type DynamicSpecifier =
-  | { readonly kind: "quoted" }
-  | { readonly kind: "template"; readonly prefix: string }
-  | { readonly kind: "unreadable" };
-
-const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*/g;
-
-/** Every dynamic import in `text`; a template literal is read up to its first substitution. */
-function dynamicImports(text: string): DynamicSpecifier[] {
-  const found: DynamicSpecifier[] = [];
-  for (const match of text.matchAll(DYNAMIC_IMPORT_RE)) {
-    const start = match.index + match[0].length;
-    const opener = text.charAt(start);
-    if (opener === '"' || opener === "'") {
-      found.push({ kind: "quoted" });
-    } else if (opener === "`") {
-      const rest = text.slice(start + 1);
-      const end = [rest.indexOf("${"), rest.indexOf("`")].filter((i) => i !== -1);
-      found.push(end.length === 0 ? { kind: "unreadable" } : { kind: "template", prefix: rest.slice(0, Math.min(...end)) });
-    } else {
-      found.push({ kind: "unreadable" });
-    }
-  }
-  return found;
-}
-
 /**
  * What a template-literal specifier's static prefix bounds: a built-in or a relative module loads no
  * package; an empty, absolute, URL or node_modules prefix may load anything; a bare one loads a
@@ -381,6 +357,10 @@ function prefixMayName(prefix: string, name: string): boolean {
   return `${name}/`.startsWith(prefix) || prefix.startsWith(`${name}/`);
 }
 
+function specifierNames(specifier: string, name: string): boolean {
+  return specifier === name || specifier.startsWith(`${name}/`);
+}
+
 /**
  * The workspace directory a file belongs to: the deepest enclosing directory with a package.json,
  * or the root project ("") when none encloses it.
@@ -389,43 +369,77 @@ function owningWorkspace(file: string, manifestDirs: readonly string[]): string 
   return manifestDirs.filter((dir) => file.startsWith(`${dir}/`)).reduce((deepest, dir) => (dir.length > deepest.length ? dir : deepest), "");
 }
 
-/** Every test a dependency change reaches, repo-relative and sorted; see the header's dependency rule. */
-async function dependencyTests(impacts: readonly DependencyImpact[], sources: SelectionSources): Promise<string[]> {
+function manifestDirsOf(files: readonly string[]): string[] {
+  return files.flatMap((f) => (f !== ROOT_MANIFEST && f.endsWith("/package.json") ? [f.slice(0, -"/package.json".length)] : []));
+}
+
+function workspaceLabel(workspace: string): string {
+  return workspace === "" ? "the root project's files outside every workspace" : `workspace ${workspace}`;
+}
+
+interface DependencySelection {
+  /** Repo-relative, sorted. */
+  readonly tests: string[];
+  /** One line per package its importers bring, and per file whose import target brings its workspace. */
+  readonly reasons: string[];
+}
+
+/** Every test a dependency change reaches, and why; see the header's dependency rule. */
+async function dependencyTests(impacts: readonly DependencyImpact[], sources: SelectionSources): Promise<DependencySelection> {
   const required = new Set<string>();
   const modules = new Set<string>();
+  const reasons = new Set<string>();
   const allTests = new Set(sources.allTests);
   const take = (file: string): void => {
     if (allTests.has(file)) required.add(file);
     else if (GRAPH_MODULE_RE.test(file) && !TEST_FILE_RE.test(file)) modules.add(file);
   };
-  const manifestDirs = sources.files.flatMap((f) => (f !== ROOT_MANIFEST && f.endsWith("/package.json") ? [f.slice(0, -"/package.json".length)] : []));
+  const manifestDirs = manifestDirsOf(sources.files);
   const takeWorkspace = (workspace: string): void => {
     for (const file of sources.files) {
       if (workspace === "" ? owningWorkspace(file, manifestDirs) === "" : file.startsWith(`${workspace}/`)) take(file);
     }
   };
   const workspaceImpacts = impacts.filter((impact) => impact.kind === "workspaces");
-  for (const impact of workspaceImpacts) {
-    for (const workspace of impact.workspaces) takeWorkspace(workspace);
-    for (const name of impact.packageNames) for (const spelling of specifierSpellings(name)) for (const file of sources.filesNaming(spelling)) take(file);
-  }
+  for (const impact of workspaceImpacts) for (const workspace of impact.workspaces) takeWorkspace(workspace);
   if (workspaceImpacts.length > 0) {
-    const names = workspaceImpacts.flatMap((impact) => impact.packageNames);
-    const loaders = new Set([...sources.filesNaming("import("), ...sources.filesNaming("import (")].filter((f) => GRAPH_MODULE_RE.test(f)));
-    for (const file of loaders) {
+    const importers = new Map(workspaceImpacts.flatMap((impact) => impact.packageNames).map((name) => [name, new Set<string>()]));
+    const takeOwningWorkspace = (file: string, why: string): void => {
+      const workspace = owningWorkspace(file, manifestDirs);
+      takeWorkspace(workspace);
+      reasons.add(`${file}: ${why}, so every module and test of ${workspaceLabel(workspace)} runs, past the cap`);
+    };
+    for (const file of sources.files) {
+      if (!allTests.has(file) && !GRAPH_MODULE_RE.test(file)) continue;
       const text = sources.readRevision(file, "head");
-      // A loader whose text cannot be read, or whose import target is computed, may load any package.
-      const specifiers: DynamicSpecifier[] = text === undefined ? [{ kind: "unreadable" }] : dynamicImports(text);
-      for (const specifier of specifiers) {
-        if (specifier.kind === "quoted") continue;
-        const target = specifier.kind === "template" ? templateTarget(specifier.prefix) : "unbounded";
-        if (target === "unbounded") takeWorkspace(owningWorkspace(file, manifestDirs));
-        else if (target === "package" && specifier.kind === "template" && names.some((name) => prefixMayName(specifier.prefix, name))) take(file);
+      if (text === undefined) {
+        takeOwningWorkspace(file, "its text cannot be read to see what it imports");
+        continue;
       }
+      for (const target of importTargets(file, text)) {
+        if (target.kind === "computed") {
+          takeOwningWorkspace(file, "an import whose target is computed may load any package");
+          continue;
+        }
+        if (target.kind === "template" && templateTarget(target.prefix) === "unbounded") {
+          takeOwningWorkspace(file, `an import whose template target begins \`${target.prefix}\` may load any package`);
+          continue;
+        }
+        for (const [name, files] of importers) {
+          const named = target.kind === "static" ? specifierNames(target.specifier, name) : templateTarget(target.prefix) === "package" && prefixMayName(target.prefix, name);
+          if (!named) continue;
+          take(file);
+          files.add(file);
+        }
+      }
+    }
+    for (const [name, files] of importers) {
+      const which = files.size === 0 ? "" : ` (${[...files].sort().join(", ")})`;
+      reasons.add(`${name}: ${files.size} module(s) and test(s) import it by name${which}; they and their graph dependants run, past the cap`);
     }
   }
   if (modules.size > 0) for (const t of await sources.testsImporting([...modules])) required.add(t);
-  return [...required].sort();
+  return { tests: [...required].sort(), reasons: [...reasons] };
 }
 
 /**
@@ -557,21 +571,23 @@ export async function repositorySources(root: string, revisions: Revisions): Pro
   const relative = (abs: string): string => path.relative(root, abs).split(path.sep).join("/");
   const allTests = [...new Set((await vitest.globTestSpecifications()).map((s) => relative(s.moduleId)))].sort();
   const files = git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter((f) => f !== "");
+  const readRevision = (file: string, side: "base" | "head"): string | undefined => {
+    if (side === "base") return textAt(root, revisions.base, file);
+    if (revisions.head !== undefined) return textAt(root, revisions.head, file);
+    const full = path.join(root, file);
+    return fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined;
+  };
+  const layout: WorkspaceLayout = { manifestDirs: manifestDirsOf(files), workspaceDirs: workspaceDirsOf(readRevision(LOCKFILE, "head")) };
   return {
     allTests,
     files,
-    readRevision: (file, side) => {
-      if (side === "base") return textAt(root, revisions.base, file);
-      if (revisions.head !== undefined) return textAt(root, revisions.head, file);
-      const full = path.join(root, file);
-      return fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined;
-    },
+    readRevision,
     testsImporting: async (modules) => {
       vitest.config.related = modules.map((m) => path.join(root, m));
       const specs = await vitest.getRelevantTestSpecifications();
       return [...new Set(specs.map((s) => relative(s.moduleId)))];
     },
-    testsImportingDirectly: (modules) => Promise.resolve(testsImportingDirectly(root, allTests, modules)),
+    testsImportingDirectly: (modules) => Promise.resolve(testsImportingDirectly(allTests, modules, (file) => readRevision(file, "head"), layout)),
     filesNaming: (name) => {
       const result = spawnSync("git", ["grep", "-l", "-z", "-F", "--untracked", "-e", name], { cwd: root, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: 60_000 });
       if (result.error !== undefined) throw new AffectedTestsError(`git grep ${name}`, describeErrorChain(result.error));
@@ -584,8 +600,6 @@ export async function repositorySources(root: string, revisions: Revisions): Pro
   };
 }
 
-const IMPORT_SPECIFIER_RE = /\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
-
 /** The repo-relative files a relative import specifier written in `importer` may resolve to. */
 function specifierTargets(importer: string, specifier: string): string[] {
   if (!specifier.startsWith(".")) return [];
@@ -594,20 +608,73 @@ function specifierTargets(importer: string, specifier: string): string[] {
   return [joined, `${stem}.ts`, `${stem}.mjs`, `${stem}.js`, `${joined}/index.ts`];
 }
 
-function testsImportingDirectly(root: string, allTests: readonly string[], modules: readonly string[]): string[] {
-  const wanted = new Set(modules);
-  const found: string[] = [];
-  for (const test of allTests) {
-    const text = fs.readFileSync(path.join(root, test), "utf-8");
-    for (const match of text.matchAll(IMPORT_SPECIFIER_RE)) {
-      const specifier = match[1];
-      if (specifier !== undefined && specifierTargets(test, specifier).some((t) => wanted.has(t))) {
-        found.push(test);
-        break;
-      }
+/**
+ * Where the repository's modules live, for an import edge whose target is not spelled whole.
+ * @testseam affected-tests.test.ts exercises it without running the CLI
+ */
+export interface WorkspaceLayout {
+  /** Every directory with a package.json other than the root, repo-relative. */
+  readonly manifestDirs: readonly string[];
+  /** Each workspace's directory by its package name, or "unknown" when no lockfile records them. */
+  readonly workspaceDirs: ReadonlyMap<string, string> | "unknown";
+}
+
+/**
+ * The workspaces of the head lockfile, by package name: its entries under no node_modules segment.
+ * No lockfile at the head leaves them unknown, so a template target that names a package may name any.
+ */
+function workspaceDirsOf(text: string | undefined): WorkspaceLayout["workspaceDirs"] {
+  if (text === undefined) return "unknown";
+  const lock = parseLockfile(text, `${LOCKFILE} at the head`);
+  const dirs = new Map<string, string>();
+  for (const [key, entry] of Object.entries(lock.packages)) {
+    if (key === "" || key.split("/").includes("node_modules") || entry.name === undefined) continue;
+    dirs.set(entry.name, key);
+  }
+  return dirs;
+}
+
+/**
+ * Whether an import edge written in `importer` may load one of `modules`. A literal resolves to its
+ * files; a template whose prefix is relative may load every module whose path begins where the
+ * prefix resolves, and one whose prefix names a workspace package may load every module of that
+ * workspace; a built-in prefix loads none; any other target, computed or unbounded, may load every
+ * module of the importer's own workspace.
+ */
+function edgeMayLoad(importer: string, target: ImportTarget, modules: readonly string[], layout: WorkspaceLayout): boolean {
+  if (target.kind === "static") {
+    const targets = new Set(specifierTargets(importer, target.specifier));
+    return modules.some((m) => targets.has(m));
+  }
+  if (target.kind === "template") {
+    if (target.prefix.startsWith("node:")) return false;
+    const bound = templateTarget(target.prefix);
+    if (bound === "no-package") {
+      const begins = path.posix.normalize(path.posix.join(path.posix.dirname(importer), target.prefix));
+      return modules.some((m) => m.startsWith(begins));
+    }
+    if (bound === "package") {
+      if (layout.workspaceDirs === "unknown") return modules.length > 0;
+      const dirs = [...layout.workspaceDirs].filter(([name]) => prefixMayName(target.prefix, name)).map(([, dir]) => `${dir}/`);
+      return modules.some((m) => dirs.some((dir) => m.startsWith(dir)));
     }
   }
-  return found;
+  const workspace = owningWorkspace(importer, layout.manifestDirs);
+  return modules.some((m) => owningWorkspace(m, layout.manifestDirs) === workspace);
+}
+
+/**
+ * The tests among `allTests` whose own import edges (their text read by `read`) may load any of
+ * `modules`; see edgeMayLoad for an edge whose target is not spelled whole.
+ * @testseam affected-tests.test.ts exercises it without running the CLI
+ */
+export function testsImportingDirectly(allTests: readonly string[], modules: readonly string[], read: (file: string) => string | undefined, layout: WorkspaceLayout): string[] {
+  return allTests.filter((test) => {
+    const text = read(test);
+    // A test whose text cannot be read may import any of them, so it stays among the direct tests.
+    if (text === undefined) return true;
+    return importTargets(test, text).some((target) => edgeMayLoad(test, target, modules, layout));
+  });
 }
 
 interface Cli {

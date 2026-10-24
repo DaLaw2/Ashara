@@ -9,7 +9,8 @@
  * Fail-closed: a change this cannot attribute to a workspace (an entry the root project resolves, an
  * entry no workspace resolves, a root entry or lockfile field outside the packages map, a file that
  * differs with no entry differing, a lockfile absent in either revision, a closure that cannot be
- * followed: a link with no target, a required dependency with no entry) comes back as the whole
+ * followed: a link with no target, a required dependency with no entry; a changed workspace entry
+ * with no package name to find its importers by) comes back as the whole
  * suite, and a lockfile that is not of the npm shape throws.
  */
 
@@ -51,7 +52,8 @@ export function parseLockfile(text: string, source: string): Lockfile {
 /**
  * What a dependency change reaches: the whole suite with the reason it cannot be bounded, or the
  * workspaces (repo-relative directories) that resolve a changed entry and, for each changed entry,
- * the outermost package it sits under, which a module anywhere may import by name to load it.
+ * the outermost package it sits under (for a workspace's own entry, that workspace's package), which a
+ * module anywhere may import by name to load it.
  */
 export type DependencyImpact =
   | { readonly kind: "whole-suite"; readonly reason: string }
@@ -118,17 +120,24 @@ function workspaceLocations(locks: readonly Lockfile[]): string[] {
   return [...found].sort();
 }
 
-/** Every location `start` resolves in either revision, each start's closure computed once. */
-class Reach {
+/**
+ * Every location `start` resolves in either revision, each start's closure computed once: an
+ * attribution asks every workspace's reach once per changed entry.
+ * @testseam lockfile-impact.test.ts counts the closures it follows
+ */
+export class Reach {
   private readonly cache = new Map<string, Set<string>>();
 
-  constructor(private readonly locks: readonly Lockfile[]) {}
+  constructor(
+    private readonly locks: readonly Lockfile[],
+    private readonly follow: (lock: Lockfile, start: string) => Set<string> = closure,
+  ) {}
 
   of(start: string): Set<string> {
     const cached = this.cache.get(start);
     if (cached !== undefined) return cached;
     const all = new Set<string>();
-    for (const lock of this.locks) for (const location of closure(lock, start)) all.add(location);
+    for (const lock of this.locks) for (const location of this.follow(lock, start)) all.add(location);
     this.cache.set(start, all);
     return all;
   }
@@ -189,7 +198,14 @@ export function lockfileImpact(base: Lockfile | undefined, head: Lockfile | unde
     const packageNames = new Set<string>();
     for (const key of changed) {
       const name = OUTERMOST_PACKAGE.exec(key)?.[1];
-      if (name !== undefined) packageNames.add(name);
+      if (name !== undefined) {
+        packageNames.add(name);
+        continue;
+      }
+      // A key under no node_modules segment is a workspace's own entry, which a module loads by the workspace's name.
+      const names = workspaceName(locks, key);
+      if (names.length === 0) return { kind: "whole-suite", reason: `workspace ${key} changed and has no package name to find its importers by` };
+      for (const workspaceNamed of names) packageNames.add(workspaceNamed);
     }
     return {
       kind: "workspaces",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { lockfileImpact, manifestImpact, parseLockfile, type Lockfile } from "./lockfile-impact.js";
+import { lockfileImpact, manifestImpact, parseLockfile, Reach, type Lockfile } from "./lockfile-impact.js";
 
 // Two workspaces: a resolves hono (which nests its own copy of tiny), b resolves a through its link;
 // the root project resolves only vitest.
@@ -42,6 +42,16 @@ describe("lockfileImpact", () => {
     expect(lockfileImpact(base, head)).toMatchObject({ kind: "workspaces", workspaces: ["packages/a", "packages/b"], packageNames: ["left"] });
   });
 
+  test("a changed workspace entry names that workspace's package, which a module loads by name", () => {
+    const impact = lockfileImpact(lockfile(), lockfile({ "packages/a": { name: "@p/a", version: "0.0.1", dependencies: { hono: "4.0.0" } } }));
+    expect(impact).toMatchObject({ kind: "workspaces", workspaces: ["packages/a", "packages/b"], packageNames: ["@p/a"] });
+  });
+
+  test("a changed workspace entry with no package name in either revision is the whole suite", () => {
+    const impact = lockfileImpact(lockfile({ "packages/b": { dependencies: { "@p/a": "*" } } }), lockfile({ "packages/b": { version: "0.0.1", dependencies: { "@p/a": "*" } } }));
+    expect(impact).toMatchObject({ kind: "whole-suite", reason: expect.stringMatching(/workspace packages\/b changed and has no package name/) });
+  });
+
   test.each([
     ["a link entry with no resolved target", lockfile(), lockfile({ "node_modules/@p/a": { link: true } }), /node_modules\/@p\/a cannot be followed \(a link entry with no resolved target\)/],
     ["a required dependency with no lockfile entry", lockfile(), lockfile({ "packages/a": { name: "@p/a", dependencies: { hono: "4.0.0", ghost: "1.0.0" } } }), /packages\/a cannot be followed \(its dependency ghost resolves to no lockfile entry\)/],
@@ -78,5 +88,17 @@ describe("manifestImpact", () => {
 
   test("a manifest the lockfile records no workspace for is the whole suite", () => {
     expect(manifestImpact("packages/z", lockfile(), lockfile())).toMatchObject({ kind: "whole-suite", reason: expect.stringMatching(/no workspace at packages\/z/) });
+  });
+});
+
+describe("Reach", () => {
+  test("follows each start's closure once per lockfile, however often its reach is asked", () => {
+    const followed: string[] = [];
+    const reach = new Reach([lockfile(), lockfile()], (_lock, start) => {
+      followed.push(start);
+      return new Set([start]);
+    });
+    for (const start of ["packages/a", "packages/b", "packages/a", "packages/b", "packages/a"]) expect(reach.of(start)).toEqual(new Set([start]));
+    expect(followed).toEqual(["packages/a", "packages/a", "packages/b", "packages/b"]);
   });
 });

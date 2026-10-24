@@ -1,8 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, WHOLE_SUITE_RULES, type ChangedPath, type SelectionSources } from "./affected-tests.js";
+import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, testsImportingDirectly, WHOLE_SUITE_RULES, type ChangedPath, type SelectionSources, type WorkspaceLayout } from "./affected-tests.js";
 
 const REPO = path.join(import.meta.dirname, "..");
 const SCRIPT = path.join(import.meta.dirname, "affected-tests.ts");
@@ -169,6 +169,12 @@ describe("a dependency change", () => {
   const HONO_IMPORTER = "packages/c/src/undeclared.ts";
   const IMPORTS_A = "scripts/s1.test.ts";
   const IMPORTS_HONO = "packages/c/src/c1.test.ts";
+  const USES_A = "packages/b/src/uses-a.ts";
+  const PLAIN = "export const plain = 1;\n";
+  const TEXTS = new Map([
+    [HONO_IMPORTER, 'import { Hono } from "hono";\nexport const app = new Hono();\n'],
+    [USES_A, 'import { start } from "@p/a";\nexport const run = start;\n'],
+  ]);
 
   const lockfile = (honoVersion: string, extra: Record<string, unknown> = {}): string =>
     JSON.stringify({
@@ -190,15 +196,25 @@ describe("a dependency change", () => {
       },
     });
 
-  const sources = (base: string | undefined, head: string | undefined): SelectionSources =>
-    stubSources({
+  // Every file has a text: a module or test the stub could not read would fail closed to its workspace.
+  // `texts` overrides a file's text; an undefined entry is a file whose text cannot be read.
+  const sources = (base: string | undefined, head: string | undefined, texts = new Map<string, string | undefined>(), extraFiles: readonly string[] = []): SelectionSources => {
+    const files = [...ALL, A_MODULE, HONO_IMPORTER, USES_A, "packages/c/src/plain.ts", "package.json", "package-lock.json", ...extraFiles];
+    const textOf = (file: string): string | undefined => {
+      if (file === "package-lock.json") return head;
+      if (texts.has(file)) return texts.get(file);
+      return TEXTS.get(file) ?? PLAIN;
+    };
+    return stubSources({
       allTests: ALL,
-      files: [...ALL, A_MODULE, HONO_IMPORTER, "packages/c/src/plain.ts", "package.json", "package-lock.json"],
-      readRevision: (file, side) => (file === "package-lock.json" ? (side === "base" ? base : head) : undefined),
-      filesNaming: (name) => (name === '"hono"' ? [HONO_IMPORTER] : name === '"@p/a"' ? ["packages/b/src/uses-a.ts"] : []),
+      files,
+      readRevision: (file, side) => (file === "package-lock.json" && side === "base" ? base : textOf(file)),
+      // A plain text search, as the repository's is.
+      filesNaming: (name) => files.filter((file) => textOf(file)?.includes(name) === true),
       testsImporting: (modules) =>
         Promise.resolve([...(modules.includes(A_MODULE) ? [IMPORTS_A] : []), ...(modules.includes(HONO_IMPORTER) ? [IMPORTS_HONO] : [])]),
     });
+  };
 
   const upgrade = [modified("packages/a/package.json"), modified("package-lock.json")];
 
@@ -254,18 +270,57 @@ describe("a dependency change", () => {
   });
 
   const DYNAMIC_LOADER = "packages/c/src/loader.ts";
+  const IMPORTS_LOADER = "packages/c/src/c2.test.ts";
   const loaderSources = (loaderText: string | undefined, loader = DYNAMIC_LOADER): SelectionSources => {
-    const base = sources(lockfile("4.0.0"), lockfile("4.1.0"));
-    return {
-      ...base,
-      files: [...base.files, loader, "packages/a/package.json", "packages/b/package.json", "packages/c/package.json"],
-      filesNaming: (name) => (name === "import(" ? [loader] : base.filesNaming(name)),
-      readRevision: (file, side) => (file === loader ? loaderText : base.readRevision(file, side)),
-      testsImporting: async (modules) => [...(await base.testsImporting(modules)), ...(modules.includes(DYNAMIC_LOADER) ? ["packages/c/src/c2.test.ts"] : [])],
-    };
+    const base = sources(lockfile("4.0.0"), lockfile("4.1.0"), new Map([[loader, loaderText]]), [loader, "packages/a/package.json", "packages/b/package.json", "packages/c/package.json"]);
+    return { ...base, testsImporting: async (modules) => [...(await base.testsImporting(modules)), ...(modules.includes(DYNAMIC_LOADER) ? [IMPORTS_LOADER] : [])] };
   };
   const honoUpgrade = [modified("package-lock.json")];
   const HONO_SELECTION = [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO];
+
+  test.each([
+    ["a comment", '// import { Hono } from "hono";\n/* const late = await import(target); require("hono/jsx") */\nexport const quiet = 1;\n'],
+    ["a string literal", 'export const doc = \'import { Hono } from "hono"; import(target); require(`hono/${x}`)\';\n'],
+  ])("%s that spells an import is no import edge, and selects nothing more", async (_name, text) => {
+    const selection = await selectTests(honoUpgrade, loaderSources(text));
+    expect(selection).toMatchObject({ kind: "selected", required: [...HONO_SELECTION].sort() });
+    expect(selection.reasons.join("\n")).not.toContain(DYNAMIC_LOADER);
+  });
+
+  test.each([
+    ["an import( split across lines", "export const load = (x: string) => import\n(`hono/${x}`);\n"],
+    ["a require of a template", "export const load = (x: string): unknown => require(`hono/${x}`);\n"],
+    ["a require", 'const hono: unknown = require("hono");\nexport { hono };\n'],
+    ["an import-equals require", 'import hono = require("hono");\nexport { hono };\n'],
+    ["an export-from", 'export * from "hono";\n'],
+    ["an export-from of a subpath", "export { jsx } from 'hono/jsx';\n"],
+  ])("%s of a changed package selects the importer's dependants, and the reasons name it", async (_name, text) => {
+    const selection = await selectTests(honoUpgrade, loaderSources(text));
+    expect(selection).toMatchObject({ kind: "selected", required: [...HONO_SELECTION, IMPORTS_LOADER].sort() });
+    expect(selection.reasons).toContain(`hono: 2 module(s) and test(s) import it by name (${DYNAMIC_LOADER}, ${HONO_IMPORTER}); they and their graph dependants run, past the cap`);
+  });
+
+  test("a template-literal import whose static prefix is a changed scoped package's scope selects the importer's dependants", async () => {
+    const selection = await selectTests([modified("packages/a/package.json")], loaderSources("export const load = (x: string) => import(`@p/${x}`);\n"));
+    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_LOADER].sort() });
+    expect(selection.reasons).toContain(`@p/a: 2 module(s) and test(s) import it by name (${USES_A}, ${DYNAMIC_LOADER}); they and their graph dependants run, past the cap`);
+  });
+
+  test("a lockfile-only change to a workspace's own entry selects the modules that import that workspace's package by name", async () => {
+    const asked: string[] = [];
+    const head = lockfile("4.0.0", { "packages/a": { name: "@p/a", version: "0.0.1", dependencies: { hono: "4.0.0" } } });
+    const base = sources(lockfile("4.0.0"), head);
+    const selection = await selectTests([modified("package-lock.json")], {
+      ...base,
+      testsImporting: (modules) => {
+        asked.push(...modules);
+        return base.testsImporting(modules);
+      },
+    });
+    expect(asked).toContain(USES_A);
+    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A].sort() });
+    expect(selection.reasons).toContain(`@p/a: 1 module(s) and test(s) import it by name (${USES_A}); they and their graph dependants run, past the cap`);
+  });
 
   test("a template-literal dynamic import whose static prefix names a changed package selects the importer's dependants", async () => {
     const selection = await selectTests(honoUpgrade, loaderSources("export const load = (x: string) => import(`hono/${x}`);\n"));
@@ -280,17 +335,21 @@ describe("a dependency change", () => {
   });
 
   test.each([
-    ["a computed specifier", "export const load = (target: string) => import(target);\n"],
-    ["a template with no static prefix", "export const load = (x: string) => import(`${x}/index.js`);\n"],
-    ["a loader whose text cannot be read", undefined],
-  ])("a dynamic import with %s fails closed to every test of the importer's workspace", async (_name, text) => {
+    ["a computed specifier", "export const load = (target: string) => import(target);\n", "an import whose target is computed may load any package"],
+    ["a computed specifier split across lines", "export const load = (target: string) => import\n(target);\n", "an import whose target is computed may load any package"],
+    ["a computed require", "export const load = (target: string): unknown => require(target);\n", "an import whose target is computed may load any package"],
+    ["a template with no static prefix", "export const load = (x: string) => import(`${x}/index.js`);\n", "an import whose template target begins `` may load any package"],
+    ["a loader whose text cannot be read", undefined, "its text cannot be read to see what it imports"],
+  ])("a dynamic import with %s fails closed to every test of the importer's workspace, and the reasons say so", async (_name, text, why) => {
     const selection = await selectTests(honoUpgrade, loaderSources(text));
     expect(selection).toMatchObject({ kind: "selected", required: [...new Set([...HONO_SELECTION, ...TESTS.c])].sort() });
+    expect(selection.reasons).toContain(`${DYNAMIC_LOADER}: ${why}, so every module and test of workspace packages/c runs, past the cap`);
   });
 
   test("a computed dynamic import outside every workspace manifest fails closed to the root project's own files", async () => {
     const selection = await selectTests(honoUpgrade, loaderSources("await import(target);\n", "scripts/loader.ts"));
     expect(selection).toMatchObject({ kind: "selected", required: [...new Set([...HONO_SELECTION, ...TESTS.root])].sort() });
+    expect(selection.reasons).toContain("scripts/loader.ts: an import whose target is computed may load any package, so every module and test of the root project's files outside every workspace runs, past the cap");
   });
 
   test.each([
@@ -324,6 +383,59 @@ describe("a dependency change", () => {
   });
 });
 
+describe("the direct importers", () => {
+  const CORE = "packages/a/src/core.ts";
+  const LAYOUT: WorkspaceLayout = { manifestDirs: ["packages/a", "packages/b"], workspaceDirs: new Map([["@ashara/a", "packages/a"], ["@ashara/b", "packages/b"]]) };
+  const TEXTS = new Map([
+    ["packages/a/src/reexports.test.ts", 'export * from "./core.js";\n'],
+    ["packages/a/src/requires.test.ts", 'const core: unknown = require("./core");\nexport { core };\n'],
+    ["packages/a/src/split.test.ts", 'const core: unknown = await import\n("./core.js");\nexport { core };\n'],
+    ["packages/a/src/mentions.test.ts", '// import { x } from "./core.js";\nexport const s = \'from "./core.js"\';\n'],
+    ["packages/a/src/other.test.ts", 'import { y } from "./other.js";\nexport { y };\n'],
+  ]);
+
+  test("a test reaches the module through any edge the parser reads, never through a comment or a string", () => {
+    const found = testsImportingDirectly([...TEXTS.keys()], [CORE], (file) => TEXTS.get(file), LAYOUT);
+    expect(found).toEqual(["packages/a/src/reexports.test.ts", "packages/a/src/requires.test.ts", "packages/a/src/split.test.ts"]);
+  });
+
+  test("a test whose text cannot be read stays among the direct tests", () => {
+    expect(testsImportingDirectly(["packages/a/src/gone.test.ts"], [CORE], () => undefined, LAYOUT)).toEqual(["packages/a/src/gone.test.ts"]);
+  });
+
+  const direct = (test: string, text: string, modules: readonly string[], layout: WorkspaceLayout = LAYOUT): boolean =>
+    testsImportingDirectly([test], modules, () => text, layout).length === 1;
+
+  test("a computed import target makes a test direct for every changed module of its own workspace, and of no other", () => {
+    const computed = "const m: unknown = await import(path.join(dir, name));\nexport { m };\n";
+    expect(direct("packages/a/test/load.test.ts", computed, [CORE])).toBe(true);
+    expect(direct("packages/a/test/load.test.ts", computed, ["packages/b/src/core.ts"])).toBe(false);
+    expect(direct("scripts/lints/all.test.ts", computed, ["scripts/lints/one.ts"])).toBe(true);
+    expect(direct("scripts/lints/all.test.ts", computed, [CORE])).toBe(false);
+    expect(direct("packages/a/src/load.test.ts", "const m: unknown = require(name);\nexport { m };\n", [CORE])).toBe(true);
+  });
+
+  test("a template import target counts by where its static prefix may resolve", () => {
+    const relative = "const m: unknown = await import(`./lints/${name}.js`);\nexport { m };\n";
+    expect(direct("scripts/run.test.ts", relative, ["scripts/lints/one.ts"])).toBe(true);
+    expect(direct("scripts/run.test.ts", relative, ["scripts/other.ts"])).toBe(false);
+    const named = "const m: unknown = await import(`@ashara/${name}`);\nexport { m };\n";
+    expect(direct("scripts/run.test.ts", named, [CORE])).toBe(true);
+    expect(direct("scripts/run.test.ts", "const m: unknown = await import(`@other/${name}`);\nexport { m };\n", [CORE])).toBe(false);
+    expect(direct("scripts/run.test.ts", named, [CORE], { ...LAYOUT, workspaceDirs: "unknown" })).toBe(true);
+    expect(direct("scripts/run.test.ts", "const m: unknown = await import(`node:${name}`);\nexport { m };\n", ["scripts/other.ts"])).toBe(false);
+    expect(direct("scripts/run.test.ts", "const m: unknown = await import(`${name}`);\nexport { m };\n", ["scripts/other.ts"])).toBe(true);
+  });
+});
+
+describe("the import edges selection reads", () => {
+  test("affected-tests.ts reads no import edge by a text search: its only name search is for a changed file's name", async () => {
+    const source = await readFile(SCRIPT, "utf-8");
+    expect(source).not.toMatch(/matchAll|DYNAMIC_IMPORT_RE|IMPORT_SPECIFIER_RE|specifierSpellings/);
+    expect(source.match(/\bfilesNaming\([^)]*\)/g)).toEqual(["filesNaming(path.posix.basename(file)"]);
+  });
+});
+
 describe("this repository's graph", () => {
   test("the direct importers are the tests whose own specifiers resolve to the module", async () => {
     const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });
@@ -331,6 +443,7 @@ describe("this repository's graph", () => {
       const tests = await sources.testsImportingDirectly(["packages/shared/src/json.ts"]);
       expect(tests).toContain("packages/shared/src/json.test.ts");
       expect(tests).not.toContain("packages/engagement/src/vision.test.ts");
+      expect(await sources.testsImportingDirectly(["scripts/lints/class-imports.ts"])).toContain("scripts/lints/lints.test.ts");
     } finally {
       await sources.close();
     }
