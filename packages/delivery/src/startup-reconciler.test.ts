@@ -8,6 +8,7 @@ import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { FailureRouter } from "./failure-router.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
+import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 import { inertWorkItemRepo } from "./testing.js";
 
@@ -172,7 +173,9 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     id: WorkItem["id"],
     workspacePath: string | null,
     saveFails: (status: WorkItem["status"]) => boolean = () => false,
+    faultsBefore = 0,
   ) {
+    let faults = faultsBefore;
     const now = new Date();
     let row: WorkItem = {
       id,
@@ -204,8 +207,11 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
         row = { ...item, events: [] };
       },
       recordMergeCommit: async (_id, commit, kind) => void records.push({ commit, kind }),
+      recordInfrastructureFault: async () => ++faults,
     });
+    const logger = recordingLogger();
     const { deps } = buildDeps({
+      logger,
       workItemRepo: repo,
       projects: {
         block: async (_id, cause) => {
@@ -217,7 +223,7 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
       },
       devSessionStore: { dispatchEvidence: async () => ({ latestPhase: null, orphanedBefore: 0 }) },
     });
-    return { deps, row: () => row, records, projectBlocks };
+    return { deps, row: () => row, records, projectBlocks, faults: () => faults, logger };
   }
 
   test("its merge is on main: the merge is recorded and the task Completed, never requeued; the dead process's worktree and branch are gone", async () => {
@@ -273,7 +279,7 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     expect(world.row().status).toBe("Pending");
   });
 
-  test("main cannot be read: Blocked as Ashara's own fault and the project blocked, never requeued blind", async () => {
+  test("main cannot be read: Blocked as Ashara's own fault, never requeued blind, the read counted on its fault budget and no halt within it", async () => {
     const unreadable = mkdtempSync(join(tmpdir(), "ashara-orphan-"));
     dirs.push(unreadable);
     mkdirSync(join(unreadable, ".git"));
@@ -286,6 +292,21 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
       status: "Blocked",
       blockedReason: { source: "orphan_unreconciled", faultClass: "ashara", step: "read main for the task's merge" },
     });
+    expect(world.faults()).toBe(1);
+    expect(world.projectBlocks).toEqual([]);
+  });
+
+  test("main cannot be read past the fault budget: Blocked, and the project halted on Ashara's own fault", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-orphan-"));
+    dirs.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const world = orphanWorld(createWorkItemId(), unreadable, () => false, 3);
+
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ orphansRequeued: 0, orphansBlocked: 1 });
+    expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled" } });
+    expect(world.faults()).toBe(4);
     expect(world.projectBlocks).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" })]);
   });
 
@@ -301,9 +322,13 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     expect(summary).toMatchObject({ orphansRequeued: 0, orphansCompleted: 0, orphansBlocked: 1 });
     expect(world.records).toEqual([]);
     expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled" } });
+    // A configuration fault: not retried, not counted, the project halted at once.
+    expect(world.logger.records.filter((record) => record.event === "delivery.main-unread")).toHaveLength(1);
+    expect(world.faults()).toBe(0);
+    expect(world.projectBlocks).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled", reason: expect.stringContaining("InvalidTargetProjectPath") })]);
   });
 
-  test("a requeue that fails once is retried, and the task requeued", async () => {
+  test("a requeue that fails once is retried after the merge record's wait, the one bound every settlement from main takes, and the task requeued", async () => {
     let failed = 0;
     const world = orphanWorld(createWorkItemId(), null, (status) => status === "Pending" && failed++ === 0);
 
@@ -311,6 +336,8 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
 
     expect(summary).toMatchObject({ orphansRequeued: 1, orphansBlocked: 0 });
     expect(world.row().status).toBe("Pending");
+    const retries = world.logger.records.filter((record) => record.event === "delivery.orphan-settle-failed").map((record) => record.msg);
+    expect(retries).toEqual([expect.stringContaining(`attempt 1 of ${MERGE_RECORD_BACKOFF_MS.length + 1}; retrying in ${MERGE_RECORD_BACKOFF_MS[0]}ms`)]);
   });
 
   test("a requeue that keeps failing: Blocked with its step and the project blocked, never left InProgress", async () => {

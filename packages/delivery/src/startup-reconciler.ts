@@ -17,8 +17,9 @@ import { recoverParkedFailedItem } from "./lifecycle/failure-recovery.js";
 import { ORPHANED_SESSION_RESOLVER } from "./acl/workplace-acl.js";
 import { OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
-import type { MainHoldsNoMerge, MainRead } from "./requeue-on-main.js";
-import { readMainForMerge, returnToPending } from "./requeue-on-main.js";
+import type { MainHoldsNoMerge, MainRead, MainUnreadRead } from "./requeue-on-main.js";
+import { chargeUnreadMain, readMainForMerge, returnToPending } from "./requeue-on-main.js";
+import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 import type { SettledTargets } from "./settled-branches.js";
 
@@ -172,12 +173,6 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
 const MAX_ORPHAN_REFUNDS = 1;
 
 /**
- * Policy: the waits between attempts at settling one crash orphan, and at blocking it; three
- * attempts each. A store or a git call that fails once is retried, never taken as the answer.
- */
-const ORPHAN_BACKOFF_MS: readonly number[] = [100, 500];
-
-/**
  * Policy default (a bound that stays as an early stop inside the work ledger): the startups in a
  * row that may find one task InProgress before it is given up (crash_loop) instead of requeued. A task left InProgress by a dead process twice running, with no
  * dispatch of it ending in between, is taken as the dispatch that kills the process. A requeue at
@@ -198,16 +193,24 @@ type Settled = "requeued" | "given-up" | "completed" | "blocked" | "moved";
  * crash_loop once CRASH_LOOP_BOUND startups in a row have found it InProgress. Each attempt re-reads the item, so a partial write of the one before
  * is never built on. Past the bound the task is blocked, never left InProgress: with its merge
  * found but unrecorded, as merge_unrecorded, whose record the loop writes again each cycle;
- * otherwise as orphan_unreconciled under Ashara's own fault class, with the project blocked on it
+ * otherwise as orphan_unreconciled under Ashara's own fault class. An orphan blocked because main
+ * could not be read takes the one policy for an unread main (chargeUnreadMain): a refused workspace
+ * path, never retried here, halts the project at once; any other failure is counted on the task and
+ * halts it only past the budget. An orphan blocked on any other step has the project blocked on it
  * so the operator sees it. A block that cannot be written either throws: the start is refused
- * rather than run with an item InProgress and no attempt alive.
+ * rather than run with an item InProgress and no attempt alive. The waits between attempts are
+ * MERGE_RECORD_BACKOFF_MS's, the one bound every settlement from main takes.
  */
 async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<Settled> {
   let read: Exclude<MainRead, { readonly kind: "unread" }> | undefined;
+  let unread: MainUnreadRead | null = null;
   let boots: number | undefined;
   let step = "read main for the task's merge";
   let last: unknown = null;
-  for (let attempt = 1; attempt <= ORPHAN_BACKOFF_MS.length + 1; attempt++) {
+  let attempts = 0;
+  for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1; attempt++) {
+    attempts = attempt;
+    unread = null;
     try {
       step = "re-read the item";
       const item = attempt === 1 ? orphan : await deps.workItemRepo.findById(orphan.id);
@@ -221,7 +224,10 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
       step = "read main for the task's merge";
       if (read === undefined) {
         const fresh = await readMainForMerge(deps, item, []);
-        if (fresh.kind === "unread") throw fresh.error;
+        if (fresh.kind === "unread") {
+          unread = fresh;
+          throw fresh.error;
+        }
         read = fresh;
       }
       if (read.kind === "absent") {
@@ -251,18 +257,20 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept, and an orphan still unsettled after it is blocked under OrphanUnreconciled, below
       last = error;
-      const wait = ORPHAN_BACKOFF_MS[attempt - 1];
+      // A refused workspace path is a configuration fault: a retry meets the same refusal.
+      const wait = unread?.fault === "configuration" ? undefined : MERGE_RECORD_BACKOFF_MS[attempt - 1];
       deps.logger.warn(
         "delivery.orphan-settle-failed",
-        `orphan ${orphan.id}: ${step} failed on attempt ${attempt} of ${ORPHAN_BACKOFF_MS.length + 1}` +
+        `orphan ${orphan.id}: ${step} failed on attempt ${attempt} of ${MERGE_RECORD_BACKOFF_MS.length + 1}` +
           `${wait === undefined ? "; blocking it" : `; retrying in ${wait}ms`}`,
         { taskId: orphan.id, step, attempt },
         error,
       );
-      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+      if (wait === undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
-  const unsettled = new OrphanUnreconciled(orphan.id, step, ORPHAN_BACKOFF_MS.length + 1, { cause: last });
+  const unsettled = new OrphanUnreconciled(orphan.id, step, attempts, { cause: last });
   const reason: StoredBlockedReason =
     read?.kind === "merged"
       ? { source: "merge_unrecorded", mergeCommit: read.mergeCommit, mergeKind: "merged", reason: unsettled.message }
@@ -271,6 +279,10 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
   if (blocked === "moved") return "moved";
   if (reason.source === "orphan_unreconciled") {
     try {
+      if (unread !== null) {
+        await chargeUnreadMain(deps, orphan, step, unread);
+        return "blocked";
+      }
       const result = await deps.projects.block(orphan.projectId, projectBlockCause(unsettled));
       deps.logger.error("delivery.project-halted", `project ${orphan.projectId} ${result} on Ashara's own fault: ${unsettled.message}`, {
         taskId: orphan.id,
@@ -297,7 +309,7 @@ async function blockUnsettled(
   unsettled: OrphanUnreconciled,
 ): Promise<"blocked" | "moved"> {
   let last: unknown = null;
-  for (let attempt = 1; attempt <= ORPHAN_BACKOFF_MS.length + 1; attempt++) {
+  for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1; attempt++) {
     try {
       const item = await deps.workItemRepo.findById(orphan.id);
       if (item === null || item.status !== "InProgress") return "moved";
@@ -309,12 +321,12 @@ async function blockUnsettled(
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: one attempt of a bounded retry; the last error is kept and thrown as OrphanUnreconciled below, which refuses the start
       last = error;
-      const wait = ORPHAN_BACKOFF_MS[attempt - 1];
+      const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
       deps.logger.warn("delivery.orphan-block-failed", `orphan ${orphan.id}: its block failed on attempt ${attempt}`, { taskId: orphan.id, attempt }, error);
       if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
-  throw new OrphanUnreconciled(orphan.id, `block it (${reason.source}) after this: ${unsettled.message}; the block`, ORPHAN_BACKOFF_MS.length + 1, {
+  throw new OrphanUnreconciled(orphan.id, `block it (${reason.source}) after this: ${unsettled.message}; the block`, MERGE_RECORD_BACKOFF_MS.length + 1, {
     cause: last,
   });
 }

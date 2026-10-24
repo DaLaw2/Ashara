@@ -359,6 +359,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     failedApproaches: () => number;
     refunds: () => number;
     halts: ProjectBlockCause[];
+    faults: () => number;
+    logger: ReturnType<typeof recordingLogger>;
   } {
     let row = freshPendingItem();
     const statusesWritten: string[] = [];
@@ -367,6 +369,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     let faults = faultsBefore;
     let refunded = 0;
     const halts: ProjectBlockCause[] = [];
+    const logger = recordingLogger();
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
 
     const workItemRepo: WorkItemRepository = inertWorkItemRepo({
@@ -392,7 +395,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     });
 
     const base = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
-    const deps = coreLoopDeps({ loop: { workItemRepo, projectRepo: {
+    const deps = coreLoopDeps({ loop: { workItemRepo, logger, projectRepo: {
         ...base.loop.projectRepo,
         block: async (_projectId, cause) => {
           halts.push(cause);
@@ -400,7 +403,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         },
       } }, dispatch: { dispatchService: { execute: async () => execResult }, failedApproachRepo: { record: async () => { approaches++; } }, failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } } } });
 
-    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, refunds: () => refunded, halts };
+    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, refunds: () => refunded, halts, faults: () => faults, logger };
   }
 
   // A turn that did not fit its model's window meets the same window
@@ -624,8 +627,10 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts).toEqual([]);
   });
 
-  test("main unreadable after a fault: Blocked orphan_unreconciled with the project blocked, never requeued blind", async () => {
-    const { deps, stored, halts } = buildEnvironmentBlockedDeps();
+  // A transient fault under the read of main is retried within the task's infrastructure fault
+  // budget: kept off Pending, never completed nor requeued on an unread main, and no halt within it.
+  test("main unreadable after a fault, within the budget: Blocked orphan_unreconciled and the fault counted, no halt, never requeued blind", async () => {
+    const { deps, stored, halts, faults, refunds } = buildEnvironmentBlockedDeps();
     const unreadable = mkdtempSync(join(tmpdir(), "ashara-execution-"));
     targets.push(unreadable);
     mkdirSync(join(unreadable, ".git"));
@@ -634,7 +639,108 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     await processTask(deps, freshPendingItem());
 
     expect(stored()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled", faultClass: "ashara" } });
+    expect(faults()).toBe(1);
+    expect(refunds()).toBe(0);
+    expect(halts).toEqual([]);
+  });
+
+  test("main unreadable after a fault past the budget: Blocked orphan_unreconciled with the project halted on Ashara's own fault", async () => {
+    const { deps, stored, halts, faults } = buildEnvironmentBlockedDeps(probeBlocked, 3);
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-execution-"));
+    targets.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    deps.loop.projectRepo.get = async () => ({ workspacePath: unreadable });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled", faultClass: "ashara" } });
+    expect(faults()).toBe(4);
     expect(halts).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" })]);
+  });
+
+  test("a refused workspace path after a fault: the project halts at once, nothing counted, never requeued", async () => {
+    const { deps, stored, halts, faults } = buildEnvironmentBlockedDeps();
+    const outside = mkdtempSync(join("/var/tmp", "ashara-execution-outside-"));
+    targets.push(outside);
+    deps.loop.projectRepo.get = async () => ({ workspacePath: outside });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled", faultClass: "ashara" } });
+    expect(faults()).toBe(0);
+    expect(halts).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled", reason: expect.stringContaining("InvalidTargetProjectPath") })]);
+  });
+
+  // Every route that returns the item to Pending reads main first, whatever sent it back.
+  describe("a route back to Pending with the task's merge on main: recorded and Completed, never back to Pending", () => {
+    const blockedAt = (operation: string): NonNullable<ExecutionResult["errorEnvelope"]> => ({
+      outcome: "blocked",
+      summary: operation,
+      chain: { boundary: "development", operation, message: operation, timestamp: new Date().toISOString() },
+    });
+    const at = { sessionId: "test-session", attempt: 1 } as const;
+    test.each<[string, string, ExecutionResult]>([
+      [
+        "an environment change requested",
+        "a requested change to environment/Containerfile",
+        { status: "environment_change_requested", paths: ["environment/Containerfile"], need: "jq", diff: "+jq", detail: "needs jq", outcome: COMPLETED_OUTCOME, ...at, errorEnvelope: blockedAt("ownershipGate") },
+      ],
+      [
+        "a need of another task's work",
+        "a need of I1",
+        { status: "prerequisite_needed", interfaceEntries: ["I1"], interfaceTable: [{ key: "I1", text: "POST /loans" }], reason: "needs I1", detail: "needs I1", outcome: COMPLETED_OUTCOME, ...at, errorEnvelope: blockedAt("agentAttempt") },
+      ],
+      [
+        "its stored checks stale",
+        "its stored checks went stale",
+        { status: "checks_stale", checkTaskId: createWorkItemId(), revision: 1, detail: "stale", outcome: null, ...at, errorEnvelope: blockedAt("revalidateTaskChecks") },
+      ],
+      [
+        "a disputed check",
+        "a dispute of its check",
+        {
+          status: "disputed",
+          checksOf: ITEM_ID,
+          checkTaskId: createWorkItemId(),
+          revision: 1,
+          check: { name: "lists", command: "true" },
+          reason: "wrong",
+          evidence: null,
+          detail: "disputed",
+          outcome: { ...OUTCOME_BASE, kind: "disputed", checkName: "lists", ofTask: null, reason: "wrong", evidence: null },
+          ...at,
+          errorEnvelope: blockedAt("agentAttempt"),
+        },
+      ],
+      [
+        "a suite review that found problems",
+        "a suite review that found 1 problem(s)",
+        {
+          status: "suite_review_problems",
+          problems: [{ checkTaskIds: [createWorkItemId()], kind: "contradiction", problem: "p", evidence: "e" }],
+          detail: "problems",
+          outcome: null,
+          ...at,
+          errorEnvelope: blockedAt("reviewSuites"),
+        },
+      ],
+    ])("after %s", async (_label, why, executed) => {
+      const { deps, stored, statusesWritten, refunds, faults, logger } = buildEnvironmentBlockedDeps(executed);
+      const main = targetWithMain([`merge: task ${ITEM_ID}`]);
+      deps.loop.projectRepo.get = async () => ({ workspacePath: main.path });
+      const records: string[] = [];
+      deps.loop.workItemRepo.recordMergeCommit = async (_id, commit, kind) => void records.push(`${commit}:${kind ?? "null"}`);
+
+      await processTask(deps, freshPendingItem());
+
+      expect(records).toEqual([`${main.head}:merged`]);
+      expect(statusesWritten).toEqual(["InProgress", "Completed"]);
+      expect(stored().status).toBe("Completed");
+      expect(refunds()).toBe(0);
+      expect(faults()).toBe(0);
+      // Found by the route's own read, not by a fault path's after the route failed.
+      expect(logger.records.filter((record) => record.event === "delivery.merged-before-requeue").map((record) => record.msg)).toEqual([expect.stringContaining(why)]);
+    });
   });
 
   test("the fault past the budget of 3 halts the project on infrastructure once and requeues the item uncharged", async () => {

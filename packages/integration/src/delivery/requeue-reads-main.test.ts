@@ -222,8 +222,17 @@ describe("a task whose merge is on main is recorded and Completed, never back to
       blockedReason: { source: "environment_unavailable", unavailable: "podman", reason: "podman binary not found" },
     });
 
-    await loopOver(projectId, workdirBase, notExercised("dispatchService.execute")).runCycle();
+    const dispatched: string[] = [];
+    const recordDispatch: Execute = async (task) => {
+      dispatched.push(task.id);
+      throw new Error("no dispatch may run: the parked exit settles the task from main");
+    };
 
-    expect(await new WorkItemRowRepository(db).findById(taskId)).toMatchObject({ status: "Completed", mergeCommit, blockedReason: null });
+    await loopOver(projectId, workdirBase, recordDispatch).runCycle();
+
+    // Settled by the parked exit itself, before any dispatch: a release to Pending would be
+    // dispatched in the same cycle and counted, and only that dispatch's own read would find the merge.
+    expect(dispatched).toEqual([]);
+    expect(await new WorkItemRowRepository(db).findById(taskId)).toMatchObject({ status: "Completed", mergeCommit, blockedReason: null, dispatchCount: 1, infrastructureFaults: 0 });
   });
 });

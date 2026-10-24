@@ -2,12 +2,11 @@ import type { DomainEvent } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
-import { projectBlockCause } from "../project-halt.js";
 import type { WorkItem } from "../domain/index.js";
 import { PlanningService, blockWorkItem } from "../domain/index.js";
-import { OrphanUnreconciled, releaseMergedTask } from "../orphan-merge.js";
+import { releaseMergedTask } from "../orphan-merge.js";
 import type { MainHoldsNoMerge } from "../requeue-on-main.js";
-import { readMainForMerge } from "../requeue-on-main.js";
+import { chargeUnreadMain, readMainForMerge } from "../requeue-on-main.js";
 import { publishBestEffort } from "./audit-events.js";
 import { MERGE_RECORD_BACKOFF_MS, recordMergeWithRetry } from "./merge-record.js";
 import { reopen } from "./reopen.js";
@@ -56,22 +55,17 @@ export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem
  * for the requeue. Otherwise the task is settled here and null returned: a merge found is recorded,
  * its worktree and branch released, and the task Completed (or parked merge_unrecorded when the
  * record cannot be written); main that cannot be read parks the task orphan_unreconciled, whose
- * exit reads main again, with the project blocked on Ashara's own fault.
+ * exit reads main again each cycle, under the one policy for an unread main (chargeUnreadMain): a
+ * transient fault retried within the task's infrastructure fault budget, a refused workspace path
+ * halting the project at once.
  */
 export async function mainHoldsNoMergeOf(deps: ExecutionRoutingDeps, task: WorkItem, why: string): Promise<MainHoldsNoMerge | null> {
   const read = await readMainForMerge(deps, task, MERGE_RECORD_BACKOFF_MS);
   if (read.kind === "absent") return read.absent;
   if (read.kind === "unread") {
     const step = `read main for the task's merge before it goes back to Pending after ${why}`;
-    const unread = new OrphanUnreconciled(task.id, step, read.error.attempts, { cause: read.error.cause });
     await routeAsParked(deps, task.id, { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(read.error.cause) });
-    const halted = await deps.projects.block(task.projectId, projectBlockCause(unread));
-    deps.logger.error("delivery.project-halted", `project ${task.projectId} ${halted} on Ashara's own fault: ${unread.message}`, {
-      taskId: task.id,
-      projectId: task.projectId,
-      faultClass: "ashara",
-      result: halted,
-    }, unread);
+    await chargeUnreadMain(deps, task, step, read);
     return null;
   }
   const merge = read.mergeCommit;

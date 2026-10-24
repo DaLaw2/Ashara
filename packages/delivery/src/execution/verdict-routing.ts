@@ -66,7 +66,7 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
     case "checks_stale":
       // Not a task failure (a replan keeps the item id, so it would meet the same checks): the
       // check task is reopened to write them again and the item waits on it, within a bound.
-      await routeAsStaleChecks(deps, task.id, executed);
+      await routeAsStaleChecks(deps, task, executed);
       return routedHere(executed, blockedResult(task.id, executed.detail));
 
     case "disputed":
@@ -256,7 +256,9 @@ async function routeAsCompleted(deps: ExecutionRoutingDeps, task: WorkItem, exec
  * A fault under a dispatch that is not the task's work:
  * the substrate's or Ashara's own Z0 machinery. Main is read first (mainHoldsNoMergeOf): a fault
  * after the merge commit leaves merged work behind, which is settled there, never counted as a
- * fault nor requeued. Otherwise the fault is counted on the task, durably, and the attempt is not
+ * fault nor requeued; a main that cannot be read keeps the task off Pending, its read retried each
+ * cycle within this same budget (chargeUnreadMain), never completed nor requeued on it. Otherwise
+ * the fault is counted on the task, durably, and the attempt is not
  * charged and no lesson is written. Within the budget the item goes back to Pending (its dispatch
  * refunded when the seam `counted` it). The fault past the budget halts the project under its
  * class, with one report, and requeues the item the same way: a substrate fault on

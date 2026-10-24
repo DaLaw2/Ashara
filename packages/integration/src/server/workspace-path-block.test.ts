@@ -173,13 +173,16 @@ describe("a project whose workspace path is refused", () => {
 
     // An uncharged fault, no dispatch counted. Main cannot be read for the task's merge from the
     // refused path either, so the task is never requeued blind: Blocked orphan_unreconciled, whose
-    // exit reads main again each cycle, with the project halted on Ashara's own fault.
+    // exit reads main again each cycle. A refused path is a configuration fault no retry clears, so
+    // the project halts at once, never counted against the task's infrastructure fault budget.
     expect(cycle.results).toEqual([
       expect.objectContaining({ taskId: itemId, status: "interrupted", detail: expect.stringContaining("not inside the workdir base") }),
     ]);
     const item = await workItems.findById(itemId);
     expect(item).toMatchObject({ status: "Blocked", dispatchCount: 0, infrastructureFaults: 0, blockedReason: { source: "orphan_unreconciled", faultClass: "ashara" } });
     expect(await projects.get(projectId)).toMatchObject({ status: "blocked" });
+    const halts = await db.execute(sql`SELECT kind, error_class AS "errorClass", reason FROM project_blocks WHERE project_id = ${projectId}`);
+    expect(halts.rows).toEqual([{ kind: "fault", errorClass: "OrphanUnreconciled", reason: expect.stringContaining("InvalidTargetProjectPath") }]);
     const rows = await db.execute(sql`SELECT count(*)::int AS n FROM llm_calls WHERE project_id = ${projectId}`);
     expect(rows.rows).toEqual([{ n: 0 }]);
     expect(mock.doGenerateCalls).toHaveLength(0);

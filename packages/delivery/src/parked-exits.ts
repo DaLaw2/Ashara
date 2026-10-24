@@ -11,7 +11,8 @@ import { giveUpUnaskable, giveUpWorkItem, PlanningService, takeEvents } from "./
 import { releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 import type { MainHoldsNoMerge } from "./requeue-on-main.js";
-import { readMainForMerge, returnToPending } from "./requeue-on-main.js";
+import { chargeUnreadMain, readMainForMerge, returnToPending } from "./requeue-on-main.js";
+import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { clientWaitCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import type { ClientQuestions } from "./types.js";
@@ -145,13 +146,13 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
  * A blocked task whose exit is Pending: a crash orphan the startup reconciler could not settle
  * (orphan_unreconciled), or an infrastructure block from a legacy row. Main is read for the task's
  * merge. Found, it is recorded and the task Completed; none, the task goes back to Pending, now that
- * main says nothing of it was merged. Main unreadable leaves it Blocked for the next cycle: it is
- * never requeued blind.
+ * main says nothing of it was merged. Main unreadable leaves it Blocked for the next cycle, never
+ * requeued blind, under the one policy for an unread main (chargeUnreadMain).
  */
 async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
-  const read = await readMainForMerge(deps, item, []);
+  const read = await readMainForMerge(deps, item, MERGE_RECORD_BACKOFF_MS);
   if (read.kind === "unread") {
-    deps.logger.warn("delivery.main-unread", "main cannot be read for its merge; it stays Blocked", { taskId: item.id }, read.error);
+    await chargeUnreadMain(deps, item, "read main for the task's merge before it leaves Blocked", read);
     return false;
   }
   if (read.kind === "merged") return completeRecordedMerge(deps, item, read.mergeCommit, "merged");
@@ -198,9 +199,9 @@ async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReaso
     });
   }
   if (!(await deps.clientQuestions.answered(questionId))) return "held";
-  const read = await readMainForMerge(deps, item, []);
+  const read = await readMainForMerge(deps, item, MERGE_RECORD_BACKOFF_MS);
   if (read.kind === "unread") {
-    deps.logger.warn("delivery.main-unread", `the client's answer to question ${questionId} is read, but main cannot be read for its merge; it stays Blocked`, { taskId: item.id, questionId }, read.error);
+    await chargeUnreadMain(deps, item, `read main for the task's merge once the client's answer to question ${questionId} is read`, read);
     return "main-unread";
   }
   if (read.kind === "merged") return (await completeRecordedMerge(deps, item, read.mergeCommit, "merged")) ? "left" : "held";

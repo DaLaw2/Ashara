@@ -48,7 +48,9 @@ function run(
   recordMergeCommit: WorkItemRepository["recordMergeCommit"] = notExercised("recordMergeCommit"),
   workspacePath: string | null = null,
   client: ClientSide = { askable: true, answered: true },
+  faultsBefore = 0,
 ) {
+  let faults = faultsBefore;
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
   const published: Array<Pick<DomainEvent, "eventType">> = [];
   const asked: string[] = [];
@@ -64,6 +66,7 @@ function run(
     },
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
+    recordInfrastructureFault: async () => ++faults,
     recordMergeCommit,
   });
   const released = releaseClearedBlocks({
@@ -91,7 +94,7 @@ function run(
     containment: memoryStepContainment(() => true),
     logger: recordingLogger(),
   });
-  return { released, saves, published, asked, blocks };
+  return { released, saves, published, asked, blocks, faults: () => faults };
 }
 
 const repos: string[] = [];
@@ -314,14 +317,39 @@ describe("orphan_unreconciled reads main again before it leaves Blocked", () => 
     expect(left()).toEqual({ branch: "", worktree: false });
   });
 
-  test("main still cannot be read: it stays Blocked, never requeued blind", async () => {
+  test("main still cannot be read: it stays Blocked, never requeued blind, the read counted on its fault budget and no halt within it", async () => {
     const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
     repos.push(unreadable);
     mkdirSync(join(unreadable, ".git"));
-    const { released, saves } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), unreadable);
+    const { released, saves, blocks, faults } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), unreadable);
 
     expect(await released).toBe(0);
     expect(saves).toEqual([]);
+    expect(faults()).toBe(1);
+    expect(blocks).toEqual([]);
+  });
+
+  test("main still cannot be read past the fault budget: it stays Blocked and the project halts on Ashara's own fault", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const { released, saves, blocks, faults } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), unreadable, undefined, 3);
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(faults()).toBe(4);
+    expect(blocks).toEqual([{ projectId: PROJECT, cause: expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" }) }]);
+  });
+
+  test("a refused workspace path: the project halts at once, nothing counted, no retry can clear it", async () => {
+    const outside = mkdtempSync(join("/var/tmp", "ashara-parked-outside-"));
+    repos.push(outside);
+    const { released, saves, blocks, faults } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), outside);
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(faults()).toBe(0);
+    expect(blocks).toEqual([{ projectId: PROJECT, cause: expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled", reason: expect.stringContaining("InvalidTargetProjectPath") }) }]);
   });
 });
 
@@ -365,10 +393,11 @@ describe("a task held for the client's answer: its question is posted from the h
     const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
     repos.push(unreadable);
     mkdirSync(join(unreadable, ".git"));
-    const { released, saves, blocks } = run([blocked(held)], false, notExercised("recordMergeCommit"), unreadable, { askable: true, answered: true });
+    const { released, saves, blocks, faults } = run([blocked(held)], false, notExercised("recordMergeCommit"), unreadable, { askable: true, answered: true });
     expect(await released).toBe(0);
     expect(saves).toEqual([]);
     expect(blocks).toEqual([]);
+    expect(faults()).toBe(1);
   });
 
   test("unanswered once no other work of the project could proceed, the project halts on client_wait and the task is neither given up nor moved", async () => {

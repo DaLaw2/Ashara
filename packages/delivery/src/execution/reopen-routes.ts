@@ -221,9 +221,12 @@ export async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkIte
  * reopened and the item back at Pending waiting on it, with the dispatch given back (no model
  * ran); or, past the rewrite bound or with a check task that cannot be reopened, the item given up
  * and its plan repaired. The check task is saved first: if that save loses a race the item is given
- * up with checks_stale instead, never left waiting on a check task that stayed Completed.
+ * up with checks_stale instead, never left waiting on a check task that stayed Completed. Main is
+ * read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
-export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], stale: StaleChecksResult): Promise<void> {
+export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, task: WorkItem, stale: StaleChecksResult): Promise<void> {
+  if ((await mainHoldsNoMergeOf(deps, task, `its stored checks went stale (${stale.detail})`)) === null) return;
+  const taskId = task.id;
   await reopen(deps, {
     taskId,
     site: "execution.routeAsStaleChecks",
@@ -297,8 +300,10 @@ export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: Wor
  * bound. Within it the check task is reopened with the dispute in its brief and saved first, then
  * the item is back at Pending waiting on it, its dispatch given back; past it, or with a check task
  * that cannot be reopened, the item is given up with a check_disputed reason and its plan repaired.
+ * Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
 export async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispute: DisputedCheckResult): Promise<void> {
+  if ((await mainHoldsNoMergeOf(deps, task, `a dispute of its check ${JSON.stringify(dispute.check.name)}`)) === null) return;
   const disputes = await deps.checkDisputes.record({
     projectId: task.projectId,
     taskId: task.id,
@@ -388,9 +393,10 @@ export async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem
  * implementations stay held by their dependency on the review. Past the bound, or with a named
  * check task that cannot be reopened or that moves while it is reopened, the review is given up
  * with a suite_review_unresolved reason and its plan repaired, so no implementation is released on
- * problems nobody answered.
+ * problems nobody answered. Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
 export async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: SuiteReviewProblemsResult): Promise<void> {
+  if ((await mainHoldsNoMergeOf(deps, task, `a suite review that found ${review.problems.length} problem(s)`)) === null) return;
   const { timesNamed } = await deps.suiteReviewFindings.record({
     projectId: task.projectId,
     reviewTaskId: task.id,
@@ -467,8 +473,10 @@ export async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkI
  * Within the bound the new environment task, the item's dependency on it and the item back at
  * Pending are written in one transaction, and the dispatch is given back (the work was not tried
  * and found wanting); past the bound, or with no owner, the item is given up and its plan repaired.
+ * Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
 export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkItem, request: EnvironmentChangeResult): Promise<void> {
+  if ((await mainHoldsNoMergeOf(deps, task, `a requested change to ${request.paths.join(", ")}`)) === null) return;
   await reopen(deps, {
     taskId: task.id,
     site: "execution.routeAsEnvironmentChange",
@@ -543,9 +551,10 @@ export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task:
  * written in the same transaction, its dispatch given back, so the scheduler releases it once they
  * complete. With no such task the need is a gap in the plan, and the item is given up for its plan to
  * be repaired; past the bound it is given up too. No attempt is counted toward the failure router's
- * give-up on any of these.
+ * give-up on any of these. Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
 export async function routeAsAwaitingWork(deps: ExecutionRoutingDeps, task: WorkItem, needed: PrerequisiteNeededResult): Promise<void> {
+  if ((await mainHoldsNoMergeOf(deps, task, `a need of ${needed.interfaceEntries.join(", ")}`)) === null) return;
   await reopen(deps, {
     taskId: task.id,
     site: "execution.routeAsAwaitingWork",
