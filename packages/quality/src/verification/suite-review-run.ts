@@ -24,6 +24,8 @@ export interface SuiteReviewRunDeps {
   readonly logger: Logger;
 }
 
+type ReviewOutcome = Awaited<ReturnType<SuiteReviewing["review"]>>;
+
 /** A review task's dispatch: the suite review run and its outcome read as the dispatch's result. */
 export class SuiteReviewRun {
   private readonly deps: SuiteReviewRunDeps;
@@ -41,67 +43,78 @@ export class SuiteReviewRun {
    * blocks it under that class. Nothing is released on any of them.
    */
   async reviewSuites(task: VerifiedTask, sessionId: string, targetProjectPath: string): Promise<ExecutionResult> {
-    const { eventSink } = this.deps;
-    let outcome: Awaited<ReturnType<SuiteReviewing["review"]>>;
+    let outcome: ReviewOutcome;
     try {
       outcome = await this.deps.suiteReview.review(task, targetProjectPath);
     } catch (e) {
-      // The shutdown stopped the review's model call: nothing was judged, so nothing failed or is blocked.
-      const aborted = modelCallAbortedOf(e);
-      if (aborted !== null) {
-        const summary = `the review of the plan's checks for ${task.id} was interrupted by shutdown: ${aborted.message}; nothing was reviewed`;
-        this.deps.logger.info("quality.suite-review-interrupted", summary, { taskId: task.id, attempt: task.attempt });
-        return {
-          status: "interrupted",
-          detail: summary,
-          outcome: null,
-          sessionId,
-          attempt: task.attempt,
-          errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
-        };
-      }
-      const refusal = preCallRefusalOf(e);
-      if (refusal !== null) {
-        const summary = `the review of the plan's checks for ${task.id} stopped at a refused model call: ${refusal.message}; nothing was reviewed`;
-        return {
-          status: "refused",
-          refusal,
-          detail: summary,
-          outcome: null,
-          sessionId,
-          attempt: task.attempt,
-          errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
-        };
-      }
-      // Only the review model's own failure is the review's (a verdict that never validated, or one
-      // unfit to act on), retried as its work. A provider's failure, or Ashara's (its records, git on
-      // the host, a store, its code), says nothing of the suites: blocked under its class, uncharged.
-      const failure = modelCallFailureOf(e);
-      if (failure === "model") {
-        const result = failedBeforeAgent(task, sessionId, "reviewSuites", e, `the review of the plan's checks for ${task.id} gave no verdict`);
-        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
-        return result;
-      }
-      if (failure === "provider") {
-        const errorClass = e instanceof Error ? e.name : typeof e;
-        return environmentBlocked(
-          {
-            task,
-            sessionId,
-            stage: "reviewSuites",
-            fault: "provider",
-            errorClass,
-            message: `the review of the plan's checks for ${task.id} gave no verdict: ${describeErrorChain(e)}`,
-            chain: wrapError("development", "reviewSuites", e, { taskId: task.id, errorClass }),
-            unavailable: "model provider (suite review)",
-            ...NO_AGENT,
-          },
-          eventSink,
-          this.deps.logger,
-        );
-      }
-      return thrownBlocked({ task, sessionId, stage: "reviewSuites", error: e, where: { step: "review the plan's checks", cell: "no cell" }, agent: NO_AGENT, eventSink, logger: this.deps.logger });
+      return this.reviewThrew(task, sessionId, e);
     }
+    return this.reviewed(task, sessionId, outcome);
+  }
+
+  /** A review that threw: interrupted, refused, failed as the review's own work, or blocked under the fault's class. */
+  private reviewThrew(task: VerifiedTask, sessionId: string, e: unknown): ExecutionResult {
+    const { eventSink } = this.deps;
+    // The shutdown stopped the review's model call: nothing was judged, so nothing failed or is blocked.
+    const aborted = modelCallAbortedOf(e);
+    if (aborted !== null) {
+      const summary = `the review of the plan's checks for ${task.id} was interrupted by shutdown: ${aborted.message}; nothing was reviewed`;
+      this.deps.logger.info("quality.suite-review-interrupted", summary, { taskId: task.id, attempt: task.attempt });
+      return {
+        status: "interrupted",
+        detail: summary,
+        outcome: null,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
+      };
+    }
+    const refusal = preCallRefusalOf(e);
+    if (refusal !== null) {
+      const summary = `the review of the plan's checks for ${task.id} stopped at a refused model call: ${refusal.message}; nothing was reviewed`;
+      return {
+        status: "refused",
+        refusal,
+        detail: summary,
+        outcome: null,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
+      };
+    }
+    // Only the review model's own failure is the review's (a verdict that never validated, or one
+    // unfit to act on), retried as its work. A provider's failure, or Ashara's (its records, git on
+    // the host, a store, its code), says nothing of the suites: blocked under its class, uncharged.
+    const failure = modelCallFailureOf(e);
+    if (failure === "model") {
+      const result = failedBeforeAgent(task, sessionId, "reviewSuites", e, `the review of the plan's checks for ${task.id} gave no verdict`);
+      eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
+      return result;
+    }
+    if (failure === "provider") {
+      const errorClass = e instanceof Error ? e.name : typeof e;
+      return environmentBlocked(
+        {
+          task,
+          sessionId,
+          stage: "reviewSuites",
+          fault: "provider",
+          errorClass,
+          message: `the review of the plan's checks for ${task.id} gave no verdict: ${describeErrorChain(e)}`,
+          chain: wrapError("development", "reviewSuites", e, { taskId: task.id, errorClass }),
+          unavailable: "model provider (suite review)",
+          ...NO_AGENT,
+        },
+        eventSink,
+        this.deps.logger,
+      );
+    }
+    return thrownBlocked({ task, sessionId, stage: "reviewSuites", error: e, where: { step: "review the plan's checks", cell: "no cell" }, agent: NO_AGENT, eventSink, logger: this.deps.logger });
+  }
+
+  /** The review's outcome as the dispatch's result: clean, releasing the plan's implementations, or its problems to route. */
+  private reviewed(task: VerifiedTask, sessionId: string, outcome: ReviewOutcome): ExecutionResult {
+    const { eventSink } = this.deps;
     const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
     // A rejection the second review did not reach is released; both judgements are recorded whole
     // by the reviewer (suite_review_judgements) before this outcome exists.

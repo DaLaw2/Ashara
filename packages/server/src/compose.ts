@@ -61,7 +61,7 @@ import {
   teardownCellsAtShutdown,
   withGitRunner,
 } from "@ashara/execution-infra";
-import type { EnvironmentImages, GitRunner, ProcessRunner } from "@ashara/execution-infra";
+import type { BaseCellReference, EnvironmentImages, GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import {
   buildGateway,
   buildGatewayConfig,
@@ -93,6 +93,7 @@ import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-stor
 import { reconcileOrRefuse } from "./fail-closed.js";
 import { createEventLog } from "./event-log.js";
 import { cellPortsOf, composeCoreLoopDeps, composeDispatchService, composeSweepers } from "./compose-core-loop.js";
+import type { DispatchComposition } from "./compose-core-loop.js";
 
 // Policy defaults for the web client's sessions. A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -188,10 +189,235 @@ export function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
   return logger.scope({ trace: "new" }, () => composeInBoot(ports, logger, AsyncLocalStorage.snapshot()));
 }
 
+type Db = ReturnType<typeof createDb>;
+type ServerConfig = ReturnType<typeof loadServerConfig>;
+
 async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T>(work: () => T) => T): Promise<AsharaInstance> {
   const { masterKey, databaseUrl } = ports;
-  // Fail closed on schema drift: a database that ran a different draft of a
-  // migration otherwise surfaces only as a runtime query error.
+  await assertSchemaCurrent(databaseUrl);
+  const db = createDb(databaseUrl, ports.createPool);
+  const secretStore = new SecretStore(new SecretRepository(db), masterKey);
+  logger.info("server.secret-store", `Secret store: master key ${masterKey.id}`, { masterKeyId: masterKey.id });
+
+  const dbWorkItemRepo = new WorkItemRowRepository(db);
+  const eventStore = new EventStoreRepository(db);
+  const devSessionRepo = new DevSessionRepository(db);
+  const visionRepo = new VisionRepository(db);
+  const projectRepo = new ProjectHaltRepository(db);
+  const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
+
+  // Phase 2: API token from the secret store. Fail-closed: a
+  // missing token means the server cannot authenticate any request.
+  const apiToken = await loadApiToken(secretStore);
+
+  const config = loadServerConfig(databaseUrl, apiToken);
+
+  // Ladder attempts, execution events and completed cycles go to the server log as records,
+  // timestamped by the injected clock. A ladder attempt's capability, attempt number, validation
+  // errors and raw excerpt are in no llm_calls column, and an attempt the ladder judged invalid can
+  // be an ok provider call there.
+  // An event its schema refuses is logged at error with its issues, never thrown into the caller.
+  const eventLog = createEventLog(logger);
+  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
+
+  const { spendCap, llmCallLedger, modelCalls } = await composeModelCalls({ db, config, secretStore, ports, logger });
+
+  const failureRouter = new FailureRouter(3);
+  // Aborted on SIGTERM/SIGINT: stops the runner and cancels any attempt in flight.
+  const abortController = new AbortController();
+
+  const cells = await composeCells({ db, config, processRunner: ports.processRunner, logger });
+  const { dispatchService, sweepers } = composeDispatch({
+    db,
+    config,
+    cells,
+    eventLog,
+    ladderAttemptSink,
+    modelCalls,
+    repos: { dbWorkItemRepo, workItemRepo, devSessionRepo, visionRepo },
+    shutdownSignal: abortController.signal,
+    clock: ports.clock,
+    logger,
+  });
+
+  const runner = composeRunner({
+    db,
+    config,
+    ports,
+    logger,
+    eventLog,
+    ladderAttemptSink,
+    modelCalls,
+    spendCap,
+    failureRouter,
+    shutdownSignal: abortController.signal,
+    dispatchService,
+    sweepers,
+    cells,
+  });
+  const cycles: CycleRunner = runner;
+
+  const app = composeWebApp({ db, config, secretStore, clock: ports.clock, logger, repos: { dbWorkItemRepo, eventStore, devSessionRepo, visionRepo, projectRepo } });
+
+  const startup = startupOf({
+    git: ports.git,
+    databaseUrl,
+    workdirBase: config.coreLoop.workdirBase,
+    logger,
+    abortController,
+    llmCallLedger,
+    repos: { workItemRepo, projectRepo, eventStore, devSessionRepo },
+    failureRouter,
+    cells,
+  });
+
+  return {
+    cycles,
+    runner,
+    logger,
+    booted: inBootTrace,
+    app,
+    port: config.port,
+    shutdownSignal: abortController.signal,
+    startup: startup.run,
+    abort: () => abortController.abort(),
+    teardownCells: () => teardownCellsAtShutdown(cells.substrate),
+    async closeDatabase() {
+      await startup.releaseClaims();
+      await db.$client.end();
+    },
+  };
+}
+
+/**
+ * Delivery's dispatch and the main sweeps: an agent's attempt with every port it reads, and Quality's
+ * verification jobs over the cells and environment images.
+ */
+function composeDispatch(deps: {
+  readonly db: Db;
+  readonly config: ServerConfig;
+  readonly cells: ComposedCells;
+  readonly eventLog: ExecutionEventSink;
+  readonly ladderAttemptSink: (attempt: LadderAttemptEvent) => void;
+  readonly modelCalls: GuardedModelAccess;
+  readonly repos: {
+    readonly dbWorkItemRepo: WorkItemRowRepository;
+    readonly workItemRepo: WorkItemRepository;
+    readonly devSessionRepo: DevSessionRepository;
+    readonly visionRepo: VisionRepository;
+  };
+  readonly shutdownSignal: AbortSignal;
+  readonly clock: Clock;
+  readonly logger: Logger;
+}): { readonly dispatchService: ReturnType<typeof composeDispatchService>; readonly sweepers: ReturnType<typeof composeSweepers> } {
+  const { db, config, cells, eventLog, ladderAttemptSink, modelCalls, repos, shutdownSignal, clock, logger } = deps;
+  const devEventSink: ExecutionEventSink = {
+    emit: (event) => eventLog.emit(event),
+  };
+  const verificationCells = { substrate: cells.substrate, instance: cells.instance, shutdownSignal };
+  const environmentStatements: EnvironmentStatementStore = {
+    record: (taskId, statement, version) => repos.dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
+    forVersion: (projectId, version) => repos.dbWorkItemRepo.environmentStatementFor(projectId, version),
+  };
+  const environment = { images: cells.images, statements: environmentStatements };
+  const taskChecks = createTaskCheckStore(db);
+  // The sweeps of main are the core loop's, which no dispatch holds; the dispatcher calls each of
+  // Quality's verification jobs, composed from its own deps, as a port.
+  const sweepers = composeSweepers({
+    config: { workdirBase: config.coreLoop.workdirBase },
+    cells: verificationCells,
+    attemptPolicy: ATTEMPT_POLICY,
+    environment,
+    checks: taskChecks,
+    eventSink: devEventSink,
+    logger,
+  });
+
+  const dispatchService = composeDispatchService({
+    config: {
+      workdirBase: config.coreLoop.workdirBase,
+    },
+    ...composeAgentPorts({ db, ...repos, modelCalls, logger }),
+    eventSink: devEventSink,
+    cells: { ...verificationCells, baseCell: cells.baseCell },
+    llm: modelCalls,
+    attemptPolicy: ATTEMPT_POLICY,
+    environment,
+    checks: taskChecks,
+    suiteReview: new SuiteReviewer({
+      llm: modelCalls,
+      source: createSuiteReviewSource(db),
+      publicInterface: gitPublicInterface,
+      judgements: new SuiteReviewJudgementRepository(db),
+      onAttempt: ladderAttemptSink,
+      logger,
+      shutdownSignal,
+    }),
+    shutdownSignal,
+    clock,
+    logger,
+  });
+
+  return { dispatchService, sweepers };
+}
+
+/** Delivery's core loop over the dispatch and sweeps, run by the continuous runner with every host git call through the process's runner. */
+function composeRunner(deps: {
+  readonly db: Db;
+  readonly config: ServerConfig;
+  readonly ports: Pick<AsharaPorts, "clock" | "git" | "taskLanes">;
+  readonly logger: Logger;
+  readonly eventLog: ReturnType<typeof createEventLog>;
+  readonly ladderAttemptSink: (attempt: LadderAttemptEvent) => void;
+  readonly modelCalls: GuardedModelAccess;
+  readonly spendCap: SpendCap;
+  readonly failureRouter: FailureRouter;
+  readonly shutdownSignal: AbortSignal;
+  readonly dispatchService: ReturnType<typeof composeDispatchService>;
+  readonly sweepers: ReturnType<typeof composeSweepers>;
+  readonly cells: ComposedCells;
+}): ContinuousRunner {
+  const { db, config, ports, logger, eventLog, ladderAttemptSink, modelCalls, spendCap, failureRouter, shutdownSignal, dispatchService, sweepers, cells } = deps;
+  // One subject's fault in a cycle step is contained to it and kept in step_faults; a spend-cap
+  // refusal escapes to the cycle, which halts at the cap (CoreLoop.step), and so do a model call the
+  // shutdown aborted and a command in a cell it interrupted, neither a fault of its subject's: the
+  // cycle ends on it, and the subject is read afresh after the restart.
+  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null || modelCallAbortedOf(error) !== null || cellExecInterruptedOf(error) !== null, logger);
+  const coreLoop = new CoreLoop(composeCoreLoopDeps({
+    db,
+    config: config.coreLoop,
+    workBudgets: config.workBudgets,
+    clock: ports.clock,
+    logger,
+    cycleLog: eventLog,
+    llm: modelCalls,
+    onAttempt: ladderAttemptSink,
+    spendCap,
+    containment,
+    failureRouter,
+    taskLanes: ports.taskLanes,
+    shutdownSignal,
+    dispatchService,
+    sweepers,
+    cells: cellPortsOf(cells.substrate),
+  }));
+
+  const gitScopedCycles: CycleRunner = {
+    runCycle: () => withGitRunner(ports.git, () => coreLoop.runCycle()),
+    runHaltedCycle: () => withGitRunner(ports.git, () => coreLoop.runHaltedCycle()),
+  };
+
+  // The runner numbers every cycle and opens its trace, so a cycle a harness steps through
+  // `cycles` is numbered and traced as one the runner's own loop runs.
+  const runner = new ContinuousRunner(gitScopedCycles, logger, { databaseUrl: config.databaseUrl });
+  return runner;
+}
+
+/**
+ * Fails closed on schema drift: a database that ran a different draft of a migration otherwise
+ * surfaces only as a runtime query error.
+ */
+async function assertSchemaCurrent(databaseUrl: string): Promise<void> {
   try {
     await assertMigrationsCurrent(databaseUrl, MIGRATIONS_DIR);
   } catch (err: unknown) {
@@ -215,35 +441,18 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     }
     throw err;
   }
-  const db = createDb(databaseUrl, ports.createPool);
-  const secretStore = new SecretStore(new SecretRepository(db), masterKey);
-  logger.info("server.secret-store", `Secret store: master key ${masterKey.id}`, { masterKeyId: masterKey.id });
+}
 
-  const dbWorkItemRepo = new WorkItemRowRepository(db);
-  const eventStore = new EventStoreRepository(db);
-  const devSessionRepo = new DevSessionRepository(db);
-  const visionRepo = new VisionRepository(db);
-  const projectRepo = new ProjectHaltRepository(db);
+/** Finance in front of Model Access: the spend cap, its ledger, and the guarded port every model call goes through. */
+async function composeModelCalls(deps: {
+  readonly db: Db;
+  readonly config: ServerConfig;
+  readonly secretStore: SecretStore;
+  readonly ports: Pick<AsharaPorts, "clock" | "models">;
+  readonly logger: Logger;
+}): Promise<{ readonly spendCap: SpendCap; readonly llmCallLedger: LlmCallLedger; readonly modelCalls: GuardedModelAccess }> {
+  const { db, config, secretStore, ports, logger } = deps;
   const configRepo = new ConfigRepository(db);
-  const knowledgeRepo = new KnowledgeRepository(db);
-  const failedApproachRepo = new FailedApproachRepository(db);
-
-  const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
-
-  // Phase 2: API token from the secret store. Fail-closed: a
-  // missing token means the server cannot authenticate any request.
-  const apiToken = await loadApiToken(secretStore);
-
-  const config = loadServerConfig(databaseUrl, apiToken);
-
-  // Ladder attempts, execution events and completed cycles go to the server log as records,
-  // timestamped by the injected clock. A ladder attempt's capability, attempt number, validation
-  // errors and raw excerpt are in no llm_calls column, and an attempt the ladder judged invalid can
-  // be an ok provider call there.
-  // An event its schema refuses is logged at error with its issues, never thrown into the caller.
-  const eventLog = createEventLog(logger);
-  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
-
   // Finance's cost ledger, its one spend cap and its one work ledger, all on llm_calls: before
   // every provider request Finance's guarded port refuses an unpriced model, a call whose
   // worst case would cross the project's or the deployment's cap, and a call whose project or task
@@ -296,12 +505,70 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
   // Finance in front of Model Access: every model call below goes through this guarded port.
   const modelCalls = new GuardedModelAccess(llmGateway, llmCallLedger, logger);
   logger.info("server.gateway-ready", `LLM gateway initialized; model catalog: ${dbModelRows.length} models loaded from DB`, { models: dbModelRows.length });
+  return { spendCap, llmCallLedger, modelCalls };
+}
 
-  const failureRouter = new FailureRouter(3);
-  // Aborted on SIGTERM/SIGINT: stops the runner and cancels any attempt in flight.
-  const abortController = new AbortController();
-  // Taken by startup(), held until closeDatabase().
-  let targetClaims: Awaited<ReturnType<typeof claimTargetCheckouts>> | null = null;
+/** Execution Infrastructure's cells and environment images, on this deployment's podman. */
+interface ComposedCells {
+  readonly substrate: PodmanSubstrate;
+  readonly instance: string;
+  readonly baseCell: BaseCellReference;
+  readonly images: EnvironmentImages;
+}
+
+async function composeCells(deps: {
+  readonly db: Db;
+  readonly config: ServerConfig;
+  readonly processRunner: ProcessRunner;
+  readonly logger: Logger;
+}): Promise<ComposedCells> {
+  const { db, config, logger } = deps;
+  // Execution infrastructure: every tool call and every check runs in a cell on
+  // this podman. The cells are labelled with this
+  // deployment's instance, so startup reconciliation removes only its own.
+  const substrate = new PodmanSubstrate({
+    podmanPath: config.podmanBinary,
+    mountRoot: config.coreLoop.workdirBase,
+    runner: deps.processRunner,
+    limits: config.cellLimits,
+    logger,
+  });
+  // Before anything dispatches: the lanes' cells must all fit the host podman starts them on.
+  await assertLanesFitCellHost(config.coreLoop.laneCount, config.cellLimits, substrate);
+  const instance = cellInstanceFor(config.coreLoop.workdirBase);
+  const environmentBuildRepo = new EnvironmentBuildRepository(db);
+  const baseCell = await loadBaseCell();
+  logger.info(
+    "server.cells",
+    `Cells: substrate ${config.podmanBinary}, instance ${instance}, base image ${baseCell.image}; limits (every cell and image ` +
+      `build): memory ${config.cellLimits.memoryBytes} bytes, ${config.cellLimits.cpus} CPUs, ${config.cellLimits.pids} pids`,
+    { instance, image: baseCell.image },
+  );
+  const images: EnvironmentImages = {
+    build: (request) =>
+      buildEnvironmentImage(request, {
+        substrate,
+        recorder: environmentBuildRepo,
+        timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
+      }),
+    prune: (projectId, keepVersion) => pruneEnvironmentImages(substrate, projectId, keepVersion),
+  };
+  return { substrate, instance, baseCell, images };
+}
+
+/** What an agent's attempt reads and writes outside Delivery: its session, knowledge, intent and staffing. */
+function composeAgentPorts(deps: {
+  readonly db: Db;
+  readonly dbWorkItemRepo: WorkItemRowRepository;
+  readonly workItemRepo: WorkItemRepository;
+  readonly devSessionRepo: DevSessionRepository;
+  readonly visionRepo: VisionRepository;
+  readonly modelCalls: GuardedModelAccess;
+  readonly logger: Logger;
+}): Pick<DispatchComposition, "sessionStore" | "knowledgeSink" | "knowledgeSource" | "intentSource" | "staffing"> {
+  const { db, dbWorkItemRepo, workItemRepo, devSessionRepo, visionRepo, modelCalls, logger } = deps;
+  const knowledgeRepo = new KnowledgeRepository(db);
+  const failedApproachRepo = new FailedApproachRepository(db);
 
   const sessionStore: SessionStore = {
     // Opened inside the dispatched attempt's scope: the session carries that attempt's trace.
@@ -313,28 +580,6 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
   const knowledgeSink: KnowledgeSink = {
     storeFinding: (finding) => knowledgeRepo.storeKnowledgeFinding(finding),
   };
-
-  // Execution infrastructure: every tool call and every check runs in a cell on
-  // this podman. The cells are labelled with this
-  // deployment's instance, so startup reconciliation removes only its own.
-  const cellSubstrate = new PodmanSubstrate({
-    podmanPath: config.podmanBinary,
-    mountRoot: config.coreLoop.workdirBase,
-    runner: ports.processRunner,
-    limits: config.cellLimits,
-    logger,
-  });
-  // Before anything dispatches: the lanes' cells must all fit the host podman starts them on.
-  await assertLanesFitCellHost(config.coreLoop.laneCount, config.cellLimits, cellSubstrate);
-  const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
-  const environmentBuildRepo = new EnvironmentBuildRepository(db);
-  const baseCell = await loadBaseCell();
-  logger.info(
-    "server.cells",
-    `Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}; limits (every cell and image ` +
-      `build): memory ${config.cellLimits.memoryBytes} bytes, ${config.cellLimits.cpus} CPUs, ${config.cellLimits.pids} pids`,
-    { instance: cellInstance, image: baseCell.image },
-  );
 
   // The agent half of each task's Assignment, resolved once per attempt: the work item's owner
   // role from the project's latest stored roster, and the model.
@@ -354,10 +599,6 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
       knowledgeRepo.recentFindingsScoped(scope.projectId, scope.epicId, scope.queryText, limit),
     failedApproaches: (scope, limit) =>
       failedApproachRepo.failedApproachesScoped(scope.projectId, scope.epicId, scope.queryText, limit),
-  };
-
-  const devEventSink: ExecutionEventSink = {
-    emit: (event) => eventLog.emit(event),
   };
 
   // A task's project is the project_id on its own row: the
@@ -382,194 +623,136 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
     },
   };
 
-  const environmentImages: EnvironmentImages = {
-    build: (request) =>
-      buildEnvironmentImage(request, {
-        substrate: cellSubstrate,
-        recorder: environmentBuildRepo,
-        timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
-      }),
-    prune: (projectId, keepVersion) => pruneEnvironmentImages(cellSubstrate, projectId, keepVersion),
+  return { sessionStore, knowledgeSink, knowledgeSource, intentSource, staffing };
+}
+
+/** The HTTP app: the operator API on the API token, the web client on its session cookie. */
+function composeWebApp(deps: {
+  readonly db: Db;
+  readonly config: ServerConfig;
+  readonly secretStore: SecretStore;
+  readonly clock: Clock;
+  readonly logger: Logger;
+  readonly repos: {
+    readonly dbWorkItemRepo: WorkItemRowRepository;
+    readonly eventStore: EventStoreRepository;
+    readonly devSessionRepo: DevSessionRepository;
+    readonly visionRepo: VisionRepository;
+    readonly projectRepo: ProjectHaltRepository;
   };
-
-  const verificationCells = { substrate: cellSubstrate, instance: cellInstance, shutdownSignal: abortController.signal };
-  const environmentStatements: EnvironmentStatementStore = {
-    record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
-    forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
-  };
-  const taskChecks = createTaskCheckStore(db);
-  // The sweeps of main are the core loop's, which no dispatch holds; the dispatcher calls each of
-  // Quality's verification jobs, composed from its own deps, as a port.
-  const sweepers = composeSweepers({
-    config: { workdirBase: config.coreLoop.workdirBase },
-    cells: verificationCells,
-    attemptPolicy: ATTEMPT_POLICY,
-    environment: { images: environmentImages, statements: environmentStatements },
-    checks: taskChecks,
-    eventSink: devEventSink,
-    logger,
-  });
-
-  const dispatchService = composeDispatchService({
-    config: {
-      workdirBase: config.coreLoop.workdirBase,
-    },
-    sessionStore,
-    knowledgeSink,
-    knowledgeSource,
-    eventSink: devEventSink,
-    intentSource,
-    cells: { ...verificationCells, baseCell },
-    llm: modelCalls,
-    staffing,
-    attemptPolicy: ATTEMPT_POLICY,
-    environment: { images: environmentImages, statements: environmentStatements },
-    checks: taskChecks,
-    suiteReview: new SuiteReviewer({
-      llm: modelCalls,
-      source: createSuiteReviewSource(db),
-      publicInterface: gitPublicInterface,
-      judgements: new SuiteReviewJudgementRepository(db),
-      onAttempt: ladderAttemptSink,
-      logger,
-      shutdownSignal: abortController.signal,
-    }),
-    shutdownSignal: abortController.signal,
-    clock: ports.clock,
-    logger,
-  });
-
-  // One subject's fault in a cycle step is contained to it and kept in step_faults; a spend-cap
-  // refusal escapes to the cycle, which halts at the cap (CoreLoop.step), and so do a model call the
-  // shutdown aborted and a command in a cell it interrupted, neither a fault of its subject's: the
-  // cycle ends on it, and the subject is read afresh after the restart.
-  const containment = stepContainment(db, ports.clock, (error) => spendCap.refusalOf(error) !== null || modelCallAbortedOf(error) !== null || cellExecInterruptedOf(error) !== null, logger);
-  const coreLoopDeps = composeCoreLoopDeps({
-    db,
-    config: config.coreLoop,
-    workBudgets: config.workBudgets,
-    clock: ports.clock,
-    logger,
-    cycleLog: eventLog,
-    llm: modelCalls,
-    onAttempt: ladderAttemptSink,
-    spendCap,
-    containment,
-    failureRouter,
-    taskLanes: ports.taskLanes,
-    shutdownSignal: abortController.signal,
-    dispatchService,
-    sweepers,
-    cells: cellPortsOf(cellSubstrate),
-  });
-
-  const coreLoop = new CoreLoop(coreLoopDeps);
-
-  const gitScopedCycles: CycleRunner = {
-    runCycle: () => withGitRunner(ports.git, () => coreLoop.runCycle()),
-    runHaltedCycle: () => withGitRunner(ports.git, () => coreLoop.runHaltedCycle()),
-  };
-
-  // The runner numbers every cycle and opens its trace, so a cycle a harness steps through
-  // `cycles` is numbered and traced as one the runner's own loop runs.
-  const runner = new ContinuousRunner(gitScopedCycles, logger, { databaseUrl: config.databaseUrl });
-  const cycles: CycleRunner = runner;
-
+}): Hono {
+  const { db, config, repos } = deps;
   const appDeps: AppDeps = {
-    workItemRepo: dbWorkItemRepo,
-    eventStore,
-    devSessionRepo,
-    visionRepo,
-    projectRepo,
+    workItemRepo: repos.dbWorkItemRepo,
+    eventStore: repos.eventStore,
+    devSessionRepo: repos.devSessionRepo,
+    visionRepo: repos.visionRepo,
+    projectRepo: repos.projectRepo,
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
   };
 
   // The web client authenticates with a session cookie, never the API token.
-  const app = buildApp(config.apiToken, appDeps, {
+  return buildApp(config.apiToken, appDeps, {
     projectRepo: appDeps.projectRepo,
     clientMessageRepo: appDeps.clientMessageRepo,
     clientRepo: appDeps.clientRepo,
     createTender: appDeps.createTender,
-    secrets: secretStore,
-    sessionRepo: new ClientSessionRepository(db, ports.clock),
-    loginFailureRepo: new ClientLoginFailureRepository(db, ports.clock),
+    secrets: deps.secretStore,
+    sessionRepo: new ClientSessionRepository(db, deps.clock),
+    loginFailureRepo: new ClientLoginFailureRepository(db, deps.clock),
     loginThrottle: CLIENT_LOGIN_THROTTLE,
     sessionTtlSeconds: CLIENT_SESSION_TTL_SECONDS,
     loginFailureDelayMs: CLIENT_LOGIN_FAILURE_DELAY_MS,
     assets: loadWebClientAssets(),
-  }, logger);
+  }, deps.logger);
+}
 
+/**
+ * Startup reconciliation, each context over its own resources, and the claim on the target
+ * checkouts it takes first and holds until the database closes.
+ */
+function startupOf(deps: {
+  readonly git: GitRunner;
+  readonly databaseUrl: string;
+  readonly workdirBase: string;
+  readonly logger: Logger;
+  readonly abortController: AbortController;
+  readonly llmCallLedger: LlmCallLedger;
+  readonly repos: {
+    readonly workItemRepo: WorkItemRepository;
+    readonly projectRepo: ProjectHaltRepository;
+    readonly eventStore: EventStoreRepository;
+    readonly devSessionRepo: DevSessionRepository;
+  };
+  readonly failureRouter: FailureRouter;
+  readonly cells: ComposedCells;
+}): { readonly run: () => Promise<void>; readonly releaseClaims: () => Promise<void> } {
+  const { databaseUrl, workdirBase, logger, abortController, repos, cells } = deps;
+  const { workItemRepo, projectRepo, devSessionRepo } = repos;
+  // Taken by startup(), held until closeDatabase().
+  let targetClaims: Awaited<ReturnType<typeof claimTargetCheckouts>> | null = null;
+  const run = (): Promise<void> => logger.scope({ trace: "new" }, () => withGitRunner(deps.git, async () => {
+    // One process drives a target: the checkout lock that serialises its finalizes is
+    // in-process only, so the claim is taken in the database before anything touches a target,
+    // and a second process on the same targets refuses to start. Recorded targets are claimed
+    // by path; targets this process mints later live under workdirBase/projects, claimed whole.
+    const targets = [join(workdirBase, "projects"), ...(await projectRepo.listWithWorkspace()).map((p) => p.workspacePath)];
+    targetClaims = await claimTargetCheckouts(databaseUrl, await Promise.all(targets.map(canonicalizeAllowingMissing)), (lost) => {
+      console.error(`FATAL: ${lost.message}; stopping the runner, no target is driven unclaimed`);
+      abortController.abort(lost);
+    });
+
+    // A model call a prior process admitted and never recorded keeps counting against the spend
+    // cap at its estimate, marked unmeasured_after_crash, before this process admits any call.
+    await reconcileOrRefuse(
+      () => deps.llmCallLedger.reconcileAtStartup(),
+      `llm_calls admissions in ${redactedDatabaseUrl(databaseUrl)}`,
+    );
+
+    // A prior process may have crashed mid-dispatch, leaving items InProgress with no owning
+    // agent, or Failed with no recovery routed. Each orphan is settled from its target's main
+    // (Completed with a merge found there, else back to Pending, else Blocked under a typed
+    // cause) and parked Failed items are routed through the same FailureRouter policy, so the
+    // gate (Pending-only) sees the recovered work on the first cycle. Idempotent; a pass that
+    // throws, an orphan it could not even block included, refuses the start.
+    // The tasks found InProgress are read first: only their open sessions are crash orphans.
+    const inProgressAtStart = await workItemRepo.listIdsByStatus(["InProgress"]);
+    await reconcileOrRefuse(
+      () =>
+        reconcileWorkItemsOnStartup({
+          workItemRepo,
+          projects: projectRepo,
+          eventStore: repos.eventStore,
+          failureRouter: deps.failureRouter,
+          devSessionStore: devSessionRepo,
+          workdirBase,
+          logger,
+        }),
+      `work items in ${redactedDatabaseUrl(databaseUrl)}, workdir ${workdirBase}`,
+    );
+
+    // Each context reconciles its own resources, in this order. Workplace's sessions after
+    // Delivery's work items: a session a crash left open is Delivery's evidence that a dispatch
+    // never finished. Execution Infrastructure's task worktrees after both, kept for every task
+    // still open once its orphans are settled. Neither refuses the start; each logs its result.
+    await terminalizeOrphanedSessions(devSessionRepo, inProgressAtStart);
+    await sweepWorktreesAtStartup(workdirBase, workItemRepo);
+
+    // Cells a previous process of this instance leaked, removed before any dispatch.
+    await reconcileCellsAtStartup(cells.substrate, cells.instance);
+
+    // Environment images an earlier process left of versions main no longer uses.
+    // Pruning never fails the start: each project's failure is logged and retried next time.
+    for (const project of await projectRepo.listWithWorkspace()) {
+      await pruneStaleEnvironmentImages(project.id, project.workspacePath, cells.images, readEnvironmentDefinition);
+    }
+  }));
   return {
-    cycles,
-    runner,
-    logger,
-    booted: inBootTrace,
-    app,
-    port: config.port,
-    shutdownSignal: abortController.signal,
-    startup: () => logger.scope({ trace: "new" }, () => withGitRunner(ports.git, async () => {
-      // One process drives a target: the checkout lock that serialises its finalizes is
-      // in-process only, so the claim is taken in the database before anything touches a target,
-      // and a second process on the same targets refuses to start. Recorded targets are claimed
-      // by path; targets this process mints later live under workdirBase/projects, claimed whole.
-      const targets = [join(config.coreLoop.workdirBase, "projects"), ...(await projectRepo.listWithWorkspace()).map((p) => p.workspacePath)];
-      targetClaims = await claimTargetCheckouts(databaseUrl, await Promise.all(targets.map(canonicalizeAllowingMissing)), (lost) => {
-        console.error(`FATAL: ${lost.message}; stopping the runner, no target is driven unclaimed`);
-        abortController.abort(lost);
-      });
-
-      // A model call a prior process admitted and never recorded keeps counting against the spend
-      // cap at its estimate, marked unmeasured_after_crash, before this process admits any call.
-      await reconcileOrRefuse(
-        () => llmCallLedger.reconcileAtStartup(),
-        `llm_calls admissions in ${redactedDatabaseUrl(databaseUrl)}`,
-      );
-
-      // A prior process may have crashed mid-dispatch, leaving items InProgress with no owning
-      // agent, or Failed with no recovery routed. Each orphan is settled from its target's main
-      // (Completed with a merge found there, else back to Pending, else Blocked under a typed
-      // cause) and parked Failed items are routed through the same FailureRouter policy, so the
-      // gate (Pending-only) sees the recovered work on the first cycle. Idempotent; a pass that
-      // throws, an orphan it could not even block included, refuses the start.
-      // The tasks found InProgress are read first: only their open sessions are crash orphans.
-      const inProgressAtStart = await workItemRepo.listIdsByStatus(["InProgress"]);
-      await reconcileOrRefuse(
-        () =>
-          reconcileWorkItemsOnStartup({
-            workItemRepo,
-            projects: projectRepo,
-            eventStore,
-            failureRouter,
-            devSessionStore: devSessionRepo,
-            workdirBase: config.coreLoop.workdirBase,
-            logger,
-          }),
-        `work items in ${redactedDatabaseUrl(databaseUrl)}, workdir ${config.coreLoop.workdirBase}`,
-      );
-
-      // Each context reconciles its own resources, in this order. Workplace's sessions after
-      // Delivery's work items: a session a crash left open is Delivery's evidence that a dispatch
-      // never finished. Execution Infrastructure's task worktrees after both, kept for every task
-      // still open once its orphans are settled. Neither refuses the start; each logs its result.
-      await terminalizeOrphanedSessions(devSessionRepo, inProgressAtStart);
-      await sweepWorktreesAtStartup(config.coreLoop.workdirBase, workItemRepo);
-
-      // Cells a previous process of this instance leaked, removed before any dispatch.
-      await reconcileCellsAtStartup(cellSubstrate, cellInstance);
-
-      // Environment images an earlier process left of versions main no longer uses.
-      // Pruning never fails the start: each project's failure is logged and retried next time.
-      for (const project of await projectRepo.listWithWorkspace()) {
-        await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages, readEnvironmentDefinition);
-      }
-    })),
-    abort: () => abortController.abort(),
-    teardownCells: () => teardownCellsAtShutdown(cellSubstrate),
-    async closeDatabase() {
+    run,
+    async releaseClaims() {
       await targetClaims?.release();
-      await db.$client.end();
     },
   };
 }

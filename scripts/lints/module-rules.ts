@@ -18,7 +18,7 @@ interface ModuleRuleTargets {
   readonly moduleEntry: Map<string, string[]>;
 }
 
-interface RuleLine {
+export interface RuleLine {
   readonly rulesPath: string;
   readonly lineNumber: number;
   readonly line: string;

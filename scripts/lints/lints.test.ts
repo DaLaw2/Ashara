@@ -2,8 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { longFunctions, run as functionLength } from "./function-length.js";
 import { run as languageHomes } from "./language-homes.js";
-import { loadLintContext, type LintContext, type PackageScan } from "./lint.js";
+import { loadLintContext, type LintContext, type PackageScan, type Violation } from "./lint.js";
 import { run as positionalParams } from "./positional-params.js";
 import { run as projectRecord } from "./project-record.js";
 import { run as recognisedWording } from "./recognised-wording.js";
@@ -14,7 +15,7 @@ const LINTS_DIR = import.meta.dirname;
 const RUNNER = path.join(REPO, "scripts", "check-boundaries.ts");
 
 /** Lint modules hold one lint each; these are the shared readers and helpers the lints build on. */
-const HELPERS = new Set(["lint.ts", "module-rules.ts", "rules.ts", "rules-parse-error.ts", "source-files.ts", "stand-ins.ts"]);
+const HELPERS = new Set(["lint.ts", "module-rules.ts", "production-source.ts", "rules.ts", "rules-parse-error.ts", "source-files.ts", "stand-ins.ts"]);
 
 const SIMULATOR = "packages/integration/src/simulator";
 const WORDING = `export const CONFLICT_HEADING = "## Merge with main in progress";\n`;
@@ -277,5 +278,58 @@ describe("positional-params", () => {
 
   test("the repository's functions, methods and method signatures keep to five positional parameters", () => {
     expect(positionalParams(loadLintContext(REPO))).toEqual([]);
+  });
+});
+
+describe("function-length", () => {
+  /** A function declaration spanning `lines` lines, its opening and closing lines included. */
+  const spanning = (name: string, lines: number): string =>
+    [`export function ${name}(): number {`, "  let n = 0;", ...Array.from({ length: lines - 4 }, () => "  n += 1;"), "  return n;", "}"].join("\n");
+  /** A tree of `files` under quality, with one script so neither half of the scan is empty. */
+  const tree = (files: Readonly<Record<string, string>>): LintContext => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "function-length-"));
+    scratch = root;
+    fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "tool.ts"), "export const tool = 1;\n");
+    return { ...homesTree("", { quality: files }), root };
+  };
+  const sites = (violations: readonly Violation[]): string[] => violations.map((v) => `${v.file}:${v.line}`);
+
+  test("a function of 121 lines is a violation, and one of 120 lines is not", () => {
+    expect(spanning("long", 121).split("\n")).toHaveLength(121);
+    const context = tree({ "long.ts": spanning("long", 121), "bounded.ts": spanning("bounded", 120) });
+    expect(sites(functionLength(context))).toEqual(["packages/quality/src/long.ts:1"]);
+  });
+
+  test("a method and an arrow nested in another function are measured, and a test file is not", () => {
+    const method = `export class Ledger {\n  ${spanning("x", 121).replace("export function x(): number {", "record(): number {")}\n}`;
+    const arrow = `export function outer(): void {\n  const inner = (): number => {\n${spanning("y", 121).split("\n").slice(1).join("\n")};\n  inner();\n}`;
+    const violations = functionLength(tree({ "ledger.ts": method, "outer.ts": arrow, "long.test.ts": spanning("inTest", 200) }));
+    expect(violations.map((v) => v.reason.split(" spans ")[0])).toEqual(["Ledger.record", "outer", "inner"]);
+  });
+
+  test("an allowed function is clean, an entry with no reason fails, and so does a stale one", () => {
+    const context = tree({ "long.ts": spanning("long", 121), "bounded.ts": spanning("bounded", 120) });
+    expect(longFunctions(context, [{ file: "packages/quality/src/long.ts", name: "long", reason: "kept whole for a stated reason" }])).toEqual([]);
+    const noReason = longFunctions(context, [{ file: "packages/quality/src/long.ts", name: "long", reason: " " }]);
+    expect(noReason.map((v) => v.reason)).toEqual([expect.stringContaining("states no reason")]);
+    const stale = longFunctions(context, [
+      { file: "packages/quality/src/long.ts", name: "long", reason: "kept whole" },
+      { file: "packages/quality/src/bounded.ts", name: "bounded", reason: "kept whole" },
+      { file: "packages/quality/src/gone.ts", name: "gone", reason: "kept whole" },
+    ]);
+    expect(stale.map((v) => `${v.file}: ${v.reason.split(" is not past")[0]}`)).toEqual([
+      "packages/quality/src/bounded.ts: the allowed function bounded",
+      "packages/quality/src/gone.ts: the allowed function gone",
+    ]);
+  });
+
+  test("a tree with no scripts/ to scan fails closed", () => {
+    const violations = functionLength(homesTree("", { quality: { "result.ts": "export const clean = 1;\n" } }));
+    expect(violations.map((v) => v.reason)).toContainEqual(expect.stringContaining("no script to scan"));
+  });
+
+  test("the repository's production functions keep to the line bound", () => {
+    expect(functionLength(loadLintContext(REPO))).toEqual([]);
   });
 });

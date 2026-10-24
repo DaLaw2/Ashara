@@ -43,6 +43,7 @@ import { STACK_LITERALS_SECTION } from "../stack-literals.js";
 import { TABLES_SECTION } from "../table-ownership.js";
 import { HOMES_SECTION } from "./language-homes.js";
 import { MODULE_RULE_RE, checkModuleRules, parseModuleRule } from "./module-rules.js";
+import type { RuleLine } from "./module-rules.js";
 import { BoundaryRulesParseError } from "./rules-parse-error.js";
 
 
@@ -101,29 +102,29 @@ function parseList(inner: string): string[] {
   return trimmed.split(",").map((s) => s.trim().replace(/^["']|["']$/g, ""));
 }
 
+/** A section's rules as its lines are read into them. */
+interface SectionRule {
+  allow: string[];
+  restrict: Map<string, string[]>;
+  entries: Map<string, string[]>;
+  importers: string[] | null;
+  namedOnly: string[];
+  names: Map<string, string[]>;
+  standIns: string[];
+  standInNames: Map<string, string[]>;
+  boundsTables: string[];
+  modules: Map<string, string[]>;
+  moduleAllow: Map<string, string[]>;
+  moduleAllowFiles: Map<string, Map<string, string[]>>;
+  moduleEntry: Map<string, string[]>;
+  moduleNames: Map<string, HeldName[]>;
+  subpathImporters: Map<string, string[]>;
+  testOnlySubpaths: string[];
+  classImports: Map<string, string[]>;
+}
+
 export function parseRules(toml: string, rulesPath: string): BoundaryRules {
-  const rules = new Map<
-    string,
-    {
-      allow: string[];
-      restrict: Map<string, string[]>;
-      entries: Map<string, string[]>;
-      importers: string[] | null;
-      namedOnly: string[];
-      names: Map<string, string[]>;
-      standIns: string[];
-      standInNames: Map<string, string[]>;
-      boundsTables: string[];
-      modules: Map<string, string[]>;
-      moduleAllow: Map<string, string[]>;
-      moduleAllowFiles: Map<string, Map<string, string[]>>;
-      moduleEntry: Map<string, string[]>;
-      moduleNames: Map<string, HeldName[]>;
-      subpathImporters: Map<string, string[]>;
-      testOnlySubpaths: string[];
-      classImports: Map<string, string[]>;
-    }
-  >();
+  const rules = new Map<string, SectionRule>();
   let currentSection: string | null = null;
   // The [stack-literals], [tables] and [homes] sections are not a package's rules; parseStackLiteralRules,
   // parseTableOwnershipRules and the language-homes lint read them.
@@ -156,233 +157,238 @@ export function parseRules(toml: string, rulesPath: string): BoundaryRules {
       throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `unknown section "${currentSection}"`);
     }
 
-    const allowMatch = /^allow\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (allowMatch) {
-      rule.allow = parseList(allowMatch[1]);
-      continue;
-    }
-
-    const importersMatch = /^importers\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (importersMatch) {
-      rule.importers = parseList(importersMatch[1]);
-      continue;
-    }
-
-    const restrictMatch = /^restrict\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (restrictMatch) {
-      const globs = parseList(restrictMatch[2]);
-      if (globs.length === 0) {
-        throw new BoundaryRulesParseError(
-          rulesPath,
-          lineNumber,
-          line,
-          "restrict list is empty (use `allow` to forbid the package outright)",
-        );
-      }
-      rule.restrict.set(restrictMatch[1], globs);
-      continue;
-    }
-
-    const entriesMatch = /^entries\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (entriesMatch) {
-      const entries = parseList(entriesMatch[2]);
-      if (entries.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "entries list is empty (use `allow` to forbid the package outright)");
-      }
-      rule.entries.set(entriesMatch[1], entries);
-      continue;
-    }
-
-    const namedOnlyMatch = /^named-only\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (namedOnlyMatch) {
-      rule.namedOnly = parseList(namedOnlyMatch[1]);
-      if (rule.namedOnly.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "named-only list is empty");
-      }
-      continue;
-    }
-
-    const namesMatch = /^names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (namesMatch) {
-      const names = parseList(namesMatch[2]);
-      if (names.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "names list is empty (omit it to give the named-only files nothing)");
-      }
-      rule.names.set(namesMatch[1], names);
-      continue;
-    }
-
-    const standInsMatch = /^stand-ins\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (standInsMatch) {
-      rule.standIns = parseList(standInsMatch[1]);
-      if (rule.standIns.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "stand-ins list is empty");
-      }
-      continue;
-    }
-
-    const standInNamesMatch = /^stand-in-names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (standInNamesMatch) {
-      const names = parseList(standInNamesMatch[2]);
-      if (names.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "stand-in-names list is empty (omit it to give the stand-ins nothing)");
-      }
-      rule.standInNames.set(standInNamesMatch[1], names);
-      continue;
-    }
-
-    const boundsTablesMatch = /^bounds-tables\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (boundsTablesMatch) {
-      rule.boundsTables = parseList(boundsTablesMatch[1]);
-      if (rule.boundsTables.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "bounds-tables list is empty");
-      }
-      continue;
-    }
-
-    const moduleMatch = MODULE_RULE_RE.exec(line);
-    if (moduleMatch) {
-      parseModuleRule(moduleMatch[1], moduleMatch[2], parseList(moduleMatch[3]), rule, { rulesPath, lineNumber, line });
-      continue;
-    }
-
-    const moduleNamesMatch = /^module-names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (moduleNamesMatch) {
-      const items = parseList(moduleNamesMatch[2]);
-      if (items.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "module-names list is empty");
-      if (rule.moduleNames.has(moduleNamesMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `module-names.${moduleNamesMatch[1]} is stated twice`);
-      rule.moduleNames.set(
-        moduleNamesMatch[1],
-        items.map((item) => {
-          const held = HELD_NAME_RE.exec(item);
-          if (held === null) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `"${item}" is not "<pkg>[/<subpath>]:<symbol>"`);
-          return { pkg: held[2], entry: held[1], name: held[3] };
-        }),
-      );
-      continue;
-    }
-
-    const subpathMatch = /^subpath-importers\.([a-z0-9][a-z0-9/-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (subpathMatch) {
-      const importers = parseList(subpathMatch[2]);
-      if (importers.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "subpath-importers list is empty (drop the subpath from the exports instead)");
-      if (rule.subpathImporters.has(subpathMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `subpath-importers.${subpathMatch[1]} is stated twice`);
-      rule.subpathImporters.set(subpathMatch[1], importers);
-      continue;
-    }
-
-    const testOnlyMatch = /^test-only-subpaths\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (testOnlyMatch) {
-      rule.testOnlySubpaths = parseList(testOnlyMatch[1]);
-      if (rule.testOnlySubpaths.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "test-only-subpaths list is empty");
-      continue;
-    }
-
-    const classesMatch = /^classes\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
-    if (classesMatch) {
-      if (rule.classImports.has(classesMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `classes.${classesMatch[1]} is stated twice`);
-      rule.classImports.set(classesMatch[1], parseList(classesMatch[2]));
-      continue;
-    }
-
+    const at = { rulesPath, lineNumber, line };
     // Fail closed: a typo in a rule key must not silently disable the gate.
-    throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
+    if (!parseImportKey(rule, at) && !parseNamedKey(rule, at) && !parseModuleKey(rule, at)) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
+    }
   }
 
-  const result = new Map<string, PackageRule>();
-  for (const [pkg, rule] of rules) {
-    const isWildcard = rule.allow.length === 1 && rule.allow[0] === "*";
-    for (const restricted of rule.restrict.keys()) {
-      if (!isWildcard && !rule.allow.includes(restricted)) {
-        throw new BoundaryRulesParseError(
-          rulesPath,
-          0,
-          `[${pkg}] restrict.${restricted}`,
-          `restricts "${restricted}" which is not in its allow list`,
-        );
-      }
-    }
-    for (const entered of rule.entries.keys()) {
-      if (!isWildcard && !rule.allow.includes(entered)) {
-        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] entries.${entered}`, `names entries of "${entered}", which is not in its allow list`);
-      }
-    }
-    for (const named of rule.names.keys()) {
-      if (rule.namedOnly.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, "names a package's symbols, but the section has no named-only files");
-      }
-      if (!isWildcard && !rule.allow.includes(named)) {
-        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, `lists symbols of "${named}", which is not in its allow list`);
-      }
-    }
-    if (rule.standIns.length > 0 && rule.namedOnly.length === 0) {
-      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-ins`, "names stand-in files, but the section has no named-only files");
-    }
-    if (rule.boundsTables.length > 0 && rule.namedOnly.length === 0) {
-      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] bounds-tables`, "names bounds-table files, but the section has no named-only files");
-    }
-    for (const [named, standInNames] of rule.standInNames) {
-      if (rule.standIns.length === 0) {
-        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, "lists a package's symbols, but the section has no stand-ins");
-      }
-      // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no names list narrows to nothing, so each stand-in name throws below
-      const wider = rule.names.get(named) ?? [];
-      for (const name of standInNames) {
-        if (!wider.includes(name)) {
-          throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, `lists "${name}", which names.${named} does not: the stand-in list only narrows`);
-        }
-      }
-    }
-    // eslint-disable-next-line no-restricted-syntax -- policy default: a section without importers restricts no importer (boundary-rules.toml header)
-    for (const importer of rule.importers ?? []) {
-      if (!rules.has(importer)) {
-        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
-      }
-    }
-    for (const held of rule.classImports.keys()) {
-      if (!isWildcard && !rule.allow.includes(held)) {
-        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] classes.${held}`, `holds the classes of "${held}", which is not in its allow list`);
-      }
-    }
-    for (const [subpath, importers] of rule.subpathImporters) {
-      for (const importer of importers) {
-        if (!rules.has(importer)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] subpath-importers.${subpath}`, `names "${importer}", which has no section`);
-      }
-    }
-    checkModuleRules(rulesPath, pkg, rule.modules, rule.moduleAllow, rule.moduleEntry);
-    const holders = new Map<string, string>();
-    for (const [name, held] of rule.moduleNames) {
-      if (!rule.modules.has(name)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `"${name}" is no module of the section`);
-      for (const each of held) {
-        if (!isWildcard && !rule.allow.includes(each.pkg)) {
-          throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `holds a symbol of "${each.pkg}", which is not in its allow list`);
-        }
-        const key = `${each.entry}:${each.name}`;
-        const holder = holders.get(key);
-        if (holder !== undefined) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `"${key}" is held by module ${holder} too; one module holds it`);
-        holders.set(key, name);
-      }
-    }
-    result.set(pkg, {
-      allow: rule.allow,
-      restrict: rule.restrict,
-      entries: rule.entries,
-      importers: rule.importers,
-      namedOnly: rule.namedOnly,
-      names: rule.names,
-      standIns: rule.standIns,
-      standInNames: rule.standInNames,
-      boundsTables: rule.boundsTables,
-      modules: rule.modules,
-      moduleAllow: rule.moduleAllow,
-      moduleAllowFiles: rule.moduleAllowFiles,
-      moduleEntry: rule.moduleEntry,
-      moduleNames: rule.moduleNames,
-      subpathImporters: rule.subpathImporters,
-      testOnlySubpaths: rule.testOnlySubpaths,
-      classImports: rule.classImports,
-    });
+  for (const [pkg, rule] of rules) checkSection(rulesPath, pkg, rule, rules);
+  return rules;
+}
+
+/** A line of allow, importers, restrict or entries read into `rule`; false when the line is none of them. */
+function parseImportKey(rule: SectionRule, at: RuleLine): boolean {
+  const { rulesPath, lineNumber, line } = at;
+  const allowMatch = /^allow\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (allowMatch) {
+    rule.allow = parseList(allowMatch[1]);
+    return true;
   }
 
-  return result;
+  const importersMatch = /^importers\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (importersMatch) {
+    rule.importers = parseList(importersMatch[1]);
+    return true;
+  }
+
+  const restrictMatch = /^restrict\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (restrictMatch) {
+    const globs = parseList(restrictMatch[2]);
+    if (globs.length === 0) {
+      throw new BoundaryRulesParseError(
+        rulesPath,
+        lineNumber,
+        line,
+        "restrict list is empty (use `allow` to forbid the package outright)",
+      );
+    }
+    rule.restrict.set(restrictMatch[1], globs);
+    return true;
+  }
+
+  const entriesMatch = /^entries\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (entriesMatch) {
+    const entries = parseList(entriesMatch[2]);
+    if (entries.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "entries list is empty (use `allow` to forbid the package outright)");
+    }
+    rule.entries.set(entriesMatch[1], entries);
+    return true;
+  }
+  return false;
+}
+
+/** A line of the named-only files and the symbols they, the stand-ins and the bounds tables may import; false when the line is none of them. */
+function parseNamedKey(rule: SectionRule, at: RuleLine): boolean {
+  const { rulesPath, lineNumber, line } = at;
+  const namedOnlyMatch = /^named-only\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (namedOnlyMatch) {
+    rule.namedOnly = parseList(namedOnlyMatch[1]);
+    if (rule.namedOnly.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "named-only list is empty");
+    }
+    return true;
+  }
+
+  const namesMatch = /^names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (namesMatch) {
+    const names = parseList(namesMatch[2]);
+    if (names.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "names list is empty (omit it to give the named-only files nothing)");
+    }
+    rule.names.set(namesMatch[1], names);
+    return true;
+  }
+
+  const standInsMatch = /^stand-ins\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (standInsMatch) {
+    rule.standIns = parseList(standInsMatch[1]);
+    if (rule.standIns.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "stand-ins list is empty");
+    }
+    return true;
+  }
+
+  const standInNamesMatch = /^stand-in-names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (standInNamesMatch) {
+    const names = parseList(standInNamesMatch[2]);
+    if (names.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "stand-in-names list is empty (omit it to give the stand-ins nothing)");
+    }
+    rule.standInNames.set(standInNamesMatch[1], names);
+    return true;
+  }
+
+  const boundsTablesMatch = /^bounds-tables\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (boundsTablesMatch) {
+    rule.boundsTables = parseList(boundsTablesMatch[1]);
+    if (rule.boundsTables.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "bounds-tables list is empty");
+    }
+    return true;
+  }
+  return false;
+}
+
+/** A line of the internal modules, the subpaths' importers, the test-only subpaths or the held classes; false when the line is none of them. */
+function parseModuleKey(rule: SectionRule, at: RuleLine): boolean {
+  const { rulesPath, lineNumber, line } = at;
+  const moduleMatch = MODULE_RULE_RE.exec(line);
+  if (moduleMatch) {
+    parseModuleRule(moduleMatch[1], moduleMatch[2], parseList(moduleMatch[3]), rule, at);
+    return true;
+  }
+
+  const moduleNamesMatch = /^module-names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (moduleNamesMatch) {
+    const items = parseList(moduleNamesMatch[2]);
+    if (items.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "module-names list is empty");
+    if (rule.moduleNames.has(moduleNamesMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `module-names.${moduleNamesMatch[1]} is stated twice`);
+    rule.moduleNames.set(
+      moduleNamesMatch[1],
+      items.map((item) => {
+        const held = HELD_NAME_RE.exec(item);
+        if (held === null) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `"${item}" is not "<pkg>[/<subpath>]:<symbol>"`);
+        return { pkg: held[2], entry: held[1], name: held[3] };
+      }),
+    );
+    return true;
+  }
+
+  const subpathMatch = /^subpath-importers\.([a-z0-9][a-z0-9/-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (subpathMatch) {
+    const importers = parseList(subpathMatch[2]);
+    if (importers.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "subpath-importers list is empty (drop the subpath from the exports instead)");
+    if (rule.subpathImporters.has(subpathMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `subpath-importers.${subpathMatch[1]} is stated twice`);
+    rule.subpathImporters.set(subpathMatch[1], importers);
+    return true;
+  }
+
+  const testOnlyMatch = /^test-only-subpaths\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (testOnlyMatch) {
+    rule.testOnlySubpaths = parseList(testOnlyMatch[1]);
+    if (rule.testOnlySubpaths.length === 0) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "test-only-subpaths list is empty");
+    return true;
+  }
+
+  const classesMatch = /^classes\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+  if (classesMatch) {
+    if (rule.classImports.has(classesMatch[1])) throw new BoundaryRulesParseError(rulesPath, lineNumber, line, `classes.${classesMatch[1]} is stated twice`);
+    rule.classImports.set(classesMatch[1], parseList(classesMatch[2]));
+    return true;
+  }
+  return false;
+}
+
+/** A section's rules held against each other and against the other sections, once every line is read. */
+function checkSection(rulesPath: string, pkg: string, rule: SectionRule, rules: ReadonlyMap<string, SectionRule>): void {
+  const isWildcard = rule.allow.length === 1 && rule.allow[0] === "*";
+  for (const restricted of rule.restrict.keys()) {
+    if (!isWildcard && !rule.allow.includes(restricted)) {
+      throw new BoundaryRulesParseError(
+        rulesPath,
+        0,
+        `[${pkg}] restrict.${restricted}`,
+        `restricts "${restricted}" which is not in its allow list`,
+      );
+    }
+  }
+  for (const entered of rule.entries.keys()) {
+    if (!isWildcard && !rule.allow.includes(entered)) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] entries.${entered}`, `names entries of "${entered}", which is not in its allow list`);
+    }
+  }
+  for (const named of rule.names.keys()) {
+    if (rule.namedOnly.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, "names a package's symbols, but the section has no named-only files");
+    }
+    if (!isWildcard && !rule.allow.includes(named)) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, `lists symbols of "${named}", which is not in its allow list`);
+    }
+  }
+  if (rule.standIns.length > 0 && rule.namedOnly.length === 0) {
+    throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-ins`, "names stand-in files, but the section has no named-only files");
+  }
+  if (rule.boundsTables.length > 0 && rule.namedOnly.length === 0) {
+    throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] bounds-tables`, "names bounds-table files, but the section has no named-only files");
+  }
+  for (const [named, standInNames] of rule.standInNames) {
+    if (rule.standIns.length === 0) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, "lists a package's symbols, but the section has no stand-ins");
+    }
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no names list narrows to nothing, so each stand-in name throws below
+    const wider = rule.names.get(named) ?? [];
+    for (const name of standInNames) {
+      if (!wider.includes(name)) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] stand-in-names.${named}`, `lists "${name}", which names.${named} does not: the stand-in list only narrows`);
+      }
+    }
+  }
+  // eslint-disable-next-line no-restricted-syntax -- policy default: a section without importers restricts no importer (boundary-rules.toml header)
+  for (const importer of rule.importers ?? []) {
+    if (!rules.has(importer)) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
+    }
+  }
+  for (const held of rule.classImports.keys()) {
+    if (!isWildcard && !rule.allow.includes(held)) {
+      throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] classes.${held}`, `holds the classes of "${held}", which is not in its allow list`);
+    }
+  }
+  for (const [subpath, importers] of rule.subpathImporters) {
+    for (const importer of importers) {
+      if (!rules.has(importer)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] subpath-importers.${subpath}`, `names "${importer}", which has no section`);
+    }
+  }
+  checkModuleRules(rulesPath, pkg, rule.modules, rule.moduleAllow, rule.moduleEntry);
+  checkHeldNames(rulesPath, pkg, rule, isWildcard);
+}
+
+/** Each held symbol names a module of the section and a package it may import, and one module holds it. */
+function checkHeldNames(rulesPath: string, pkg: string, rule: SectionRule, isWildcard: boolean): void {
+  const holders = new Map<string, string>();
+  for (const [name, held] of rule.moduleNames) {
+    if (!rule.modules.has(name)) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `"${name}" is no module of the section`);
+    for (const each of held) {
+      if (!isWildcard && !rule.allow.includes(each.pkg)) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `holds a symbol of "${each.pkg}", which is not in its allow list`);
+      }
+      const key = `${each.entry}:${each.name}`;
+      const holder = holders.get(key);
+      if (holder !== undefined) throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] module-names.${name}`, `"${key}" is held by module ${holder} too; one module holds it`);
+      holders.set(key, name);
+    }
+  }
 }

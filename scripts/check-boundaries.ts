@@ -8,8 +8,9 @@
  * optional dependencies, stack literals, table ownership, the project record's columns, the
  * simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
- * recognise, the line limits of the modules split by role, a name declared outside its one home, and a
- * function, method or method signature of production source or scripts/ with a long positional parameter list.
+ * recognise, the line limits of the modules split by role, a name declared outside its one home, a
+ * function, method or method signature of production source or scripts/ with a long positional parameter list,
+ * and a function of production source or scripts/ past the line bound.
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -21,6 +22,7 @@ import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
 import { run as classImports } from "./lints/class-imports.js";
 import { run as fileSizes } from "./lints/file-sizes.js";
+import { run as functionLength } from "./lints/function-length.js";
 import { run as internalModules } from "./lints/internal-modules.js";
 import { run as languageHomes } from "./lints/language-homes.js";
 import { loadLintContext } from "./lints/lint.js";
@@ -61,6 +63,7 @@ const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   fileSizes,
   languageHomes,
   positionalParams,
+  functionLength,
 ];
 
 function main(): void {

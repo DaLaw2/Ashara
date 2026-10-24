@@ -523,19 +523,7 @@ class PodmanCell implements Cell {
   }
 
   private async execUnlogged(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
-    if (this.tornDown || this.containerRemoved) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
-    // Queued behind an exec the shutdown ended: this one never starts either.
-    if (options.signal.aborted) throw new CellExecInterrupted(this.id, argv, "before it started", options.signal.reason);
-    if (this.interrupted !== null) {
-      throw new CellExecFailed(
-        this.id,
-        argv,
-        null,
-        "",
-        // Named, not chained: this exec was not interrupted, so it must not read as an interruption.
-        `an earlier exec in this cell was interrupted (${this.interrupted.message}) and what it started may still run; only the cell's teardown ends it`,
-      );
-    }
+    this.assertRunnable(argv, options.signal);
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
     const argvEnvironment = [`${ARGC_VARIABLE}=${argv.length}`, ...argv.map((arg, i) => `${ARG_VARIABLE_PREFIX}${i}=${arg}`)];
@@ -577,85 +565,63 @@ class PodmanCell implements Cell {
     if (options.stdin !== undefined && result.stdinError !== null) {
       throw new CellExecFailed(this.id, argv, exitCode, result.stderr, `stdin was not fully delivered: ${result.stdinError}`);
     }
-    if (result.statusReport === "") {
-      // The wrapper never reported: podman exec or the wrapper's sh failed, the cell was lost
-      // mid-run, or the command killed the wrapper. Only the last leaves a cell that
-      // answers a fresh exec, whose sweep also ends what the command left that the dead wrapper
-      // never swept. timeout(1) never ends the wrapper.
-      const unreported = `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command`;
-      if (exitCode <= SIGNAL_EXIT_FLOOR) {
-        // A wrapper killed by a signal exits above 128. Anything else is podman
-        // or the OCI runtime failing before the wrapper ran (125-127) or the wrapper's sh itself:
-        // the substrate's failure, which a cell that still answers a probe does not change.
-        throw new CellExecFailed(
-          this.id,
-          argv,
-          exitCode,
-          result.stderr,
-          `${unreported}; an exit of ${SIGNAL_EXIT_FLOOR} or below is not a wrapper killed by a signal: podman exec or the wrapper's sh failed`,
-        );
-      }
-      try {
-        await this.sweep(argv, unreported, options.signal);
-      } catch (probe) {
-        if (probe instanceof CellExecInterrupted) throw probe;
-        throw new CellExecFailed(
-          this.id,
-          argv,
-          exitCode,
-          result.stderr,
-          `${unreported}, and the cell then failed its probe: podman exec, the wrapper's sh or the cell itself failed ` +
-            `(${describeErrorChain(probe)})`,
-          { cause: probe },
-        );
-      }
-      return { ...streams(result), exitCode: null, timedOut: false, statusLost: true };
+    if (result.statusReport === "") return this.unreportedResult({ argv, result, exitCode, signal: options.signal });
+    return reportedResult({ cellId: this.id, argv, result, exitCode, timedOutAfter: elapsedMs >= options.timeoutSeconds * 1000 });
+  }
+
+  /** Refuses an exec this cell cannot run: torn down, shut down before it started, or behind an interrupted exec. */
+  private assertRunnable(argv: readonly string[], signal: AbortSignal): void {
+    if (this.tornDown || this.containerRemoved) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
+    // Queued behind an exec the shutdown ended: this one never starts either.
+    if (signal.aborted) throw new CellExecInterrupted(this.id, argv, "before it started", signal.reason);
+    if (this.interrupted !== null) {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        null,
+        "",
+        // Named, not chained: this exec was not interrupted, so it must not read as an interruption.
+        `an earlier exec in this cell was interrupted (${this.interrupted.message}) and what it started may still run; only the cell's teardown ends it`,
+      );
     }
-    const report = parseStatusReport(result.statusReport);
-    if (report === null) {
+  }
+
+  /**
+   * The wrapper never reported: podman exec or the wrapper's sh failed, the cell was lost
+   * mid-run, or the command killed the wrapper. Only the last leaves a cell that
+   * answers a fresh exec, whose sweep also ends what the command left that the dead wrapper
+   * never swept. timeout(1) never ends the wrapper.
+   */
+  private async unreportedResult(exec: { readonly argv: readonly string[]; readonly result: ProcessResult; readonly exitCode: number; readonly signal: AbortSignal }): Promise<ExecResult> {
+    const { argv, result, exitCode } = exec;
+    const unreported = `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command`;
+    if (exitCode <= SIGNAL_EXIT_FLOOR) {
+      // A wrapper killed by a signal exits above 128. Anything else is podman
+      // or the OCI runtime failing before the wrapper ran (125-127) or the wrapper's sh itself:
+      // the substrate's failure, which a cell that still answers a probe does not change.
       throw new CellExecFailed(
         this.id,
         argv,
         exitCode,
         result.stderr,
-        `the in-cell wrapper's status report is malformed: ${JSON.stringify(result.statusReport)}`,
+        `${unreported}; an exit of ${SIGNAL_EXIT_FLOOR} or below is not a wrapper killed by a signal: podman exec or the wrapper's sh failed`,
       );
     }
-    if (report.kind === "unisolated") {
+    try {
+      await this.sweep(argv, unreported, exec.signal);
+    } catch (probe) {
+      if (probe instanceof CellExecInterrupted) throw probe;
       throw new CellExecFailed(
         this.id,
         argv,
         exitCode,
         result.stderr,
-        "the exec's session cannot be told from the session of the cell's init, so what the command would start " +
-          "could not be told from the cell's own processes; the command was not run",
+        `${unreported}, and the cell then failed its probe: podman exec, the wrapper's sh or the cell itself failed ` +
+          `(${describeErrorChain(probe)})`,
+        { cause: probe },
       );
     }
-    if (report.kind === "unrunnable") {
-      throw new CellExecFailed(this.id, argv, exitCode, result.stderr, "the in-cell wrapper could not run the command; the command was not run");
-    }
-    if (report.kind === "unswept") {
-      throw new CellExecFailed(
-        this.id,
-        argv,
-        exitCode,
-        result.stderr,
-        `the command exited ${report.status}, but processes it left in the cell were still alive after the wrapper's sweep`,
-      );
-    }
-    if (report.status !== exitCode) {
-      throw new CellExecFailed(
-        this.id,
-        argv,
-        exitCode,
-        result.stderr,
-        `the command exited ${report.status} in the cell but podman exec exited ${exitCode}`,
-      );
-    }
-    if (TIMEOUT_EXITS.has(exitCode) && elapsedMs >= options.timeoutSeconds * 1000) {
-      return { ...streams(result), exitCode, timedOut: true, statusLost: false };
-    }
-    return { ...streams(result), exitCode, timedOut: false, statusLost: false };
+    return { ...streams(result), exitCode: null, timedOut: false, statusLost: true };
   }
 
   /** Throws CellExecInterrupted, and marks the cell interrupted, once `signal` has aborted. */
@@ -1147,4 +1113,61 @@ export class PodmanSubstrate {
     }
     return { removed, failures };
   }
+}
+
+/** An exec's result read from the in-cell wrapper's status report; a report that does not vouch for the command's exit throws. */
+function reportedResult(exec: {
+  readonly cellId: string;
+  readonly argv: readonly string[];
+  readonly result: ProcessResult;
+  readonly exitCode: number;
+  /** The exec ran for at least its timeout. */
+  readonly timedOutAfter: boolean;
+}): ExecResult {
+  const { cellId, argv, result, exitCode } = exec;
+  const report = parseStatusReport(result.statusReport);
+  if (report === null) {
+    throw new CellExecFailed(
+      cellId,
+      argv,
+      exitCode,
+      result.stderr,
+      `the in-cell wrapper's status report is malformed: ${JSON.stringify(result.statusReport)}`,
+    );
+  }
+  if (report.kind === "unisolated") {
+    throw new CellExecFailed(
+      cellId,
+      argv,
+      exitCode,
+      result.stderr,
+      "the exec's session cannot be told from the session of the cell's init, so what the command would start " +
+        "could not be told from the cell's own processes; the command was not run",
+    );
+  }
+  if (report.kind === "unrunnable") {
+    throw new CellExecFailed(cellId, argv, exitCode, result.stderr, "the in-cell wrapper could not run the command; the command was not run");
+  }
+  if (report.kind === "unswept") {
+    throw new CellExecFailed(
+      cellId,
+      argv,
+      exitCode,
+      result.stderr,
+      `the command exited ${report.status}, but processes it left in the cell were still alive after the wrapper's sweep`,
+    );
+  }
+  if (report.status !== exitCode) {
+    throw new CellExecFailed(
+      cellId,
+      argv,
+      exitCode,
+      result.stderr,
+      `the command exited ${report.status} in the cell but podman exec exited ${exitCode}`,
+    );
+  }
+  if (TIMEOUT_EXITS.has(exitCode) && exec.timedOutAfter) {
+    return { ...streams(result), exitCode, timedOut: true, statusLost: false };
+  }
+  return { ...streams(result), exitCode, timedOut: false, statusLost: false };
 }

@@ -495,6 +495,48 @@ function countOccurrences(text: string, needle: string): { readonly count: numbe
   }
 }
 
+/** One exact, unique text of a file replaced in the cell. */
+async function editFile(args: z.infer<typeof editFileArgs>, context: ToolContext): Promise<RanTool> {
+  const { cell } = context;
+  const { path, old_text: oldText, new_text: newText } = args;
+  const text = uncutText(await cell.readFile(path));
+  if (text === null) return toolError(`${path} is larger than the workspace read limit; edit_file cannot rewrite it safely.`);
+  const { count, first } = countOccurrences(text, oldText);
+  if (count === 0) return toolError(`old_text not found in ${path}. Read the file and copy the exact text.`);
+  if (count > 1) return toolError(`old_text matches ${count} locations in ${path}. Include more surrounding text.`);
+  // Spliced by index: String.replace would interpret `$&` and `$1` in new_text.
+  await cell.writeFile(path, text.slice(0, first) + newText + text.slice(first + oldText.length));
+  context.checks?.fileWritten(path);
+  return ok(wholeText(`Edited ${path}: replaced ${oldText.split("\n").length} line(s) with ${newText.split("\n").length} line(s).`));
+}
+
+/** A dispute of a stored check this task runs, or of one a task already merged stored; a check named by neither is refused. */
+function disputeCheck(args: z.infer<typeof disputeCheckArgs>, taskChecks: TaskCheckRunPort): RanTool {
+  const name = args.name.trim();
+  const reason = args.reason.trim();
+  const ofTask = args.task?.trim();
+  if (ofTask !== undefined) {
+    const merged = taskChecks.mergedChecks;
+    if (!merged.some((check) => check.taskId === ofTask && check.name === name)) {
+      const known = merged.filter((check) => check.taskId === ofTask).map((check) => JSON.stringify(check.name));
+      return toolError(
+        known.length === 0
+          ? `dispute_check: no task already merged has id ${JSON.stringify(ofTask)} with stored checks.`
+          : `dispute_check: task ${ofTask} has no check named ${JSON.stringify(name)}. Its checks are: ${known.join(", ")}.`,
+      );
+    }
+    return { kind: "dispute", checkName: name, ofTask, reason };
+  }
+  if (!taskChecks.checkNames.includes(name)) {
+    const known = taskChecks.checkNames.map((check) => JSON.stringify(check)).join(", ");
+    return toolError(
+      `dispute_check: no check of this task is named ${JSON.stringify(name)}. Its checks are: ${known}. For a check of a ` +
+        `task already merged, give that task's id as "task".`,
+    );
+  }
+  return { kind: "dispute", checkName: name, ofTask: null, reason };
+}
+
 async function runTool(toolName: string, input: unknown, context: ToolContext): Promise<RanTool> {
   const { cell } = context;
   if (!Object.hasOwn(context.tools, toolName)) {
@@ -517,16 +559,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
     case "edit_file": {
       const args = editFileArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
-      const { path, old_text: oldText, new_text: newText } = args.data;
-      const text = uncutText(await cell.readFile(path));
-      if (text === null) return toolError(`${path} is larger than the workspace read limit; edit_file cannot rewrite it safely.`);
-      const { count, first } = countOccurrences(text, oldText);
-      if (count === 0) return toolError(`old_text not found in ${path}. Read the file and copy the exact text.`);
-      if (count > 1) return toolError(`old_text matches ${count} locations in ${path}. Include more surrounding text.`);
-      // Spliced by index: String.replace would interpret `$&` and `$1` in new_text.
-      await cell.writeFile(path, text.slice(0, first) + newText + text.slice(first + oldText.length));
-      context.checks?.fileWritten(path);
-      return ok(wholeText(`Edited ${path}: replaced ${oldText.split("\n").length} line(s) with ${newText.split("\n").length} line(s).`));
+      return editFile(args.data, context);
     }
     case "list_directory": {
       const args = listDirectoryArgs.safeParse(input);
@@ -589,29 +622,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const args = disputeCheckArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       if (context.taskChecks === null) return toolError(`dispute_check is not available in this attempt.`);
-      const name = args.data.name.trim();
-      const reason = args.data.reason.trim();
-      const ofTask = args.data.task?.trim();
-      if (ofTask !== undefined) {
-        const merged = context.taskChecks.mergedChecks;
-        if (!merged.some((check) => check.taskId === ofTask && check.name === name)) {
-          const known = merged.filter((check) => check.taskId === ofTask).map((check) => JSON.stringify(check.name));
-          return toolError(
-            known.length === 0
-              ? `dispute_check: no task already merged has id ${JSON.stringify(ofTask)} with stored checks.`
-              : `dispute_check: task ${ofTask} has no check named ${JSON.stringify(name)}. Its checks are: ${known.join(", ")}.`,
-          );
-        }
-        return { kind: "dispute", checkName: name, ofTask, reason };
-      }
-      if (!context.taskChecks.checkNames.includes(name)) {
-        const known = context.taskChecks.checkNames.map((check) => JSON.stringify(check)).join(", ");
-        return toolError(
-          `dispute_check: no check of this task is named ${JSON.stringify(name)}. Its checks are: ${known}. For a check of a ` +
-            `task already merged, give that task's id as "task".`,
-        );
-      }
-      return { kind: "dispute", checkName: name, ofTask: null, reason };
+      return disputeCheck(args.data, context.taskChecks);
     }
     case "finish": {
       // The finish parsed is the finish offered: environment work's carries the statement.

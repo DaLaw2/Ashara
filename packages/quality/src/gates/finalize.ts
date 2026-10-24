@@ -254,6 +254,16 @@ function conflictContext(taskId: string, files: readonly string[], presented: Ma
   return `${head}\n${listed}`;
 }
 
+/** One finalize under the checkout's lock: its task and attempt, and the target it merges into. */
+interface HeldFinalize {
+  readonly deps: FinalizeDeps;
+  readonly task: DispatchRef;
+  readonly targetProjectPath: string;
+  readonly attempt: number;
+}
+
+type FailedMerge = Extract<Awaited<ReturnType<typeof tentativeMerge>>, { readonly status: "conflict" | "error" }>;
+
 async function finalizeHeld(
   deps: FinalizeDeps,
   task: DispatchRef,
@@ -261,6 +271,7 @@ async function finalizeHeld(
   attempt: number,
   lease: CheckoutLease,
 ): Promise<FinalizeResult> {
+  const held: HeldFinalize = { deps, task, targetProjectPath, attempt };
   const head = await recoverOrphanedMerge(targetProjectPath, deps.logger);
   await ensureTargetGitInit(targetProjectPath, deps.workdirBase);
 
@@ -268,31 +279,52 @@ async function finalizeHeld(
   // This is also where a checkout an earlier finalize could not restore (TargetCheckoutUnrestored)
   // stays blocked: every finalize restores it first, and none merges until that succeeds.
   const unrestored = await unrestoredReason(targetProjectPath, head);
-  if (unrestored !== null) {
-    // Fail closed: an unrestorable checkout makes every merge verdict below
-    // untrustworthy, so refuse rather than merge onto unknown residue. Nothing is known of the
-    // task's work, so it is blocked for the operator, never failed against the task.
-    const fault = new VerificationInfrastructureFault(task.id, "restoring the target checkout to HEAD before the merge", { cause: unrestored });
-    deps.logger.error("quality.checkout-unrestored", `target checkout could not be restored — refusing to merge: ${unrestored}`, {
-      taskId: task.id,
-      attempt,
-      targetPath: targetProjectPath,
-    }, fault);
-    return {
-      success: false,
-      failedStep: "merge",
-      gateFailureContext: `Target checkout could not be restored to HEAD before merge: ${unrestored}`,
-      errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, {
-        taskId: task.id,
-        attempt,
-        step: "resetCheckoutToHead",
-      }),
-      fault: { class: "ashara", error: fault },
-    };
-  }
+  if (unrestored !== null) return refuseUnrestoredCheckout(held, unrestored);
 
   const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id), deps.logger);
+  if (mergeResult.status === "conflict" || mergeResult.status === "error") return undoFailedMerge(held, mergeResult);
 
+  const unverified = await verifyMerge(held, lease);
+  if (unverified !== null) return unverified;
+
+  const mergeCommit = await commitMerge(targetProjectPath, task.id);
+  deps.logger.info("quality.merge-committed", `merge committed to main as ${mergeCommit}`, { taskId: task.id, attempt, mergeCommit });
+
+  // The dev_sessions terminal write is not made here: it lives in the dispatch's
+  // withSessionLifecycle, the one seam every outcome passes through, so no return path
+  // can leave a session without one.
+  return { success: true, mergeCommit };
+}
+
+/**
+ * Fail closed: an unrestorable checkout makes every merge verdict untrustworthy, so the finalize
+ * refuses rather than merge onto unknown residue. Nothing is known of the task's work, so it is
+ * blocked for the operator, never failed against the task.
+ */
+function refuseUnrestoredCheckout(held: HeldFinalize, unrestored: string): FinalizeResult {
+  const { deps, task, targetProjectPath, attempt } = held;
+  const fault = new VerificationInfrastructureFault(task.id, "restoring the target checkout to HEAD before the merge", { cause: unrestored });
+  deps.logger.error("quality.checkout-unrestored", `target checkout could not be restored — refusing to merge: ${unrestored}`, {
+    taskId: task.id,
+    attempt,
+    targetPath: targetProjectPath,
+  }, fault);
+  return {
+    success: false,
+    failedStep: "merge",
+    gateFailureContext: `Target checkout could not be restored to HEAD before merge: ${unrestored}`,
+    errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, {
+      taskId: task.id,
+      attempt,
+      step: "resetCheckoutToHead",
+    }),
+    fault: { class: "ashara", error: fault },
+  };
+}
+
+/** A tentative merge that conflicted or failed, undone by a reset to HEAD: the task's conflict, or Ashara's own fault. */
+async function undoFailedMerge(held: HeldFinalize, mergeResult: FailedMerge): Promise<FinalizeResult> {
+  const { deps, task, targetProjectPath, attempt } = held;
   if (mergeResult.status === "conflict") {
     // Handed a conflict with main and still conflicting: main moved again under the resolution.
     const operation = deps.presentedConflict === null ? "tentativeMerge" : "tentativeMergeAfterConflict";
@@ -316,29 +348,31 @@ async function finalizeHeld(
     };
   }
 
-  if (mergeResult.status === "error") {
-    // Not a conflict: git on the host refused the merge (an index lock, residue, Z0's own git). The
-    // branch was never weighed against main, so this is Ashara's fault, never the task's.
-    const fault = new VerificationInfrastructureFault(task.id, "tentative merge of the task branch into main", { cause: mergeResult.cause });
-    const gateContext = { taskId: task.id, attempt, errorClass: fault.name, step: fault.step };
-    const unrestored = await undoTentativeMerge(deps.logger, task.id, targetProjectPath, "a failed tentative merge");
-    if (unrestored !== null) {
-      return unrestoredFailure(unrestored, "merge", `Tentative merge failed: ${mergeResult.message}`, {
-        operation: POST_MERGE_CHECK_RUN,
-        gateOutput: fault,
-        gateContext,
-      });
-    }
-    deps.logger.error("quality.tentative-merge-failed", "tentative merge FAILED without a conflict — undone by a reset to HEAD", { taskId: task.id, attempt }, fault);
-    return {
-      success: false,
-      failedStep: "merge",
-      gateFailureContext: `Tentative merge failed: ${mergeResult.message}`,
-      errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, gateContext),
-      fault: { class: "ashara", error: fault },
-    };
+  // Not a conflict: git on the host refused the merge (an index lock, residue, Z0's own git). The
+  // branch was never weighed against main, so this is Ashara's fault, never the task's.
+  const fault = new VerificationInfrastructureFault(task.id, "tentative merge of the task branch into main", { cause: mergeResult.cause });
+  const gateContext = { taskId: task.id, attempt, errorClass: fault.name, step: fault.step };
+  const unrestored = await undoTentativeMerge(deps.logger, task.id, targetProjectPath, "a failed tentative merge");
+  if (unrestored !== null) {
+    return unrestoredFailure(unrestored, "merge", `Tentative merge failed: ${mergeResult.message}`, {
+      operation: POST_MERGE_CHECK_RUN,
+      gateOutput: fault,
+      gateContext,
+    });
   }
+  deps.logger.error("quality.tentative-merge-failed", "tentative merge FAILED without a conflict — undone by a reset to HEAD", { taskId: task.id, attempt }, fault);
+  return {
+    success: false,
+    failedStep: "merge",
+    gateFailureContext: `Tentative merge failed: ${mergeResult.message}`,
+    errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, gateContext),
+    fault: { class: "ashara", error: fault },
+  };
+}
 
+/** The tentative merge's post-merge verification, then its dirty-tree check; null once both pass, else the aborted merge's failure. */
+async function verifyMerge(held: HeldFinalize, lease: CheckoutLease): Promise<FinalizeResult | null> {
+  const { deps, task, targetProjectPath, attempt } = held;
   let postMergeVerify: PostMergeVerdict;
   try {
     postMergeVerify = await deps.postMergeVerify(targetProjectPath, lease);
@@ -390,10 +424,17 @@ async function finalizeHeld(
     });
   }
 
-  // Dirty-tree check: the merge must be the only change in the target checkout before it is
-  // committed. Every check runs on a throwaway checkout of the merge (task-checks.ts,
-  // environment-check.ts), so a tracked file changed here is residue of Z0's own machinery, and a
-  // git diff that cannot run is Z0's git: either way Ashara's fault, never the implementer's.
+  return checkCleanTree(held);
+}
+
+/**
+ * Dirty-tree check: the merge must be the only change in the target checkout before it is
+ * committed. Every check runs on a throwaway checkout of the merge (task-checks.ts,
+ * environment-check.ts), so a tracked file changed here is residue of Z0's own machinery, and a
+ * git diff that cannot run is Z0's git: either way Ashara's fault, never the implementer's.
+ */
+async function checkCleanTree(held: HeldFinalize): Promise<FinalizeResult | null> {
+  const { deps, task, targetProjectPath, attempt } = held;
   let dirtyFiles: string[];
   try {
     dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
@@ -424,14 +465,7 @@ async function finalizeHeld(
       fault: { class: "ashara", error: fault },
     });
   }
-
-  const mergeCommit = await commitMerge(targetProjectPath, task.id);
-  deps.logger.info("quality.merge-committed", `merge committed to main as ${mergeCommit}`, { taskId: task.id, attempt, mergeCommit });
-
-  // The dev_sessions terminal write is not made here: it lives in the dispatch's
-  // withSessionLifecycle, the one seam every outcome passes through, so no return path
-  // can leave a session without one.
-  return { success: true, mergeCommit };
+  return null;
 }
 
 /**

@@ -206,22 +206,50 @@ export class CoreLoop {
   private async cycleSteps(): Promise<CycleResult> {
     const { deps } = this;
 
+    const told = await this.clientStateSteps();
+    if (told !== null) return this.haltAtCap(told);
+    const reported = await this.reportSteps();
+    if (reported !== null) return this.haltAtCap(reported);
+
+    // Every step below makes LLM calls, each admitted by Finance's spend cap. A cycle at the cap
+    // releases what the previous cycle's attempts held inside haltAtCap.
+    const atCap = await deps.loop.spendCap.deploymentStop();
+    if (atCap) return this.haltAtCap(atCap);
+    const held = await this.releaseHeld();
+    if (held.kind === "stop") return this.haltAtCap(held.stop);
+
+    const read = await this.clientReadingSteps();
+    if (read !== null) return this.haltAtCap(read);
+    const planned = await this.planningSteps();
+    if (planned !== null) return this.haltAtCap(planned);
+    const swept = await this.sweepSteps();
+    if (swept !== null) return this.haltAtCap(swept);
+
+    return this.dispatchStep();
+  }
+
+  /**
+   * The steps that bring each project's state up to date before any report on it, none of them a model
+   * call: the client's stops and receipts, a merged stack choice, and the halts that resume by themselves.
+   */
+  private async clientStateSteps(): Promise<LoopStop | null> {
+    const { deps } = this;
     // The client's stops first, even at the spend cap (no LLM call): a project
     // stopped here is not active, so no step below takes it in, plans it,
     // reports on it or dispatches its tasks. Nothing of this process is running
     // for it now: the previous cycle awaited every task it dispatched.
     const stops = await this.takeClientStops();
-    if (stops !== null) return this.haltAtCap(stops);
+    if (stops !== null) return stops;
     // Then every message of the client's still unanswered gets its receipt (no LLM call), stating its
     // project's state as the stops just left it and what happens to the message.
     const receipts = await this.postReceipts("read-cap");
-    if (receipts !== null) return this.haltAtCap(receipts);
+    if (receipts !== null) return receipts;
 
     // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
     // so before the spend-cap check.
     const choices = await this.step("stack-choice", () => deps.reporting.stackChoices.runPending());
-    if (choices.kind === "stop") return this.haltAtCap(choices.stop);
+    if (choices.kind === "stop") return choices.stop;
     for (const choice of choices.kind === "ran" ? choices.value : []) {
       if (choice.kind !== "project-blocked" && choice.kind !== "step-faulted") {
         const version = choice.kind === "recorded" ? ` as vision v${choice.visionVersion}` : "";
@@ -234,7 +262,7 @@ export class CoreLoop {
     // told this cycle. Only a halt already told is resumed: one written late in the previous cycle
     // is reported below first, and resumes from the next cycle on.
     const resumed = await this.step("infrastructure-resume", () => resumeInfrastructureHalts(deps.loop.projectRepo, deps.dispatch.infrastructureProbe, deps.loop.containment, deps.loop.logger));
-    if (resumed.kind === "stop") return this.haltAtCap(resumed.stop);
+    if (resumed.kind === "stop") return resumed.stop;
     // A project halted on client_wait resumes by itself once the client's answer to a question its held
     // tasks wait on is read (no LLM call); like an infrastructure halt, only once its halt is told.
     const answered = await this.step("client-wait-resume", () =>
@@ -246,39 +274,39 @@ export class CoreLoop {
         logger: deps.loop.logger,
       }),
     );
-    if (answered.kind === "stop") return this.haltAtCap(answered.stop);
+    if (answered.kind === "stop") return answered.stop;
+    return null;
+  }
 
+  /** The reports owed before the spend-cap check, none of them a model call. */
+  private async reportSteps(): Promise<LoopStop | null> {
     // Each stop and halt episode still owed one gets its terminal sweep on main (no LLM call), before
     // the stop's and the halt's terminal message, so each guarantee's evidence on the last commit is on
     // record when it is told.
     const terminal = await this.sweepTerminals();
-    if (terminal !== null) return this.haltAtCap(terminal);
+    if (terminal !== null) return terminal;
     // The stop and halt messages owed: a stop's taken above, a halt's recorded in an earlier cycle (or
     // before a restart), each after its terminal sweep. No LLM call, so before the spend-cap check: a
     // project the budget cap halted is told so. Every other kind is told where it can become due below,
     // and every kind as the cap halts the cycle.
     const terminalReports = await this.postTerminalReports(CARRIED_TERMINALS);
-    if (terminalReports !== null) return this.haltAtCap(terminalReports);
+    if (terminalReports !== null) return terminalReports;
 
     // A project's return to work, once its halt is told: one plain report each to the client.
     const blockReports = await this.postBlockReports();
-    if (blockReports !== null) return this.haltAtCap(blockReports);
+    if (blockReports !== null) return blockReports;
     // A project whose model requests run ahead of its finished work is warned once per zone and plan
     // revision, from the ledger's rows (no LLM call), so the warning reaches the client and the
     // operator before the budget halts the project.
-    const warnings = await this.postBurnWarnings();
-    if (warnings !== null) return this.haltAtCap(warnings);
+    return this.postBurnWarnings();
+  }
 
-    // Every step below makes LLM calls, each admitted by Finance's spend cap. A cycle at the cap
-    // releases what the previous cycle's attempts held inside haltAtCap.
-    const atCap = await deps.loop.spendCap.deploymentStop();
-    if (atCap) return this.haltAtCap(atCap);
-    const held = await this.releaseHeld();
-    if (held.kind === "stop") return this.haltAtCap(held.stop);
-
+  /** The client's tenders, answers and changes of direction, each read by the Liaison. */
+  private async clientReadingSteps(): Promise<LoopStop | null> {
+    const { deps } = this;
     // Tenders first: a project's intake comes before any work on it.
     const intake = await this.stepThenCap("liaison-intake", () => deps.client.liaisonIntake.runPending());
-    if (intake.kind === "stop") return this.haltAtCap(intake.stop);
+    if (intake.kind === "stop") return intake.stop;
     for (const outcome of intake.outcomes) logIntake(deps.loop.logger, outcome);
 
     // Then the client's answers, before planning: one read now appends the vision version
@@ -287,19 +315,24 @@ export class CoreLoop {
     // (correction_holds), which the gate below never dispatches, while the project's other tasks go on,
     // until the replanning step replaces them.
     const answers = await this.readAnswers();
-    if (answers !== null) return this.haltAtCap(answers);
+    if (answers !== null) return answers;
     // Then the client's changes of direction, each read into operations on the contract in force and
     // answered with its impact note this cycle: applied as the next vision version, holding the tasks
     // citing a key it affects as answers do, or held for the client's confirmation when the Liaison
     // pushes back.
     const changes = await this.stepThenCap("client-change", () => deps.client.clientChanges.runPending());
-    if (changes.kind === "stop") return this.haltAtCap(changes.stop);
+    if (changes.kind === "stop") return changes.stop;
     for (const outcome of changes.outcomes) logChange(deps.loop.logger, outcome);
+    return null;
+  }
 
+  /** The roster, the first plan and the revisions of each project, and the reports on them. */
+  private async planningSteps(): Promise<LoopStop | null> {
+    const { deps } = this;
     // Then a roster for each project with vision v1 and none: first planning
     // requires one, since every planned task gets its owning role.
     const rosters = await this.stepThenCap("roster", () => deps.planning.rosterDerivation.runPending());
-    if (rosters.kind === "stop") return this.haltAtCap(rosters.stop);
+    if (rosters.kind === "stop") return rosters.stop;
     for (const outcome of rosters.outcomes) {
       // Organization refuses a roster it cannot derive; the project's halt is Delivery's,
       // blamed by the refusal's cause chain: a ladder run out is the model's failure, an unreadable
@@ -311,7 +344,7 @@ export class CoreLoop {
     // Answers posted while the roster was derived are read before the first plan, so it is made
     // from the vision they state.
     const beforePlan = await this.readAnswers();
-    if (beforePlan !== null) return this.haltAtCap(beforePlan);
+    if (beforePlan !== null) return beforePlan;
 
     // Then a first plan for each project that has a vision, a roster and no work items,
     // and the Liaison's report on each recorded planning outcome. Both before
@@ -320,14 +353,14 @@ export class CoreLoop {
     // A project whose own record is bad is blocked inside each step, logged at
     // warn there, and skipped; any other failure of one project is contained to it (containEach).
     const plans = await this.stepThenCap("first-plan", () => deps.planning.firstPlanning.runPending());
-    if (plans.kind === "stop") return this.haltAtCap(plans.stop);
+    if (plans.kind === "stop") return plans.stop;
     for (const outcome of plans.outcomes) logFirstPlan(deps.loop.logger, outcome);
     // Answers posted while the first plan was being written are read before any of its tasks is
     // dispatched: one that changes an assumption the plan relied on holds the tasks citing it or a
     // guarantee resting on it, the
     // revision below replaces them in this cycle, and the gate never dispatches the work it replaces.
     const afterPlan = await this.readAnswers();
-    if (afterPlan !== null) return this.haltAtCap(afterPlan);
+    if (afterPlan !== null) return afterPlan;
     // Then a revision for each project's awaited corrections, once no task citing a key they affect
     // is in progress, replacing only that work; and a repair of each plan a given-up task stopped
     // (the gate dispatches none of that project's tasks meanwhile, so no dependent of a given-up task
@@ -336,15 +369,18 @@ export class CoreLoop {
     // plan's Epic stays InProgress while any child is open, and the revision supersedes it with the
     // open tasks it held. The Liaison's report on the revision follows with the other planning reports.
     const replans = await this.stepThenCap("replan", () => deps.planning.replanning.runPending());
-    if (replans.kind === "stop") return this.haltAtCap(replans.stop);
+    if (replans.kind === "stop") return replans.stop;
     for (const outcome of replans.outcomes) logReplan(deps.loop.logger, outcome);
     const planReports = await this.postPlanReports();
-    if (planReports !== null) return this.haltAtCap(planReports);
+    if (planReports !== null) return planReports;
     // A first planning that stopped, and a contract version Ashara declines that intake, an answer or a
     // change wrote, are told now, with the guarantee table.
-    const planningStopped = await this.postTerminalReports(PLANNED_TERMINALS);
-    if (planningStopped !== null) return this.haltAtCap(planningStopped);
+    return this.postTerminalReports(PLANNED_TERMINALS);
+  }
 
+  /** The exits of Blocked tasks, then the acceptance sweeps on main and the delivered reports they make due. */
+  private async sweepSteps(): Promise<LoopStop | null> {
+    const { deps } = this;
     // Every Blocked task takes its exit (Completed, Pending or given up) before the gate reads them.
     const released = await this.step("parked-exits", () =>
       releaseClearedBlocks({
@@ -357,15 +393,18 @@ export class CoreLoop {
         logger: deps.loop.logger,
       }),
     );
-    if (released.kind === "stop") return this.haltAtCap(released.stop);
+    if (released.kind === "stop") return released.stop;
 
     // A project with every task settled and a goal task done is swept on main (no LLM call): Accepted
     // and told so, or a defect whose repair the next cycle's replanning plans.
     const swept = await this.step("acceptance", () => runAcceptanceSweeps({ ...deps.sweeps, projectRepo: deps.loop.projectRepo, eventStore: deps.loop.eventStore, containment: deps.loop.containment, logger: deps.loop.logger }));
-    if (swept.kind === "stop") return this.haltAtCap(swept.stop);
-    const deliveredAfterSweep = await this.postTerminalReports(ACCEPTED_TERMINALS);
-    if (deliveredAfterSweep !== null) return this.haltAtCap(deliveredAfterSweep);
+    if (swept.kind === "stop") return swept.stop;
+    return this.postTerminalReports(ACCEPTED_TERMINALS);
+  }
 
+  /** The gate, then the cycle's dispatch over its lanes, closed by the deployment's cap check. */
+  private async dispatchStep(): Promise<CycleResult> {
+    const { deps } = this;
     const gated = await this.step("gate", () => PlanningService.gate(deps.loop.workItemRepo, deps.loop.projectRepo, deps.loop.eventStore, deps.loop.containment, deps.loop.logger));
     if (gated.kind === "stop") return this.haltAtCap(gated.stop);
     if (gated.kind === "refused" || gated.value.available.length === 0) return { tasksProcessed: 0, results: [], stop: null };

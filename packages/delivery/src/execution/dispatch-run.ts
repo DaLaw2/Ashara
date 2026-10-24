@@ -221,34 +221,11 @@ class CountedDispatchThrew extends Error {
 
 /** The dispatch after the seam counted it: its run, then its routing. */
 async function runCountedDispatch(run: CountedDispatch): Promise<TaskResult> {
-  const { deps, task, workItem, routingDeps, attempt } = run;
-  let executed: RoutedExecution;
-  try {
-    executed = await dispatchAndRoute(run);
-  } catch (e) {
-    const refusal = deps.loop.spendCap.refusalOf(e);
-    if (refusal?.kind === "task_work") {
-      // The task's spent work budget surfaced as a throw: given up as on a refused result, never
-      // requeued, since every re-dispatch meets the same refusal.
-      await routeAsGivenUp(routingDeps, task.id, workBudgetGiveUp(refusal), "refund");
-      return blockedResult(task.id, refusal.reason);
-    }
-    const interrupted = cellExecInterruptedOf(e);
-    if (interrupted !== null) {
-      // The shutdown stopped a command of the dispatch in a cell: no verdict and no fault, routed as
-      // an interrupted attempt is (verdict-routing's "interrupted").
-      await routeAsRequeued(routingDeps, { task: workItem, why: "a shutdown interrupted its dispatch in a cell", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
-      return { taskId: task.id, status: "interrupted", detail: interrupted.message };
-    }
-    // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
-    // code): never the task's work, so its counted dispatch is refunded and no lesson is written.
-    const fault = asharaFaultOf(e, "run or route the dispatch");
-    deps.loop.logger.error("delivery.dispatch-threw", "the dispatch threw, Ashara's own fault, routed uncharged", { taskId: task.id, attempt }, e);
-    await haltOnProjectRefusal(deps.loop, task, e);
-    await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
-    return { taskId: task.id, status: "interrupted", detail: fault.reason };
-  }
-  const { result, outcome, errorEnvelope: execEnvelope, verdict, routedHere } = executed;
+  const { deps, task } = run;
+  const ran = await dispatchOrRecover(run);
+  if (ran.kind === "recovered") return ran.result;
+  const executed = ran.executed;
+  const { result, routedHere } = executed;
 
   // The target project path is minted, validated, and recorded on the project
   // inside resolveTargetProjectPath, its single writer.
@@ -273,123 +250,169 @@ async function runCountedDispatch(run: CountedDispatch): Promise<TaskResult> {
   }
 
   if (result.status === "failed" || result.status === "blocked") {
-    if (verdict === undefined) throw new FailureVerdictMissing(task.id, result.status);
-    let current = await PlanningService.findWorkItem(deps.loop.workItemRepo, task.id);
-    if (current && current.status === "InProgress") {
-      await handleTaskError(deps, task, verdict);
-      current = await PlanningService.findWorkItem(deps.loop.workItemRepo, task.id);
-    }
-    // Exhaustive over WorkItemStatus: adding a status without a case here is
-    // a compile error, not a new silent fall-through. The routing commits the
-    // WorkItem to Failed for BOTH failed and blocked TaskResults from an agent
-    // dispatch (a "blocked" result is a block the agent attributed to nothing outside
-    // its task; one on another task's work or the client's decision is
-    // prerequisite_needed or client_decision_needed, routed above to that owner without
-    // spending an attempt, so never reaches here). Blocked status is reached
-    // only by the parked dispatch outcomes (routeAsParked), which returned
-    // above. Any item that landed at Failed is routed through
-    // the FailureRouter so it recovers (replan) or terminates
-    // (abandon) rather than sitting in Failed and deadlocking its
-    // dependents.
-    if (!current) {
-      deps.loop.logger.warn(
-        "delivery.item-vanished",
-        `work item vanished after agent returned (result: ${result.status}); dispatchCount already incremented, agent spend unrecoverable`,
-        { taskId: task.id, result: result.status },
-      );
-    } else {
-      switch (current.status) {
-        case "Failed": {
-          const failure: RawFailureContext = {
-            detail: result.detail,
-            // With no envelope, the attempt's Outcome as plain data: its claim, read as no verdict.
-            raw: execEnvelope ? { ...execEnvelope } : outcome !== null ? { ...toRecordedOutcome(outcome) } : {},
-          };
-          // dispatchCount was already incremented for this attempt at the dispatch
-          // seam above and is not mutated by recoverFailedItem, so it is the exact
-          // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
-          const attempts = current.dispatchCount;
-          const action = await recoverFailedItem(
-            {
-              workItemRepo: deps.loop.workItemRepo,
-              eventPublisher: deps.loop.eventStore,
-              failureRouter: deps.dispatch.failureRouter,
-              logger: deps.loop.logger,
-            },
-            current,
-            failure,
-            verdict,
-          );
-          // Every FailureRouter decision here (replan/abandon) means
-          // this dispatch attempt did not succeed: capture it as a
-          // failed_approaches lesson so a later brief sees WHY, closing the gap
-          // where only a THROWN orchestrator error (the catch block below) ever
-          // reached recordFailedApproach. This is the ONLY call site that writes
-          // for the typed-failed-results path — the catch block's own
-          // recoverFailedItem call does not, so a thrown error never
-          // double-writes.
-          await recordFailedApproach(
-            deps.dispatch.failedApproachRepo,
-            current,
-            () => findEpicId(deps.loop.workItemRepo, current),
-            failure.detail,
-            { action, attempts },
-          );
-          break;
-        }
-
-        case "InProgress":
-          // handleTaskError was called but the concurrent pre-image guard
-          // rejected the save — another writer moved the item first. The
-          // startup reconciler will requeue on next restart.
-          deps.loop.logger.warn(
-            "delivery.result-discarded",
-            `work item still InProgress after handleTaskError (expected Failed); agent result (${result.status}) discarded — ` +
-              `startup reconciler will requeue on next restart`,
-            { taskId: task.id, result: result.status, status: current.status },
-          );
-          break;
-
-        case "Completed":
-        case "Pending":
-        case "Blocked":
-          // Preempted to a non-Abandoned, non-Failed status. The agent's
-          // result is not routable. dispatchCount was already incremented.
-          deps.loop.logger.warn(
-            "delivery.result-discarded",
-            `work item preempted: expected Failed, found "${current.status}" after agent returned (result: ${result.status}); ` +
-              `agent result discarded, dispatchCount already incremented, agent spend unrecoverable`,
-            { taskId: task.id, result: result.status, status: current.status },
-          );
-          break;
-
-        case "Abandoned": {
-          // Preempted to Abandoned while the agent was executing. The
-          // agent's result has value: persist it on the existing
-          // blockedReason so cascade-completion can see the work's
-          // outcome without reopening the terminal status.
-          const outcomeKind = result.status === "blocked" ? "blocked" as const : "failed" as const;
-          await salvagePreemptedResult(deps.loop, current, outcomeKind, result.detail);
-          await recordFailedApproach(
-            deps.dispatch.failedApproachRepo,
-            current,
-            () => findEpicId(deps.loop.workItemRepo, current),
-            result.detail,
-            `Preempted to Abandoned during execution (result: ${result.status}). ` +
-            `Agent spend incurred, result salvaged.`,
-          );
-          break;
-        }
-
-        default: {
-          const _exhaustive: never = current.status;
-          throw new UnhandledWorkItemStatus(task.id, "processTask post-agent ladder", _exhaustive);
-        }
-      }
-    }
+    await settleUnsuccessful(deps, task, executed);
   }
 
   return result;
+}
+
+/**
+ * The dispatch's run and routing, or, when it threw, the throw's own routing: a spent work budget
+ * gives the task up, a shutdown's interruption requeues it, and anything else is Ashara's fault.
+ */
+async function dispatchOrRecover(
+  run: CountedDispatch,
+): Promise<{ readonly kind: "ran"; readonly executed: RoutedExecution } | { readonly kind: "recovered"; readonly result: TaskResult }> {
+  const { deps, task, workItem, routingDeps, attempt } = run;
+  try {
+    return { kind: "ran", executed: await dispatchAndRoute(run) };
+  } catch (e) {
+    const refusal = deps.loop.spendCap.refusalOf(e);
+    if (refusal?.kind === "task_work") {
+      // The task's spent work budget surfaced as a throw: given up as on a refused result, never
+      // requeued, since every re-dispatch meets the same refusal.
+      await routeAsGivenUp(routingDeps, task.id, workBudgetGiveUp(refusal), "refund");
+      return { kind: "recovered", result: blockedResult(task.id, refusal.reason) };
+    }
+    const interrupted = cellExecInterruptedOf(e);
+    if (interrupted !== null) {
+      // The shutdown stopped a command of the dispatch in a cell: no verdict and no fault, routed as
+      // an interrupted attempt is (verdict-routing's "interrupted").
+      await routeAsRequeued(routingDeps, { task: workItem, why: "a shutdown interrupted its dispatch in a cell", site: "execution.routeAsInterrupted", write: { kind: "refund" } });
+      return { kind: "recovered", result: { taskId: task.id, status: "interrupted", detail: interrupted.message } };
+    }
+    // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
+    // code): never the task's work, so its counted dispatch is refunded and no lesson is written.
+    const fault = asharaFaultOf(e, "run or route the dispatch");
+    deps.loop.logger.error("delivery.dispatch-threw", "the dispatch threw, Ashara's own fault, routed uncharged", { taskId: task.id, attempt }, e);
+    await haltOnProjectRefusal(deps.loop, task, e);
+    await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
+    return { kind: "recovered", result: { taskId: task.id, status: "interrupted", detail: fault.reason } };
+  }
+}
+
+/** A failed or blocked result not routed in the dispatch: its item committed to Failed, then settled by the status it is found at. */
+async function settleUnsuccessful(deps: DispatchRunDeps, task: WorkItem, executed: RoutedExecution): Promise<void> {
+  const { result, verdict } = executed;
+  if (verdict === undefined) throw new FailureVerdictMissing(task.id, result.status);
+  let current = await PlanningService.findWorkItem(deps.loop.workItemRepo, task.id);
+  if (current && current.status === "InProgress") {
+    await handleTaskError(deps, task, verdict);
+    current = await PlanningService.findWorkItem(deps.loop.workItemRepo, task.id);
+  }
+  // Exhaustive over WorkItemStatus: adding a status without a case here is
+  // a compile error, not a new silent fall-through. The routing commits the
+  // WorkItem to Failed for BOTH failed and blocked TaskResults from an agent
+  // dispatch (a "blocked" result is a block the agent attributed to nothing outside
+  // its task; one on another task's work or the client's decision is
+  // prerequisite_needed or client_decision_needed, routed above to that owner without
+  // spending an attempt, so never reaches here). Blocked status is reached
+  // only by the parked dispatch outcomes (routeAsParked), which returned
+  // above. Any item that landed at Failed is routed through
+  // the FailureRouter so it recovers (replan) or terminates
+  // (abandon) rather than sitting in Failed and deadlocking its
+  // dependents.
+  if (!current) {
+    deps.loop.logger.warn(
+      "delivery.item-vanished",
+      `work item vanished after agent returned (result: ${result.status}); dispatchCount already incremented, agent spend unrecoverable`,
+      { taskId: task.id, result: result.status },
+    );
+    return;
+  }
+  switch (current.status) {
+    case "Failed":
+      await recoverFailedResult(deps, current, executed, verdict);
+      break;
+
+    case "InProgress":
+      // handleTaskError was called but the concurrent pre-image guard
+      // rejected the save — another writer moved the item first. The
+      // startup reconciler will requeue on next restart.
+      deps.loop.logger.warn(
+        "delivery.result-discarded",
+        `work item still InProgress after handleTaskError (expected Failed); agent result (${result.status}) discarded — ` +
+          `startup reconciler will requeue on next restart`,
+        { taskId: task.id, result: result.status, status: current.status },
+      );
+      break;
+
+    case "Completed":
+    case "Pending":
+    case "Blocked":
+      // Preempted to a non-Abandoned, non-Failed status. The agent's
+      // result is not routable. dispatchCount was already incremented.
+      deps.loop.logger.warn(
+        "delivery.result-discarded",
+        `work item preempted: expected Failed, found "${current.status}" after agent returned (result: ${result.status}); ` +
+          `agent result discarded, dispatchCount already incremented, agent spend unrecoverable`,
+        { taskId: task.id, result: result.status, status: current.status },
+      );
+      break;
+
+    case "Abandoned": {
+      // Preempted to Abandoned while the agent was executing. The
+      // agent's result has value: persist it on the existing
+      // blockedReason so cascade-completion can see the work's
+      // outcome without reopening the terminal status.
+      const outcomeKind = result.status === "blocked" ? "blocked" as const : "failed" as const;
+      await salvagePreemptedResult(deps.loop, current, outcomeKind, result.detail);
+      await recordFailedApproach(
+        deps.dispatch.failedApproachRepo,
+        current,
+        () => findEpicId(deps.loop.workItemRepo, current),
+        result.detail,
+        `Preempted to Abandoned during execution (result: ${result.status}). ` +
+        `Agent spend incurred, result salvaged.`,
+      );
+      break;
+    }
+
+    default: {
+      const _exhaustive: never = current.status;
+      throw new UnhandledWorkItemStatus(task.id, "processTask post-agent ladder", _exhaustive);
+    }
+  }
+}
+
+/** An item the result left at Failed: routed by the FailureRouter, and the attempt kept as a failed approach. */
+async function recoverFailedResult(deps: DispatchRunDeps, current: WorkItem, executed: RoutedExecution, verdict: FailureVerdict): Promise<void> {
+  const { result, outcome, errorEnvelope: execEnvelope } = executed;
+  const failure: RawFailureContext = {
+    detail: result.detail,
+    // With no envelope, the attempt's Outcome as plain data: its claim, read as no verdict.
+    raw: execEnvelope ? { ...execEnvelope } : outcome !== null ? { ...toRecordedOutcome(outcome) } : {},
+  };
+  // dispatchCount was already incremented for this attempt at the dispatch
+  // seam above and is not mutated by recoverFailedItem, so it is the exact
+  // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
+  const attempts = current.dispatchCount;
+  const action = await recoverFailedItem(
+    {
+      workItemRepo: deps.loop.workItemRepo,
+      eventPublisher: deps.loop.eventStore,
+      failureRouter: deps.dispatch.failureRouter,
+      logger: deps.loop.logger,
+    },
+    current,
+    failure,
+    verdict,
+  );
+  // Every FailureRouter decision here (replan/abandon) means
+  // this dispatch attempt did not succeed: capture it as a
+  // failed_approaches lesson so a later brief sees WHY, closing the gap
+  // where only a THROWN orchestrator error (the catch block below) ever
+  // reached recordFailedApproach. This is the ONLY call site that writes
+  // for the typed-failed-results path — the catch block's own
+  // recoverFailedItem call does not, so a thrown error never
+  // double-writes.
+  await recordFailedApproach(
+    deps.dispatch.failedApproachRepo,
+    current,
+    () => findEpicId(deps.loop.workItemRepo, current),
+    failure.detail,
+    { action, attempts },
+  );
 }
 
 async function handleTaskError(deps: DispatchRunDeps, task: WorkItem, verdict: FailureVerdict): Promise<void> {

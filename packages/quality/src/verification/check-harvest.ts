@@ -197,47 +197,65 @@ export class CheckHarvest {
       if (set.kind === "unheld") return this.unheldRejected(d, outcome, { checkedTaskId, evidence: set.evidence, rejection, operator: atFoundation });
       if (problems.length > 0 || setRejected(set)) return this.checksRejected(d, outcome, rejection, atFoundation);
 
-      const revision = await this.deps.checks.append({
-        projectId: task.projectId,
-        taskId: work.checkedTaskId,
-        checkTaskId: task.id,
-        environmentVersion: work.environment.version,
-        baselineCommit: foundation.commit,
-        checks: defined,
-        files: harvest.files,
-      });
-      eventSink?.emit({
-        event: "task_checks_recorded",
-        taskId: task.id,
-        attempt: task.attempt,
-        checkedTaskId: work.checkedTaskId,
-        revision,
-        baselineCommit: foundation.commit,
-        checks: defined.map((check) => check.name),
-        files: harvest.files.map((file) => file.path),
-        held: set.kind === "held" ? set.items : [],
-      });
-      if (set.kind === "held") {
-        this.deps.logger.info(
-          "quality.checks-held",
-          `every check of revision ${revision} for task ${work.checkedTaskId} passes on the foundation, and ` +
-            `${set.items.join(", ")} held before the correction that put them in scope: its delivered sweep closes it on main`,
-          { taskId: task.id, attempt: task.attempt, checkedTaskId: work.checkedTaskId, revision, items: set.items },
-        );
-      }
-      eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
-      return {
-        status: "completed",
-        delivered: { kind: "checks-recorded", revision },
-        detail:
-          `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}, red-run on the ` +
-          `foundation ${foundation.commit}${set.kind === "held" ? `, where every one passes: ${set.items.join(", ")} still hold` : ""}`,
-        outcome,
-        sessionId,
-        attempt: task.attempt,
-      };
+      return await this.recordKept(d, work, { outcome, defined, files: harvest.files, set });
     } finally {
       await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch, this.deps.logger);
     }
+  }
+
+  /** A kept set appended to the implementation task's checks, with the foundation as its baseline: the check task is completed. */
+  private async recordKept(
+    d: VerifiedDispatch,
+    work: CheckAuthoring,
+    kept: {
+      readonly outcome: Outcome;
+      readonly defined: ReturnType<CheckAuthoring["recorder"]["checks"]>;
+      readonly files: Parameters<TaskCheckStore["append"]>[0]["files"];
+      readonly set: Awaited<ReturnType<typeof redRunSetVerdict>>;
+    },
+  ): Promise<ExecutionResult> {
+    const { eventSink } = this.deps;
+    const { task, sessionId } = d;
+    const { foundation } = work;
+    const { outcome, defined, files, set } = kept;
+    const revision = await this.deps.checks.append({
+      projectId: task.projectId,
+      taskId: work.checkedTaskId,
+      checkTaskId: task.id,
+      environmentVersion: work.environment.version,
+      baselineCommit: foundation.commit,
+      checks: defined,
+      files,
+    });
+    eventSink?.emit({
+      event: "task_checks_recorded",
+      taskId: task.id,
+      attempt: task.attempt,
+      checkedTaskId: work.checkedTaskId,
+      revision,
+      baselineCommit: foundation.commit,
+      checks: defined.map((check) => check.name),
+      files: files.map((file) => file.path),
+      held: set.kind === "held" ? set.items : [],
+    });
+    if (set.kind === "held") {
+      this.deps.logger.info(
+        "quality.checks-held",
+        `every check of revision ${revision} for task ${work.checkedTaskId} passes on the foundation, and ` +
+          `${set.items.join(", ")} held before the correction that put them in scope: its delivered sweep closes it on main`,
+        { taskId: task.id, attempt: task.attempt, checkedTaskId: work.checkedTaskId, revision, items: set.items },
+      );
+    }
+    eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
+    return {
+      status: "completed",
+      delivered: { kind: "checks-recorded", revision },
+      detail:
+        `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}, red-run on the ` +
+        `foundation ${foundation.commit}${set.kind === "held" ? `, where every one passes: ${set.items.join(", ")} still hold` : ""}`,
+      outcome,
+      sessionId,
+      attempt: task.attempt,
+    };
   }
 }

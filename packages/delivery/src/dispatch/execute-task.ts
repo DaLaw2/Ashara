@@ -239,6 +239,49 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
     return thrownBlocked({ task, sessionId, stage: "planWork", error: e, where: { step: "read the checks that decide the work", cell: "CI cell" }, agent: NO_AGENT, eventSink, logger: deps.logger });
   }
 
+  const resumed = await branchToResume(session, plan);
+  if ("status" in resumed) return resumed;
+  const { resumesBranch, conflict } = resumed;
+
+  let brief: AgentBrief;
+  try {
+    brief = await buildBrief({ context, task, spec, targetProjectPath, environment, plan, conflict });
+  } catch (e) {
+    // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
+    // other throw building the brief: never the agent's work, so blocked under class ashara.
+    const step = e instanceof ProjectIntentUnavailable ? "load the project's intent" : "build the brief";
+    return thrownBlocked({ task, sessionId, stage: "buildBrief", error: e, where: { step, cell: "brief" }, agent: NO_AGENT, eventSink, logger: deps.logger });
+  }
+
+  // The Assignment's agent half, once per attempt: a model that cannot be
+  // resolved (routing, budget) fails the dispatch before any worktree exists.
+  let staff: AgentStaff;
+  let records: DispatchRecords;
+  try {
+    const staffing = await deps.staffing.staff(task);
+    if (staffing.kind === "owner-unresolved") return ownerUnresolved(session, staffing);
+    if (staffing.kind === "no-wider-model") return noWiderModel(session, staffing);
+    staff = staffing.staff;
+    records = new DispatchRecords(deps.config.workdirBase, task.id, sessionId);
+    await records.writeBrief(brief);
+  } catch (e) {
+    return thrownBlocked({ task, sessionId, stage: "assignAgent", error: e, where: { step: "staff the attempt and write its brief", cell: "attempt records" }, agent: NO_AGENT, eventSink, logger: deps.logger });
+  }
+
+  return dispatchInCell({ ...session, environment, plan, resumesBranch, conflict, brief, staff, records });
+}
+
+/**
+ * Whether the attempt resumes the task's branch, and the conflict with main it starts from; a
+ * branch git cannot be asked about, or a conflict that cannot be prepared, blocks the dispatch.
+ */
+async function branchToResume(
+  session: SessionDispatch,
+  plan: WorkPlan,
+): Promise<ExecutionResult | { readonly resumesBranch: boolean; readonly conflict: MainConflict | null }> {
+  const { context, task, targetProjectPath, sessionId } = session;
+  const { deps } = context;
+  const { eventSink } = deps;
   // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
   // same files first), the attempt starts with main merged into it and the conflict in
   // its worktree, named in its brief: the branch as it is would only conflict again. A conflict
@@ -267,33 +310,7 @@ export async function executeTask({ context, task, targetProjectPath }: TaskDisp
       eventSink?.emit({ event: "merge_conflict_presented", taskId: task.id, attempt: task.attempt, mainCommit: conflict.mainCommit, files: conflict.files });
     }
   }
-
-  let brief: AgentBrief;
-  try {
-    brief = await buildBrief({ context, task, spec, targetProjectPath, environment, plan, conflict });
-  } catch (e) {
-    // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
-    // other throw building the brief: never the agent's work, so blocked under class ashara.
-    const step = e instanceof ProjectIntentUnavailable ? "load the project's intent" : "build the brief";
-    return thrownBlocked({ task, sessionId, stage: "buildBrief", error: e, where: { step, cell: "brief" }, agent: NO_AGENT, eventSink, logger: deps.logger });
-  }
-
-  // The Assignment's agent half, once per attempt: a model that cannot be
-  // resolved (routing, budget) fails the dispatch before any worktree exists.
-  let staff: AgentStaff;
-  let records: DispatchRecords;
-  try {
-    const staffing = await deps.staffing.staff(task);
-    if (staffing.kind === "owner-unresolved") return ownerUnresolved(session, staffing);
-    if (staffing.kind === "no-wider-model") return noWiderModel(session, staffing);
-    staff = staffing.staff;
-    records = new DispatchRecords(deps.config.workdirBase, task.id, sessionId);
-    await records.writeBrief(brief);
-  } catch (e) {
-    return thrownBlocked({ task, sessionId, stage: "assignAgent", error: e, where: { step: "staff the attempt and write its brief", cell: "attempt records" }, agent: NO_AGENT, eventSink, logger: deps.logger });
-  }
-
-  return dispatchInCell({ ...session, environment, plan, resumesBranch, conflict, brief, staff, records });
+  return { resumesBranch, conflict };
 }
 
 /**

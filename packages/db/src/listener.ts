@@ -21,35 +21,79 @@ export async function listenForEvents(
   callback: (eventType: string) => void,
   logger: Logger,
 ): Promise<PgListener> {
-  let stopped = false;
-  let client: pg.Client | null = null;
-  let pid: number | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let attempt = 0;
+  const listener = new EventsListener(databaseUrl, callback, logger);
+  await listener.start();
+  return listener;
+}
 
-  const traced = <T>(work: () => T): T => logger.scope({ trace: "new" }, work);
+/** The live LISTEN connection, the reconnect pending while there is none, and whether it was stopped. */
+class EventsListener implements PgListener {
+  private stopped = false;
+  private client: pg.Client | null = null;
+  private pid: number | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private attempt = 0;
 
-  function endQuietly(c: pg.Client, context: string): Promise<void> {
-    return c.end().catch((err: unknown) => {
-      logger.warn("db.listener-end-failed", `ending the ${context} LISTEN client failed`, { context }, err);
+  constructor(
+    private readonly databaseUrl: string,
+    private readonly callback: (eventType: string) => void,
+    private readonly logger: Logger,
+  ) {}
+
+  backendPid(): number | null {
+    return this.pid;
+  }
+
+  stop(): Promise<void> {
+    return this.traced(async () => {
+      this.stopped = true;
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      const c = this.client;
+      this.client = null;
+      this.pid = null;
+      if (c) await this.endQuietly(c, "stopped");
     });
   }
 
-  function drop(c: pg.Client, context: string): void {
-    if (client !== c) return;
-    client = null;
-    pid = null;
-    void endQuietly(c, context);
+  /** The first connect; one that fails schedules the reconnects. */
+  async start(): Promise<void> {
+    await this.traced(async () => {
+      try {
+        await this.connect();
+      } catch (e) {
+        // eslint-disable-next-line ashara/catch-continue -- best effort: the reconnect is scheduled with backoff, and a NOTIFY only wakes the runner early: its poll interval picks the same work up without one
+        this.logger.warn("db.listener-connect-failed", "LISTEN initial connection failed, will retry", {}, e);
+        this.scheduleReconnect();
+      }
+    });
   }
 
-  async function connect(): Promise<void> {
-    if (stopped) return;
-    const c = new pg.Client({ connectionString: databaseUrl });
+  private traced<T>(work: () => T): T {
+    return this.logger.scope({ trace: "new" }, work);
+  }
+
+  private endQuietly(c: pg.Client, context: string): Promise<void> {
+    return c.end().catch((err: unknown) => {
+      this.logger.warn("db.listener-end-failed", `ending the ${context} LISTEN client failed`, { context }, err);
+    });
+  }
+
+  private drop(c: pg.Client, context: string): void {
+    if (this.client !== c) return;
+    this.client = null;
+    this.pid = null;
+    void this.endQuietly(c, context);
+  }
+
+  private async connect(): Promise<void> {
+    if (this.stopped) return;
+    const c = new pg.Client({ connectionString: this.databaseUrl });
 
     c.on("notification", (msg) => {
-      traced(() => {
+      this.traced(() => {
         if (msg.channel === "ashara_events" && msg.payload) {
-          callback(msg.payload);
+          this.callback(msg.payload);
         }
       });
     });
@@ -57,20 +101,20 @@ export async function listenForEvents(
     // Handlers ignore a client that is no longer the live one, so a dropped client's
     // late events cannot schedule a second reconnect.
     c.on("error", (err: Error) => {
-      traced(() => {
-        if (client !== c) return;
-        logger.warn("db.listener-error", "LISTEN connection error, reconnecting", {}, err);
-        drop(c, "errored");
-        scheduleReconnect();
+      this.traced(() => {
+        if (this.client !== c) return;
+        this.logger.warn("db.listener-error", "LISTEN connection error, reconnecting", {}, err);
+        this.drop(c, "errored");
+        this.scheduleReconnect();
       });
     });
 
     c.on("end", () => {
-      traced(() => {
-        if (client !== c) return;
-        client = null;
-        pid = null;
-        if (!stopped) scheduleReconnect();
+      this.traced(() => {
+        if (this.client !== c) return;
+        this.client = null;
+        this.pid = null;
+        if (!this.stopped) this.scheduleReconnect();
       });
     });
 
@@ -81,69 +125,42 @@ export async function listenForEvents(
       const result = await c.query("SELECT pg_backend_pid() AS pid");
       backendPid = BackendPidRowSchema.parse(result.rows[0]).pid;
     } catch (e) {
-      await endQuietly(c, "failed");
+      await this.endQuietly(c, "failed");
       throw e;
     }
 
-    if (stopped) {
-      await endQuietly(c, "late");
+    if (this.stopped) {
+      await this.endQuietly(c, "late");
       return;
     }
-    client = c;
-    pid = backendPid;
+    this.client = c;
+    this.pid = backendPid;
   }
 
-  function scheduleReconnect(): void {
-    if (stopped || reconnectTimer) return;
-    attempt += 1;
-    const delay = Math.min(1000 * 2 ** attempt, 30_000);
-    reconnectTimer = setTimeout(() => {
-      void traced(async () => {
-        reconnectTimer = null;
+  private scheduleReconnect(): void {
+    if (this.stopped || this.reconnectTimer) return;
+    this.attempt += 1;
+    const delay = Math.min(1000 * 2 ** this.attempt, 30_000);
+    this.reconnectTimer = setTimeout(() => {
+      void this.traced(async () => {
+        this.reconnectTimer = null;
         try {
-          await connect();
-          if (pid !== null) {
-            logger.info("db.listener-reconnected", `LISTEN reconnected after ${attempt} attempt(s) (backend pid ${pid})`, { attempts: attempt, pid });
+          await this.connect();
+          if (this.pid !== null) {
+            this.logger.info("db.listener-reconnected", `LISTEN reconnected after ${this.attempt} attempt(s) (backend pid ${this.pid})`, { attempts: this.attempt, pid: this.pid });
           }
-          attempt = 0;
+          this.attempt = 0;
         } catch (e) {
           // eslint-disable-next-line ashara/catch-continue -- best effort: the next reconnect is scheduled with backoff, and a NOTIFY only wakes the runner early: its poll interval picks the same work up without one
-          logger.warn(
+          this.logger.warn(
             "db.listener-reconnect-failed",
-            `LISTEN reconnect attempt ${attempt} failed, next in ${Math.min(1000 * 2 ** (attempt + 1), 30_000)}ms`,
-            { attempts: attempt },
+            `LISTEN reconnect attempt ${this.attempt} failed, next in ${Math.min(1000 * 2 ** (this.attempt + 1), 30_000)}ms`,
+            { attempts: this.attempt },
             e,
           );
-          scheduleReconnect();
+          this.scheduleReconnect();
         }
       });
     }, delay);
   }
-
-  await traced(async () => {
-    try {
-      await connect();
-    } catch (e) {
-      // eslint-disable-next-line ashara/catch-continue -- best effort: the reconnect is scheduled with backoff, and a NOTIFY only wakes the runner early: its poll interval picks the same work up without one
-      logger.warn("db.listener-connect-failed", "LISTEN initial connection failed, will retry", {}, e);
-      scheduleReconnect();
-    }
-  });
-
-  return {
-    backendPid() {
-      return pid;
-    },
-    stop() {
-      return traced(async () => {
-        stopped = true;
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-        const c = client;
-        client = null;
-        pid = null;
-        if (c) await endQuietly(c, "stopped");
-      });
-    },
-  };
 }
