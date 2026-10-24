@@ -19,7 +19,7 @@ import { SecretRepository } from "@ashara/security";
 import { DevSessionRepository } from "@ashara/workplace";
 import { ClientStops, ClientMessageRepository, TERMINAL_KINDS, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { CLIENT_SESSION_COOKIE, clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
-import { parseProjectId } from "@ashara/shared";
+import { parseProjectId, systemClock } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { buildApp } from "@ashara/server/app";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
@@ -87,8 +87,8 @@ function webClientDeps(overrides: Partial<WebClientDeps> = {}): WebClientDeps {
     clientRepo: base.clientRepo,
     createTender: base.createTender,
     secrets: secretStore,
-    sessionRepo: new ClientSessionRepository(db),
-    loginFailureRepo: new ClientLoginFailureRepository(db),
+    sessionRepo: new ClientSessionRepository(db, systemClock),
+    loginFailureRepo: new ClientLoginFailureRepository(db, systemClock),
     loginThrottle: THROTTLE,
     sessionTtlSeconds: TTL_SECONDS,
     loginFailureDelayMs: FAILURE_DELAY_MS,

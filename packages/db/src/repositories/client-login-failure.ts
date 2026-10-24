@@ -1,5 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { z } from "zod";
+import type { Clock } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { clientLoginFailures } from "../schema/index.js";
 
@@ -32,11 +33,16 @@ const CountsSchema = z.object({
  * Web-client login attempts, keyed by the client name
  * as presented and the source the attempt came from (column `source_address`;
  * the caller decides what one source is). A row is a failed attempt or one still
- * being evaluated; a success deletes its pair's rows. Every window is judged
- * against the database clock, so the throttle survives a restart.
+ * being evaluated; a success deletes its pair's rows. The rows are persisted, so
+ * the throttle survives a restart; each attempt's time and every window are read
+ * from `clock`, so the instant an attempt was counted and the window it is counted
+ * against share one clock.
  */
 export class ClientLoginFailureRepository {
-  constructor(private readonly db: DbHandle) {}
+  constructor(
+    private readonly db: DbHandle,
+    private readonly clock: Clock,
+  ) {}
 
   /**
    * Counts the window and, when every cap still has room, inserts this attempt,
@@ -50,14 +56,15 @@ export class ClientLoginFailureRepository {
   async reserve(clientName: string, source: string, caps: LoginAttemptCaps): Promise<LoginAttemptReservation> {
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'ashara.client_login_throttle/' + source}))`);
-      const windowStart = sql`now() - make_interval(secs => ${caps.windowSeconds})`;
-      await tx.delete(clientLoginFailures).where(sql`${clientLoginFailures.failedAt} < ${windowStart}`);
+      const now = this.clock.now();
+      const windowStart = new Date(now - caps.windowSeconds * 1000);
+      await tx.delete(clientLoginFailures).where(lt(clientLoginFailures.failedAt, windowStart));
       const result = await tx.execute(sql`
         SELECT
           (count(*) FILTER (WHERE client_name = ${clientName}))::int AS name_and_source,
           count(*)::int AS source
         FROM client_login_failures
-        WHERE source_address = ${source} AND failed_at >= ${windowStart}`);
+        WHERE source_address = ${source} AND failed_at >= ${windowStart.toISOString()}::timestamptz`);
       const counts = CountsSchema.parse(result.rows[0]);
       const checks: readonly [LoginAttemptScope, number, number][] = [
         ["name-and-source", counts.name_and_source, caps.perNameAndSource],
@@ -66,7 +73,7 @@ export class ClientLoginFailureRepository {
       for (const [scope, count, limit] of checks) {
         if (count >= limit) return { kind: "throttled", scope, count, limit };
       }
-      await tx.insert(clientLoginFailures).values({ clientName, sourceAddress: source });
+      await tx.insert(clientLoginFailures).values({ clientName, sourceAddress: source, failedAt: new Date(now) });
       return { kind: "reserved", nameAndSourceCount: counts.name_and_source + 1 };
     });
   }

@@ -159,3 +159,19 @@ describe("containEach", () => {
   });
 });
 
+describe("memoryStepContainment", () => {
+  test("a fault's backoff is set and judged on the injected clock: not due one second short of it, due at it", async () => {
+    // Far from the host's time, so a ledger reading the wall clock judges the fault not due at either instant.
+    const t0 = Date.UTC(2100, 0, 1);
+    let now = t0;
+    const containment = memoryStepContainment(() => false, { now: () => now });
+    const retryAfterSeconds = 60;
+    await containment.record({ step: "gate", subjectId: "a", projectId: projectA, error: "seed", retryAfterSeconds });
+
+    now = t0 + (retryAfterSeconds - 1) * 1000;
+    expect((await containment.faultsOf("gate")).get("a")).toEqual({ faults: 1, due: false });
+    now = t0 + retryAfterSeconds * 1000;
+    expect((await containment.faultsOf("gate")).get("a")).toEqual({ faults: 1, due: true });
+  });
+});
+

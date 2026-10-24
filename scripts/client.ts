@@ -31,7 +31,7 @@ import {
   resolveKeyFilePath,
 } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, systemClock } from "@ashara/shared";
 import { readPipedStdin } from "./read-piped-stdin.js";
 
 const USAGE =
@@ -117,7 +117,7 @@ async function main(): Promise<void> {
         const { key, code } = await readAccessCode(command);
         const ended = await db.transaction(async (tx) => {
           await new SecretStore(new SecretRepository(tx), key).put(clientAccessCodeSecretName(client.id), code);
-          return new ClientSessionRepository(tx).deleteByClient(client.id);
+          return new ClientSessionRepository(tx, systemClock).deleteByClient(client.id);
         });
         console.log(
           `Stored a new access code for client "${client.name}" (${client.id}) as ` +
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
         const key = loadMasterKey(resolveKeyFilePath(process.env));
         const { removed, ended } = await db.transaction(async (tx) => ({
           removed: await new SecretStore(new SecretRepository(tx), key).delete(secretName),
-          ended: await new ClientSessionRepository(tx).deleteByClient(client.id),
+          ended: await new ClientSessionRepository(tx, systemClock).deleteByClient(client.id),
         }));
         console.log(
           `${removed ? `Removed the access code "${secretName}"` : `No access code was stored as "${secretName}"`} ` +
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
       }
       case "revoke-sessions": {
         const client = await requireClient(new ClientRepository(db), parseClientName(name, command));
-        const ended = await new ClientSessionRepository(db).deleteByClient(client.id);
+        const ended = await new ClientSessionRepository(db, systemClock).deleteByClient(client.id);
         console.log(`Deleted ${ended} session(s) of client "${client.name}" (${client.id}).`);
         return;
       }

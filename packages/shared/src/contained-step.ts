@@ -1,4 +1,4 @@
-import { systemClock } from "./clock.js";
+import { systemClock, type Clock } from "./clock.js";
 import { describeErrorChain } from "./error-chain.js";
 import type { ProjectId } from "./ids.js";
 import { createLogger } from "./log.js";
@@ -257,9 +257,10 @@ async function containSubject<T, O>(
 
 /**
  * A ledger held in memory, for a step under test.
- * Unit tests of the cycle's steps, and the inert loop they build, contain their subjects with it; the composition root supplies db's ledger
+ * Unit tests of the cycle's steps, and the inert loop they build, contain their subjects with it; the composition root supplies db's ledger.
+ * A backoff is set and judged on `clock`; a test that moves time past one passes the clock it moves.
  */
-export function memoryStepContainment(escapes: (error: unknown) => boolean): StepContainment & {
+export function memoryStepContainment(escapes: (error: unknown) => boolean, clock: Clock = systemClock): StepContainment & {
   readonly recorded: ReadonlyMap<string, { readonly faults: number; readonly error: string; readonly retryAt: number; readonly parked: boolean }>;
   readonly halted: ReadonlyArray<{ readonly projectId: ProjectId; readonly fault: StepFaultsExhausted }>;
   /** The projects not at work: a halt of one is "already-blocked", and a parked subject of one is not due. */
@@ -286,7 +287,7 @@ export function memoryStepContainment(escapes: (error: unknown) => boolean): Ste
       const prefix = `${step}/`;
       const standing = new Map<string, StepFaultStanding>();
       for (const [at, fault] of recorded) {
-        const due = fault.retryAt <= Date.now() && !(fault.parked && notAtWork.has(fault.projectId));
+        const due = fault.retryAt <= clock.now() && !(fault.parked && notAtWork.has(fault.projectId));
         if (at.startsWith(prefix)) standing.set(at.slice(prefix.length), { faults: fault.faults, due });
       }
       return standing;
@@ -297,7 +298,7 @@ export function memoryStepContainment(escapes: (error: unknown) => boolean): Ste
         // eslint-disable-next-line no-restricted-syntax -- policy default: no prior entry is a subject with no fault in a row, so this fault is its first
         faults: (prior?.faults ?? 0) + 1,
         error: fault.error,
-        retryAt: Date.now() + fault.retryAfterSeconds * 1000,
+        retryAt: clock.now() + fault.retryAfterSeconds * 1000,
         // eslint-disable-next-line no-restricted-syntax -- policy default: a subject with no prior fault has not been parked
         parked: prior?.parked ?? false,
         projectId: fault.projectId,
