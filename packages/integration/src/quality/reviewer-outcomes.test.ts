@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
 import { CheckDisputeRepository, reviewerRecordOf, TaskCheckRepository } from "@ashara/quality";
+import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 
 // A check task's re-authored revision is the evidence its disputes and routed rejections are judged
 // by: the reviewer record it writes is read back from reviewer_outcomes. Every row belongs to a
@@ -70,9 +71,9 @@ async function checkedTask(checks: ReadonlyArray<{ readonly name: string; readon
   const repo = new TaskCheckRepository(db);
   const revise = (next: ReadonlyArray<{ readonly name: string; readonly command: string }>, files: ReadonlyArray<{ readonly path: string; readonly content: string }> = [{ path: "checks/run.sh", content: "exit 0\n" }]) =>
     repo.append({
-      projectId,
+      projectId: parseProjectId(projectId, "test"),
       taskId: task,
-      checkTaskId: checkTask,
+      checkTaskId: parseWorkItemId(checkTask, "test"),
       environmentVersion: "e".repeat(64),
       baselineCommit: "a".repeat(40),
       checks: next.map((check) => ({ ...check, decides: ["S1"] as const })),

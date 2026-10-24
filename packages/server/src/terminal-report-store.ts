@@ -1,17 +1,16 @@
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { TerminalReports, listDueTerminals, postTerminalMessage, recordDeliveredReportFailure } from "@ashara/engagement";
 import type { TerminalReportStore } from "@ashara/engagement";
 import type { Clock, StepContainment } from "@ashara/shared";
 import { PUBLIC_INTERFACE_FILE, blockingReview, gitPublicInterface, readSweepOutcome } from "@ashara/quality";
 
-type Db = ReturnType<typeof createDb>;
 
 /**
  * Engagement's terminal-message store over Quality's published sweeps and verdicts, Delivery's
  * published halt episodes and planning records, Engagement's told and attempts records and
  * client_messages. A delivered report's backoff is set and waited out on `clock`.
  */
-export function createTerminalReportStore(db: Db, clock: Clock): TerminalReportStore {
+export function createTerminalReportStore(db: Database, clock: Clock): TerminalReportStore {
   return {
     dueTerminals: (kinds) => listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview }, kinds, clock),
     postTerminal: (message) => postTerminalMessage(db, message),

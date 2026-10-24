@@ -5,6 +5,7 @@ import type { ProjectId } from "@ashara/shared";
 import { Vision, readVisionVersion, visionWritable } from "../vision.js";
 import type { Direction, RevisionOp, RevisionRecord } from "../vision-language/contract-op.js";
 import type { ContractDraft, VisionGuarantee } from "../vision-language/guarantee.js";
+import type { PlannedAssumption } from "../vision-language/vision-assumption.js";
 import type { VisionAppend } from "../vision.js";
 
 type VisionRow = typeof visionDocuments.$inferSelect;
@@ -191,14 +192,6 @@ export async function guaranteesInForce(
   if (current === null) return { kind: "none" };
   const vision = readVisionVersion(current);
   return { kind: "version", version: vision.version, guarantees: vision.guarantees };
-}
-
-/** One behaviour a plan adds that no item of the contract states, under the key the plan's tasks cite it by. */
-interface PlannedAssumption {
-  readonly key: string;
-  readonly statement: string;
-  /** The guarantees whose lines cite it. */
-  readonly underpins: readonly [string, ...string[]];
 }
 
 /** The behaviour a plan adds could not be recorded on the contract as the plan cites it; nothing of the plan is written. */

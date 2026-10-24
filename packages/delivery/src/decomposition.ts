@@ -2,6 +2,7 @@ import { z, type ZodType } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import type { StructuredValidation } from "./acl/finance-acl.js";
 import { visionSourceCitation, visionSourceLine } from "./acl/engagement-vision-acl.js";
+import type { PlannedAssumption } from "./acl/engagement-vision-acl.js";
 import { PUBLIC_INTERFACE_FILE, SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
 import { HELD_SET_RULE, heldSetRuleText } from "./acl/workplace-acl.js";
 import type {
@@ -12,7 +13,6 @@ import type {
     EnvironmentPlanning,
     DecompositionResult,
     DroppedDependency,
-    PlannedAssumption,
     PriorEpicResult,
     TaskSpec,
     TracedLine,

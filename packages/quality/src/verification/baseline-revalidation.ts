@@ -51,9 +51,9 @@ export class BaselineRevalidation {
     if (stored.baselineCommit === null) {
       problem = `revision ${stored.revision} records no baseline commit (it was stored before baselines were recorded), so it cannot be red-run again`;
     } else {
-      // As at authoring: on a baseline the environment no longer builds, every check fails
-      // for that reason alone, which is no evidence the set still tells the task's work from its absence.
-      // The BaseCell (Sprint 0's cells only) defines no build: its run is the red run alone, as before.
+      // The foundation is built before the red run, the rule authoring also holds: on a baseline the
+      // environment no longer builds, every check fails for that reason alone, which is no evidence the
+      // set still tells the task's work from its absence. A BaseCell defines no build, so its run is the red run alone.
       let build: EnvironmentTestRun | null = null;
       if (d.environment.kind === "environment") {
         try {

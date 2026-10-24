@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, type NonEmpty } from "@ashara/shared";
 import { LEGACY_MIGRATIONS } from "./legacy-migrations.js";
 
 // The runner owns its tracking table, so the table and its columns are created
@@ -199,8 +199,6 @@ type MigrationDrift =
     }
   | { readonly kind: "not_applied" | "hash_unrecorded" | "applied_without_file"; readonly filename: string }
   | { readonly kind: "tracking_table_missing" | "no_migration_files" };
-
-type NonEmpty<T> = readonly [T, ...T[]];
 
 function describeDrift(drift: MigrationDrift): string {
   switch (drift.kind) {

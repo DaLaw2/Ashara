@@ -297,7 +297,7 @@ importers = []
 # that a run put the process's wait observer back: with none installed it returns its argument.
 # HoldEvidence is imported as a type only, so the coverage line of its arms cannot drift from the union.
 named-only = ["src/simulator/**"]
-names.db = ["ClientRepository", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "TargetCheckoutClaimedElsewhere", "createDb", "resolveTestDatabaseUrl", "runMigrations"]
+names.db = ["ClientRepository", "Database", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "TargetCheckoutClaimedElsewhere", "createDb", "resolveTestDatabaseUrl", "runMigrations"]
 names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "DELIVERY_MODEL_SCHEMAS", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
 names.engagement = ["ENGAGEMENT_MODEL_SCHEMAS", "PROJECT_STATUSES", "TenderIntake", "VisionSource"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]

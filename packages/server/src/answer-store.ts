@@ -1,10 +1,10 @@
 import { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "@ashara/engagement";
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, holdCorrection } from "@ashara/delivery";
 import type { AnswerStore } from "@ashara/engagement";
 
 /** Engagement's answer store over client_messages, vision_documents and projects, with Delivery's hold on the work a correcting answer touches. */
-export function createAnswerStore(db: ReturnType<typeof createDb>): AnswerStore {
+export function createAnswerStore(db: Database): AnswerStore {
   const projects = new ProjectHaltRepository(db);
   return {
     openAnswers: () => listOpenAnswers(db),

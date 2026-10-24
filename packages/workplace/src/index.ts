@@ -27,7 +27,7 @@ export { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
 export type { TaskSpec } from "./task-spec.js";
 export { buildContextMap } from "./context-map.js";
 export { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
-export type { ProjectIntentSource } from "./project-intent.js";
+export type { AssignmentVision, ProjectIntentSource } from "./project-intent.js";
 export { renderKnowledgeContext } from "./knowledge-context.js";
 export type { KnowledgeSection } from "./knowledge-context.js";
 export { priorAttemptFailure } from "./replan-context.js";

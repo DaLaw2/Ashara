@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ClientAnswers, PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore, PlanReportStore } from "@ashara/engagement";
@@ -49,7 +50,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
   const NAME_PREFIX = `replan-test-${randomUUID().slice(0, 8)}`;
   const MERGE_COMMIT = "a".repeat(40);
 
-  let db: ReturnType<typeof createDb>;
+  let db: Database;
   let gateway: GuardedModelAccess;
   let clientId: string;
   const ourProjects = new Set<string>();
@@ -375,7 +376,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
   });
 
   return {
-    get db(): ReturnType<typeof createDb> {
+    get db(): Database {
       return db;
     },
     get gateway(): GuardedModelAccess {

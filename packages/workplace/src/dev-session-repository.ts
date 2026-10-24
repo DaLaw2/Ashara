@@ -11,7 +11,8 @@ import {
   type FailedSessionEnd,
   type ReconciledSessionEnd,
 } from "./session-end.js";
-import { TERMINAL_SESSION_PHASES, type AttemptTerminal } from "./session-vocabulary.js";
+import type { SessionAttempt } from "./session-attempt.js";
+import { TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
 
 /**
  * A terminal write matched no session still open: the id names no session (`phaseFound` null), or
@@ -33,20 +34,6 @@ class SessionTerminalWriteRefused extends Error {
 }
 
 const stillOpen = notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]);
-
-/**
- * What the session's Workplace attempt was, written with its terminal phase. The
- * terminal is the attempt's typed end ("finished:done", "turn_cap", ...); `cell` says whether it
- * ran on the BaseCell or on the session's environment version.
- */
-interface SessionAttempt {
-  readonly promptDigest: string;
-  readonly terminal: AttemptTerminal;
-  readonly turns: number;
-  readonly provider: string;
-  readonly model: string;
-  readonly cell: "base-cell" | "environment";
-}
 
 function attemptColumns(attempt: SessionAttempt | null) {
   return {

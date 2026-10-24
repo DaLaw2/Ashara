@@ -252,7 +252,7 @@ const TERMINAL_SWEEP_FAULTS_TO_EXHAUST = 4;
  * A stop's or a halt's terminal, as its sweep and its counted faults name it; a stop report in reply
  * to no stop names none.
  */
-type SweptTerminal = { readonly stopId: string | null } | { readonly blockId: string };
+type TerminalOfReport = { readonly stopId: string | null } | { readonly blockId: string };
 
 /**
  * Why a stop's or a halt's report was told on a terminal sweep that was not owed to be over; null
@@ -263,7 +263,7 @@ type SweptTerminal = { readonly stopId: string | null } | { readonly blockId: st
  */
 export function terminalSweepProblem(
   records: Pick<ReportRecords, "terminalSweepFaults">,
-  terminal: SweptTerminal,
+  terminal: TerminalOfReport,
   sweep: ReportRecords["tableSweeps"][number] | undefined,
 ): string | null {
   const name = "stopId" in terminal ? `stop ${terminal.stopId ?? "(in reply to no stop)"}` : `halt ${terminal.blockId}`;

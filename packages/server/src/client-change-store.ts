@@ -1,11 +1,11 @@
 import { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "@ashara/engagement";
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, holdCorrection } from "@ashara/delivery";
 import type { ClientChangeStore } from "@ashara/engagement";
 import type { WorkBudgets } from "@ashara/finance";
 
 /** Engagement's client-change store over client_messages, vision_documents, vision_revisions, work_items and the work ledger, with Delivery's hold on the work an applied correction touches. */
-export function createClientChangeStore(db: ReturnType<typeof createDb>, budgets: WorkBudgets): ClientChangeStore {
+export function createClientChangeStore(db: Database, budgets: WorkBudgets): ClientChangeStore {
   const projects = new ProjectHaltRepository(db);
   return {
     openChanges: () => listUnconsumedChanges(db),

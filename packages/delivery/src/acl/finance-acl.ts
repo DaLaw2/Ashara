@@ -13,7 +13,7 @@ export { BudgetExceeded } from "@ashara/finance";
 export { modelCallFailureOf } from "@ashara/finance";
 export type { ModelCallFailure } from "@ashara/finance";
 export { SPEND_CAP_ERROR_CLASS, WORK_BUDGET_ERROR_CLASS } from "@ashara/finance";
-export type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
+export type { SpendAtCap, SpendRefusal, WorkAtBudget } from "@ashara/finance";
 
 // The model language Delivery's planning calls speak, published by Finance in front of Model Access.
 export { CapabilityLevelSchema, higherCapability, withStructuredLadder } from "@ashara/finance";

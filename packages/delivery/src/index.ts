@@ -32,7 +32,7 @@ export { createAgentStaffing, gradedCapability } from "./staffing.js";
 
 export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 
-export type { WorkItemRepository } from "./domain/index.js";
+export type { WorkItem, WorkItemRepository } from "./domain/index.js";
 export { startWorkItem } from "./domain/index.js";
 export {
   startUnlessHeld,

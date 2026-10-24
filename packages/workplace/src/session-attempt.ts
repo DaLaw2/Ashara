@@ -32,7 +32,10 @@ export function outcomeRecord(outcome: Outcome): Record<string, unknown> {
   return { ...toRecordedOutcome(outcome) };
 }
 
-/** An attempt as the session's terminal write records it. */
+/**
+ * An attempt as the session's terminal write records it, with its terminal phase; `cell` says
+ * whether it ran on the BaseCell or on the session's environment version.
+ */
 export interface SessionAttempt {
   readonly promptDigest: string;
   /** The Outcome kind, with a finished attempt's status: "finished:done", "finished:blocked", "turn_cap", ... */

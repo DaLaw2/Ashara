@@ -6,7 +6,7 @@ import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { readCellLimits, type CellResourceLimits, type HostCapacity, type PodmanSubstrate } from "@ashara/execution-infra";
 import { DEFAULT_WORK_BUDGETS, type WorkBudgets } from "@ashara/finance";
 
-interface ServerConfig {
+export interface ServerConfig {
   readonly databaseUrl: string;
   readonly apiToken: string;
   readonly port: number;

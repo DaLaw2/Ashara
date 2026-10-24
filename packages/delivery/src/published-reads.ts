@@ -15,8 +15,10 @@ import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/index.js";
 // cycle at load time; the planning outcomes the Liaison reports on are re-exported as types alone,
 // which load nothing.
 
+export type { AddedAssumption } from "./decomposition-types.js";
 export type { DroppedOrderingHints, DuePlanReport } from "./repositories/plan-report.js";
 export type { DuePlanRevision, PlanRevisionToTell } from "./repositories/replan.js";
+export type { RevisionChange } from "./replan-port.js";
 
 /** A reference to the project a published scalar or predicate is about: a column, or an expression. */
 type ProjectRef = AnyColumn | SQL;

@@ -4,9 +4,10 @@ import type { Observation, VisionGuarantee } from "./acl/engagement-acl.js";
 // The verdict a delivery earns on one guarantee, kept apart from how well the guarantee's footing is
 // known (its basis) and from what kind of evidence was seen. The verdict speaks the hidden suite's
 // vocabulary, so the two can be laid side by side guarantee by guarantee. Quality alone judges it:
-// every terminal message's table and the project's acceptance read the verdicts judged here. This
-// module imports nothing of Quality at run time, so the published verdict read can load it without a
-// cycle.
+// every terminal message's table and the project's acceptance read the verdicts judged here. The
+// sweep they are judged on, what it was run for and what it recorded, is stated here once, for the
+// acceptance record and the published reads both. This module imports nothing of Quality at run
+// time, so the published reads can load it without a cycle.
 
 /**
  * What a piece of evidence about a guarantee is: a check written after the work by someone other than
@@ -141,6 +142,31 @@ export interface GuaranteeVerdict {
  * recorded before evidence per guarantee was), which judges every guarantee on no evidence.
  */
 export type SweepEvidence = { readonly kind: "recorded"; readonly byGuarantee: ReadonlyMap<string, Evidence> } | { readonly kind: "unrecorded" };
+
+/** What a terminal sweep is run for: the client's consumed stop, or a halt episode (project_blocks). */
+export type SweptTerminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
+
+/** How one stored check an acceptance sweep ran ended (acceptance_sweeps.check_outcomes). */
+export const SWEEP_CHECK_OUTCOMES = ["passed", "failed", "not-run"] as const;
+
+/** One stored check a sweep ran: its task, its name, the command it ran and how it ended. */
+interface SweepCheckOutcome {
+  readonly taskId: string;
+  readonly name: string;
+  readonly command: string;
+  readonly outcome: (typeof SWEEP_CHECK_OUTCOMES)[number];
+}
+
+/**
+ * What a sweep recorded of the work it swept: the completed tasks whose stored checks it ran and
+ * those with none, and every stored check it ran with its outcome; the checks are unrecorded on a
+ * sweep recorded before their outcomes were.
+ */
+export interface SweepOutcome {
+  readonly checkedTasks: readonly string[];
+  readonly uncheckedTasks: readonly string[];
+  readonly checks: { readonly kind: "unrecorded" } | { readonly kind: "recorded"; readonly checks: readonly SweepCheckOutcome[] };
+}
 
 /** The sweep a set of verdicts is judged on: its id, and the commit of main it ran on, null when it ran on none. */
 export interface JudgedSweep {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { z } from "zod";
-import { MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
+import { MIGRATIONS_DIR, runMigrations } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 
 /*
@@ -12,8 +12,8 @@ import { describeErrorChain } from "@ashara/shared";
  * per run created from it and dropped after, and stale run databases older than an hour dropped
  * at tier start. Never the shared database itself: every name starts with `ashara_sim_`.
  */
-/** The observer's handle on a run database: read-only by use, never faulted. */
-export type Database = ReturnType<typeof createDb>;
+// The observer's handle on a run database is db's own handle, read-only by use, never faulted.
+export type { Database } from "@ashara/db";
 
 const PREFIX = "ashara_sim_";
 const TEMPLATE_PREFIX = `${PREFIX}tpl_`;

@@ -2,15 +2,17 @@ import { and, asc, count, desc, eq, lte, type SQL } from "drizzle-orm";
 import { qualifiedColumn } from "@ashara/db";
 import { acceptanceSweeps, checkDisputes } from "@ashara/db/schema/quality";
 import type { DbHandle } from "@ashara/db";
+import type { SweptTerminal } from "./guarantee-verdict.js";
 
 // Quality's published reads of its acceptance sweeps and its check disputes, for the contexts that
 // tell the client of them: what another context reads of these tables goes through these, never a
-// query of its own. Each returns Quality's rows as stored,
-// its jsonb unread. This module imports nothing of Quality, so a context Quality reads can import it
+// query of its own. Each returns Quality's rows as stored, its jsonb unread. It also publishes the
+// shapes of a terminal sweep and of a sweep's outcome, which the guarantee verdict declares, so a
+// context that may import only this entry names them in Quality's language, never in a copy of its
+// own. This module imports nothing of Quality at run time, so a context Quality reads can import it
 // without a cycle at load time.
 
-/** What a terminal sweep was run for: the client's consumed stop, or a halt episode. */
-type SweptTerminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
+export type { SweepOutcome, SweptTerminal } from "./guarantee-verdict.js";
 
 /** The id of the sweep recorded for the terminal; null when none is on record (its recording failed, or it is yet to run). */
 export async function sweepOfTerminal(db: DbHandle, terminal: SweptTerminal): Promise<string | null> {

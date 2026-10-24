@@ -1,7 +1,7 @@
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { recordPlannedBehaviour } from "../acl/engagement-acl.js";
-import type { PlannedAssumption } from "../decomposition-types.js";
+import type { PlannedAssumption } from "../acl/engagement-vision-acl.js";
 
 /**
  * Records the behaviour a plan adds beyond what the contract states on the contract, through

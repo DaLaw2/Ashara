@@ -18,7 +18,7 @@ import { LlmCallRepository } from "@ashara/finance";
 import { ConfigRepository } from "@ashara/model-access";
 import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
 import { SecretRepository } from "@ashara/security";
-import type { PoolFactory } from "@ashara/db";
+import type { Database, PoolFactory } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
 import {
@@ -80,7 +80,7 @@ import type { MasterKey } from "@ashara/security";
 import type { Clock, LogSink, Logger, ProjectId } from "@ashara/shared";
 import { contendedWait, createLogger, parseWorkItemId } from "@ashara/shared";
 import { buildApp } from "./app.js";
-import { assertLanesFitCellHost, loadServerConfig } from "./config.js";
+import { assertLanesFitCellHost, loadServerConfig, type ServerConfig } from "./config.js";
 import { sweepWorktreesAtStartup } from "./kept-worktrees.js";
 import type { AppDeps } from "./routes.js";
 import {
@@ -189,8 +189,6 @@ export function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
   return logger.scope({ trace: "new" }, () => composeInBoot(ports, logger, AsyncLocalStorage.snapshot()));
 }
 
-type Db = ReturnType<typeof createDb>;
-type ServerConfig = ReturnType<typeof loadServerConfig>;
 
 async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T>(work: () => T) => T): Promise<AsharaInstance> {
   const { masterKey, databaseUrl } = ports;
@@ -294,7 +292,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
  * verification jobs over the cells and environment images.
  */
 function composeDispatch(deps: {
-  readonly db: Db;
+  readonly db: Database;
   readonly config: ServerConfig;
   readonly cells: ComposedCells;
   readonly eventLog: ExecutionEventSink;
@@ -363,7 +361,7 @@ function composeDispatch(deps: {
 
 /** Delivery's core loop over the dispatch and sweeps, run by the continuous runner with every host git call through the process's runner. */
 function composeRunner(deps: {
-  readonly db: Db;
+  readonly db: Database;
   readonly config: ServerConfig;
   readonly ports: Pick<AsharaPorts, "clock" | "git" | "taskLanes">;
   readonly logger: Logger;
@@ -445,7 +443,7 @@ async function assertSchemaCurrent(databaseUrl: string): Promise<void> {
 
 /** Finance in front of Model Access: the spend cap, its ledger, and the guarded port every model call goes through. */
 async function composeModelCalls(deps: {
-  readonly db: Db;
+  readonly db: Database;
   readonly config: ServerConfig;
   readonly secretStore: SecretStore;
   readonly ports: Pick<AsharaPorts, "clock" | "models">;
@@ -517,7 +515,7 @@ interface ComposedCells {
 }
 
 async function composeCells(deps: {
-  readonly db: Db;
+  readonly db: Database;
   readonly config: ServerConfig;
   readonly processRunner: ProcessRunner;
   readonly logger: Logger;
@@ -558,7 +556,7 @@ async function composeCells(deps: {
 
 /** What an agent's attempt reads and writes outside Delivery: its session, knowledge, intent and staffing. */
 function composeAgentPorts(deps: {
-  readonly db: Db;
+  readonly db: Database;
   readonly dbWorkItemRepo: WorkItemRowRepository;
   readonly workItemRepo: WorkItemRepository;
   readonly devSessionRepo: DevSessionRepository;
@@ -628,7 +626,7 @@ function composeAgentPorts(deps: {
 
 /** The HTTP app: the operator API on the API token, the web client on its session cookie. */
 function composeWebApp(deps: {
-  readonly db: Db;
+  readonly db: Database;
   readonly config: ServerConfig;
   readonly secretStore: SecretStore;
   readonly clock: Clock;

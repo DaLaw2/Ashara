@@ -1,9 +1,7 @@
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { CapabilityLevel, ResolvedModel } from "./acl/finance-acl.js";
 import { RoleNotInRoster, RosterUnreadable, parseStoredRoster, roleInRoster } from "./acl/organization-acl.js";
-import type { AgentStaffing, TaskDescriptor } from "./dispatch/dispatch-types.js";
-
-type Staffing = Awaited<ReturnType<AgentStaffing["staff"]>>;
+import type { AgentStaffing, Staffing, TaskDescriptor } from "./dispatch/dispatch-types.js";
 
 /**
  * A task reached dispatch with no capability level on its stored spec. Every producer sets one

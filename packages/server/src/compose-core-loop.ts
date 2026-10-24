@@ -1,5 +1,5 @@
 import { EventStoreRepository } from "@ashara/db";
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import {
   DispatchService,
   FirstPlanner,
@@ -78,7 +78,6 @@ import { createRosterStore } from "./roster-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createTerminalReportStore, createTerminalReports } from "./terminal-report-store.js";
 
-type Db = ReturnType<typeof createDb>;
 
 /**
  * What the core loop's step groups are composed over: the database every repository reads, the
@@ -86,7 +85,7 @@ type Db = ReturnType<typeof createDb>;
  * the caller holds (the dispatcher, the sweepers of main and the cells).
  */
 export interface CoreLoopParts {
-  readonly db: Db;
+  readonly db: Database;
   readonly config: CoreLoopConfig;
   readonly workBudgets: WorkBudgets;
   /** The time the cycle runs on: every backoff a step's repository sets and reads. */

@@ -19,7 +19,7 @@ export { sdkLanguageModels } from "./provider-registry.js";
 export { ROUTING_RULES } from "./routing-rules.js";
 export type { LanguageModelFactory } from "./provider-registry.js";
 export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-ladder.js";
-export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
+export type { LadderAttemptEvent, StructuredProvider, StructuredProviderResult, StructuredValidation } from "./reliability-ladder.js";
 export {
   ContextBudgetExceeded,
   ModelCallAborted,
@@ -45,6 +45,8 @@ export type {
   ModelConfig,
   ProviderRequest,
   ProviderRequestGate,
+  GradedModel,
+  PassedOver,
   ReportedTokens,
   SecondOpinion,
   SecondOpinionStrength,

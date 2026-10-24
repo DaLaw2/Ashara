@@ -5,10 +5,13 @@ import { taskChecks } from "@ashara/db/schema/quality";
 import type { DbHandle } from "@ashara/db";
 
 // Quality's published language for a task's stored checks (task_checks): which revision of them is
-// in force and how a stored check records the vision items it decides. Each is spelled here once;
-// a reader in another context imports it (`@ashara/quality/stored-checks`) instead of writing it
-// again. This module imports nothing else of Quality, so a context Quality reads can import it
-// without a cycle at load time.
+// in force, how a stored check records the vision items it decides, and the review of them a
+// suite_review block was written on. Each is spelled once, here or in the checks it publishes; a
+// reader in another context imports it (`@ashara/quality/stored-checks`) instead of writing it
+// again. This module imports nothing else of Quality at run time, so a context Quality reads can
+// import it without a cycle at load time.
+
+export type { BlockingReviewRow } from "./task-checks.js";
 
 /**
  * task_checks.decides: the ids of the vision items a stored check decides, never none; null on a

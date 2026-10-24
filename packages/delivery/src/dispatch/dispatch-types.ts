@@ -83,7 +83,8 @@ export interface NoWiderModel {
   readonly overflowedWindowTokens: number;
 }
 
-type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | OwnerUnresolved | NoWiderModel;
+/** How a task was staffed for one attempt: its owner and model, or why it has none. */
+export type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | OwnerUnresolved | NoWiderModel;
 
 /**
  * Builds the agent half of a task's Assignment: its owner role and its model, resolved once per

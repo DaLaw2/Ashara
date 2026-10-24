@@ -6,8 +6,8 @@ import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { completedGoalTaskExists, completedGoalTasks, completedScaffolds, firstPlanned, haltEpisodesWhere, noTaskOpen, pendingCorrection, pendingRepair } from "../acl/delivery-acl.js";
 import { haltReported, noOpenAnswer, noOpenStop, projectActive, projectAtWork, reportTold, stopsThatStopped, type AcceptProject } from "../acl/engagement-acl.js";
-import { coverageOf, judgeGuarantees } from "../guarantee-verdict.js";
-import type { Coverage, Evidence, JudgedGuarantee } from "../guarantee-verdict.js";
+import { SWEEP_CHECK_OUTCOMES, coverageOf, judgeGuarantees } from "../guarantee-verdict.js";
+import type { Coverage, Evidence, JudgedGuarantee, SweepOutcome, SweptTerminal } from "../guarantee-verdict.js";
 import type { FailedCheck, SweptCheck } from "../verification/acceptance-sweep.js";
 import { recordFailedSweepOutcomes } from "./reviewer-outcome.js";
 
@@ -97,9 +97,6 @@ export interface AcceptanceSweepRecord {
   readonly checkOutcomes: readonly SweptCheck[];
   readonly details: string;
 }
-
-/** What a terminal sweep is run for: the client's consumed stop, or a halt episode (project_blocks). */
-export type SweptTerminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
 
 /** A failed sweep's record: the stored checks it ran and saw fail, none when it ran none. */
 export type FailedSweepRecord = AcceptanceSweepRecord & { readonly failedChecks: readonly FailedCheck[] };
@@ -529,34 +526,12 @@ export async function latestAcceptanceSweepOf(
   return row;
 }
 
-/** How one stored check an acceptance sweep ran ended (acceptance_sweeps.check_outcomes). */
-const CHECK_OUTCOMES = ["passed", "failed", "not-run"] as const;
-
 const SweepTaskIdsSchema = z.array(z.guid());
 
 /** acceptance_sweeps.check_outcomes as insertSweepWithEvidence writes it; null on a row recorded before the column existed. */
 const StoredCheckOutcomesSchema = z
-  .array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1), outcome: z.enum(CHECK_OUTCOMES) }))
+  .array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1), outcome: z.enum(SWEEP_CHECK_OUTCOMES) }))
   .nullable();
-
-/** One stored check a sweep ran: its task, its name, the command it ran and how it ended. */
-interface SweepCheckOutcome {
-  readonly taskId: string;
-  readonly name: string;
-  readonly command: string;
-  readonly outcome: (typeof CHECK_OUTCOMES)[number];
-}
-
-/**
- * What a sweep recorded of the work it swept, as Quality publishes it: the completed tasks whose
- * stored checks it ran and those with none, and every stored check it ran with its outcome; the
- * checks are unrecorded on a sweep recorded before their outcomes were.
- */
-interface SweepOutcome {
-  readonly checkedTasks: readonly string[];
-  readonly uncheckedTasks: readonly string[];
-  readonly checks: { readonly kind: "unrecorded" } | { readonly kind: "recorded"; readonly checks: readonly SweepCheckOutcome[] };
-}
 
 /** A sweep's stored outcome does not read: the column named holds something its writer never writes. */
 class SweepOutcomeUnreadable extends Error {

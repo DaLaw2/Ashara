@@ -10,12 +10,9 @@ import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/q
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
 import type { MappingFile, PacketKey } from "./pool-mapping.js";
 import type { PickRecord } from "./pool-selection.js";
-import type { readRunEvidence } from "./run-evidence.js";
+import type { CallTotals, RunEvidence, TaskCall, WorkItemEvidence } from "./run-evidence.js";
 
-type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
-type CallTotals = RunEvidence["calls"][number];
 type Session = RunEvidence["tasks"][number]["sessions"][number];
-type TaskCall = RunEvidence["tasks"][number]["calls"][number];
 
 interface Totals {
   calls: number;
@@ -218,8 +215,6 @@ function peakText(p: PeakUtilisation): string {
   return `peak context utilisation ${percent(p.peak.share)} (call ${p.peak.at}) over ${p.known} call(s)${unknown}`;
 }
 
-type WorkItem = RunEvidence["workItems"][number];
-
 /** Measured spend over a set of llm_calls rows; an unmeasured row is counted, never read as $0. */
 interface Spend {
   usd: number;
@@ -250,9 +245,9 @@ function spendText(s: Spend): string {
  * not on record, or one naming no goal task of the project, serves none and says so. Anything else
  * serves no goal task.
  */
-type Served = { readonly kind: "goal"; readonly goal: WorkItem; readonly as: "own" | "check" | "repair" } | { readonly kind: "none"; readonly why: string };
+type Served = { readonly kind: "goal"; readonly goal: WorkItemEvidence; readonly as: "own" | "check" | "repair" } | { readonly kind: "none"; readonly why: string };
 
-function servedBy(item: WorkItem, items: ReadonlyMap<string, WorkItem>): Served {
+function servedBy(item: WorkItemEvidence, items: ReadonlyMap<string, WorkItemEvidence>): Served {
   if (isGoalTask(item)) return { kind: "goal", goal: item, as: "own" };
   if (item.workKind === "check" && isCheckOrigin(item.origin)) {
     if (item.checksFor === null) return { kind: "none", why: "check task with no task_spec.checksFor" };
@@ -271,9 +266,9 @@ function servedBy(item: WorkItem, items: ReadonlyMap<string, WorkItem>): Served 
 }
 
 /** The Epic an item sits under by its work_items.parent_id chain, or null when the chain reaches none. */
-function epicOf(item: WorkItem, items: ReadonlyMap<string, WorkItem>): WorkItem | null {
+function epicOf(item: WorkItemEvidence, items: ReadonlyMap<string, WorkItemEvidence>): WorkItemEvidence | null {
   const seen = new Set<string>();
-  let at: WorkItem | undefined = item;
+  let at: WorkItemEvidence | undefined = item;
   while (at !== undefined && !seen.has(at.id)) {
     if (at.level === "Epic") return at;
     seen.add(at.id);
@@ -283,7 +278,7 @@ function epicOf(item: WorkItem, items: ReadonlyMap<string, WorkItem>): WorkItem 
 }
 
 interface GoalSpend {
-  readonly goal: WorkItem;
+  readonly goal: WorkItemEvidence;
   readonly first: Spend;
   readonly rework: Spend;
   readonly checks: Spend;
@@ -291,9 +286,9 @@ interface GoalSpend {
 }
 
 interface EpicSpend {
-  readonly epic: WorkItem | null;
+  readonly epic: WorkItemEvidence | null;
   readonly goals: GoalSpend[];
-  readonly unattributed: { readonly item: WorkItem; readonly why: string; readonly spend: Spend }[];
+  readonly unattributed: { readonly item: WorkItemEvidence; readonly why: string; readonly spend: Spend }[];
   agentCalls: number;
   agentCallsWithInput: number;
   agentInputTokens: number;
@@ -323,7 +318,7 @@ function perGoal(spend: Spend, goals: number): string {
 function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: string[]; readonly violation: boolean } {
   const items = new Map(evidence.workItems.map((w) => [w.id, w]));
   const epics = new Map<string | null, EpicSpend>();
-  const epicFor = (epic: WorkItem | null): EpicSpend => {
+  const epicFor = (epic: WorkItemEvidence | null): EpicSpend => {
     const key = epic === null ? null : epic.id;
     const known = epics.get(key);
     if (known !== undefined) return known;

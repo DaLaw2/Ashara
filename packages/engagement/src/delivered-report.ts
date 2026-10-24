@@ -16,9 +16,14 @@ import type { ProjectId } from "@ashara/shared";
 /** How a goal task's record says it closed. */
 type GoalClose =
   | { readonly kind: "merged"; readonly commit: string }
-  /** Its checks passed on main at `commit` with nothing of its own merged; `by` is the task whose merge made that commit. */
+  /**
+   * Its checks passed on main at `commit` with nothing of its own merged; `by` is the task whose merge
+   * made that commit, null when no task records it as its merge.
+   */
   | { readonly kind: "already-delivered"; readonly commit: string; readonly by: string | null }
+  /** A commit is recorded, but not how it closed the task (a record from before merge kinds were recorded). */
   | { readonly kind: "unrecorded-kind"; readonly commit: string }
+  /** Completed with no commit recorded at all. */
   | { readonly kind: "no-record" };
 
 /**
@@ -70,7 +75,7 @@ export interface DueDeliveredReport {
  * The stored checks an accepted sweep ran on main and saw pass, by task title, with the command each
  * ran; or none recorded (a sweep recorded before they were), which verifies no way of running the product.
  */
-type ExecutedChecks =
+export type ExecutedChecks =
   | { readonly kind: "recorded"; readonly checks: ReadonlyArray<{ readonly task: string; readonly name: string; readonly command: string }> }
   | { readonly kind: "unrecorded" };
 

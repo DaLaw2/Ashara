@@ -63,7 +63,7 @@ const WorkItemRowSchema = z.object({
  * measured, `inputTokens` when the provider reported none, `contextWindowTokens` (the window of the
  * model it was sent to) on a row recorded before windows were, or not recorded yet.
  */
-interface TaskCall {
+export interface TaskCall {
   readonly callSite: string;
   readonly createdAt: Date;
   readonly agentTurn: boolean;
@@ -79,7 +79,7 @@ interface TaskCall {
  * an environment-change task, the task it was opened for (work_items.repairs_task_id;
  * NULL when the row records none).
  */
-type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
+export type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
 
 /**
  * One task's (or, with taskId null, the project's own) llm_calls of one provider. An unmeasured
@@ -91,7 +91,7 @@ type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
  * ledger must never write; `cacheCountedCalls` are the
  * rows reporting both input and cache-read tokens, the only ones a cache-hit share is taken over.
  */
-type CallTotals = z.infer<typeof CallTotalsRowSchema>;
+export type CallTotals = z.infer<typeof CallTotalsRowSchema>;
 
 interface TaskEvidence {
   readonly taskId: string;
@@ -101,7 +101,7 @@ interface TaskEvidence {
   readonly calls: readonly TaskCall[];
 }
 
-interface RunEvidence {
+export interface RunEvidence {
   readonly project: z.infer<typeof ProjectRowSchema>;
   readonly tasks: readonly TaskEvidence[];
   readonly calls: readonly CallTotals[];

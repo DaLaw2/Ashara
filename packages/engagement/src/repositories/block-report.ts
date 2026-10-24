@@ -8,11 +8,15 @@ import { PROJECT_BLOCK_KINDS, endedHaltEpisodesWhere, haltEpisodeOf, type HaltEp
 import { awaitedRepairsRecordedBy, workItemSummaries } from "@ashara/delivery/reads";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 import { lastDisputeBy } from "@ashara/quality/published-reads";
+import type { BlockingReviewRow } from "@ashara/quality/stored-checks";
 import { haltReported, noOpenStop, reportTold, visionWritten } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import { insertOutboundReport } from "./client-message.js";
 import { tellOnce } from "./told-report.js";
-import type { DueResumption } from "../block-report.js";
+import type { BlockingAbandonment, BlockingDispute, DueResumption, ProjectBlockedReport } from "../block-report.js";
+
+// The halt report names the review a block was written on in Quality's published language, read here.
+export type { BlockingReviewRow };
 
 // The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
@@ -24,15 +28,6 @@ import type { DueResumption } from "../block-report.js";
 // resumption's report is listed and posted here, after its halt's.
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
-type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
-
-/** A task given up whose repair a plan_repair block left awaited, with the reason it was given up for, as stored. */
-interface BlockingAbandonmentRow {
-  readonly workItemId: string;
-  readonly title: string;
-  readonly attempts: number;
-  readonly cause: StoredBlockedReason;
-}
 
 /** A given-up task's stored blocked_reason is absent or unreadable: the halt cannot be reported truthfully. */
 class GivenUpCauseUnreadable extends Error {
@@ -71,24 +66,10 @@ class BlockingRepairMissing extends Error {
 }
 
 /** The given-up tasks whose awaited repair the plan_repair block stopped, oldest first. */
-async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonmentRow[]> {
+async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonment[]> {
   const rows = await awaitedRepairsRecordedBy(db, projectId, blockedAt);
   if (rows.length === 0) throw new BlockingRepairMissing(episodeId, projectId);
   return rows.map((row) => ({ workItemId: row.workItemId, title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.workItemId, row.blockedReason) }));
-}
-
-/**
- * The cause recorded on a block episode: the error's class, its described chain, on
- * a budget_cap halt the amounts its cap was judged on, and on a work_budget halt the
- * work ledger as it stood, its verification reserve with it.
- */
-interface RecordedCauseRow {
-  readonly errorClass: string | null;
-  readonly reason: string | null;
-  /** null on every kind but budget_cap, and on a budget_cap halt recorded before the amounts were. */
-  readonly spend: SpendAtCap | null;
-  /** null on every kind but work_budget. */
-  readonly work: WorkAtBudget | null;
 }
 
 const WorkAtBudgetSchema = z.strictObject({
@@ -145,12 +126,6 @@ function recordedSpend(episodeId: string, raw: unknown): SpendAtCap | null {
   return parsed.data;
 }
 
-/** The review a suite_review block was written on: the last one recorded before the block. */
-interface BlockingReviewRow {
-  readonly times: number;
-  readonly problems: readonly string[];
-}
-
 /**
  * Reads the last review of the project recorded at or before `blockedAt`, null when none was:
  * Quality's record, which the composition root supplies.
@@ -167,21 +142,6 @@ class BlockingReviewMissing extends Error {
     this.name = "BlockingReviewMissing";
   }
 }
-
-/** The dispute a check_dispute block was written on: the last one recorded before the block. */
-interface BlockingDisputeRow {
-  readonly taskTitle: string;
-  readonly checkName: string;
-  readonly reason: string;
-  readonly disputes: number;
-}
-
-/** A halt as its terminal message tells it, read from its episode. */
-type HaltReportRow =
-  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind; readonly cause: RecordedCauseRow; readonly visionWritten: boolean }
-  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "check_dispute"; readonly dispute: BlockingDisputeRow; readonly visionWritten: boolean }
-  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "suite_review"; readonly review: BlockingReviewRow; readonly visionWritten: boolean }
-  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "plan_repair"; readonly abandoned: readonly BlockingAbandonmentRow[]; readonly visionWritten: boolean };
 
 const ResumeKindSchema = z.enum(["unblocked", "probe_passed", "answered"]);
 
@@ -208,7 +168,7 @@ class BlockingDisputeMissing extends Error {
 }
 
 /** The last dispute of the project recorded at or before `blockedAt`, with its check task's count then. */
-async function blockingDispute(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingDisputeRow> {
+async function blockingDispute(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingDispute> {
   const last = await lastDisputeBy(db, projectId, blockedAt);
   if (last === null || last.disputes < 1) throw new BlockingDisputeMissing(episodeId, projectId);
   const [task] = await workItemSummaries(db, [last.taskId]);
@@ -281,7 +241,7 @@ async function projectVisionWritten(db: DbHandle, projectId: ProjectId): Promise
  * cause, or the dispute, review or given-up tasks it was blocked on. One whose record does not read
  * as a report throws.
  */
-export async function haltReportOf(db: DbHandle, row: HaltEpisode, blockingReview: BlockingReviewReader): Promise<HaltReportRow> {
+export async function haltReportOf(db: DbHandle, row: HaltEpisode, blockingReview: BlockingReviewReader): Promise<ProjectBlockedReport> {
   const kind = ProjectBlockKindSchema.safeParse(row.kind);
   if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
   const projectId = parseProjectId(row.projectId, "project_blocks.project_id");

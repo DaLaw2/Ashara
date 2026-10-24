@@ -4,6 +4,7 @@ import { suiteReviewClaims, suiteReviewFindings, suiteReviewJudgements, undecide
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { CAPABILITY_RANK, CapabilityLevelSchema, SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { CapabilityLevel, JudgeRelation } from "@ashara/finance";
+import type { BlockingReviewRow } from "../task-checks.js";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
 // Quality's record of the reviews of plan revisions' check suites: each review
@@ -565,12 +566,6 @@ export async function suiteReviewClaimsOf(db: DbHandle, projectId: string): Prom
         }),
     }),
   );
-}
-
-/** The review a suite_review block was written on: what it found, and how often it had named the check task. */
-interface BlockingReviewRow {
-  readonly times: number;
-  readonly problems: readonly string[];
 }
 
 /**

@@ -29,7 +29,7 @@ export interface AttemptSlot {
 }
 
 /** How a session's dispatch ended, as its terminal write records it. */
-interface SessionEnd {
+interface DispatchEnd {
   readonly status: string;
   readonly detail: string;
   readonly errorEnvelope?: ErrorEnvelope;
@@ -48,7 +48,7 @@ interface SessionEnd {
  * resolved by the startup reconciler, the durable backstop Discipline B requires
  * — no in-process handler survives a crash.
  */
-export async function withSessionLifecycle<R extends SessionEnd>(
+export async function withSessionLifecycle<R extends DispatchEnd>(
   sessionStore: SessionStore,
   session: { readonly sessionId: string; readonly taskId: string; readonly brief: AgentBrief; readonly environmentVersion: string | null },
   body: (slot: AttemptSlot) => Promise<R>,

@@ -6,10 +6,13 @@ import type { ProjectId } from "@ashara/shared";
 // wires it. The per-project row lock the caller holds is the consistency boundary of each call.
 
 /** One applied correction as Delivery's hold reads it: the version it wrote, the message it answers and the keys it affects. */
-interface AppliedCorrection {
+export interface AppliedCorrection {
   readonly projectId: ProjectId;
+  /** The vision version the correction wrote, with its vision_revisions row. */
   readonly visionVersion: number;
+  /** The client message it answers: the change, its confirmation or the answer. */
   readonly requestedBy: string;
+  /** The guarantee and assumption keys it affects. */
   readonly affected: readonly string[];
 }
 

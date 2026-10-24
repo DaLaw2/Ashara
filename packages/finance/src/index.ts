@@ -6,7 +6,7 @@ export { LlmCallLedger } from "./llm-call-ledger.js";
 export { LlmCallRepository } from "./llm-call-repository.js";
 export { WorkGrantRepository } from "./work-grant-repository.js";
 export { SPEND_CAP_ERROR_CLASS, SpendCap, WORK_BUDGET_ERROR_CLASS } from "./spend-cap.js";
-export type { SpendAtCap } from "./spend-cap.js";
+export type { SpendAtCap, SpendRefusal } from "./spend-cap.js";
 export { DEFAULT_WORK_BUDGETS, projectWorkBudget } from "./work-ledger.js";
 export type { WorkBudgets } from "./work-ledger.js";
 export { burnZoneOf } from "./work-burn.js";
@@ -34,11 +34,14 @@ export { CAPABILITY_RANK, CapabilityLevelSchema, judgeRelation, SECOND_OPINION_S
 export type {
   CapabilityLevel,
   JudgeRelation,
+  GradedModel,
   LadderAttemptEvent,
+  PassedOver,
   ResolvedModel,
   SecondOpinion,
   SecondOpinionStrength,
   StructuredProvider,
+  StructuredProviderResult,
   StructuredValidation,
   TokenUsage,
   TurnToolSchema,

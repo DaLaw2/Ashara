@@ -1,4 +1,5 @@
 export { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./vision-assumption.js";
+export type { PlannedAssumption } from "./vision-assumption.js";
 export type { VisionSource } from "./vision-source.js";
 export { VisionSourceSchema, checkDecides, taskMayCite, visionSourceCitation, visionSourceLine } from "./vision-source.js";
 export type { InterfaceEntry, Observation, VisionGuarantee } from "./guarantee.js";

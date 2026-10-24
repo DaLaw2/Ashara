@@ -1,4 +1,4 @@
-import type { DbTransaction, createDb } from "@ashara/db";
+import type { Database, DbTransaction } from "@ashara/db";
 import { ProjectHaltRepository, listDuePlanReports, listDuePlanRevisionReports, planRevisionToTell } from "@ashara/delivery";
 import { postPlanReport, postPlanRevisionReport, readRiskRecords } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
@@ -8,7 +8,7 @@ import type { PlanReportStore } from "@ashara/engagement";
  * Engagement's write of each report with its told record. A report that cannot be composed halts its
  * project through Delivery's halt.
  */
-export function createPlanReportStore(db: ReturnType<typeof createDb> | DbTransaction): PlanReportStore {
+export function createPlanReportStore(db: Database | DbTransaction): PlanReportStore {
   const projects = new ProjectHaltRepository(db);
   return {
     dueReports: () => listDuePlanReports(db),

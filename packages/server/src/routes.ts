@@ -3,7 +3,7 @@ import { z } from "zod";
 import { VisionRepository } from "@ashara/engagement";
 import { WORK_FAILED } from "@ashara/quality";
 import type { WorkItemId } from "@ashara/shared";
-import type { StoredBlockedReason } from "@ashara/delivery";
+import type { StoredBlockedReason, WorkItem } from "@ashara/delivery";
 import { InvalidId, parseProjectId, parseWorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { EventStoreRepository } from "@ashara/db";
@@ -46,7 +46,6 @@ const StatusPatchSchema = z.strictObject({
   reason: z.record(z.string(), z.unknown()).optional(),
 });
 
-type WorkItem = ReturnType<typeof rowToWorkItem>;
 type StatusTarget = z.infer<typeof StatusPatchSchema>["status"];
 
 /** Why a status patch is refused: the HTTP status and the body it answers with. */

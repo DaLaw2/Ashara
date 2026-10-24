@@ -79,9 +79,10 @@ export {
   formatProjectChecksForCheckAuthor,
   headCommit,
 } from "./task-checks.js";
-export type { CitedItemIds, CompletedTaskChecks, TaskCheckStore, TaskChecks } from "./task-checks.js";
+export type { CitedItemIds, CompletedTaskChecks, SuiteReviewProblem, TaskCheckStore, TaskChecks } from "./task-checks.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
+export type { NewCheckDispute } from "./repositories/check-dispute.js";
 export { CheckSetFreezeRepository } from "./repositories/check-set-freeze.js";
 export { SuiteReviewFindingRepository, SuiteReviewJudgementRepository, blockingReview } from "./repositories/suite-review.js";
 export { suiteReviewClaimsOf, suiteReviewJudgementsOf } from "./repositories/suite-review.js";
@@ -106,6 +107,6 @@ export type {
   DueTerminalSweep,
   FailedSweepRecord,
   ReadyProject,
-  SweptTerminal,
   TerminalSweepRecord,
 } from "./repositories/acceptance.js";
+export type { SweptTerminal } from "./published-reads.js";

@@ -279,6 +279,11 @@ export interface ModelIdentity {
   readonly model: string;
 }
 
+/** The model an answer came from, as the response named it, with its catalog grade as it was called. */
+export interface GradedModel extends ModelIdentity {
+  readonly grade: CapabilityLevel;
+}
+
 /**
  * How independent a second opinion is of the first, strongest
  * first: a model of another provider; another model of the first's provider; the first's model
@@ -291,6 +296,17 @@ export type SecondOpinionStrength = (typeof SECOND_OPINION_STRENGTHS)[number];
 export interface SecondOpinion {
   readonly avoid: ModelIdentity;
   readonly strength: SecondOpinionStrength;
+}
+
+/**
+ * A strength of second opinion no answer was had at, before the caller asked the next: the catalog
+ * offered no model for it, or the model it went to gave no fit answer. Recorded, so moving to a
+ * weaker strength is never silent.
+ */
+export interface PassedOver {
+  readonly strength: SecondOpinionStrength;
+  readonly outcome: "unavailable" | "failed";
+  readonly reason: string;
 }
 
 export interface StructuredResponse<T> {

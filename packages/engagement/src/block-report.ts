@@ -12,6 +12,7 @@ import { INBOUND_KINDS, WAITS_FOR_HALT_END, inboundDecision } from "./inbound-po
 import type { InboundKind, Told } from "./inbound-policy.js";
 import type { ContractStanding } from "./vision-language/guarantee.js";
 import { WORK_WORDS } from "./vision-language/work-promise.js";
+import type { BlockingReviewRow } from "./repositories/block-report.js";
 
 // The Liaison's reports on project halts: the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
@@ -56,7 +57,7 @@ interface RecordedCause {
 }
 
 /** The dispute that passed its bound, as recorded when the project was blocked on it; only older records hold this halt kind. */
-interface BlockingDispute {
+export interface BlockingDispute {
   readonly taskTitle: string;
   readonly checkName: string;
   readonly reason: string;
@@ -64,16 +65,8 @@ interface BlockingDispute {
   readonly disputes: number;
 }
 
-/** The review that passed its bound, as recorded when the project was blocked on it; only older records hold this halt kind. */
-interface BlockingReview {
-  /** How many reviews had named the check task past the bound when the project was blocked. */
-  readonly times: number;
-  /** What the last review found, as it stated each problem. */
-  readonly problems: readonly string[];
-}
-
 /** A task the team gave up again after the plan was repaired its bound of times, as recorded when the project halted. */
-interface BlockingAbandonment {
+export interface BlockingAbandonment {
   /** The task's work item: the record that holds why it was given up, in Ashara's own words. */
   readonly workItemId: string;
   readonly title: string;
@@ -94,7 +87,8 @@ interface BlockingAbandonment {
  */
 export type ProjectBlockedReport =
   | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind; readonly cause: RecordedCause; readonly visionWritten: boolean }
-  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "suite_review"; readonly review: BlockingReview; readonly visionWritten: boolean }
+  /** The suite review that passed its bound, as recorded when the project was blocked on it; only older records hold this halt kind. */
+  | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "suite_review"; readonly review: BlockingReviewRow; readonly visionWritten: boolean }
   | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "plan_repair"; readonly abandoned: readonly BlockingAbandonment[]; readonly visionWritten: boolean }
   | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "check_dispute"; readonly dispute: BlockingDispute; readonly visionWritten: boolean };
 
@@ -438,7 +432,7 @@ function disputeBoundReport(dispute: BlockingDispute, standing: ContractStanding
 }
 
 /** Plain words: what stopped, what the review found, and what ends it (a halt kind only older records hold). */
-function suiteReviewBoundReport(review: BlockingReview, standing: ContractStanding): string {
+function suiteReviewBoundReport(review: BlockingReviewRow, standing: ContractStanding): string {
   return [
     `${WORK_WORDS[standing].paused} Before building starts, the team reviews all the checks written to confirm the ` +
       `work, together with what you asked for. The review keeps finding checks that cannot all be passed at once, or ` +

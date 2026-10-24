@@ -10,6 +10,7 @@ import { isSupersededItem, pendingCorrection } from "../predicates.js";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
+import type { AddedAssumption } from "../decomposition-types.js";
 import type { PlanTaskCounts } from "../published-reads.js";
 import type { DroppedPlanDependency } from "./project-plan.js";
 import { projectReportsPlans } from "./project-halt.js";
@@ -70,7 +71,7 @@ export type DuePlanReport =
        * The behaviour the standing plan's tasks add beyond what the contract states, once each, in the
        * order the tasks cite it, each recorded as an assumption under its key.
        */
-      readonly assumptions: ReadonlyArray<{ readonly key: string; readonly statement: string }>;
+      readonly assumptions: readonly AddedAssumption[];
     }
   /**
    * A planned project with a work item whose jsonb does not parse (WorkItemRowCorrupt), or whose

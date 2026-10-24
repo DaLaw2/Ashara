@@ -10,13 +10,13 @@ import { modelCallFailureOf } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "./acl/organization-acl.js";
 import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
+import type { PlannedAssumption } from "./acl/engagement-vision-acl.js";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type {
   DecompositionInput,
   DecompositionResult,
   DroppedDependency,
-  PlannedAssumption,
   TaskSpec,
   WorkItemSpec,
 } from "./decomposition-types.js";

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { formatTaskSpec, loadProjectIntent } from "@ashara/workplace";
 import type { ProjectIntentSource } from "@ashara/workplace";
 import { assignmentIntentOf } from "@ashara/delivery";
@@ -15,7 +15,6 @@ import type { RecomposedBrief } from "../simulator/stored-text.js";
  * here is judged by the simulator's I4 and I9 (stored-text.ts), which import nothing of it.
  */
 
-type Db = ReturnType<typeof createDb>;
 
 const PREFIX = "ashara_replay_";
 
@@ -57,7 +56,7 @@ export async function dropReplayDatabase(server: string, name: string): Promise<
 
 const projectRow = z.object({ id: z.string(), name: z.string() });
 
-export async function replayProjects(db: Db): Promise<Array<z.infer<typeof projectRow>>> {
+export async function replayProjects(db: Database): Promise<Array<z.infer<typeof projectRow>>> {
   return z.array(projectRow).parse((await db.execute(sql`SELECT id, name FROM projects ORDER BY created_at, id`)).rows);
 }
 
@@ -77,7 +76,7 @@ const visionAt = z.object({
 });
 
 /** The vision current when one session was recorded: today's intent composer reads it as the run's composer then would. */
-function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
+function visionWhenRecorded(db: Database, sessionId: string): ProjectIntentSource {
   return {
     async loadIntent(taskId) {
       const rows = z.array(visionAt).parse(
@@ -105,7 +104,7 @@ function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
  * brief. A session whose intent cannot be composed throws ProjectIntentUnavailable: the replay
  * fails, never judges less.
  */
-export async function recomposeBriefs(db: Db, projectId: string): Promise<RecomposedBrief[]> {
+export async function recomposeBriefs(db: Database, projectId: string): Promise<RecomposedBrief[]> {
   const sessions = z.array(sessionRow).parse(
     (
       await db.execute(sql`
@@ -167,7 +166,7 @@ interface ReportsSetAside {
  * project reads as not yet told), so today's Engagement reports on them again. A project accepted and
  * later stopped or reopened is accepted again for the while: its delivered report was composed while it was.
  */
-export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
+export async function setAsideReports(db: Database): Promise<ReportsSetAside> {
   return await db.transaction(async (tx) => {
     const sweeps = z.array(setAsideRow).parse(
       (
@@ -217,7 +216,7 @@ export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
  * (a project with a stop awaiting the Liaison is not reported on) gets its kept report back, judged
  * as kept. Project statuses are put back. Returns the records reported on again.
  */
-export async function settleReports(db: Db, setAside: ReportsSetAside): Promise<SetAside[]> {
+export async function settleReports(db: Database, setAside: ReportsSetAside): Promise<SetAside[]> {
   return await db.transaction(async (tx) => {
     const recomposed: SetAside[] = [];
     for (const record of setAside.records) {
@@ -277,7 +276,7 @@ const verdictRow = z.object({
 export type StoredVerdict = z.infer<typeof verdictRow>;
 
 /** Every verdict stored beside one of the project's reports, oldest report first, by guarantee id. */
-export async function storedVerdicts(db: Db, projectId: string): Promise<StoredVerdict[]> {
+export async function storedVerdicts(db: Database, projectId: string): Promise<StoredVerdict[]> {
   return z.array(verdictRow).parse(
     (
       await db.execute(sql`

@@ -6,7 +6,7 @@ import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
 import type { FirstPlanning } from "./first-plan.js";
 import type { Replanning } from "./replan-port.js";
 import type { FailedApproachRepository } from "./acl/knowledge-acl.js";
-import type { AcceptanceSweeper, TerminalSweeper } from "./acl/quality-acl.js";
+import type { AcceptanceSweeper, NewCheckDispute, TerminalSweeper } from "./acl/quality-acl.js";
 import type { DispatchService } from "./dispatch/dispatch-service.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
 import type { SettledTargets } from "./settled-branches.js";
@@ -29,7 +29,7 @@ import type { TerminalSweepStore } from "./terminal-sweep.js";
 import type { ClientWaitHalts } from "./client-wait-halts.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
-import type { SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
+import type { SpendAtCap, SpendRefusal } from "./acl/finance-acl.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
@@ -60,17 +60,6 @@ export interface CycleResult {
   /** Set when this cycle found the loop must stop. */
   readonly stop: LoopStop | null;
 }
-
-/**
- * Finance's admission refusing an LLM call, as the loop routes it: a spend cap's (`project`,
- * `deployment`), or the work ledger's, a task's model requests spent
- * (`task_work`: the task is given up) or its project's (`project_work`: the project halts).
- */
-type SpendRefusal =
-  | { readonly kind: "project"; readonly projectId: string; readonly reason: string; readonly spend: SpendAtCap }
-  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap }
-  | { readonly kind: "task_work"; readonly projectId: string; readonly taskId: string; readonly reason: string; readonly work: WorkAtBudget }
-  | { readonly kind: "project_work"; readonly projectId: string; readonly reason: string; readonly work: WorkAtBudget };
 
 /**
  * Finance's spend cap, as the loop reads it. Finance only refuses: the loop halts a project its
@@ -356,20 +345,9 @@ export type TaskLanes = <I extends { readonly id: string }, T>(
 /** Who does a project's environment work, as the latest roster says. */
 type EnvironmentOwner = { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };
 
-/** One dispute of a stored check, as an implementer's attempt ended with it. */
-interface CheckDisputeEntry {
-  readonly projectId: string;
-  readonly taskId: string;
-  readonly checkTaskId: string;
-  readonly revision: number;
-  readonly checkName: string;
-  readonly reason: string;
-  readonly evidence: string | null;
-}
-
 /** Appends a dispute; resolves to the disputes its check task has drawn, this one included. */
 interface CheckDisputeRecord {
-  record(dispute: CheckDisputeEntry): Promise<number>;
+  record(dispute: NewCheckDispute): Promise<number>;
 }
 
 /** One review of a plan revision's suites that found problems, as its dispatch ended with it. */

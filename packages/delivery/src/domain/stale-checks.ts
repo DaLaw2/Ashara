@@ -1,4 +1,5 @@
 import { createDomainEvent } from "@ashara/shared";
+import type { SuiteReviewProblem } from "../acl/quality-acl.js";
 import { HELD_SET_RULE, heldSetRuleText } from "../acl/workplace-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
@@ -256,15 +257,6 @@ function reopenableCheckTask(
  * not act there and stays undecided (Quality's suite review).
  */
 const SUITE_REVIEW_BOUND = 1;
-
-/** One problem the review found: the check tasks whose checks it involves, what is wrong, and the evidence. */
-interface SuiteReviewProblem {
-  readonly checkTaskIds: readonly string[];
-  /** Checks no product can pass together, a check of behaviour no vision item asks for, or a cited item no check decides. */
-  readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
-  readonly problem: string;
-  readonly evidence: string;
-}
 
 interface SuiteReviewFindings {
   readonly problems: readonly SuiteReviewProblem[];

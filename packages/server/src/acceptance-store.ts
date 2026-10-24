@@ -1,4 +1,4 @@
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { WorkItemRowRepository, adaptWorkItemRepo } from "@ashara/delivery";
 import type { AcceptanceStore, TerminalSweepStore } from "@ashara/delivery";
 import { acceptProject, guaranteesInForce } from "@ashara/engagement";
@@ -13,7 +13,6 @@ import {
   recordTerminalSweepWithoutEvidence,
 } from "@ashara/quality";
 
-type Db = ReturnType<typeof createDb>;
 
 /**
  * Delivery's acceptance store over projects, work_items, acceptance_sweeps and guarantee_evidence. The
@@ -22,7 +21,7 @@ type Db = ReturnType<typeof createDb>;
  * judges pass every one the contract does not mark not verifiable by Ashara, the coverage Delivery
  * routes as an acceptance_uncovered halt when it is short.
  */
-export function createAcceptanceStore(db: Db): AcceptanceStore {
+export function createAcceptanceStore(db: Database): AcceptanceStore {
   return {
     readyForAcceptance: () => listProjectsReadyForAcceptance(db),
     // The move to 'accepted' is Engagement's lifecycle guard, in the sweep's transaction.
@@ -33,7 +32,7 @@ export function createAcceptanceStore(db: Db): AcceptanceStore {
 }
 
 /** Delivery's terminal sweep store over projects, client_messages, project_blocks, acceptance_sweeps and guarantee_evidence. */
-export function createTerminalSweepStore(db: Db): TerminalSweepStore {
+export function createTerminalSweepStore(db: Database): TerminalSweepStore {
   return {
     dueTerminalSweeps: () => listDueTerminalSweeps(db),
     recordTerminalSweep: (sweep) => recordTerminalSweep(db, sweep, guaranteesInForce),

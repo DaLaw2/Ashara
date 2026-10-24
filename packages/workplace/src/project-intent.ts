@@ -6,7 +6,7 @@ import type { AgentBrief } from "./agent-brief.js";
  * The project's current vision as the Assignment carries it: its version, its text verbatim, every
  * assumption by key, already rendered by Delivery in neutral words, and every public interface entry by key.
  */
-interface AssignmentVision {
+export interface AssignmentVision {
   readonly version: number;
   readonly visionText: string;
   readonly assumptions: AgentBrief["assumptions"];

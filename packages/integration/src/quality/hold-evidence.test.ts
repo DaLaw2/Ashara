@@ -43,9 +43,9 @@ async function delivered(decided: readonly [string, ...string[]]): Promise<void>
   const taskId = await task("Completed", decided, FIRST_PLAN_AT);
   const checkTaskId = await task("Completed", decided, FIRST_PLAN_AT);
   await repo.append({
-    projectId,
+    projectId: parseProjectId(projectId, "test"),
     taskId,
-    checkTaskId,
+    checkTaskId: parseWorkItemId(checkTaskId, "test"),
     environmentVersion: "e".repeat(64),
     baselineCommit: "a".repeat(40),
     checks: [{ name: "holds", command: "true", decides: decided }],

@@ -8,7 +8,7 @@ import {
   modelCallFailureOf,
   withStructuredLadder,
 } from "@ashara/finance";
-import type { CapabilityLevel, LadderAttemptEvent, ModelCallFailure, SecondOpinion, SecondOpinionStrength } from "@ashara/finance";
+import type { GradedModel, LadderAttemptEvent, ModelCallFailure, PassedOver, SecondOpinion, SecondOpinionStrength } from "@ashara/finance";
 import { containEach, describeErrorChain } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 import { modelCallBlockCategory, projectBlockCause } from "@ashara/delivery/project-halt";
@@ -131,33 +131,16 @@ interface AskedQuestion {
   readonly key: string;
 }
 
-/** The model a reading's answer came from, as the response named it, with its catalog grade as it was called. */
-interface ReadingModel {
-  readonly provider: string;
-  readonly model: string;
-  readonly grade: CapabilityLevel;
-}
-
 /** The first reading's answer and the model that gave it. */
 interface FirstReading {
   readonly response: IntakeResponse;
-  readonly model: ReadingModel;
-}
-
-/**
- * A strength of second reading no answer was had at: the catalog offered no model for it, or the
- * model it went to gave no fit answer. Recorded, so moving to a weaker strength is never silent.
- */
-interface PassedOver {
-  readonly strength: SecondOpinionStrength;
-  readonly outcome: "unavailable" | "failed";
-  readonly reason: string;
+  readonly model: GradedModel;
 }
 
 /** The second reading that answered: its strength against the first, its model and the questions it asked. */
 interface SecondReading {
   readonly strength: SecondOpinionStrength;
-  readonly model: ReadingModel;
+  readonly model: GradedModel;
   readonly questions: readonly RaisedQuestion[];
 }
 
@@ -173,7 +156,7 @@ export type ReadingConfirmation =
 
 /** The tender's reading as intake_readings records it. */
 interface IntakeReading {
-  readonly first: ReadingModel;
+  readonly first: GradedModel;
   readonly firstQuestions: number;
   readonly confirmation: ReadingConfirmation;
 }
@@ -305,8 +288,8 @@ class SecondReadingMisrouted extends Error {
   constructor(
     readonly tenderId: string,
     readonly asked: SecondOpinionStrength,
-    readonly first: ReadingModel,
-    readonly answered: ReadingModel,
+    readonly first: GradedModel,
+    readonly answered: GradedModel,
   ) {
     super(
       `tender ${tenderId}: a ${asked} second reading of ${modelName(first)}'s reading was answered by ${modelName(answered)}, ` +
@@ -324,12 +307,12 @@ class SecondReadingUnasked extends Error {
   }
 }
 
-function modelName(model: ReadingModel): string {
+function modelName(model: GradedModel): string {
   return `${model.provider}/${model.model}`;
 }
 
 /** The strength the answering model has against the first, from the two models alone. */
-function strengthBetween(first: ReadingModel, second: ReadingModel): SecondOpinionStrength {
+function strengthBetween(first: GradedModel, second: GradedModel): SecondOpinionStrength {
   if (first.provider !== second.provider) return "other-family";
   return first.model === second.model ? "same-model" : "same-family-other-model";
 }

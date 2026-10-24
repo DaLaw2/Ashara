@@ -1,4 +1,4 @@
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { readEach } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { parseStoredVision } from "../acl/engagement-vision-acl.js";
@@ -22,7 +22,7 @@ class OwnedTaskNotPlanned extends Error {
 }
 
 /** Delivery's first-plan store over projects, vision_documents, roster_roles and work_items. */
-export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlanStore {
+export function createFirstPlanStore(db: Database): FirstPlanStore {
   const projects = new ProjectHaltRepository(db);
   return {
     async projectsAwaitingPlan() {

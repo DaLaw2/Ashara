@@ -10,7 +10,17 @@ import {
   StructuredOutputExhausted,
   withStructuredLadder,
 } from "@ashara/finance";
-import type { CapabilityLevel, JudgeRelation, LadderAttemptEvent, SecondOpinion, SecondOpinionStrength, StructuredValidation } from "@ashara/finance";
+import type {
+  CapabilityLevel,
+  GradedModel,
+  JudgeRelation,
+  LadderAttemptEvent,
+  PassedOver,
+  SecondOpinion,
+  SecondOpinionStrength,
+  StructuredProviderResult,
+  StructuredValidation,
+} from "@ashara/finance";
 import type { Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
 import type { StoredTaskSpec } from "./acl/delivery-acl.js";
@@ -18,7 +28,7 @@ import type { VisionSource } from "./acl/engagement-acl.js";
 import { visionSourceCitation } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { PublicInterface, PublicInterfaceReader } from "./public-interface.js";
-import type { CheckTaskUnderReview, TaskChecks } from "./task-checks.js";
+import type { CheckTaskUnderReview, SuiteReviewProblem, TaskChecks } from "./task-checks.js";
 
 // Quality's review of a plan revision's check suites: checks written by
 // independent authors can together ask for what no product can pass. After the last check task of a revision completes and
@@ -80,7 +90,6 @@ import type { CheckTaskUnderReview, TaskChecks } from "./task-checks.js";
 // Each record names the weaker judge it rests on and whether it stood above the work or only equal
 // to it.
 
-
 /** What the review reads: the review task's check tasks, the checks stored for their tasks, and whether its check set is frozen. */
 export interface SuiteReviewSource {
   /** The check tasks the review task depends on: its plan revision's. */
@@ -89,14 +98,6 @@ export interface SuiteReviewSource {
   latest(taskId: WorkItemId): Promise<TaskChecks | null>;
   /** Whether the review task's check set is frozen: an implementation depending on it was dispatched (check_set_freezes). */
   frozen(reviewTaskId: WorkItemId): Promise<boolean>;
-}
-
-/** One problem the review routes, with the check tasks whose checks it involves. */
-interface SuiteReviewProblem {
-  readonly checkTaskIds: readonly string[];
-  readonly kind: ReviewFinding["kind"];
-  readonly problem: string;
-  readonly evidence: string;
 }
 
 /**
@@ -111,13 +112,6 @@ interface ReleasedRejection {
   readonly second: readonly string[];
   /** What the second review was, in words, with its strength (secondReviewText). */
   readonly secondReview: string;
-}
-
-/** The model a review's verdict came from, as the response named it, with its catalog grade. */
-interface ReviewModel {
-  readonly provider: string;
-  readonly model: string;
-  readonly grade: CapabilityLevel;
 }
 
 /**
@@ -135,22 +129,11 @@ interface JudgeTiers {
 /** The second review against the first: the model that answered it, and how independent of the first it is. */
 interface SecondReview {
   readonly strength: SecondOpinionStrength;
-  readonly first: ReviewModel;
-  readonly second: ReviewModel;
+  readonly first: GradedModel;
+  readonly second: GradedModel;
 }
 
-/**
- * A strength of second opinion the review did not get an answer at before the one that answered, or
- * before it failed: the catalog offered no model for it, or the model it went to never gave a fit
- * answer. Recorded, so moving to a weaker strength is never silent.
- */
-interface PassedOver {
-  readonly strength: SecondOpinionStrength;
-  readonly outcome: "unavailable" | "failed";
-  readonly reason: string;
-}
-
-function modelName(model: ReviewModel): string {
+function modelName(model: GradedModel): string {
   return `${model.provider}/${model.model}`;
 }
 
@@ -159,7 +142,7 @@ function higherTier(a: CapabilityLevel, b: CapabilityLevel): CapabilityLevel {
 }
 
 /** The tiers of a verdict judged at `judged` by the first review and, where it answered, the second. */
-function tiersOf(judged: CapabilityLevel, first: ReviewModel, second: SecondReview | null): JudgeTiers {
+function tiersOf(judged: CapabilityLevel, first: GradedModel, second: SecondReview | null): JudgeTiers {
   const judgeTier = second === null || CAPABILITY_RANK[first.grade] <= CAPABILITY_RANK[second.second.grade] ? first.grade : second.second.grade;
   return { judgeTier, judgedTier: judged, relation: judgeRelation(judged, judgeTier) };
 }
@@ -179,7 +162,7 @@ function secondReviewText(review: SecondReview): string {
 }
 
 /** The strength the answering model has against the first, from the two models alone. */
-function strengthBetween(first: ReviewModel, second: ReviewModel): SecondOpinionStrength {
+function strengthBetween(first: GradedModel, second: GradedModel): SecondOpinionStrength {
   if (first.provider !== second.provider) return "other-family";
   return first.model === second.model ? "same-model" : "same-family-other-model";
 }
@@ -223,7 +206,7 @@ interface ReviewJudgement {
   readonly basis: JudgementBasis;
   readonly first: ReviewFinding;
   /** The model the first review's verdict came from. */
-  readonly firstModel: ReviewModel;
+  readonly firstModel: GradedModel;
   /** Every finding the second review made on the check tasks it names, none when it found nothing there or was not asked. */
   readonly second: readonly ReviewFinding[];
   /** Null when the second review failed. */
@@ -261,7 +244,7 @@ interface ReviewClaim {
   readonly basis: ClaimBasis;
   /** The check tasks whose suites it covers. */
   readonly covered: readonly string[];
-  readonly firstModel: ReviewModel;
+  readonly firstModel: GradedModel;
   /** Null exactly when the second review failed. */
   readonly secondReview: SecondReview | null;
   /** The strengths passed over before the second review answered or failed. */
@@ -433,12 +416,7 @@ const ReviewResponseSchema = z.strictObject({
 type ReviewResponse = z.infer<typeof ReviewResponseSchema>;
 
 /** A review's answer: the verdict and the model that gave it, with the model's catalog grade. */
-interface ReviewAnswer {
-  readonly data: ReviewResponse;
-  readonly provider: string;
-  readonly model: string;
-  readonly grade: CapabilityLevel;
-}
+type ReviewAnswer = StructuredProviderResult<ReviewResponse>;
 
 /**
  * Every schema Quality sends to a model, by call site: the integration schema-acceptance test judges each against every provider type, so a schema a provider refuses fails a test before any run sends it.
@@ -1062,7 +1040,7 @@ type SecondVerdict =
  */
 function claimOf(
   suites: ReadonlyMap<string, ReviewedSuite>,
-  firstModel: ReviewModel,
+  firstModel: GradedModel,
   second: SecondVerdict,
   undecided: readonly UndecidedItem[],
   judged: CapabilityLevel,
@@ -1173,7 +1151,7 @@ class JudgeBelowWork extends Error {
   constructor(
     readonly reviewTaskId: string,
     readonly judged: CapabilityLevel,
-    readonly answered: ReviewModel,
+    readonly answered: GradedModel,
   ) {
     super(`review task ${reviewTaskId}: the review of check work at ${judged} was answered by ${modelName(answered)}, graded ${answered.grade}: no verdict is read from it`);
     this.name = "JudgeBelowWork";
@@ -1305,7 +1283,7 @@ export class SuiteReviewer implements SuiteReviewing {
   private async secondVerdict(
     reviewTaskId: WorkItemId,
     judged: CapabilityLevel,
-    first: ReviewModel,
+    first: GradedModel,
     ask: (secondOpinion: SecondOpinion) => Promise<ReviewAnswer>,
     suites: ReadonlyMap<string, ReviewedSuite>,
   ): Promise<SecondVerdict> {
@@ -1347,9 +1325,9 @@ export class SuiteReviewer implements SuiteReviewing {
     judged: CapabilityLevel,
     ask: () => Promise<ReviewAnswer>,
     suites: ReadonlyMap<string, ReviewedSuite>,
-  ): Promise<{ readonly data: ReviewResponse; readonly model: ReviewModel }> {
+  ): Promise<{ readonly data: ReviewResponse; readonly model: GradedModel }> {
     const { data, provider, model, grade } = await ask();
-    const answered: ReviewModel = { provider, model, grade };
+    const answered: GradedModel = { provider, model, grade };
     if (CAPABILITY_RANK[grade] < CAPABILITY_RANK[judged]) throw new JudgeBelowWork(reviewTaskId, judged, answered);
     const unfit = verdictErrors(data, suites);
     if (unfit.length > 0) throw new SuiteVerdictUnfit(reviewTaskId, unfit.join("; "));

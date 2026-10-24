@@ -1,13 +1,11 @@
 import { z } from "zod";
-import type { ProjectId } from "@ashara/shared";
+import type { NonEmpty, ProjectId } from "@ashara/shared";
 
 const CAPABILITY_CLASSES = ["client-comms", "write-source", "author-checks", "write-environment"] as const;
 
 export const CapabilityClassSchema = z.enum(CAPABILITY_CLASSES);
 
 export type CapabilityClass = z.infer<typeof CapabilityClassSchema>;
-
-type NonEmpty<T> = readonly [T, ...T[]];
 
 export interface Role {
   readonly id: string;

@@ -1,4 +1,4 @@
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { createTerminalSweepStore } from "@ashara/server/acceptance-store";
 
 /**
@@ -7,7 +7,7 @@ import { createTerminalSweepStore } from "@ashara/server/acceptance-store";
  * report that carries the guarantee table, with no substrate behind it. Every other suite's
  * terminal is left alone.
  */
-export async function sweepTerminalsOf(db: ReturnType<typeof createDb>, ours: (projectId: string) => boolean): Promise<void> {
+export async function sweepTerminalsOf(db: Database, ours: (projectId: string) => boolean): Promise<void> {
   const store = createTerminalSweepStore(db);
   for (const due of await store.dueTerminalSweeps()) {
     if (!ours(due.projectId)) continue;

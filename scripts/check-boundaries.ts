@@ -4,13 +4,14 @@
  * states their shapes). The import lints hold each package to its section: the cross-package import
  * matrix, named-only, stand-in and bounds-table files, internal modules, the symbols only one module
  * may import, subpath entries, test-only subpaths and the classes of another context a package may
- * import. The others are no import rule, run here so each needs no gate of its own: price-column defaults, unsupplied
- * optional dependencies, stack literals, table ownership, the project record's columns, the
- * simulator's run budgets, raw copies of a
- * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
- * recognise, the line limits of the modules split by role, a name declared outside its one home, a
- * function, method or method signature of production source or scripts/ with a long positional parameter list,
- * and a function of production source or scripts/ past the line bound.
+ * import. The others are no import rule, run here so each needs no gate of its own: price-column
+ * defaults, unsupplied optional dependencies, stack literals, table ownership, the project record's
+ * columns, the simulator's run budgets, raw copies of a cross-context predicate, the verification
+ * split, a copy of a wording the simulator's stand-ins recognise, the line limits of the modules
+ * split by role, a name declared outside its one home, a function, method or method signature of
+ * production source or scripts/ with a long positional parameter list, a function of production
+ * source or scripts/ past the line bound, and a type production source declares twice, by name, by
+ * its members or as an alias of what an imported function returns.
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -27,6 +28,7 @@ import { run as internalModules } from "./lints/internal-modules.js";
 import { run as languageHomes } from "./lints/language-homes.js";
 import { loadLintContext } from "./lints/lint.js";
 import type { LintContext, Violation } from "./lints/lint.js";
+import { run as mirroredTypes } from "./lints/mirrored-types.js";
 import { run as moduleNames } from "./lints/module-names.js";
 import { run as optionalDeps } from "./lints/optional-deps.js";
 import { run as packageImports } from "./lints/package-imports.js";
@@ -64,6 +66,7 @@ const LINTS: ReadonlyArray<(context: LintContext) => Violation[]> = [
   languageHomes,
   positionalParams,
   functionLength,
+  mirroredTypes,
 ];
 
 function main(): void {

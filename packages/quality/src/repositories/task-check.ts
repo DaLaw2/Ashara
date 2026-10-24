@@ -4,7 +4,7 @@ import { heldSetRejections, suiteReviewFindings, taskChecks } from "@ashara/db/s
 import type { Database } from "@ashara/db";
 import { CapabilityLevelSchema } from "@ashara/finance";
 import { attemptsWithModel, unheldItems } from "@ashara/workplace";
-import type { CheckDefinition, DefinedCheck, HoldEvidence } from "@ashara/workplace";
+import type { CheckDefinition, HoldEvidence } from "@ashara/workplace";
 import {
   checkTasksOfReview,
   completedImplementationTaskIds,
@@ -16,7 +16,7 @@ import {
   parseWorkItemJsonb,
   workItemSummaries,
 } from "../acl/delivery-acl.js";
-import type { CheckFoundation, CheckTaskUnderReview, CompletedTaskChecks, CompletedTasksChecks, ProjectTaskChecks, SetRejection, StoredCheckFile } from "../task-checks.js";
+import type { CheckFoundation, CheckTaskUnderReview, CompletedTaskChecks, CompletedTasksChecks, NewTaskChecks, ProjectTaskChecks, SetRejection, StoredCheckFile } from "../task-checks.js";
 import { inLatestCheckRevision, latestCheckRevision, StoredDecidesSchema } from "../stored-checks.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
@@ -50,18 +50,6 @@ const StoredRevisionSchema = z.number().int().positive().nullable();
 
 /** The models a task's attempts ran on, each with its catalog grade (Workplace's attempt log, graded by Finance's attemptGrade). */
 const AttemptModelSchema = z.strictObject({ model: z.string().min(1), grade: CapabilityLevelSchema.nullable() });
-
-/** One revision of an implementation task's checks, as the check task harvested it. */
-interface NewTaskChecks {
-  readonly projectId: string;
-  readonly taskId: string;
-  readonly checkTaskId: string;
-  readonly environmentVersion: string;
-  /** The commit the checks were red-run on: their plan revision's foundation. */
-  readonly baselineCommit: string;
-  readonly checks: readonly DefinedCheck[];
-  readonly files: readonly TaskCheckFile[];
-}
 
 /** A revision with no check: an empty revision would read as "nothing to check". */
 class TaskChecksEmpty extends Error {

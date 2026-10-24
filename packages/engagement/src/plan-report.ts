@@ -3,7 +3,7 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
-import type { DroppedOrderingHints, DuePlanReport, DuePlanRevision, PlanTaskCounts } from "@ashara/delivery/reads";
+import type { AddedAssumption, DroppedOrderingHints, DuePlanReport, DuePlanRevision, PlanTaskCounts, RevisionChange } from "@ashara/delivery/reads";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
 import { REPORT_SUBJECT } from "./report-subjects.js";
@@ -17,9 +17,6 @@ import type { PlanReportSubject } from "./report-subjects.js";
 // every answer it took in: each of them was promised the client would
 // be told what changed. The report of a first planning that stopped is the report of that halt, a
 // terminal message (terminal-report.ts): its words are here, and it carries the guarantee table.
-
-/** Behaviour a plan adds that no item of the contract states, as the assumption the contract records it under. */
-type PlannedAssumption = Extract<DuePlanReport, { readonly subject: typeof REPORT_SUBJECT.firstPlan }>["assumptions"][number];
 
 /** Engagement's persistence port for planning reports; each report reissues the register of guarantees at risk. */
 export interface PlanReportStore extends RiskRecordReader {
@@ -101,16 +98,17 @@ const revisionWorkFields = {
 
 // A revision for the client's changes carries every change it took in, each with their words and
 // the decision; a plan repair, the titles of the tasks the team gave up.
-const RevisionChangeSchema = z.object({ answer: z.string().min(1), decision: z.string().min(1) });
+const RevisionChangeSchema: z.ZodType<RevisionChange> = z.object({ answer: z.string().min(1), decision: z.string().min(1) });
 const PlanRevisionSummarySchema = z.union([
   z.object({ changes: z.array(RevisionChangeSchema).min(1), ...revisionWorkFields }),
   z.object({ repaired: z.array(z.string().min(1)).min(1), ...revisionWorkFields }),
 ]);
 
-type PlanRevisionSummary = z.infer<typeof PlanRevisionSummarySchema>;
-
-/** A client change a revision took in: what the client said and what was decided. */
-type RevisionChange = z.infer<typeof RevisionChangeSchema>;
+/**
+ * A revision's summary as stored, read from every version Delivery has written: the counts and
+ * assumptions an older summary lacks read as absent, never as none.
+ */
+type StoredRevisionSummary = z.infer<typeof PlanRevisionSummarySchema>;
 
 /**
  * A revision's summary does not name exactly the client answers recorded as taken in by it: a change
@@ -132,7 +130,7 @@ class RevisionChangesUnrecorded extends Error {
 }
 
 /** The summary, parsed, with its changes checked against the answers recorded as taken in. */
-function readRevision(projectId: ProjectId, revisionId: string, summary: unknown, answersTaken: number): PlanRevisionSummary {
+function readRevision(projectId: ProjectId, revisionId: string, summary: unknown, answersTaken: number): StoredRevisionSummary {
   const parsed = PlanRevisionSummarySchema.safeParse(summary);
   if (!parsed.success) throw new PlanRevisionSummaryUnreadable(projectId, revisionId, z.prettifyError(parsed.error));
   const named = "changes" in parsed.data ? parsed.data.changes.length : 0;
@@ -188,7 +186,7 @@ function firstPlanReport({ epicTitles, goalTasks, checkTasks, droppedHints, chan
   readonly checkTasks: number;
   readonly droppedHints: number;
   readonly changes: readonly RevisionChange[];
-  readonly assumptions: readonly PlannedAssumption[];
+  readonly assumptions: readonly AddedAssumption[];
 }): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
@@ -226,7 +224,7 @@ function firstPlanReport({ epicTitles, goalTasks, checkTasks, droppedHints, chan
  * The behaviour the plan adds that the client did not state, each as the assumption the contract now
  * records it under: the client reads it before any task resting on it starts, and can change it.
  */
-function plannedParagraph(assumptions: readonly PlannedAssumption[]): string[] {
+function plannedParagraph(assumptions: readonly AddedAssumption[]): string[] {
   if (assumptions.length === 0) return [];
   return [
     `The plan also builds behaviour your request does not state. The team has recorded ${assumptions.length === 1 ? "it as an assumption" : "each as an assumption"} ` +
@@ -254,7 +252,7 @@ function revisionReviewSentence(newReviewTasks: number | undefined): string {
 }
 
 /** Plain words: what the client said, what the team now does, what was set aside and what stays done. */
-function planRevisionReport(summary: PlanRevisionSummary): string {
+function planRevisionReport(summary: StoredRevisionSummary): string {
   const paragraphs =
     "changes" in summary
       ? summary.changes.length === 1
@@ -364,7 +362,7 @@ export class PlanReports implements LiaisonPlanReports {
       revisions,
       (due) => ({ id: due.revisionId, projectId: due.projectId }),
       async (due): Promise<PlanReportOutcome> => {
-        let summary: PlanRevisionSummary;
+        let summary: StoredRevisionSummary;
         try {
           summary = readRevision(due.projectId, due.revisionId, due.summary, due.answersTaken);
         } catch (err) {

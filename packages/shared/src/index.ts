@@ -18,7 +18,7 @@ export { UnreadSubject, containEach, faultBackoffSeconds, readEach, uncontainedS
 /** @testseam the simulator may not import it, so a cross-package test holds the simulator's report retry wait equal to it */
 export { FIRST_FAULT_BACKOFF_SECONDS } from "./contained-step.js";
 
-export type { DomainEvent } from "./types.js";
+export type { DomainEvent, NonEmpty } from "./types.js";
 export { createDomainEvent } from "./types.js";
 
 export { JsonParseFailed, parseJson } from "./json.js";

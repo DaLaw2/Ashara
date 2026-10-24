@@ -1,4 +1,4 @@
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { BlockReports, TerminalMessage, TerminalReports, terminalTableOf } from "@ashara/engagement";
 import type { BlockReportStore, TerminalKind, TerminalReportStore } from "@ashara/engagement";
 import { UnreadSubject, parseProjectId, systemClock } from "@ashara/shared";
@@ -7,7 +7,6 @@ import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
-type Db = ReturnType<typeof createDb>;
 type Due = Awaited<ReturnType<TerminalReportStore["dueTerminals"]>>[number];
 type ProductInterface = ConstructorParameters<typeof TerminalReports>[1];
 type Listed = Extract<Due, { readonly kind: "delivered" }>;
@@ -24,7 +23,7 @@ const NO_RISK: Risk = { kind: "read", version: { guarantees: [], assumptions: []
  * the table the records reader reads for its project.
  * @testseam the integration tests of posting a terminal message twice; production builds it from the due listing
  */
-export async function haltMessage(db: Db, projectId: string, episodeId: string): Promise<TerminalMessage> {
+export async function haltMessage(db: Database, projectId: string, episodeId: string): Promise<TerminalMessage> {
   const project = parseProjectId(projectId, "test project");
   const halt = { episodeId, projectId: project, kind: "fault", cause: { errorClass: null, reason: null, spend: null, work: null }, visionWritten: true } as const;
   return TerminalMessage.of({ kind: "halted", projectId: project, halt, risk: NO_RISK }, await terminalTableOf(db, { kind: "no-sweep", projectId: project }));
@@ -35,7 +34,7 @@ export async function haltMessage(db: Db, projectId: string, episodeId: string):
  * again, with the table the records reader reads for its sweep.
  * @testseam the integration tests of posting a terminal message twice; production builds it from the due listing
  */
-export async function deliveredMessage(db: Db, projectId: string, sweepId: string): Promise<TerminalMessage> {
+export async function deliveredMessage(db: Database, projectId: string, sweepId: string): Promise<TerminalMessage> {
   const table = await terminalTableOf(db, { kind: "sweep", sweepId });
   return TerminalMessage.of({ kind: "accepted", projectId: parseProjectId(projectId, "test project"), sweepId, attempts: 5 }, table);
 }
@@ -54,7 +53,7 @@ export function dueProjectOf(due: Due): string {
  * table it carries as `guarantees`, or why they did not read; undefined when none is due.
  * @testseam the integration tests of the delivered report's listing; production lists it in the terminal step
  */
-export async function dueDeliveredOf(db: Db, projectId: string): Promise<DueDelivered | undefined> {
+export async function dueDeliveredOf(db: Database, projectId: string): Promise<DueDelivered | undefined> {
   for (const due of await createTerminalReportStore(db, systemClock).dueTerminals(["delivered"])) {
     if (due instanceof UnreadSubject || due.kind === "listed" || due.report.projectId !== projectId) continue;
     return due.kind === "delivered" ? { ...due.report, guarantees: due.table } : due.report;
@@ -84,7 +83,7 @@ interface TerminalReportsOptions {
  * `unswept`), and every message posted through the production store.
  * @testseam the integration tests that post terminal messages outside the core loop; production runs it in the core loop
  */
-export function terminalReportsOf(db: Db, ours: (projectId: string) => boolean, options: TerminalReportsOptions = {}): TerminalReports {
+export function terminalReportsOf(db: Database, ours: (projectId: string) => boolean, options: TerminalReportsOptions = {}): TerminalReports {
   const store = options.store ?? createTerminalReportStore(db, systemClock);
   const kinds = options.kinds;
   const scoped: TerminalReportStore = {
@@ -107,7 +106,7 @@ interface HaltReportOutcome {
  * The reports a halt is told by over the projects `ours` admits: each halt's terminal message (its
  * terminal sweep recorded first), then each resumption's report, as the core loop runs them.
  */
-export function haltReportsOf(db: Db, ours: (projectId: string) => boolean, options: { readonly escapes?: boolean } = {}): { runPending(): Promise<HaltReportOutcome[]> } {
+export function haltReportsOf(db: Database, ours: (projectId: string) => boolean, options: { readonly escapes?: boolean } = {}): { runPending(): Promise<HaltReportOutcome[]> } {
   const terminal = terminalReportsOf(db, ours, { kinds: ["halted"], ...options });
   const store = createBlockReportStore(db);
   const scoped: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => ours(due.projectId)) };

@@ -182,7 +182,7 @@ const storedCheckRow = z.object({
   name: z.string(),
   decides: z.unknown(),
 });
-type SweptCheck = z.infer<typeof storedCheckRow>;
+type StoredCheckRow = z.infer<typeof storedCheckRow>;
 /** One stored check a passed sweep ran, with the task it checks and the revision of that task's checks it ran. */
 const sweptCheckRow = storedCheckRow.extend({ sweepId: z.string(), taskId: z.string(), revision: z.number().int() });
 type RanCheck = Omit<z.infer<typeof sweptCheckRow>, "sweepId">;
@@ -437,7 +437,7 @@ function identityOf(source: Pick<VisionSource, "id" | "text">): string {
  * cite or its `decides` is no list of ids. Either way no stored fact says which items were checked.
  */
 function decidedByStoredChecks(
-  checks: readonly SweptCheck[],
+  checks: readonly StoredCheckRow[],
 ):
   | { readonly kind: "decided"; readonly decided: ReadonlySet<string> }
   | { readonly kind: "unrecorded" | "unreadable"; readonly detail: string } {

@@ -2,7 +2,7 @@ import type { ZodType } from "zod";
 import type { CapabilityLevel } from "./capability-level.js";
 import { GatewayError, ModelCallAborted, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK, nextCapability, tierOf } from "./capability-rank.js";
-import type { KnownLLMSite, SecondOpinion, TierAsk } from "./types.js";
+import type { GradedModel, KnownLLMSite, SecondOpinion, TierAsk } from "./types.js";
 
 /**
  * Routing-profiles site tag stamped on every ladder attempt run at an
@@ -311,12 +311,9 @@ type StructuredProviderRequest<T> = TierAsk & {
   readonly validate?: (value: T) => StructuredValidation;
 };
 
-interface StructuredProviderResult<T> {
+/** A structured answer and the model that gave it, with that model's catalog grade as it was called (StructuredResponse.grade). */
+export interface StructuredProviderResult<T> extends GradedModel {
   readonly data: T;
-  readonly model: string;
-  readonly provider: string;
-  /** The answering model's catalog grade as it was called (StructuredResponse.grade). */
-  readonly grade: CapabilityLevel;
 }
 
 export interface StructuredProvider {

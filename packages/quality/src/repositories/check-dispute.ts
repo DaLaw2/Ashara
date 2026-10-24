@@ -5,7 +5,7 @@ import type { Database } from "@ashara/db";
 // Quality's record of an implementer's disputes of its task's checks.
 
 /** One dispute, as the implementer's attempt ended with it. */
-interface NewCheckDispute {
+export interface NewCheckDispute {
   readonly projectId: string;
   readonly taskId: string;
   readonly checkTaskId: string;

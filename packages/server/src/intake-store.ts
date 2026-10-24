@@ -1,11 +1,11 @@
 import { ClientMessageRepository, VisionRepository, consumeTenderWithoutIntake, recordTenderIntake } from "@ashara/engagement";
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import type { IntakeStore } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
 
 /** Engagement's intake store over client_messages and vision_documents. */
-export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore {
+export function createIntakeStore(db: Database): IntakeStore {
   const messages = new ClientMessageRepository(db);
   const visions = new VisionRepository(db);
   const projects = new ProjectHaltRepository(db);

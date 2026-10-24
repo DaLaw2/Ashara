@@ -1,4 +1,4 @@
-import type { createDb } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { parseWorkItemId, readEach, type Logger, type ProjectId } from "@ashara/shared";
 import { latestRosterRoles } from "../acl/organization-roster-acl.js";
 import { createBulkPlan } from "../bulk-plan.js";
@@ -30,7 +30,7 @@ function attemptGradeOf(grades: ReadonlyMap<string, AttemptGrade>, taskId: strin
 }
 
 /** Delivery's plan revision store over projects, vision_documents, roster_roles, work_items, task_checks and plan_revisions. */
-export function createReplanStore(db: ReturnType<typeof createDb>, logger: Logger): ReplanStore {
+export function createReplanStore(db: Database, logger: Logger): ReplanStore {
   const projects = new ProjectHaltRepository(db);
   const workItems = new WorkItemRowRepository(db);
   return {

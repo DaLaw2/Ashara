@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { InvalidId, parseWorkItemId } from "@ashara/shared";
-import type { InterfaceTable, WorkItem } from "../domain/index.js";
+import type { ExecutionResult } from "../acl/quality-acl.js";
+import type { WorkItem } from "../domain/index.js";
 import {
   PlanningService,
   awaitWork,
@@ -22,68 +23,8 @@ import type { ItemWrite, ReopenPlan } from "./reopen.js";
 import { reopen } from "./reopen.js";
 import { mainHoldsNoMergeOf } from "./main-settle.js";
 
-interface StaleChecksResult {
-  readonly checkTaskId: string;
-  readonly revision: number;
-  readonly detail: string;
-}
-
-/** An implementer's dispute of one stored check, as development returned it. */
-interface DisputedCheckResult {
-  /** The task whose stored checks hold the disputed check: the item itself, or a task already merged. */
-  readonly checksOf: string;
-  readonly checkTaskId: string;
-  readonly revision: number;
-  readonly check: { readonly name: string; readonly command: string };
-  readonly reason: string;
-  readonly evidence: string | null;
-  readonly detail: string;
-}
-
-/** A review of a plan revision's suites that found problems, as development returned it. */
-interface SuiteReviewProblemsResult {
-  readonly problems: ReadonlyArray<{
-    readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
-    readonly problem: string;
-    readonly evidence: string;
-  }>;
-  readonly detail: string;
-}
-
-/** A turn that did not fit its model's context window, as development returned it. */
-interface ContextExceededResult {
-  readonly model: { readonly provider: string; readonly modelId: string };
-  readonly windowTokens: number;
-  readonly outputReserveTokens: number;
-  readonly projectedInputTokens: number | null;
-  readonly wider: { readonly provider: string; readonly modelId: string; readonly windowTokens: number } | null;
-  readonly detail: string;
-}
-
-/** An implementer's finished work that changed environment recipe files, as development returned it. */
-interface EnvironmentChangeResult {
-  readonly paths: readonly string[];
-  readonly need: string;
-  readonly diff: string;
-  readonly detail: string;
-}
-
-/** An implementer's blocked finish on work another task delivers, as development returned it. */
-interface PrerequisiteNeededResult {
-  readonly interfaceEntries: readonly [string, ...string[]];
-  readonly interfaceTable: InterfaceTable;
-  readonly reason: string;
-  readonly detail: string;
-}
-
-/** An implementer's blocked finish on a decision only the client can make, as development returned it. */
-interface ClientDecisionNeededResult {
-  readonly question: string;
-  readonly assumption: string;
-  readonly reason: string;
-  readonly detail: string;
-}
+/** The result a dispatch returned with `status`, as development returned it. */
+type ResultOf<S extends ExecutionResult["status"]> = Extract<ExecutionResult, { readonly status: S }>;
 
 /** A return to Pending: the task, after what, the site its events name, and its write. */
 interface Requeue {
@@ -151,7 +92,7 @@ export async function requeueOnAbsence(deps: ExecutionRoutingDeps, requeue: Requ
  * within the catalog. With none, the task is given up naming the window and the estimate, and its
  * plan repaired, which can cut it smaller.
  */
-export async function routeAsContextExceeded(deps: ExecutionRoutingDeps, task: WorkItem, exceeded: ContextExceededResult): Promise<void> {
+export async function routeAsContextExceeded(deps: ExecutionRoutingDeps, task: WorkItem, exceeded: ResultOf<"context_exceeded">): Promise<void> {
   const { model, windowTokens, wider } = exceeded;
   if (wider === null) {
     await routeAsGivenUp(
@@ -224,7 +165,7 @@ export async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkIte
  * up with checks_stale instead, never left waiting on a check task that stayed Completed. Main is
  * read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
-export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, task: WorkItem, stale: StaleChecksResult): Promise<void> {
+export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, task: WorkItem, stale: ResultOf<"checks_stale">): Promise<void> {
   if ((await mainHoldsNoMergeOf(deps, task, `its stored checks went stale (${stale.detail})`)) === null) return;
   const taskId = task.id;
   await reopen(deps, {
@@ -302,7 +243,7 @@ export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, task: WorkI
  * that cannot be reopened, the item is given up with a check_disputed reason and its plan repaired.
  * Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
-export async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispute: DisputedCheckResult): Promise<void> {
+export async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispute: ResultOf<"disputed">): Promise<void> {
   if ((await mainHoldsNoMergeOf(deps, task, `a dispute of its check ${JSON.stringify(dispute.check.name)}`)) === null) return;
   const disputes = await deps.checkDisputes.record({
     projectId: task.projectId,
@@ -395,7 +336,7 @@ export async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem
  * with a suite_review_unresolved reason and its plan repaired, so no implementation is released on
  * problems nobody answered. Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
-export async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: SuiteReviewProblemsResult): Promise<void> {
+export async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: ResultOf<"suite_review_problems">): Promise<void> {
   if ((await mainHoldsNoMergeOf(deps, task, `a suite review that found ${review.problems.length} problem(s)`)) === null) return;
   const { timesNamed } = await deps.suiteReviewFindings.record({
     projectId: task.projectId,
@@ -475,7 +416,7 @@ export async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkI
  * and found wanting); past the bound, or with no owner, the item is given up and its plan repaired.
  * Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
-export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkItem, request: EnvironmentChangeResult): Promise<void> {
+export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkItem, request: ResultOf<"environment_change_requested">): Promise<void> {
   if ((await mainHoldsNoMergeOf(deps, task, `a requested change to ${request.paths.join(", ")}`)) === null) return;
   await reopen(deps, {
     taskId: task.id,
@@ -553,7 +494,7 @@ export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task:
  * be repaired; past the bound it is given up too. No attempt is counted toward the failure router's
  * give-up on any of these. Main is read first (mainHoldsNoMergeOf), as before every return to Pending.
  */
-export async function routeAsAwaitingWork(deps: ExecutionRoutingDeps, task: WorkItem, needed: PrerequisiteNeededResult): Promise<void> {
+export async function routeAsAwaitingWork(deps: ExecutionRoutingDeps, task: WorkItem, needed: ResultOf<"prerequisite_needed">): Promise<void> {
   if ((await mainHoldsNoMergeOf(deps, task, `a need of ${needed.interfaceEntries.join(", ")}`)) === null) return;
   await reopen(deps, {
     taskId: task.id,
@@ -635,7 +576,7 @@ class NeededEntriesUnresolved extends Error {
  * (parked-exits.ts). The hold is written before the question is posted, so no crash between the two
  * leaves a question no task waits on. Past the bound the item is given up and its plan repaired.
  */
-export async function routeAsAwaitingClient(deps: ExecutionRoutingDeps, task: WorkItem, needed: ClientDecisionNeededResult): Promise<void> {
+export async function routeAsAwaitingClient(deps: ExecutionRoutingDeps, task: WorkItem, needed: ResultOf<"client_decision_needed">): Promise<void> {
   const reason = `${needed.reason}\n${needed.detail}`;
   await reopen(deps, {
     taskId: task.id,

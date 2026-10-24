@@ -22,6 +22,18 @@ export const ClassifiedAssumptionKindSchema = z
   .enum(["client-visible", "internal-design", "undecided"])
   .transform((kind): AssumptionKind => (kind === "undecided" ? "client-visible" : kind));
 
+/**
+ * Behaviour a plan adds that no item of the contract states: recorded on the contract as an Inferred
+ * client-visible assumption under `key`, underpinning the guarantees whose lines cite it, in the
+ * transaction that writes the plan, and told to the client before any task citing it is dispatched.
+ */
+export interface PlannedAssumption {
+  readonly key: string;
+  readonly statement: string;
+  /** The guarantees whose lines cite it. */
+  readonly underpins: readonly [string, ...string[]];
+}
+
 /** What the client reads before a question's assumption; the statement itself never carries it. */
 export const ASSUMPTION_LABEL = "Until you answer, we proceed on this assumption:";
 

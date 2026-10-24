@@ -6,73 +6,19 @@ import { SECOND_OPINION_STRENGTHS } from "@ashara/finance";
 import type { Clock, ProjectId } from "@ashara/shared";
 import { completedGoalTasks } from "@ashara/delivery/predicates";
 import { givenUpGoalTitles, mergedCommitsOf, workItemSummaries } from "@ashara/delivery/reads";
-import { recordedSweep, type SweepRef } from "@ashara/quality/published-reads";
-import type { DeliveredReportFailureRecord, ReadingTold } from "../delivered-report.js";
+import { recordedSweep, type SweepOutcome, type SweepRef } from "@ashara/quality/published-reads";
+import type { DeliveredReportFailureRecord, DueDeliveredReport, ExecutedChecks, ReadingTold } from "../delivered-report.js";
 
 // The records of the Liaison's delivered report, a terminal message (repositories/terminal-report.ts):
 // rendered only from what is recorded: how each goal task closed, which tasks' checks the sweep ran
 // and the commands of those that passed (Quality's published sweep outcome), the tasks given up,
 // and how the tender was read. Its failed attempts are its own record (delivered_report_attempts).
 
-/** How a goal task's recorded commit closed it. */
-type GoalClose =
-  | { readonly kind: "merged"; readonly commit: string }
-  /** `by` is the task whose merge made that commit, null when no task records it as its merge. */
-  | { readonly kind: "already-delivered"; readonly commit: string; readonly by: string | null }
-  /** A commit is recorded, but not how it closed the task (a record from before merge kinds were recorded). */
-  | { readonly kind: "unrecorded-kind"; readonly commit: string }
-  /** Completed with no commit recorded at all. */
-  | { readonly kind: "no-record" };
-
-interface DueDeliveredReportRow {
-  readonly kind: "due";
-  /** Failed attempts at the report so far. */
-  readonly failures: number;
-  /** Failed reads of the public interface file so far. */
-  readonly interfaceReadFailures: number;
-  /** Failed attempts whose records did not make a report so far. */
-  readonly recordFailures: number;
-  readonly sweepId: string;
-  readonly projectId: ProjectId;
-  readonly mainCommit: string;
-  /** The project's target checkout (projects.workspace_path). */
-  readonly targetProjectPath: string;
-  readonly goals: ReadonlyArray<{ readonly title: string; readonly close: GoalClose }>;
-  /** The titles of the completed tasks whose stored checks the sweep ran. */
-  readonly checked: readonly string[];
-  /** The titles of the completed tasks with no stored check: nothing of theirs ran in the sweep. */
-  readonly unchecked: readonly string[];
-  /** The titles of goal tasks given up (Abandoned), which the plan was repaired around. */
-  readonly givenUp: readonly string[];
-  readonly executed: ExecutedChecks;
-  readonly reading: ReadingTold;
-}
-
-/** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before check outcomes were recorded. */
-type ExecutedChecks =
-  | { readonly kind: "recorded"; readonly checks: ReadonlyArray<{ readonly task: string; readonly name: string; readonly command: string }> }
-  | { readonly kind: "unrecorded" };
-
 /** What was read of a sweep's records does not hold together as its delivered report; a retry reads the same. */
 abstract class ReportRecordUnreadable extends Error {}
 
-/** One stored check a sweep ran, in Quality's published sweep outcome. */
-interface SweepCheckRead {
-  readonly taskId: string;
-  readonly name: string;
-  readonly command: string;
-  readonly outcome: "passed" | "failed" | "not-run";
-}
-
-/** What a sweep recorded of the work it swept, in Quality's published language (its readSweepOutcome). */
-interface SweepOutcomeRead {
-  readonly checkedTasks: readonly string[];
-  readonly uncheckedTasks: readonly string[];
-  readonly checks: { readonly kind: "unrecorded" } | { readonly kind: "recorded"; readonly checks: readonly SweepCheckRead[] };
-}
-
 /** Reads a sweep's outcome: Quality's published read, which the composition root supplies. */
-export type SweepOutcomeReader = (db: DbHandle, sweepId: string) => Promise<SweepOutcomeRead>;
+export type SweepOutcomeReader = (db: DbHandle, sweepId: string) => Promise<SweepOutcome>;
 
 /** A sweep names a task id that has no work_items row: the report cannot name it. */
 class SweepTaskMissing extends ReportRecordUnreadable {
@@ -97,7 +43,7 @@ async function sweepTaskTitles(db: DbHandle, sweepId: string, ids: readonly stri
 }
 
 /** The stored checks the sweep records it ran and saw pass, each with its task's title; unrecorded on a sweep from before check outcomes were recorded. */
-async function passedChecksOf(db: DbHandle, sweepId: string, recorded: SweepOutcomeRead["checks"]): Promise<ExecutedChecks> {
+async function passedChecksOf(db: DbHandle, sweepId: string, recorded: SweepOutcome["checks"]): Promise<ExecutedChecks> {
   if (recorded.kind === "unrecorded") return { kind: "unrecorded" };
   const passed = recorded.checks.filter((check) => check.outcome === "passed");
   const ids = [...new Set(passed.map((check) => check.taskId))];
@@ -112,7 +58,7 @@ async function passedChecksOf(db: DbHandle, sweepId: string, recorded: SweepOutc
   };
 }
 
-async function goalCloses(db: DbHandle, projectId: string): Promise<DueDeliveredReportRow["goals"]> {
+async function goalCloses(db: DbHandle, projectId: string): Promise<DueDeliveredReport["goals"]> {
   const goals = await completedGoalTasks(db, projectId);
   const merges = await mergedCommitsOf(db, projectId);
   return goals.map((goal) => {
@@ -234,7 +180,7 @@ export function attemptsOf(annotation: unknown): z.infer<typeof DueSweepRecordSc
 }
 
 /** A passed sweep's delivered report, read from its records; one whose records do not hold together throws. */
-export async function deliveredReportOf(db: DbHandle, row: DueSweep, sweepOutcome: SweepOutcomeReader): Promise<DueDeliveredReportRow> {
+export async function deliveredReportOf(db: DbHandle, row: DueSweep, sweepOutcome: SweepOutcomeReader): Promise<DueDeliveredReport> {
   const goals = await goalCloses(db, row.projectId);
   // A passed sweep always ran on main (acceptance_sweeps_pass_has_main).
   if (row.mainCommit === null) throw new AcceptedSweepWithoutMain(row.id);

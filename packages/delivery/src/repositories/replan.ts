@@ -4,6 +4,7 @@ import { parseProjectId, readEach, type DomainEvent, type Logger, type ProjectId
 import type { Database, DbHandle } from "@ashara/db";
 import { domainEvents, projects } from "@ashara/db";
 import { correctionHolds, planRepairs, planRevisions, projectPlans, workItems } from "@ashara/db/schema/delivery";
+import type { AppliedCorrection } from "../acl/engagement-acl.js";
 import { clientMessageBodies, firstPlanTold, noOpenAnswer, noOpenStop, planRevisionTold, projectAtWork } from "../acl/engagement-predicates-acl.js";
 import { currentStoredVision, currentVisionVersion, parseStoredVision, type PublishedStoredVision } from "../acl/engagement-vision-acl.js";
 import { CapabilityLevelSchema } from "../acl/finance-acl.js";
@@ -12,7 +13,7 @@ import { lastCompletedAttempts } from "../acl/workplace-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 import { holdForCorrection, takeEvents } from "../domain/index.js";
 import { firstPlanned, pendingCorrection, pendingRepair } from "../predicates.js";
-import type { AttemptGrade } from "../replan-port.js";
+import type { AttemptGrade, CorrectionRequest, RevisionCorrections } from "../replan-port.js";
 import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { IDLE_OPEN_WORK_ITEM_STATUSES } from "../work-item-language/work-item-status.js";
@@ -37,7 +38,7 @@ interface ProjectAwaitingReplanRow {
   readonly projectId: ProjectId;
   readonly projectName: string;
   /** The client's corrections whose revision the project awaits (correction_holds), oldest first; empty when none. */
-  readonly correctionsAwaited: readonly AwaitedCorrection[];
+  readonly correctionsAwaited: readonly CorrectionRequest[];
   /** The tasks the failure router gave up whose repair the project awaits, oldest first; empty when none. */
   readonly repairsAwaited: readonly string[];
   readonly replanAttempts: number;
@@ -136,18 +137,6 @@ const heldTaskInProgress = (projectId: AnyColumn): SQL =>
   sql`EXISTS (SELECT 1 FROM work_items w JOIN correction_holds ch ON ch.project_id = w.project_id AND ch.plan_revision_id IS NULL
     WHERE w.project_id = ${projectId} AND w.level = 'Task' AND w.status = 'InProgress' AND ${citesAnyOf(sql`ch.affected`)})`;
 
-/** One client correction a project awaits the revision of, with the client's own words. */
-interface AwaitedCorrection {
-  /** The vision version the correction wrote. */
-  readonly visionVersion: number;
-  /** The client message it answers: the change, its confirmation or the answer. */
-  readonly requestedBy: string;
-  /** That message's words. */
-  readonly words: string;
-  /** The guarantee and assumption keys it affects; never empty. */
-  readonly affected: readonly [string, ...string[]];
-}
-
 const AffectedSchema = z.array(z.string().min(1));
 
 /** A stored correction hold names no affected key, or its keys do not read: the row the migration's CHECK refuses. */
@@ -163,7 +152,7 @@ class CorrectionHoldUnreadable extends Error {
 }
 
 /** The corrections whose revision the project awaits, in the order they were recorded. */
-async function awaitedCorrections(db: DbHandle, projectId: string): Promise<AwaitedCorrection[]> {
+async function awaitedCorrections(db: DbHandle, projectId: string): Promise<CorrectionRequest[]> {
   const rows = await db
     .select({ visionVersion: correctionHolds.visionVersion, requestedBy: correctionHolds.requestedBy, affected: correctionHolds.affected })
     .from(correctionHolds)
@@ -181,17 +170,6 @@ async function awaitedCorrections(db: DbHandle, projectId: string): Promise<Awai
   });
 }
 
-/** A client correction applied to a project, as the correction's own transaction records it. */
-export interface CorrectionHold {
-  readonly projectId: ProjectId;
-  /** The vision version the correction wrote, with its vision_revisions row. */
-  readonly visionVersion: number;
-  /** The client message it answers: the change, its confirmation or the answer. */
-  readonly requestedBy: string;
-  /** The guarantee and assumption keys it affects. */
-  readonly affected: readonly string[];
-}
-
 /** What holdCorrection did: held, parking `parked` tasks, or nothing, and why. */
 type HoldOutcome = { readonly kind: "held"; readonly parked: number } | { readonly kind: "unplanned" } | { readonly kind: "no-key" };
 
@@ -206,7 +184,7 @@ type HoldOutcome = { readonly kind: "held"; readonly parked: number } | { readon
  * from the vision the correction wrote, and a correction affecting no guarantee or assumption holds
  * nothing either.
  */
-export async function holdCorrection(db: DbHandle, hold: CorrectionHold): Promise<HoldOutcome> {
+export async function holdCorrection(db: DbHandle, hold: AppliedCorrection): Promise<HoldOutcome> {
   const affected = [...new Set(hold.affected)];
   if (affected.length === 0) return { kind: "no-key" };
   const [locked] = await db.select({ id: projects.id }).from(projects).where(eq(projects.id, hold.projectId)).for("update");
@@ -380,13 +358,6 @@ class RevisionTaskUnowned extends Error {
     super(`cannot record a plan revision of project ${projectId}: task(s) ${taskIds.join(", ")} have no owner from the latest roster`);
     this.name = "RevisionTaskUnowned";
   }
-}
-
-/** The corrections a revision takes in. */
-interface RevisionCorrections {
-  readonly versions: readonly [number, ...number[]];
-  readonly requestedBy: string;
-  readonly affected: readonly string[];
 }
 
 interface PlanRevisionRecord {

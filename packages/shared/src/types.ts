@@ -44,3 +44,5 @@ export function createDomainEvent(
   };
 }
 
+/** A list with at least one element: a type whose empty value would read as "nothing to say" offers none. */
+export type NonEmpty<T> = readonly [T, ...T[]];

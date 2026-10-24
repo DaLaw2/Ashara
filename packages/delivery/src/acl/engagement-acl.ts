@@ -1,6 +1,6 @@
 import { TERMINAL_KINDS, VisionChangeRefused, VisionUnreadable, plannedBehaviourKeys, readVisionVersion, recordPlannedBehaviour, restartClientReadings } from "@ashara/engagement";
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
-import type { AgentBrief } from "@ashara/workplace";
+import type { AssignmentVision } from "@ashara/workplace";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
 import type { InterfaceEntry, VisionGuarantee } from "./engagement-vision-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
@@ -41,6 +41,10 @@ export type {
   TaskQuestionPosting,
   TerminalKind,
 } from "@ashara/engagement";
+
+// A client correction applied to a project, as Engagement hands it to Delivery's hold in the
+// correction's own transaction (Engagement's port HoldCorrection).
+export type { AppliedCorrection } from "@ashara/engagement/ports";
 
 // The kinds of terminal message the loop asks the Liaison to tell, each where it can become due.
 export { TERMINAL_KINDS };
@@ -153,21 +157,13 @@ class AssumptionUnkeyed extends Error {
   }
 }
 
-/** The project's vision as an Assignment carries it: the client's text, every assumption by key in neutral words, and every interface entry by key. */
-interface AssignmentIntent {
-  readonly version: number;
-  readonly visionText: string;
-  readonly assumptions: AgentBrief["assumptions"];
-  readonly interfaceEntries: AgentBrief["interfaceEntries"];
-}
-
 /**
  * The vision rendered for the Assignment, in Delivery's words: each assumption by its key, its statement, and a note
  * of what the record says of it (its standing with the client and its kind), so Workplace renders
  * text and knows no Engagement vocabulary. Throws VisionUnreadable, and AssumptionUnkeyed for an
  * assumption keyed only by its place.
  */
-export function assignmentIntentOf(stored: StoredVision): AssignmentIntent {
+export function assignmentIntentOf(stored: StoredVision): AssignmentVision {
   const vision = readVisionVersion(stored);
   return {
     version: vision.version,

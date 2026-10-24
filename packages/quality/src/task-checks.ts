@@ -120,6 +120,34 @@ export interface CheckTaskUnderReview {
   readonly attemptModels: ReadonlyArray<{ readonly model: string; readonly grade: CapabilityLevel | null }>;
 }
 
+/** One problem a suite review routes, with the check tasks whose checks it involves. */
+export interface SuiteReviewProblem {
+  readonly checkTaskIds: readonly string[];
+  readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
+  readonly problem: string;
+  readonly evidence: string;
+}
+
+/** The suite review a suite_review block was written on: what it found, and how often it had named the check task. */
+export interface BlockingReviewRow {
+  /** How many reviews had named the check task past the bound when the project was blocked. */
+  readonly times: number;
+  /** What the last review found, as it stated each problem. */
+  readonly problems: readonly string[];
+}
+
+/** One revision of an implementation task's checks, as the check task harvested it. */
+export interface NewTaskChecks {
+  readonly projectId: ProjectId;
+  readonly taskId: string;
+  readonly checkTaskId: WorkItemId;
+  readonly environmentVersion: string;
+  /** The commit the checks were red-run on: their plan revision's foundation. */
+  readonly baselineCommit: string;
+  readonly checks: readonly DefinedCheck[];
+  readonly files: readonly CheckFile[];
+}
+
 /** Quality's task_checks; the composition root supplies it. */
 export interface TaskCheckStore {
   /**
@@ -143,15 +171,7 @@ export interface TaskCheckStore {
    */
   storedOfProject(projectId: ProjectId, exceptTaskId: string): Promise<readonly ProjectTaskChecks[]>;
   /** Appends one revision of the task's checks; returns the revision. */
-  append(write: {
-    readonly projectId: ProjectId;
-    readonly taskId: string;
-    readonly checkTaskId: WorkItemId;
-    readonly environmentVersion: string;
-    readonly baselineCommit: string;
-    readonly checks: readonly DefinedCheck[];
-    readonly files: readonly CheckFile[];
-  }): Promise<number>;
+  append(write: NewTaskChecks): Promise<number>;
   /** The task's latest revision, or null when no check was ever stored for it. */
   latest(taskId: WorkItemId): Promise<TaskChecks | null>;
   /** What a check set of the implementation task that holds whole on its foundation is evidence of (HoldEvidence). */
@@ -427,7 +447,7 @@ type CheckHarvest =
  * Whose check files a harvest reads: the attempt's worktree `repo`, the commit it started from, the
  * environment's build context, the paths the author wrote with its file tools, and its checks area.
  */
-export interface CheckHarvestOf {
+interface CheckHarvestOf {
   readonly repo: HostRepo;
   readonly taskId: string;
   readonly startCommit: string;
@@ -548,7 +568,7 @@ export interface SuiteRun {
 }
 
 /** Where checks run: `commit` checked out into `dir`, in one cell of `role` from `image`. */
-export interface CheckCheckout {
+interface CheckCheckout {
   readonly role: string;
   readonly image: string;
   readonly commit: string;

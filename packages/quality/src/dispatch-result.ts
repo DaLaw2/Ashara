@@ -11,7 +11,7 @@ import type { StoredTaskSpec } from "./acl/delivery-acl.js";
 import type { EnvironmentDefinition } from "./environment-definition.js";
 import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf, VerificationInfrastructureFault } from "./fault-class.js";
 import type { EnvironmentError, FaultClass } from "./fault-class.js";
-import type { CheckRecorder, CitedItemIds, TaskChecks } from "./task-checks.js";
+import type { CheckFoundation, CheckRecorder, CitedItemIds, SuiteReviewProblem, TaskChecks } from "./task-checks.js";
 import { WORK_FAILED } from "./task-verdict.js";
 import type { FailureVerdict } from "./task-verdict.js";
 
@@ -330,12 +330,6 @@ export function cellImageOf(environment: DispatchEnvironment): string {
   return environment.kind === "base-cell" ? environment.image : environment.imageId;
 }
 
-/** The plan revision's foundation a check task red-runs on: the merged task and its recorded merge commit. */
-interface CheckFoundation {
-  readonly taskId: string;
-  readonly commit: string;
-}
-
 /** A check task's plan once its throwaway worktree exists. */
 export interface CheckAuthoring {
   readonly kind: "check-authoring";
@@ -343,8 +337,8 @@ export interface CheckAuthoring {
   readonly environment: CurrentEnvironment<EnvironmentDefinition>;
   /** The checked task's latest stored revision, when its checks are being written again. */
   readonly prior: TaskChecks | null;
-  /** The commit every authoring of these checks is red-run on. */
-  readonly foundation: CheckFoundation;
+  /** The plan revision's foundation every authoring of these checks is red-run on: the merged task and its recorded merge commit. */
+  readonly foundation: Omit<Extract<CheckFoundation, { readonly kind: "found" }>, "kind">;
   /** The ids of the vision items the check task cites: each must be decided by one of its checks. */
   readonly citedItems: CitedItemIds;
   readonly branch: string;
@@ -672,12 +666,7 @@ interface NoWiderModelResult {
  */
 interface SuiteReviewProblemsResult {
   readonly status: "suite_review_problems";
-  readonly problems: ReadonlyArray<{
-    readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
-    readonly problem: string;
-    readonly evidence: string;
-  }>;
+  readonly problems: readonly SuiteReviewProblem[];
   readonly detail: string;
   readonly outcome: null;
   readonly sessionId: string;

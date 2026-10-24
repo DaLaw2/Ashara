@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import { CapabilityLevelSchema } from "./acl/finance-acl.js";
 import { checkDecides, taskMayCite } from "./acl/engagement-vision-acl.js";
-import type { VisionSource } from "./acl/engagement-vision-acl.js";
+import type { PlannedAssumption, VisionSource } from "./acl/engagement-vision-acl.js";
 
 export interface WorkItemSpec {
     readonly id: string;
@@ -68,15 +68,6 @@ export type DecomposedTaskSpec = TaskSpecCore &
 export interface AddedAssumption {
     readonly key: string;
     readonly statement: string;
-}
-
-/**
- * Behaviour a plan adds that no item of the contract states: recorded on the contract as an Inferred
- * client-visible assumption under `key`, underpinning the guarantees whose lines cite it, in the
- * transaction that writes the plan, and told to the client before any task citing it is dispatched.
- */
-export interface PlannedAssumption extends AddedAssumption {
-    readonly underpins: readonly [string, ...string[]];
 }
 
 /**

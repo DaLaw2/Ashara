@@ -45,7 +45,7 @@ interface DeploymentStop {
  * An admission refusing a call, as the loop routes it: a spend cap's (`project`, `deployment`), or
  * the work ledger's, a task's budget spent (`task_work`) or its project's (`project_work`).
  */
-type SpendRefusal =
+export type SpendRefusal =
   | { readonly kind: "project"; readonly projectId: string; readonly reason: string; readonly spend: SpendAtCap }
   | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap }
   | { readonly kind: "task_work"; readonly projectId: string; readonly taskId: string; readonly reason: string; readonly work: WorkAtBudget }
