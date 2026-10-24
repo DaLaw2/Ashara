@@ -85,14 +85,12 @@ function lockMismatches(lock: Lockfile, declared: ReadonlyMap<string, readonly D
   });
 }
 
-/** Every package the lockfile installs, at any depth, by name. */
-function allLockfileDependencyNames(lock: Lockfile = Lockfile.parse(readJson("package-lock.json"))): string[] {
-  const names = new Set<string>();
-  for (const key of Object.keys(lock.packages)) {
-    const at = key.lastIndexOf("node_modules/");
-    if (at !== -1) names.add(key.slice(at + "node_modules/".length));
-  }
-  return [...names];
+/**
+ * Every fetched package a workspace manifest declares, by name. A transitive package's name is
+ * often a common word (once, ms, is), which a comment uses before a number in its own sense.
+ */
+function declaredDependencyNames(declared: ReadonlyMap<string, readonly Declaration[]> = externalDeclarations()): string[] {
+  return [...declared.keys()];
 }
 
 function escaped(text: string): string {
@@ -159,29 +157,25 @@ describe("dependency versions", () => {
 
 // A comment that pins a dependency's version goes stale on the next upgrade, which never edits it.
 describe("dependency versions in comments", () => {
-  test("no comment names any package the lockfile installs at a version", () => {
-    expect(versionedToolComments(trackedFiles(), allLockfileDependencyNames())).toEqual([]);
+  test("no comment names any package a workspace manifest declares at a version", () => {
+    expect(versionedToolComments(trackedFiles(), declaredDependencyNames())).toEqual([]);
   });
 
-  test("the names come from every lockfile entry, nested and scoped ones included, and not from workspace paths", () => {
-    const lock: Lockfile = {
-      packages: {
-        "": {},
-        "node_modules/pg": { version: "8.22.0" },
-        "node_modules/a/node_modules/ai": { version: "7.0.128" },
-        "node_modules/@scope/x": { version: "1.0.0" },
-        "packages/db": {},
-      },
-    };
-    expect(allLockfileDependencyNames(lock).sort()).toEqual(["@scope/x", "ai", "pg"]);
+  test("the names are every manifest's declared packages, runtime ones included, and no package only another installs", () => {
+    const names = declaredDependencyNames();
+    expect(names).toEqual(expect.arrayContaining(["pg", "ai", "zod", "vitest"]));
+    expect(names).not.toEqual(expect.arrayContaining(["once"]));
+    expect(names).not.toEqual(expect.arrayContaining(["ms"]));
+    expect(names).not.toEqual(expect.arrayContaining(["is"]));
   });
 
-  test("a runtime dependency's version in a comment is found", () => {
+  test("a declared runtime dependency's version in a comment is found, a common word before a number is not", () => {
     const files = new Map([
       ["a.ts", "// pg 8.22\nexport const a = 1;\n"],
       ["b.ts", "/* drops when it sums steps (ai 7.0.128) */\nexport const b = 2;\n"],
+      ["c.ts", "// the wait is 30 seconds, tried once 2 times, then ms 500 apart\nexport const c = 3;\n"],
     ]);
-    expect(versionedToolComments(files, allLockfileDependencyNames())).toEqual([
+    expect(versionedToolComments(files, declaredDependencyNames())).toEqual([
       "a.ts:1: // pg 8.22",
       "b.ts:1: /* drops when it sums steps (ai 7.0.128) */",
     ]);

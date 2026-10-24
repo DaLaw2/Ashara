@@ -658,6 +658,26 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" })]);
   });
 
+  // The owner abandoned the task while it was dispatched: it is no longer at work, so an unread main
+  // is charged to nothing, neither counted on it nor halting its project.
+  test("main unreadable after a fault, the task abandoned during the dispatch: left Abandoned, no fault counted, no halt", async () => {
+    const { deps, stored, halts, faults } = buildEnvironmentBlockedDeps(probeBlocked, 3);
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-execution-"));
+    targets.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    deps.loop.projectRepo.get = async () => ({ workspacePath: unreadable });
+    deps.dispatch.dispatchService.execute = async () => {
+      await deps.loop.workItemRepo.save({ ...stored(), status: "Abandoned" }, "InProgress");
+      return probeBlocked;
+    };
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored().status).toBe("Abandoned");
+    expect(faults()).toBe(3);
+    expect(halts).toEqual([]);
+  });
+
   test("a refused workspace path after a fault: the project halts at once, nothing counted, never requeued", async () => {
     const { deps, stored, halts, faults } = buildEnvironmentBlockedDeps();
     const outside = mkdtempSync(join("/var/tmp", "ashara-execution-outside-"));

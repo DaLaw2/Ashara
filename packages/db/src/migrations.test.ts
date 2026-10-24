@@ -343,6 +343,7 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
         `INSERT INTO client_sessions (token_hash, client_id, expires_at) VALUES ('${"a".repeat(64)}', '${String(clientId)}', now() + interval '1 hour')`,
         "INSERT INTO client_login_failures (client_name, source_address) VALUES ('clock-columns', '192.0.2.1')",
         `INSERT INTO step_faults (step, subject_id, project_id, faults, last_error) VALUES ('s', 'x', '${randomUUID()}', 1, 'e')`,
+        `INSERT INTO step_faults (step, subject_id, project_id, faults, last_error, retry_at) VALUES ('s', 'y', '${randomUUID()}', 1, 'e', now())`,
       ];
       const refusals = await Promise.all(
         omitting.map((statement) =>
@@ -356,6 +357,7 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
         { code: "23502", column: "created_at" },
         { code: "23502", column: "failed_at" },
         { code: "23502", column: "retry_at" },
+        { code: "23502", column: "updated_at" },
       ]);
     });
   }, 120_000);

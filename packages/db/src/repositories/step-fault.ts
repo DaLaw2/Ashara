@@ -32,7 +32,8 @@ class StepFaultNotOnRecord extends Error {
  * The cycle steps' faults per subject, kept in step_faults so a backoff, and the
  * parking of a subject that exhausted its faults, outlive a restart. A backoff is set and read on
  * `clock`, the time the cycle itself runs on, never the database's: a wait measured on another
- * clock than the one that spaces the cycles passes in no number of cycles, or in none at all. A
+ * clock than the one that spaces the cycles passes in no number of cycles, or in none at all. Every
+ * time the ledger writes (a backoff's end, a park, a row's last update) is that clock's. A
  * parked subject is due again once its project is at work: `projectAtWork`, a condition on the
  * joined projects row in the words of the context that owns it, which this package cannot import.
  */
@@ -54,13 +55,14 @@ export function stepFaultLedger(db: DbHandle, clock: Clock, projectAtWork: SQL):
       return standing;
     },
     async record(fault) {
-      const retryAt = new Date(clock.now() + fault.retryAfterSeconds * 1000);
+      const updatedAt = new Date(clock.now());
+      const retryAt = new Date(updatedAt.getTime() + fault.retryAfterSeconds * 1000);
       const [row] = await db
         .insert(stepFaults)
-        .values({ step: fault.step, subjectId: fault.subjectId, projectId: fault.projectId, faults: 1, lastError: fault.error, retryAt })
+        .values({ step: fault.step, subjectId: fault.subjectId, projectId: fault.projectId, faults: 1, lastError: fault.error, retryAt, updatedAt })
         .onConflictDoUpdate({
           target: [stepFaults.step, stepFaults.subjectId],
-          set: { faults: sql`${stepFaults.faults} + 1`, lastError: fault.error, retryAt, updatedAt: sql`now()` },
+          set: { faults: sql`${stepFaults.faults} + 1`, lastError: fault.error, retryAt, updatedAt },
         })
         .returning({ faults: stepFaults.faults });
       if (row === undefined) throw new StepFaultRowCorrupt(fault.step, `recording a fault on ${fault.subjectId} returned no row`);
@@ -70,9 +72,10 @@ export function stepFaultLedger(db: DbHandle, clock: Clock, projectAtWork: SQL):
       await db.delete(stepFaults).where(and(eq(stepFaults.step, step), eq(stepFaults.subjectId, subjectId)));
     },
     async park(step, subjectId) {
+      const at = new Date(clock.now());
       const parked = await db
         .update(stepFaults)
-        .set({ parkedAt: sql`now()`, updatedAt: sql`now()` })
+        .set({ parkedAt: at, updatedAt: at })
         .where(and(eq(stepFaults.step, step), eq(stepFaults.subjectId, subjectId)))
         .returning({ subjectId: stepFaults.subjectId });
       if (parked.length === 0) throw new StepFaultNotOnRecord(step, subjectId);

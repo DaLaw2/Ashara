@@ -147,6 +147,23 @@ describe("a state with no exit", () => {
     expect(keys).toEqual(["I2:unreached:G3"]);
   });
 
+  it("names a task that reached Pending while main holds a merge of its current generation (I7), and not one of an older generation", () => {
+    const requeued = (mergeCommit: string | null): Snapshot => ({
+      ...plantedSnapshot([{ ...task("Pending", null), mergeCommit }]),
+      transitions: [{ workItemId: "impl", from: "Pending", to: "InProgress" }, { workItemId: "impl", from: "InProgress", to: "Pending" }],
+      main: [
+        { commit: "c2".repeat(20), subject: "merge: task impl" },
+        { commit: "c1".repeat(20), subject: "merge: task impl" },
+      ],
+    });
+    const keys = (snapshot: Snapshot): string[] =>
+      checkSnapshot(4, snapshot, { spendCapUsd: 25, cells: [], final: false, reviews: [], intakes: [] }).map((violation) => violation.key);
+    expect(keys(requeued(null))).toContain("I7:pending-over-merge:Deliver b1");
+    expect(keys(requeued("c1".repeat(20)))).toContain("I7:pending-over-merge:Deliver b1");
+    expect(keys(requeued("c2".repeat(20)))).not.toContain("I7:pending-over-merge:Deliver b1");
+    expect(keys({ ...requeued(null), main: [] })).not.toContain("I7:pending-over-merge:Deliver b1");
+  });
+
   it("names every non-terminal state of a run that made no progress (I8)", () => {
     const stalled = plantedSnapshot([task("Pending", null)]);
     expect(checkTotality(9, stalled, 6).map((violation) => violation.key)).toEqual(["I8:Pending"]);

@@ -21,7 +21,7 @@ export const stepFaults = pgTable(
     lastError: text("last_error").notNull(),
     retryAt: timestamptz("retry_at").notNull(),
     parkedAt: timestamptz("parked_at"),
-    updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+    updatedAt: timestamptz("updated_at").notNull(),
   },
   (table) => [primaryKey({ columns: [table.step, table.subjectId] })],
 );

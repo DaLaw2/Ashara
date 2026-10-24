@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { systemClock, type Clock, type ProjectId } from "@ashara/shared";
 import { createDb, type Database } from "../connection.js";
-import { projects } from "../schema/index.js";
+import { projects, stepFaults } from "../schema/index.js";
 import { resolveTestDatabaseUrl } from "../test-database-url.js";
 import { ClientRepository } from "./client.js";
 import { ProjectRepository } from "./project.js";
@@ -85,5 +85,26 @@ describe("stepFaultLedger", () => {
     expect((await ledger.faultsOf("roster")).get(subject)).toEqual({ faults: 1, due: false });
     at += 1_000;
     expect((await stepFaultLedger(db, clock, projectAtWork).faultsOf("roster")).get(subject)).toEqual({ faults: 1, due: true });
+  });
+
+  test("every time a fault's row records is the injected clock's, a park's included", async () => {
+    const recordedAt = Date.now() - 2 * 24 * 3600 * 1000;
+    let at = recordedAt;
+    const ledger = stepFaultLedger(db, { now: () => at }, projectAtWork);
+    const subject = `clocked-${NONCE}`;
+    const times = async (): Promise<unknown> =>
+      db
+        .select({ updatedAt: stepFaults.updatedAt, parkedAt: stepFaults.parkedAt })
+        .from(stepFaults)
+        .where(and(eq(stepFaults.step, "roster"), eq(stepFaults.subjectId, subject)));
+
+    await ledger.record({ step: "roster", subjectId: subject, projectId, error: "e", retryAfterSeconds: 60 });
+    expect(await times()).toEqual([{ updatedAt: new Date(recordedAt), parkedAt: null }]);
+    at += 5_000;
+    await ledger.record({ step: "roster", subjectId: subject, projectId, error: "e", retryAfterSeconds: 60 });
+    expect(await times()).toEqual([{ updatedAt: new Date(recordedAt + 5_000), parkedAt: null }]);
+    at += 5_000;
+    await ledger.park("roster", subject);
+    expect(await times()).toEqual([{ updatedAt: new Date(recordedAt + 10_000), parkedAt: new Date(recordedAt + 10_000) }]);
   });
 });

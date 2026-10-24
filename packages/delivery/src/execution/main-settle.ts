@@ -16,12 +16,12 @@ import type { ExecutionRoutingDeps } from "./routing-deps.js";
 export type ParkedReason = Extract<StoredBlockedReason, { source: "merge_unrecorded" | "orphan_unreconciled" }>;
 
 /**
- * Parks the item at Blocked with the stated reason. An item that is no longer
- * InProgress (moved by the owner during dispatch) is left where it is: no
- * agent ran, so there is no result to salvage.
+ * Parks the item at Blocked with the stated reason, and returns `parked` once that block is written.
+ * An item that is no longer InProgress (moved by the owner during dispatch) is left where it is, and
+ * `moved` returned: no agent ran, so there is no result to salvage.
  */
-export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: ParkedReason): Promise<void> {
-  await reopen(deps, {
+export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: ParkedReason): Promise<"parked" | "moved"> {
+  const written = await reopen(deps, {
     taskId,
     site: "execution.routeAsParked",
     vanished: `work item vanished before it could be blocked (${reason.reason})`,
@@ -45,6 +45,7 @@ export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem
         ),
     }),
   });
+  return written === "written" ? "parked" : "moved";
 }
 
 /**
@@ -57,15 +58,16 @@ export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem
  * record cannot be written); main that cannot be read parks the task orphan_unreconciled, whose
  * exit reads main again each cycle, under the one policy for an unread main (chargeUnreadMain): a
  * transient fault retried within the task's infrastructure fault budget, a refused workspace path
- * halting the project at once.
+ * halting the project at once. A task that moved before it could be parked (the owner abandoned it)
+ * is no longer at work, and nothing is charged for it.
  */
 export async function mainHoldsNoMergeOf(deps: ExecutionRoutingDeps, task: WorkItem, why: string): Promise<MainHoldsNoMerge | null> {
   const read = await readMainForMerge(deps, task, MERGE_RECORD_BACKOFF_MS);
   if (read.kind === "absent") return read.absent;
   if (read.kind === "unread") {
     const step = `read main for the task's merge before it goes back to Pending after ${why}`;
-    await routeAsParked(deps, task.id, { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(read.error.cause) });
-    await chargeUnreadMain(deps, task, step, read);
+    const parked = await routeAsParked(deps, task.id, { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(read.error.cause) });
+    if (parked === "parked") await chargeUnreadMain(deps, task, step, read);
     return null;
   }
   const merge = read.mergeCommit;

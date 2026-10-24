@@ -70,6 +70,12 @@ export interface ReopenRoute<X> {
 
 type Answer<T> = { readonly kind: "done"; readonly value: T } | { readonly kind: "rejected"; readonly rejection: InvalidStatusTransition };
 
+/**
+ * Whether the routed item's own write committed: `unwritten` when it was gone, its transition or a
+ * write was refused because it moved, or the route's other way was taken instead.
+ */
+export type ReopenOutcome = "written" | "unwritten";
+
 /** A step's value, or the InvalidStatusTransition it was refused with; any other throw propagates. */
 async function answerOf<T>(step: () => T | Promise<T>): Promise<Answer<T>> {
   try {
@@ -122,38 +128,40 @@ async function writeItem(repo: WorkItemRepository, item: WorkItem, previousStatu
  * dispatch follows: find the item, move it by the route's transition, write what comes before it,
  * write it (its dispatch kept or given back), publish the events of what was written, then report.
  * An item that is gone is warned of; one whose transition or write is refused because it moved is
- * left where it is, or taken by the route's other way, and nothing after that step runs.
+ * left where it is, or taken by the route's other way, and nothing after that step runs. Returns
+ * whether the item's own write committed.
  */
-export async function reopen<X>(deps: ReopenDeps, route: ReopenRoute<X>): Promise<void> {
+export async function reopen<X>(deps: ReopenDeps, route: ReopenRoute<X>): Promise<ReopenOutcome> {
   const { taskId } = route;
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
     deps.logger.warn("delivery.item-vanished", route.vanished, { taskId });
-    return;
+    return "unwritten";
   }
   const previousStatus = item.status;
   const moved = await answerOf(() => route.transition(item));
   if (moved.kind === "rejected") {
     warnLeft(deps, taskId, route.transitionRejected(moved.rejection), moved.rejection);
-    return;
+    return "unwritten";
   }
   const plan = route.plan(moved.value, item);
   for (const before of plan.before) {
     const done = await answerOf(before.write);
     if (done.kind === "rejected") {
       await settleRejection(deps, taskId, before.rejected, done.rejection);
-      return;
+      return "unwritten";
     }
     for (const other of before.published) await publishBestEffort(deps, other.id, takeEvents(other), route.site);
   }
   const written = await answerOf(() => writeItem(deps.workItemRepo, item, previousStatus, plan.write));
   if (written.kind === "rejected") {
     await settleRejection(deps, taskId, plan.rejected, written.rejection);
-    return;
+    return "unwritten";
   }
   if (plan.write.kind === "refund-with") {
     for (const other of plan.write.items) await publishBestEffort(deps, other.id, takeEvents(other), route.site);
   }
   await publishBestEffort(deps, taskId, takeEvents(item), route.site);
   plan.log(written.value);
+  return "written";
 }

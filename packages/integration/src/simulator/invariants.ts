@@ -917,6 +917,26 @@ export function checkSnapshot(
         `${items.map((i) => `"${i.title}"`).join(", ")} record ${commit.slice(0, 12)}, which is not on main`,
       );
   }
+  // I7's requeue clause, on every transition into Pending: a task that reached Pending while main
+  // holds a merge of its current generation (the newest merge naming it, which its record does not
+  // hold) would be dispatched again to redo merged work. main is newest first.
+  const newestMerge = new Map<string, MainCommit>();
+  for (const entry of snapshot.main) {
+    const named = /^merge: task (\S+)$/.exec(entry.subject)?.[1];
+    if (named !== undefined && !newestMerge.has(named)) newestMerge.set(named, entry);
+  }
+  const reachedPending = new Set(snapshot.transitions.filter((t) => t.to === "Pending").map((t) => t.workItemId));
+  for (const item of snapshot.items) {
+    if (item.status !== "Pending" || !reachedPending.has(item.id)) continue;
+    const merge = newestMerge.get(item.id);
+    if (merge === undefined || merge.commit === item.mergeCommit) continue;
+    add(
+      "I7",
+      `pending-over-merge:${item.title}`,
+      `"${item.title}" reached Pending while main holds its merge ${merge.commit.slice(0, 12)}, ` +
+        `which its record (${item.mergeCommit?.slice(0, 12) ?? "none"}) does not hold`,
+    );
+  }
   return violations;
 }
 
