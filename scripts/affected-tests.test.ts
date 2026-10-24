@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, testsImportingDirectly, WHOLE_SUITE_RULES, workspaceLayout, type ChangedPath, type SelectionSources, type WorkspaceLayout } from "./affected-tests.js";
+import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, WHOLE_SUITE_RULES, type BoundedRun, type ChangedPath, type Selection, type SelectionSources } from "./affected-tests.js";
 
 const REPO = path.join(import.meta.dirname, "..");
 const SCRIPT = path.join(import.meta.dirname, "affected-tests.ts");
@@ -14,7 +14,6 @@ function stubSources(over: Partial<SelectionSources> = {}): SelectionSources {
     allTests: ["packages/a/src/a.test.ts", `${SIMULATOR_DIR}one.test.ts`, `${SIMULATOR_DIR}two.test.ts`, "packages/integration/src/workplace/snap.test.ts"],
     testsImporting: () => Promise.resolve(["packages/a/src/a.test.ts"]),
     filesNaming: () => [],
-    testsImportingDirectly: () => Promise.resolve([]),
     files: [],
     readRevision: () => undefined,
     ...over,
@@ -105,7 +104,16 @@ describe("the selected rules", () => {
   });
 });
 
-describe("the cap", () => {
+/** Whether `run` runs every test file `selection` selects: the whole suite, or a superset of its tests. */
+function runCovers(selection: Selection, run: BoundedRun): boolean {
+  if (selection.kind === "whole-suite") return run.kind === "whole-suite";
+  if (run.kind === "whole-suite") return true;
+  if (run.kind === "nothing") return selection.tests.length === 0;
+  const ran = new Set(run.tests);
+  return selection.tests.every((t) => ran.has(t));
+}
+
+describe("the run of a selection", () => {
   const CORE = "packages/a/src/core.ts";
   const COLOCATED = "packages/a/src/core.test.ts";
   const IMPORTER = "packages/b/src/b.test.ts";
@@ -116,44 +124,72 @@ describe("the cap", () => {
   const graph = stubSources({
     allTests: ALL,
     testsImporting: (modules) => Promise.resolve(modules.includes(CORE) ? [COLOCATED, IMPORTER, ...TRANSITIVE] : []),
-    testsImportingDirectly: (modules) => Promise.resolve(modules.includes(CORE) ? [IMPORTER] : []),
   });
 
-  test("a related set under the cap runs whole, with no cap line", async () => {
-    const run = boundSelection(await selectTests([modified(CORE)], graph), ALL.length, { maxTests: 10 });
+  test("a related set no larger than the large mark runs whole, with no notice", async () => {
+    const run = boundSelection(await selectTests([modified(CORE)], graph), ALL.length, { largeSelection: 10 });
     expect(run).toEqual({ kind: "tests", tests: [COLOCATED, ...TRANSITIVE, IMPORTER].sort(), notice: undefined });
   });
 
-  test("a related set over the cap runs only the direct tests and says so", async () => {
-    const run = boundSelection(await selectTests([modified(CORE)], graph), ALL.length, { maxTests: 3 });
-    expect(run).toMatchObject({ kind: "tests", tests: [COLOCATED, IMPORTER] });
-    if (run.kind !== "tests") throw new Error("expected a test run");
-    expect(run.notice).toMatch(/^selection capped: 7 test files exceed the cap of 3; running the 2 direct test file\(s\).*, 5 skipped; the merge lane's full suite covers them$/);
+  test("a related set past the large mark still runs every selected test file, and says it is large", async () => {
+    const run = boundSelection(await selectTests([modified(CORE)], graph), ALL.length, { largeSelection: 3 });
+    expect(run).toEqual({
+      kind: "tests",
+      tests: [COLOCATED, ...TRANSITIVE, IMPORTER].sort(),
+      notice: "a large selection: 7 test files, more than 3; every one of them runs, which may take as long as the full suite",
+    });
   });
 
-  test("a whole-suite verdict over the cap falls back to the direct tests", async () => {
+  test("a whole-suite verdict runs the whole suite at any size, and says so", async () => {
     const selection = await selectTests([modified(CORE), modified("migrations/added.sql")], graph);
     expect(selection.kind).toBe("whole-suite");
-    const run = boundSelection(selection, ALL.length, { maxTests: 3 });
-    expect(run).toMatchObject({ kind: "tests", tests: [COLOCATED, IMPORTER] });
-    if (run.kind !== "tests") throw new Error("expected a test run");
-    expect(run.notice).toContain("8 test files exceed the cap of 3");
-    expect(run.notice).toContain("6 skipped; the merge lane's full suite covers them");
-    expect(boundSelection(selection, ALL.length, { maxTests: 8 })).toEqual({ kind: "whole-suite", count: 8 });
+    for (const largeSelection of [1, 3, 8, 100]) {
+      expect(boundSelection(selection, ALL.length, { largeSelection })).toEqual({ kind: "whole-suite", count: 8, notice: "runs the whole suite: every one of its 8 test files" });
+    }
   });
 
-  test("a source change that selects no test fails the run; a change that touches no source passes it", async () => {
-    const orphan = boundSelection(await selectTests([modified("packages/d/src/orphan.ts")], graph), ALL.length, { maxTests: 10 });
+  test("a source change that selects no test fails the run; a change that touches no source passes it; a migration runs the whole suite", async () => {
+    const orphan = boundSelection(await selectTests([modified("packages/d/src/orphan.ts")], graph), ALL.length, { largeSelection: 10 });
     expect(orphan).toMatchObject({ kind: "nothing", exitCode: 1 });
-    const cappedToNothing = boundSelection(await selectTests([modified("migrations/added.sql")], graph), ALL.length, { maxTests: 3 });
-    expect(cappedToNothing).toMatchObject({ kind: "nothing", exitCode: 1 });
-    const docs = boundSelection(await selectTests([modified("README.md")], graph), ALL.length, { maxTests: 10 });
+    const migration = boundSelection(await selectTests([modified("migrations/added.sql")], graph), ALL.length, { largeSelection: 3 });
+    expect(migration).toMatchObject({ kind: "whole-suite", count: ALL.length });
+    const docs = boundSelection(await selectTests([modified("README.md")], graph), ALL.length, { largeSelection: 10 });
     expect(docs).toMatchObject({ kind: "nothing", exitCode: 0 });
   });
 
-  test("a cap that is not a positive whole number is refused", async () => {
+  test("a large mark that is not a positive whole number is refused", async () => {
     const selection = await selectTests([modified(CORE)], graph);
-    expect(() => boundSelection(selection, ALL.length, { maxTests: 0 })).toThrow(/not a positive whole number/);
+    expect(() => boundSelection(selection, ALL.length, { largeSelection: 0 })).toThrow(/not a positive whole number/);
+  });
+
+  test("every selection's run covers every test file it selects, at any size, and no notice reports a skip", async () => {
+    const changes: ChangedPath[][] = [
+      [modified(CORE)],
+      [modified(CORE), modified("migrations/added.sql")],
+      [modified(CORE), modified("packages/b/src/b.test.ts")],
+      [modified("packages/b/src/b.test.ts")],
+      [modified("packages/d/src/orphan.ts")],
+      [modified("README.md")],
+      [modified("boundary-rules.toml")],
+      [modified("vitest.config.mts")],
+    ];
+    for (const change of changes) {
+      const selection = await selectTests(change, graph);
+      for (const largeSelection of [1, 2, 3, 7, 8, 100]) {
+        const run = boundSelection(selection, ALL.length, { largeSelection });
+        const label = `${change.map((c) => c.path).join(", ")} at ${largeSelection}`;
+        expect(runCovers(selection, run), label).toBe(true);
+        expect(run.notice ?? "", label).not.toMatch(/skip/);
+        if (selection.kind === "selected" && selection.tests.length > largeSelection) expect(run.notice, label).toMatch(/^a large selection: \d+ test files, more than \d+; every one of them runs/);
+        if (selection.kind === "whole-suite") expect(run.notice, label).toBe(`runs the whole suite: every one of its ${ALL.length} test files`);
+      }
+    }
+  });
+
+  test("affected-tests.ts holds no cap and no direct-only trim that drops selected tests", async () => {
+    const source = await readFile(SCRIPT, "utf-8");
+    expect(source).not.toContain("skipped; the merge lane");
+    expect(source).not.toMatch(/selection\.direct|direct test file|maxTests|capped|--cap|past the cap|testsImportingDirectly/);
   });
 });
 
@@ -225,50 +261,55 @@ describe("a dependency change", () => {
     if (selection.kind !== "selected") throw new Error(`expected a selection, got the whole suite: ${selection.reasons.join("; ")}`);
     const expected = [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort();
     expect(selection.tests).toEqual(expected);
-    expect(selection.required).toEqual(expected);
     expect(selection.tests).not.toContain("packages/c/src/c2.test.ts");
     expect(selection.tests).not.toContain("scripts/s2.test.ts");
   });
 
-  test("the cap never trims a dependency change's tests", async () => {
+  test("a dependency change's tests all run beside a module change, however many they are", async () => {
     const selection = await selectTests([modified("packages/c/src/plain.ts"), ...upgrade], sources(lockfile("4.0.0"), lockfile("4.1.0")));
-    const run = boundSelection(selection, ALL.length, { maxTests: 1 });
+    const run = boundSelection(selection, ALL.length, { largeSelection: 1 });
     if (run.kind !== "tests") throw new Error(`expected a test run, got ${run.kind}`);
     expect(run.tests).toEqual([...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort());
-    expect(run.notice).toContain("every test file of the changed dependencies");
+    expect(run.notice).toBe("a large selection: 6 test files, more than 1; every one of them runs, which may take as long as the full suite");
   });
 
-  test("a selection over the cap that the kept tests cover whole says none is skipped, never that zero were", async () => {
+  test("a selection past the large mark says it is large, never that any file was skipped", async () => {
     const selection = await selectTests(upgrade, sources(lockfile("4.0.0"), lockfile("4.1.0")));
-    const run = boundSelection(selection, ALL.length, { maxTests: 1 });
+    const run = boundSelection(selection, ALL.length, { largeSelection: 1 });
     if (run.kind !== "tests") throw new Error(`expected a test run, got ${run.kind}`);
     expect(run.tests).toHaveLength(6);
-    expect(run.notice).toBe("6 test files exceed the cap of 1; running the 6 direct test file(s) of the changed files and every test file of the changed dependencies, which skips none of them");
+    expect(run.notice).not.toMatch(/skip/);
   });
 
-  // One path per capped whole-suite rule; a capped rule added without a path here fails the check below.
-  const CAPPED_PATHS = ["migrations/zzzz_probe.sql", "boundary-rules.toml", "eslint.config.mjs", "tsconfig.json", "packages/integration/src/cell-leak-guard.ts", "packages/integration/src/podman-test-load.ts", "config/probe.toml"];
+  // One path per whole-suite rule; a rule added without a path here fails the check below.
+  const WHOLE_SUITE_BESIDE_DEPENDENCY = [
+    "migrations/zzzz_probe.sql",
+    "boundary-rules.toml",
+    "eslint.config.mjs",
+    "tsconfig.json",
+    "vitest.config.mts",
+    "packages/integration/src/cell-leak-guard.ts",
+    "packages/integration/src/podman-test-load.ts",
+    "config/probe.toml",
+  ];
 
-  test("every capped whole-suite rule has a probe path", () => {
-    for (const rule of WHOLE_SUITE_RULES.filter((r) => r.capped)) expect(CAPPED_PATHS.some((f) => rule.pattern.test(f)), rule.pattern.source).toBe(true);
+  test("every whole-suite rule has a probe path", () => {
+    for (const rule of WHOLE_SUITE_RULES) expect(WHOLE_SUITE_BESIDE_DEPENDENCY.some((f) => rule.pattern.test(f)), rule.pattern.source).toBe(true);
   });
 
-  test.each(CAPPED_PATHS)("a capped whole-suite path (%s) in the same change never trims a dependency change's tests", async (file) => {
+  test.each(WHOLE_SUITE_BESIDE_DEPENDENCY)("a whole-suite path (%s) beside a dependency change runs the whole suite, which holds the dependency change's tests", async (file) => {
     const head = lockfile("4.0.0", { "node_modules/hono": { version: "4.0.0-probe", dependencies: { tiny: "1.0.0" } } });
     const selection = await selectTests([modified("package-lock.json"), modified(file)], sources(lockfile("4.0.0"), head));
-    expect(selection).toMatchObject({ kind: "whole-suite", capped: true });
+    expect(selection).toMatchObject({ kind: "whole-suite" });
     expect(selection.reasons.join("\n")).toMatch(/^package-lock\.json: /m);
-    const run = boundSelection(selection, ALL.length, { maxTests: 1 });
-    if (run.kind !== "tests") throw new Error(`expected a test run, got ${run.kind}`);
-    expect(run.tests).toEqual([...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort());
-    expect(run.notice).toContain("every test file of the changed dependencies");
+    expect(boundSelection(selection, ALL.length, { largeSelection: 1 })).toEqual({ kind: "whole-suite", count: ALL.length, notice: `runs the whole suite: every one of its ${ALL.length} test files` });
   });
 
   test("a nested copy resolves to the workspaces that resolve its parent, and to every module that imports the parent by name", async () => {
     const base = lockfile("4.0.0");
     const head = lockfile("4.0.0", { "node_modules/hono/node_modules/tiny": { version: "1.0.1" } });
     const selection = await selectTests([modified("package-lock.json")], sources(base, head));
-    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort() });
+    expect(selection).toMatchObject({ kind: "selected", tests: [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort() });
   });
 
   const DYNAMIC_LOADER = "packages/c/src/loader.ts";
@@ -285,7 +326,7 @@ describe("a dependency change", () => {
     ["a string literal", 'export const doc = \'import { Hono } from "hono"; import(target); require(`hono/${x}`)\';\n'],
   ])("%s that spells an import is no import edge, and selects nothing more", async (_name, text) => {
     const selection = await selectTests(honoUpgrade, loaderSources(text));
-    expect(selection).toMatchObject({ kind: "selected", required: [...HONO_SELECTION].sort() });
+    expect(selection).toMatchObject({ kind: "selected", tests: [...HONO_SELECTION].sort() });
     expect(selection.reasons.join("\n")).not.toContain(DYNAMIC_LOADER);
   });
 
@@ -298,14 +339,14 @@ describe("a dependency change", () => {
     ["an export-from of a subpath", "export { jsx } from 'hono/jsx';\n"],
   ])("%s of a changed package selects the importer's dependants, and the reasons name it", async (_name, text) => {
     const selection = await selectTests(honoUpgrade, loaderSources(text));
-    expect(selection).toMatchObject({ kind: "selected", required: [...HONO_SELECTION, IMPORTS_LOADER].sort() });
-    expect(selection.reasons).toContain(`hono: 2 module(s) and test(s) import it by name (${DYNAMIC_LOADER}, ${HONO_IMPORTER}); they and their graph dependants run, past the cap`);
+    expect(selection).toMatchObject({ kind: "selected", tests: [...HONO_SELECTION, IMPORTS_LOADER].sort() });
+    expect(selection.reasons).toContain(`hono: 2 module(s) and test(s) import it by name (${DYNAMIC_LOADER}, ${HONO_IMPORTER}); they and their graph dependants run`);
   });
 
   test("a template-literal import whose static prefix is a changed scoped package's scope selects the importer's dependants", async () => {
     const selection = await selectTests([modified("packages/a/package.json")], loaderSources("export const load = (x: string) => import(`@p/${x}`);\n"));
-    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_LOADER].sort() });
-    expect(selection.reasons).toContain(`@p/a: 2 module(s) and test(s) import it by name (${USES_A}, ${DYNAMIC_LOADER}); they and their graph dependants run, past the cap`);
+    expect(selection).toMatchObject({ kind: "selected", tests: [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_LOADER].sort() });
+    expect(selection.reasons).toContain(`@p/a: 2 module(s) and test(s) import it by name (${USES_A}, ${DYNAMIC_LOADER}); they and their graph dependants run`);
   });
 
   test("a lockfile-only change to a workspace's own entry selects the modules that import that workspace's package by name", async () => {
@@ -320,19 +361,19 @@ describe("a dependency change", () => {
       },
     });
     expect(asked).toContain(USES_A);
-    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A].sort() });
-    expect(selection.reasons).toContain(`@p/a: 1 module(s) and test(s) import it by name (${USES_A}); they and their graph dependants run, past the cap`);
+    expect(selection).toMatchObject({ kind: "selected", tests: [...TESTS.a, ...TESTS.b, IMPORTS_A].sort() });
+    expect(selection.reasons).toContain(`@p/a: 1 module(s) and test(s) import it by name (${USES_A}); they and their graph dependants run`);
   });
 
   test("a template-literal dynamic import whose static prefix names a changed package selects the importer's dependants", async () => {
     const selection = await selectTests(honoUpgrade, loaderSources("export const load = (x: string) => import(`hono/${x}`);\n"));
-    expect(selection).toMatchObject({ kind: "selected", required: [...HONO_SELECTION, "packages/c/src/c2.test.ts"].sort() });
+    expect(selection).toMatchObject({ kind: "selected", tests: [...HONO_SELECTION, "packages/c/src/c2.test.ts"].sort() });
   });
 
   test("a template-literal dynamic import of another package or a relative module selects nothing more", async () => {
     for (const text of ["import(`honorific/${x}`);", "import(`./plugins/${x}.js`);", "import(`node:${x}`);"]) {
       const selection = await selectTests(honoUpgrade, loaderSources(text));
-      expect(selection, text).toMatchObject({ kind: "selected", required: [...HONO_SELECTION].sort() });
+      expect(selection, text).toMatchObject({ kind: "selected", tests: [...HONO_SELECTION].sort() });
     }
   });
 
@@ -344,14 +385,14 @@ describe("a dependency change", () => {
     ["a loader whose text cannot be read", undefined, "its text cannot be read to see what it imports"],
   ])("a dynamic import with %s fails closed to every test of the importer's workspace, and the reasons say so", async (_name, text, why) => {
     const selection = await selectTests(honoUpgrade, loaderSources(text));
-    expect(selection).toMatchObject({ kind: "selected", required: [...new Set([...HONO_SELECTION, ...TESTS.c])].sort() });
-    expect(selection.reasons).toContain(`${DYNAMIC_LOADER}: ${why}, so every module and test of workspace packages/c runs, past the cap`);
+    expect(selection).toMatchObject({ kind: "selected", tests: [...new Set([...HONO_SELECTION, ...TESTS.c])].sort() });
+    expect(selection.reasons).toContain(`${DYNAMIC_LOADER}: ${why}, so every module and test of workspace packages/c runs`);
   });
 
   test("a computed dynamic import outside every workspace manifest fails closed to the root project's own files", async () => {
     const selection = await selectTests(honoUpgrade, loaderSources("await import(target);\n", "scripts/loader.ts"));
-    expect(selection).toMatchObject({ kind: "selected", required: [...new Set([...HONO_SELECTION, ...TESTS.root])].sort() });
-    expect(selection.reasons).toContain("scripts/loader.ts: an import whose target is computed may load any package, so every module and test of the root project's files outside every workspace runs, past the cap");
+    expect(selection).toMatchObject({ kind: "selected", tests: [...new Set([...HONO_SELECTION, ...TESTS.root])].sort() });
+    expect(selection.reasons).toContain("scripts/loader.ts: an import whose target is computed may load any package, so every module and test of the root project's files outside every workspace runs");
   });
 
   test.each([
@@ -359,25 +400,23 @@ describe("a dependency change", () => {
     ["an entry no workspace resolves", lockfile("4.0.0"), lockfile("4.0.0", { "node_modules/orphan": { version: "1.0.0" } }), /no workspace resolves node_modules\/orphan/],
     ["a lockfile absent at the base", undefined, lockfile("4.0.0"), /absent at the base/],
     ["a file that differs with no entry differing", lockfile("4.0.0"), lockfile("4.0.0"), /no locked entry does/],
-  ])("%s selects the whole suite, which the cap never trims", async (_name, base, head, reason) => {
+  ])("%s selects the whole suite, which runs whole", async (_name, base, head, reason) => {
     const selection = await selectTests([modified("package-lock.json")], sources(base, head));
-    expect(selection).toMatchObject({ kind: "whole-suite", capped: false });
+    expect(selection).toMatchObject({ kind: "whole-suite" });
     expect(selection.reasons.join("\n")).toMatch(reason);
-    expect(boundSelection(selection, ALL.length, { maxTests: 1 })).toEqual({ kind: "whole-suite", count: ALL.length });
+    expect(boundSelection(selection, ALL.length, { largeSelection: 1 })).toMatchObject({ kind: "whole-suite", count: ALL.length });
   });
 
-  test("the root manifest and the vitest config select the whole suite past the cap; a migration's whole suite stays capped", async () => {
-    for (const file of ["package.json", "vitest.config.mts"]) {
+  test("the root manifest, the vitest config and a migration each run the whole suite", async () => {
+    for (const file of ["package.json", "vitest.config.mts", "migrations/added.sql"]) {
       const selection = await selectTests([modified(file)], sources(lockfile("4.0.0"), lockfile("4.0.0")));
-      expect(boundSelection(selection, ALL.length, { maxTests: 1 }), file).toEqual({ kind: "whole-suite", count: ALL.length });
+      expect(boundSelection(selection, ALL.length, { largeSelection: 1 }), file).toMatchObject({ kind: "whole-suite", count: ALL.length });
     }
-    const migration = await selectTests([modified("migrations/added.sql")], sources(lockfile("4.0.0"), lockfile("4.0.0")));
-    expect(boundSelection(migration, ALL.length, { maxTests: 1 })).toMatchObject({ kind: "nothing", exitCode: 1 });
   });
 
   test("a manifest outside the workspaces the lockfile records selects the whole suite", async () => {
     const selection = await selectTests([modified("packages/z/package.json")], sources(lockfile("4.0.0"), lockfile("4.0.0")));
-    expect(selection).toMatchObject({ kind: "whole-suite", capped: false });
+    expect(selection).toMatchObject({ kind: "whole-suite" });
   });
 
   test("a malformed head lockfile is never read for a change that touches no manifest or lockfile", async () => {
@@ -421,88 +460,6 @@ describe("a dependency change", () => {
   });
 });
 
-describe("the direct importers", () => {
-  const CORE = "packages/a/src/core.ts";
-  const LAYOUT: WorkspaceLayout = { manifestDirs: ["packages/a", "packages/b"], workspaceDirs: () => new Map([["@ashara/a", "packages/a"], ["@ashara/b", "packages/b"]]) };
-  const TEXTS = new Map([
-    ["packages/a/src/reexports.test.ts", 'export * from "./core.js";\n'],
-    ["packages/a/src/requires.test.ts", 'const core: unknown = require("./core");\nexport { core };\n'],
-    ["packages/a/src/split.test.ts", 'const core: unknown = await import\n("./core.js");\nexport { core };\n'],
-    ["packages/a/src/mentions.test.ts", '// import { x } from "./core.js";\nexport const s = \'from "./core.js"\';\n'],
-    ["packages/a/src/other.test.ts", 'import { y } from "./other.js";\nexport { y };\n'],
-    ["packages/a/src/mocks.test.ts", 'vi.mock("./core.js", async (importOriginal) => ({ ...(await importOriginal<object>()) }));\n'],
-    ["packages/a/src/actual.test.ts", 'const core = await vi.importActual<object>("./core.js");\nexport { core };\n'],
-    ["packages/a/src/resolves.test.ts", 'export const where = import.meta.resolve("./core.js");\n'],
-    ["packages/a/src/created.test.ts", 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const core: unknown = load("./core");\n'],
-  ]);
-
-  test("a test reaches the module through any edge the parser reads, never through a comment or a string", () => {
-    const found = testsImportingDirectly([...TEXTS.keys()], [CORE], (file) => TEXTS.get(file), LAYOUT);
-    expect(found).toEqual([
-      "packages/a/src/reexports.test.ts",
-      "packages/a/src/requires.test.ts",
-      "packages/a/src/split.test.ts",
-      "packages/a/src/mocks.test.ts",
-      "packages/a/src/actual.test.ts",
-      "packages/a/src/resolves.test.ts",
-      "packages/a/src/created.test.ts",
-    ]);
-  });
-
-  test("a literal edge counts by the file the compiler resolves it to, a workspace package's entry among them", () => {
-    const layout = workspaceLayout(["packages/shared/package.json", "packages/shared/src/index.ts"], () => undefined);
-    const importer = 'import { describeErrorChain } from "@ashara/shared";\nexport { describeErrorChain };\n';
-    expect(testsImportingDirectly(["packages/x/src/uses.test.ts"], ["packages/shared/src/index.ts"], () => importer, layout)).toEqual(["packages/x/src/uses.test.ts"]);
-    expect(testsImportingDirectly(["packages/x/src/uses.test.ts"], ["packages/shared/src/json.ts"], () => importer, layout)).toEqual([]);
-  });
-
-  test("a createRequire result the reader cannot follow fails the selection, never drops the edge", () => {
-    const escaped = 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const loaders = [load];\n';
-    expect(() => testsImportingDirectly(["packages/a/src/escaped.test.ts"], [CORE], () => escaped, LAYOUT)).toThrow(/^import-targets: packages\/a\/src\/escaped\.test\.ts:3: a module loader \(or a value that holds one\) is handed to code this reader does not follow/);
-  });
-
-  test("the head lockfile is read when an edge first needs the workspaces, and not before", () => {
-    const reads: string[] = [];
-    const layout = workspaceLayout(["packages/a/package.json", "packages/a/src/core.ts"], () => {
-      reads.push("package-lock.json");
-      return "{ not a lockfile";
-    });
-    expect(testsImportingDirectly(["packages/a/src/static.test.ts"], [CORE], () => 'import { x } from "./core.js";\nexport { x };\n', layout)).toEqual(["packages/a/src/static.test.ts"]);
-    expect(reads).toEqual([]);
-    const named = "const m: unknown = await import(`@ashara/${name}`);\nexport { m };\n";
-    expect(() => testsImportingDirectly(["scripts/run.test.ts"], [CORE], () => named, layout)).toThrow(/package-lock\.json at the head/);
-    expect(reads).toEqual(["package-lock.json"]);
-  });
-
-  test("a test whose text cannot be read stays among the direct tests", () => {
-    expect(testsImportingDirectly(["packages/a/src/gone.test.ts"], [CORE], () => undefined, LAYOUT)).toEqual(["packages/a/src/gone.test.ts"]);
-  });
-
-  const direct = (test: string, text: string, modules: readonly string[], layout: WorkspaceLayout = LAYOUT): boolean =>
-    testsImportingDirectly([test], modules, () => text, layout).length === 1;
-
-  test("a computed import target makes a test direct for every changed module of its own workspace, and of no other", () => {
-    const computed = "const m: unknown = await import(path.join(dir, name));\nexport { m };\n";
-    expect(direct("packages/a/test/load.test.ts", computed, [CORE])).toBe(true);
-    expect(direct("packages/a/test/load.test.ts", computed, ["packages/b/src/core.ts"])).toBe(false);
-    expect(direct("scripts/lints/all.test.ts", computed, ["scripts/lints/one.ts"])).toBe(true);
-    expect(direct("scripts/lints/all.test.ts", computed, [CORE])).toBe(false);
-    expect(direct("packages/a/src/load.test.ts", "const m: unknown = require(name);\nexport { m };\n", [CORE])).toBe(true);
-  });
-
-  test("a template import target counts by where its static prefix may resolve", () => {
-    const relative = "const m: unknown = await import(`./lints/${name}.js`);\nexport { m };\n";
-    expect(direct("scripts/run.test.ts", relative, ["scripts/lints/one.ts"])).toBe(true);
-    expect(direct("scripts/run.test.ts", relative, ["scripts/other.ts"])).toBe(false);
-    const named = "const m: unknown = await import(`@ashara/${name}`);\nexport { m };\n";
-    expect(direct("scripts/run.test.ts", named, [CORE])).toBe(true);
-    expect(direct("scripts/run.test.ts", "const m: unknown = await import(`@other/${name}`);\nexport { m };\n", [CORE])).toBe(false);
-    expect(direct("scripts/run.test.ts", named, [CORE], { ...LAYOUT, workspaceDirs: () => "unknown" })).toBe(true);
-    expect(direct("scripts/run.test.ts", "const m: unknown = await import(`node:${name}`);\nexport { m };\n", ["scripts/other.ts"])).toBe(false);
-    expect(direct("scripts/run.test.ts", "const m: unknown = await import(`${name}`);\nexport { m };\n", ["scripts/other.ts"])).toBe(true);
-  });
-});
-
 describe("the import edges selection reads", () => {
   test("affected-tests.ts reads no import edge by a text search: its only name search is for a changed file's name", async () => {
     const source = await readFile(SCRIPT, "utf-8");
@@ -512,19 +469,6 @@ describe("the import edges selection reads", () => {
 });
 
 describe("this repository's graph", () => {
-  test("the direct importers are the tests whose own specifiers resolve to the module", async () => {
-    const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });
-    try {
-      const tests = await sources.testsImportingDirectly(["packages/shared/src/json.ts"]);
-      expect(tests).toContain("packages/shared/src/json.test.ts");
-      expect(tests).not.toContain("packages/engagement/src/vision.test.ts");
-      expect(await sources.testsImportingDirectly(["scripts/lints/class-imports.ts"])).toContain("scripts/lints/lints.test.ts");
-    } finally {
-      await sources.close();
-    }
-  });
-
-
   test("a revision's files are read together, byte for byte as git holds them, and a file it lacks reads as absent", async () => {
     const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });
     try {
@@ -644,7 +588,7 @@ describe("a planted break in a scratch repository", () => {
   test("a workspace manifest change selects the tests that reach the workspace, and not the others", async () => {
     await write("packages/leaf/src/double.ts", LEAF);
     await write("packages/leaf/package.json", JSON.stringify({ name: "@probe/leaf", type: "module", version: "0.0.1", exports: { ".": "./src/index.ts" } }));
-    const run = await runCli("main", "--list", "--cap", "1");
+    const run = await runCli("main", "--list");
     expect(run.output).toContain("packages/leaf/package.json: the manifest of workspace packages/leaf");
     expect(run.output).toContain("selected: 1 of 2 test files");
     expect(run.output).toMatch(/^ {2}packages\/top\/src\/top\.test\.ts$/m);
@@ -652,12 +596,13 @@ describe("a planted break in a scratch repository", () => {
     expect(run.code, run.output).toBe(0);
   });
 
-  test("the root manifest selects the whole suite, past a cap of one", async () => {
+  test("the root manifest selects the whole suite, and the run says it runs every test file", async () => {
     await write("packages/leaf/package.json", JSON.stringify({ name: "@probe/leaf", type: "module", exports: { ".": "./src/index.ts" } }));
     await write("package.json", JSON.stringify({ name: "probe", private: true, workspaces: ["packages/*"] }));
-    const run = await runCli("main", "--list", "--cap", "1");
+    const run = await runCli("main", "--list");
     expect(run.output).toContain("selected: the whole suite (2 test files)");
-    expect(run.output).not.toContain("selection capped");
+    expect(run.output).toContain("runs the whole suite: every one of its 2 test files");
+    expect(run.output).not.toMatch(/skip/);
     expect(run.code, run.output).toBe(0);
   });
 });

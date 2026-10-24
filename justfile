@@ -103,9 +103,11 @@ test: _test-db-ready
 
 # Runs only the test files a change against <base> can affect (scripts/affected-tests.ts states the
 # selection rules and their blind spots); `just test` stays the full suite the merge lane runs.
+# Every selected test file runs, however many: no bound trims the selection, and a large one says so.
 # Example: just test-affected origin/master --list
 #          just test-affected origin/master -- --maxWorkers=2
-# Bounded and signal-forwarding exactly as `test` is, for the same reasons. `--list` runs no test, so
+# Bounded and signal-forwarding exactly as `test` is, for the same reasons; the wall bound is the
+# full suite's, so the largest selection, the whole suite, fits it. `--list` runs no test, so
 # it needs no test database.
 test-affected base *ARGS:
     #!/usr/bin/env bash
