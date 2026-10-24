@@ -129,7 +129,7 @@ function commitLiveManifests(checkout: string): void {
 }
 
 beforeAll(() => {
-  tmp =fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ashara-worktree-setup-")));
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ashara-worktree-setup-")));
   mainCheckout = path.join(tmp, "main");
   worktree = path.join(tmp, "wt");
   git(tmp, "init", "--quiet", mainCheckout);

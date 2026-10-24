@@ -11,8 +11,9 @@
  * Bound: a selection (the whole suite included) of more test files than the cap (--cap, default
  * DEFAULT_SELECTION_CONFIG) runs only the direct tests of the changed files: a changed test file, the
  * test file a changed snapshot belongs to, the colocated `<name>.test.ts` of a changed module, and
- * the test files whose own import specifiers resolve to a changed module. One line says it was
- * capped and how many files were skipped; the merge lane's full suite runs those. The cap never
+ * the test files whose own import specifiers resolve to a changed module. One line says the
+ * selection exceeds the cap and how many files were skipped, or that none was; the merge lane's
+ * full suite runs the skipped ones. The cap never
  * trims what a dependency or toolchain change selects: those tests run whatever their number, and
  * so does the whole suite a dependency change or a whole-suite rule that is not capped selects. A
  * selection that comes to no test file for a change that touches source fails the run instead of
@@ -29,7 +30,10 @@
  *   changed entry, or the whole suite when the change cannot be attributed to a workspace (an entry
  *   the root project resolves among them). A selected workspace brings every test under it, the
  *   graph dependants of every module under it, and the graph dependants of every module that names
- *   its package, or a changed hoisted package, in a quoted import specifier.
+ *   its package, or the outermost package a changed entry sits under, in a quoted import specifier
+ *   or in the static prefix of a template-literal dynamic import. A module with a dynamic import
+ *   whose target no static prefix bounds brings every module and test of its workspace (the
+ *   deepest enclosing directory with a package.json, or the root project's files outside them).
  * - Whole suite (WHOLE_SUITE_RULES): a file that changes how every test is collected, compiled,
  *   resolved or run, or that every database test reads at runtime. Any one such file selects the
  *   whole suite, each with the reason the table states.
@@ -47,7 +51,8 @@
  * Blind spots, each a change this selection under-runs (the merge lane's full suite and soak run
  * every test and are the only net for them):
  * - Dynamic imports whose specifier is computed, and modules loaded by a path built at runtime
- *   (a directory listing, a glob, a path joined from parts no single literal spells).
+ *   (a directory listing, a glob, a path joined from parts no single literal spells), for a change
+ *   to a module; for a dependency change the rule above brings the importer's whole workspace.
  * - Files read at runtime by a module whose name the module never spells whole: a SQL file found by
  *   listing migrations/, a TOML file located through a configured directory, a fixture tree copied
  *   by walking it. Migrations themselves select the whole suite; every other such file does not.
@@ -332,6 +337,58 @@ function specifierSpellings(name: string): string[] {
   return [`"${name}"`, `"${name}/`, `'${name}'`, `'${name}/`];
 }
 
+/** What a dynamic import's argument says about the specifier it loads. */
+type DynamicSpecifier =
+  | { readonly kind: "quoted" }
+  | { readonly kind: "template"; readonly prefix: string }
+  | { readonly kind: "unreadable" };
+
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*/g;
+
+/** Every dynamic import in `text`; a template literal is read up to its first substitution. */
+function dynamicImports(text: string): DynamicSpecifier[] {
+  const found: DynamicSpecifier[] = [];
+  for (const match of text.matchAll(DYNAMIC_IMPORT_RE)) {
+    const start = match.index + match[0].length;
+    const opener = text.charAt(start);
+    if (opener === '"' || opener === "'") {
+      found.push({ kind: "quoted" });
+    } else if (opener === "`") {
+      const rest = text.slice(start + 1);
+      const end = [rest.indexOf("${"), rest.indexOf("`")].filter((i) => i !== -1);
+      found.push(end.length === 0 ? { kind: "unreadable" } : { kind: "template", prefix: rest.slice(0, Math.min(...end)) });
+    } else {
+      found.push({ kind: "unreadable" });
+    }
+  }
+  return found;
+}
+
+/**
+ * What a template-literal specifier's static prefix bounds: a built-in or a relative module loads no
+ * package; an empty, absolute, URL or node_modules prefix may load anything; a bare one loads a
+ * package whose name it begins.
+ */
+function templateTarget(prefix: string): "no-package" | "unbounded" | "package" {
+  if (prefix.startsWith("node:")) return "no-package";
+  if (prefix.includes("node_modules/")) return "unbounded";
+  if (prefix.startsWith(".")) return "no-package";
+  if (prefix === "" || prefix.startsWith("/") || prefix.includes(":")) return "unbounded";
+  return "package";
+}
+
+function prefixMayName(prefix: string, name: string): boolean {
+  return `${name}/`.startsWith(prefix) || prefix.startsWith(`${name}/`);
+}
+
+/**
+ * The workspace directory a file belongs to: the deepest enclosing directory with a package.json,
+ * or the root project ("") when none encloses it.
+ */
+function owningWorkspace(file: string, manifestDirs: readonly string[]): string {
+  return manifestDirs.filter((dir) => file.startsWith(`${dir}/`)).reduce((deepest, dir) => (dir.length > deepest.length ? dir : deepest), "");
+}
+
 /** Every test a dependency change reaches, repo-relative and sorted; see the header's dependency rule. */
 async function dependencyTests(impacts: readonly DependencyImpact[], sources: SelectionSources): Promise<string[]> {
   const required = new Set<string>();
@@ -341,10 +398,31 @@ async function dependencyTests(impacts: readonly DependencyImpact[], sources: Se
     if (allTests.has(file)) required.add(file);
     else if (GRAPH_MODULE_RE.test(file) && !TEST_FILE_RE.test(file)) modules.add(file);
   };
-  for (const impact of impacts) {
-    if (impact.kind !== "workspaces") continue;
-    for (const workspace of impact.workspaces) for (const file of sources.files) if (file.startsWith(`${workspace}/`)) take(file);
+  const manifestDirs = sources.files.flatMap((f) => (f !== ROOT_MANIFEST && f.endsWith("/package.json") ? [f.slice(0, -"/package.json".length)] : []));
+  const takeWorkspace = (workspace: string): void => {
+    for (const file of sources.files) {
+      if (workspace === "" ? owningWorkspace(file, manifestDirs) === "" : file.startsWith(`${workspace}/`)) take(file);
+    }
+  };
+  const workspaceImpacts = impacts.filter((impact) => impact.kind === "workspaces");
+  for (const impact of workspaceImpacts) {
+    for (const workspace of impact.workspaces) takeWorkspace(workspace);
     for (const name of impact.packageNames) for (const spelling of specifierSpellings(name)) for (const file of sources.filesNaming(spelling)) take(file);
+  }
+  if (workspaceImpacts.length > 0) {
+    const names = workspaceImpacts.flatMap((impact) => impact.packageNames);
+    const loaders = new Set([...sources.filesNaming("import("), ...sources.filesNaming("import (")].filter((f) => GRAPH_MODULE_RE.test(f)));
+    for (const file of loaders) {
+      const text = sources.readRevision(file, "head");
+      // A loader whose text cannot be read, or whose import target is computed, may load any package.
+      const specifiers: DynamicSpecifier[] = text === undefined ? [{ kind: "unreadable" }] : dynamicImports(text);
+      for (const specifier of specifiers) {
+        if (specifier.kind === "quoted") continue;
+        const target = specifier.kind === "template" ? templateTarget(specifier.prefix) : "unbounded";
+        if (target === "unbounded") takeWorkspace(owningWorkspace(file, manifestDirs));
+        else if (target === "package" && specifier.kind === "template" && names.some((name) => prefixMayName(specifier.prefix, name))) take(file);
+      }
+    }
   }
   if (modules.size > 0) for (const t of await sources.testsImporting([...modules])) required.add(t);
   return [...required].sort();
@@ -377,7 +455,11 @@ export function boundSelection(selection: Selection, allTestCount: number, confi
     const required = selection.required;
     tests = [...new Set([...selection.direct, ...required])].sort();
     const kept = required.length === 0 ? "direct test file(s) of the changed files" : "direct test file(s) of the changed files and every test file of the changed dependencies";
-    notice = `selection capped: ${count} test files exceed the cap of ${config.maxTests}; running the ${tests.length} ${kept}, ${count - tests.length} skipped; the merge lane's full suite covers them`;
+    const skipped = count - tests.length;
+    notice =
+      skipped > 0
+        ? `selection capped: ${count} test files exceed the cap of ${config.maxTests}; running the ${tests.length} ${kept}, ${skipped} skipped; the merge lane's full suite covers them`
+        : `${count} test files exceed the cap of ${config.maxTests}; running the ${tests.length} ${kept}, which skips none of them`;
   } else if (selection.kind === "whole-suite") {
     return { kind: "whole-suite", count };
   } else {

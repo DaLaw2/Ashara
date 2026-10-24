@@ -8,7 +8,8 @@
  *
  * Fail-closed: a change this cannot attribute to a workspace (an entry the root project resolves, an
  * entry no workspace resolves, a root entry or lockfile field outside the packages map, a file that
- * differs with no entry differing, a lockfile absent in either revision) comes back as the whole
+ * differs with no entry differing, a lockfile absent in either revision, a closure that cannot be
+ * followed: a link with no target, a required dependency with no entry) comes back as the whole
  * suite, and a lockfile that is not of the npm shape throws.
  */
 
@@ -49,8 +50,8 @@ export function parseLockfile(text: string, source: string): Lockfile {
 
 /**
  * What a dependency change reaches: the whole suite with the reason it cannot be bounded, or the
- * workspaces (repo-relative directories) that resolve a changed entry and the package names of the
- * changed hoisted entries, which a module anywhere may import by name.
+ * workspaces (repo-relative directories) that resolve a changed entry and, for each changed entry,
+ * the outermost package it sits under, which a module anywhere may import by name to load it.
  */
 export type DependencyImpact =
   | { readonly kind: "whole-suite"; readonly reason: string }
@@ -58,7 +59,12 @@ export type DependencyImpact =
 
 const ROOT = "";
 const NODE_MODULES_SEGMENT = /(^|\/)node_modules\//;
-const HOISTED_KEY = /^node_modules\/((?:@[^/]+\/)?[^/]+)$/;
+/**
+ * The package a module loads to reach a lockfile location: the first package under a node_modules
+ * segment. A nested entry (`node_modules/a/node_modules/x`) is loaded only through `a`, so a module
+ * that imports `a` without declaring it reaches `x` too.
+ */
+const OUTERMOST_PACKAGE = /(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)/;
 
 function enclosingLocation(location: string): string | undefined {
   if (location === ROOT) return undefined;
@@ -112,10 +118,20 @@ function workspaceLocations(locks: readonly Lockfile[]): string[] {
   return [...found].sort();
 }
 
-function reach(locks: readonly Lockfile[], start: string): Set<string> {
-  const all = new Set<string>();
-  for (const lock of locks) for (const location of closure(lock, start)) all.add(location);
-  return all;
+/** Every location `start` resolves in either revision, each start's closure computed once. */
+class Reach {
+  private readonly cache = new Map<string, Set<string>>();
+
+  constructor(private readonly locks: readonly Lockfile[]) {}
+
+  of(start: string): Set<string> {
+    const cached = this.cache.get(start);
+    if (cached !== undefined) return cached;
+    const all = new Set<string>();
+    for (const lock of this.locks) for (const location of closure(lock, start)) all.add(location);
+    this.cache.set(start, all);
+    return all;
+  }
 }
 
 function workspaceName(locks: readonly Lockfile[], workspace: string): string[] {
@@ -137,6 +153,16 @@ function outsidePackages(lock: Lockfile): string {
   return JSON.stringify(rest);
 }
 
+/** A closure that cannot be followed leaves the change unattributable, so it is the whole suite. */
+function attributing(compute: () => DependencyImpact): DependencyImpact {
+  try {
+    return compute();
+  } catch (error) {
+    if (!(error instanceof LockfileImpactError)) throw error;
+    return { kind: "whole-suite", reason: `${error.subject} cannot be followed (${error.reason}), so no workspace can be attributed` };
+  }
+}
+
 /**
  * The impact of a change to package-lock.json between `base` and `head`; `undefined` is a revision
  * without the file.
@@ -150,29 +176,28 @@ export function lockfileImpact(base: Lockfile | undefined, head: Lockfile | unde
   if (changed.length === 0) return { kind: "whole-suite", reason: "the file differs and no locked entry does, so nothing bounds the change" };
   if (changed.includes(ROOT)) return { kind: "whole-suite", reason: "the root project's own entry changed" };
   const locks = [base, head];
-  const rootReach = reach(locks, ROOT);
-  const rootResolved = changed.filter((key) => rootReach.has(key));
-  if (rootResolved.length > 0) {
-    return { kind: "whole-suite", reason: `the root project resolves ${rootResolved.join(", ")}, and its dependencies are the toolchain every test runs under` };
-  }
-  const workspaces = new Set<string>();
-  for (const workspace of workspaceLocations(locks)) {
-    const resolved = reach(locks, workspace);
-    if (changed.some((key) => resolved.has(key))) workspaces.add(workspace);
-  }
-  const unattributed = changed.filter((key) => ![...workspaces].some((workspace) => reach(locks, workspace).has(key)));
-  if (unattributed.length > 0) return { kind: "whole-suite", reason: `no workspace resolves ${unattributed.join(", ")}` };
-  const packageNames = new Set<string>();
-  for (const key of changed) {
-    const name = HOISTED_KEY.exec(key)?.[1];
-    if (name !== undefined) packageNames.add(name);
-  }
-  return {
-    kind: "workspaces",
-    workspaces: [...workspaces].sort(),
-    packageNames: [...packageNames].sort(),
-    reason: `${changed.length} locked entr${changed.length === 1 ? "y" : "ies"} changed (${changed.join(", ")})`,
-  };
+  return attributing(() => {
+    const reach = new Reach(locks);
+    const rootReach = reach.of(ROOT);
+    const rootResolved = changed.filter((key) => rootReach.has(key));
+    if (rootResolved.length > 0) {
+      return { kind: "whole-suite", reason: `the root project resolves ${rootResolved.join(", ")}, and its dependencies are the toolchain every test runs under` };
+    }
+    const workspaces = workspaceLocations(locks).filter((workspace) => changed.some((key) => reach.of(workspace).has(key)));
+    const unattributed = changed.filter((key) => !workspaces.some((workspace) => reach.of(workspace).has(key)));
+    if (unattributed.length > 0) return { kind: "whole-suite", reason: `no workspace resolves ${unattributed.join(", ")}` };
+    const packageNames = new Set<string>();
+    for (const key of changed) {
+      const name = OUTERMOST_PACKAGE.exec(key)?.[1];
+      if (name !== undefined) packageNames.add(name);
+    }
+    return {
+      kind: "workspaces",
+      workspaces,
+      packageNames: [...packageNames].sort(),
+      reason: `${changed.length} locked entr${changed.length === 1 ? "y" : "ies"} changed (${changed.join(", ")})`,
+    };
+  });
 }
 
 /**
@@ -182,12 +207,16 @@ export function lockfileImpact(base: Lockfile | undefined, head: Lockfile | unde
 export function manifestImpact(workspace: string, base: Lockfile | undefined, head: Lockfile | undefined): DependencyImpact {
   const locks = [base, head].filter((lock) => lock !== undefined);
   if (locks.length === 0) return { kind: "whole-suite", reason: "no revision has a lockfile to say which workspaces resolve it" };
-  if (!workspaceLocations(locks).includes(workspace)) return { kind: "whole-suite", reason: `the lockfile records no workspace at ${workspace}` };
-  const dependants = workspaceLocations(locks).filter((other) => reach(locks, other).has(workspace));
-  return {
-    kind: "workspaces",
-    workspaces: dependants,
-    packageNames: workspaceName(locks, workspace),
-    reason: `the manifest of workspace ${workspace}, which ${dependants.length} workspace(s) resolve`,
-  };
+  const workspaces = workspaceLocations(locks);
+  if (!workspaces.includes(workspace)) return { kind: "whole-suite", reason: `the lockfile records no workspace at ${workspace}` };
+  return attributing(() => {
+    const reach = new Reach(locks);
+    const dependants = workspaces.filter((other) => reach.of(other).has(workspace));
+    return {
+      kind: "workspaces",
+      workspaces: dependants,
+      packageNames: workspaceName(locks, workspace),
+      reason: `the manifest of workspace ${workspace}, which ${dependants.length} workspace(s) resolve`,
+    };
+  });
 }

@@ -9,8 +9,8 @@
  * What is read, over every file `git ls-files` lists outside COMMENT_LINT_EXCLUDES:
  * - .ts, .mts, .cts, .mjs, .cjs and .js files: every comment, found by the TypeScript parser so a
  *   `//` inside a string, template or regular expression is never taken for one, and the title of
- *   every `it`, `test`, `describe` and `suite` call (including `.each`, `.skip`, `.skipIf(...)` and the like), since a
- *   test title is read as prose about the code just as a comment is.
+ *   every `it`, `test`, `describe` and `suite` call (including `.each`, `.skip`, `.skipIf(...)` and
+ *   the like), since a test title is read as prose about the code just as a comment is.
  * - justfile, .github/workflows, docker/, *.toml, config/env.example and .gitignore: every `#`
  *   comment that starts a line or follows whitespace outside a quoted string.
  * - .sql files: every `--` comment.
@@ -32,13 +32,12 @@
  * a package (`packages/<name>`, or a top-level directory) whose non-test code holds it so: there it
  * is an id the code defines (an invariant's name), and a comment naming it names code. A literal in a
  * test file is a fixture and exempts the label in that test file alone; a literal in another package
- * exempts nothing. A design label also passes when it is
- * one of DOMAIN_NAMES, a word of the domain that happens to have the label's shape. Likewise a
- * numbered SQL file name passes when a tracked file has that name: the comment names a file that
- * exists, not one a checkout no longer holds. A migration number is also caught bare: a zero-padded
- * three-digit number after `pre-`, `before`, `after`, `since`, `until` or an opening parenthesis
- * (`before` followed by such a number, `pre-` joined to one, a parenthesised list of them), since a
- * quantity in prose carries no leading zero.
+ * exempts nothing. A design label also passes when it is one of DOMAIN_NAMES, a word of the domain
+ * that happens to have the label's shape. Likewise a numbered SQL file name passes when a tracked
+ * file has that name: the comment names a file that exists, not one a checkout no longer holds. A
+ * migration number is also caught bare: a zero-padded three-digit number after `pre-`, `before`,
+ * `after`, `since`, `until` or an opening parenthesis (`before` followed by such a number, `pre-`
+ * joined to one, a parenthesised list of them), since a quantity in prose carries no leading zero.
  *
  * Blind spots, each a stale comment this check passes:
  * - A history account in plain words ("X now does Y", "after the outage we ...") uses no marker the

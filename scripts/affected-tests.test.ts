@@ -220,6 +220,14 @@ describe("a dependency change", () => {
     expect(run.notice).toContain("every test file of the changed dependencies");
   });
 
+  test("a selection over the cap that the kept tests cover whole says none is skipped, never that zero were", async () => {
+    const selection = await selectTests(upgrade, sources(lockfile("4.0.0"), lockfile("4.1.0")));
+    const run = boundSelection(selection, ALL.length, { maxTests: 1 });
+    if (run.kind !== "tests") throw new Error(`expected a test run, got ${run.kind}`);
+    expect(run.tests).toHaveLength(6);
+    expect(run.notice).toBe("6 test files exceed the cap of 1; running the 6 direct test file(s) of the changed files and every test file of the changed dependencies, which skips none of them");
+  });
+
   // One path per capped whole-suite rule; a capped rule added without a path here fails the check below.
   const CAPPED_PATHS = ["migrations/zzzz_probe.sql", "boundary-rules.toml", "eslint.config.mjs", "tsconfig.json", "packages/integration/src/cell-leak-guard.ts", "packages/integration/src/podman-test-load.ts", "config/probe.toml"];
 
@@ -238,11 +246,51 @@ describe("a dependency change", () => {
     expect(run.notice).toContain("every test file of the changed dependencies");
   });
 
-  test("a nested copy resolves to the workspaces that resolve its parent", async () => {
+  test("a nested copy resolves to the workspaces that resolve its parent, and to every module that imports the parent by name", async () => {
     const base = lockfile("4.0.0");
     const head = lockfile("4.0.0", { "node_modules/hono/node_modules/tiny": { version: "1.0.1" } });
     const selection = await selectTests([modified("package-lock.json")], sources(base, head));
-    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A].sort() });
+    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort() });
+  });
+
+  const DYNAMIC_LOADER = "packages/c/src/loader.ts";
+  const loaderSources = (loaderText: string | undefined, loader = DYNAMIC_LOADER): SelectionSources => {
+    const base = sources(lockfile("4.0.0"), lockfile("4.1.0"));
+    return {
+      ...base,
+      files: [...base.files, loader, "packages/a/package.json", "packages/b/package.json", "packages/c/package.json"],
+      filesNaming: (name) => (name === "import(" ? [loader] : base.filesNaming(name)),
+      readRevision: (file, side) => (file === loader ? loaderText : base.readRevision(file, side)),
+      testsImporting: async (modules) => [...(await base.testsImporting(modules)), ...(modules.includes(DYNAMIC_LOADER) ? ["packages/c/src/c2.test.ts"] : [])],
+    };
+  };
+  const honoUpgrade = [modified("package-lock.json")];
+  const HONO_SELECTION = [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO];
+
+  test("a template-literal dynamic import whose static prefix names a changed package selects the importer's dependants", async () => {
+    const selection = await selectTests(honoUpgrade, loaderSources("export const load = (x: string) => import(`hono/${x}`);\n"));
+    expect(selection).toMatchObject({ kind: "selected", required: [...HONO_SELECTION, "packages/c/src/c2.test.ts"].sort() });
+  });
+
+  test("a template-literal dynamic import of another package or a relative module selects nothing more", async () => {
+    for (const text of ["import(`honorific/${x}`);", "import(`./plugins/${x}.js`);", "import(`node:${x}`);"]) {
+      const selection = await selectTests(honoUpgrade, loaderSources(text));
+      expect(selection, text).toMatchObject({ kind: "selected", required: [...HONO_SELECTION].sort() });
+    }
+  });
+
+  test.each([
+    ["a computed specifier", "export const load = (target: string) => import(target);\n"],
+    ["a template with no static prefix", "export const load = (x: string) => import(`${x}/index.js`);\n"],
+    ["a loader whose text cannot be read", undefined],
+  ])("a dynamic import with %s fails closed to every test of the importer's workspace", async (_name, text) => {
+    const selection = await selectTests(honoUpgrade, loaderSources(text));
+    expect(selection).toMatchObject({ kind: "selected", required: [...new Set([...HONO_SELECTION, ...TESTS.c])].sort() });
+  });
+
+  test("a computed dynamic import outside every workspace manifest fails closed to the root project's own files", async () => {
+    const selection = await selectTests(honoUpgrade, loaderSources("await import(target);\n", "scripts/loader.ts"));
+    expect(selection).toMatchObject({ kind: "selected", required: [...new Set([...HONO_SELECTION, ...TESTS.root])].sort() });
   });
 
   test.each([
