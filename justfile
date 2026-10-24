@@ -51,6 +51,13 @@ check:
 check-docs:
     npx tsx scripts/check-docs.ts
 
+# Known advisories against the locked dependency tree, dev toolchain included; any severity fails.
+# NOT in `check`: the verdict comes from the registry's advisory database, not from the tree, so
+# it can turn red on an unchanged commit the day an advisory is published, and it needs the network.
+# Run it before every commit that touches package.json or package-lock.json; CI runs it on every push.
+audit:
+    npm audit --audit-level=low
+
 # The gate typechecks with TS 7; typescript-eslint and tsx resolve TS 6. Agreement between
 # them is a measurement, not a guarantee — a native-port
 # reimplementation may diverge from the JS compiler on some input. This runs the OTHER

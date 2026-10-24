@@ -41,7 +41,7 @@
     "@ashara/shared": "*",
     "@ashara/workplace": "*",
     "@hono/node-server": "2.0.12",
-    "hono": "4.12.32",
-    "zod": "4.4.3"
+    "hono": "4.13.13",
+    "zod": "4.6.7"
   }
 }

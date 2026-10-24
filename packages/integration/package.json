@@ -21,7 +21,7 @@
     "@ashara/workplace": "*",
     "drizzle-orm": "0.45.2",
     "pg": "8.22.0",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@ashara/delivery": "*",
@@ -31,6 +31,6 @@
     "@hono/node-server": "2.0.12",
     "@types/pg": "8.20.0",
     "ai": "7.0.128",
-    "hono": "4.12.32"
+    "hono": "4.13.13"
   }
 }

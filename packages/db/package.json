@@ -22,7 +22,7 @@
     "@ashara/shared": "*",
     "drizzle-orm": "0.45.2",
     "pg": "8.22.0",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/pg": "8.20.0"

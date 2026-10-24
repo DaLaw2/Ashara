@@ -94,6 +94,9 @@ jobs:
       - name: Gate — typecheck + boundary lint + comment lint + knip + eslint
         run: just check
 
+      - name: Dependency advisories
+        run: just audit
+
   test:
     name: Test suite
     runs-on: ubuntu-24.04
